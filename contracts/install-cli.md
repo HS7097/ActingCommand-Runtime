@@ -771,20 +771,41 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     for the server (no `applications.json`, one that does not read or is no JSON, no member of the
     server, no `application_id` there, or one the assembly's rule refuses), with `game`, `server`,
     the file's `path` and the read's failure as the cause when there is one; a configuration
-    without the list `instances` or `policy.facts.instances`, or without a row there to take the
-    host and the capabilities from (`config_key`). A parameter missing or malformed is
-    `actingctl_usage_invalid`. With no Runtime running it refuses `runtime_not_running`: the new
-    instance's pause needs the Runtime that starts with it.
+    without the list `instances` or `policy.facts.instances` (`config_key`, the list's key);
+    (Workflow #453 S1) a configuration without `policy`, absent or `null` (`config_key`
+    `policy`); with `policy.facts.instances` empty, the refusals of a first row (below). A
+    parameter missing or malformed is `actingctl_usage_invalid`. With no Runtime running it
+    refuses `runtime_not_running`: the new instance's pause needs the Runtime that starts with
+    it.
   - **The candidate**: the selected configuration with the entry `{alias, instance_id,
     application_id, instance_index, touch_backend, capture_backend}` appended to `instances` and
     the row
     `{instance_id: <alias>, server_id, game_id, host_id, available: true,
     capability_operation_ids, preferred_task_ids: []}` appended to `policy.facts.instances`, the
     host and the capabilities those of a row of the same game and server, else of the same game,
-    else of the first row; both places, as the configuration's assembly requires until INST-R
-    (`policy_instance_set_mismatch`); every other member as it was, in its order, with the live
-    file's line ends. The `instance_id` is minted (`instance_<32 hex>`) and is none the live file
-    names and none a journal of the root recorded as added.
+    else of the first row (a first row's, below, when there is none); both places, as the
+    configuration's assembly requires until INST-R (`policy_instance_set_mismatch`); every other
+    member as it was, in its order, with the live file's line ends. The `instance_id` is minted
+    (`instance_<32 hex>`) and is none the live file names and none a journal of the root recorded
+    as added.
+  - **A first row** (Workflow #453 S1, since 0.12.60; register §1.353; the coordinator's work
+    order of 11-14 on board #453, not the owner's words). When `policy.facts.instances` is empty,
+    as on a fresh root, the row is composed from the configuration alone, after every check above
+    and at the place the copied row's check stood. Its host is the one
+    `policy.resources.hosts[].host_id`: no host list, an empty one, several hosts, or one host
+    without a `host_id` text are refused `instance_invalid` with `config_key`
+    `policy.resources.hosts`. Its capabilities are exactly the composer's one operation
+    (`operation.package.run`, the policy crate's `STANDARD_PACK_OPERATION_ID`), and only in
+    composer mode (`policy.catalog` absent or `null`, as the configuration's assembly reads it):
+    in catalog mode the catalog, not the installer, says what an instance can run, so an empty
+    list is refused as before, `instance_invalid` with `config_key` `policy.facts.instances`.
+    The candidate then passes the assembly's policy check (the set of
+    `policy.facts.instances[].instance_id` equals the configured aliases, every `host_id` is a
+    declared host) by construction. Nothing else differs: the candidate file, its place, the
+    commit and every other refusal are those of a configuration with rows, and a configuration
+    with rows composes the same bytes as before (`runtime_not_running` stays: a commit while the
+    Runtime is stopped is a later slice). `install new` is what writes a first `policy`; this
+    slice writes none.
   - **The commit** is `config replace`'s ("The Lab's rescue module"): the candidate, written
     beside the live file as `actingd.config.json.new-<ms>.part` (`<ms>` the command's own
     milliseconds) so that its relative paths resolve as the live file's, passes the live build's
@@ -794,8 +815,11 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     replaced file kept as
     `actingd.config.json.prev-<ms>` (the candidate is the swap's own part, so nothing else is
     staged), the start and its post-start checks: one journal of kind `config_replace` with the
-    initiator and the input `instance_add` (what was added, its `instance_id`, the pause reason;
-    since Workflow #452 also `application_id` and `application_id_from`, `given` or `declared`).
+    initiator and the input `instance_add` (what was added, its `instance_id`, the pause reason,
+    `capabilities_from`, the alias of the row whose host and capabilities were taken; since
+    Workflow #452 also `application_id` and `application_id_from`, `given` or `declared`; since
+    Workflow #453 S1 `capabilities_from` is `null` for a first row, the member always present).
+    The answer's `added` is the same record.
   - **The new instance starts paused** (the coordinator's ruling of 11-11, not Alice's words):
     after the start, before `alive` and the release of the hold, it is paused with its own reason
     `instance.added`, a pause reason name ([scheduling-pause.md](scheduling-pause.md):
@@ -2775,6 +2799,10 @@ the fragment registers, names the command.
   and `pack_invalid` (`game`, `path`, `timeout_ms`) for the standard-pack root and a game root's
   check; no code or key is new here (actingd's `vision_manifest_reported` and
   `vision_check_completed` are actingd's own).
+- **Workflow #453 S1** (since 0.12.60; "Instances, the first slice", "A first row"):
+  `install_instance_add`'s `instance_invalid` gives the existing key `config_key` two more
+  values, `policy` and `policy.resources.hosts`, beside those it gave before; no code, location,
+  key or word is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

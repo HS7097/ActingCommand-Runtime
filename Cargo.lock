@@ -276,6 +276,7 @@ dependencies = [
  "actingcommand-contract",
  "actingcommand-host-metrics",
  "actingcommand-lab-ops",
+ "actingcommand-policy",
  "actingcommand-runtime-client",
  "actingcommand-runtime-config",
  "actingcommand-watchdog",
