@@ -293,7 +293,9 @@ impl HostShared {
         instance_id: InstanceId,
         prospective: &mut SchedulingPauseTable,
     ) -> Result<Option<u64>, RequestFailure> {
-        if !start_pause_entries_on() {
+        // No configured entry declares the member (every installation without it): return before
+        // any lock, so that a release takes exactly the locks it takes without this slice.
+        if !start_pause_entries_on() || self.start_paused.is_empty() {
             return Ok(None);
         }
         {
