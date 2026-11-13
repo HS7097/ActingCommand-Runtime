@@ -674,6 +674,10 @@
       "type": "vocab:reading_problem",
       "description": "Why a reading mark gave no reading on a frame handed to recognition."
     },
+    "frame_indices": {
+      "type": "list<integer>",
+      "description": "The frames of a contained task's fields report (their frame_index) that a field list's miss names: the unresolved frames, every frame that holds a repeated key, the first frame (start not seen) or the last frame (end not seen), in ascending order; at most 64 kept, frame_indices_total past that (Workflow #450 FL-1b, contracts/resource-readings.md \"Lists from fields\")."
+    },
     "adjustment_reason": {
       "type": "vocab:adjustment_reason",
       "description": "Why a run's confirmed resource adjustment wrote nothing (Workflow #384 D2-S3)."
@@ -3719,16 +3723,22 @@
           "description": "The frames of the mark's agreement did not all read the same value (Workflow #411 B1); the mark writes no fact."
         },
         "list_position_unread": {
-          "description": "Workflow #428 S168-4: a position of a read_list step's list was readable at least once but holds no fixed Known reading of its identity or of a column's feature; the list writes nothing."
+          "description": "Workflow #428 S168-4: a position of a read_list step's list was readable at least once but holds no fixed Known reading of its identity or of a column's feature; the list writes nothing. Workflow #450 FL-1b: a frame of a field list whose key or a column is not resolved at the list's minimum_confidence_milli (frame_indices names those frames); the list writes nothing."
         },
         "list_duplicate_key": {
-          "description": "Workflow #428 S168-4: two positions of a read_list step's list read the same business ID; the list writes nothing."
+          "description": "Workflow #428 S168-4: two positions of a read_list step's list read the same business ID; the list writes nothing. Workflow #450 FL-1b: a field list read one key on two frames or more, adjacent or not, with equal or different columns; the core never folds, sums or picks one (frame_indices names every frame that holds a repeated key); the list writes nothing."
         },
         "list_rows_exceeded": {
           "description": "Workflow #428 S168-4: a read_list step's list showed more positions than one fact holds; the scan stopped there and the list writes nothing. Since 0.12.55 (Workflow #428 S168-LB1a) a fact holds 1024 rows, so at the 1025th position; before it, 256, at the 257th."
         },
         "list_bytes_exceeded": {
           "description": "Workflow #428 S168-LB1a (since 0.12.55): a read_list step's list was read whole, within the row bound, but its record is larger than one observation holds (512 KiB); nothing is cut to fit, the list writes nothing and the key's earlier record stays."
+        },
+        "list_start_unseen": {
+          "description": "Workflow #450 FL-1b (since 0.12.59): a field list's first frame did not meet its start (a page, a required target, a forbidden target), so the run may have begun inside the list; count is the frames collected and frame_indices the first frame. The list writes nothing and the key's earlier record stays."
+        },
+        "list_end_unseen": {
+          "description": "Workflow #450 FL-1b (since 0.12.59): a successful run collected frames of a field list and none met its end (the end page was not reached, not collected past max_frames, or its targets did not hold); count is the frames collected and frame_indices the last frame. The list writes nothing and the key's earlier record stays."
         }
       }
     },

@@ -19745,6 +19745,140 @@ catalog gains one code and one vocabulary.
 **Rollback** (below 0.12.59). Nothing is persisted by MAPP-2a; the build before it reads every
 record this one writes.
 
+### 1.343 Slice FL-1 (0.12.59): field lists, the declaration, the list builder, the gate and the kernel; `package` revision 11 (Workflow #450; the owner approved the feature on 11-13, board #450; the design note `rd-1113/design-list-from-fields.md`, design (a), read on main `abee78ed`, with the coordinator's decisions of its section 7 and the work order's rulings, not the owner's words; coordinator work order `rd-1113/brief-450-fl1.md`, read on main `98924e28`)
+
+1.342 was the next free section on main `10f538ea`, merged into this slice (1.340 and 1.341 were
+taken first); the integration train 0.12.59b renumbered it 1.343, after §1.342 (MAPP-2a). The
+design note's slices FL-0 (the contract text), FL-1a (the declaration
+and the pure list builder) and FL-1b (the gate, admission, the collector's bookkeeping, the
+end-frame traces, the run kinds, the catalog and the `package` raise) are one pull request, because
+FL-1a alone would be code no caller reaches. [resource-readings.md](resource-readings.md), "Lists
+from fields", is the contract; [ocr-fields.md](ocr-fields.md), [instance-fact-store.md](instance-fact-store.md),
+"List reading facts" and the capacity table, [selection-policy.md](selection-policy.md), "List
+readings and field lists", and the `package` row 11 of
+[component-interfaces.md](component-interfaces.md) change the sentences that said a list reading
+was the one producer of a record list.
+
+**What it builds.** A task schema `0.8` or `0.9` task that declares `post_admission_ocr`
+(`fields_v1`) and `scheduling_outcome` may declare one `field_lists` entry: a group of its fields,
+keyed by a dictionary field, its columns other fields of the group, with the list's own confidence
+floor, key, lifetime, `start` and `end`. The rule of the declaration is one function of the contract
+crate (`validate_field_lists` in `taskflow.rs`, beside `MAX_LIST_READINGS`), shared by the
+declaration gate (`Declaration::field_lists` for the structure, `Declaration::field_list_rules` for
+the rule, `crates/pack-containment/src/source/declarations.rs`; the parser's cross-reference of the
+conditions' targets, `validate_field_list_targets`, `source/mod.rs`) and admission
+(`prepare_field_lists`, `crates/execution-kernel/src/contained_task/field_list.rs`, after the
+fields are prepared). On each collected frame the fields collector keeps the key's and the
+columns' readings with their confidences; the list judges `start` on its first frame and `end` on
+each; on its end frame it is built (`field_list_of`) and recorded as a `read_list` step's list is
+(`ListReadingFrame` when whole, then `ListReading`); a frame of the group after that fails the run;
+at a successful end a list that met no end records `list_end_unseen`. Every repeat fails the list
+(the coordinator's decision 2 of section 7: the core never folds, sums or picks one).
+
+**Two facts of the code on `98924e28` the design note did not name, and how they are met without
+moving the host.** (1) The host takes `ListReadingMiss` as a two-member value it also builds itself
+(`list_bytes_exceeded`), so the frames a field list's miss names ride in memory on the list's
+`ListReadingDeclaration` (`frame_indices`, empty for a `read_list` step and a whole list), and
+`ListReadingMiss::outcome` adds them as the optional value `frame_indices`. (2) The host binds a
+miss to the frame it captured last and stops on a mismatch (`resource_reading_poison`,
+`contained_task_resource_reading_frame_mismatch`), and the kernel's success paths do not carry
+that frame. For `list_end_unseen` the kernel therefore notes the device capture time of every frame
+a run captures (the entry frame, every sample and observation frame, every agreement frame), only
+for a task that declares a field list, and binds the miss to the latest. A declared operation's one
+step (#412 Lab B-3), a bound recovery entry and `recognize_only` read no list.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| FL-1 | a task's `field_lists` (`FieldListDeclaration`, `FieldListColumn`, `FieldListCondition`) and its rule `validate_field_lists` | package member | FL-1 | the resource repository (FL-3) | `package` 11; refused before it at the declaration gate (`UnknownField` at `/field_lists`) |
+| FL-2 | `reading_problem` + `list_start_unseen`, `list_end_unseen` | outcome vocabulary words | FL-1 | the kernel | catalog only; `runtime-outcomes` stays 1 |
+| FL-3 | the key `frame_indices` (`list<integer>`), optional on `contained_task_resource_reading_unresolved` | outcome value key | FL-1 | the kernel | the code's review is pending, so it may gain an optional value (§1.291 S168C-3) |
+| FL-4 | `ListReadingDeclaration.frame_indices` | in-memory trace member (not persisted) | FL-1 | the kernel | the host's `ListReading` arms read it through `ListReadingMiss::outcome` unchanged |
+| FL-5 | `inventory.list.<name>` written by a field list | `fact.published` of the existing `record_list` (no new shape) | FL-1 (kernel), FL-2 (host's tests) | the host | `ledger` stays 8: a miss is an existing warning row whose outcome gains words and an optional value a reader relays unchanged |
+| FL-6 | `package` [3, 10] → [3, 11] | interface revision | FL-1 | the resource repository's packer (FL-3) | component-interfaces.md row 11 |
+
+**The raise, as NOTICES-2 made it (§1.335).** `package` [3, 10] → [3, 11]:
+`distribution/windows/component-interfaces.json`, the architecture pin
+(`tools/actinglab-architecture/tests/component_interfaces.rs`, its `V0120` and its history
+comment), the row 11 of component-interfaces.md, and this section. The design note's revision 10
+was taken by NOTICES-2 in 0.12.58; S168-5b's planned judge takes the next free revision after 11.
+**Every reader of the `package` range, as §1.335 checked them:** `place` (the Lab's rescue module)
+reads its own installer's range, so `place` of 0.12.58 ([3, 10]) refuses a bundle declaring
+[11, 11] with `interface_edge` at `<zip>\interfaces.json`, in the plan, before the hold and any
+write, and this release's takes it; the update's and the rollback's `package` edges compare the
+register's range, unknown for every root (the warning `pack_declaration_unknown`); the Runtime reads
+no `interfaces.json` and no range, and a Runtime before 0.12.59 refuses a package that declares the
+member at its declaration gate, on the source path and on the sealed task admission runs the gate
+on; `resource verify`'s `bundle` step writes [3, 3], or [10, 10] for a notices bundle, and does not
+look at `field_lists`, so the packer of FL-3 declares [11, 11] itself. None of them refuses a bundle
+or a root that is accepted today. A pack without the member keeps its revision.
+
+**What programs of an earlier release do** with a package that declares `field_lists`: the Runtime
+(admission, `package check`, the source parse) refuses it `resource_declaration_invalid`,
+`UnknownField` at `/field_lists`; the rescue module's `place` refuses its bundle `interface_edge`.
+Neither ignores the member.
+
+**Not moved.** `ledger` (FL-5); `runtime-client` (the list travels in `InstanceFactSnapshot`, and
+the fields report and its projection do not change); `actingd-config` (no key: the bounds are the
+format's); `runtime-outcomes` (catalog only: two words, one key, the code's description; the index
+regenerated, unchanged); `runtime-host` product code, the fact store, the selection policy, the scan
+session and `read_list` (FL-2 is the host's slice). No outcome code is added.
+
+**The order of the slices.** FL-0, FL-1a and FL-1b (this section, one pull request), then FL-2 (the
+host's halves on a fake device, host gate rows `field_list_published_like_a_list`,
+`field_list_miss_keeps_record`, `field_list_failed_or_cancelled_run_publishes_nothing`,
+`field_list_full_store_refused`, `field_list_row_read_by_ledger_8`), both in the Runtime release of
+0.12.59, deployed; then FL-3, the resource repository's package (its bundle declares `package`
+[11, 11]). The slice that places the first such package books its *L*, one identity on that
+instance, in instance-fact-store.md's capacity table.
+
+**At deploy.** The Runtime declares `package` [3, 11]; nothing changes for a package without the
+member, and no released package declares it before FL-3. Rollback to 0.12.58 stays open while no
+root is placed from a bundle that uses it; after that, 0.12.58 refuses that package at admission.
+
+**After an independent review (11-13, the coordinator's rulings, in this pull request).**
+- *Which frames are list frames.* A list frame is a frame a step's field observation captures; the
+  frame the kernel captures again before an input when an action gap is configured
+  (`ObservationBeforeInput`, ACT-2) is not one, so the field lists are out of the collector for that
+  one capture and back after it, and the fields report takes the frame as before. Before this, every
+  item but the last reached the list twice under any gap and the list always failed
+  `list_duplicate_key`; now which frames a list is made of does not depend on the gap's
+  configuration. This is no fold by key and value: the core still never folds.
+- *No new work for a package without the member.* The start of a run's capture record returns at
+  once when no list is admitted (no lock), and the fields collector keeps the confidences only while
+  the run reads a field list (no insert). What remains on such a package's run path is a test of an
+  empty list or of an absent relay at each capture, at each collected frame and at the run's
+  successful end: no lock, no allocation, no insert.
+- *One frame per item.* The contract ("Lists from fields", "When the list is whole", item 5) warns
+  package authors that an observation window, a wait step that holds a field page or a confirmation's
+  wait page that is a field page collects one item on several frames inside one step, and that a
+  stability termination ends a run only after steps whose frames did not change.
+- *The revision a bundle declares.* `resource verify`'s `bundle` step keeps writing [3, 3], or
+  [10, 10] for a notices bundle, as it wrote neither 8 nor 9: a bundle whose packs use a field list
+  declares `package` [11, 11] itself (the resource repository's packer, FL-3).
+
+Tests. Contract gate row "#450 FL-1": `field_list_declaration_rules`
+(`crates/actingcommand-contract/src/taskflow/gate_450_fl1.rs`: the declaration reads back as
+written and refuses an unknown member; schemas 0.8 and 0.9, a list without columns, a string column,
+pages with and without the game prefix are declared; each rule of the task and of an entry is
+refused at its pointer with its reason, and admission's detail is `<id>:<member>`). Exec gate row
+"#450 FL-1": the kernel's `field_list_rows_whole`, `field_list_repeats`,
+`field_list_unresolved_rows`, `field_list_start_end` (the builder over frames made in the test),
+`field_list_run_records_traces`, `field_list_run_end_and_start_unseen`,
+`field_list_frame_after_end_fails_run`,
+`field_list_under_an_action_gap` (a scripted device and a fixture provider; the last, after the
+review: with an action gap three items give a whole list of three rows, the fields report holds its
+five frames as a package without the member gets them, and the list's frame trace lands on the last
+frame), `field_list_gate_and_admission_refusals`,
+`field_list_absent_package_runs_as_before` and
+`field_list_refused_under_an_older_schema_or_as_a_layer`
+(`crates/execution-kernel/src/contained_task/gate_450_fl1.rs`), and the declaration gate's
+`field_list_gate_and_admission_refusals` (`crates/pack-containment/src/source/declarations.rs`).
+Adapted for the build only, no assertion changed: the test literals of `TaskProgram`
+(`value_test_tests.rs`, `unique_tests.rs`, `text_locate_tests.rs` three times, one in
+`contained_task.rs`) gain `field_lists: Default::default()`, and the `ListReadingDeclaration` of
+`gate_428_s168_4.rs`'s `list_reading_miss_publishes_nothing` gains an empty `frame_indices`. The
+architecture pin `the_runtime_declares_each_v0120_interface_revision_once` holds `package` [3, 11].
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

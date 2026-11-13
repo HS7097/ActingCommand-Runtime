@@ -361,6 +361,7 @@ impl OperationParser {
         validate_pack_targets_exist(&self.root, &pack, files)?;
         let pages = self.build_pages()?;
         validate_page_rule_targets(&pack, &self.bundles)?;
+        validate_field_list_targets(&pack, &self.bundles)?;
         let navigation = self.build_navigation()?;
         let index = self.build_index()?;
         let primitives = self.build_primitives()?;
@@ -5152,6 +5153,56 @@ fn validate_page_rule_targets(pack: &Value, bundles: &[Bundle]) -> CliOutcome<()
     } else {
         Err(CliError::package_invalid(format!(
             "resource convert page rule validation failed:\n  - {}",
+            errors.join("\n  - ")
+        )))
+    }
+}
+
+/// Workflow #450 FL-1b (`contracts/resource-readings.md`, "Lists from fields", "Declaration"): the
+/// cross-reference of each field list's `start` and `end`: every target they require or forbid is
+/// one template or colour target of the derived recognition pack, so a condition makes no
+/// provider call. The declaration gate has already checked each entry; each error names the
+/// target's pointer.
+fn validate_field_list_targets(pack: &Value, bundles: &[Bundle]) -> CliOutcome<()> {
+    let kinds = array_field(pack, "targets")
+        .iter()
+        .filter_map(|target| {
+            Some((
+                target.get("id").and_then(Value::as_str)?,
+                target.get("type").and_then(Value::as_str)?,
+            ))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut errors = Vec::new();
+    for bundle in bundles {
+        let source = bundle.task_json_path();
+        for (index, list) in array_field(&bundle.data, "field_lists").iter().enumerate() {
+            for condition in ["start", "end"] {
+                for member in ["required", "forbidden"] {
+                    let declared = list
+                        .get(condition)
+                        .map(|value| array_field(value, member))
+                        .unwrap_or_default();
+                    for (target_index, target) in declared.iter().enumerate() {
+                        let target_id = target.as_str().unwrap_or("");
+                        if matches!(kinds.get(target_id), Some(&("template" | "color"))) {
+                            continue;
+                        }
+                        errors.push(format!(
+                            "{}: /field_lists/{index}/{condition}/{member}/{target_index} target \
+                             '{target_id}' is not a template or colour target of the pack",
+                            source.display()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CliError::package_invalid(format!(
+            "resource convert field list validation failed:\n  - {}",
             errors.join("\n  - ")
         )))
     }

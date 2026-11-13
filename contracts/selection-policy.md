@@ -272,10 +272,11 @@ facts; the evaluator only reads them):
   The publisher refuses to start when the active identities plus the
   identities it plans would exceed 256.
 
-**List readings** (Workflow #428 S168-4; [resource-readings.md](resource-readings.md), "List
-readings") are the second publisher: a package's `read_list` step reads a list a page shows, and
-the host writes it under `inventory.list.<name>` at the run's successful end. Their rules differ
-from the decision layer's:
+**List readings** and **field lists** (Workflow #428 S168-4 and Workflow #450;
+[resource-readings.md](resource-readings.md), "List readings" and "Lists from fields") are the
+second publisher: a package's `read_list` step reads a list a page shows, or a field list groups
+OCR fields read one position per frame, and the host writes it under `inventory.list.<name>` at the
+run's successful end. Their rules differ from the decision layer's:
 
 - **Whole or not at all.** A list is written only when every position was read; an unread
   position, a repeated key or more than 1024 positions (since S168-LB1a, 0.12.55; 256 before it;

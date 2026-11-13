@@ -1923,6 +1923,336 @@ pub fn list_reading_fact_key_valid(value: &str) -> bool {
     crate::fact::is_list_reading_key(value) && crate::fact::validate_fact_key(value).is_ok()
 }
 
+/// Workflow #450 FL-1a (`contracts/resource-readings.md`, "Lists from fields"): the most field
+/// lists one task declares in this revision.
+pub const MAX_FIELD_LISTS: usize = 1;
+/// Workflow #450 FL-1a: the most pages a field list's `start` or `end` names.
+pub const MAX_FIELD_LIST_PAGES: usize = 2;
+/// Workflow #450 FL-1a: the most targets a field list's `start` or `end` requires, and the most
+/// it forbids.
+pub const MAX_FIELD_LIST_CONDITION_TARGETS: usize = 8;
+
+/// Workflow #450 FL-1a (`contracts/resource-readings.md`, "Lists from fields"): one entry of a
+/// task's `field_lists`. The fields of one `group` of the task's `post_admission_ocr` (`fields_v1`)
+/// read one position per collected frame: `key_field` (a dictionary entry) gives the row's key,
+/// under `key_column`, and each column a value. The run writes the rows as one `record_list` fact
+/// under `fact_key`, whole or not at all, as a list reading does. Every value read must be
+/// resolved at `minimum_confidence_milli` or above, on top of each target's own floor. The list's
+/// first frame must meet `start` and its last `end`. The declaration never enters an event,
+/// artifact or report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldListDeclaration {
+    pub id: String,
+    pub group: String,
+    pub key_field: String,
+    pub key_column: String,
+    pub columns: Vec<FieldListColumn>,
+    pub minimum_confidence_milli: u16,
+    pub fact_key: String,
+    pub valid_for_ms: u64,
+    pub start: FieldListCondition,
+    pub end: FieldListCondition,
+}
+
+/// Workflow #450 FL-1a: one declared column of a field list: the row member `column` holds the
+/// value of the field `field`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldListColumn {
+    pub column: String,
+    pub field: String,
+}
+
+/// Workflow #450 FL-1a: a field list's `start` or `end`: a frame meets it when it is on one of
+/// `page_ids` (when declared), every `required` target passes on it and no `forbidden` one does,
+/// each judged with its own declaration as a page rule judges it. The targets are template or
+/// colour targets, so a condition makes no provider call.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldListCondition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forbidden: Vec<String>,
+}
+
+/// Workflow #450 FL-1a: where a task's field lists break a rule. `index` is the refused entry's
+/// position in `field_lists` and `id` its declared id, both `None` for a rule of the task (the
+/// array's count or schema, a missing `post_admission_ocr` or `scheduling_outcome`); `member` is
+/// the refused member below the entry (`key_field`, `columns/0/field`, `start/required/1`, …) or
+/// the task's member (`field_lists`, `post_admission_ocr`, `scheduling_outcome`). The declaration
+/// gate refuses it with `resource_declaration_invalid` at [`Self::pointer`] and `reason`;
+/// admission with `contained_task_resource_reading_invalid` and [`Self::detail`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldListRefusal {
+    pub index: Option<usize>,
+    pub id: Option<String>,
+    pub member: String,
+    pub reason: crate::ResourceDeclarationReason,
+}
+
+impl FieldListRefusal {
+    fn task(member: &str, reason: crate::ResourceDeclarationReason) -> Self {
+        Self {
+            index: None,
+            id: None,
+            member: member.to_owned(),
+            reason,
+        }
+    }
+
+    /// The JSON pointer of the refused member in the task: `/field_lists/<i>/<member>`, or
+    /// `/<member>` for a rule of the task.
+    pub fn pointer(&self) -> String {
+        match self.index {
+            Some(index) => format!("/field_lists/{index}/{}", self.member),
+            None => format!("/{}", self.member),
+        }
+    }
+
+    /// Admission's detail: `<id>:<member>`, or the task's member alone.
+    pub fn detail(&self) -> String {
+        match &self.id {
+            Some(id) => format!("{id}:{}", self.member),
+            None => self.member.clone(),
+        }
+    }
+}
+
+/// Workflow #450 FL-1a: what a task's field lists are checked against: its game (a page may be
+/// written with or without the game prefix), its task schema, its fields declaration, its
+/// scheduling outcome, the ids a field list's id must differ from (the task's operations and
+/// reading marks: the id names the producer in `source_detector`) and every other key the task
+/// writes (its marks' keys and its `read_list` steps' keys).
+#[derive(Debug, Clone, Copy)]
+pub struct FieldListTask<'a> {
+    pub game: &'a str,
+    pub schema_version: &'a str,
+    pub fields: Option<&'a OcrFieldsDeclaration>,
+    pub scheduling: Option<&'a SchedulingOutcomeDeclaration>,
+    pub taken_ids: &'a std::collections::BTreeSet<String>,
+    pub written_keys: &'a std::collections::BTreeSet<String>,
+}
+
+/// Workflow #450 FL-1a: the one rule of a task's `field_lists`, shared by the declaration gate and
+/// admission (`contracts/resource-readings.md`, "Lists from fields", "Declaration"), the first
+/// refusal in this order: task schema `0.8` or `0.9` (`UnconsumedField` at `/field_lists`
+/// before); exactly [`MAX_FIELD_LISTS`] entries (`InvalidValue` at `/field_lists`); a
+/// `post_admission_ocr` and a `scheduling_outcome` (`MissingField` at each); then each entry,
+/// member by member, `InvalidValue` at the member:
+///
+/// - `id`: the identifier rule of a mark's id, distinct from every taken id and every other list's;
+/// - `group`: a group of the task's fields;
+/// - `key_field`: a field of that group, a `dictionary_entry`, `privacy` `public`;
+/// - `key_column`: a token (`list_reading_column_valid`);
+/// - `columns`: at most [`MAX_LIST_READING_COLUMNS`]; each `column` a distinct token other than
+///   `key_column`, each `field` another field of the group, at most once, `public`, an
+///   `unsigned_integer` whose `max` is at most [`MAX_RESOURCE_READING_VALUE`] (an integer column)
+///   or a `dictionary_entry` (a string column);
+/// - `minimum_confidence_milli`: `1..=1000`;
+/// - `fact_key`: under `inventory.list.`, a valid fact key, unique among every key the task writes;
+/// - `valid_for_ms`: a fact's lifetime;
+/// - `start`: at least one condition; `page_ids` 1 or 2 distinct field pages; `required` and
+///   `forbidden` each at most [`MAX_FIELD_LIST_CONDITION_TARGETS`] distinct identifiers;
+/// - `end`: `page_ids` required, 1 or 2 distinct pages, each a field page and a terminal page of
+///   the fields' (`fields_recorded`) mapping; `required` and `forbidden` as `start`'s.
+///
+/// The targets of `required` and `forbidden` are template or colour targets of the task: the
+/// package parser checks them against the derived recognition pack and admission against the
+/// sealed one.
+pub fn validate_field_lists(
+    lists: &[FieldListDeclaration],
+    task: FieldListTask<'_>,
+) -> Result<(), FieldListRefusal> {
+    use crate::ResourceDeclarationReason as Reason;
+    if !crate::TaskSchema::at_least(task.schema_version, crate::TaskSchema::V0_8) {
+        return Err(FieldListRefusal::task(
+            "field_lists",
+            Reason::UnconsumedField,
+        ));
+    }
+    if lists.is_empty() || lists.len() > MAX_FIELD_LISTS {
+        return Err(FieldListRefusal::task("field_lists", Reason::InvalidValue));
+    }
+    let Some(fields) = task.fields else {
+        return Err(FieldListRefusal::task(
+            "post_admission_ocr",
+            Reason::MissingField,
+        ));
+    };
+    let Some(scheduling) = task.scheduling else {
+        return Err(FieldListRefusal::task(
+            "scheduling_outcome",
+            Reason::MissingField,
+        ));
+    };
+    let mut ids = std::collections::BTreeSet::new();
+    let mut keys = std::collections::BTreeSet::new();
+    for (index, list) in lists.iter().enumerate() {
+        let mut refused = field_list_refused_member(list, &task, fields, scheduling);
+        if refused.is_none() && !ids.insert(list.id.as_str()) {
+            refused = Some("id".to_owned());
+        }
+        if refused.is_none() && !keys.insert(list.fact_key.as_str()) {
+            refused = Some("fact_key".to_owned());
+        }
+        if let Some(member) = refused {
+            return Err(FieldListRefusal {
+                index: Some(index),
+                id: Some(list.id.clone()),
+                member,
+                reason: Reason::InvalidValue,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// A page of a task's declarations as one form, without the game prefix.
+fn field_list_page<'p>(game: &str, page: &'p str) -> &'p str {
+    page.strip_prefix(game)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(page)
+}
+
+/// The first member of one field list that breaks the rule of [`validate_field_lists`], below
+/// the entry; `None` when the entry keeps every rule that needs only itself and the task.
+fn field_list_refused_member(
+    list: &FieldListDeclaration,
+    task: &FieldListTask<'_>,
+    fields: &OcrFieldsDeclaration,
+    scheduling: &SchedulingOutcomeDeclaration,
+) -> Option<String> {
+    if !resource_identifier(&list.id) || task.taken_ids.contains(&list.id) {
+        return Some("id".to_owned());
+    }
+    if !fields.fields.iter().any(|field| field.group == list.group) {
+        return Some("group".to_owned());
+    }
+    let field = |id: &str| {
+        fields
+            .fields
+            .iter()
+            .find(|field| field.id == id && field.group == list.group)
+    };
+    let public = |field: &OcrFieldDeclaration| field.privacy == OcrFieldPrivacy::Public;
+    if !field(list.key_field.as_str()).is_some_and(|field| {
+        public(field) && matches!(field.value, OcrFieldType::DictionaryEntry { .. })
+    }) {
+        return Some("key_field".to_owned());
+    }
+    if !list_reading_column_valid(&list.key_column) {
+        return Some("key_column".to_owned());
+    }
+    if list.columns.len() > MAX_LIST_READING_COLUMNS {
+        return Some("columns".to_owned());
+    }
+    let mut columns = std::collections::BTreeSet::from([list.key_column.as_str()]);
+    let mut read = std::collections::BTreeSet::from([list.key_field.as_str()]);
+    for (index, column) in list.columns.iter().enumerate() {
+        if !list_reading_column_valid(&column.column) || !columns.insert(column.column.as_str()) {
+            return Some(format!("columns/{index}/column"));
+        }
+        let readable = field(column.field.as_str()).is_some_and(|field| {
+            public(field)
+                && match &field.value {
+                    OcrFieldType::UnsignedInteger { max, .. } => *max <= MAX_RESOURCE_READING_VALUE,
+                    OcrFieldType::DictionaryEntry { .. } => true,
+                }
+        });
+        if !readable || !read.insert(column.field.as_str()) {
+            return Some(format!("columns/{index}/field"));
+        }
+    }
+    if !(1..=1000).contains(&list.minimum_confidence_milli) {
+        return Some("minimum_confidence_milli".to_owned());
+    }
+    if !list_reading_fact_key_valid(&list.fact_key) || task.written_keys.contains(&list.fact_key) {
+        return Some("fact_key".to_owned());
+    }
+    if !(crate::fact::MIN_FACT_TTL_MS..=crate::fact::MAX_FACT_TTL_MS).contains(&list.valid_for_ms) {
+        return Some("valid_for_ms".to_owned());
+    }
+    let field_pages = fields
+        .page_ids
+        .iter()
+        .map(|page| field_list_page(task.game, page))
+        .collect::<std::collections::BTreeSet<_>>();
+    let terminals = scheduling
+        .mappings()
+        .iter()
+        .filter(|mapping| mapping.outcome_key() == fields.outcome_key)
+        .flat_map(|mapping| mapping.terminal_pages())
+        .map(|page| field_list_page(task.game, page))
+        .collect::<std::collections::BTreeSet<_>>();
+    let start = &list.start;
+    if start.page_ids.is_none() && start.required.is_empty() && start.forbidden.is_empty() {
+        return Some("start".to_owned());
+    }
+    let pages = FieldListPages {
+        game: task.game,
+        fields: &field_pages,
+    };
+    field_list_condition_refusal("start", start, pages, None)
+        .or_else(|| field_list_condition_refusal("end", &list.end, pages, Some(&terminals)))
+}
+
+/// The field pages of a task, without the game prefix, and its game.
+#[derive(Clone, Copy)]
+struct FieldListPages<'a> {
+    game: &'a str,
+    fields: &'a std::collections::BTreeSet<&'a str>,
+}
+
+/// The first member of a `start` or `end` (`name`) that breaks its rule: `page_ids` (required
+/// when `terminals` is given, `end`'s) 1 or 2 distinct field pages, each also one of `terminals`
+/// when given; `required` and `forbidden` each at most 8 distinct identifiers.
+fn field_list_condition_refusal(
+    name: &str,
+    condition: &FieldListCondition,
+    pages: FieldListPages<'_>,
+    terminals: Option<&std::collections::BTreeSet<&str>>,
+) -> Option<String> {
+    match &condition.page_ids {
+        None if terminals.is_some() => return Some(format!("{name}/page_ids")),
+        None => {}
+        Some(declared) => {
+            if declared.is_empty() || declared.len() > MAX_FIELD_LIST_PAGES {
+                return Some(format!("{name}/page_ids"));
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for (index, page) in declared.iter().enumerate() {
+                let page = field_list_page(pages.game, page);
+                let held = resource_identifier(page)
+                    && pages.fields.contains(page)
+                    && terminals.is_none_or(|terminals| terminals.contains(page))
+                    && seen.insert(page);
+                if !held {
+                    return Some(format!("{name}/page_ids/{index}"));
+                }
+            }
+        }
+    }
+    for (member, targets) in [
+        ("required", &condition.required),
+        ("forbidden", &condition.forbidden),
+    ] {
+        if targets.len() > MAX_FIELD_LIST_CONDITION_TARGETS {
+            return Some(format!("{name}/{member}"));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for (index, target) in targets.iter().enumerate() {
+            if !resource_identifier(target) || !seen.insert(target.as_str()) {
+                return Some(format!("{name}/{member}/{index}"));
+            }
+        }
+    }
+    None
+}
+
 /// Adjustments one task may declare (Workflow #384 D2-S3), as many as reading marks.
 pub const MAX_RESOURCE_ADJUSTMENTS: usize = MAX_RESOURCE_READINGS;
 
@@ -2421,3 +2751,8 @@ pub enum TaskParamValue {
     Array(Vec<TaskParamValue>),
     Object(BTreeMap<String, TaskParamValue>),
 }
+
+// Workflow #450 FL-1a (register §1.343): the shared rule of a task's field lists.
+#[cfg(test)]
+#[path = "taskflow/gate_450_fl1.rs"]
+mod gate_450_fl1;
