@@ -58,15 +58,22 @@ impl Initiator {
         Self::LabWatchdog,
     ];
 
-    /// The word, exactly as the contract writes it.
+    /// The word, exactly as the contract writes it: the contract crate's (Workflow #434
+    /// LAB-6S1a), the one place the six strings are written.
     pub const fn as_str(self) -> &'static str {
+        self.word().as_str()
+    }
+
+    /// This initiator as the contract crate's, which `BindChannel` declares (LAB-6S1a).
+    pub const fn word(self) -> actingcommand_contract::Initiator {
+        use actingcommand_contract::Initiator as Word;
         match self {
-            Self::Ui => "UI",
-            Self::LabCli => "Lab-CLI",
-            Self::LabMcp => "Lab-MCP",
-            Self::LabAuthoring => "Lab-制包",
-            Self::LabRescue => "Lab-救急",
-            Self::LabWatchdog => "Lab-看门狗",
+            Self::Ui => Word::Ui,
+            Self::LabCli => Word::LabCli,
+            Self::LabMcp => Word::LabMcp,
+            Self::LabAuthoring => Word::LabAuthoring,
+            Self::LabRescue => Word::LabRescue,
+            Self::LabWatchdog => Word::LabWatchdog,
         }
     }
 

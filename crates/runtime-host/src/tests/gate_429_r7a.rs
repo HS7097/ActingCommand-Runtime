@@ -92,7 +92,11 @@ fn r7a_both_player_hold_kinds_answer_not_implemented_on_every_channel_with_no_ef
     let mut clients = Vec::new();
     for (channel, via, actor, source) in channels {
         let mut client = TestClient::connect(&host);
-        let bind = client.request(RuntimeOperation::BindChannel { channel, via });
+        let bind = client.request(RuntimeOperation::BindChannel {
+            channel,
+            via,
+            initiator: None,
+        });
         let bound = client.send(&bind);
         assert_eq!(bound.state(), RuntimeReceiptState::Completed, "{channel:?}");
         clients.push((client, channel, actor, source));

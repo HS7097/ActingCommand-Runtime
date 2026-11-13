@@ -285,10 +285,11 @@ fn serve(mut stream: TcpStream, script: &Script) {
                 None,
             ),
             // Workflow #389 U-2: the handshake's BindChannel.
-            RuntimeOperation::BindChannel { channel, via } => (
+            RuntimeOperation::BindChannel { channel, via, .. } => (
                 RuntimeResult::ChannelBound {
                     channel: *channel,
                     via: *via,
+                    initiator: None,
                 },
                 None,
             ),

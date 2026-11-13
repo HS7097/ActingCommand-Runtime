@@ -17650,9 +17650,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: a BindChannel whose via names a forwarding counter on a channel other than lab (Workflow #389 U-2; via exists only on the Lab channel).",
-      "common_causes": "A client defect: a counter program named via for its own connection.",
-      "handling": "Report the client defect. Only actinglab takes --via, from the counter that forwards the work."
+      "description": "Runtime contract validation refused a value: a BindChannel whose via names a forwarding counter on a channel other than lab (Workflow #389 U-2; via exists only on the Lab channel), or whose initiator is not one of the five Lab words, names one on a channel other than lab or names one together with via (Workflow #434 LAB-6S1a). The connection stays unbound.",
+      "common_causes": "A client defect: a counter program named via for its own connection, or a client declared an initiator on another channel than lab, with via, or one outside the Lab words (UI is never declared).",
+      "handling": "Report the client defect. Only actinglab takes --via, from the counter that forwards the work; only a Lab connection declares an initiator, one of the five Lab words of contracts/lab-two-entries.md section 4.1, without via."
     },
     "request_performance_status_completed": {
       "category": "success",

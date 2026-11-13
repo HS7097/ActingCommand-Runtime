@@ -3610,3 +3610,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_idle3_host::idle_runs_counted_follows_the_policys_dispatches",
 ]
 incident = ["#447 IDLE-3"]
+
+# Workflow #434 LAB-6S1a (0.12.58; register §1.287, "Slice LAB-6S1a"; brief rd-1113/brief-lab6s1a.md; contracts/lab-two-entries.md §2.2, §4.3; contracts/runtime-interface.md, "Binding"): the first part of gate_two_entries. The door also takes BindChannel {channel: lab, initiator} with each of the five Lab words: the connection is bound, ChannelBound echoes the word, every receipt of the connection carries it beside channel, the Status answer names no initiator, and a second BindChannel is refused channel_binding_exists naming lab with the binding and its word kept. Every binding without a word (lab, lab with via mcp, cli, mcp, ui) answers its ChannelBound and a later Health receipt byte for byte as the literal JSON of the test, the bytes before this slice; so does a connection bound by its first request's envelope source (ui, lab, cli). A word on ui, cli or mcp, a word with via, the word UI on lab or ui and a word outside the list (wrong case included) are refused invalid_bind_channel, the receipt names no channel and the connection stays unbound: a valid BindChannel on it then binds and a second one is channel_binding_exists. The runtime client: a Lab session configured with each Lab word sends it in the handshake's BindChannel and takes the echo; an echo without the word, with another word, or with a word the session did not declare fails the connect runtime_result_unexpected, as an echo of another channel does; the reconnect after a dropped request and the player hold's temporary client (another owner epoch) bind the same channel and word
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_434_lab6s1a::lab6s1a_lab_with_each_lab_word_is_bound_echoed_and_carried_by_its_receipts",
+    "actingcommand-runtime-host::lib::tests::gate_434_lab6s1a::lab6s1a_a_binding_without_a_word_answers_byte_for_byte_as_before",
+    "actingcommand-runtime-host::lib::tests::gate_434_lab6s1a::lab6s1a_a_refused_word_leaves_the_connection_unbound",
+    "actingcommand-runtime-client::lib::tests::gate_434_lab6s1a::lab6s1a_a_lab_session_declares_its_word_and_takes_its_echo",
+    "actingcommand-runtime-client::lib::tests::gate_434_lab6s1a::lab6s1a_an_echo_that_differs_in_the_word_is_refused",
+    "actingcommand-runtime-client::lib::tests::gate_434_lab6s1a::lab6s1a_a_reconnect_and_the_temporary_client_declare_the_same_word",
+]
+incident = ["#434 LAB-6S1a"]

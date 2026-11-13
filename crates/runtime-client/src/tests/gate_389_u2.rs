@@ -74,19 +74,23 @@ fn answer_handshake(stream: &mut TcpStream, owner_epoch: OwnerEpoch) -> ChannelB
     assert!(matches!(health.operation(), RuntimeOperation::Health));
     write_scripted_result(stream, &health, RuntimeResult::Health { owner_epoch });
     let bind = read_scripted_request(stream);
-    let RuntimeOperation::BindChannel { channel, via } = bind.operation() else {
+    let RuntimeOperation::BindChannel {
+        channel,
+        via,
+        initiator,
+    } = bind.operation()
+    else {
         panic!("BindChannel after Health, got {:?}", bind.operation());
     };
-    let binding = ChannelBinding {
-        channel: *channel,
-        via: *via,
-    };
+    let binding = ChannelBinding::requested(*channel, *via, initiator.as_ref())
+        .expect("the client declares a binding the contract allows");
     write_scripted_result(
         stream,
         &bind,
         RuntimeResult::ChannelBound {
             channel: binding.channel,
             via: binding.via,
+            initiator: binding.initiator,
         },
     );
     binding
@@ -105,6 +109,7 @@ fn forwarded_lab_config(root: &TempDir) -> RuntimeClientConfig {
 const FORWARDED_LAB: ChannelBinding = ChannelBinding {
     channel: RuntimeChannel::Lab,
     via: Some(ChannelVia::Mcp),
+    initiator: None,
 };
 
 // TU-2: the `send_or_dropped` fallback reconnects, and the new connection binds the same

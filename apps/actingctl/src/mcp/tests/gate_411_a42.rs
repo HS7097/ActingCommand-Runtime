@@ -925,11 +925,12 @@ fn serve(
         }
         let receipt = match request.operation() {
             RuntimeOperation::Health => completed(&request, RuntimeResult::Health { owner_epoch }),
-            RuntimeOperation::BindChannel { channel, via } => completed(
+            RuntimeOperation::BindChannel { channel, via, .. } => completed(
                 &request,
                 RuntimeResult::ChannelBound {
                     channel: *channel,
                     via: *via,
+                    initiator: None,
                 },
             ),
             RuntimeOperation::Status => completed(

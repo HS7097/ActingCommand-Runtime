@@ -736,13 +736,15 @@ impl HostShared {
             // Workflow #389 U-1: the contract has these shapes and later slices add the
             // behaviour (LoadPack and UnloadPack U-3, UpgradeState and UpgradeStateStatus U-4).
             // Until then each is refused and records nothing.
-            // Workflow #389 U-2.
-            RuntimeOperation::BindChannel { channel, via } => self.bind_channel(
+            // Workflow #389 U-2; Workflow #434 LAB-6S1a: the initiator a `lab` connection
+            // declares is kept with its channel.
+            RuntimeOperation::BindChannel {
+                channel,
+                via,
+                initiator,
+            } => self.bind_channel(
                 connection_id,
-                ChannelBinding {
-                    channel: *channel,
-                    via: *via,
-                },
+                ChannelBinding::requested(*channel, *via, initiator.as_ref()),
             ),
             RuntimeOperation::LoadPack { .. } => Err(not_implemented(HostLocation::LoadPack)),
             RuntimeOperation::UnloadPack { .. } => Err(not_implemented(HostLocation::UnloadPack)),
