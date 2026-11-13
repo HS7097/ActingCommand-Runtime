@@ -1002,7 +1002,9 @@ other trace, as `record stop` records none.
 **Naming.** A recording is named by its `record_id`: the id its session header carries
 (`record-<instance>.json`, from `record start --record-id` or generated), which also names its
 directory `record-artifacts/<record_id>/lab/`. Without `--record-id` both commands name the
-recording of the instance's session header.
+recording of the instance's session header. A recording whose header was replaced (by `record
+start --force`, or by a later `record start` after it was archived) keeps that id in its step
+table and its directory, and is named by it (fix 1, "Left behind by `record start --force`").
 
 ### record archive
 
@@ -1039,7 +1041,10 @@ session header hold:
 ```
 
 - The header: `record_id`, `instance`, `task_id` and `started_at_unix_ms` as the session header
-  names them; `application`, the game and server the step table names (the session header names
+  names them, read from the step table, which carries the same four (`record start` writes them
+  from the header, and every command holds them equal to it; for a recording `record start
+  --force` left behind they are what its replaced header held); `application`, the game and server
+  the step table names (the session header names
   no application; `null` where the step table has none); `archived_at_unix_ms`; `step_count`;
   `written_by`, the commit of the program that wrote the manifest; `step_table`, the step table's
   file and its sha256 when the manifest was written, against which a copy is checked.
@@ -1059,6 +1064,14 @@ session header hold:
 
 **The copy** (`--copy-to <dir>`):
 
+- Fix 1: `<dir>` is an absolute path. An empty value, a value of only white space and a relative
+  path are refused `validation_failed` (exit 2, `details{path, reason}`, `empty` or
+  `not_absolute`), as the module refuses its other parameters, before the session is read and
+  before anything is written: no manifest, no copy, the session as it was. A relative path would
+  name a place under the current directory of whichever process serves the command (an empty one
+  that directory itself). The same rule holds on the command line and in `serve --stdio`; the
+  Lab's MCP server refuses such a path itself before it sends anything (`arguments_invalid`,
+  `not_absolute`), as it refuses every path parameter.
 - The directory must not exist (it is created, with its parents) or must be empty. Anything else
   is refused `record_archive_target_not_empty` (exit 3, `details{path, reason}`, `not_empty` or
   `not_a_directory`) before anything is written: no manifest, the session as it was.
@@ -1080,16 +1093,41 @@ outside the directory) and hashes every file it lists in the recording's directo
 (`record_archive_verify_failed`, `checked: "recording"`, on a file that does not hold its sha256);
 with `--copy-to` it then copies as above. That is the retry after a failed copy.
 
+**Left behind by `record start --force`** (fix 1, the coordinator's ruling on the independent
+review). `record start --force` replaces the session header and starts a new directory; the old
+recording keeps its directory and its step table (`active`), and the header names another
+recording. `record archive --record-id <id>` works on it as on any recording: it writes the
+manifest from that directory's step table (`n` as above; `record_id`, `instance`, `task_id` and
+`started_at_unix_ms` the step table's, which are what the replaced header held) and copies with
+`--copy-to` exactly as above. It writes no session header, since the header belongs to the other
+recording: the answer's `record` is `null` and `lab.session_header` is `{record_id, status,
+changed: false}`, the recording the header names and its status (`null` without a header). Once it
+has a manifest it is an archived recording: named again it gets no second manifest, and `record
+reopen --record-id <id>` makes it the active one under the rule of every archived recording
+("record reopen"), refused while another recording is active. The same holds for an archived
+recording whose header a later `record start` replaced: its answer names that header too.
+
+**After the manifest** (fix 1). Once the manifest is there, written now or before, a session
+header that cannot be read or written fails the command with that failure, its `details` adding
+`record_id` and `manifest{file, path, sha256, steps, written}`, so that the manifest's path is
+known: the manifest stays, the header is as it was, and a later `record archive` of an active
+recording writes the next manifest.
+
 **The answer** is `{status: "archived" | "already_archived", record, path, lab}`: `record` the
 session header when it names the recording, `null` otherwise; `lab` `{status, record_id,
 record_started_at_unix_ms, instance, path (the recording's directory), manifest{file, path, sha256,
-steps, written}, copy?{path, files}}`, `written` false for a recording named again.
+steps, written}, copy?{path, files}, session_header?{record_id, status, changed}}`, `written` false
+for a recording named again, `session_header` present only when the session header does not name
+the recording.
 
-**Refused, nothing written:** no `--record-id` and no active recording (no session, or a stopped or
-archived one): `record_session_not_active`; a named recording that is neither the instance's active
-one nor archived: `record_not_archived` (exit 3, `details{record_id, state}`, `state` `missing`,
-`stopped`, `unarchived` for a directory without a manifest, such as one `record start --force` left
-behind, or the session header's status); one of another instance: `record_instance_mismatch`; an
+**Refused, nothing written:** `--copy-to` empty, blank or relative: `validation_failed` (above); no
+`--record-id` and no active recording (no session, or a stopped or archived one):
+`record_session_not_active`; a named recording that is neither the instance's active one, nor
+archived, nor one whose step table is `active` while the header names another recording:
+`record_not_archived` (exit 3, `details{record_id, state}`, `state` `missing` without a step table
+of that id, `stopped` for a stopped step table, the session header's status when it names the
+recording and is neither `active` nor `archived`, `unarchived` when the header names it `archived`
+and its directory holds no manifest); one of another instance: `record_instance_mismatch`; an
 active session whose step table is missing or does not read: `record_lab_unavailable` (`reason`
 `lab_recording_missing`, `lab_recording_unreadable` or `lab_recording_mismatch`).
 
@@ -1104,6 +1142,11 @@ Makes an archived recording of the instance its active recording again:
   `lease_id` `null`, no `steps`. The step table needs no change (archiving never rewrote it), and
   every manifest stays as a file: a later `record archive` writes the next one
   (`archive-manifest-2.json`, …).
+- Fix 1: a recording `record start --force` left behind is reopened so once `record archive
+  --record-id` has written its manifest ("Left behind by `record start --force`"); before that it
+  is `unarchived`. What the replaced header held besides those four (its `holder`, `lease_id` and
+  the `record step` entries of `steps`, which `record stop` does not read) is not restored: nothing
+  is guessed, and the package is built from the step table alone.
 - Then `record mark` takes marks on its steps and `record stop` builds the package the same
   recording would have built had it never been archived.
 - Refused, nothing written: while another recording is active on the instance,
@@ -1538,7 +1581,7 @@ equal value is accepted.
 
 | exit | codes |
 |---|---|
-| 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
+| 2 | `validation_failed` (Workflow #449 REC-ARCH fix 1: also `record archive --copy-to` empty, blank or relative), `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
 | 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written; Workflow #449 REC-ARCH: also a copy file that cannot be written), the state directory cannot be created, `record_archive_verify_failed` (Workflow #449 REC-ARCH) |

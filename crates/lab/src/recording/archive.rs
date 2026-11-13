@@ -10,8 +10,12 @@
 //!   step without an effect, and never deletes, moves or rewrites a frame or the step table.
 //! - Named again by its id, an archived recording gets no second manifest: the latest one is read
 //!   and every file it lists is hashed against it.
+//! - Fix 1: named by its id, a recording `record start --force` left behind (its directory and
+//!   step table intact, the session header another recording's) is archived from its own step
+//!   table; its session header, which belongs to the other recording, is left as it is.
 //! - `record archive --copy-to` ([`record_archive_copy`]) copies the frames, the step table and the
-//!   manifest into a directory that does not exist or is empty, checked before anything is
+//!   manifest into a directory that does not exist or is empty, named by an absolute path (fix 1:
+//!   an empty, blank or relative one is refused `validation_failed`), checked before anything is
 //!   written, and hashes every copy against the manifest. A failure names the file and the reason;
 //!   what was copied stays, and the recording stays archived.
 //! - `record reopen` ([`record_reopen`]) finds the archived recording the `record` command makes
@@ -22,15 +26,15 @@
 
 use super::RecordingLock;
 use super::model::{
-    ArchiveCopyOutcome, ArchiveManifestRef, ClickGesture, LAB_RECORDING_ARCHIVE_SCHEMA,
-    LAB_RECORDING_SCHEMA, LabRecording, OpaqueJson, RecordArchiveOptions, RecordArchiveOutcome,
-    RecordPoint, RecordRect, RecordReopenOptions, RecordReopenOutcome, RecordedFrame,
-    RecordingStep, StepTransition,
+    ArchiveCopyOutcome, ArchiveManifestRef, ArchiveSessionHeader, ClickGesture,
+    LAB_RECORDING_ARCHIVE_SCHEMA, LAB_RECORDING_SCHEMA, LabRecording, OpaqueJson,
+    RecordArchiveOptions, RecordArchiveOutcome, RecordPoint, RecordRect, RecordReopenOptions,
+    RecordReopenOutcome, RecordedFrame, RecordingStep, StepTransition,
 };
 use super::steps::{lab_unavailable, not_active};
 use super::store::{
-    LabFile, OldRecordView, RECORDING_FILE, blocked, hex_sha256, lab_dir, load_lab, now_unix_ms,
-    read_old_record, recording_path, state_io, with_details,
+    LabFile, OldRecordView, RECORDING_FILE, blocked, hex_sha256, invalid, lab_dir, load_lab,
+    now_unix_ms, read_old_record, recording_path, state_io, with_details,
 };
 use crate::codes::LabCode;
 use actingcommand_contract::{LabError, LabErrorClass, LabResult};
@@ -57,7 +61,10 @@ const FRAMES_DIR: &str = "frames";
 #[serde(deny_unknown_fields)]
 pub(crate) struct ArchiveManifest {
     pub(crate) schema_version: String,
-    /// The session header's `record_id`, `instance`, `task_id` and `started_at_unix_ms`.
+    /// The session header's `record_id`, `instance`, `task_id` and `started_at_unix_ms`, as the
+    /// step table carries them: `record start` writes them from the header, and every command holds
+    /// the four equal to it (fix 1: for a recording `record start --force` left behind, what its
+    /// replaced header held).
     pub(crate) record_id: String,
     pub(crate) instance: String,
     pub(crate) task_id: String,
@@ -176,11 +183,14 @@ impl ArchiveManifest {
 /// `record archive`: the instance's active recording (or the one `record_id` names) archived, or
 /// an archived recording named again; with `copy_to` its target checked first, before anything is
 /// written. The copy itself is [`record_archive_copy`], once the `record` command has marked the
-/// session header `archived` (`ends_session`).
+/// session header `archived` (`ends_session`). Fix 1: a recording the session header does not name
+/// (`archive_unnamed`) is archived from its own step table, its header left as it is.
 pub fn record_archive(
     lock: &RecordingLock,
     options: &RecordArchiveOptions,
 ) -> LabResult<RecordArchiveOutcome> {
+    // Fix 1: a copy target that is no absolute path is refused before the session is read.
+    let copy_to = options.copy_to.as_deref().map(copy_target).transpose()?;
     let header = current_header(lock)?;
     let record_id = match (&options.record_id, &header) {
         (Some(record_id), _) => record_id.clone(),
@@ -200,31 +210,31 @@ pub fn record_archive(
         }
     };
     // Nothing is written before the copy target is known to be usable.
-    if let Some(target) = &options.copy_to {
-        preflight_copy_target(Path::new(target))?;
+    if let Some(target) = copy_to {
+        preflight_copy_target(target)?;
     }
     match header.as_ref().filter(|old| old.record_id == record_id) {
         Some(old) if old.status == ACTIVE => archive_active(lock.state_dir(), old, options),
         Some(old) if old.status == ARCHIVED => archived_again(lock, &record_id),
         Some(old) => Err(not_archived(Some(&record_id), &old.status)),
-        None => archived_again(lock, &record_id),
+        None => archive_unnamed(lock, &record_id, header.as_ref(), options),
     }
 }
 
 /// The copy of an archived recording into `target` (`record archive --copy-to`): its frames, its
 /// step table and its manifest, each hashed against the manifest once all are copied. `target`
-/// must not exist or must be empty. A file that cannot be copied is `record_state_io_failed`, a
-/// copy that does not hold its sha256 `record_archive_verify_failed`; both name the file, and
-/// nothing is deleted.
+/// must be an absolute path (fix 1) and must not exist or must be empty. A file that cannot be
+/// copied is `record_state_io_failed`, a copy that does not hold its sha256
+/// `record_archive_verify_failed`; both name the file, and nothing is deleted.
 pub fn record_archive_copy(
     lock: &RecordingLock,
     archived: &RecordArchiveOutcome,
     target: &str,
 ) -> LabResult<ArchiveCopyOutcome> {
+    let target = copy_target(target)?;
     if archived.instance != lock.instance() {
         return Err(instance_mismatch(&archived.instance, lock.instance()));
     }
-    let target = Path::new(target);
     preflight_copy_target(target)?;
     let dir = Path::new(&archived.path);
     let (manifest, _) = read_manifest(Path::new(&archived.manifest.path), &archived.record_id)?;
@@ -359,6 +369,8 @@ fn archive_active(
     old: &OldRecordView,
     options: &RecordArchiveOptions,
 ) -> LabResult<RecordArchiveOutcome> {
+    // `load_lab` holds the step table's record id, instance, task id and start equal to the
+    // header's.
     let recording = match load_lab(state_dir, old)? {
         LabFile::Ready(recording) => *recording,
         LabFile::Missing => return Err(lab_unavailable("lab_recording_missing")),
@@ -370,21 +382,59 @@ fn archive_active(
             recording.record_id, recording.status
         )));
     }
-    let dir = lab_dir(state_dir, &old.record_id);
-    let table = recording_path(state_dir, &old.record_id);
+    write_archive(state_dir, &recording, &options.written_by, true)
+}
+
+/// Fix 1: a recording of the instance that the session header does not name, by its id: one
+/// `record start --force` left behind (its directory and step table intact, the header replaced by
+/// another recording's), or an archived one whose header a later `record start` replaced. Without
+/// a manifest, its manifest is written from its own step table; with one, it is named again. The
+/// session header belongs to another recording (or there is none): neither this nor the `record`
+/// command writes it, and the answer's `session_header` says so.
+fn archive_unnamed(
+    lock: &RecordingLock,
+    record_id: &str,
+    header: Option<&OldRecordView>,
+    options: &RecordArchiveOptions,
+) -> LabResult<RecordArchiveOutcome> {
+    let (recording, dir, manifest) = named_recording(lock, record_id)?;
+    let mut archived = match manifest {
+        Some(file) => verified_again(&recording, &dir, file)?,
+        None => write_archive(lock.state_dir(), &recording, &options.written_by, false)?,
+    };
+    archived.session_header = Some(ArchiveSessionHeader {
+        record_id: header.map(|old| old.record_id.clone()),
+        status: header.map(|old| old.status.clone()),
+        changed: false,
+    });
+    Ok(archived)
+}
+
+/// Writes the manifest of `recording`, whose step table is active, into its directory; nothing
+/// else changes. `ends_session`: the session header names the recording, and the `record`
+/// command then marks it `archived`.
+fn write_archive(
+    state_dir: &Path,
+    recording: &LabRecording,
+    written_by: &str,
+    ends_session: bool,
+) -> LabResult<RecordArchiveOutcome> {
+    let dir = lab_dir(state_dir, &recording.record_id);
+    let table = recording_path(state_dir, &recording.record_id);
     let bytes = fs::read(&table)
         .map_err(|error| state_io(format!("failed to read {}: {error}", table.display())))?;
-    let manifest = manifest_of(&recording, old, hex_sha256(&bytes), &options.written_by);
+    let manifest = manifest_of(recording, hex_sha256(&bytes), written_by);
     let manifest = write_manifest(&dir, &manifest)?;
     Ok(RecordArchiveOutcome {
         status: "archived".to_string(),
-        record_id: old.record_id.clone(),
-        record_started_at_unix_ms: old.started_at_unix_ms,
-        instance: old.instance.clone(),
+        record_id: recording.record_id.clone(),
+        record_started_at_unix_ms: recording.record_started_at_unix_ms,
+        instance: recording.instance.clone(),
         path: display(&dir),
         manifest,
         copy: None,
-        ends_session: true,
+        session_header: None,
+        ends_session,
     })
 }
 
@@ -392,9 +442,20 @@ fn archive_active(
 /// it lists is hashed against it.
 fn archived_again(lock: &RecordingLock, record_id: &str) -> LabResult<RecordArchiveOutcome> {
     let (recording, dir, file) = archived_recording(lock, record_id)?;
+    verified_again(&recording, &dir, file)
+}
+
+/// The archived `recording`, in `dir`, named again: its latest manifest `file` is read, and every
+/// file it lists is hashed against it.
+fn verified_again(
+    recording: &LabRecording,
+    dir: &Path,
+    file: String,
+) -> LabResult<RecordArchiveOutcome> {
+    let record_id = recording.record_id.as_str();
     let path = dir.join(&file);
     let (manifest, bytes) = read_manifest(&path, record_id)?;
-    let failures = check_files(&dir, &manifest.files());
+    let failures = check_files(dir, &manifest.files());
     if !failures.is_empty() {
         return Err(verify_failed("recording", failures, &[]));
     }
@@ -403,7 +464,7 @@ fn archived_again(lock: &RecordingLock, record_id: &str) -> LabResult<RecordArch
         record_id: record_id.to_owned(),
         record_started_at_unix_ms: recording.record_started_at_unix_ms,
         instance: recording.instance.clone(),
-        path: display(&dir),
+        path: display(dir),
         manifest: ArchiveManifestRef {
             file,
             path: display(&path),
@@ -412,16 +473,31 @@ fn archived_again(lock: &RecordingLock, record_id: &str) -> LabResult<RecordArch
             written: false,
         },
         copy: None,
+        session_header: None,
         ends_session: false,
     })
 }
 
-/// The archived recording `record_id` of the lock's instance: its step table (still active: an
-/// archive never rewrites it, a stop does), its directory and its latest manifest's file name.
+/// The archived recording `record_id` of the lock's instance: [`named_recording`] with a manifest
+/// (`record_not_archived`, `unarchived`, without one).
 fn archived_recording(
     lock: &RecordingLock,
     record_id: &str,
 ) -> LabResult<(LabRecording, PathBuf, String)> {
+    let (recording, dir, manifest) = named_recording(lock, record_id)?;
+    let Some(file) = manifest else {
+        return Err(not_archived(Some(record_id), "unarchived"));
+    };
+    Ok((recording, dir, file))
+}
+
+/// The recording `record_id` of the lock's instance, read by its id: its step table (still active:
+/// an archive never rewrites it, a stop does), its directory and its latest manifest's file name,
+/// `None` before it has one.
+fn named_recording(
+    lock: &RecordingLock,
+    record_id: &str,
+) -> LabResult<(LabRecording, PathBuf, Option<String>)> {
     let state_dir = lock.state_dir();
     let Some(recording) = read_recording(state_dir, record_id)? else {
         return Err(not_archived(Some(record_id), "missing"));
@@ -433,10 +509,8 @@ fn archived_recording(
         return Err(not_archived(Some(record_id), &recording.status));
     }
     let dir = lab_dir(state_dir, record_id);
-    let Some((_, file)) = latest_manifest(&dir)? else {
-        return Err(not_archived(Some(record_id), "unarchived"));
-    };
-    Ok((recording, dir, file))
+    let manifest = latest_manifest(&dir)?.map(|(_, file)| file);
+    Ok((recording, dir, manifest))
 }
 
 /// The step table of the recording `record_id`, read by its id; `None` when there is none.
@@ -554,24 +628,25 @@ fn write_manifest(dir: &Path, manifest: &ArchiveManifest) -> LabResult<ArchiveMa
     })
 }
 
-/// The manifest of `recording`, whose session header is `old` and whose step table file has the
-/// sha256 `step_table_sha256`.
+/// The manifest of `recording`, whose step table file has the sha256 `step_table_sha256`. Its
+/// record id, instance, task id and start are the step table's, which are the session header's
+/// (`record start` writes them from the header, and every command holds the four equal to it);
+/// fix 1: for a recording `record start --force` left behind, what its replaced header held.
 fn manifest_of(
     recording: &LabRecording,
-    old: &OldRecordView,
     step_table_sha256: String,
     written_by: &str,
 ) -> ArchiveManifest {
     ArchiveManifest {
         schema_version: LAB_RECORDING_ARCHIVE_SCHEMA.to_owned(),
-        record_id: old.record_id.clone(),
-        instance: old.instance.clone(),
-        task_id: old.task_id.clone(),
+        record_id: recording.record_id.clone(),
+        instance: recording.instance.clone(),
+        task_id: recording.task_id.clone(),
         application: ArchiveApplication {
             game: recording.game.clone(),
             server: recording.server.clone(),
         },
-        started_at_unix_ms: old.started_at_unix_ms,
+        started_at_unix_ms: recording.record_started_at_unix_ms,
         archived_at_unix_ms: now_unix_ms(),
         step_count: recording.steps.len(),
         written_by: written_by.to_owned(),
@@ -768,6 +843,31 @@ fn verify_failed(checked: &str, failures: Vec<Value>, copied: &[String]) -> LabE
         "failures": failures,
         "copied": copied
     }))
+}
+
+/// Fix 1: `--copy-to` as a path, which must be absolute: an empty value, one of only white space
+/// and a relative path are refused `validation_failed` (`details{path, reason}`, `empty` or
+/// `not_absolute`), as the module refuses its other parameters, before anything is read or written
+/// for the copy. A relative path would name a place under the current directory of whichever
+/// process serves the command, and an empty one that directory itself.
+fn copy_target(target: &str) -> LabResult<&Path> {
+    let (reason, said) = if target.trim().is_empty() {
+        ("empty", "empty")
+    } else if Path::new(target).is_absolute() {
+        return Ok(Path::new(target));
+    } else {
+        ("not_absolute", "not an absolute path")
+    };
+    Err(with_details(
+        invalid(
+            "validation_failed",
+            format!(
+                "--copy-to '{target}' is {said}: the copy goes into a directory named by an \
+                 absolute path; nothing was written"
+            ),
+        ),
+        json!({"path": target, "reason": reason}),
+    ))
 }
 
 /// `--copy-to` names a directory that does not exist or is empty; anything else is refused before

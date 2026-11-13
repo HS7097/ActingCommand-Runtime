@@ -1322,8 +1322,9 @@ pub struct RecordArchiveOptions {
     /// The recording named by its id, the id its session header carries (`--record-id`); `None`
     /// names the instance's active recording.
     pub record_id: Option<String>,
-    /// The directory the frames, the step table and the manifest are copied to (`--copy-to`); it
-    /// must not exist or must be empty.
+    /// The directory the frames, the step table and the manifest are copied to (`--copy-to`): an
+    /// absolute path (fix 1: an empty, blank or relative one is refused `validation_failed`) of a
+    /// directory that does not exist or is empty.
     pub copy_to: Option<String>,
     /// The build that writes the manifest (the commit of the program that runs the command).
     pub written_by: String,
@@ -1351,6 +1352,20 @@ pub struct ArchiveCopyOutcome {
     pub files: Vec<String>,
 }
 
+/// Workflow #449 REC-ARCH, fix 1: the instance's session header when it does not name the recording
+/// `record archive` acted on (one `record start --force` left behind, or an archived one whose
+/// header a later `record start` replaced): it belongs to another recording, and the command
+/// leaves it as it is.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ArchiveSessionHeader {
+    /// The recording the header names; `None` without a header.
+    pub record_id: Option<String>,
+    /// Its status; `None` without a header.
+    pub status: Option<String>,
+    /// Always `false`: the command did not write it.
+    pub changed: bool,
+}
+
 /// Workflow #449 REC-ARCH: what `record archive` did. `ends_session` says that the instance's
 /// active recording was archived now: the `record` command then marks its session header
 /// `archived`, before any copy.
@@ -1366,6 +1381,10 @@ pub struct RecordArchiveOutcome {
     pub manifest: ArchiveManifestRef,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub copy: Option<ArchiveCopyOutcome>,
+    /// Fix 1: present when the session header does not name the recording, which it leaves as it
+    /// is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_header: Option<ArchiveSessionHeader>,
     #[serde(skip)]
     pub ends_session: bool,
 }

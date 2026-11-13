@@ -22,7 +22,7 @@ use actingcommand_lab::{
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -2965,7 +2965,11 @@ fn run_record_mark(
 /// the one an archived recording named again has; the session header of the instance's active
 /// recording becomes `archived` before any copy; then the copy, checked against the manifest. A
 /// failed copy answers its failure with `archived: true`, the recording and its manifest in its
-/// details: the recording stays archived and nothing is deleted.
+/// details: the recording stays archived and nothing is deleted. Fix 1: a session header that
+/// cannot be read or written once the manifest is there answers its failure with the recording and
+/// its manifest in its details too; a recording the header does not name (one `record start
+/// --force` left behind) leaves the header as it is (`ends_session` false). The copy target must be
+/// an absolute path: the Lab refuses another (`validation_failed`) before anything is written.
 fn run_record_archive(
     flags: &FlagArgs,
     record_path: &Path,
@@ -2977,26 +2981,35 @@ fn run_record_archive(
         written_by: env!("ACTINGCOMMAND_RUNTIME_HEAD").to_owned(),
     };
     let mut archived = record_archive(lock, &options)?;
-    let mut record = read_json_file::<SessionRecordContext>(record_path)?;
+    // Fix 1: the manifest is there, written now or before; a person must learn that from a failure
+    // of the session header as well.
+    let with_manifest = |error: CliError| {
+        with_archive_context(
+            error,
+            &[
+                ("record_id", json!(&archived.record_id)),
+                ("manifest", json!(&archived.manifest)),
+            ],
+        )
+    };
+    let mut record = read_json_file::<SessionRecordContext>(record_path).map_err(with_manifest)?;
     if archived.ends_session
         && let Some(record) = record.as_mut()
     {
         record.status = "archived".to_string();
         record.updated_at_unix_ms = current_unix_ms();
-        write_json_file_atomic(record_path, &*record)?;
+        write_json_file_atomic(record_path, &*record).map_err(with_manifest)?;
     }
     if let Some(target) = &options.copy_to {
-        let context = json!({
-            "record_id": &archived.record_id,
-            "archived": true,
-            "manifest": &archived.manifest
-        });
-        let copy = record_archive_copy(lock, &archived, target).map_err(|mut error| {
-            let mut details = error.details.take().unwrap_or_else(|| json!({}));
-            if let (Some(details), Value::Object(context)) = (details.as_object_mut(), context) {
-                details.extend(context);
-            }
-            error.with_details(details)
+        let copy = record_archive_copy(lock, &archived, target).map_err(|error| {
+            with_archive_context(
+                error,
+                &[
+                    ("record_id", json!(&archived.record_id)),
+                    ("archived", json!(true)),
+                    ("manifest", json!(&archived.manifest)),
+                ],
+            )
         })?;
         archived.copy = Some(copy);
     }
@@ -3008,6 +3021,25 @@ fn run_record_archive(
         "path": record_path.display().to_string(),
         "lab": archived
     }))
+}
+
+/// Workflow #449 REC-ARCH: `error` with `context` added to its details, an object (details of
+/// another form are kept under `cause`).
+fn with_archive_context(mut error: CliError, context: &[(&str, Value)]) -> CliError {
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        given => {
+            let mut details = Map::new();
+            if let Some(cause) = given {
+                details.insert("cause".to_owned(), cause);
+            }
+            details
+        }
+    };
+    for (name, value) in context {
+        details.insert((*name).to_owned(), value.clone());
+    }
+    error.with_details(Value::Object(details))
 }
 
 /// Workflow #449 REC-ARCH: `record reopen [--record-id <id>]`. The Lab finds the archived

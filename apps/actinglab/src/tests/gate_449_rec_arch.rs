@@ -24,10 +24,29 @@
 //   on the active recording and while another one is active; after it the archived recording is
 //   active again, marked and stopped it builds the package a twin never archived builds (the files
 //   compared but the provenance's generation time), and its manifest stays.
+// Fix 1 (coordinator work order rd-1113/brief-1675-fix1.md, after the independent review):
+// - `rec_arch_a_copy_target_that_is_no_absolute_path_is_refused`: on the command line and through
+//   `serve --stdio`, `--copy-to` empty, of white space only and relative are each refused
+//   `validation_failed` (`details.reason` `empty` or `not_absolute`, `details.path` the value)
+//   before anything is written: the session directory holds what it held (but the recording lock's
+//   own files), nothing is at the relative target or in the current directory, and the recording is
+//   still active.
+// - `rec_arch_an_archived_recording_refuses_stop_and_reopens_by_its_header`: `record stop` on an
+//   archived recording answers `record_session_not_active` with `details.reason`
+//   `recording_archived` and its id and writes nothing; `record reopen` without a record id reopens
+//   the recording the session header names, the header kept but for its status; an archive after
+//   the reopen writes `archive-manifest-2.json` and leaves the first manifest as it was.
+// - `rec_arch_a_recording_record_start_force_left_behind_is_archived_by_its_id`: a recording `record
+//   start --force` left behind is archived by its id from its own step table and copied, the
+//   session header (the other recording's) left as it is and named in `lab.session_header`; named
+//   again it gets no second manifest; `record reopen --record-id` is refused while the other
+//   recording is active and, once that one is archived, makes it the active recording; its step
+//   table keeps its bytes.
 // Temporary roots only; no Runtime, no device, no sleep.
 
 use super::env_lock;
 use super::gate_434_lab5b4::{Isolated, printed};
+use crate::cli_module::{self, serve};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     AttachFrameRequest, ClickEffect, CommitClickRequest, OpaqueJson, PlanClickRequest, RecordRect,
@@ -49,6 +68,8 @@ const TAP: RecordRect = RecordRect {
     width: 4,
     height: 4,
 };
+// Fix 1: a relative copy target, which would name a place under the current directory.
+const RELATIVE: &str = "rec-arch-relative-copy";
 
 // A 16x9 frame: a 4x4 square of `color` at the top left on gray.
 fn frame_png(color: [u8; 3]) -> Vec<u8> {
@@ -205,6 +226,47 @@ fn manifests(dir: &Path) -> Vec<String> {
         .collect::<Vec<_>>();
     names.sort();
     names
+}
+
+// Fix 1: every file of the session directory `state`, by its `/`-separated path relative to it,
+// with its bytes, in name order, but the recording lock's own files (`record-<instance>.lock` and
+// its holder file), which every state-writing record command takes and rewrites, a refused one
+// too.
+fn session_files(state: &str) -> Vec<(String, Vec<u8>)> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(state).expect("session directory") {
+        let entry = entry.expect("entry");
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.file_type().expect("file type").is_dir() {
+            files.extend(
+                files_under(&entry.path())
+                    .into_iter()
+                    .map(|(file, bytes)| (format!("{name}/{file}"), bytes)),
+            );
+        } else if !name.contains(".lock") {
+            files.push((name, fs::read(entry.path()).expect("file")));
+        }
+    }
+    files.sort();
+    files
+}
+
+// Fix 1: what `serve --stdio` answers to `record archive` with `copy_to` on the instance and the
+// session directory `state`: its one line, as JSON.
+fn served_archive(state: &str, copy_to: &str) -> Value {
+    let table = cli_module::table().expect("the operation table");
+    let request = json!({
+        "op": "record archive",
+        "params": {"instance": INSTANCE, "state_dir": state, "copy_to": copy_to}
+    });
+    let input = format!("{request}\n");
+    let mut output = Vec::new();
+    let mut developer = Vec::new();
+    serve::serve(table, input.as_bytes(), &mut output, &mut developer).expect("the loop ends");
+    let output = String::from_utf8(output).expect("UTF-8 output");
+    let lines = output.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1, "{output}");
+    serde_json::from_str(lines[0]).expect("one JSON answer")
 }
 
 // Items 1 and 2 and the first test of the work order: a recording kept only as material, whose
@@ -517,5 +579,240 @@ fn rec_arch_reopen_builds_the_package_the_recording_would_have_built() {
     assert_eq!(
         manifests(&lab_dir(&archived, "rec_x")),
         ["archive-manifest-1.json"]
+    );
+}
+
+// Fix 1, point 1: a copy target that is no absolute path, on the command line and through `serve
+// --stdio` (the Lab's MCP server refuses such a path parameter itself before it sends anything,
+// `arguments_invalid` `not_absolute`).
+#[test]
+fn rec_arch_a_copy_target_that_is_no_absolute_path_is_refused() {
+    let _guard = env_lock();
+    let isolated = Isolated::new();
+    let state = isolated.path("session");
+    let instance = start(&state, "rec_t");
+    step(&state, &instance, "Lab-CLI", RED, Some("request-t"));
+    step(&state, &instance, "Lab-CLI", BLUE, None);
+    let before = session_files(&state);
+    let (_, active) = record(&state, "status", &[]);
+    assert_eq!(active["record"]["status"], "active", "{active}");
+    for (target, reason) in [("", "empty"), ("   ", "empty"), (RELATIVE, "not_absolute")] {
+        let (code, refused) = record(&state, "archive", &["--copy-to", target]);
+        assert_ne!(code, 0, "{target:?}: {refused}");
+        let served = served_archive(&state, target);
+        for answer in [&refused, &served] {
+            assert_eq!(
+                answer["outcome"]["code"], "validation_failed",
+                "{target:?}: {answer}"
+            );
+            assert_eq!(answer["details"]["reason"], reason, "{target:?}: {answer}");
+            assert_eq!(answer["details"]["path"], target, "{target:?}: {answer}");
+        }
+        assert_eq!(
+            session_files(&state),
+            before,
+            "{target:?}: nothing was written"
+        );
+        let (_, status) = record(&state, "status", &[]);
+        assert_eq!(status, active, "{target:?}: the recording is still active");
+    }
+    for name in [RELATIVE, "recording.json", "archive-manifest-1.json"] {
+        assert!(
+            !Path::new(name).exists(),
+            "{name} was written in the current directory"
+        );
+    }
+}
+
+// Fix 1, point 2: `record stop` on an archived recording, `record reopen` without a record id, and
+// an archive after a reopen.
+#[test]
+fn rec_arch_an_archived_recording_refuses_stop_and_reopens_by_its_header() {
+    let _guard = env_lock();
+    let isolated = Isolated::new();
+    let state = isolated.path("session");
+    let instance = start(&state, "rec_s");
+    step(&state, &instance, "Lab-CLI", RED, Some("request-s1"));
+    step(&state, &instance, "Lab-MCP", GREEN, Some("request-s2"));
+    let dir = lab_dir(&state, "rec_s");
+    let (code, archived) = record(&state, "archive", &[]);
+    assert_eq!(code, 0, "{archived}");
+    let header = archived["record"].clone();
+    assert_eq!(header["status"], "archived", "{archived}");
+    let first = fs::read(dir.join("archive-manifest-1.json")).expect("first manifest");
+
+    // `record stop`: the refusal the contract names; nothing written.
+    let before = session_files(&state);
+    let (code, stopped) = record(&state, "stop", &[]);
+    assert_ne!(code, 0, "{stopped}");
+    assert_eq!(
+        stopped["outcome"]["code"], "record_session_not_active",
+        "{stopped}"
+    );
+    assert_eq!(
+        stopped["details"]["reason"], "recording_archived",
+        "{stopped}"
+    );
+    assert_eq!(stopped["details"]["record_id"], "rec_s", "{stopped}");
+    assert_eq!(session_files(&state), before, "record stop wrote nothing");
+
+    // `record reopen` without a record id: the recording the session header names, its header kept
+    // but for its status.
+    let (code, reopened) = record(&state, "reopen", &[]);
+    assert_eq!(code, 0, "{reopened}");
+    assert_eq!(reopened["status"], "reopened", "{reopened}");
+    assert_eq!(reopened["lab"]["record_id"], "rec_s", "{reopened}");
+    assert_eq!(reopened["lab"]["replaced_record_id"], Value::Null);
+    assert_eq!(reopened["lab"]["manifest"], "archive-manifest-1.json");
+    let mut kept = header;
+    kept["status"] = json!("active");
+    kept["updated_at_unix_ms"] = reopened["record"]["updated_at_unix_ms"].clone();
+    assert_eq!(reopened["record"], kept, "{reopened}");
+    let (_, status) = record(&state, "status", &[]);
+    assert_eq!(status["record"]["record_id"], "rec_s", "{status}");
+    assert_eq!(status["record"]["status"], "active", "{status}");
+    assert_eq!(status["lab"]["status"], "active", "{status}");
+
+    // A step more, then an archive: the second manifest; the first as it was.
+    step(&state, &instance, "Lab-CLI", BLUE, None);
+    let (code, again) = record(&state, "archive", &[]);
+    assert_eq!(code, 0, "{again}");
+    assert_eq!(again["status"], "archived", "{again}");
+    assert_eq!(
+        again["lab"]["manifest"]["file"], "archive-manifest-2.json",
+        "{again}"
+    );
+    assert_eq!(again["lab"]["manifest"]["written"], true, "{again}");
+    assert_eq!(again["lab"]["manifest"]["steps"], 3, "{again}");
+    assert_eq!(
+        manifests(&dir),
+        ["archive-manifest-1.json", "archive-manifest-2.json"]
+    );
+    assert_eq!(
+        fs::read(dir.join("archive-manifest-1.json")).expect("first manifest"),
+        first
+    );
+}
+
+// Fix 1, points 2 and 4: a recording `record start --force` left behind, its directory and step
+// table intact and the session header another recording's.
+#[test]
+fn rec_arch_a_recording_record_start_force_left_behind_is_archived_by_its_id() {
+    let _guard = env_lock();
+    let isolated = Isolated::new();
+    let state = isolated.path("session");
+    let instance = start(&state, "rec_f");
+    step(&state, &instance, "Lab-CLI", RED, Some("request-f1"));
+    step(&state, &instance, "Lab-MCP", GREEN, Some("request-f2"));
+    let dir = lab_dir(&state, "rec_f");
+    let table_bytes = fs::read(dir.join("recording.json")).expect("step table");
+    let table: Value = serde_json::from_slice(&table_bytes).expect("step table JSON");
+    let before = files_under(&dir);
+    let (code, forced) = record(
+        &state,
+        "start",
+        &["--task-id", TASK, "--record-id", "rec_g", "--force"],
+    );
+    assert_eq!(code, 0, "{forced}");
+    let (_, other) = record(&state, "status", &[]);
+    assert_eq!(other["record"]["record_id"], "rec_g", "{other}");
+    assert_eq!(other["record"]["status"], "active", "{other}");
+
+    // Archived by its id from its own step table, and copied; the session header left as it is.
+    let copy = isolated.path("copies/left-behind");
+    let (code, archived) = record(
+        &state,
+        "archive",
+        &["--record-id", "rec_f", "--copy-to", copy.as_str()],
+    );
+    assert_eq!(code, 0, "{archived}");
+    assert_eq!(archived["status"], "archived", "{archived}");
+    assert_eq!(archived["record"], Value::Null, "{archived}");
+    let lab = &archived["lab"];
+    assert_eq!(lab["record_id"], "rec_f", "{archived}");
+    assert_eq!(
+        lab["record_started_at_unix_ms"], table["record_started_at_unix_ms"],
+        "{archived}"
+    );
+    assert_eq!(lab["manifest"]["file"], "archive-manifest-1.json");
+    assert_eq!(lab["manifest"]["written"], true);
+    assert_eq!(lab["manifest"]["steps"], 2);
+    assert_eq!(
+        lab["session_header"],
+        json!({"record_id": "rec_g", "status": "active", "changed": false}),
+        "{archived}"
+    );
+    let manifest = read_json(&dir.join("archive-manifest-1.json"));
+    assert_eq!(manifest["record_id"], "rec_f");
+    assert_eq!(manifest["instance"], instance.as_str());
+    assert_eq!(manifest["task_id"], TASK);
+    assert_eq!(
+        manifest["started_at_unix_ms"],
+        table["record_started_at_unix_ms"]
+    );
+    let rows = manifest["steps"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|row| (row["kind"].clone(), row["request_id"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            (json!("tap"), json!("request-f1")),
+            (json!("tap"), json!("request-f2"))
+        ]
+    );
+    let (_, status) = record(&state, "status", &[]);
+    assert_eq!(
+        status, other,
+        "the session header and its recording as they were"
+    );
+    let mut expected = before;
+    expected.push((
+        "archive-manifest-1.json".to_owned(),
+        fs::read(dir.join("archive-manifest-1.json")).expect("manifest"),
+    ));
+    expected.sort();
+    assert_eq!(files_under(&dir), expected);
+    assert_eq!(files_under(Path::new(&copy)), expected);
+
+    // Named again: no second manifest; the session header still the other recording's.
+    let (code, again) = record(&state, "archive", &["--record-id", "rec_f"]);
+    assert_eq!(code, 0, "{again}");
+    assert_eq!(again["status"], "already_archived", "{again}");
+    assert_eq!(again["lab"]["manifest"]["written"], false, "{again}");
+    assert_eq!(again["lab"]["session_header"]["record_id"], "rec_g");
+    assert_eq!(manifests(&dir), ["archive-manifest-1.json"]);
+
+    // `record reopen --record-id`: refused while the other recording is active; once that one is
+    // archived, a header of this recording in place of the other's.
+    let (_, busy) = record(&state, "reopen", &["--record-id", "rec_f"]);
+    assert_eq!(busy["outcome"]["code"], "record_session_active", "{busy}");
+    assert_eq!(busy["details"]["active_record_id"], "rec_g", "{busy}");
+    let (code, ended) = record(&state, "archive", &[]);
+    assert_eq!(code, 0, "{ended}");
+    assert_eq!(ended["lab"]["record_id"], "rec_g", "{ended}");
+    let (code, reopened) = record(&state, "reopen", &["--record-id", "rec_f"]);
+    assert_eq!(code, 0, "{reopened}");
+    assert_eq!(reopened["record"]["record_id"], "rec_f", "{reopened}");
+    assert_eq!(reopened["record"]["status"], "active", "{reopened}");
+    assert_eq!(
+        reopened["record"]["started_at_unix_ms"], table["record_started_at_unix_ms"],
+        "{reopened}"
+    );
+    assert_eq!(reopened["lab"]["replaced_record_id"], "rec_g", "{reopened}");
+    let (_, status) = record(&state, "status", &[]);
+    assert_eq!(status["record"]["record_id"], "rec_f", "{status}");
+    assert_eq!(status["lab"]["status"], "active", "{status}");
+    assert_eq!(
+        status["lab"]["steps"].as_array().map(Vec::len),
+        Some(2),
+        "{status}"
+    );
+    assert_eq!(
+        fs::read(dir.join("recording.json")).expect("step table"),
+        table_bytes,
+        "the step table keeps its bytes"
     );
 }

@@ -2075,8 +2075,8 @@
       "module": "authoring",
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
-        {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "an archived recording of the instance, named again by the record_id its session header carried: no second manifest, its files checked, and copied with copy_to; absent: the instance's active recording"},
-        {"name": "copy_to", "form": "option", "type": "dir", "required": false, "note": "a directory that does not exist or is empty: the frames, the step table and the manifest are copied there and each copy is checked against the manifest; another is refused before anything is written"},
+        {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "an archived recording of the instance, named again by the record_id its session header carried: no second manifest, its files checked, and copied with copy_to; or a recording record start --force left behind (its step table active, the session header another recording's): its manifest written from its own step table, the session header left as it is; absent: the instance's active recording"},
+        {"name": "copy_to", "form": "option", "type": "dir", "required": false, "note": "an absolute path of a directory that does not exist or is empty: the frames, the step table and the manifest are copied there and each copy is checked against the manifest; an empty, blank or relative path (validation_failed) or another directory is refused before anything is written"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
       "help": "Ends the instance's active recording as material only: writes its manifest beside its frames and step table, keeps every file, and can copy them.",
@@ -2090,7 +2090,7 @@
       "new": "#449",
       "slice": "REC-ARCH",
       "status": "planned",
-      "notes": "Workflow #449 REC-ARCH (0.12.59; contracts/lab-recording.md, Archiving): it requires no mark and no last step without an effect, writes archive-manifest-<n>.json into the recording's own directory and never deletes, moves or rewrites a frame or the step table; the session ends in its own state, archived, so that record start needs no --force; a copy that fails names the file and the reason, deletes nothing and leaves the recording archived"
+      "notes": "Workflow #449 REC-ARCH (0.12.59; contracts/lab-recording.md, Archiving): it requires no mark and no last step without an effect, writes archive-manifest-<n>.json into the recording's own directory and never deletes, moves or rewrites a frame or the step table; the session ends in its own state, archived, so that record start needs no --force; a copy that fails names the file and the reason, deletes nothing and leaves the recording archived. Fix 1: copy_to must be an absolute path; a recording record start --force left behind is archived by its record_id, its session header (another recording's) unchanged and named in the answer's lab.session_header"
     },
     {
       "name": "record reopen",
