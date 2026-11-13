@@ -666,8 +666,9 @@ fn without_identities(text: &str) -> String {
     written
 }
 
-/// The texts of `root`'s path a record may hold: as given, canonical, with forward slashes; the
-/// longest first.
+/// The texts of `root`'s path a record may hold: as given, canonical, with forward slashes, and
+/// its last component alone (the start record's `audit.machine_path` names the state root by its
+/// base name: two temporary roots never share it); the longest first.
 fn root_texts(root: &TempDir) -> Vec<String> {
     let mut texts = vec![root.path().display().to_string()];
     if let Ok(canonical) = root.path().canonicalize() {
@@ -678,6 +679,9 @@ fn root_texts(root: &TempDir) -> Vec<String> {
         .map(|text| text.replace('\\', "/"))
         .collect::<Vec<_>>();
     texts.extend(slashed);
+    if let Some(name) = root.path().file_name() {
+        texts.push(name.to_string_lossy().into_owned());
+    }
     texts.sort_by_key(|text| std::cmp::Reverse(text.len()));
     texts
 }
