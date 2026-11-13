@@ -2358,6 +2358,18 @@ acknowledgeable: the apply carries `--ack-guard root_inventory` (`guard_failed` 
 Startup-folder launcher is the caveat `legacy_autostart` with `stop_legacy_autostart`, and the MCP
 entry g1, which follows the conversion once, the caveat `mcp_entry_generation_stale`.
 
+**The installation's entries beside the Runtime's** (Workflow #452; the coordinator's ruling of
+2026-11-13 on board #452, a requirement on the slice that builds the inventory, R-15e). Directly
+under a single-location root the graphical installer writes entries that belong to the
+installation without being the Runtime's own: the files `acui.toml` (the console's settings of that
+root), `install-wizard.log` (the graphical installer's log) and `install-wizard.config.json` (the
+complete configuration it hands to `config replace`), and the directory `licenses` (the third-party
+licence texts it places). The inventory, when it is built, lists none of them as `foreign`; which
+other class each takes is that slice's to state. `vision` is not one of them: it is the
+root-relative default of the configuration's vision root, governed by the configuration and not by
+this statement. Nothing reads this list yet: no installer command of this build takes an
+inventory.
+
 ### Registered codes and words (Workflow #429 R-15b)
 
 Registered in `contracts/outcome-codes` (`since` 0.12.35, review pending) so the UI's code table

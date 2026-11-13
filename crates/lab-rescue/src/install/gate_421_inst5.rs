@@ -56,12 +56,23 @@
 //   257-byte one and one with a control character are `actingctl_usage_invalid` `unusable` (a
 //   number `wrong_type`) naming `--application-id`, nothing written and nothing asked; a 256-byte
 //   one with spaces and capitals, which the assembly takes, is written as given.
+// - `inst5_452_compose_yields_the_fixtures_candidate` (the coordinator's ruling on point 6, option
+//   C): `compose` on the inputs of the checked-in fixture `tests/fixtures/inst5-application-id.json`
+//   (the live configuration, the game root's two files, the parameters asked) yields exactly the
+//   fixture's candidate document, every member in its order, but the minted `instance_id`, which is
+//   compared by its form (the issuer's prefix and 32 lowercase hex digits, the one `added` records,
+//   none the live file holds) and then replaced by the fixture's. actingd's
+//   `config::gate_452_inst5` has the real configuration assembly judge the same candidate.
 // The machine is the fake host of `fixture.rs` with its fake Runtime, fake watchdog and fake
 // clock: no device, no emulator, no sleep; every root is a temporary folder with neutral files.
 
 use super::fixture::{BuildSpec, C1, FakeHost, code, live_root, run, tree, word, write_json};
+use super::instance_add::{Asked, compose};
+use super::plan::Loaded;
+use super::state::{InstallState, Paths};
 use crate::agent_channel::Answer as Answered;
 use crate::rescue::{self, Context};
+use crate::rescue_reads;
 use actingcommand_lab_ops::initiator::Initiator;
 use serde_json::{Map, Value, json};
 use std::fs;
@@ -1067,4 +1078,91 @@ fn inst5_452_a_malformed_application_id_is_refused_by_the_assembly_rule() {
     let entry = member_of(&config, "/instances", "alias", ADDED).expect("the instance's entry");
     assert_eq!(entry["application_id"], longest.as_str(), "{entry}");
     assert_eq!(line["added"]["application_id_from"], "given", "{line}");
+}
+
+/// Workflow #452 (point 6, option C): the checked-in fixture both sides read: the live
+/// configuration, the game root's files, the parameters asked and the candidate `instance add`
+/// composes from them. apps/actingd (`config::gate_452_inst5`) reads it by its path relative to the
+/// workspace and has the real configuration assembly judge the candidate.
+const COMPOSED_FIXTURE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/inst5-application-id.json"
+));
+
+/// Whether `id` has the issuer's form of an instance id: `instance_` and 32 lowercase hex digits.
+fn minted_form(id: &str) -> bool {
+    id.strip_prefix("instance_").is_some_and(|hex| {
+        hex.len() == 32
+            && hex
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
+// Workflow #452, the coordinator's ruling on point 6 (option C): `compose` on the fixture's inputs
+// yields the fixture's candidate, so the fixture actingd's assembly judges cannot drift from the
+// code.
+#[test]
+fn inst5_452_compose_yields_the_fixtures_candidate() {
+    let fixture: Value = serde_json::from_str(COMPOSED_FIXTURE).expect("the fixture's JSON");
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+
+    // A root that holds what the live configuration names: the configuration itself and, under its
+    // relative standard-pack root, the game root's `bundle.json` and `applications.json`.
+    let root = temp.path().join("root");
+    let game = fixture["game"].as_str().expect("the fixture's game");
+    let game_root = root.join("packages").join(game);
+    fs::create_dir_all(&game_root).expect("the game root");
+    for name in ["bundle.json", "applications.json"] {
+        write_json(&game_root.join(name), &fixture["game_root"][name]);
+    }
+    let live = fixture["live"].clone();
+    write_json(&root.join("actingd.config.json"), &live);
+    let paths = Paths::resolve(&root).expect("the root's paths");
+    let loaded = Loaded {
+        state: InstallState::default(),
+        settings: actingcommand_runtime_config::install::settings(&live)
+            .expect("the install settings"),
+        config_sha256: String::new(),
+        state_root: root.join("state"),
+        config: live,
+    };
+    let Value::Object(asked) = fixture["asked"].clone() else {
+        panic!("the fixture's parameters are an object");
+    };
+    let params = rescue_reads::read_here("instance add", &asked).expect("the row is read here");
+    let asked = Asked::of(params).unwrap_or_else(|outcome| panic!("the parameters: {outcome}"));
+    let composed = compose(&host, &paths, &loaded, &asked)
+        .unwrap_or_else(|outcome| panic!("instance add composes: {outcome}"));
+    assert_eq!(
+        composed.added.value()["application_id_from"],
+        "declared",
+        "the fixture asks without the option"
+    );
+
+    // The minted id, by its form: the issuer's, the one `added` records, none the live file holds.
+    let mut candidate: Value =
+        serde_json::from_slice(&composed.bytes).expect("the candidate's JSON");
+    let at = fixture["minted"].as_str().expect("the minted id's place");
+    let minted = candidate
+        .pointer(at)
+        .and_then(Value::as_str)
+        .expect("the minted id")
+        .to_owned();
+    assert!(minted_form(&minted), "{minted}");
+    assert_eq!(minted, composed.added.instance_id);
+    assert!(!fixture["live"].to_string().contains(&minted), "{minted}");
+
+    // Every other member exactly, order included: with the fixture's id in that one place, the
+    // candidate is the fixture's, as text.
+    let fixed = fixture
+        .pointer(&format!("/candidate{at}"))
+        .cloned()
+        .expect("the fixture's id");
+    *candidate.pointer_mut(at).expect("the minted id's place") = fixed;
+    assert_eq!(
+        serde_json::to_string(&candidate).expect("JSON"),
+        serde_json::to_string(&fixture["candidate"]).expect("JSON"),
+    );
 }

@@ -1,0 +1,161 @@
+{
+  "note": "Workflow #452: what instance add composes. crates/lab-rescue (install::gate_421_inst5) holds compose on live, the game root and asked to candidate; apps/actingd (config::gate_452_inst5) has the real configuration assembly judge candidate. The member at minted is the issuer's: compared by its form, every other member exactly, order included.",
+  "game": "neutral-game",
+  "game_root": {
+    "bundle.json": {
+      "schema_version": "actingcommand.bundle.v4",
+      "game": "neutral-game",
+      "packs": [
+        {
+          "package_id": "neutral.pack",
+          "server": "neutral-server",
+          "entry_task_id": "neutral.entry",
+          "path": "packs/neutral.pack",
+          "file_count": 1,
+          "byte_count": 2
+        }
+      ]
+    },
+    "applications.json": {
+      "schema_version": "actingcommand.applications.v1",
+      "game": "neutral-game",
+      "servers": {
+        "neutral-server": {
+          "application_id": "neutral.application"
+        }
+      }
+    }
+  },
+  "live": {
+    "schema_version": "actingcommand.actingd.config.v1",
+    "state_root": "state",
+    "bind_host": "127.0.0.1",
+    "secret_fingerprint_salt": "0123456789abcdef",
+    "standard_packs": {
+      "root": "packages"
+    },
+    "instances": [
+      {
+        "alias": "neutral.a",
+        "instance_id": "instance_0000000000000000000000000000000a",
+        "application_id": "neutral.application.a",
+        "instance_index": 0,
+        "touch_backend": "adb_shell_input",
+        "capture_backend": "adb"
+      }
+    ],
+    "policy": {
+      "facts": {
+        "ledger_position": 0,
+        "fact_snapshot_id": "neutral",
+        "facts": [],
+        "outcomes": [],
+        "tasks": [],
+        "instances": [
+          {
+            "instance_id": "neutral.a",
+            "server_id": "neutral-server",
+            "game_id": "neutral-game",
+            "host_id": "neutral.host",
+            "available": true,
+            "capability_operation_ids": [
+              "operation.neutral"
+            ],
+            "preferred_task_ids": []
+          }
+        ]
+      },
+      "resources": {
+        "pools": [],
+        "hosts": [
+          {
+            "host_id": "neutral.host",
+            "cpu_available_milli": 1000,
+            "gpu_available_milli": 1000,
+            "io_available_milli": 1000
+          }
+        ]
+      }
+    }
+  },
+  "asked": {
+    "alias": "neutral.added",
+    "game": "neutral-game",
+    "server": "neutral-server",
+    "mumu_index": 1,
+    "touch_backend": "adb_shell_input",
+    "capture_backend": "adb"
+  },
+  "minted": "/instances/1/instance_id",
+  "candidate": {
+    "schema_version": "actingcommand.actingd.config.v1",
+    "state_root": "state",
+    "bind_host": "127.0.0.1",
+    "secret_fingerprint_salt": "0123456789abcdef",
+    "standard_packs": {
+      "root": "packages"
+    },
+    "instances": [
+      {
+        "alias": "neutral.a",
+        "instance_id": "instance_0000000000000000000000000000000a",
+        "application_id": "neutral.application.a",
+        "instance_index": 0,
+        "touch_backend": "adb_shell_input",
+        "capture_backend": "adb"
+      },
+      {
+        "alias": "neutral.added",
+        "instance_id": "instance_00000000000000000000000000000452",
+        "application_id": "neutral.application",
+        "instance_index": 1,
+        "touch_backend": "adb_shell_input",
+        "capture_backend": "adb"
+      }
+    ],
+    "policy": {
+      "facts": {
+        "ledger_position": 0,
+        "fact_snapshot_id": "neutral",
+        "facts": [],
+        "outcomes": [],
+        "tasks": [],
+        "instances": [
+          {
+            "instance_id": "neutral.a",
+            "server_id": "neutral-server",
+            "game_id": "neutral-game",
+            "host_id": "neutral.host",
+            "available": true,
+            "capability_operation_ids": [
+              "operation.neutral"
+            ],
+            "preferred_task_ids": []
+          },
+          {
+            "instance_id": "neutral.added",
+            "server_id": "neutral-server",
+            "game_id": "neutral-game",
+            "host_id": "neutral.host",
+            "available": true,
+            "capability_operation_ids": [
+              "operation.neutral"
+            ],
+            "preferred_task_ids": []
+          }
+        ]
+      },
+      "resources": {
+        "pools": [],
+        "hosts": [
+          {
+            "host_id": "neutral.host",
+            "cpu_available_milli": 1000,
+            "gpu_available_milli": 1000,
+            "io_available_milli": 1000
+          }
+        ]
+      }
+    }
+  }
+}
