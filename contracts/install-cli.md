@@ -43,6 +43,7 @@ and its configuration `actingd.config.json`. The installer owns `<root>\install\
 | `install\operations\op-<unix_ms>.json` | `actingcommand.install-operation.v1`, the journal (below) | installer |
 | `install\builds\<commit40>\runtime\`, `tools\`, `release.json` | kept builds, each verified against its own manifests; the source of every update and rollback | `release stage`, `adopt` |
 | `install\candidate\actingd.config.json`, `base.json` | the staged configuration and the SHA-256 of the live file it was built on (INST-3) | `config *`, `instance *` |
+| `install\identity.json` | `actingcommand.installation-identity.v1`, the installation's number (Workflow #453 S11, [state-root-installation.md](state-root-installation.md)); not the installer's: no installer command writes, moves, renames, keeps or lists it, so an update, a rollback, an undo, `status`, `leftovers` and `place` leave it as it is | the Runtime: the first start of the installation that finds none (`.part`, flush, rename, once) |
 
 **Kept files.** On a single-location root Tools never deletes anything; `install leftovers` lists
 what it kept. On an A/B root it deletes only in the clean, the seventh phase, and only the
@@ -2384,7 +2385,9 @@ are below. On a single-location root nothing is deleted ("Kept files").
   names; account material; `_archive\`, `_deployment\`, `downloads\`, `installed-members.json`;
   the records (`install\operations\`, `install\selections\`, `install\health\`,
   `install\current.json.finished-*`, `install\detached-*.log`, `install\entry-failures.log*`,
-  `install\state.json.v1-*`); the root-fixed items; the entries and the forwarders' `.old-<ms>`
+  `install\state.json.v1-*`); the installation's identity `install\identity.json` (Workflow #453
+  S11, [state-root-installation.md](state-root-installation.md)); the root-fixed items; the
+  entries and the forwarders' `.old-<ms>`
   copies; the active slot; `watchdog\` and the root's logs; the lock files.
 - **Constraint 4, the rollback material told as it is.** When `clean_slot` first touches the old
   slot, `state.previous.rollback_material` becomes `{state: unavailable, reason: cleaned,

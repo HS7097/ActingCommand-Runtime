@@ -81,6 +81,12 @@ mod routine_summary;
 mod run_duration;
 // Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation, memory only.
 mod schedule_explanation;
+// Workflow #453 S11: the state root's record of the installation that claimed it.
+mod state_root_installation;
+pub use state_root_installation::{
+    STATE_ROOT_INSTALLATION_FACT_KEY, StateRootInstallation, check_state_root_installation,
+    installation_root_at, installation_root_of_config,
+};
 mod strategy;
 mod suspension_lift;
 mod suspension_report;

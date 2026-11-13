@@ -541,6 +541,20 @@ The members of `report`:
   (`standard_pack_root_invalid`) is in `problems` and is also a note of
   `check_config_passed`; a game in use whose game root is broken is in
   `left_out` (its problem is `standard_packs`'s).
+- `state_root_installation` is always present (Workflow #453 S11, since 0.12.60,
+  [state-root-installation.md](state-root-installation.md)): what the state root's record
+  `installation.json` says for the installation the configuration belongs to, judged as the start
+  judges it and read only (nothing is minted or written). The installation root is the root
+  `--install-root` names, else the directory of `--config`, each only when it holds the
+  installer's own `install\state.json`. `not_installed`: there is none, and nothing is read;
+  `unclaimed`: the state root holds no record; `claimed_by_this`: the record names this
+  installation. The contract's two other states refuse the configuration with the start's codes
+  at stage `config_state_root`, so they are never a value: `claimed_by_other` is
+  `state_root_installation_mismatch` (`path` the state root, `at_unix_ms` the record's claim time;
+  another installation's record, or a record while this installation has no identity file) and
+  `record_invalid` is `state_root_installation_record_invalid` (`path` the file that cannot be
+  read or has another shape). The check comes after the recognition bindings and the notes and
+  before the catalog plan. The member is new in the report; its schema is unchanged.
 
 ROUT-L RL-1c (#411; v0.12.20): in composer mode (a `policy` section without
 `catalog`) the notes check-config computes over the configured catalog and
@@ -648,7 +662,9 @@ adb check `adb_install_missing` / `adb_install_mismatch`, see "Default ADB"),
 `RuntimeHostConfig::validate` codes),
 `config_resource_package` (`resource_package_missing`, `resource_package_invalid`),
 `config_recognition_binding` (`fact_reader_binding_invalid`, see "Recognition
-maintenance package") or
+maintenance package"), `config_state_root` (Workflow #453 S11:
+`state_root_installation_mismatch`, `state_root_installation_record_invalid`, see
+`state_root_installation` above) or
 `policy_state` (startup's catalog plan refused, or the state root unreadable, see
 "Catalog plan"), in
 that order; the execution registry's own refusals (`duplicate_instance_alias`,

@@ -10446,6 +10446,91 @@
       "common_causes": "actingd suspended, or another read of the suspension report, could not read a recorded error frame of a pair from the artifact store: the artifact is missing, fails its verification or cannot be read; the caused_by link says which.",
       "handling": "The pair's comparison is unavailable and has no verdict; the rest of the report stands. The frame_id and artifact_sha256 in the report name the artifact the caused_by link concerns."
     },
+    "state_root_installation_mismatch": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "at_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #453 S11 (contracts/state-root-installation.md): the state root's record installation.json names another installation than the one the Runtime, actingd unlock-owner or a ledger maintenance pass runs from, or this installation has no identity file install\\identity.json while the state root has a record; the developer text says which of the two. path is the state root and at_unix_ms the time the record's installation claimed it. Nothing was written; a start's refusal leaves the owner journal as it was, except after two starts raced, when the start that lost closes the owner epoch it opened. check-config refuses the same configuration at stage config_state_root.",
+      "common_causes": "The configuration's state_root names the state root of another installation (a configuration copied from another installation root, or edited by hand), or this installation's identity file was removed.",
+      "handling": "Correct state_root in this installation's configuration so that it names this installation's own state root, or put the previous configuration file back. When this installation is meant to own that state root, a later release brings a command that hands it over; until then the only other way is by hand: with no Runtime running on it, rename installation.json in the state root aside (keep it), and this installation's next start claims the state root."
+    },
+    "state_root_installation_record_invalid": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #453 S11 (contracts/state-root-installation.md): the state root's record installation.json, the installation's identity file install\\identity.json or the installer's state file install\\state.json cannot be read or has another shape (not the document, another schema_version, an installation_id that is not 32 lowercase hexadecimal digits, larger than 64 KiB); path is the file and the read failure is the caused_by link. Nothing was written. check-config refuses the same configuration at stage config_state_root.",
+      "common_causes": "A file damaged by a disk failure or edited by hand, or a file another program holds locked.",
+      "handling": "Read the caused_by link and free the file when another program holds it. Otherwise put the file back from a backup of the same installation or the same state root; a damaged installation.json can also be renamed aside by hand (keep it), with no Runtime running on the state root, and the next start claims the state root again."
+    },
+    "state_root_claim_failed": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #453 S11 (contracts/state-root-installation.md): a start's claim of an unrecorded state root, under the owner lock, could not mint the installation's identity (the operating system's random source failed) or could not write install\\identity.json or the state root's installation.json (its .part file, its flush or its rename); path is the file and the operating system's failure is the caused_by link. The start fails and closes its owner epoch.",
+      "common_causes": "A full disk, a folder the Runtime may not write, or a file another program holds locked.",
+      "handling": "Read the caused_by link, free the disk or the file, and start again: the next start claims the state root."
+    },
+    "state_root_claimed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #453 S11 (contracts/state-root-installation.md): the start recorded in the state root (path) the installation it runs from, in installation.json, minting the installation's identity file first when it had none, and mirrored the claim once as the tagged runtime fact host.state_root_installation. actingd writes it as a daemon line. An existing installation's state root is recorded so by its first start of 0.12.60 or later.",
+      "common_causes": "The first start of this release on an installation, or the first start of a new installation.",
+      "handling": "None."
+    },
     "observation_evidence_encode_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -23557,6 +23642,22 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: acquire owner file."
+    },
+    "check_state_root_installation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "A Runtime host operation (Workflow #453 S11, contracts/state-root-installation.md): the read-only check of the state root's installation record against the installation's identity file, made by a start before anything is written and by actingd unlock-owner, a ledger maintenance pass that takes the owner and check-config; it never mints or writes."
+    },
+    "record_state_root_installation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "A Runtime host operation (Workflow #453 S11, contracts/state-root-installation.md): a start's claim of the state root under the owner lock: the record read again, the installation's identity minted when it has none, and the record installation.json written once."
     },
     "acquire_resource_close_lease": {
       "owner": "runtime-host",

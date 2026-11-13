@@ -193,8 +193,13 @@ struct BackupBinding {
 /// `bounded_tail`: #422 LN-VERIFY, the newest records `verify` of a formal root authenticates
 /// (`ledger_observer.open_verify_tail_records`; `RuntimeHost::maintain_ledger` gives it for `verify`
 /// without `full` and without `frame_query` only).
+/// `installation_root`: Workflow #453 S11, the installation root the pass runs from, if any; a
+/// pass that takes the owner checks the state root's installation record before the owner is
+/// taken and never mints or claims. `verify` without `--full` and `--frame-query` is a read-only
+/// reader and checks nothing.
 pub(crate) fn run(
     root: &Path,
+    installation_root: Option<&Path>,
     salt: &[u8],
     clock: Arc<dyn RuntimeClock>,
     mut request: LedgerMaintenanceRequest,
@@ -207,6 +212,20 @@ pub(crate) fn run(
         .flatten()
     {
         *path = actingcommand_runtime_database::resolve_maintenance_destination(path)?;
+    }
+    let read_only_verify = request.operation == LedgerMaintenanceOperation::Verify
+        && !request.full
+        && !request.frame_query;
+    if !read_only_verify {
+        crate::state_root_installation::check_state_root_installation(installation_root, root)
+            .map_err(|error| {
+                // The refusal's text (which case of a mismatch it was) on the developer line.
+                let text = match error.native_detail() {
+                    Some(detail) => format!("{}: {detail}", error.complete_message()),
+                    None => error.complete_message(),
+                };
+                LedgerMaintenanceFailure::new(error.daemon_outcome(), text)
+            })?;
     }
     let deadline = request.limits.deadline()?;
     let events = RuntimeEvents::new(salt, Arc::clone(&clock))?;

@@ -65,6 +65,13 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     } else {
         actingcommand_contract::InstallConfigPurpose::Running
     };
+    // Workflow #453 S11: run from an installation root (the directory of `--config` holding the
+    // installer's `install\state.json`), a pass that takes the owner checks the state root's
+    // installation record before it does; nothing is minted or claimed.
+    let installation_root = actingcommand_runtime_host::installation_root_of_config(&config)
+        .map_err(|error| {
+            ActingdError::runtime(error).with_report("activated", serde_json::Value::Bool(false))
+        })?;
     let file = config::load_for(&config, purpose).map_err(ActingdError::config)?;
     // #422 LN-VERIFY: the bounded `verify` reads how many records the start authenticates; every
     // other pass reads no key through the configuration mechanism, as before.
@@ -76,6 +83,9 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     let mut config = file.maintenance_config().map_err(ActingdError::config)?;
     if let Some(manifest) = bounded_manifest {
         config = config.with_config_manifest(manifest);
+    }
+    if let Some(root) = installation_root {
+        config = config.with_installation_root(root);
     }
     let request = LedgerMaintenanceRequest {
         operation,

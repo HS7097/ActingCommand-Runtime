@@ -629,6 +629,9 @@ mod gate_407_perf_read;
 mod gate_421_s2if;
 
 mod gate_epoch_close;
+// Workflow #453 S11 (0.12.60): the state root remembers its installation: the start's check
+// before anything is written, the claim under the owner lock, and the writers that only check.
+mod gate_453_s11;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
 // read, and of the epochs before a start that failed after appending its start event.
 mod gate_411_a65;

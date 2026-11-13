@@ -42,7 +42,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// `ledger_observer.tag.workbench_patterns`' default (§15).
-pub const DEFAULT_TAG_WORKBENCH_PATTERNS: [&str; 14] = [
+pub const DEFAULT_TAG_WORKBENCH_PATTERNS: [&str; 15] = [
     "task.*.last_duration_ms",
     "task.*.last_outcome",
     "task.*.failure_streak",
@@ -58,6 +58,8 @@ pub const DEFAULT_TAG_WORKBENCH_PATTERNS: [&str; 14] = [
     "host.agent_wake",
     // #428 SCHED-C1d (register §1.299 SC1-11): the capped spending order's episodes.
     "host.capped_episodes",
+    // Workflow #453 S11: the claim of the state root by an installation, mirrored once.
+    "host.state_root_installation",
 ];
 
 /// The preparation work the spill thread takes at once.

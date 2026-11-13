@@ -21296,6 +21296,76 @@ A wait clock must tell such rows from waiting contenders by the presence of `lim
 **At deploy (ORD-1b).** Nothing: no Runtime build passes the order inputs, and every group of
 several is refused at load; a device of one never reads them.
 
+### 1.353 Slice S11 (0.12.60): the state root remembers its installation (Workflow #453; the owner approved board #453, and the coordinator's rulings on the board replace the design survey's identity by the configuration's salt, not the owner's words; the design survey `rd-1113/fresh-root-design.md` §0 and §6, read on main `98924e28`, its line numbers found again on main `95525c98`; coordinator work order `rd-1114/brief-453-s11-state-root-record.md`, read on main `95525c98`)
+
+[state-root-installation.md](state-root-installation.md) is the contract;
+[actingd-check-config.md](actingd-check-config.md) (the report member `state_root_installation`,
+the stage `config_state_root`), [actingd-unlock-owner.md](actingd-unlock-owner.md) ("Order", step
+0), [ledger-maintenance.md](ledger-maintenance.md) ("Offline entry"),
+[runtime-fact-store.md](runtime-fact-store.md) (`host.state_root_installation`),
+[ledger-observer.md](ledger-observer.md) (§15, the tag list's default),
+[install-cli.md](install-cli.md) ("Layout"; the clean's "Never touched") and
+[runtime-watchdog.md](runtime-watchdog.md) (the fatal start refusals row 5′ holds down) follow it.
+**No interface revision moves** ([component-interfaces.md](component-interfaces.md)): the two
+files are neither configuration nor ledger shapes; the fact is a new key of `runtime.fact_recorded`;
+the codes, operations and stage are catalog additions; the tag list's default gains one entry (no
+key, no revision, as AGT1A-5 and C1D-2 added theirs). The number 1.353 follows ORD-1's §1.352 on
+the base this slice was read on; open pull requests may take it first, and the train renumbers.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S11-1 | `<installation root>\install\identity.json`, `actingcommand.installation-identity.v1` `{schema_version, installation_id, minted_at_unix_ms, minted_by {pid, build_commit\|null}}` | file outside the ledger (installation root) | S11 | the first start of an installation that finds none, under its owner lock | `installation_id` 16 bytes of `actingcommand_host_metrics::fill_system_random` (FLK-10's OS source), 32 lowercase hex; not a secret, in no configuration; `.part`, flush, rename; no installer command writes, moves, renames, keeps or lists it |
+| S11-2 | `<state root>\installation.json`, `actingcommand.state-root-installation.v1` `{schema_version, installation_id, claimed_at_unix_ms, claimed_by {pid, owner_epoch, build_commit\|null}}` | file outside the ledger (state root): a registered exception to iron rule 13, as `runtime-state.key` and the watchdog's `state.json` | S11 | the claim, under the owner lock | written once (`.part`, flush, rename, only when read absent under the lock); read before the ledger opens by the check of a start, `unlock-owner`, a maintenance pass that takes the owner and check-config |
+| S11-3 | `host.state_root_installation`: runtime scope, `record_list` of one row `{claimed_at_unix_ms, claimed_by_pid, claimed_by_owner_epoch, claimed_by_build_commit?}` | new runtime fact key | S11 | the claiming start, once the ledger is open | never the installation's number; in the default of `ledger_observer.tag.workbench_patterns` (`[&str; 15]`, `actingd.defaults.json`), so a start loads it and records it once; `config.parameters.ledger_observer` lists one entry more and the shipped defaults file's digest in `config.selection` changes |
+| S11-4 | `state_root_installation_mismatch` (fatal; `path`, `at_unix_ms`), `state_root_installation_record_invalid` (fatal; `path`, the read failure as `caused_by`), `state_root_claim_failed` (fatal; `path`, the OS failure as `caused_by`), `state_root_claimed` (info; `path`) | outcome codes (runtime-host) | S11 | the start, `unlock-owner`, `ledger-maintenance`, check-config; actingd's daemon line | operations `check_state_root_installation`, `record_state_root_installation`; actingd's stage `config_state_root`; no vocabulary word |
+| S11-5 | check-config's report member `state_root_installation` (`claimed_by_this`, `unclaimed`, `not_installed`) | report member (`check-config.v2` unchanged) | S11 | actingd | `claimed_by_other` and `record_invalid` are refusals with the start's codes at stage `config_state_root`, never values |
+
+**The installation root** (ruling 2). No program gets a flag: a writer of the state root (the
+start, `unlock-owner`, a maintenance pass that takes the owner) takes the directory of its
+`--config` when that directory holds the installer's own `install\state.json`; check-config the
+root `--install-root` names, else the same directory, under the same condition. The installer's
+start and the watchdog start `<root>\runtime\actingcommand-actingd.exe --config
+<root>\actingd.config.json`, so an installed Runtime finds its root; any other start (CI's example
+configuration, a developer's run) reads neither file.
+
+**Settled here** (each the slice's; the coordinator may change them):
+- *The claim reads the record before it mints.* Ruling 5 names minting first; this slice reads the
+  record again first and mints only for an unrecorded state root, so a start that lost a race
+  mints nothing either. The record is written right after the identity, in the same step.
+- *A step of the claim that fails* is the fourth code, `state_root_claim_failed` (fatal), since no
+  existing code says that the identity could not be minted or a file of the claim not written.
+- *The installer's state file that cannot be inspected* for another reason than its absence is
+  `state_root_installation_record_invalid` with that file as `path`: whether the program belongs
+  to an installation is then unknown, and the check is not skipped silently.
+- *The maintenance passes that take the owner* are every pass but `verify` without flags (all of
+  them take the owner journal's lock; ruling 6 names `verify` without flags as a read-only reader).
+- *check-config's member is `state_root_installation`*, a new top-level member: the report's
+  `state_root` stays the configured path string (a member of another type would change the
+  report's shape for every reader).
+
+**Not touched.** The salt and everything derived from it, the integrity key, the owner journal's
+format, the hand-over command and its rescue row (S12), `install status`, `install new`, every
+behaviour of a Runtime not started from an installation root.
+
+**At deploy.** The first start of this release on an installation mints `install\identity.json`
+and writes the state root's `installation.json`, one fact and one daemon line `state_root_claimed`;
+nothing else of the start changes. A build before this slice ignores both files; forward again
+they match.
+
+**Rollback** (below 0.12.60): the older build neither reads nor writes either file, and its tag
+list does not name the fact, whose one record stays in the ledger as written; a configuration that
+names another installation's state root starts on it again. The files stay; the next start of
+this release or a later one reads them and matches.
+
+Tests: host rows "#453 S11", `actingcommand-runtime-host::lib::tests::gate_453_s11` (eight tests,
+the start fixture on temporary state roots and installation roots, no sleep, no clock read by a
+test); apps rows "#453 S11", `gate_453_s11::s11_check_config_reports_each_state_of_the_state_root_and_never_writes`
+(actingd) and `gate_inst1_update::s11_an_update_and_a_rollback_leave_the_installation_identity_in_place`
+(lab-rescue, the installer's fake host). One existing test pinned the default this slice changes
+and changes with it, keeping its name: `actingcommand-runtime-config`'s
+`ao1_keys_every_ledger_observer_key_has_its_contract_default` (its `WORKBENCH_PATTERNS`, 15
+entries). The installer's own tests are unchanged; no golden changes; no test leaves the gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -21363,6 +21433,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.idle_state` (a record list: the instances the idle action closed or is closing, with their action and wake; since 0.12.25 its writer row names the start anchor, not the owner epoch (#405 N-2), and a woken instance stays in it, `woken`, until its startup package has run (#405 O-2); [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #405 IDLE-1P) | #405 IDLE-1P |
 | `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `host.capped_episodes` (a record list: the writer's start anchor, then per instance and pool with an open or waiting capped episode its episode row, consumer rows and member rows; [runtime-fact-store.md](runtime-fact-store.md); §1.299 SC1-11, C1D-1) | workbench | yes (added to `tag.workbench_patterns` by SCHED-C1d) | #428 SCHED-C1d |
+| `host.state_root_installation` (one row: the claim's time and who claimed, never the installation's number; [state-root-installation.md](state-root-installation.md); §1.353 S11-3) | workbench | yes (added to `tag.workbench_patterns` by S11) | #453 S11 |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
 | `config.catalog_provenance` (count and id rows of who wrote the active composed generation's fixed values and valuations; §1.299 SC1-7, C1B-1) | workbench | no (`config.` is re-observed) | #428 SCHED-C1b |

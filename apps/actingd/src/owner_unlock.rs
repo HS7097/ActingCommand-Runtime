@@ -50,6 +50,15 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
             error.stage = Some(ActingdLocation::ConfigLoad.location());
             error.with_report("journal_appended", json!(false))
         })?;
+    // Workflow #453 S11: run from an installation root (the directory of `--config` holding the
+    // installer's `install\state.json`), the state root's installation record is checked before
+    // the owner lock; nothing is minted or claimed.
+    let host = match actingcommand_runtime_host::installation_root_of_config(&config_path).map_err(
+        |error| ActingdError::runtime(error).with_report("journal_appended", json!(false)),
+    )? {
+        Some(root) => host.with_installation_root(root),
+        None => host,
+    };
     match RuntimeHost::unlock_owner(host, actor.clone(), confirmed) {
         Ok(receipt) => Ok(
             Reported::new(Outcome::new(ActingdCode::UnlockOwnerCompleted))
@@ -66,7 +75,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         Err(failure) => {
             let journal_appended = failure.journal_appended;
             let stage = failure.stage;
-            let mut error = ActingdError::runtime(failure.error);
+            let mut error = state_root_refusal(failure.error);
             error.stage = Some(stage);
             Err(error.with_report("journal_appended", json!(journal_appended)))
         }

@@ -202,6 +202,13 @@ Each decision is one registered code; its category sets the exit (Workflow #378 
 
 Row 5 precedes row 6 because a stop by a condition also writes `active=false`. A
 refusal before the owner lock was taken leaves J untouched and is still newer than it.
+Among the fatal start refusals row 5′ holds down are, since Workflow #453 S11 (0.12.60,
+[state-root-installation.md](state-root-installation.md)), `state_root_installation_mismatch`
+(the configuration names a state root another installation recorded) and
+`state_root_installation_record_invalid` (that record or the installation's identity file cannot
+be read), both before the owner lock, so J stays untouched; after two starts raced the losing
+start refuses with the first after the lock and closes the epoch it opened, which row 5′ holds
+down as well. The watchdog itself reads neither file.
 Rows 5 and 5′ never see a terminal outcome of an earlier owner: every later owner
 appended a record; only row 6′ looks back, past a close that no log covers. Rows 5
 and 5′ read only the terminal outcome's category, never its code, operation or links

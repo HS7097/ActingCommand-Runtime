@@ -75,6 +75,9 @@ mod gate_427a;
 // Test-only: Workflow #453 S10, `actingd discover` on injected reads of the vendor tool.
 #[cfg(test)]
 mod gate_453_s10;
+// Test-only: Workflow #453 S11, check-config's `state_root_installation`.
+#[cfg(test)]
+mod gate_453_s11;
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{
@@ -478,6 +481,10 @@ fn run_daemon(arguments: Vec<std::ffi::OsString>) -> Category {
             Some(&released.to_string()),
         ));
     }
+    // Workflow #453 S11: the start recorded its installation in the state root, once.
+    if let Some(claimed) = host.state_root_claimed() {
+        lines.push_str(&daemon_lines(claimed, None));
+    }
     // Workflow #361 B1: each scheduling pause the start restored or dropped.
     for pause in host.scheduling_pause_restore() {
         lines.push_str(&daemon_lines(pause, None));
@@ -683,10 +690,35 @@ fn start_daemon(
         Some(held) => host.with_install_held(held),
         None => host,
     };
+    // Workflow #453 S11 (`contracts/state-root-installation.md`): the start is not told its
+    // installation root; it is the directory of `--config` when that directory holds the
+    // installer's own `install\state.json`, and a start from anywhere else checks nothing.
+    let host = match actingcommand_runtime_host::installation_root_of_config(&config_path)
+        .map_err(ActingdError::runtime)?
+    {
+        Some(root) => host.with_installation_root(root),
+        None => host,
+    };
     let host =
         RuntimeHost::start_with_provider(host, |startup| provider.assemble_provider(startup))
-            .map_err(ActingdError::runtime)?;
+            .map_err(state_root_refusal)?;
     Ok((host, policy))
+}
+
+/// Workflow #453 S11: a host error as actingd's, with the text of a refusal of the state root's
+/// installation record (which of its two cases it was) on the developer line; any other error as
+/// it is.
+fn state_root_refusal(error: RuntimeHostError) -> ActingdError {
+    let text = if error.code() == HostCode::StateRootInstallationMismatch.as_str() {
+        error.native_detail().map(str::to_owned)
+    } else {
+        None
+    };
+    let refused = ActingdError::runtime(error);
+    match text {
+        Some(text) => refused.with_detail(text),
+        None => refused,
+    }
 }
 
 /// Workflow #369 S6a: a `start_emulator_requires_discovery_binding` refusal names the instance
