@@ -300,7 +300,10 @@ CPU with one warning when that adapter or `ort\DirectML.dll` cannot be used,
 `refuse` fails the OCR requests instead. Its vision root holds ONNX Runtime
 1.24.4's DirectML build and DirectML 1.15.4 under `ort\`, three files whose sizes
 and SHA-256 the Runtime pins (`contracts/vision-model-folders.md`, "DirectML
-runtime"); neither this artifact, the Tools nor the installer carries them, and
+runtime"); this artifact and the Tools do not carry them, the Windows installation
+package does, with their license files and with the PP-OCRv6 medium model files
+and PaddleOCR's `LICENSE`, by the owner's decision recorded in the tool registry
+(`scripts/windows-tools/windows-tool-sources.v1.json`, Workflow #441), and
 whoever places them keeps the license files beside them. Use a vision root of its
 own for DirectML (for example `<install root>\vision-dml`, named by `root`) and
 leave the CPU root as it is, so that switching back needs no file change. The

@@ -186,7 +186,8 @@ fn wd1_active_json_appearing_before_the_start_is_a_selection_change() {
     single.owner_journal(Owner::Crashed);
     let machine = FakeMachine::new();
     let state = WatchdogState::default();
-    let mut tick = Tick::observe(&single.root, &single.root.join("watchdog"))
+    // Workflow #434 LAB-6S2-B1: the tick's probe declares the word of its seams, none here.
+    let mut tick = Tick::observe(&single.root, &single.root.join("watchdog"), None)
         .unwrap_or_else(|failure| panic!("the tick observes the root: {failure}"));
     assert!(
         matches!(

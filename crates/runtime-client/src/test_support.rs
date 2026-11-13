@@ -124,11 +124,25 @@ pub enum ScriptedStep {
     Open(ScriptedGate),
 }
 
+/// Workflow #434 LAB-6S2-B1: what the handshake does with the `BindChannel` after `Health`.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum ScriptedBind {
+    /// Reads it and answers its binding, as the Runtime echoes it.
+    #[default]
+    Echo,
+    /// Reads it and closes the connection without a receipt, as a Runtime that cannot decode it
+    /// does (one before Workflow #389 U-2, or before #434 LAB-6S1a for a declared word).
+    Drop,
+    /// Expects none: the steps follow `Health`.
+    Absent,
+}
+
 /// The script of one accepted connection.
 #[derive(Default)]
 pub struct ScriptedConnection {
     /// `Health` answers this owner epoch instead of the Runtime's, and no `BindChannel` follows.
     other_epoch: Option<OwnerEpoch>,
+    bind: ScriptedBind,
     steps: Vec<ScriptedStep>,
 }
 
@@ -143,7 +157,28 @@ impl ScriptedConnection {
     pub fn in_other_epoch(owner_epoch: OwnerEpoch) -> Self {
         Self {
             other_epoch: Some(owner_epoch),
+            bind: ScriptedBind::Absent,
             steps: Vec::new(),
+        }
+    }
+
+    /// Workflow #434 LAB-6S2-B1: a connection of a Runtime that cannot decode the `BindChannel` the
+    /// client sends (a word before LAB-6S1a): `Health` is answered, the `BindChannel` that follows
+    /// is read and the connection closed without a receipt. Its steps are not run.
+    pub fn dropping_bind() -> Self {
+        Self {
+            bind: ScriptedBind::Drop,
+            ..Self::default()
+        }
+    }
+
+    /// Workflow #434 LAB-6S2-B1: the connection of a client that goes on unbound after its Runtime
+    /// dropped a `BindChannel` (`client_channel_unsupported`): `Health` is answered in the
+    /// Runtime's owner epoch, no `BindChannel` follows, and the steps run after it.
+    pub fn unbound() -> Self {
+        Self {
+            bind: ScriptedBind::Absent,
+            ..Self::default()
         }
     }
 
@@ -369,10 +404,9 @@ fn serve(
         connection.drain();
         return connection.record;
     };
-    connection.handshake(
-        script.other_epoch.unwrap_or(owner_epoch),
-        script.other_epoch.is_none(),
-    );
+    if !connection.handshake(script.other_epoch.unwrap_or(owner_epoch), script.bind) {
+        return connection.record;
+    }
     let mut open = true;
     for step in script.steps {
         match step {
@@ -421,8 +455,9 @@ struct Connection {
 
 impl Connection {
     /// `Health` answers `owner_epoch`; a bound handshake then binds the channel `BindChannel`
-    /// asks for (Workflow #389 U-2).
-    fn handshake(&mut self, owner_epoch: OwnerEpoch, bind: bool) {
+    /// asks for (Workflow #389 U-2). Workflow #434 LAB-6S2-B1: `bind` says what is done with the
+    /// `BindChannel`; false once the connection is closed (a dropped one).
+    fn handshake(&mut self, owner_epoch: OwnerEpoch, bind: ScriptedBind) -> bool {
         let health = self
             .next_request()
             .unwrap_or_else(|| panic!("the client closed before its handshake"));
@@ -435,8 +470,8 @@ impl Connection {
             &health,
             RuntimeResult::Health { owner_epoch },
         ));
-        if !bind {
-            return;
+        if bind == ScriptedBind::Absent {
+            return true;
         }
         let request = self
             .next_request()
@@ -452,13 +487,16 @@ impl Connection {
                 request.operation()
             )
         };
+        if bind == ScriptedBind::Drop {
+            return self.answer(ScriptedAnswer::Close);
+        }
         // Workflow #434 LAB-6S1a: a declared initiator is echoed as the Runtime echoes it.
         let result = RuntimeResult::ChannelBound {
             channel: *channel,
             via: *via,
             initiator: initiator.as_ref().and_then(DeclaredInitiator::initiator),
         };
-        self.answer(ScriptedAnswer::completed(&request, result));
+        self.answer(ScriptedAnswer::completed(&request, result))
     }
 
     /// Answers the request just read; false once the connection is closed.

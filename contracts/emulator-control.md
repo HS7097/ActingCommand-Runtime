@@ -1622,7 +1622,7 @@ the IO margin.
 The same listing while no Runtime runs: before a root exists (an installer runs the release's own
 actingd), on a fresh root, or with the Runtime stopped. It is the Runtime's discovery without the
 Runtime, so it lives beside the query above: the same vendor reads, the same instance shape, the
-same refusal codes. Board #453, slice S10; register §1.340. The online query and the core row
+same refusal codes. Board #453, slice S10; register §1.341. The online query and the core row
 `discover` are unchanged.
 
 ```

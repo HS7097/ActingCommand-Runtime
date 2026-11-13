@@ -125,8 +125,11 @@ on drive `D:`. Component selection is explicit:
   NuGet's published SHA-512 is recorded as `official_sha512_base64`) and extract
   only the x64 `onnxruntime.dll` and `onnxruntime_providers_shared.dll`, the x64
   `DirectML.dll`, and each package's license files. These are the DirectML runtime
-  of a vision root: neither the Runtime package, the Tools package nor the
-  installer carries them. Whoever places them copies each `pinned_files` entry to
+  of a vision root: the Runtime package and the Tools package do not carry them;
+  the Windows installation package does, with their license files and with the
+  three files of `ppocrv6-medium-onnx` and PaddleOCR's `LICENSE`, by the owner's
+  decision (Workflow #441; each entry's `license.redistribution_note`).
+  Whoever places them copies each `pinned_files` entry to
   its `vision_root_path` under the vision root and the license files to
   `ort\licenses\onnxruntime\` and `ort\licenses\directml\`
   (`contracts/vision-model-folders.md`). The sizes and SHA-256 of `pinned_files`

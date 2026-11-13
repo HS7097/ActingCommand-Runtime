@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S10 (register §1.340; contracts/emulator-control.md, "Offline instance discovery";
+// Workflow #453 S10 (register §1.341; contracts/emulator-control.md, "Offline instance discovery";
 // coordinator work order rd-1113/brief-453-s10-offline-discovery.md): the rescue row `emulators`
 // runs the live build's `actingd discover --config <the root's configuration> --install-root
 // <root>`, once, and nothing else, and writes nothing in the root or its state root:

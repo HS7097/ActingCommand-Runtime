@@ -37,6 +37,8 @@ zip = { workspace = true }
 [dev-dependencies]
 # #411 P49: `mcp-entry list`'s gate fakes the process probe.
 actingcommand-host-metrics = { workspace = true }
+# Workflow #434 LAB-6S2-B1: the scripted Runtime of the gate of the module's own client's binding.
+actingcommand-runtime-client = { workspace = true, features = ["test-support"] }
 # Workflow #434 LAB-4: the install gates read the decision of one task tick (`tick_for_test`).
 actingcommand-watchdog = { workspace = true, features = ["test-hooks"] }
 tempfile = "3"

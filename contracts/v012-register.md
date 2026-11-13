@@ -12002,6 +12002,133 @@ program of this build declares a word.
   receipt of a word binding carries `initiator`; it now names M and R, as component-interfaces.md
   does.
 
+#### Slice LAB-6S2-B1 (0.12.59): the Lab's own programs bind `lab` with their word; the envelope stays as on 0.12.58
+
+Coordinator work order `rd-1113/brief-lab6s2b1.md`, after the second survey `rd-1113/lab6s2-mapping.md`
+(its row S2-B1); the coordinator's rulings of 2026-11-13 on board #434, not the owner's words;
+based on main `98924e28` (0.12.58, LAB-6S2-M and two slices of board #451). The contracts are
+[lab-two-entries.md](lab-two-entries.md) (the slice table; since fix 1 also §4.2's refusal of
+`ACTINGCOMMAND_INITIATOR`, §8.2's `--front mcp` and §9.3's connection of `Front::Mcp` and its
+client action; §2.4 and §4.3 unchanged) and `apps/actinglab-mcp/MANUAL.md` (§9, the detached
+run's requests).
+
+**What.** Every program of the Lab's own family binds `BindChannel{channel: lab, initiator}` with
+its word and no `via`, and sends the envelope it sent on 0.12.58; the Runtime records each request
+with the channel that program's binding had then (LAB-6S2-M's map M) and receipts it by rule R:
+
+| Program, front | Word, and where it is taken | Envelope (as on 0.12.58) |
+|---|---|---|
+| `actinglab`, the CLI module's core rows (`lab_ops::front`, `Front::Actinglab(word)`, set once by `cli_module::set_front`) | `Lab-CLI`, or the `Lab-制包` / `Lab-救急` of `ACTINGCOMMAND_INITIATOR` (`Initiator::of_this_lab_process`); `Lab-MCP` under `serve --stdio --front mcp` | (Lab, Lab) |
+| `actinglab`'s own commands, on a command line and under `serve` (`lab_client_config_via`) | the process's word as above; `Lab-MCP` without `via` for `via` `mcp` (MCP's `--via mcp` child, `serve --front mcp`) | (Lab, Lab) |
+| `actinglab-mcp` in its own process (`Front::Mcp`: the kept connection, each write's, the identity card and the client action) | `Lab-MCP` | (Cli, Cli) |
+| the rescue module's own client (`runtime_start::client_config`, through `SystemHost::of` and `SystemRuntime`; its start and restart) | the module's word (`rescue::answer`'s initiator): the process's, `Lab-MCP` in `actinglab-mcp`, under `serve --front mcp` and in the detached run (LAB-6S0's marker, unchanged) | (Cli, Cli) |
+| the watchdog's probe (`observe::live_owner`, `probe_config`; `Health` and `BindChannel` only) | a parameter its callers pass: `Lab-看门狗` from `actingwatch` (`dispatch_exit`); the rescue module's word for its `alive`, start and restart; the word of the program in force for the overview's `watchdog` block (`lab_ops::overview::WatchdogBlock`, `Front::initiator`) | (Cli, Cli) |
+
+`lab_ops::front::cli_envelope(state_root, word)` builds the (Cli, Cli) connections: `lab` with the
+word, or `cli` without one.
+
+**What stays.** Every envelope; every record the Runtime writes for these programs but the one of
+"What a person sees" (the map M gives each request the channel and `via` its program's binding
+had on 0.12.58); `actingctl` and today's MCP server (`actingctl mcp-serve`) and its children's
+launcher, which LAB-6S2-B2 moves. The code
+`actingctl` shares with the Lab declares no word when `actingctl` runs it: `install`
+(`SystemHost::of(None)`), `start` and `restart` (`runtime_start::dispatch`), `watchdog`
+(`dispatch`) and the overview's `watchdog` block (`Front::Actingctl`), all on `cli` as on 0.12.58.
+No interface revision moves, no outcome code is added, and `RuntimeRequest::validate()`, the host,
+the UI list and the contract crate's map are untouched.
+
+**What a person sees.** One record changes, and no released program reaches it: a core row sent
+to `serve --stdio --front mcp`, which runs without `--via mcp`, is recorded `lab` with `via` `mcp`
+where 0.12.58 recorded `lab` without it (decision (c) below; contract §8.2). The Lab's MCP server
+serves the core rows in its own process and sends its `serve --front mcp` children only the other
+rows, and today's MCP server starts its actinglab children with `--via mcp`, whose lines are
+actinglab's own commands; only a person who types the command and sends a core row on its input
+meets the change. Every other record is 0.12.58's. Two kinds of receipt change (the second
+survey's V2), and one cell of M (its V3), all in lines of these programs that print a receipt:
+- the receipt of a request with the Lab's envelope gains `initiator` beside `channel` `lab`:
+  `actinglab`'s lines that print one (the core rows' `shutdown` and the refused writes of
+  `targets set`, `config set`, `task stop` and `pack-schedule set`; the refusals of `evidence
+  read`, `perf-preset`, `remedy` and `summary`; its own commands, `lab run` among them, the pin
+  release of `runtime_debug.rs`, the signature commands, `commands/device_commands.rs` and the
+  refusal details of `runtime_slice_cli.rs`);
+- the receipts of the MCP children (`serve --front mcp`, MCP's `--via mcp` child) lose `via`
+  `mcp` and carry `Lab-MCP`;
+- under `Lab-MCP` the rescue module's receipts name `mcp` where they named `cli` (its `restart`
+  prints the shutdown's receipt).
+No released program decodes these strictly: the console v0.12.16 starts no `actinglab`, today's
+MCP server and the Lab's MCP server read their children's lines as JSON values, and acsetup
+decodes only `actingctl`'s receipts, which this slice does not touch. The receipt of a request
+with the CLI's envelope (the Lab's MCP server in its own process; the rescue module under the
+other words) is byte for byte 0.12.58's (rule R).
+
+**Version skew** stays as it is: a Runtime before 0.12.58 drops a binding that declares a word; the
+client reconnects once in the same owner epoch, goes on unbound and reports
+`client_channel_unsupported` once per process (`runtime-client`'s fallback, kept); no plan edge
+and no interface check is added.
+
+**Decided in this slice, by the texts** (each the only way to keep 0.12.58's records, (c) every
+record a released program reaches):
+- (a) `--via ui`, which no word names, binds `lab` with `via` `ui` and no word, as on 0.12.58.
+- (b) An `ACTINGCOMMAND_INITIATOR` that names no word leaves the own commands' connections as on
+  0.12.58 (`lab` without a word); every command that checks the variable (an operation of the CLI
+  module, a recording) refuses it as before.
+- (c) The core rows under `serve --stdio --front mcp`, which no MCP server sends its child, bind
+  with the process's word, `Lab-MCP`, so a request of theirs is recorded `lab` with `via` `mcp`
+  where 0.12.58 recorded `lab` without it: the one record change ("What a person sees"); every
+  row an MCP server sends records as on 0.12.58.
+- (d) `actingctl install`'s face (`Face::Install`) declares no word (the second survey's row
+  S2-B1 gave it `Lab-CLI`): the work order keeps `actingctl` for LAB-6S2-B2.
+
+**Tests.** New: apps row "#434 LAB-6S2-B1". On the runtime client's scripted Runtime: the CLI's
+core rows with each process word (`actinglab` `gate_434_lab6s2b1`), actinglab's own commands for
+each word, `via` `mcp`, `via` `ui` and a variable that names no word, the rescue module's client for
+each kind it sends with `Lab-CLI`, `Lab-MCP` and none (`lab-rescue` `install::gate_434_lab6s2b1`),
+the watchdog's probe with `Lab-看门狗`, `Lab-CLI` and none, and a Runtime that drops the word
+(`watchdog` `gate_434_lab6s2b1`; the scripted Runtime gains `ScriptedConnection::dropping_bind` and
+`unbound`). On the test host, one `ConfigureSettings` of a key no configuration holds through each
+front's configuration, its client record (type, source, module, actor) and command record (channel,
+`via`) written as 0.12.58's literals; the watchdog's probe records nothing. **Adapted** (the
+binding they pinned moved): `actinglab-mcp` `serve_calls::mcp_write_provenance_as_todays_server`
+and `actingctl` `gate::lab5g1b_front_mcp` (every request but the binding is still today's MCP
+server's), `actinglab` `gate_434_lab5g4a::serve_front_mcp_records_lab_mcp` (the option's binding
+is `Lab-MCP` without `via`), the protocol golden `lab_run_success` (its receipt gains `initiator`
+`Lab-CLI`, one member, edited, not re-recorded), and `watchdog` `gate_wd1`'s call of `Tick::observe`
+(its new word argument, none). No test leaves the gate map.
+
+**Fix 1** (work order `rd-1113/brief-1673-fix1.md`, after an independent review that found the
+code and the tests sound): the sentences the slice had left contrary to the code (contract §4.2,
+§8.2, §9.3 and the slice table; this entry's "What a person sees" and "At deploy"), and three
+tests in the same apps row. On the test host,
+`gate_434_lab6s2b1::lab6s2b1_core_rows_under_serve_front_mcp_record_lab_with_via_mcp`: the core
+rows' front under `serve --stdio --front mcp` (the option read by `serve::front`, the front
+`cli_module::set_front` sets) records `lab.request` and `lab` with `via` `mcp`, the one record
+change. In `actinglab`'s integration test `lab6s2b1_set_front`, the real binary on the scripted
+Runtime, one process for each call of `cli_module::set_front`: a command line of the CLI module
+(`actinglab --json resume`) binds `lab` with `Lab-CLI`, and the core row `resume` on the input of
+`serve --stdio --front mcp` binds `lab` with `Lab-MCP`, both without `via` and with (Lab, Lab).
+The protocol golden's child now runs without `ACTINGCOMMAND_INITIATOR`, so the `Lab-CLI` its
+receipt pins does not depend on the machine. No product code changes.
+
+**At deploy.** Works on a Runtime of 0.12.59 (LAB-6S2-M in the same build). On an earlier Runtime
+each program is served by that Runtime's own rules, as the code has them (fix 1):
+- **Runtime 0.12.58** accepts the word and has no map M. It serves every request of these
+  programs and refuses none, records each with the binding as declared, `lab` without `via`, and
+  receipts it with `lab` and the word (the requests of the Lab's MCP server and of the rescue
+  module too, which 0.12.59 records `mcp`, and `cli` or, under `Lab-MCP`, `mcp`). So the records
+  of the MCP children (`serve --front mcp`, MCP's `--via mcp` child) lose `via` `mcp`, and the
+  Lab's MCP server's settings rows (`host.config_overrides`) and its package debug records are
+  written with the channel `lab` where 0.12.59 writes `mcp`: the console's settings page then
+  shows its settings as the Lab's.
+- **Runtime 0.12.57 or earlier** refuses the unknown member `initiator` of `BindChannel` and drops
+  the connection. The client reconnects once in the same owner epoch, unbound, and reports
+  `client_channel_unsupported` once per process (`actingwatch`'s tick, a process per minute, then
+  writes that line to its log on each tick); the connection is then bound by its first request's
+  envelope, so the Lab's MCP server, (Cli, Cli), is recorded as the command line, `cli`, where
+  that Runtime recorded `mcp`, and the MCP children, (Lab, Lab), as `lab` without `via`.
+Both arise only where programs of this build meet a Runtime of an earlier one.
+
+**LAB-6S2-B1 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
@@ -14269,6 +14396,111 @@ command is there after it, unchanged.
 `own_pauses.global` (unknown members are ignored), and its `release-hold` resumes the hold's
 instance pauses only, leaving a global pause 0.12.53 set: lift it with `actingctl resume
 --state-root <s>`.
+
+**Fix #452** (0.12.59; board #452; coordinator work order `rd-1113/brief-452-inst5-appid.md`, on
+main `98924e28`). [install-cli.md](install-cli.md), "Instances, the first slice" ("The application
+id") and "The conversion's checks and inventory" ("The installation's entries beside the
+Runtime's"), and the row `instance add` of [lab-operations.json](lab-operations.json) are the
+contract.
+
+*The defect.* `instance add` appended to `instances` an entry of five members, `{alias,
+instance_id, instance_index, touch_backend, capture_backend}`, with no `application_id`
+(`install::instance_add::compose`). actingd's configuration assembly requires a non-blank
+`application_id` of every entry bound by discovery (`apps/actingd/src/config.rs`,
+`deferred_backend`, and the device registration it builds, `application_identity_missing`), so
+the live build's check-config refused every candidate the command composed
+(`config_refused_by_target`), the candidate kept beside the live file as a part. Nothing was
+damaged, and production never used the command (it adds instances by hand, "At deploy" above).
+
+*The fix.* The row takes one optional parameter, `application_id` (`--application-id <id>`, read
+through its constant, `rescue_reads::READ_HERE`, as the others are), checked by the assembly's own
+rule and no stricter one (`install::instance_add::application_id_form`: not blank, which actingd's
+assembly checks, at most `MAX_INSTANCE_ALIAS_BYTES` (256) bytes and no control character, which
+the device registration it builds checks, `invalid_application_identity`); otherwise
+`actingctl_usage_invalid` `unusable` (`wrong_type` for another type) naming `--application-id`.
+Without it the id is the one the game's root under `standard_packs.root` declares for the server
+(`<game>\applications.json`, `servers.<server>.application_id`), read by a reader of its own beside
+`bound()` (`install::instance_add::declared_application_id`): the host's reader of that member
+(`crates/runtime-host`, `host::idle`, the idle action's) is private to the host, which this crate
+does not depend on, and the contract crate has none; it reads as the host's does (a leading
+byte-order mark skipped) and takes the id only in the form above. Neither given nor declared (no
+file, one that does not read or is no JSON, no member of the server, no `application_id` there, or
+one of another form): `instance_invalid` before anything is written, with `game`, `server`, the
+file's `path` and the read's failure as the cause when there is one (`foreign_os_error`,
+`foreign_data_error`). Given and declared and different: the given one is written, and no refusal
+compares them; the Runtime later meets such an instance only in the idle action, whose `close_app`
+(and `auto` when it takes that tier) refuses before its stop request with
+`invalid_application_identity` (`alias`, the declared `application_id`) when the instance's
+configured application is not the declared one, recorded for that instance alone, the application
+left running and no wake owed (`host::idle`, `idle_close_app`). The entry is now `{alias,
+instance_id, application_id, instance_index, touch_backend, capture_backend}`; the journal's input
+`instance_add` and the answer's `added` gain `application_id` and `application_id_from` (`given`
+or `declared`), additive members.
+
+*Why the gate missed it.* The INST-5 gate's check-config is the fake host's (`fixture.rs`: it
+answers done unless a test names the build in `refuse_check_config`); nothing in it assembles the
+candidate, so a document the real check-config refuses passed.
+
+*Interfaces.* None raised: `application_id` is an existing member of an entry (`actingd-config`
+unchanged), the journal stays `actingcommand.install-operation.v1` with two more members of an
+existing input, and the operation table gains one optional parameter on the row (its schema
+unchanged). No code, key, location or vocabulary is new: `install_command_refused` takes `game`,
+`server` and `path` already. No other row of the table changes.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| INST5-10 | the row parameter `application_id` of `instance add` (option, string, optional) | operation table parameter | #452 | `rescue_reads::READ_HERE`, `install::instance_add::Asked::of` | without it the id the game's root declares for the server |
+| INST5-11 | the entry member `application_id` written by `instance add`; `application_id` and `application_id_from` of the journal input `instance_add` and of the answer's `added` | configuration member (existing); installer journal and answer members | #452 | `install::instance_add::compose`, `Added::value` | `application_id_from` is `given` or `declared` |
+
+*Tests* (apps gate row "#452 INST-5 application id"), in `gate_421_inst5`:
+`inst5_452_a_given_application_id_is_written_over_the_declared_one`,
+`inst5_452_without_the_option_the_declared_id_is_written`,
+`inst5_452_without_a_declared_id_nothing_is_written`,
+`inst5_452_a_malformed_application_id_is_refused_by_the_assembly_rule` and
+`inst5_452_compose_yields_the_fixtures_candidate`; in actingd,
+`config::gate_452_inst5::inst5_452_the_real_assembly_takes_the_composed_candidate`. The last two
+are the real judge (the coordinator's ruling on the work order's point 6, option C: no test reaches
+both the composer in `crates/lab-rescue` and the assembly in `apps/actingd`, a program with no
+library target, without a dependency between the crates, so one checked-in fixture links them):
+`crates/lab-rescue/tests/fixtures/inst5-application-id.json` holds the live configuration, the game
+root's `bundle.json` and `applications.json`, the parameters asked and the candidate document.
+`compose` on its inputs yields exactly that candidate, every member in its order (compared as
+text), but the minted `instance_id` (the member the fixture's `minted` names), which is compared by
+its form (`instance_` and 32 lowercase hex digits, the id `added` records, none the live file
+holds) and then replaced by the fixture's; actingd's own `load` and assembly, on a temporary root
+that holds the state root and the standard-pack root with the game root, take that candidate, and
+refuse it with `application_identity_missing` once the added entry's `application_id` is removed,
+as `instance add` composed it before this fix. actingd reads the fixture by its path relative to the
+workspace, as the MCP entry's tests read the rescue module's sample. The gates that hold the
+operation table to the code cover the new parameter through the row and its constant, unchanged:
+`gate_434_lab5b1b::rescue_read_here_rows_read_what_they_declare` (the row's constant, both ways),
+`gate_434_lab5g2a::mcp_tools_from_op_table` (the MCP tool's input from the row) and
+`gate_434_cli_help` (the help built from the row). One change to the existing
+INST-5 gate: its fake game root (`installed`) also holds `applications.json` declaring an id for
+its server, as a game root a bundle places does, since without `--application-id` the command now
+takes the declared id and refuses without one; no assertion of an existing test changed (none
+pinned the entry's five members as a whole).
+
+*What is not built* (the work order's point 7; the coordinator's ruling on board #452: contract text
+only, since no list of a root's own entries exists on main to register names in: the conversion's
+inventory, R-15e, is not built, and `install adopt` lists no root entry). Directly under a
+single-location root the graphical installer writes entries that belong to the installation without
+being the Runtime's own: the files `acui.toml` (the console's settings of that root),
+`install-wizard.log` (the graphical installer's log) and `install-wizard.config.json` (the complete
+configuration it hands to `config replace`), and the directory `licenses` (the third-party licence
+texts it places); the inventory, when it is built, lists none of them as `foreign`
+([install-cli.md](install-cli.md), "The conversion's checks and inventory"). `vision` is not one of
+them: it is the root-relative default of the configuration's vision root, governed by the
+configuration and not by that statement. No interface revision or plan schema moves: nothing reads
+the statement until R-15e builds the inventory.
+
+*At deploy.* Nothing to do: the command was unusable before (check-config refused every
+candidate), and production keeps adding instances by hand.
+
+*Rollback* (to 0.12.58). Nothing persisted changes shape: a configuration whose entry gained
+`application_id` stays valid, and an installer of 0.12.58 reads a journal whose input has the two
+new members (its `inputs` are free JSON); its `instance add` writes the five-member entry again,
+which check-config refuses.
 
 ### 1.301 Slice ISO-START-1 (0.12.52): one pair's refused settlement fact no longer stops the start (#419; Alice's requirement on board #419 of 10-24: one emulator's fault must not bring down the whole Runtime; the debt the coordinator logged on 11-11, #421 6774483473 and #428 6770731970: isolate only that pair; the coordinator's ruling on the three cases, not Alice's words: coordinator work order `rd-1111/brief-iso-start-1.md`)
 
@@ -19300,9 +19532,67 @@ with the item `notices` `new` first, placed, the journalled plan document's `pac
 file on disk the zip's bytes). No existing test changes: the earlier gates' bundles keep their
 six-interface declarations, which the new reader reads by their `package` pair.
 
-### 1.340 Slice S10 (0.12.59): `actingd discover` and the rescue row `emulators` list this machine's emulator instances while no Runtime runs (Workflow #453, thing 4 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0 and §4, read on main `98924e28`; the coordinator's rulings of 11-13 in the work order, not the owner's words; coordinator work order `rd-1113/brief-453-s10-offline-discovery.md`, read on main `98924e28`)
+### 1.340 Workflow #441: the owner's decision on redistributing the vision runtime (0.12.59) (the owner's decision of 2026-11-13 on board #441; how this repository records it is the coordinator's ruling, not the owner's words; coordinator work order `rd-1113/brief-441-vision-redistribution.md`, read on main `98924e28`)
 
-1.340 is the next number on main `98924e28`. The contract is
+1.340 was the next free number on the base `98924e28`. Text and data, and two tests adapted: no
+product code, outcome code, configuration key, interface revision, wire shape or record changes.
+
+**The decision.** The Windows installation package (the complete, offline package the graphical
+installer installs from; it is assembled outside this repository and published in the umbrella
+repository) carries `onnxruntime.dll` and
+`onnxruntime_providers_shared.dll` of `onnxruntime-directml-1.24.4` (ONNX Runtime's DirectML build,
+MIT) with its `LICENSE` and `ThirdPartyNotices.txt`; `DirectML.dll` of `directml-1.15.4`
+(Microsoft's own license terms) with the package's license terms, so that the installation can
+offer GPU acceleration; and the detector, recognizer and dictionary of `ppocrv6-medium-onnx`
+(Apache-2.0) with PaddleOCR's `LICENSE`.
+
+**What changed.** In the tool registry `scripts/windows-tools/windows-tool-sources.v1.json`, the
+three components' `license.redistribution` is the new word
+`redistributed_in_installation_package_by_owner_decision` (the first two were
+`task_local_cache_only`, the third had none), formed like `platform-tools-37.0.1`'s and the scrcpy
+server's, each with a `redistribution_note` in their form (the files, their license files, the
+installation package only, Workflow #441, 2026-11-13, and "This records the owner's decision; it is
+not a legal opinion."); `directml-1.15.4`'s note also says what the terms require of this
+redistribution and that `DirectML.dll` is governed by Microsoft's terms, not by the project's own
+licenses. The sentence of the two `placement_note`s on who carries the files says what is now
+decided. `onnxruntime-gpu-1.24.4` stays `task_local_cache_only`. [NOTICE.md](../NOTICE.md), the
+ONNXRuntime "Release boundary": the Runtime and Tools artifacts carry neither ONNX Runtime, DirectML
+nor models; the installation package carries the files above, each named with its size, SHA-256,
+source package and license; its first sentence, which said GPU and DirectML were disabled, now
+names the execution providers the configuration selects since 0.12.44; the notice's date of state
+is 2026-11-13. Four more sentences of the notice: FastDeploy / PPOCR "Current status" and "Artifact
+contract status" (no PPOCR model or dictionary is in this repository or its Runtime and Tools
+artifacts; those the installation package carries are listed under the release boundary), and
+ONNXRuntime "Current status" (a classifier runs on the CPU under `directml`) and "Engine
+implementation" (the engine registers DirectML in its DirectML OCR sessions).
+[vision-model-folders.md](vision-model-folders.md), "Vision root" and "DirectML runtime",
+`scripts/windows-tools/README.md`, [INSTALL.md](../distribution/windows/INSTALL.md) and the
+documentation comment of `crates/vision-ffi/src/runtime_pin.rs`: who carries the files, as the
+registry says; no rule and no code changes.
+
+**What did not change.** No Rust product code (one documentation comment only), interface or
+outcome code. The Runtime artifact and the Tools artifact carry none of these files, as before.
+`Materialize-VisionRoot.ps1` and `Materialize-TaskToolCache.ps1` are unchanged (the latter copies
+the word into its provenance note as it is); no reader holds a list of `redistribution` words.
+
+**At deploy.** Nothing changes in a deployed Runtime: the registry and the notice are repository
+files; the Runtime artifact's `INSTALL.md` carries the corrected sentence from 0.12.59.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| VR-1 | `windows-tool-sources.v1.json` `license.redistribution` `redistributed_in_installation_package_by_owner_decision` with `redistribution_note`, on `onnxruntime-directml-1.24.4`, `directml-1.15.4` and `ppocrv6-medium-onnx` | tool source | #441 | — | the two `placement_note`s' sentence on who carries the files; pins unchanged |
+| VR-2 | [NOTICE.md](../NOTICE.md), the ONNXRuntime "Release boundary", and four sentences of the vision section | notice text | #441 | — | the three runtime files with the sizes and SHA-256 of vision-model-folders.md, the three model files with the registry's; `DirectML.dll` with `LICENSE.txt`, `LICENSE-CODE.txt` and `ThirdPartyNotices.txt` |
+| VR-3 | [vision-model-folders.md](vision-model-folders.md), `scripts/windows-tools/README.md`, [INSTALL.md](../distribution/windows/INSTALL.md), the documentation comment of `runtime_pin.rs`: who carries the files | contract and document text (no rule change) | #441 | — | the Runtime and Tools packages carry none of them |
+
+Tests (adapted; the requirement deliberately changes what they pin, nothing else in them):
+`the_runtime_pin_equals_the_tool_sources_entries` (exec gate row "#407 GPU-1 A",
+`crates/vision-ffi/src/gate_407_gpu1a.rs`) and the case `parse-and-workflow-structure` of
+`scripts/windows-tools/Test-WindowsRemoteBuildTools.ps1` each pinned `task_local_cache_only` for
+the two DirectML components and now pin the new word. No test is added.
+
+### 1.341 Slice S10 (0.12.59): `actingd discover` and the rescue row `emulators` list this machine's emulator instances while no Runtime runs (Workflow #453, thing 4 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0 and §4, read on main `98924e28`; the coordinator's rulings of 11-13 in the work order, not the owner's words; coordinator work order `rd-1113/brief-453-s10-offline-discovery.md`, read on main `98924e28`, main `7938d10e` merged)
+
+1.341 is the next number on main `7938d10e` (#441 took 1.340). The contract is
 [emulator-control.md](emulator-control.md), "Offline instance discovery": its subject is the
 instance discovery that section's "Instance discovery query" gives for a running Runtime (the same
 two vendor reads, the same instance shape, the same refusal codes), while

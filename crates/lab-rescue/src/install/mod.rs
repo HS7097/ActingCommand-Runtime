@@ -128,6 +128,10 @@ mod gate_451_loadp;
 // the bundle's own rule.
 #[cfg(test)]
 mod gate_451_place_pkg;
+// Test-only: Workflow #434 LAB-6S2-B1, the rescue module's own client binds `lab` with its word and
+// keeps the CLI's envelope.
+#[cfg(test)]
+mod gate_434_lab6s2b1;
 // Test-only: Workflow #453 S10, the rescue row `emulators` on the fake host's actingd.
 #[cfg(test)]
 mod gate_453_s10;
@@ -197,7 +201,9 @@ pub fn dispatch(arguments: &[OsString]) -> Option<Exit> {
     if let Err(invalid) = cli_line::detail() {
         return Some(cli_line::failure(&invalid, None));
     }
-    Some(print(execute(&arguments[1..], &SystemHost)))
+    // Workflow #434 LAB-6S2-B1: actingctl's connections declare no word, the CLI channel as on
+    // 0.12.58, until LAB-6S2-B2.
+    Some(print(execute(&arguments[1..], &SystemHost::of(None))))
 }
 
 const MCP_ENTRY_USAGE: &str = "usage: actingctl mcp-entry plan --root <root> --entry-protocol 1 [--current-build <commit>] [-- <child arguments>]\nusage: actingctl mcp-entry list --root <root> [--all]";

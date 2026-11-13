@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S10 (register §1.340; contracts/emulator-control.md, "Offline instance discovery";
+// Workflow #453 S10 (register §1.341; contracts/emulator-control.md, "Offline instance discovery";
 // coordinator work order rd-1113/brief-453-s10-offline-discovery.md): `actingd discover` on the
 // vendor tool's two reads injected (`MumuManagerReads`), so no program is spawned:
 // - `s10_discover_lists_the_instances_with_the_files_bound_aliases`: the listing's fixture parsed

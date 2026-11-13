@@ -3231,7 +3231,8 @@
         {"name": "server", "form": "option", "type": "string", "required": true, "note": "the server id as the configuration names it; a pack of that game's bundle names it"},
         {"name": "mumu_index", "form": "option", "type": "unsigned", "required": true, "note": "the emulator's index (instance_index), 0 to 65535; refused when an instance binds it"},
         {"name": "touch_backend", "form": "option", "type": "string", "required": true, "note": "no default"},
-        {"name": "capture_backend", "form": "option", "type": "string", "required": true, "note": "no default"}
+        {"name": "capture_backend", "form": "option", "type": "string", "required": true, "note": "no default"},
+        {"name": "application_id", "form": "option", "type": "string", "required": false, "note": "the instance's application id, of the form the configuration takes; without it the one the game's applications.json declares for the server, refused when it declares none"}
       ],
       "help": "Adds one emulator instance to this root's configuration and restarts the Runtime under a hold; the new instance starts paused.",
       "output": "the operation id, the instance added, the backup kept and each step's result; never the file's content",
@@ -3243,7 +3244,7 @@
       "source": ["actingctl install instance add"],
       "slice": "INST-5",
       "status": "planned",
-      "notes": "INST-5 first slice (an emulator instance; a handset, remove and INST-3's candidate commands later): the entry and its policy.facts.instances row written together until INST-R, a minted instance_id no present or journalled instance used; the candidate beside the live file is committed by config replace's path (journal kind config_replace with the input instance_add and the initiator; actingd.config.json.prev-<ms> kept); after the start the new instance is paused with the reason instance.added, then the hold is handed back. Refused runtime_not_running without a Runtime; the source command actingctl install instance add is not built"
+      "notes": "INST-5 first slice (an emulator instance; a handset, remove and INST-3's candidate commands later): the entry and its policy.facts.instances row written together until INST-R, a minted instance_id no present or journalled instance used; the entry's application_id the one given, else the one the game's root declares for the server (Workflow #452); the candidate beside the live file is committed by config replace's path (journal kind config_replace with the input instance_add and the initiator; actingd.config.json.prev-<ms> kept); after the start the new instance is paused with the reason instance.added, then the hold is handed back. Refused runtime_not_running without a Runtime; the source command actingctl install instance add is not built"
     },
     {
       "name": "instance remove",

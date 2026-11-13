@@ -42,11 +42,15 @@
 //!   Workflow #421 INST-5b: the hold also sets one global pause of its own before the close
 //!   (unless a global pause is in effect), which the Runtime restores at its start, so the new
 //!   instance is never unpaused; the release hands it back after the new instance's pause.
-//! - **Until LAB-6** a request the module sends to a running Runtime goes as `actingctl install`'s
-//!   do, on the CLI channel with the CLI envelope (`crate::install::runtime`). The Runtime refused
-//!   a pause, a resume and a shutdown from a Lab envelope until LAB-6S1b deleted those origin gates
-//!   (§2.4); the module moves to the Lab channel with its word in LAB-6S2. The journal records the
-//!   initiator now; the binding carries it from LAB-6S2.
+//! - **The binding** (Workflow #434 LAB-6S2-B1; §2.4, §4.3). A request the module sends to a
+//!   running Runtime keeps the CLI envelope `actingctl install`'s requests carry
+//!   (`crate::install::runtime`), and its connection binds the Lab channel with the module's word,
+//!   the one its journals record: `Lab-CLI`, `Lab-制包`, `Lab-救急`, or `Lab-MCP` for the Lab's MCP
+//!   server, `serve --stdio --front mcp` and the detached run. None of the module's requests
+//!   writes a record that carries a channel, and the receipt of each names the channel the map M of
+//!   LAB-6S2-M gives, without the word: `cli`, as on 0.12.58, or `mcp` under `Lab-MCP`, where
+//!   0.12.58 named `cli`. `actingctl install` keeps the CLI channel without a word until
+//!   LAB-6S2-B2.
 //! - **The MCP rows** (Workflow #434 LAB-5G5b; register §1.287, "Slice LAB-5G5b";
 //!   `contracts/install-cli.md`, "The MCP entry"), read only, on the module's own root: `mcp plan`
 //!   (the plan the entry's second generation asks, `entry_protocol` 2,
@@ -198,7 +202,7 @@ pub fn answer(
 ) -> Answered {
     answer_with(
         &Context {
-            host: &SystemHost,
+            host: &SystemHost::of(Some(initiator)),
             location,
             initiator,
         },
@@ -564,7 +568,12 @@ fn hold_reason(context: &Context<'_>, word: &str) -> Result<SchedulingPauseReaso
 /// its selection (`actingctl start`).
 fn up(context: &Context<'_>, handed: &'static Handed, params: &Map<String, Value>) -> Exit {
     if context.location.installation.is_some() {
-        return runtime_start::run_located(Mode::Start, &context.location.root, None);
+        return runtime_start::run_located(
+            Mode::Start,
+            &context.location.root,
+            None,
+            Some(context.initiator),
+        );
     }
     installer(context, handed, params)
 }
@@ -576,7 +585,12 @@ fn restart(context: &Context<'_>) -> Exit {
         .installation
         .is_none()
         .then_some(context.location.config.as_path());
-    runtime_start::run_located(Mode::Restart, &context.location.root, config)
+    runtime_start::run_located(
+        Mode::Restart,
+        &context.location.root,
+        config,
+        Some(context.initiator),
+    )
 }
 
 /// `down [--reason <r>]`: the formal stop with its hold (`install stop`, its constant `handed`);
@@ -1468,8 +1482,10 @@ fn commit(
 }
 
 /// `instance add <alias> --game <g> --server <s> --mumu-index <n> --touch-backend <b>
-/// --capture-backend <b>` (Workflow #421 INST-5, first slice): an emulator instance added to the
-/// root's configuration, both places of it (`crate::install::instance_add`), committed by
+/// --capture-backend <b> [--application-id <id>]` (Workflow #421 INST-5, first slice; the
+/// application id since Workflow #452, without the option the one the game's root declares for the
+/// server): an emulator instance added to the root's configuration, both places of it
+/// (`crate::install::instance_add`), committed by
 /// [`commit`] with the Runtime restarted under a hold; the new instance is paused with its own
 /// reason after the start. Every refusal before the candidate is written leaves the root as it
 /// was; a Runtime must run.

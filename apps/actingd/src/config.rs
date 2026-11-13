@@ -91,6 +91,10 @@ mod gate_407_gpu1d;
 // fake discovery.
 #[cfg(test)]
 mod gate_mapp1;
+// Test-only: Workflow #452, the real assembly judges the candidate the Lab's rescue module's
+// `instance add` composes (its fixture, crates/lab-rescue/tests/fixtures/inst5-application-id.json).
+#[cfg(test)]
+mod gate_452_inst5;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;

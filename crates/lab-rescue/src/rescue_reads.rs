@@ -51,6 +51,8 @@ pub static READ_HERE: [Reads; 17] = [
             "mumu_index",
             "touch_backend",
             "capture_backend",
+            // Workflow #452: optional; without it the id the game's root declares.
+            "application_id",
         ],
     ),
     reads("place", &["bundle", "sums", "facts", "plan"]),

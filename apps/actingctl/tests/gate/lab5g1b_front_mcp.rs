@@ -11,11 +11,17 @@
 //! no counter, then `Status`, each with the envelope (Cli, Cli). The members of the configuration
 //! no request carries (timeouts, frame bound, deadline, detail) equal those of the expression
 //! today's server builds its connections with. No device, no clock, no sleep.
+//!
+//! Workflow #434 LAB-6S2-B1 (register §1.287, "Slice LAB-6S2-B1"; adapted: the binding of
+//! `Front::Mcp` moved, today's server's moves with LAB-6S2-B2): `Front::Mcp` binds `lab` with
+//! `Lab-MCP` and no counter, where today's server binds the MCP channel; every other request and
+//! every envelope are today's server's, and the members of its configuration but its binding equal
+//! those of today's expression.
 
 use crate::mcp_harness::McpServer;
 use actingcommand_contract::{
-    EventActor, EventSource, RuntimeErrorCode, RuntimeErrorProjection, RuntimeOperation,
-    RuntimeReceiptState, RuntimeRequest,
+    DeclaredInitiator, EventActor, EventSource, Initiator, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeOperation, RuntimeReceiptState, RuntimeRequest,
 };
 use actingcommand_lab_ops::front::{self, Front};
 use actingcommand_runtime_client::test_support::{
@@ -82,10 +88,12 @@ fn lab5g1b_front_mcp_connects_as_todays_mcp_server() {
         panic!("{} connections, not two", record.connections.len());
     };
     let server_sent = server.requests.iter().map(sent).collect::<Vec<_>>();
+    let lab_sent = lab.requests.iter().map(sent).collect::<Vec<_>>();
+    // Workflow #434 LAB-6S2-B1 (adapted): every request but the binding is today's server's.
     assert_eq!(
-        lab.requests.iter().map(sent).collect::<Vec<_>>(),
-        server_sent,
-        "Front::Mcp sends what today's MCP server sends"
+        (&lab_sent[..1], &lab_sent[2..]),
+        (&server_sent[..1], &server_sent[2..]),
+        "Front::Mcp sends what today's MCP server sends, its binding apart"
     );
     let operations = server_sent
         .iter()
@@ -95,11 +103,30 @@ fn lab5g1b_front_mcp_connects_as_todays_mcp_server() {
         operations,
         [json!("health"), json!("bind_channel"), json!("status")]
     );
-    let RuntimeOperation::BindChannel { channel, via, .. } = server.requests[1].operation() else {
-        panic!("the second request is no BindChannel");
+    let bound = |request: &RuntimeRequest| {
+        let RuntimeOperation::BindChannel {
+            channel,
+            via,
+            initiator,
+        } = request.operation()
+        else {
+            panic!("the second request is no BindChannel");
+        };
+        (
+            *channel,
+            *via,
+            initiator.as_ref().and_then(DeclaredInitiator::initiator),
+        )
     };
-    assert_eq!((*channel, *via), (RuntimeChannel::Mcp, None));
-    for request in &server_sent {
+    assert_eq!(
+        bound(&server.requests[1]),
+        (RuntimeChannel::Mcp, None, None)
+    );
+    assert_eq!(
+        bound(&lab.requests[1]),
+        (RuntimeChannel::Lab, None, Some(Initiator::LabMcp))
+    );
+    for request in server_sent.iter().chain(&lab_sent) {
         assert_eq!(
             (&request["actor"], &request["source"]),
             (&json!(EventActor::Cli), &json!(EventSource::Cli)),
@@ -107,17 +134,19 @@ fn lab5g1b_front_mcp_connects_as_todays_mcp_server() {
         );
     }
 
-    // What no request carries, as `apps/actingctl/src/mcp/runtime.rs` builds its connections.
+    // What no request carries, as `apps/actingctl/src/mcp/runtime.rs` builds its connections,
+    // with `Front::Mcp`'s binding (Workflow #434 LAB-6S2-B1).
     assert_eq!(
         format!("{:?}", front::config(Front::Mcp, state)),
         format!(
             "{:?}",
             RuntimeClientConfig::new(
                 state,
-                RuntimeChannel::Mcp,
+                RuntimeChannel::Lab,
                 EventActor::Cli,
                 EventSource::Cli
             )
+            .with_initiator(Initiator::LabMcp)
         )
     );
 }
