@@ -374,10 +374,11 @@ impl HostShared {
     }
 
     /// Workflow #318 cfg4: verifies one declarative governance identity card and records it
-    /// as `governance.identity_declared` with the request's actor and source. Order: card,
-    /// origin (both already refused by the request envelope; repeated so this entry trusts
-    /// no caller), then the policy's `allowed_clients`, then the card's instance alias, then
-    /// one card per connection. A refusal is appended before its Denied receipt returns; an
+    /// as `governance.identity_declared` with the request's actor and source. Order: card
+    /// (already refused by request validation; repeated so this entry trusts no caller), origin
+    /// (since Workflow #434 LAB-6S1b checked here only), then the policy's `allowed_clients`, then
+    /// the card's instance alias, then one card per connection. A refusal is appended before its
+    /// Denied receipt returns; an
     /// append failure poisons the Runtime exactly as an approval append does.
     pub(super) fn declare_governance_identity(
         &self,

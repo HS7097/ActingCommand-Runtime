@@ -433,9 +433,14 @@ yet made rows; the crash itself is loud.
 actingctl agent-wake-test --state-root <root> --to <channel> [--instance <alias>] [--wait-s <seconds>]
 ```
 
-The request `AgentWakeTest{to, instance_alias?}` takes the origins (User, Ui) and (Cli, Cli) only, else
-`invalid_agent_wake_test_origin`, the same gate as a pause. **It is not an MCP tool:** an agent cannot use the
-Runtime to ping others. It goes through the real worker, file, row and transport with kind `delivery_test`,
+The request `AgentWakeTest{to, instance_alias?}` took the origins (User, Ui) and (Cli, Cli) only, else
+`invalid_agent_wake_test_origin`, the same gate as a pause, until Workflow #434 LAB-6S1b (0.12.58) deleted the
+origin gates of `RuntimeRequest::validate()` ([lab-two-entries.md](lab-two-entries.md) §2.4): since then every
+client envelope sends it, the Lab's `wake-test` row included, and the code is retired. **Today's MCP server
+(`actingctl mcp-serve`) has no tool for it.** The Lab's MCP server (`actinglab-mcp`, Workflow #434 LAB-5,
+0.12.57) serves the row `wake-test` as it serves every row of the operation table, so an agent of a client
+registered there can send the test; that was so before this slice, since its core rows go out as `(Cli, Cli)`.
+The test goes through the real worker, file, row and transport with kind `delivery_test`,
 word 发送测试, `test: true` and no `trigger`, and it obeys quiet: the answer `{wake_id, channel, quiet?}` names
 what holds it. Refusals: `agent_wake_disabled`, `agent_wake_channel_unknown` (a readable registry that does not
 list the name, or a name of no channel's shape). A missing or unreadable registry takes the test, whose row

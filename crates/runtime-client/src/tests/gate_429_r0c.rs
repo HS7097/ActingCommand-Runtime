@@ -67,7 +67,8 @@ fn connect(state_root: &Path, io_timeout: Duration) -> RuntimeClient {
     connect_as(state_root, io_timeout, EventActor::Cli, EventSource::Cli)
 }
 
-/// `ApplyResourceTargets` keeps its Agent/Adapter origin gate until U-6.
+/// The agent dispatcher's envelope, which `ApplyResourceTargets` needed until Workflow #434
+/// LAB-6S1b deleted its origin gate.
 fn connect_agent(state_root: &Path) -> RuntimeClient {
     connect_as(state_root, IO, EventActor::Agent, EventSource::Adapter)
 }

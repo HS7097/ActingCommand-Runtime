@@ -54,7 +54,6 @@
   "not_exposed": [
     {"kind": "Health", "reason": "handshake", "note": "every connection's first request; the watchdog sends only this"},
     {"kind": "BindChannel", "reason": "handshake", "note": "the binding of section 2.2"},
-    {"kind": "DeclareGovernanceIdentity", "reason": "deleted", "note": "LAB-6 deletes the kind; this row leaves with it"},
     {"kind": "RecordApprovalDecision", "reason": "deleted", "note": "LAB-6 deletes the kind; this row leaves with it"},
     {"kind": "InstallTransition", "reason": "deleted", "note": "LAB-6 deletes the kind; this row leaves with it"},
     {"kind": "UpgradeState", "reason": "deleted", "note": "LAB-6 deletes the kind; this row leaves with it"},
@@ -679,10 +678,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["RecordClientAction", "RuntimeFactSnapshot"],
+      "requests": ["DeclareGovernanceIdentity", "RecordClientAction", "RuntimeFactSnapshot"],
       "source": ["actingctl evidence confirm-read", "MCP ac_evidence_confirm_read"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-6S1b: requests add DeclareGovernanceIdentity, the identity card the row declares before its confirmation (crates/lab-ops evidence_read), which the row's code sent since LAB-1 and the table left out; the kind therefore left not_exposed. LAB-6S4a deletes the kind and takes it off this row. From the Lab's envelope the Runtime still refuses the card (the host's own check, invalid_governance_origin)"
     },
     {
       "name": "emu start",

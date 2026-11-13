@@ -11621,6 +11621,158 @@ declares a word, and every binding answers as before.
 **LAB-6S1a rollback** (to the release before it). Two-way: nothing persisted; the earlier build
 declares [3, 7], which every client of this build meets, and no client sent a word.
 
+#### Slice LAB-6S1b (0.12.58): the origin gates of `RuntimeRequest::validate()` go
+
+Coordinator work order `rd-1113/brief-lab6s1b.md`, after the read-only survey
+`rd-1113/lab6-step0-survey.md` (its B.3, B.4, the row S1b of D and E's N9); the coordinator's
+rulings of 2026-11-13 on board #434, not the owner's words; built on LAB-6S1a. The contract is
+[lab-two-entries.md](lab-two-entries.md) §2.4 ("LAB-6 deletes the origin gates of
+`RuntimeRequest::validate()` ...; the content and shape rules stay"), with the slice table's row.
+
+**Each gate deleted, and what it refused** (all in `RuntimeRequest::validate`, before or after
+`self.operation.validate()`):
+
+| # | Gate | Refused | Code |
+|---|---|---|---|
+| L6S1b-1 | `RequestShutdown` | every envelope but `(User, Ui)`, `(Cli, Cli)` | `invalid_shutdown_origin` |
+| L6S1b-2 | `InstallTransition` | the same | `invalid_install_transition_origin` |
+| L6S1b-3 | `RecordAuthoringEvent` | every envelope but `(Lab, Lab)` | `invalid_resource_authoring_origin` |
+| L6S1b-4 | the signatures' register, match and retire | the same | `invalid_signature_origin` |
+| L6S1b-5 | `RecordDebugEvent`, `ReleaseLabPin`, `RunContainedLabOperation`, `RecognizeArtifact`, `DebugPackage`, `ExportEvidence` | the same | `invalid_runtime_debug_origin` |
+| L6S1b-6 | `DeclareGovernanceIdentity` | every envelope but `(User, Ui)`, `(Cli, Cli)` (`valid_governance_declaration_origin`) | `invalid_governance_origin` |
+| L6S1b-7 | `RecordApprovalDecision` | every envelope but `(User, Ui)` | `invalid_governance_origin` |
+| L6S1b-8 | `ControlEmulatorInstance`, `DiscoverInstances`, `SelfCheckInstance`, `DrillRecoveryLadder` | every envelope but `(User, Ui)`, `(Cli, Cli)` | `invalid_emulator_control_origin` |
+| L6S1b-9 | `PauseScheduling`, `ResumeScheduling` | the same | `invalid_scheduling_pause_origin` |
+| L6S1b-10 | `AgentWakeTest` | the same | `invalid_agent_wake_test_origin` |
+| L6S1b-11 | `PublishFact`, `PublishFacts` by family | every envelope but `(Agent, Adapter)`, and for a family with the origin exception (offsets, remedy choices, the pack schedule) also `(User, Ui)`, `(Cli, Cli)` | `invalid_agent_dispatcher_origin` |
+| L6S1b-12 | the agent dispatcher's kinds (the planning session's ten, `ApplyResourceTargets`) | every envelope but `(Agent, Adapter)` | `invalid_agent_dispatcher_origin` |
+| L6S1b-13 | `AcquirePlayerHold`, `ReleasePlayerHold` (after the shapes) | every envelope but `(User, Ui)`, `(Cli, Cli)`, `(Lab, Lab)` | `invalid_player_hold_origin` |
+
+**What stays, and why none of it is a gate by origin.** `valid_client_origin`: an envelope
+outside the client set (a source other than `Cli`, `Ui`, `Lab`, `Adapter`, or an actor other than
+`User`, `Cli`, `Ui`, `Lab`, `Agent`) is still `invalid_client_origin`, a shape rule of the
+envelope. Every content and shape rule, `fact_origin_mixed` among them (one request does not mix
+key families; `fact_key_family` and `FactKeyFamily::takes_origin_exception` stay, the latter for
+the host's choice of the `fact.published` origin). Judged by the envelope outside `validate()`,
+unchanged and none of it a refusal by origin of a client request: the frame pin's kind (`Lab` for
+a `(Lab, Lab)` request), the C4 intent's record type and origin module
+(`c4_client_source_unsupported`), the receipt's default detail.
+
+**The host's own re-checks of an origin stay as they are** (they belong to kinds LAB-6S4a
+deletes): `governance.rs`, `declare_governance_identity`, refuses a card from any envelope but
+`(User, Ui)`, `(Cli, Cli)` (`valid_governance_declaration_origin`, `invalid_governance_origin`,
+nothing recorded); `governance.rs`, `record_approval_decision`, refuses an approval from anything
+but `(User, Ui)` on a connection whose card was accepted (`governance_authority_required`);
+`installation.rs`, `install_transition`, refuses every action but `Query` on a connection whose
+card was not accepted (`install_identity_required`, its lifecycle failure recorded). Since no
+card can be accepted from another envelope, each refuses what it refused; only the code of an
+approval or a card from a refused envelope changes where validate's came first (an approval from
+`(Lab, Lab)` is now `governance_authority_required`; a card keeps `invalid_governance_origin`).
+Outside these kinds the host keeps one more check by envelope that `validate()` never held: an
+evidence-read confirmation (`RecordClientAction` of `evidence_read_frame` or `evidence_read_run`)
+counts only from `(Agent, Adapter)`, `(Cli, Cli)`, `(User, Ui)` (`client_action_invalid`,
+`client_events.rs`); and the runtime client still opens an authoring or debug session only on a
+Lab envelope (`runtime_authoring_origin_invalid`, `runtime_debug_origin_invalid`). This slice
+touches neither.
+
+**Codes.** Retired (`status` `retired`, `retired_in` 0.12.58, no `replaced_by`, the registry
+entries removed as G1 asks; the index regenerated): `invalid_shutdown_origin`,
+`invalid_install_transition_origin` (released settled in 0.12.0; G9 holds the signature, not the
+status), `invalid_resource_authoring_origin`, `invalid_signature_origin`,
+`invalid_runtime_debug_origin`, `invalid_emulator_control_origin`,
+`invalid_scheduling_pause_origin`, `invalid_agent_wake_test_origin`,
+`invalid_agent_dispatcher_origin`, `invalid_player_hold_origin`: no code path emits them once the
+gates are gone. No `replaced_by`: the Runtime takes the request; the `channel_request_refused`
+the U-6 text planned for some of them (runtime-interface.md, "Retired later") is LAB-6S3's refusal
+by channel on `ui`, not a replacement, and that table now says so. Kept: `invalid_governance_origin`
+(the host's card check emits it), `invalid_client_origin`, `fact_origin_mixed`. No code is added.
+**No interface revision moves**: the Runtime accepts more and no shape changes (no request,
+answer, record or document gains or loses a member; [component-interfaces.md](component-interfaces.md),
+"Bump rule").
+
+**What begins to work** (read on the code: `crates/lab-ops`' `front::Front::Actinglab` gives
+actinglab's CLI module and `serve` the envelope `(Lab, Lab)`, and `core_ops` serves these rows
+through the front's connection). Refused before and served now, from `actinglab` (CLI and
+`serve --stdio`): `pause` and `resume` (L6S1b-9), `shutdown` (1), `discover`, `emu start`,
+`emu stop`, `emu restart`, `emu selfcheck` and `drill` (8), `wake-test` (10), `facts publish`,
+`offset`, `remedy set` and `remedy lift` (11; `remedy` was not in the survey's list: its rows
+publish the remedy choices family, which the exception took from the person and the operator
+only), `targets set` (12). From `actinglab-mcp`, whose core rows connect as `Front::Mcp`, `(Cli,
+Cli)`, until LAB-6S2: `ac_targets_set` (12) and `ac_facts_publish` of a family without the origin
+exception (11); its other rows were taken before. Still refused from the Lab, and by what:
+`evidence read` (its identity card, the host's `invalid_governance_origin`; its confirmation would
+then be `client_action_invalid`); `hold` and `unhold` are reserved rows and the host answers both
+kinds `not_implemented` until R-7b. `actingctl`, the console and today's MCP server send what
+they sent and are answered as before. No program changes its binding, channel or envelope
+(LAB-6S2 does).
+
+**The operation table** (E's N9, first half): the row `evidence read` names
+`DeclareGovernanceIdentity` in its `requests` (the card `crates/lab-ops`' `evidence_read`
+declares before its confirmation), so the kind leaves `not_exposed`, which LAB-1's
+`lab_ops_table_complete` requires of a kind a row sends; the row's note says LAB-6S4a takes it off
+with the kind. The second half (`StopInstanceRun`'s `console_today`) is LAB-6S3's.
+
+**Texts corrected.** [lab-two-entries.md](lab-two-entries.md) (the slice row, §2.4, §7, §12),
+[runtime-interface.md](runtime-interface.md) (the slice table's U-6 row, "The gate", the request
+tables' gate notes, the player hold's, the key families', "Retired later" and "Kept"),
+[install-cli.md](install-cli.md) (the ways out of a kept hold and the added instance's resume:
+the Lab's own `resume` works since this slice; `next` still names actingctl's forms),
+[scheduling-pause.md](scheduling-pause.md), [emulator-control.md](emulator-control.md) (three
+places), [agent-wake.md](agent-wake.md), [player-hold.md](player-hold.md) (the acquire's step 2
+and the codes), [client-interactions.md](client-interactions.md),
+[instance-fact-store.md](instance-fact-store.md) (two places),
+[resource-targets.md](resource-targets.md), [resource-readings.md](resource-readings.md),
+[runtime-fact-store.md](runtime-fact-store.md), the catalog text of `list_reading_key_reserved`,
+`docs/architecture/emulator-control-capability-matrix.md`, the contract crate's doc comments and
+the rescue module's comments on its ways out. The player hold's recorded source
+(`player_hold_source_actor`) keeps its three words: R-7b, which builds the behaviour, settles the
+word of another envelope, or LAB-6S2 leaves only these three.
+
+**Tests.** New: contract row "#434 LAB-6S1b" (`gate_434_lab6s1b` of the contract crate: a request
+of every family of deleted gate validates from each of six client envelopes and again read back
+off the wire; five envelopes outside the client set are `invalid_client_origin` for every one of
+those kinds; a mixed fact observation is `fact_origin_mixed` from every client envelope) and host
+row "#434 LAB-6S1b" (`gate_434_lab6s1b` of the host: a `(Lab, Lab)` connection's global and
+instance pause are completed with revision 1 on the `lab` channel, held with their reason,
+restored by a restart and resumed, as a `(Cli, Cli)` connection's in the same test; the card from
+`(Lab, Lab)`, `(Agent, Adapter)`, `(Ui, Ui)` is `invalid_governance_origin`, an approval from four
+envelopes without a card is `governance_authority_required`, an install transition's drain from
+the Lab is `install_identity_required`). The architecture guard
+`b3_every_runtime_operation_has_an_explicit_origin_category` now says: the refusal branches of
+`validate()` are the schema, the timestamp, `valid_client_origin` and `fact_origin_mixed`; no
+branch names an actor or a source, and the one origin predicate is `valid_client_origin`; every
+other operation is open to every client envelope. `b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection`
+keeps the predicate's terms and the host's approval branch and checks the host's card check in
+place of validate's branch. Retired ([`ci/retired-gates.toml`](../ci/retired-gates.toml)): row K6
+whole; `agent_dispatcher_operations_require_agent_adapter_origin` and
+`r7a_the_source_gate_takes_the_three_envelopes_for_both_requests` (their whole point was a gate);
+renamed for what they keep, `runtime_debug_events_are_strict_and_require_lab_origin` (now
+`runtime_debug_events_and_pin_releases_are_strict`),
+`governance_identity_cards_require_person_or_operator_origin_and_a_valid_card` (now
+`governance_identity_cards_require_a_valid_card`), the host's
+`drill1_a_drill_is_refused_when_stuck_recovery_is_off_or_it_comes_from_an_agent` (now
+`drill1_a_drill_is_refused_when_stuck_recovery_is_off`) and `agent_wake_test_takes_only_person_origins`
+(now `agent_wake_test_is_an_instruction_of_no_instance`). Adapted, each for its origin half only:
+`list_reading_key_reserved` (the key from `(Cli, Cli)`, `(User, Ui)`, `(Lab, Lab)` now reaches the
+host and is `list_reading_key_reserved`), `a4_a_request_the_contract_refuses_carries_the_refusal_code`
+(an envelope outside the client set), the host's
+`second_owner_is_rejected_and_clean_restart_gets_a_new_epoch` (host row 1: the shutdown it forges
+to be refused now carries an envelope outside the client set, since an agent adapter's is
+admitted), and, outside the gate maps, the host's forged authoring event (now
+`runtime_rejects_an_authoring_event_from_outside_the_client_set_without_ledger_effect`, the same
+change: a (Cli, Cli) authoring event is taken and recorded as the Lab's, the record's origin being
+the kind's) and the contract crate's tests that built a refused envelope beside their shape checks
+(signatures, package debug, evidence export, fact publication and the policy input identity,
+planning, authoring). The two host tests were found red by CI on the pull request's first full
+round and adapted by the coordinator.
+
+**At deploy.** The Lab's own programs are no longer refused for their envelope (the list above).
+No program changes what it sends. A rollback to the build before this slice brings the gates
+back: the Lab's pause, resume and the rest are refused again, nothing persisted needs a way back.
+
+**LAB-6S1b rollback** (to the release before it). Two-way: nothing persisted changes shape;
+`runtime-client` stays [3, 8].
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

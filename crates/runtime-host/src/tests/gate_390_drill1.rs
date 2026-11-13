@@ -12,7 +12,6 @@
 use super::instance_workers::{phases, wait_until};
 use super::*;
 use crate::codes::HostCode;
-use actingcommand_contract::codes::RuntimeContractCode;
 use actingcommand_contract::{
     EmulatorInstanceAction, InstanceStuckRecovery, RecoveryDrillMode, RecoveryLadderDrill,
     RecoveryLadderOutcome, RecoveryLadderSuppression, RecoveryRung, RecoveryRungOutcome,
@@ -505,7 +504,7 @@ fn drill1_a_plan_drill_leaves_the_cool_down_and_a_device_drill_opens_it_as_a_rea
 }
 
 #[test]
-fn drill1_a_drill_is_refused_when_stuck_recovery_is_off_or_it_comes_from_an_agent() {
+fn drill1_a_drill_is_refused_when_stuck_recovery_is_off() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = drill_host(&root, &state, instance_id(), Some(false));
@@ -535,25 +534,6 @@ fn drill1_a_drill_is_refused_when_stuck_recovery_is_off_or_it_comes_from_an_agen
         1
     );
     assert!(emulator_actions(&state).is_empty());
-
-    // Only a person (Ui) or the operator (Cli) may ask for a drill: no agent or scheduler path.
-    let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let agent = RuntimeRequest::new(
-        ids.mint_request_id().expect("request id"),
-        ids.mint_correlation_id().expect("correlation id"),
-        None,
-        EventActor::Agent,
-        EventSource::Adapter,
-        unix_ms_now().expect("wall clock"),
-        RuntimeOperation::DrillRecoveryLadder {
-            instance_alias: ALIAS.to_owned(),
-            mode: RecoveryDrillMode::Plan,
-        },
-    );
-    assert_eq!(
-        agent.err().map(|error| error.code().as_str()),
-        Some(RuntimeContractCode::InvalidEmulatorControlOrigin.as_str())
-    );
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
 }

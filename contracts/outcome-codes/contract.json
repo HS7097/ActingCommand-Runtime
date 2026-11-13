@@ -5657,11 +5657,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid shutdown origin.",
+      "retired_in": "0.12.58",
+      "description": "Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. Was: a RequestShutdown from an envelope other than (User, Ui) or (Cli, Cli).",
       "common_causes": "TBD",
-      "handling": "TBD"
+      "handling": "None in 0.12.58 and later: the code is no longer emitted."
     },
     "invalid_install_transition_origin": {
       "category": "error",
@@ -5677,11 +5678,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "An InstallTransition request names an origin other than the user through the UI or the CLI; only those may drive an install transition.",
-      "common_causes": "A client that sends the request with another actor or source.",
-      "handling": "Send install transitions from acsetup or actingctl."
+      "retired_in": "0.12.58",
+      "description": "Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code; the host still refuses an install transition other than its Query on a connection without an accepted identity card (install_identity_required). Was: an InstallTransition request that names an origin other than the user through the UI or the CLI.",
+      "common_causes": "A client that sent the request with another actor or source, before 0.12.58.",
+      "handling": "None in 0.12.58 and later: the code is no longer emitted."
     },
     "invalid_resource_authoring_origin": {
       "category": "error",
@@ -5697,11 +5699,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid resource authoring origin.",
+      "retired_in": "0.12.58",
+      "description": "Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. Was: a RecordAuthoringEvent from an envelope other than (Lab, Lab).",
       "common_causes": "TBD",
-      "handling": "TBD"
+      "handling": "None in 0.12.58 and later: the code is no longer emitted."
     },
     "invalid_signature_origin": {
       "category": "error",
@@ -5717,11 +5720,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid signature origin.",
+      "retired_in": "0.12.58",
+      "description": "Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. Was: a diagnostic signature registration, match or retirement from an envelope other than (Lab, Lab).",
       "common_causes": "TBD",
-      "handling": "TBD"
+      "handling": "None in 0.12.58 and later: the code is no longer emitted."
     },
     "invalid_runtime_debug_origin": {
       "category": "error",
@@ -5737,11 +5741,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid runtime debug origin.",
+      "retired_in": "0.12.58",
+      "description": "Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. Was: a debug event, a Lab pin release, a contained Lab operation, an artifact recognition, a package debug or an evidence export from an envelope other than (Lab, Lab).",
       "common_causes": "TBD",
-      "handling": "TBD"
+      "handling": "None in 0.12.58 and later: the code is no longer emitted."
     },
     "invalid_emulator_control_origin": {
       "category": "error",
@@ -5757,11 +5762,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid emulator control origin.",
+      "retired_in": "0.12.58",
+      "description": "Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. Was: an emulator start, stop or restart, an instance discovery, a self-check or a ladder drill from an envelope other than (User, Ui) or (Cli, Cli).",
       "common_causes": "TBD",
-      "handling": "TBD"
+      "handling": "None in 0.12.58 and later: the code is no longer emitted."
     },
     "invalid_scheduling_pause_origin": {
       "category": "error",
@@ -5777,11 +5783,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid scheduling pause origin.",
+      "retired_in": "0.12.58",
+      "description": "Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. Was: a scheduling pause or resume from an envelope other than (User, Ui) or (Cli, Cli).",
       "common_causes": "TBD",
-      "handling": "TBD"
+      "handling": "None in 0.12.58 and later: the code is no longer emitted."
     },
     "invalid_agent_wake_test_origin": {
       "category": "error",
@@ -5797,11 +5804,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.37",
-      "description": "Runtime contract validation refused a value: an AgentWakeTest from another origin than a person's (User+Ui or Cli+Cli), the same gate as a pause (Workflow #432 AGT-1b).",
-      "common_causes": "A client other than actingctl or the console sent the request.",
-      "handling": "Run actingctl agent-wake-test. No MCP tool sends it, so an agent cannot use the Runtime to ping others."
+      "retired_in": "0.12.58",
+      "description": "Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. Was: an AgentWakeTest from another origin than a person's (User+Ui or Cli+Cli), the same gate as a pause (Workflow #432 AGT-1b).",
+      "common_causes": "A client other than actingctl or the console sent the request, before 0.12.58.",
+      "handling": "None in 0.12.58 and later: the code is no longer emitted."
     },
     "fact_origin_mixed": {
       "category": "error",
@@ -5837,11 +5845,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid agent dispatcher origin.",
+      "retired_in": "0.12.58",
+      "description": "Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. Was: a fact publication from an envelope other than (Agent, Adapter), or for a family with the origin exception other than (User, Ui) and (Cli, Cli) too; or an agent dispatcher kind (the planning session's kinds, ApplyResourceTargets) from an envelope other than (Agent, Adapter).",
       "common_causes": "TBD",
-      "handling": "TBD"
+      "handling": "None in 0.12.58 and later: the code is no longer emitted."
     },
     "invalid_contained_task_cancellation_status": {
       "category": "error",
@@ -17904,11 +17913,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.35",
-      "description": "Runtime contract validation refused a value: a player hold request from an envelope other than (User, Ui), (Cli, Cli) or (Lab, Lab). Workflow #429 R-7a (register section 1.233, contracts/player-hold.md).",
-      "common_causes": "A client or Runtime defect, or a peer of another build.",
-      "handling": "Send it from one of the four counters' envelopes."
+      "retired_in": "0.12.58",
+      "description": "Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. Was: a player hold request from an envelope other than (User, Ui), (Cli, Cli) or (Lab, Lab). Workflow #429 R-7a (register section 1.233, contracts/player-hold.md).",
+      "common_causes": "A client or Runtime defect, or a peer of another build, before 0.12.58.",
+      "handling": "None in 0.12.58 and later: the code is no longer emitted."
     },
     "invalid_player_hold_drain_timeout": {
       "category": "error",

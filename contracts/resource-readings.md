@@ -842,12 +842,13 @@ the run the same way.
   nothing is evicted.
 - A client never writes a list: a `PublishFact` or `PublishFacts` of a key under
   `inventory.list.` is refused before the fact write gate, as the non-fatal request error
-  `list_reading_key_reserved` (`fact_key`), with nothing appended, from every origin that may
-  publish facts: the agent dispatcher's (Agent, Adapter), which the agent and the CLI's
-  `facts publish` send, and the Runtime's own ordinary publication path. A CLI or UI origin of
-  its own (Cli, Cli or User, Ui) is refused earlier, when the request is formed
-  (`invalid_agent_dispatcher_origin`), as for any publication of a key outside the families with
-  the origin exception.
+  `list_reading_key_reserved` (`fact_key`), with nothing appended, from every client envelope
+  and on the Runtime's own ordinary publication path. Since Workflow #434 LAB-6S1b every client
+  envelope may publish facts (the agent dispatcher's (Agent, Adapter), the CLI's (Cli, Cli), the
+  console's (User, Ui), the Lab's (Lab, Lab)); before it only the first reached the Runtime with
+  such a key, the others being refused when the request was formed
+  (`invalid_agent_dispatcher_origin`, retired), as for any publication of a key outside the
+  families with the origin exception.
 - A mark never writes under `inventory.list.` either: from S168-4, a mark's `fact_key` or
   `capacity_fact_key` under that prefix is refused with the refusals of a mark's other key rules
   (`ResourceReadingDeclaration::validate`, "Declaration" above). The declaration gate refuses it

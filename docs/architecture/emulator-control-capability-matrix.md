@@ -191,7 +191,8 @@ adb_port != 0` after `launch` (120 s), `!is_process_started` after `shutdown`
 `mumu_manager_wait_timeout` carrying the last observation or `no observation`; `player_state`
 is recorded opaquely and never branched on. The vendor documents no return value, exit code or
 blocking behaviour for `control`, so the bounds are Runtime policy. No automatic restart exists:
-the scheduler and agents cannot issue the operation (`invalid_emulator_control_origin`). Cold
+the scheduler sends no request (until Workflow #434 LAB-6S1b an agent's envelope was refused too,
+`invalid_emulator_control_origin`, retired in 0.12.58). Cold
 start (slice #316-B2): a configured instance that discovery reports stopped is bound PENDING
 (discovered facts and host, no port; `status` shows `adb_port: null`), every device-facing
 request on it is denied typed with `instance_not_running` until `start` / `restart` succeeds,

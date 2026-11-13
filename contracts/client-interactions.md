@@ -90,9 +90,13 @@ The Runtime checks, in this order:
 5. the connection has not already had a card accepted: one card per connection
    (`governance_identity_already_declared`).
 
-A malformed card or a wrong origin is refused by request validation before
-dispatch (Denied + `InvalidRequest`, nothing recorded); the host repeats both
-checks and trusts no caller. Every declaration that reaches steps 3-5 is
+A malformed card is refused by request validation before dispatch (Denied +
+`InvalidRequest`, nothing recorded); the host repeats the check and trusts no
+caller. A wrong origin was refused by request validation too until Workflow #434
+LAB-6S1b deleted its origin gates; since then the host's own check refuses it
+(`invalid_governance_origin`, Denied + `InvalidRequest`, nothing recorded), and
+an approval decision from anything but `(User, Ui)` is the host's
+`governance_authority_required`, until LAB-6S4a deletes both kinds. Every declaration that reaches steps 3-5 is
 recorded as one `governance.identity_declared` event (family `client`, origin
 module `governance`, source and actor of the declaring request, links to the
 request, its correlation and the card's instance when it is registered):

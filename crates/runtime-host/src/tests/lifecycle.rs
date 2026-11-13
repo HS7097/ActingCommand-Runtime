@@ -742,9 +742,12 @@ fn second_owner_is_rejected_and_clean_restart_gets_a_new_epoch() {
         assert!(!first.is_shutdown_requested().expect("still running"));
     }
     let request = runtime_request(&ids, RuntimeOperation::RequestShutdown { target });
+    // Workflow #434 LAB-6S1b: every client envelope may ask (the shutdown's origin gate is
+    // gone, so an agent adapter's request would be admitted here); the one envelope rule left
+    // refuses an envelope outside the client set, and still records nothing.
     let mut forged = serde_json::to_value(&request).expect("request JSON");
-    forged["actor"] = serde_json::json!("agent");
-    forged["source"] = serde_json::json!("adapter");
+    forged["actor"] = serde_json::json!("system");
+    forged["source"] = serde_json::json!("system");
     let forged = serde_json::from_value(forged).expect("unvalidated origin");
     let denied = first
         .process_request_for_test(&forged, connection)
