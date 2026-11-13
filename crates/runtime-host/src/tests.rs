@@ -422,6 +422,9 @@ mod gate_392_da2a;
 mod gate_392_da4bd;
 // Workflow #392 DA-3: the input side: every input of a run mapped at its one exit to the device.
 mod gate_392_da3;
+// Workflow #392 DA-3b: a vertical-brake drag under a scale, sent as a drag with a pause and a
+// brake.
+mod gate_392_da3b;
 mod gate_398_rd1a;
 mod gate_398_rd1b;
 // Workflow #398 RD-2: a handset's wired device link through the host.
