@@ -63,7 +63,7 @@
 //   compared by its form (the issuer's prefix and 32 lowercase hex digits, the one `added` records,
 //   none the live file holds) and then replaced by the fixture's. actingd's
 //   `config::gate_452_inst5` has the real configuration assembly judge the same candidate.
-// Workflow #453 S1 (register §1.353; coordinator work order `rd-1114/brief-453-s1-first-row.md`;
+// Workflow #453 S1 (register §1.357; coordinator work order `rd-1114/brief-453-s1-first-row.md`;
 // the design survey `rd-1113/fresh-root-design.md` §1(c) "1a. The first row"): `instance add` on a
 // configuration whose `policy.facts.instances` is empty composes a first row from the
 // configuration alone.

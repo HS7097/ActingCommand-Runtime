@@ -22049,10 +22049,11 @@ byte over its limit), and `goals_neutral_example_reads_to_typed_entries` and
 `goals_each_type_reads_its_members` (their references made by `GoalReferences::new`, no assertion
 changed).
 
-### 1.353 Slice #453 S1 (0.12.60): `instance add` gives a configuration its first policy row (Workflow #453, approved by the owner on 11-13; the design survey `rd-1113/fresh-root-design.md` §0, §1(a), §1(c) "1a. The first row" and the row S1 of §1(d), read on main `98924e28`, every place it names found again on main `95525c98`; the coordinator's rulings of 11-13 on board #453, items 5 and 8, not the owner's words; coordinator work order `rd-1114/brief-453-s1-first-row.md`, read on main `95525c98`)
+### 1.357 Slice #453 S1 (0.12.60): `instance add` gives a configuration its first policy row (Workflow #453, approved by the owner on 11-13; the design survey `rd-1113/fresh-root-design.md` §0, §1(a), §1(c) "1a. The first row" and the row S1 of §1(d), read on main `98924e28`, every place it names found again on main `95525c98`; the coordinator's rulings of 11-13 on board #453, items 5 and 8, not the owner's words; coordinator work order `rd-1114/brief-453-s1-first-row.md`, read on main `95525c98`)
 
-1.353 was the next free number on main `95525c98` (after §1.352); an integration train renumbers it
-if open pull requests take it first. [install-cli.md](install-cli.md), "Instances, the first
+The slice took the next free number on main `95525c98` (after §1.352), which main has since given
+to MAPP-2b; the integration train 0.12.60c gave it 1.357, the number after main's §1.356, as the
+first row of that train. [install-cli.md](install-cli.md), "Instances, the first
 slice" ("Refused before anything is written", "The candidate", "A first row" and "The commit"),
 and its list of codes and words ("Workflow #453 S1") are the contract. The row `instance add` of
 [lab-operations.json](lab-operations.json) is unchanged: its parameters, its `help` and its

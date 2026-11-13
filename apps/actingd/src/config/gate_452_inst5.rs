@@ -14,7 +14,7 @@
 //   (`load`, then `assemble_or_refusal`): it passes; the same document with the added entry's
 //   `application_id` removed, as `instance add` composed it before Workflow #452, is refused at
 //   the assembly with `application_identity_missing`.
-// Workflow #453 S1 (register §1.353; contracts/install-cli.md, "Instances, the first slice" ("A
+// Workflow #453 S1 (register §1.357; contracts/install-cli.md, "Instances, the first slice" ("A
 // first row")): the same judge for the candidate of a first row, the checked-in fixture
 // `crates/lab-rescue/tests/fixtures/inst5-first-row.json`, which the rescue module's INST-5 gate
 // (`install::gate_421_inst5::inst5_453_s1_a_first_row_takes_the_one_host_and_the_standard_pack_operation`)

@@ -788,7 +788,7 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     member as it was, in its order, with the live file's line ends. The `instance_id` is minted
     (`instance_<32 hex>`) and is none the live file names and none a journal of the root recorded
     as added.
-  - **A first row** (Workflow #453 S1, since 0.12.60; register §1.353; the coordinator's work
+  - **A first row** (Workflow #453 S1, since 0.12.60; register §1.357; the coordinator's work
     order of 11-14 on board #453, not the owner's words). When `policy.facts.instances` is empty,
     as on a fresh root, the row is composed from the configuration alone, after every check above
     and at the place the copied row's check stood. Its host is the one
