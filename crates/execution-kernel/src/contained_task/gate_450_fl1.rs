@@ -1032,7 +1032,7 @@ fn field_list_under_an_action_gap() {
 // on the frame captured last; no `ListReadingFrame`. A run whose first frame shows the previous
 // arrow decides its list on `last` as `list_start_unseen`, naming its first frame.
 #[test]
-fn field_list_end_unseen() {
+fn field_list_run_end_and_start_unseen() {
     let task = package(task_json(Some(list_json()), 2), 2);
     let mut device = ListDevice::new(three_items());
     let outcome = task.run(&mut device).expect("the run succeeds");

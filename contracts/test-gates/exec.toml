@@ -2938,7 +2938,7 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_450_fl1::field_list_unresolved_rows",
     "actingcommand-execution-kernel::lib::contained_task::gate_450_fl1::field_list_start_end",
     "actingcommand-execution-kernel::lib::contained_task::gate_450_fl1::field_list_run_records_traces",
-    "actingcommand-execution-kernel::lib::contained_task::gate_450_fl1::field_list_end_unseen",
+    "actingcommand-execution-kernel::lib::contained_task::gate_450_fl1::field_list_run_end_and_start_unseen",
     "actingcommand-execution-kernel::lib::contained_task::gate_450_fl1::field_list_frame_after_end_fails_run",
     "actingcommand-execution-kernel::lib::contained_task::gate_450_fl1::field_list_under_an_action_gap",
     "actingcommand-execution-kernel::lib::contained_task::gate_450_fl1::field_list_gate_and_admission_refusals",

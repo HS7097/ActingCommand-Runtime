@@ -116,7 +116,7 @@ fn field_list_declaration_rules() {
     // Task schemas 0.8 and 0.9 declare it; so do a list without columns, a string column, pages
     // with or without the game prefix, a start on a field page and both conditions' targets.
     for schema in ["0.8", "0.9"] {
-        check(schema, &[declaration.clone()]).expect("the list is declared");
+        check(schema, std::slice::from_ref(&declaration)).expect("the list is declared");
     }
     let patched = |patch: &dyn Fn(&mut Value)| {
         let mut value = list();
@@ -149,7 +149,8 @@ fn field_list_declaration_rules() {
         reason,
     };
     for schema in ["0.7", "0.6", "unknown"] {
-        let refusal = check(schema, &[declaration.clone()]).expect_err("an older schema");
+        let refusal =
+            check(schema, std::slice::from_ref(&declaration)).expect_err("an older schema");
         assert_eq!(
             refusal,
             task_refusal("field_lists", Reason::UnconsumedField)
