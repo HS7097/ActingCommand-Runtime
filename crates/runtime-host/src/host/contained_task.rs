@@ -2866,7 +2866,9 @@ impl RuntimeContainedTask<'_> {
     /// frame and in the device box of the input box it was drawn in (the step's effect intent's
     /// sampling regions, `input_boxes`), else `contained_task_input_out_of_bounds`; lengths scale,
     /// durations do not. The effect intent keeps the input the package asked for, in base pixels;
-    /// the input intent records what is sent, in device pixels.
+    /// the input intent records what is sent, in device pixels. Workflow #392 DA-3b: under such a
+    /// map, a scale, a vertical-brake drag is sent as a drag with a pause and a brake, its brake
+    /// scaled; the effect intent keeps the package's kind and the input intent names the kind sent.
     fn device_input(
         &mut self,
         map: &actingcommand_display_adapter::DisplayMap,

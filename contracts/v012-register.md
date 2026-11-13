@@ -12256,7 +12256,11 @@ each program is served by that Runtime's own rules (fix 1: the connections count
   (`failures_grouped`), `events`, and a console's count of records by severity. No guard, no
   post-start check row, no watchdog attention and no overview warning reads them, and nothing
   stops, refuses or alarms on them.
-- **The deploy kit** runs `actingctl install` of the new build against the old running Runtime.
+- **A deployment run by `actingctl install` of the new build** against the old running Runtime
+  (corrected with the 0.12.59 release: which build's installer runs a deployment is the deployer's
+  choice; a deployment whose every step, the detached run included, is run by the installed
+  build's `actingctl install` declares no word, and its connections add none of the records
+  counted below).
   Every connection the rescue module makes keeps (Cli, Cli) and is a client of its own, one per
   read or write (`SystemRuntime`). `update plan` and its `--preview` connect to nothing (they read
   the owner lock and the processes). `update apply --stop --hold <reason> --start` connects to the
@@ -12282,14 +12286,18 @@ each program is served by that Runtime's own rules (fix 1: the connections count
   is, and `actingctl` writes the one stderr line. So one such deployment adds N + 9 records
   `runtime_protocol_invalid` to the ledger, all written by the old Runtime before it closes, and
   none after the new one starts. No step is refused or fails for the binding.
-- **The automatic rollback** (the composite update's new start did not become ready, or one of its
-  fail-class post-start checks failed): this build's `actingctl` closes the new Runtime, puts the
+- **The automatic rollback of such a deployment** (the composite update's new start did not become
+  ready, or one of its fail-class post-start checks failed): this build's `actingctl` closes the
+  new Runtime, puts the
   previous build back, starts it, and talks to that old Runtime again: the readiness probe, the
   post-start check (`Status`, `RuntimeFactSnapshot`, `StartReport`) and the release (`Status`,
   each `ResumeScheduling`, `ScheduleExplanation`). On 0.12.57 or earlier each of these connections
   is dropped once, adding one such record, and made again unbound; none fails.
 - **The deployer's choice:** deploying 0.12.58 first avoids all of these records, because that
-  Runtime accepts the binding.
+  Runtime accepts the binding. So does running the deployment with the installed build's
+  `actingctl install`, which declares no word; then only programs of the new build that reach a
+  Runtime of 0.12.57 or earlier outside the deployment add them (an MCP server's child that the
+  entry already switched to the new build, or the tools of the new build after a rollback).
 
 **LAB-6S2-B2 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
 
@@ -18019,7 +18027,7 @@ The coordinator cut MAPP-1 in two on 11-12. "MAPP-1" elsewhere in this section a
   after every task. MAPP-2's key comes with MAPP-2 and takes the next free revision of
   `actingd-config`.
 - Before the load accepts a group of several, main must also end **the member that cannot fit**
-  (added by MAPP-2b, §1.348, point 8; device-group.md, "The member that cannot fit, as built"):
+  (added by MAPP-2b, §1.350, point 8; device-group.md, "The member that cannot fit, as built"):
   with today's request deadlines every run of a member of a group of several is refused by this
   bound; the lease across a switch is reworked in a later slice before any group of several is
   accepted, and a task that cannot fit never becomes a candidate.
@@ -20677,9 +20685,257 @@ dependencies gain `actingcommand-display-adapter`, whose only dependency is the 
 its forbidden closure is unchanged); the helpers of the host's `gate_412_b3_s2` the Lab test
 reuses are visible to their sibling modules, no assertion changed.
 
-### 1.348 Slice MAPP-2b (0.12.60): the application switch before a run, its failure and the member's cooldown (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its finding F3, its row "MAPP-2b" and its row for slice 2; the coordinator's rulings of 11-14 on board #437, not the owner's words; coordinator work orders `rd-1113/brief-437-mapp2b.md`, read on main `bd58c9a6`, main `fa724931` merged, and `rd-1114/brief-1689-fix1.md`, its fix round after the independent review, with the coordinator's addition of 11-14 on the lease bound)
+### 1.348 Fix #454, the real cause (0.12.59): a restart of a Runtime in its root's first epoch passes `no_seeding`, and `bindings` judges the configuration the start was given (Workflow #454; a test installation driving release 0.12.58's command line, where `config replace` on a new root that had started once ended `post_check_failed` with `failed_checks` `no_seeding`, the row reading `{"tagged_state": "seed"}`; the coordinator's rulings of 11-13 on board #454, not the owner's words; coordinator work order `rd-1113/brief-454-first-epoch.md`, read on the head `5cc2be57` of #1679's branch, §1.341)
 
-1.348 is the next free number after §1.347. MAPP-2a (§1.342) built the switch's parts with no
+1.342 was the next free number on that base, which holds #1679 (§1.341) and merges before this
+slice; the integration train 0.12.59d renumbered it 1.348, after §1.342 (MAPP-2a), §1.343 (FL-1),
+§1.344 (REC-ARCH), §1.345 (#453 S5 and S6), §1.346 (#453 S10) and §1.347 (DA-3).
+[install-cli.md](install-cli.md), "The post-start checks (INST-2)" and the journal's
+documents, [runtime-fact-store.md](runtime-fact-store.md), "Producers" (`config.start`), and
+[ledger-observer.md](ledger-observer.md) §15 (the `config.` prefix) are the contract. No outcome
+code, value key, vocabulary word, configuration key, step kind, record or ledger shape is added,
+no interface revision moves, and no outcome code fragment changes, so the index is not
+regenerated.
+
+**Fix 1** (coordinator work order `rd-1113/brief-1685-fix1.md`, after an independent review of
+the first round). The first round carried the fact in a new member of the start report
+(`first_start`, `runtime-client` [3, 8] → [3, 9]) and recorded it in a new member of S0
+(`first_epoch`). Both broke a reader: a console pinned at revision 8 cannot decode the start
+report of a new root's first epoch, the first thing a newly installed console reads, and the
+pairing check passes all the same (it intersects ranges); an `actingctl` older than this build
+refuses `undo` and `resume` on a journal whose S0 carries the member, and its `status`,
+`last_stop` and `owned_hold` skip it. Fix 1 takes neither: the start report, S0 and the journal's
+structures are as on main, and every part of the revision's move is reverted (the declaration in
+`distribution/windows/component-interfaces.json`, the row of revision 9 of
+[component-interfaces.md](component-interfaces.md), the revision comment of
+`crates/actingcommand-contract/src/runtime.rs`, the architecture test's constant in
+`tools/actinglab-architecture/tests/component_interfaces.rs`, the two range assertions of
+`gate_429_r0b_pairing.rs`, the `StartReport` row of [runtime-interface.md](runtime-interface.md),
+this register's §3 W24 and its `runtime-client` row in §6): `runtime-client` stays [3, 8].
+
+**The cause.** A start loads the tagged state when the ledger's index holds the marker
+`tagged_state_enabled`, else it seeds (`crates/runtime-host/src/tagged_state.rs`,
+`TaggedStart::read`). A root's first start finds no start record before its own
+(`earlier_start` false) and writes no marker ([ledger-observer.md](ledger-observer.md) §11.5;
+`host.rs`, `seed_tagged_state`), so by design the root's second start seeds once, by replay, and
+only it writes the marker. The installer's row `no_seeding` (`crates/lab-rescue/src/install/
+postcheck.rs`) passed only `load` whenever an S0 existed, so every operation that restarts a
+running Runtime whose epoch is its root's first (`config replace`, `config restore`, `instance
+add`, a composite update or rollback, `install stop` then `install start`) was judged failed on
+that designed seeding. Read as the coordinator read it; nothing differed.
+
+**What decides it, and from where.** The work order's first way, a fact the installer already
+holds before the stop, is not sound: S0's owner epoch is an identifier the Runtime mints from
+random bytes (`IdentifierIssuer::mint_owner_epoch`, `epoch_` and its bytes), with no order and
+nothing that says "first"; the ledger head and the pauses and instructions say nothing about
+earlier starts; the status read (`RuntimeSeen`: owner epoch, pid, start time, pauses, instances)
+neither; and the owner journal, which lists the owners, is locked while the Runtime runs (the
+status read sees only `Locked`). So the second way: the running Runtime says it. Its start
+already computes whether it found an earlier start record (`earlier_start`, read before its own
+start record). Fix 1 takes the first of its work order's three ways, a program fact (it holds, so
+neither a new read operation nor the start report's member is needed): every start that
+records the configuration facts records `config.start`, one row `{owner_epoch, first_start,
+tagged_state}` (runtime scope, `record_list`, source `runtime`, no lifetime): its owner epoch as
+the status spells it, `first_start` true when it found no earlier start record, and `seed` or
+`load` (`host/runtime_config.rs`, `record_config_start`, called from the start right after
+`start_runtime_config`). The key is of the `config.` family (one of the nine
+`validate_runtime_fact_key` admits) and falls under the existing `tag.reobserve_prefixes` entry
+`config.`, as `config.selection` and `config.catalog` do: re-observed, never tagged, no default
+changes. The start replays every runtime fact before it (`recover_runtime_fact_store`), so the
+record an earlier start left is superseded by this start's before any instance is prepared and
+before the Runtime is ready; the row names its own epoch besides. Only a host with a configuration
+manifest records it, as every configuration fact (actingd always hands one); a host without one
+(most host tests, the actinglab protocol goldens) records nothing, so no ledger sequence a golden
+pins moves. The installer reads it where it already reads the configuration facts, just before
+`request-shutdown` (`RuntimeFactSnapshot`, S0's second read, `runtime::ConfigSeen::start`): no
+other read and no other connection; the close no longer reads `StartReport`.
+
+**Readers built before it.** Read at `ef94d950` (tag v0.12.58, the Runtime the console's main
+pins): the client decodes `RuntimeResult::RuntimeFactSnapshot` by its types alone (a record's key
+is a string, a row's members scalars it knows) and validates no record of the answer; a record's
+own check (`validate_runtime_fact_key`) admits the `config.` family. The installer's `config()`
+reads only `host.config_overrides` and `config.parameters.*`; the console's reads of the snapshot
+(`acui-source`: the task facts of instance scope, `config.parameters.*`, `host.config_overrides`,
+the self-check keys of instance scope) each pick their keys; `actingctl status --config` prints
+only `config.subsystems`, `config.selection` and `config.parameters.*`. A key such a reader does
+not know is passed over; a reader that lists the whole store (`facts --program`, `ac_facts`)
+shows one record more.
+
+**Why it is sound.** `first_epoch` is recorded exactly when the closed Runtime's own start found
+no start record and no marker. A start that seeds writes the marker only when it found a start
+record (`seed_tagged_state`), and only a start writes it, so after that Runtime no marker exists
+and the next start seeds by design; a start that loaded (a marker it did not write) records
+nothing. A first start that crashed before it wrote its start record leaves the ledger without
+one, so the root's next start also says `first_start` and also writes no marker: the start
+after it seeds by design, and `first_epoch` passes it rightly; a crash after the start record
+leaves the next start `first_start` false, which writes the marker, and the row requires `load`
+after it. Every other answer records nothing and the row requires `load` as before (fails closed):
+a read that fails, a build before 0.12.59 (no fact), a fact of another epoch than S0's (a build
+that does not record the fact leaves the one a newer build recorded in an earlier epoch in
+place), a later start. The start that follows is never asked: what it says cannot tell a missed
+marker from none. An automatic rollback's checks judge without it, since their start follows the
+new build's Runtime, not S0's.
+
+**Where the installer keeps it** (fix 1, points 1, 4 and 6). The close records it in its step's
+evidence, a free-form value every version reads, never in S0: `first_epoch` (true or false);
+`first_epoch_unread` when it could not read the fact (point 4: the failed status or fact read's
+code, a timeout included, `runtime_not_running`, or `fact_absent` for a Runtime that records none),
+so a missing fact leaves a trace; `first_epoch_guard` when the second guard (point 6) refuses it:
+the installer has its own journals (`install\operations\op-*.json`, each with its S0's owner
+epoch, as `last_stop` reads them), and a journal of another operation whose S0 names another
+owner epoch than this S0's means a Runtime of another epoch ran on this root, so the fact is not
+recorded whatever it says (`{operation_id, owner_epoch}`; a journal it cannot read, `{operation_id,
+journal_unread}`, or journals it cannot list, `{journals_unlisted}`, refuse it too; as in
+`first_epoch_unread`, the member names what could not be read and holds the failed read's
+code). The guard sees only the Runtimes an
+operation of this installer stopped: a Runtime started and stopped without one leaves no S0. The
+post-start checks of the operation's own start read the newest close step before them that is not
+an automatic rollback's (`deploy::closed_first_epoch`); `install start` reads the close of the
+operation that stopped the Runtime (`last_stop`), only when that operation began no start of its
+own after its close (a start it made follows S0's Runtime and may have written the marker), and
+carries it in its journal's `inputs` (`"first_epoch": true`, as `hold_intent` is carried).
+
+**The row.** With `first_epoch`, `no_seeding` passes `seed` as it passes `load`, with the values
+`{tagged_state, first_epoch: true}`; without it the row is as before, byte for byte (`{tagged_state}`
+with an S0, `{tagged_state, earlier_runtime: false}` without one, as `up` reads it). The name
+`earlier_runtime` there means "no S0 is judged", not "no Runtime ran before"; it is a recorded
+member and is kept.
+
+**Three smaller points (the review of #1679).**
+1. `bindings` judged the configuration the command read before the swap (`rescue::config_swap`
+   loads it, `deploy::post_check` passed `loaded.config`): a new file that removes an instance
+   failed it. It now judges the configuration the restarted Runtime was given, the root's file as
+   the checks read it (`postcheck::given_config`; a file that cannot be read or parsed then is
+   judged as before, and its hash fails `config`). A removed instance still fails `pauses` (the
+   hold's pause on it is not restored), which this slice does not change; an added instance the
+   start did not register now fails `bindings` (before, the checks passed and only its pause
+   failed).
+2. The contract says that a `post_check` step in state `done` says only that the checks ran to
+   their end; `failed` says whether they passed, also for `install start` and an automatic
+   rollback's own checks (`deploy.rs`, `post_check`: both close `done` over a failed check).
+3. The tests #1679 left out: the composite rollback through `actingctl install` that reaches
+   `close_with_end`, and a crash before the operation's end.
+
+**Interfaces.** None moves. `runtime-client` stays [3, 8] (fix 1 reverted the first round's
+[3, 9]); the start report keeps its shape. `config.start` is one more record of the runtime fact
+store in shapes every reader knows (`RuntimeFactRecord`, `record_list` of scalars), §4 lists it.
+The close step's evidence members and a `start` journal's `inputs.first_epoch` are free-form
+values of `install-operation.v1`, whose structures (S0 and the journal) are as on main, so an
+older reader reads such a journal; `install-root`, `ledger`, `actingd-config` and the rest do not
+move.
+
+**At deploy.** The fact comes from the Runtime that is stopped, so an operation that closes a
+Runtime of 0.12.58 or earlier judges as before (`first_epoch_unread` `fact_absent`), and a new
+root's first restart passes only once the Runtime that started it is 0.12.59 or later. A console
+of any revision reads every start report and fact snapshot of this build.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| FE-1 | the runtime fact `config.start`: one row `{owner_epoch, first_start, tagged_state}` | runtime fact (`config.` family, re-observed, §4) | #454 fix 1 | `host/runtime_config.rs`, `record_config_start` | `since` 0.12.59; every start with the configuration facts, from `earlier_start` and the tagged start |
+| FE-2 | the close step's evidence `first_epoch`, `first_epoch_unread`, `first_epoch_guard`; a `start` journal's `inputs.first_epoch` | free-form values of a private document (`install-operation.v1`) | #454 fix 1 | `deploy::close`, `deploy::start_command` | S0 and the journal's structures as on main; `install-root` not raised |
+| FE-3 | `no_seeding` with the close's `first_epoch`: `seed` passes, `{tagged_state, first_epoch: true}` | post-start check behaviour | #454 | `postcheck::evaluate` | without it, as before |
+| FE-4 | `bindings` judges the configuration the start was given | post-start check behaviour | #454 | `deploy::post_check` | after a swap, the new file |
+| FE-5 | [install-cli.md](install-cli.md), "The post-start checks (INST-2)": what a `done` step says, the close's first epoch and its evidence, the two rows; "Taking it back" and the added instance not registered; the journal's documents; [runtime-fact-store.md](runtime-fact-store.md), "Producers"; [ledger-observer.md](ledger-observer.md) §15 | contract text | #454 | — | |
+
+Tests (apps gate row "#454 FIRST EPOCH", `crates/lab-rescue/src/install/gate_454_postcheck.rs`,
+on the fake host): `postcheck_454_config_replace_after_a_first_epoch_passes_its_designed_seeding`
+and `postcheck_454_instance_add_after_a_first_epoch_passes_its_designed_seeding` (the closed
+Runtime's `config.start` says `first_start` with `seed`, the new start `seed`: the close's
+evidence `first_epoch` true, the row passes naming it, done, the hold released);
+`postcheck_454_a_restart_past_the_first_epoch_fails_as_before` (the closed Runtime the root's
+second start: both commands fail exactly as #1679 pins it, S0 without the member and the close's
+`first_epoch` false, the hold kept);
+`postcheck_454_an_older_runtime_that_does_not_report_the_fact_is_judged_as_before` (a Runtime
+that records no `config.start`, and one whose facts hold the fact of an earlier epoch);
+`postcheck_454_a_deployment_past_the_first_epoch_rolls_back_as_before` (`actingctl install`'s
+composite update, `deploy_rolled_back` on `no_seeding`);
+`postcheck_454_a_composite_rollback_failed_check_closes_its_step_with_its_rows` and
+`postcheck_454_a_crash_before_the_end_leaves_the_step_started` (#1679's two);
+`postcheck_454_bindings_judges_the_new_configuration_without_a_removed_instance` and
+`postcheck_454_bindings_judges_the_new_configuration_with_an_added_instance`; fix 1's
+`postcheck_454_a_record_this_build_writes_is_read_by_mains_shapes` (point 1: the journal of a
+first-epoch `config replace` reads as the journal on main and as main's S0, a test-local literal of
+its four members that refuses any other, and the close's evidence carries `first_epoch` true) and
+`postcheck_454_the_predicate_refuses_another_epoch_and_a_load` (point 5: false for a fact of
+another epoch than S0's and for a first start that loaded, true for S0's first epoch that seeded).
+In those nine of the first round, fix 1 changes only where the fact is read from and where it is
+recorded (the fake Runtime's `config.start` by build instead of its report's `first_start`; the
+close's evidence instead of S0). Host gate row "#454 FIRST EPOCH" (`crates/runtime-host/src/tests/
+gate_422_ln4.rs`, point 3, on a real host whose starts record the configuration facts):
+`ln4_f_only_a_new_roots_first_start_says_it_found_no_earlier_start` (a new root's first start's
+`config.start` names its own owner epoch, says `first_start` true and `seed`, and no marker is
+written; the second says `first_start` false, `seed`, and writes the marker
+`ledger_tagged_state_seeded`; the third says `first_start` false and `load`, the marker the only
+one). Adapted: `gate_inst2_deploy::inst2_d_4_each_post_start_check_passes_and_fails` (its
+`CheckInputs` literal names the new input `first_epoch`, `false`; its `S0` literal is as on main;
+no assertion changes). The fake Runtime gains the aliases a start no longer registers, a hook at a
+`StartReport` read and the `config.start` members its configuration facts carry by build.
+
+### 1.349 Slice DA-3b (0.12.59): a vertical-brake drag under a scale is sent as a drag with a pause and a brake, with no interface revision (#392 / #401; the design survey `rd-1113/da-remaining-design.md`, its section 6 "Route E" and its slice "DA-3b"; the coordinator's ruling of 11-13 on board #392, route E, not the owner's words; coordinator work order `rd-1113/brief-392-da3b.md`, read on the head `840abaf7` of DA-3's branch, §1.347)
+
+[display-adapter.md](display-adapter.md) section 10, "The vertical brake", is the contract. **No new
+persisted shape, no configuration key, no new code, token or value key, and no interface revision
+moves**: `InputAction::validate` and the device layer accept what they accepted. Under a pure scale
+the input side sends under (DA-3: `den` 1 or 2) other than 1, the host sends a
+`single_touch_drag_with_vertical_brake_v1` step as a `single_touch_drag_with_pause_and_brake_v1`:
+the press and the corner mapped as DA-3 maps points, drag 200 ms, pause 150 ms, and the brake to
+`(x2′, y2′ − round_half_up(100 · s))` over 200 ms (at 2, (300, 150) → (20, 150) → (20, 50) leaves as
+(600, 300) → (40, 300) → (40, 100)). The survey read the device layer as performing both kinds with
+the same events; this slice checked it member by member before building on it: for the same points
+both plans are the press, a segment of the MAA 2.0 curve over 200 ms (`append_maa_2_0_segment`), a
+hold of 150 ms, a segment over 200 ms and the release; the kernel's preparation passes the vertical
+kind's horizontal duration, corner hold and brake duration to the same three places; the slopes are
+checked constants no plan reads; the plans differ only in the name of their kind, which the backends
+use to check the plan and to name a failure. The effect intent keeps the bundle's drag in base
+pixels; the input intent records the drag sent in device pixels and, as for every drag with a pause
+and a brake (§1.58), no execution plan. Under the identity nothing changes: the host maps nothing,
+and `DisplayMap::device_input` keeps the vertical kind under a scale of 1. The descriptions of
+`display_map_unresolved` and of the token `input_scale_unsupported` no longer name the vertical
+brake (the code index was regenerated; its rows did not change). The number 1.343 was provisional for
+parallel slices: it followed DA-3's 1.342 on the branch this slice is based on; the integration
+train 0.12.59d renumbered it 1.349, after §1.347 (DA-3, which the integration train 0.12.59c
+renumbered from 1.342) and §1.348 (#454, the real cause).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DA3b-1 | a run's vertical-brake drag under an admitted scale other than 1, at the run's one input exit (`DisplayMap::device_input`, its helper `vertical_brake_as_paused_drag`) | behaviour (memory only) | DA-3b | — | sent as `single_touch_drag_with_pause_and_brake_v1`: press and corner `round_half_up(v · s)` inside their device boxes, the brake's end `round_half_up(100 · s)` straight above the corner inside the device frame (else `contained_task_input_out_of_bounds`, never clamped; the kernel makes no such drag), drag, pause and brake 200, 150 and 200 ms; under a scale of 1 the vertical kind as before |
+| DA3b-2 | DA3-2's refusal of a vertical-brake drag under a pure scale (`input_scale_unsupported`) | behaviour removed | DA-3 | — | `DisplayMap::admit_input` answers the same for every kind; the token keeps DA3-2's other meaning (a pure scale whose double is not whole) and DA3-6's |
+| DA3b-3 | the records of such a step | record (no new shape) | — | DA-3b | the effect intent keeps the bundle's vertical-brake drag, its two sampling regions and `frame_extent`; the input intent's `input_action` is the drag with a pause and a brake in device pixels, without `execution_plan`; both are `input.swipe` |
+| DA3b-4 | `actingledger task-evidence` (DA3-7) | forensic reading | DA-3 | — | no code change: the product's conversion it calls now converts the vertical-brake drag, so a scaled step relates `linked`; a different input is still `source_mismatch` |
+
+**Readers.** `run evidence` shows the effect intent's kind, the bundle's, in base pixels (a drag
+has no `point` and two boxes, so no `rect`), which is right; the Lab's recording presses no brake
+drag and a Lab declared operation sends nothing on a scaled frame (DA3-6); the diagnosis
+(`failures_grouped`, the task diagnostic stream) and the landing history (single-box presses, in
+base boxes) read no input's kind. The device's replay recording and a touch backend's failure
+diagnostics name the kind sent. None changes.
+
+**At deploy.** Nothing to do: every installation in use runs at the identity, where nothing
+changes. On a scaled device (for example 1920x1080 or 2560x1440 for a 1280x720 package) a
+vertical-brake drag step now runs instead of ending `display_map_unresolved`
+(`input_scale_unsupported`); the brake's effect there is to be confirmed on a real device, which
+the coordinator arranges.
+
+Tests. The adapter's `gate_392_da3b`:
+`da3b_a_vertical_brake_leaves_a_scaled_device_as_a_drag_with_a_pause_and_a_brake` (at 3/2, 2, 5/2
+and 3 the kind, the points and the brake by hand, the three times, accepted by
+`InputAction::validate`; the identity keeps the drag) and
+`da3b_a_brake_end_outside_the_device_frame_is_refused_not_clamped`. The host's `gate_392_da3b`:
+`da3b_the_two_drags_are_one_device_plan_for_the_same_points` (the survey's claim, event for event)
+and `da3b_a_vertical_brake_drag_reaches_a_scaled_device_as_a_drag_with_a_pause_and_a_brake` (at 2
+the fake device performs the converted drag and both records hold what the ruling says; at 1 the
+literals of today; the task evidence `linked` at both). The forensic leaf's `input_pairing::tests`:
+`da3b_a_scaled_vertical_brake_step_pairs_with_the_drag_sent` and
+`da3b_a_mismatched_vertical_brake_step_is_still_reported`. Adapted: DA-3's
+`da3_t5_a_vertical_brake_scales_with_the_map_and_waits_for_its_bound`, renamed
+`da3_t5_a_vertical_brake_scales_with_the_map` (retired entry in `ci/retired-gates.toml`): it pinned
+the refusal this slice removes; the host's `gate_392_da3` helpers `device_host` and `run` are
+visible to their sibling modules, no assertion changed.
+
+### 1.350 Slice MAPP-2b (0.12.60): the application switch before a run, its failure and the member's cooldown (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its finding F3, its row "MAPP-2b" and its row for slice 2; the coordinator's rulings of 11-14 on board #437, not the owner's words; coordinator work orders `rd-1113/brief-437-mapp2b.md`, read on main `bd58c9a6`, main `fa724931` merged, `rd-1114/brief-1689-fix1.md`, its fix round after the independent review, with the coordinator's addition of 11-14 on the lease bound, and `rd-1114/brief-1689-fix2.md`, its fix round after the first CI run, main `803fdfa3` merged)
+
+1.350 is the next free number after §1.349: the slice took 1.348 on its first base, and release
+0.12.59, merged before it, took §1.348 (#454) and §1.349 (DA-3b). MAPP-2a (§1.342) built the switch's parts with no
 caller; MAPP-2b makes the run paths use them. A build still refuses every group of several at load
 (`several_members_unsupported`, unchanged), so no installation reaches this slice's code: its tests
 hand the host the member → device key map and the group's name as the assembly builds them. Every
@@ -20926,6 +21182,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
 | `config.catalog_provenance` (count and id rows of who wrote the active composed generation's fixed values and valuations; §1.299 SC1-7, C1B-1) | workbench | no (`config.` is re-observed) | #428 SCHED-C1b |
+| `config.start` (one row `{owner_epoch, first_start, tagged_state}`: what a start found, recorded by every start with the configuration facts; [runtime-fact-store.md](runtime-fact-store.md), "Producers"; §1.348 FE-1) | workbench | no (`config.` is re-observed) | #454 fix 1 |
 | `config.parameters.touch` (a section fact of the `config.parameters.<section>` family, five rows; §1.136 T12-4) | workbench | no (`config.` is re-observed) | #406 T12 |
 | `config.parameters.emulator_control` (a section fact of the `config.parameters.<section>` family, one row; §1.158 A50-5) | workbench | no (`config.` is re-observed) | #411 A50 |
 | `config.parameters.execution` (a section fact of the `config.parameters.<section>` family, four rows since STILL-1; §1.177 B1-2, B1-3; §1.249 ST1-1) | workbench | no (`config.` is re-observed) | PERF-B1 |

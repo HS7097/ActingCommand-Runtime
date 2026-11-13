@@ -387,35 +387,43 @@ fn da3_t1_a_box_under_a_translation_lands_by_the_hand_table() {
 
 /// DA3-T5 (model 392 v1.2 §6.4): at s = 3/2 the vertical brake of 100 base pixels is 150 on the
 /// device, and the brake's end stays straight above the corner: (200, 600) → (300, 900), the
-/// corner (900, 500) → (1350, 750), the end (1350, 600). The host holds that drag back under a
-/// scale (`input_scale_unsupported`): the contract fixes its brake at 100.
+/// corner (900, 500) → (1350, 750), the end (1350, 600). Adapted by Workflow #392 DA-3b (the
+/// coordinator's route E): the drag is admitted and leaves as a drag with a pause and a brake
+/// through those three points, drag 200 ms, pause 150 ms, brake 200 ms, since the interface holds
+/// the vertical kind's brake at 100.
 #[test]
-fn da3_t5_a_vertical_brake_scales_with_the_map_and_waits_for_its_bound() {
+fn da3_t5_a_vertical_brake_scales_with_the_map() {
     let map = map((1280, 720), plain(1920, 1080), None);
-    let drag = |x1, y1, x2, y2, x3, y3, brake| InputAction::SingleTouchDragWithVerticalBrakeV1 {
-        x1,
-        y1,
-        x2,
-        y2,
-        x3,
-        y3,
+    let drag = InputAction::SingleTouchDragWithVerticalBrakeV1 {
+        x1: 200,
+        y1: 600,
+        x2: 900,
+        y2: 500,
+        x3: 900,
+        y3: 400,
         horizontal_duration_ms: 200,
         corner_hold_ms: 150,
-        brake_distance_px: brake,
+        brake_distance_px: 100,
         brake_duration_ms: 200,
         slope_in: 2,
         slope_out: 0,
     };
     let boxes = [rect(180, 580, 40, 40), rect(880, 480, 40, 40)];
     assert_eq!(
-        sent(&map, &drag(200, 600, 900, 500, 900, 400, 100), &boxes),
-        Ok(drag(300, 900, 1350, 750, 1350, 600, 150))
+        sent(&map, &drag, &boxes),
+        Ok(InputAction::SingleTouchDragWithPauseAndBrakeV1 {
+            x1: 300,
+            y1: 900,
+            x2: 1350,
+            y2: 750,
+            drag_duration_ms: 200,
+            pause_ms: 150,
+            x3: 1350,
+            y3: 600,
+            brake_duration_ms: 200,
+        })
     );
-    let held = map
-        .admit_input(&drag(200, 600, 900, 500, 900, 400, 100))
-        .expect_err("a scaled brake waits for its bound");
-    assert_eq!(held.problem, DisplayProblem::InputScaleUnsupported);
-    assert_eq!(held.stage, DisplayLocation::InputMap);
+    assert_eq!(map.admit_input(&drag), Ok(()));
     assert_eq!(map.admit_input(&tap(1, 1)), Ok(()));
 }
 
