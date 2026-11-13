@@ -221,7 +221,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The vision section breaks its rules: execution_provider cuda without a valid cuda_device, cpu with a cuda_device, or an empty root. Since 0.12.44 (Workflow #407 GPU-1 D, actingd-config revision 27) also: execution_provider directml without a directml_device whose expected_identity is dxgi-pci:<vendor>:<device>:<subsys>:<rev> in lowercase hexadecimal of 4, 4, 8 and 2 digits, directml with a cuda_device, a directml_device beside cpu or cuda, or gpu_fallback beside cpu or cuda. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "description": "The vision section breaks its rules: execution_provider cuda without a valid cuda_device, cpu with a cuda_device, or an empty root. Since 0.12.44 (Workflow #407 GPU-1 D, actingd-config revision 27) also: execution_provider directml without a directml_device whose expected_identity is dxgi-pci:<vendor>:<device>:<subsys>:<rev> in lowercase hexadecimal of 4, 4, 8 and 2 digits, directml with a cuda_device, a directml_device beside cpu or cuda, or gpu_fallback beside cpu or cuda. check-config refuses at stage config_assemble; a start refuses before the ledger opens. Since 0.12.60 (Workflow #453 S7) actingd vision check refuses such a section at stage config_assemble too, and at stage config_vision a configuration whose vision root has no manifest: no vision section, or execution_provider cuda (the manifest is of cpu and directml).",
       "common_causes": "cuda_device left out for cuda, or kept after switching to cpu; root set to an empty string; directml_device or gpu_fallback kept after switching from directml to cpu; an adapter identity copied with capitals or without its revision.",
       "handling": "Name a cuda_device only with cuda, a directml_device and gpu_fallback only with directml, and give root a path or remove it. Fix the configuration and run actingd check-config on it to confirm before restarting the daemon."
     },
@@ -235,7 +235,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The vision root resolves inside a program slot (A or B) of the install root, which the installer replaces on an upgrade. check-config refuses at stage config_vision; a start refuses before the ledger opens.",
+      "description": "The vision root resolves inside a program slot (A or B) of the install root, which the installer replaces on an upgrade. check-config refuses at stage config_vision; a start refuses before the ledger opens. Since 0.12.60 (Workflow #453 S7) actingd vision check refuses it the same way, at stage config_vision.",
       "common_causes": "vision.root pointing into <install root>\\A or <install root>\\B.",
       "handling": "Keep the vision root outside the slots (the default is <install root>\\vision). Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
@@ -2262,6 +2262,34 @@
       "description": "actingd discover listed this machine's emulator instances without a Runtime (Workflow #453 S10, contracts/emulator-control.md, \"Offline instance discovery\"): it resolved the emulator installation as check-config does and ran only the vendor tool's version and info -v all, writing nothing and touching no state root. report holds mumu_root {path, source}, provider_version and instances in the shape of an answered DiscoverInstances, each with the bound_alias of the configuration entry whose instance_index or instance_name names it (absent without --config). Exit 0.",
       "common_causes": "A person, an installer or the Lab's rescue row emulators asked which emulator instances this machine has.",
       "handling": "None; read the report."
+    },
+    "vision_manifest_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "actingd vision manifest --provider cpu|directml answered what a vision root of that provider must hold (Workflow #453 S7, contracts/vision-model-folders.md, \"The manifest\"), from the tool registry and the DirectML runtime pin compiled into this build; it read no file and wrote nothing. report holds provider, files (each vision_root_path, size, sha256, component, archive_path, license, pinned, in byte order of vision_root_path) and models (each model_ref, family, files and model_sha256, the identity computed from the files' pins as the engine computes it). It names no address. Exit 0.",
+      "common_causes": "An installer or the Lab's rescue row vision manifest asked which files a vision root needs.",
+      "handling": "None; read the report."
+    },
+    "vision_check_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "actingd vision check --config <file> [--install-root <root>] compared the configured vision root with the manifest of its execution provider (Workflow #453 S7, contracts/vision-model-folders.md, \"The manifest\"): it resolved the root as a start does, compared each manifest file by its size and then its SHA-256 read in bounded chunks, listed models\\ as a start lists it and computed each folder's identity; it wrote nothing and touched no state root. report holds provider, vision_root, files (each manifest entry with its state: ok, missing, sha256_mismatch or unreadable, the OS failure as cause), folders (each model_ref with its family, layout and identity, or invalid with the reason) and models (each manifest model with present, identity and identity_matches). Whether the root is complete is the report's to say: the code is a success either way. Exit 0.",
+      "common_causes": "An installer or the Lab's rescue row vision check asked whether a vision root holds what it must.",
+      "handling": "Read the report: a file that is not ok or a model whose identity does not match is to be placed again from its pinned source."
     }
   },
   "locations": {

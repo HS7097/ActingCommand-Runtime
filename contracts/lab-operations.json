@@ -3430,6 +3430,42 @@
       "notes": "#453 S10: the live build's actingd discover --config <this root's configuration> --install-root <root>, within 60 s, at which the child is ended (fix 1: never left running; the refusal then has timeout_ms); read only: no state root, no owner lock, no ledger, nothing written, and of the vendor tool only its version and instance listing (contracts/emulator-control.md, Offline instance discovery); a refusal is install_command_refused with install_refusal emulator_discovery_failed and actingd's outcome as its cause. The core row discover, which asks a running Runtime, stays as it is"
     },
     {
+      "name": "vision manifest",
+      "module": "rescue",
+      "params": [
+        {"name": "provider", "form": "option", "type": "string", "required": true, "note": "cpu or directml: the execution provider whose vision root the manifest is of"}
+      ],
+      "help": "Lists every file and model a vision root of the provider must hold, with sizes and SHA-256, from the installed build; nothing is read of the root.",
+      "output": "actingd vision manifest's report: provider, files (each vision_root_path, size, sha256, component, archive_path, license, pinned) and models (each model_ref, family, files, model_sha256); no address",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actingd vision manifest"],
+      "new": "#453 S7 (what a fresh root's vision root must hold, for an installer that places it)",
+      "slice": "S7",
+      "status": "planned",
+      "notes": "#453 S7: the live build's actingd vision manifest --provider <provider>, within 30 s, at which the child is ended (the refusal then has timeout_ms); read only: no state root, no owner lock, no ledger, nothing written, nothing downloaded (contracts/vision-model-folders.md, The manifest); a refusal is install_command_refused with install_refusal vision_root_unresolved and actingd's outcome (or the child's failure) as its cause; another provider is actingctl_usage_invalid"
+    },
+    {
+      "name": "vision check",
+      "module": "rescue",
+      "params": [],
+      "help": "Checks this root's vision root against the installed build's manifest, file by file, and the models the installed packs need, without a Runtime.",
+      "output": "actingd vision check's report (provider, vision_root, files with each state, folders with each identity, models), standard_packs {root, games} and required_models, each {model_ref, model_sha256, games, present, identity_matches}",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actingd vision check", "actinglab standard-pack check"],
+      "new": "#453 S7 (whether a fresh root's vision root holds what it must, before the Runtime first runs)",
+      "slice": "S7",
+      "status": "planned",
+      "notes": "#453 S7: the live build's actingd vision check --config <this root's configuration> --install-root <root> within 120 s, then the Tools' standard-pack check of each game root below standard_packs.root within 300 s each, every child ended at its bound (the refusal then has timeout_ms); read only: no state root, no owner lock, no ledger, nothing written, nothing downloaded (contracts/vision-model-folders.md, The manifest); install_command_done when every file and model matches, else install_caveat_noted with install_caveat vision_incomplete and count; a refusal is install_command_refused with vision_root_unresolved (actingd), config_unreadable (the standard-pack root) or pack_invalid (a game root's check), the child's outcome or failure as its cause"
+    },
+    {
       "name": "watchdog install",
       "module": "rescue",
       "params": [],

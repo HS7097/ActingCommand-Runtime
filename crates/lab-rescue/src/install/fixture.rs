@@ -368,6 +368,12 @@ pub(super) struct Programs {
     /// (`run_program_ending`) that never exits (a word of `stall`) and was ended there, by that
     /// word, with its deadline.
     pub(super) ended: RefCell<Vec<(String, u64)>>,
+    /// Workflow #453 S7: the exit code and the line of `actingd vision <word>`, by its word
+    /// (`manifest`, `check`; none set: `null`, no report).
+    pub(super) vision: RefCell<BTreeMap<String, (i32, Value)>>,
+    /// Workflow #453 S7: the exit code and the line of the Tools' `standard-pack check --root
+    /// <game root>`, by the game root as the command line names it (none set: a panic).
+    pub(super) standard_pack_checks: RefCell<BTreeMap<String, (i32, Value)>>,
 }
 
 /// The process id of a fake program left running at its deadline.
@@ -406,6 +412,8 @@ impl FakeHost {
                 deadlines: RefCell::new(Vec::new()),
                 discover: RefCell::new((0, Value::Null)),
                 ended: RefCell::new(Vec::new()),
+                vision: RefCell::new(BTreeMap::new()),
+                standard_pack_checks: RefCell::new(BTreeMap::new()),
             },
             on_step: RefCell::new(None),
             log: RefCell::new(Vec::new()),
@@ -597,6 +605,33 @@ impl Host for FakeHost {
             // Workflow #453 S10: the line the test set.
             ("actingcommand-actingd.exe", Some("discover")) => {
                 let (exit_code, line) = self.programs.discover.borrow().clone();
+                ran(exit_code, line)
+            }
+            // Workflow #453 S7: the line the test set for the word after `vision`.
+            ("actingcommand-actingd.exe", Some("vision")) => {
+                let word = words.get(1).cloned().unwrap_or_default();
+                let (exit_code, line) = self
+                    .programs
+                    .vision
+                    .borrow()
+                    .get(&word)
+                    .cloned()
+                    .unwrap_or((0, Value::Null));
+                ran(exit_code, line)
+            }
+            // Workflow #453 S7: the Tools' `standard-pack check` of a game root, the line the
+            // test set for that root.
+            ("actinglab.exe", Some("--json"))
+                if words.get(1).map(String::as_str) == Some("standard-pack") =>
+            {
+                let game_root = words.last().cloned().unwrap_or_default();
+                let (exit_code, line) = self
+                    .programs
+                    .standard_pack_checks
+                    .borrow()
+                    .get(&game_root)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("no standard-pack check set for {game_root}"));
                 ran(exit_code, line)
             }
             // The bounded head read (S0): no row but the head's.

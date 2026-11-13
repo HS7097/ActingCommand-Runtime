@@ -20723,6 +20723,82 @@ cross-check reads). Adapted: `gate_cov1` and `gate_sched_c1f1` (the struct's new
 NOTICES-3 added `notices`); `gate_428_cfl2`'s fixture writer and five of its constants are
 visible to `gate_453_s8` (no assertion changed).
 
+**S7. Why.** A fresh installation needs the recognition files under the vision root in exactly
+the pinned versions, and only a CI script knew which files those are, where each goes and what
+each must hash to (the model's layout lived only inside `Materialize-VisionRoot.ps1`); a wrong or
+missing file showed only at a model's first use. The contract is
+[vision-model-folders.md](vision-model-folders.md), "The manifest"; the rows are in
+[install-cli.md](install-cli.md), "The Lab's rescue module".
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S7-1 | `windows-tool-sources.v1.json`: `ppocrv6-medium-onnx` gains `model_ref` `PP-OCRv6_medium` and `family` `ppocr-ctc`, each of its three artifacts `vision_root_path` (`models/PP-OCRv6_medium/det.onnx`, `rec.onnx`, `keys.txt`) | new members of a tool source | S7 | — | `Test-WindowsRemoteBuildTools.ps1` freezes them; `Materialize-VisionRoot.ps1` keeps its constants (unchanged); `Materialize-TaskToolCache.ps1`, the workflow's platform-tools read, `crates/device/build.rs` and actingd's adb pin reader read no new member and ignore unknown ones |
+| S7-2 | `directml-1.15.4` `pinned_license_files[]` `{path, vision_root_path, size, sha256, hash_provenance}`: `LICENSE.txt` 10,439 B `a05138e3…4b8d`, `LICENSE-CODE.txt` 1,093 B `903df551…9a3c`, `ThirdPartyNotices.txt` 4,577 B `2c95795c…7950`, at `ort/licenses/directml/` | new member of a tool source (the coordinator's ruling on board #453) | S7 | — | read from the pinned package itself, a copy whose size, SHA-256 and NuGet's SHA-512 equal the entry's `archive`: each entry read whole, its CRC checked, then hashed; the same reading of `onnxruntime-directml-1.24.4`'s package gives that entry's two license pins exactly; the sizes equal those design rd-1031 §5 records; frozen by `Test-WindowsRemoteBuildTools.ps1`. #441 (§1.340) recorded the redistribution and added none |
+| S7-3 | `actingd vision manifest --provider <cpu or directml>` (`apps/actingd/src/vision_report.rs`) | new actingd subcommand, read only | S7 | an installer, a person, the row `vision manifest` | report `actingcommand.actingd.vision.v1` `{schema_version, outcome, report}`; `report` `{provider, files, models}` as the contract writes; from the embedded registry (`ac_adb::TOOL_SOURCES_PIN`, now visible to the crate) and `DIRECTML_RUNTIME_PIN`; no address; `invalid_arguments` for another command line; a registry it cannot read so `serialization_failed` caused by `foreign_data_error` |
+| S7-4 | `actingd vision check --config <file> [--install-root <root>]` | new actingd subcommand, read only | S7 | an installer, a person, the row `vision check` | the file loaded as check-config loads it (stage `config_load`), `--install-root` by check-config's rule, the `vision` section assembled alone (`ActingdConfigFile::vision_section`, stage `config_assemble`), the root resolved as a start resolves it (`ConfiguredVision::resolve_root`, the first part of `inspect`, which now calls it; stage `config_vision`), no section or `cuda` `vision_config_invalid` at `config_vision`; `report` `{provider, vision_root, files, folders, models}`; each file read at most once, in 64 KiB chunks; no state root, no owner lock, no ledger, no socket, no program, nothing written |
+| S7-5 | the rows `vision manifest` (parameter `provider`, required) and `vision check` (none) (module `rescue`, slice S7, planned; read only, offline; `new` #453 S7) | operation table rows added | S7 | the Lab's command line, `serve --stdio`, the Lab's MCP server | `rescue::SERVED` holds them (36 rows) and `rescue_reads::READ_HERE` their lists (19 rows); the children through `Host::run_program_ending`, each ended at its bound: `programs::VISION_MANIFEST_TIMEOUT_MS` 30 s, `VISION_CHECK_TIMEOUT_MS` 120 s, `STANDARD_PACK_CHECK_TIMEOUT_MS` 300 s per game root (the reasons below); `vision check` joins the `models` of each game root's Tools `standard-pack check` (S8) |
+| S7-6 | `vision_manifest_reported`, `vision_check_completed` (actingd, success, no value); the locations `install_vision_manifest`, `install_vision_check` (owner `actingctl`); `install_refusal` `vision_root_unresolved`; `install_caveat` `vision_incomplete` (all `since` 0.12.60, pending) | outcome catalog | S7 | S7-3 to S7-5 | the names 3a gives. G8: `vision_` is a domain of actingd (with vision-ffi and vision-provider-check), `install_` of actingctl (with others), so each prefix belongs to its emitter, unlike S10's first `discover_completed`; vocabulary tokens are not under G8. Reused: `vision_root_unavailable`, `vision_root_in_program_slot`, `vision_config_invalid` (descriptions now name `vision check`), `invalid_arguments`, `serialization_failed`, `foreign_data_error`, `foreign_os_error`, `config_unreadable`, `pack_invalid` (its description names `vision check`), `install_command_refused`'s `timeout_ms`, `install_caveat_noted`'s `count`; the index is regenerated |
+
+**The bounds** (the coordinator's ruling: from what each child does). `actingd vision manifest`
+reads only what is compiled into it and waits on nothing: 30 s is a process start with a wide
+margin. `actingd vision check` reads each manifest file once (about 156 MB for `cpu`, 175 MB for
+`directml` with this build's pins) and each model folder's files it has not read: a few hundred
+megabytes at most, seconds on a local disk; 120 s is that at about 4 MB/s. The Tools'
+`standard-pack check` admits every package of one game root once in memory, each within its own
+60 s deadline, and touches no device: 300 s is five whole package deadlines, where `place` runs
+it under `install.child.check_config_timeout_ms` (900 s by default) and leaves it running. Each
+child is ended at its bound by its handle and reaped (S10 fix 1's `run_captured_ending`), so none
+can stay behind where an installer's plan or the watchdog would see it; actingd's `vision`
+makes its own stdout and stderr not inheritable first, as `discover` does, though it starts no
+program; a refusal then carries `timeout_ms` and no cause.
+
+**What it can run.** `actingd vision manifest|check`: nothing. The row `vision manifest`:
+`<root>\runtime\actingcommand-actingd.exe vision manifest --provider <p>`. The row `vision
+check`: `<root>\runtime\actingcommand-actingd.exe vision check --config <config> --install-root
+<root>`, then `<root>\tools\actinglab.exe --json standard-pack check --root <game root>` once per
+game root below `standard_packs.root` that holds `bundle.json`, by name. Nothing is downloaded,
+placed, started, stopped or written; no state root is touched.
+
+**S7 tests** (apps gate row "#453 S7"; an injected pin table and temporary vision roots of
+made-up bytes; the rescue module's children are the fake host's). In `apps/actingd`
+(`gate_453_s7.rs`): `s7_manifest_directml_lists_the_library_with_the_code_pin_and_cpu_does_not`
+(on the made-up table and on the table the build carries),
+`s7_check_a_complete_vision_root_answers_every_file_ok_and_equal_identities`,
+`s7_check_names_a_missing_a_changed_and_an_unreadable_file` (Windows: the unreadable file is held
+open without sharing), `s7_check_a_model_folder_of_another_identity_does_not_match` and
+`s7_check_a_vision_root_that_cannot_be_resolved_relays_the_existing_cause`. In `crates/lab-rescue`
+(`install::gate_453_s7`): `vision_manifest_answers_the_live_builds_manifest`,
+`vision_manifest_refuses_with_actingds_outcome_as_its_cause`,
+`vision_manifest_a_child_that_never_ends_is_ended_at_its_bound`,
+`vision_check_answers_a_complete_root`, `vision_check_refuses_with_actingds_outcome_as_its_cause`,
+`vision_check_a_child_that_never_ends_is_ended_at_its_bound` and
+`vision_check_joins_the_required_models_of_two_game_roots`. The three gates that hold the
+operation table equal to the code cover both rows as they come, unchanged:
+`rescue_read_here_rows_read_what_they_declare` (`crates/lab-rescue`, `provider` declared and
+read, none for `vision check`), `every_table_driven_row_has_one_list` (actinglab, each row in
+exactly one constant) and `mcp_served_and_refused_partition` (actinglab-mcp, both served by the
+rescue module on Windows). Adapted: `gate_inst1`'s
+`inst1_it_13_check_config_install_root_judges_adb_and_vision_against_the_named_root` also pins
+`adb_default.state` `missing` (its root has no `tools\platform-tools`): a pin that decodes gives
+`missing`, one that does not `sha256_mismatch`, so the existing test now proves that the adb
+pin's reader decodes the registry with its new members; before, its one assertion (the path)
+held either way. `Test-WindowsRemoteBuildTools.ps1` freezes S7-1 and S7-2.
+
+**At deploy.** Nothing to do: an added member of a read-only answer, two new read-only
+subcommands and two new read-only rows; nothing persisted, no key, no revision. An installation
+in use changes nothing: actingd's adb pin reader ignores the registry's new members (the test
+above), check-config and a start list the vision root as before (`inspect` calls the extracted
+`resolve_root`, the same code), and no reader decodes `standard-pack check`'s answer strictly.
+These rows fall under the standing operating rule until LAB-7 ([install-cli.md](install-cli.md),
+"Journals across versions": the rescue module's composites are not used on the production root);
+they are no composite and write nothing, so they are harmless there. A build before this release
+has no `vision`: its actingd refuses the words as a start refuses unknown arguments, and the
+rows of a later Tools beside it answer `vision_root_unresolved` with that child's exit and
+stderr as the cause.
+
+**Rollback.** Nothing persisted: code, two table rows, registry members, catalog entries,
+contract sections and test files.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

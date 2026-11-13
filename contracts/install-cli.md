@@ -1077,6 +1077,32 @@ the rescue face:
   The answer's steps are `plan` and `place`, with no `schedule`. While the operation is unfinished
   the watchdog stands aside (`pack_place` is off row 7a″'s pass list), so no Runtime starts on a
   half-placed game root; the next start reads the placed game root.
+- **`vision manifest --provider cpu|directml` and `vision check`** (Workflow #453 S7, since
+  0.12.60; register §1.348; [vision-model-folders.md](vision-model-folders.md), "The manifest";
+  the coordinator's rulings on board #453, not the owner's words). Two read-only rows, `runtime`
+  `offline`, `writes` false; no `actingctl install` command. `vision manifest` runs the live
+  build's `actingd vision manifest --provider <p>` and answers its manifest as `report`
+  (`install_command_done`, operation `install_vision_manifest`). `vision check` reads the root's
+  configuration as every row does, runs the live build's `actingd vision check --config <the
+  root's configuration> --install-root <root>`, then, for each game root below the configured
+  `standard_packs.root` (a relative one against the configuration's folder; each folder there
+  that holds `bundle.json`, by name; none when the root names none or it does not exist), the
+  Tools' `<root>\tools\actinglab.exe --json standard-pack check --root <game root>`, as `place`
+  runs it, and joins their `models`: `required_models`, each `{model_ref, model_sha256, games:
+  [{game, packages}], present, identity_matches}`, by `model_ref` then `model_sha256`, judged
+  against the folders actingd listed. The answer holds actingd's `report`, `standard_packs
+  {root, games}` and `required_models`; it is `install_command_done` (operation
+  `install_vision_check`) when every manifest file is `ok` and every model matches, else
+  `install_caveat_noted` with `install_caveat` `vision_incomplete` and `count`. Every child runs
+  within a bound of what it does and is ended there, never left running, as the row `emulators`
+  ends its child: `actingd vision manifest` 30 s (it reads only what is compiled into it),
+  `actingd vision check` 120 s (it hashes a few hundred megabytes at most), each `standard-pack
+  check` 300 s (it admits every package of one game root, each within 60 s); a refusal then has
+  `timeout_ms` and no cause. Refusals: `vision_root_unresolved` when actingd gives no vision
+  report (its outcome, for example `vision_root_unavailable`, or the child's failure as the
+  cause), `config_unreadable` for a `standard_packs.root` that cannot be listed, `pack_invalid`
+  (`game`, `path`) for a game root whose check gives no models. Nothing is written, downloaded or
+  placed; placing the files is a later slice's.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
@@ -2641,6 +2667,13 @@ the fragment registers, names the command.
   the Runtime is stopped"): with no Runtime answering, `install_pack_place` refuses with the
   existing `runtime_running` (`path`, `pid`), `owner_lock_held` (`path`) and
   `processes_unreadable`, no longer `runtime_not_running`; no code, location, key or word is new.
+- **Workflow #453 S7** (since 0.12.60; "The Lab's rescue module", `vision manifest` and `vision
+  check`): the locations `install_vision_manifest` and `install_vision_check`; `install_refusal`
+  `vision_root_unresolved` (actingd's outcome or the child's failure as the cause, `timeout_ms`
+  for a child ended at its bound) and `install_caveat` `vision_incomplete` (`count`), which only
+  these rows answer; the existing `config_unreadable` and `pack_invalid` (`game`, `path`,
+  `timeout_ms`) for the standard-pack root and a game root's check; no code or key is new here
+  (actingd's `vision_manifest_reported` and `vision_check_completed` are actingd's own).
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

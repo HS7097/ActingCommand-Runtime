@@ -5,13 +5,17 @@
 //! `check-config` (the live build in place, a kept build with `--install-root <root>` when it
 //! takes the option), its `ledger-maintenance verify`, and actingledger's bounded head read (S0)
 //! and `events` pages (whether a build's own reader reads the ledger after S0). Workflow #453
-//! S10: and the live build's `actingd discover`, which the rescue row `emulators` runs.
+//! S10: and the live build's `actingd discover`, which the rescue row `emulators` runs. Workflow
+//! #453 S7: and the live build's `actingd vision manifest|check` and the Tools' `standard-pack
+//! check`, which the rows `vision manifest` and `vision check` run, each ended at its bound.
 //!
 //! INST-1b-F fix round 1 (review S1 F4): every child runs within its deadline, a key of the
 //! `install` section (`install.child.*`). A child still running then is left running, never
 //! killed (the stall rule), and its failure names its `pid` and the key. Workflow #453 S10 fix 1
 //! (review): the one exception is `actingd discover`, read only, which runs within
-//! [`DISCOVER_TIMEOUT_MS`] and is ended there ([`Host::run_program_ending`]).
+//! [`DISCOVER_TIMEOUT_MS`] and is ended there ([`Host::run_program_ending`]). Workflow #453 S7:
+//! so are the vision rows' read-only children, within [`VISION_MANIFEST_TIMEOUT_MS`],
+//! [`VISION_CHECK_TIMEOUT_MS`] and [`STANDARD_PACK_CHECK_TIMEOUT_MS`].
 
 use super::files;
 use super::host::{Host, NotFinished, NotRan, Ran};
@@ -19,7 +23,7 @@ use crate::codes::ActingctlCode;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{CauseRelation, Outcome, OutcomeEnvelope, RawSource};
 use actingcommand_runtime_config::install::{self as keys, InstallSettings};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::OsString;
 use std::path::Path;
@@ -379,6 +383,197 @@ pub(crate) fn discover(
             exit_code: ran.exit_code,
         }),
         _ => Err(Undiscovered::Failed(exited(&ran))),
+    }
+}
+
+/// Workflow #453 S7: the schema of `actingd vision`'s two reports.
+const VISION_SCHEMA: &str = "actingcommand.actingd.vision.v1";
+
+/// Workflow #453 S7: the Tools' Lab program, which runs `standard-pack check`.
+pub(crate) const LAB_PROGRAM: &str = "actinglab.exe";
+
+/// Workflow #453 S7: the bound of `actingd vision manifest` in the rescue row `vision manifest`,
+/// at which the child is ended (it is read only: ending it loses nothing). The child reads the
+/// registry and the runtime pin compiled into it and waits on nothing: no file of the root, no
+/// other program; 30 s is the start of the process with a wide margin for a machine under load.
+/// A bound of what the child does, not a tunable.
+pub(crate) const VISION_MANIFEST_TIMEOUT_MS: u64 = 30_000;
+
+/// Workflow #453 S7: the bound of `actingd vision check` in the rescue row `vision check`, at
+/// which the child is ended. The child reads each file of the manifest once, in 64 KiB chunks
+/// (about 175 MB for a `directml` root of this build: the runtime's three libraries, the OCR
+/// model's three files and the license files; about 156 MB for `cpu`), and each model folder's
+/// files it has not read yet: a few hundred megabytes at most, seconds on a local disk. 120 s is
+/// such a read at about 4 MB/s. Not a tunable.
+pub(crate) const VISION_CHECK_TIMEOUT_MS: u64 = 120_000;
+
+/// Workflow #453 S7: the bound of each Tools `standard-pack check` the row `vision check` runs,
+/// at which the child is ended. The check admits every package of one game root once, in memory
+/// (each within its own 60 s deadline), touches no device and loads no model; a released game
+/// root takes seconds. 300 s is five whole package deadlines. `place` runs the same command under
+/// `install.child.check_config_timeout_ms` and leaves it running; this read-only row ends it.
+pub(crate) const STANDARD_PACK_CHECK_TIMEOUT_MS: u64 = 300_000;
+
+/// Workflow #453 S7: what `actingd vision manifest` or `vision check` answered with its report:
+/// its outcome as received, its `report` (`null` when it carries none, as a refusal does) and
+/// its exit code.
+#[derive(Debug, Clone)]
+pub(crate) struct VisionReported {
+    pub(crate) received: Outcome,
+    pub(crate) report: Value,
+    pub(crate) exit_code: Option<i32>,
+}
+
+impl VisionReported {
+    /// Whether the command answered: exit 0 and a success outcome.
+    pub(crate) fn completed(&self) -> bool {
+        self.exit_code == Some(0)
+            && self.received.category() == actingcommand_contract::outcome::Category::Success
+    }
+}
+
+/// Workflow #453 S7: why a child of the vision rows gave no answer.
+#[derive(Debug, Clone)]
+pub(crate) enum Unanswered {
+    /// It failed, printed no usable answer, or did not run: the outcome that says why.
+    Failed(Outcome),
+    /// It was still running at its bound and was ended there; nothing it printed was read.
+    Ended,
+}
+
+impl From<NotFinished> for Unanswered {
+    fn from(not_finished: NotFinished) -> Self {
+        match not_finished {
+            NotFinished::Failed(cause) => Self::Failed(cause),
+            NotFinished::Ended => Self::Ended,
+        }
+    }
+}
+
+/// Workflow #453 S7: `<runtime>\actingcommand-actingd.exe vision manifest --provider
+/// <provider>`, the live build's manifest of a vision root, within
+/// [`VISION_MANIFEST_TIMEOUT_MS`] and ended there.
+pub(crate) fn vision_manifest(
+    host: &dyn Host,
+    runtime: &Path,
+    provider: &str,
+) -> Result<VisionReported, Unanswered> {
+    vision(
+        host,
+        runtime,
+        &["vision", "manifest", "--provider", provider],
+        VISION_MANIFEST_TIMEOUT_MS,
+    )
+}
+
+/// Workflow #453 S7: `<runtime>\actingcommand-actingd.exe vision check --config <config>
+/// --install-root <root>`, the live build's check of the root's configured vision root, within
+/// [`VISION_CHECK_TIMEOUT_MS`] and ended there.
+pub(crate) fn vision_check(
+    host: &dyn Host,
+    runtime: &Path,
+    config: &Path,
+    install_root: &Path,
+) -> Result<VisionReported, Unanswered> {
+    let config_word = config.to_string_lossy().into_owned();
+    let root_word = install_root.to_string_lossy().into_owned();
+    vision(
+        host,
+        runtime,
+        &[
+            "vision",
+            "check",
+            "--config",
+            config_word.as_str(),
+            "--install-root",
+            root_word.as_str(),
+        ],
+        VISION_CHECK_TIMEOUT_MS,
+    )
+}
+
+/// Runs actingd's `vision` with `arguments` within `timeout_ms`, ending it there. Its report line
+/// (`actingcommand.actingd.vision.v1`) is the answer; a child that prints none (a build before the
+/// subcommand refuses its words as a start would, on stderr) is its exit's failure
+/// (`foreign_other_error` with the exit code and stderr).
+fn vision(
+    host: &dyn Host,
+    runtime: &Path,
+    arguments: &[&str],
+    timeout_ms: u64,
+) -> Result<VisionReported, Unanswered> {
+    let program = runtime.join(DAEMON);
+    let arguments = arguments.iter().map(OsString::from).collect::<Vec<_>>();
+    let ran = host.run_program_ending(&program, &arguments, timeout_ms)?;
+    let report = serde_json::from_slice::<Value>(files::without_bom(&ran.stdout))
+        .ok()
+        .filter(|report| report["schema_version"] == VISION_SCHEMA);
+    let received = report.as_ref().and_then(|report| {
+        serde_json::from_value::<OutcomeEnvelope>(report["outcome"].clone())
+            .ok()
+            .map(OutcomeEnvelope::into_outcome)
+    });
+    match (report, received) {
+        (Some(report), Some(received)) => Ok(VisionReported {
+            received,
+            report: report["report"].clone(),
+            exit_code: ran.exit_code,
+        }),
+        _ => Err(Unanswered::Failed(exited(&ran))),
+    }
+}
+
+/// Workflow #453 S7: one model a game root's packs need, as `standard-pack check` answers it
+/// (its member `models`, Workflow #453 S8).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct PackModel {
+    pub(crate) model_ref: String,
+    pub(crate) model_sha256: String,
+    pub(crate) packages: Vec<String>,
+}
+
+/// Workflow #453 S7: `<tools>\actinglab.exe --json standard-pack check --root <game root>`, as
+/// `place` runs it, within [`STANDARD_PACK_CHECK_TIMEOUT_MS`] and ended there: the models the
+/// game root's packs need (its line's member `models`). A check that does not pass is its line's
+/// outcome, or its exit's failure when it printed no line; a passed line without a readable
+/// `models` is `foreign_data_error` with the decoder's text.
+pub(crate) fn standard_pack_models(
+    host: &dyn Host,
+    tools: &Path,
+    game_root: &Path,
+) -> Result<Vec<PackModel>, Unanswered> {
+    let program = tools.join(LAB_PROGRAM);
+    let root_word = game_root.to_string_lossy().into_owned();
+    let arguments = [
+        "--json",
+        "standard-pack",
+        "check",
+        "--root",
+        root_word.as_str(),
+    ]
+    .map(OsString::from);
+    let ran = host.run_program_ending(&program, &arguments, STANDARD_PACK_CHECK_TIMEOUT_MS)?;
+    let line = serde_json::from_slice::<Value>(files::without_bom(&ran.stdout)).ok();
+    let received = line.as_ref().and_then(|line| {
+        serde_json::from_value::<OutcomeEnvelope>(line["outcome"].clone())
+            .ok()
+            .map(OutcomeEnvelope::into_outcome)
+    });
+    match (line, received) {
+        (Some(line), Some(received))
+            if ran.exit_code == Some(0)
+                && received.category() == actingcommand_contract::outcome::Category::Success =>
+        {
+            serde_json::from_value::<Vec<PackModel>>(line["models"].clone()).map_err(|error| {
+                Unanswered::Failed(
+                    Outcome::new(ContractCode::ForeignDataError)
+                        .raw_source(RawSource::Json)
+                        .raw_text(error.to_string()),
+                )
+            })
+        }
+        (_, Some(received)) => Err(Unanswered::Failed(received)),
+        _ => Err(Unanswered::Failed(exited(&ran))),
     }
 }
 

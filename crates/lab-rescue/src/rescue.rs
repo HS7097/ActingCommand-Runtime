@@ -61,6 +61,10 @@
 //! - **`emulators`** (Workflow #453 S10; `contracts/emulator-control.md`, "Offline instance
 //!   discovery"), read only, offline: the live build's `actingd discover` of the module's own root,
 //!   its report the answer.
+//! - **`vision manifest`** and **`vision check`** (Workflow #453 S7;
+//!   `contracts/vision-model-folders.md`, "The manifest"), read only, offline: the live build's
+//!   `actingd vision manifest|check`, each ended at its bound; `vision check` also joins the models
+//!   the packs of each game root need, from the Tools' `standard-pack check` of the root.
 
 use crate::agent_channel::{self, Answer as Answered};
 use crate::cli_line::{self, Exit};
@@ -82,7 +86,10 @@ use crate::install::{self, Answer, Face, config_swap, instance_add, place};
 use crate::rescue_reads;
 use crate::runtime_start::{self, Mode};
 use actingcommand_contract::SchedulingPauseReason;
-use actingcommand_contract::outcome::{Category, CauseRelation, Outcome, OutcomeEnvelope};
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::{
+    Category, CauseRelation, IoOp, Outcome, OutcomeEnvelope, RawSource,
+};
 use actingcommand_lab_ops::core_reads::{
     Handed, Params, Part, ROOT_FLAG, STATE_ROOT_FLAG, Written,
 };
@@ -90,7 +97,7 @@ use actingcommand_lab_ops::initiator::{self, Initiator};
 use actingcommand_lab_ops::locate::Location;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -102,8 +109,8 @@ const USAGE: &str = "usage: actinglab [--json] <rescue operation> [<positionals>
 
 /// The rows of module `rescue` this slice serves, by the table's name (Workflow #421 INST-5: and
 /// `instance add`; Workflow #434 LAB-5G5b: and the three MCP rows; Workflow #453 S10: and
-/// `emulators`).
-pub const SERVED: [&str; 34] = [
+/// `emulators`; Workflow #453 S7: and `vision manifest` and `vision check`).
+pub const SERVED: [&str; 36] = [
     "up",
     "restart",
     "down",
@@ -127,6 +134,8 @@ pub const SERVED: [&str; 34] = [
     "check-config",
     "ledger verify",
     "emulators",
+    "vision manifest",
+    "vision check",
     "watchdog install",
     "watchdog uninstall",
     "agent add",
@@ -248,6 +257,8 @@ pub(crate) fn answer_with(
         "check-config" => check_config(context, params),
         "ledger verify" => ledger_verify(context),
         "emulators" => emulators(context),
+        "vision manifest" => vision_manifest(context, params),
+        "vision check" => vision_check(context),
         "watchdog install" => watchdog(context, crate::watchdog::Asked::Install),
         "watchdog uninstall" => watchdog(context, crate::watchdog::Asked::Uninstall),
         "mcp plan" => mcp_plan(context, params),
@@ -2077,6 +2088,258 @@ fn emulators(context: &Context<'_>) -> Exit {
         ))
     };
     run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
+}
+
+/// Workflow #453 S7: the parameter of `vision manifest` that names the provider.
+const PROVIDER: &str = "provider";
+/// Workflow #453 S7: the configuration key that names the standard-pack root.
+const STANDARD_PACKS_ROOT: &str = "standard_packs.root";
+
+/// Workflow #453 S7: `refusal` with a vision row's child failure: its outcome as the `caused_by`
+/// link, or, for a child ended at its bound `bound_ms`, `timeout_ms` the bound and no cause.
+fn unanswered_refusal(
+    refusal: Outcome,
+    unanswered: programs::Unanswered,
+    bound_ms: u64,
+) -> Outcome {
+    match unanswered {
+        programs::Unanswered::Failed(cause) => refusal.joined(CauseRelation::CausedBy, cause),
+        programs::Unanswered::Ended => refusal.timeout_ms(bound_ms),
+    }
+}
+
+/// Workflow #453 S7 (`contracts/vision-model-folders.md`, "The manifest"): `vision manifest
+/// --provider cpu|directml`, the live build's `actingd vision manifest --provider <provider>`:
+/// what a vision root of that provider must hold. It reads nothing of the root and writes nothing.
+/// Within `programs::VISION_MANIFEST_TIMEOUT_MS` (30 s), at which the child is ended. An answered
+/// manifest is `install_command_done` (operation `install_vision_manifest`, actingd's outcome its
+/// `related` link) with actingd's manifest as `report`; anything else is `install_command_refused`
+/// with `install_refusal` `vision_root_unresolved`: actingd's outcome (or the child's failure) as
+/// its cause, or, for a child ended at the bound, `timeout_ms` the bound and no cause. No provider,
+/// or another one, is `actingctl_usage_invalid` (`--provider`).
+fn vision_manifest(context: &Context<'_>, params: Params<'_>) -> Exit {
+    const MANIFEST: InstallLocation = InstallLocation::VisionManifest;
+    let provider = match text(params, PROVIDER) {
+        Some(provider @ ("cpu" | "directml")) => provider,
+        given => {
+            let problem = if given.is_none() {
+                ArgumentProblem::Required
+            } else {
+                ArgumentProblem::NotRecognised
+            };
+            return module_refusal(&cli_line::usage_invalid(Some("--provider"), problem));
+        }
+    };
+    let refused = || install::refusal(MANIFEST, InstallRefusal::VisionRootUnresolved);
+    let run = || -> Result<Exit, Outcome> {
+        let reported = programs::vision_manifest(
+            context.host,
+            &context.location.root.join(Half::Runtime.dir()),
+            provider,
+        )
+        .map_err(|unanswered| {
+            unanswered_refusal(refused(), unanswered, programs::VISION_MANIFEST_TIMEOUT_MS)
+        })?;
+        if !reported.completed() {
+            return Err(refused().joined(CauseRelation::CausedBy, reported.received));
+        }
+        let mut members = Map::new();
+        members.insert("report".to_owned(), reported.report);
+        Ok(cli_line::success(
+            members,
+            &install::done(MANIFEST).link(CauseRelation::Related, reported.received),
+        ))
+    };
+    run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
+}
+
+/// Workflow #453 S7 (`contracts/vision-model-folders.md`, "The manifest"): `vision check`, the
+/// live build's `actingd vision check --config <the root's configuration> --install-root <root>`
+/// within `programs::VISION_CHECK_TIMEOUT_MS` (120 s), then, for each game root below the
+/// configuration's `standard_packs.root` ([`game_roots`]), the Tools' `standard-pack check`
+/// within `programs::STANDARD_PACK_CHECK_TIMEOUT_MS` (300 s), each child ended at its bound;
+/// nothing is written. The models the game roots' packs need (each check's `models`) are joined,
+/// each once with every game and its packages that name it, and answered with whether a folder of
+/// its name is listed (`present`) and whether its identity is the one they name
+/// (`identity_matches`). The answer holds actingd's report as `report`, `standard_packs {root,
+/// games}` and `required_models`. It is `install_command_done` (operation
+/// `install_vision_check`, actingd's outcome its `related` link) when every manifest file is `ok`
+/// and every model of the manifest and of the packs matches; else `install_caveat_noted` with
+/// `install_caveat` `vision_incomplete` and `count` the files and the models, each pair of
+/// `model_ref` and `model_sha256` once, that do not. Refusals: the configuration's
+/// (`config_unreadable`, `install_section_invalid`); `vision_root_unresolved` when actingd gives
+/// no check report (its outcome or the child's failure as the cause, `timeout_ms` at the bound);
+/// `config_unreadable` for a `standard_packs.root` that cannot be listed (its path, the OS
+/// failure); `pack_invalid` (`game`, `path`) for a game root whose check gives no models (its
+/// outcome or the child's failure as the cause, `timeout_ms` at the bound).
+fn vision_check(context: &Context<'_>) -> Exit {
+    const CHECK: InstallLocation = InstallLocation::VisionCheck;
+    let refused = || install::refusal(CHECK, InstallRefusal::VisionRootUnresolved);
+    let run = || -> Result<Exit, Outcome> {
+        let (config, _) = configuration(context, CHECK)?;
+        let checked = programs::vision_check(
+            context.host,
+            &context.location.root.join(Half::Runtime.dir()),
+            &context.location.config,
+            &context.location.root,
+        )
+        .map_err(|unanswered| {
+            unanswered_refusal(refused(), unanswered, programs::VISION_CHECK_TIMEOUT_MS)
+        })?;
+        if !checked.completed() {
+            return Err(refused().joined(CauseRelation::CausedBy, checked.received));
+        }
+        // The report's three lists: a report without one is no check report.
+        let unread = |member: &str| {
+            refused().caused_by(
+                Outcome::new(ContractCode::ForeignDataError)
+                    .raw_source(RawSource::Json)
+                    .raw_text(format!(
+                        "actingd's vision check report has no list {member}"
+                    )),
+            )
+        };
+        let checked_files = checked.report["files"]
+            .as_array()
+            .ok_or_else(|| unread("files"))?;
+        let folders = checked.report["folders"]
+            .as_array()
+            .ok_or_else(|| unread("folders"))?;
+        let manifest_models = checked.report["models"]
+            .as_array()
+            .ok_or_else(|| unread("models"))?;
+        let packs = standard_packs_root(context, &config);
+        let games = match &packs {
+            Some(packs) => game_roots(packs, CHECK)?,
+            None => Vec::new(),
+        };
+        let tools = context.location.root.join(Half::Tools.dir());
+        let mut required = BTreeMap::<(String, String), Vec<Value>>::new();
+        for (game, game_root) in &games {
+            let models = programs::standard_pack_models(context.host, &tools, game_root).map_err(
+                |unanswered| {
+                    unanswered_refusal(
+                        install::refusal(CHECK, InstallRefusal::PackInvalid)
+                            .game(game.clone())
+                            .path(game_root),
+                        unanswered,
+                        programs::STANDARD_PACK_CHECK_TIMEOUT_MS,
+                    )
+                },
+            )?;
+            for model in models {
+                required
+                    .entry((model.model_ref, model.model_sha256))
+                    .or_default()
+                    .push(json!({"game": game, "packages": model.packages}));
+            }
+        }
+        let required_models = required
+            .into_iter()
+            .map(|((model_ref, model_sha256), named_by)| {
+                let folder = folders
+                    .iter()
+                    .find(|folder| folder["model_ref"] == model_ref.as_str());
+                let identity = folder.and_then(|folder| folder["identity"].as_str());
+                json!({
+                    "model_ref": model_ref,
+                    "model_sha256": model_sha256,
+                    "games": named_by,
+                    "present": folder.is_some(),
+                    "identity_matches": identity == Some(model_sha256.as_str()),
+                })
+            })
+            .collect::<Vec<_>>();
+        let unmatched_models = manifest_models
+            .iter()
+            .chain(&required_models)
+            .filter(|model| model["identity_matches"] != true)
+            .map(|model| {
+                (
+                    model["model_ref"].to_string(),
+                    model["model_sha256"].to_string(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        let count = checked_files
+            .iter()
+            .filter(|file| file["state"] != "ok")
+            .count()
+            + unmatched_models.len();
+        let mut members = Map::new();
+        members.insert("report".to_owned(), checked.report.clone());
+        members.insert(
+            "standard_packs".to_owned(),
+            json!({
+                "root": packs.as_deref().map(files::plain),
+                "games": games.iter().map(|(game, _)| game).collect::<Vec<_>>(),
+            }),
+        );
+        members.insert("required_models".to_owned(), Value::Array(required_models));
+        let top = if count == 0 {
+            install::done(CHECK)
+        } else {
+            install::caveat(CHECK, InstallCaveat::VisionIncomplete).count(count)
+        };
+        Ok(cli_line::success(
+            members,
+            &top.link(CauseRelation::Related, checked.received),
+        ))
+    };
+    run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
+}
+
+/// Workflow #453 S7: `standard_packs.root` of the root's configuration `config`, a relative one
+/// against the configuration file's folder, as the Runtime reads it; `None` when it names none.
+fn standard_packs_root(context: &Context<'_>, config: &Value) -> Option<PathBuf> {
+    let root = actingcommand_runtime_config::member(config, STANDARD_PACKS_ROOT)
+        .and_then(Value::as_str)
+        .filter(|root| !root.is_empty())
+        .map(PathBuf::from)?;
+    Some(if root.is_absolute() {
+        root
+    } else {
+        context
+            .location
+            .config
+            .parent()
+            .unwrap_or(&context.location.root)
+            .join(root)
+    })
+}
+
+/// Workflow #453 S7: the game roots below `packs`, by name, as the Runtime lists them: each folder
+/// there whose name is UTF-8 and that holds `bundle.json` (a folder without it holds no pack a
+/// Runtime runs). None when `packs` does not exist; a root that cannot be listed is
+/// `config_unreadable` with its path and the OS failure.
+fn game_roots(packs: &Path, operation: InstallLocation) -> Result<Vec<(String, PathBuf)>, Outcome> {
+    let unreadable = |error: std::io::Error, op: IoOp| {
+        install::refusal(operation, InstallRefusal::ConfigUnreadable)
+            .path(packs)
+            .caused_by(Outcome::from_io_error(&error, op))
+    };
+    let entries = match std::fs::read_dir(packs) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(unreadable(error, IoOp::ReadDir)),
+    };
+    let mut games = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| unreadable(error, IoOp::ReadDir))?;
+        let kind = entry
+            .file_type()
+            .map_err(|error| unreadable(error, IoOp::Metadata))?;
+        let name = entry.file_name();
+        let path = entry.path();
+        if kind.is_dir()
+            && let Some(game) = name.to_str()
+            && path.join("bundle.json").is_file()
+        {
+            games.push((game.to_owned(), path));
+        }
+    }
+    games.sort();
+    Ok(games)
 }
 
 /// `watchdog install` and `watchdog uninstall`: the watchdog's own command for the root, its

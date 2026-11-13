@@ -45,6 +45,83 @@ these files and `DirectML.dll`, each with its license files, by the owner's
 decision (Workflow #441, 2026-11-13; the registry's `redistribution_note`s); the
 Runtime package and the Tools package carry none of them.
 
+## The manifest
+
+Workflow #453 S7 (since 0.12.60; register §1.348). What a vision root must hold
+is data of the build, not of a script, and two read-only actingd subcommands
+answer it; nothing in them downloads, and no answer names an address.
+
+**Where the data lives.** The tool registry
+`scripts/windows-tools/windows-tool-sources.v1.json`, which actingd embeds (the
+text its install adb's pin is read from), and the DirectML runtime pin
+(`crates/vision-ffi/src/runtime_pin.rs`, "DirectML runtime" below). A component
+that names a model carries its `model_ref` and `family` (`ppocrv6-medium-onnx`:
+`PP-OCRv6_medium`, `ppocr-ctc`), and each of its artifacts its place
+`vision_root_path` (`models/PP-OCRv6_medium/det.onnx`, `rec.onnx`, `keys.txt`).
+A runtime component's license files are its `pinned_license_files`, each with
+`vision_root_path`, size and SHA-256: `onnxruntime-directml-1.24.4`'s two since
+Workflow #428 CI-OCR-1, and `directml-1.15.4`'s three (`LICENSE.txt`,
+`LICENSE-CODE.txt`, `ThirdPartyNotices.txt` at `ort/licenses/directml/`) since
+this slice, read from the pinned package itself. Every other member of the
+registry is ignored by the manifest, and every member the manifest reads is
+ignored by the install adb's reader. `Materialize-VisionRoot.ps1` keeps its own
+constants for the places it fills.
+
+**What it lists.** `actingd vision manifest --provider cpu|directml` answers
+`{schema_version: "actingcommand.actingd.vision.v1", outcome:
+vision_manifest_reported, report}`, `report` `{provider, files, models}`:
+
+- `files`, in byte order of `vision_root_path`, each `{vision_root_path, size,
+  sha256, component, archive_path, license, pinned}`: the runtime's libraries,
+  the pin's own (`ort/onnxruntime.dll` and `ort/onnxruntime_providers_shared.dll`
+  for both providers, `ort/DirectML.dll` for `directml` only), with the pin's
+  component and its entry in that component's archive; the license files of each
+  component a library comes from (`license` true); and the files of every model
+  component (`archive_path` `null`: the component pins the file itself). Every
+  file of this build's manifest has a size and a SHA-256 (`pinned` true).
+- `models`, each `{model_ref, family, files, model_sha256}`: the model's places
+  and its identity ("Identity" below), computed from its files' pins as the
+  engine computes it from their bytes.
+
+`cuda` has no manifest. A registry the build cannot read so is
+`serialization_failed` with the reason as its `foreign_data_error` link, a
+defect of the build.
+
+**What `check` compares.** `actingd vision check --config <file>
+[--install-root <root>]` resolves the configured vision root as a start does
+("Vision root" above: the configured or default root, canonical; a root that does
+not resolve is `vision_root_unavailable`, one inside a program slot
+`vision_root_in_program_slot`, at stage `config_vision`, the start's own
+refusals), takes the manifest of the section's `execution_provider`, and answers
+`vision_check_completed` with `report` `{provider, vision_root, files, folders,
+models}`:
+
+- `files`: each manifest file with its `state`, compared first by its size and
+  then by its SHA-256 read in 64 KiB chunks: `ok`, `missing`, `sha256_mismatch`
+  (another size, another digest, or no regular file) or `unreadable` (with the OS
+  failure as `cause`), the states of the DirectML runtime check;
+- `folders`: `models\` listed as a start lists it ("Invalid folders" below; none
+  when it does not exist), each model folder `{model_ref, family, layout?,
+  identity}` with its identity computed from its files' bytes (`identity` `null`
+  and the OS failure as `cause` when a file cannot be read), each folder that
+  breaks the rule `{model_ref, invalid}` with the reason;
+- `models`: each manifest model with `present` (a folder of its name is listed),
+  that folder's `identity` and `identity_matches`.
+
+Each file is read at most once. Whether the root is complete is the report's to
+say; the code is a success either way. A configuration without a `vision`
+section, or of `cuda`, is `vision_config_invalid` at stage `config_vision`; one
+the start refuses is refused with the start's code at its stage.
+
+**What it never does.** It writes nothing (not the vision root, not a state
+root, not a journal), takes no owner lock, opens no ledger, binds no socket,
+starts no program, loads no model and no library, and fetches nothing; it
+neither places nor removes a file. The Lab's rescue rows `vision manifest` and
+`vision check` run these subcommands with the installed build ([install-cli.md](install-cli.md),
+"The Lab's rescue module"); `vision check` there also asks the Tools'
+`standard-pack check` of each game root which models the installed packs need
+(its member `models`, [package-reference.md](package-reference.md)).
+
 ## Folder layouts
 
 A model folder holds exactly one of these layouts:
