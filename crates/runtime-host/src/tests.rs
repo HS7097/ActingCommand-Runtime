@@ -232,7 +232,7 @@ mod gate_438_held;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
 // one worker per device, the group's occupancy, pause, gates, session rule and refusals.
 mod gate_mapp1b;
-// Workflow #437 MAPP-2a (0.12.59; register §1.341): the parts of the switch before a member's run:
+// Workflow #437 MAPP-2a (0.12.59; register §1.342): the parts of the switch before a member's run:
 // another member's stop under the device's key, the startup run on a borrowed key, the stopped
 // member's page forgotten, and their one entry.
 mod gate_mapp2a;

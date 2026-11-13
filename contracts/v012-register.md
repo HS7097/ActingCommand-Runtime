@@ -19642,9 +19642,9 @@ add`, the journal's input naming the added alias) and
 `postcheck_454_config_replace_passed_check_keeps_its_record` (checks that pass: the step `done`
 with the same three members, `failed` empty, no row failed). No existing test changes.
 
-### 1.341 Slice MAPP-2a (0.12.59): the parts of the application switch: another member's stop under the device's key, a startup run on a borrowed key, the stopped member's page forgotten (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its findings F1, F2 and F4 and its row "MAPP-2a"; the coordinator's rulings of 11-13 on board #437, not the owner's words; coordinator work order `rd-1113/brief-437-mapp2a.md`, read on main `98924e28`)
+### 1.342 Slice MAPP-2a (0.12.59): the parts of the application switch: another member's stop under the device's key, a startup run on a borrowed key, the stopped member's page forgotten (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its findings F1, F2 and F4 and its row "MAPP-2a"; the coordinator's rulings of 11-13 on board #437, not the owner's words; coordinator work order `rd-1113/brief-437-mapp2a.md`, read on main `98924e28`)
 
-1.341 is the next free number after §1.340. The coordinator cut MAPP-2 (§1.323, "The code slices")
+1.342 is the next free number after §1.341. The coordinator cut MAPP-2 (§1.323, "The code slices")
 in two: MAPP-2a builds the switch's parts and their one entry with no caller in the Runtime;
 MAPP-2b calls the switch from the run paths. A build still refuses every group of several at load
 (`several_members_unsupported`, unchanged), so no configuration reaches this slice's code: its tests

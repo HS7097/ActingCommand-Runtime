@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #437 MAPP-2a (`contracts/device-group.md`, "The switch before a run"; register
-//! §1.341): the parts of the switch that brings a member of a device group of several to the
+//! §1.342): the parts of the switch that brings a member of a device group of several to the
 //! front before its run, and their one entry, [`HostShared::switch_application`].
 //!
 //! - **The stop of another member under the device's key** ([`HostShared::stop_member_application`]):
