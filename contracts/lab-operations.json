@@ -46,6 +46,7 @@
     {"kind": "RunInstanceTask", "class": "write", "console_today": false},
     {"kind": "StopInstanceRun", "class": "write", "console_today": true},
     {"kind": "EditPackSchedule", "class": "write", "console_today": false},
+    {"kind": "ApplyResourceTargets", "class": "write", "console_today": false},
     {"kind": "EditResourceTarget", "class": "write", "console_today": false},
     {"kind": "AcquirePlayerHold", "class": "write", "console_today": false},
     {"kind": "ReleasePlayerHold", "class": "write", "console_today": false},
@@ -323,12 +324,12 @@
       "writes": true,
       "irreversible": false,
       "runtime": "required",
-      "entries": ["lab"],
+      "entries": ["lab", "ui"],
       "requests": ["ApplyResourceTargets", "ResourceTargetView", "Status"],
       "source": ["MCP ac_targets_set", "actingctl agent-apply-resource-targets"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `targets` (the policy file of actingctl agent-apply-resource-targets, the document MCP ac_targets_set builds, the request, its answer and a refusal's values); requests add ResourceTargetView and Status, with which MCP resolves <inst> and reads its policy_instance"
+      "notes": "LAB-1b moved its code into lab-ops: `targets` (the policy file of actingctl agent-apply-resource-targets, the document MCP ac_targets_set builds, the request, its answer and a refusal's values); requests add ResourceTargetView and Status, with which MCP resolves <inst> and reads its policy_instance; Workflow #455 T1-R (0.12.60): entries add ui, since ApplyResourceTargets is on the UI list"
     },
     {
       "name": "targets edit",

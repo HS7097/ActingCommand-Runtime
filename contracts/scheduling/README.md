@@ -1436,6 +1436,73 @@ package included (register §1.215 UPD-16), meets the game's "client out of date
 - **No configuration key.** The store update rule's cadence is its `cooldown_ms`; the hold and
   its order are code.
 
+## Order within one device (Workflow #437 ORD-1b, since 0.12.60)
+
+Register §1.352; the owner's rulings on board #437 as the coordinator recorded them;
+[device-group.md](../device-group.md), "One pick per device per round". It applies only to a device
+whose key the device map names for two or more members, and only when the Runtime passes the
+order's inputs beside the map (`DeviceGroups::with_order`); without them the device's one pick is
+its first candidate in the allocation order, as MAPP-1 built it. An instance alone on its device
+never reads any of it, and a catalog that declares `max_queue_wait_ms` on its tasks decides there
+exactly as one that does not.
+
+- **The inputs.** The member in front of the device, or none. For each waiting contender, when its
+  wait began; a contender the Runtime gives no start waits from the evaluation's time. The longest
+  wait of a task that declares none (1 800 000 ms until the Runtime passes a configured one). Two
+  members of one device named in front refuse the evaluation (`policy_evaluation_input_invalid`).
+- **The contenders** of a device are the candidates of its members, but one the Runtime holds
+  whole (`InstanceHolds`: UPD-1's hold, a switch cooldown), one whose member is held as the cycle
+  starts (a pause, a fence, a person's hold, a holder of the device, a takeover cooldown, a
+  blackout) and one the device's chain handover holds ("Chain Handover"). Those take their turns
+  as before; a held member has no waiting task.
+- **Each contender** has its expected duration `E` (the duration its dispatch reserves), its limit
+  `L` (its task's `max_queue_wait_ms`, [v2/README.md](v2/README.md), else the default) and its
+  deadline, its start plus `L`.
+- **The selection** runs at the place of the device's first contender in the allocation order, over
+  that order; nothing is sorted anew:
+  1. No contender left: the device is not selected.
+  2. **The chain successor**: when the device's chain successor ("Chain Handover") is a contender,
+     it is the pick, whether or not it fits, whichever member is in front and when none is
+     ([device-group.md](../device-group.md), "Never interrupted").
+  3. **The binding waiter**: of the contenders of every member but the one in front (of all of them
+     when none is in front), the one whose deadline is the earliest; at equal deadlines the earlier
+     in the allocation order.
+  4. **Stay with the front**: the member in front's first contender, in that member's own order,
+     that ends by the binding waiter's deadline (`now + E ≤ deadline`: a run that ends exactly at
+     the limit has not passed it); its first contender when no other member has one. A remedy
+     request, an owed rerun or an immediate retry is first in its member's own order as before, but
+     goes first on the device only when it fits, and of a waiting member it gains no precedence.
+  5. **Switch**: when steps 2 and 4 pick none, the binding waiter; its run switches the application
+     ([device-group.md](../device-group.md), "The switch before a run").
+  6. The pick is tried as any candidate (the shared run limits, the admission, the remedy plan).
+     Selected, it wins the device. Deferred, it keeps its own deferral and the selection runs again
+     from step 1 without it.
+
+  A running task is never interrupted: a waiting task past its limit goes first at the device's
+  next free round. The time a switch takes counts in no order.
+
+  **The shared run limits across devices.** The device takes its turn at the shared run limits
+  ("Shared Run Limits") at the place of its first contender in the allocation order, and when its
+  pick is deferred the selection runs again at once from that same place, before any candidate
+  later in the allocation order is tried. So on a host that has a device of several, which
+  candidate of an instance alone on another device gets a shared run limit's slot can differ from
+  a host without it: the one way a device of several reaches an instance alone on its device. This
+  is the design.
+- **What a contender that does not run shows**, each with the state, the eligibility and the wake
+  (none of its own) of a candidate behind its own instance's winner:
+  - of the pick's own member, `instance_already_selected`; one of the member in front passed over
+    before a pick that ends in time carries `required_ms` (its `E`) and `remaining_ms` (the binding
+    waiter's time left before its limit);
+  - of the member in front, when another member's pick switches the device,
+    `device_group_waiting` `selected` with `required_ms` and `remaining_ms`, as above;
+  - of every other member, `device_group_waiting` `selected` with `limit_ms` (its `L`) and
+    `remaining_ms` (its own time left before its limit, 0 once past it).
+
+  A contender tried and deferred keeps its own reason; a non-contender keeps the reason it has
+  without the order (the hold, the handover's wait, a capped block's wait). No code is added: the
+  values are optional values of the two codes, and travel where reasons travel.
+- **Memory only.** None of the inputs enters the facts, a snapshot or a decision identity.
+
 ## Dispatch Decision Record
 
 Workflow #308 RT-S1c. Every selected candidate's reason chain ends with the

@@ -29,8 +29,9 @@ const FIXTURE_INSTANCE: &str = "inst-fixture";
 /// A key of the console's third tier, settable, that the test host's configuration carries.
 const EVIDENCE_AGE: &str = "frame_retention_evidence_max_age_days";
 
-/// The UI list as contracts/lab-two-entries.md §3 writes it, the transitional kind included.
-const UI_LIST: [Kind; 30] = [
+/// The UI list as contracts/lab-two-entries.md §3 writes it, the transitional kind included;
+/// Workflow #455 T1-R (register §1.351, since 0.12.60) adds `ApplyResourceTargets`.
+const UI_LIST: [Kind; 31] = [
     Kind::Status,
     Kind::RuntimeFactSnapshot,
     Kind::ScheduleExplanation,
@@ -56,6 +57,7 @@ const UI_LIST: [Kind; 30] = [
     Kind::ConfigureSettings,
     Kind::StopInstanceRun,
     Kind::EditPackSchedule,
+    Kind::ApplyResourceTargets,
     Kind::RunInstanceTask,
     Kind::EditResourceTarget,
     Kind::AcquirePlayerHold,

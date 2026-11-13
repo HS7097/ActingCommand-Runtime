@@ -487,7 +487,11 @@ configured, it fails every authoritative projection (and so the daemon's first e
 nothing and answers the active revision (`FactPublication { replayed: true }`); otherwise the
 active record's sequence is the new policy's `previous_version`.
 `InstanceFactStore::active_revision(scope, key)` reads the active record with the sequence and
-id of its event.
+id of its event. Workflow #455 T1-R (since 0.12.60): in the same hold, before the replay, an
+`ApplyResourceTargets` that names `expected_version` has it compared with the active record's
+sequence (`0` without a record); another is `fact_observation_version_conflict` with `fact_key`
+and `current_version`, nothing appended, as `EditPackSchedule` compares its list ("Pack schedule
+facts"); without the member nothing is compared.
 
 **Projection.** The key is not excluded from the overlay: an unexpired or expired policy is an
 ordinary overlaid fact, so it reaches `EvaluationFacts.facts`, the combined

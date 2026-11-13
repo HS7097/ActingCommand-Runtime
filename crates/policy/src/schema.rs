@@ -418,6 +418,20 @@ pub struct TaskSpec {
         deserialize_with = "written_bound"
     )]
     pub benefit_fixed_value_milli: Option<i64>,
+    /// Workflow #437 ORD-1a (register §1.352, `actingcommand.scheduling.v2` only): the longest
+    /// time, in milliseconds, a candidate of the task may wait in its device's queue while another
+    /// application of the device is in front (`contracts/scheduling/v2/README.md`). Only the order
+    /// within a device group of several reads it; a task without it takes that order's default.
+    /// A `schedule.json` rule writes it as any V2 member, and it passes through to the composed
+    /// task. The compiler holds it to [`MIN_QUEUE_WAIT_MS`]`..=`[`MAX_QUEUE_WAIT_MS`]. Absent, the
+    /// member serializes as nothing at all, so a catalog without it keeps its hash; an explicit
+    /// `null` is refused (`type_mismatch`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "written_bound"
+    )]
+    pub max_queue_wait_ms: Option<u64>,
 }
 
 impl TaskSpec {
@@ -1161,6 +1175,18 @@ pub const BENEFIT_FIXED_VALUE_SUBSYSTEM: &str = PolicyCode::BenefitFixedValue.as
 /// [`POOL_LINES_SUBSYSTEM`], which its two lines need): a Runtime that names `pool_lines` alone
 /// does not read it.
 pub const POOL_TRIGGER_LINE_SUBSYSTEM: &str = "pool_trigger_line";
+
+/// Workflow #437 ORD-1a (register §1.352): the configuration-manifest subsystem of a Runtime that
+/// reads a task's `max_queue_wait_ms`; a `schedule.json` whose rule writes it names it in
+/// `requires`.
+pub const QUEUE_WAIT_SUBSYSTEM: &str = "queue_wait";
+
+/// Workflow #437 ORD-1a: the least `max_queue_wait_ms` a task may declare, one minute (the range
+/// of `scheduling.task_held.after_ms`).
+pub const MIN_QUEUE_WAIT_MS: u64 = 60_000;
+
+/// Workflow #437 ORD-1a: the largest `max_queue_wait_ms` a task may declare, one day.
+pub const MAX_QUEUE_WAIT_MS: u64 = 86_400_000;
 
 /// One of a pool's two lines (SS-2h, register §1.289; Alice's ruling 138 and her answers of
 /// 11-09 17:37 and 17:42: a stop line above a hard line, given by the model, a person or an

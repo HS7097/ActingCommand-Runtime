@@ -30,13 +30,19 @@ impl HostShared {
     /// in the order of `project_policy_input_identity`, checks the document against the
     /// active catalog and the authoritative projection and releases every lock. Phase B
     /// publishes the record through `publish_facts`, which replays an equal active policy.
-    /// A refused document records nothing and keeps the active policy.
+    /// A refused document records nothing and keeps the active policy. Workflow #455 T1-R:
+    /// with `expected_version`, Phase B, in the hold of the fact write gate that writes the
+    /// record, first compares it with the instance's active record's version (its
+    /// `fact.published` sequence, `0` without one); another is refused
+    /// `fact_observation_version_conflict` with `fact_key` and `current_version` and appends
+    /// nothing. Without it nothing is compared.
     pub(super) fn apply_resource_targets(
         &self,
         validated: &ValidatedRuntimeRequest<'_>,
         document_json: &str,
+        expected_version: Option<u64>,
     ) -> Result<OperationSuccess, RequestFailure> {
-        self.apply_resource_targets_document(validated, document_json)
+        self.apply_resource_targets_document(validated, document_json, expected_version)
             .map_err(planning_request_failure)
     }
 
@@ -44,6 +50,7 @@ impl HostShared {
         &self,
         validated: &ValidatedRuntimeRequest<'_>,
         document_json: &str,
+        expected_version: Option<u64>,
     ) -> RuntimeHostResult<OperationSuccess> {
         let sample = self.runtime_clock_sample()?;
         let time = EvaluationTime {
@@ -141,7 +148,7 @@ impl HostShared {
                 records: vec![record],
             },
             Some(validated),
-            FactPublicationPurpose::ResourceTargets,
+            FactPublicationPurpose::ResourceTargets { expected_version },
         )?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
