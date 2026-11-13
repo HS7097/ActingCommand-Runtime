@@ -42,6 +42,11 @@ pub struct StandardPackRootFiles {
     /// `package loading --check` checks it, then the file and its templates are laid beside
     /// `bundle.json`. Without it, a pack that carries a loading copy is refused.
     pub loading: Option<PathBuf>,
+    /// Workflow #444 NOTICES-3 (`--notices`): a directory of the package author's notice texts,
+    /// no root file: every file below it is held to the contract crate's notices rules before
+    /// anything is written, then laid byte for byte into `<out>/notices/`. Without it nothing of
+    /// the output changes.
+    pub notices: Option<PathBuf>,
 }
 
 /// Workflow #407 LOAD-1: `actinglab package loading --root-file <loading.json> --packs-root
@@ -155,6 +160,22 @@ pub struct StandardPackCheckResponse {
     /// empty when none. Absent without `schedule.json`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumption_facts: Option<Vec<actingcommand_policy::ConsumptionFactRule>>,
+    /// Workflow #444 NOTICES-3 (register §1.336): with a directory `notices` in the game root that
+    /// no pack of `bundle.json` is named like (in any ASCII case; such a folder is the pack's), the
+    /// count of its files and the sum of their lengths, once every file kept the notices rules.
+    /// Absent otherwise; never a member of `root_files`, and no name or text of a file is echoed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notices: Option<StandardPackNotices>,
+}
+
+/// Workflow #444 NOTICES-3: what `standard-pack check` counted of a game root's notices
+/// directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct StandardPackNotices {
+    /// How many files the directory holds.
+    pub files: usize,
+    /// The sum of their lengths in bytes.
+    pub bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

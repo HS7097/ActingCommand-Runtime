@@ -2154,7 +2154,8 @@
         {"name": "navigation", "form": "option", "type": "file", "required": false},
         {"name": "schedule", "form": "option", "type": "file", "required": false},
         {"name": "display_layout", "form": "option", "type": "file", "required": false},
-        {"name": "loading", "form": "option", "type": "file", "required": false}
+        {"name": "loading", "form": "option", "type": "file", "required": false},
+        {"name": "notices", "form": "option", "type": "dir", "required": false}
       ],
       "help": "Lays out a bundle of standard packs from an applications file and a packs directory in a new directory, checking its root files.",
       "output": "as today's command",
@@ -2396,7 +2397,7 @@
         {"name": "root", "form": "option", "type": "dir", "required": true, "note": "a game's package root, not the installation's"}
       ],
       "help": "Checks an installed root of standard packs as package bundle checks one, and lists packs whose entry pages are missing.",
-      "output": "as today's command",
+      "output": "as today's command, and the notices directory's file count and bytes when the root holds one",
       "writes": false,
       "irreversible": false,
       "runtime": "offline",

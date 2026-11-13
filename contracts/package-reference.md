@@ -245,8 +245,8 @@ declares.
 `actinglab package bundle --applications <file> --packs-root <directory> --out <new
 directory> [--source-repository <owner>/<name> --source-commit <commit>] [--maintenance <file>]
 [--pages <file>] [--interrupts <file>] [--navigation <file>] [--schedule <file>]
-[--display-layout <file>] [--loading <file>]` lays out the resource section of a standard
-package:
+[--display-layout <file>] [--loading <file>] [--notices <directory>]` lays out the resource
+section of a standard package:
 
 ```text
 applications.json              the given applications table, copied byte for byte
@@ -258,6 +258,7 @@ schedule.json                  with --schedule, copied byte for byte (ROUT-L RL-
 display-layout.json            with --display-layout, copied byte for byte (Workflow #392 DA-4)
 loading.json                   with --loading, copied byte for byte (Workflow #407 LOAD-1)
 loading/<file>.png             with --loading, every template it declares, byte for byte
+notices/<path>                 with --notices, every file of the directory, byte for byte (Workflow #444)
 packs/<package_id>/control.json
 packs/<package_id>/resources/...
 ```
@@ -436,7 +437,9 @@ so a stale copy is named as stale. It only
 reads. Every package of the registry is admitted, once, by its directory, with or
 without the navigation files (Workflow #411 A25): a package a root file names first for its
 part, every other package of the registry after them. Its answer is `{status: "checked", root,
-game, root_files, pack_count, warnings}`, given only once every package of the registry was
+game, root_files, pack_count, warnings}`, and (Workflow #444 NOTICES-3) `notices` `{files,
+bytes}` when the root holds `notices/`, whose files it checks by the notices rules ("Notices"
+below; `notices` never joins `root_files`), given only once every package of the registry was
 admitted; `pack_count` is the registry's length, and `warnings` is the report (empty when there
 is nothing to report; its entry-page entries need `pages.json`). A root without any root file is
 `standard_pack_root_invalid` `bundle_missing`; a `bundle.json` whose `packs` lists no pack is
@@ -1011,9 +1014,32 @@ data files beside its package directories, one directory per game below the conf
   `unchanged`, and sets it aside as `notices.old-<ms>` (`retire`) when the game root holds one and
   the zip carries none (unless a pack of the bundle is named like it); `undo` puts back what was
   there. An installer before NOTICES-2 refuses a zip that carries the directory at its layout
-  check, as any unknown member (`pack_invalid` naming the member). **Still to come with
-  NOTICES-3:** `package bundle --notices`, `standard-pack check` and `resource verify`; until
-  then no program lays the directory, and `standard-pack check` ignores a placed one.
+  check, as any unknown member (`pack_invalid` naming the member). **The Tools read it from
+  NOTICES-3** (since 0.12.58; `v012-register.md` §1.336). `package bundle --notices <directory>`
+  lists the directory (each file's path below it with its length on disk) before it creates
+  anything, where the root files are checked, and holds the listing, the packs of the bundle it
+  builds and each file, read through its bound plus one byte, to the rules; a link below it, or
+  an entry that is neither a file nor a directory, is refused as the pack loader refuses one in a
+  pack directory (`package_invalid`, `content_directory_link_or_type`), and a path that names no
+  directory, or a directory that holds no file, as a `--loading` that names no file
+  (`validation_failed`). A broken rule is `standard_pack_root_invalid` as above, `path` the file in
+  the source directory (the directory for the count and the total, the pack's source directory
+  with `package_id` for a pack named like it), and nothing is written, neither `--out` nor its
+  `.part`; then it lays every file byte for byte into `<out>/notices/<path>` (no line end,
+  byte-order mark or case of a name changed). It writes no `interfaces.json` and lists nothing in
+  `bundle.json`; without the flag its output is what it was. `actinglab standard-pack check`
+  checks a game root's `notices/` by the same rules, right after the root files, when no package
+  of its `bundle.json` is named `notices` in any ASCII case (such a folder is that pack's, as
+  `place` treats it, and is checked as the pack it is), refuses a broken rule naming the file
+  below the game root, and answers `notices` `{files, bytes}`; a root without the directory
+  answers as before, and what `place` leaves beside it (`notices.old-<ms>`,
+  `notices.rolledback-<ms>`, a `.part`) is not looked at. `actinglab resource verify`'s `bundle`
+  step passes a repository root's `notices/` as `--notices`, declares `package` [10, 10] in the
+  zip's `interfaces.json` (the contract crate's `NOTICES_PACKAGE_REVISION`; [3, 3] without it),
+  zips it with the rest, lays it into the installed copy and requires the check of that copy to
+  count it ([resource-verify.md](resource-verify.md)). The coordinator's placement kit and the
+  resource repositories' packer do not know the directory yet; until they do, no bundle that
+  carries it is released.
 - **One check, three readers.** The contract crate's checks (`parse_standard_pack_pages`,
   `parse_standard_pack_interrupts`, `parse_standard_pack_navigation`, (Workflow #392 DA-4)
   `parse_standard_pack_display_layout`,

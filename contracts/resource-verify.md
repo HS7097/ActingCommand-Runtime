@@ -22,6 +22,9 @@ actinglab [--json] resource verify --repo <checkout> --source-repository <owner>
     as `--loading` with the templates of its `loading/` directory, when present; the bundle's
     root then holds the `loading/` directory too, and the installed root holds it beside
     `loading.json`;
+  - (Workflow #444 NOTICES-3) the notices directory `notices/`, the package author's notice
+    texts, given as `--notices` when present; the bundle's root, the zip and the installed root
+    then hold it too, and the zip's `interfaces.json` declares `package` [10, 10];
   - `packs/<package_id>/`, the bundle index v4 `path` form;
   - `declaration-exclusions.json`;
   - `regression/`, the regression cases (their checks arrive with Workflow #411 RV-2a).
@@ -112,20 +115,22 @@ actinglab [--json] resource verify --repo <checkout> --source-repository <owner>
 | `pins` | the rule of the resource repositories' `resource-declarations.yml:67-101`, typed: every file `git ls-files -z -- 'packs/*.json' '*procedure-manifest*.json'` lists carries no member named `package_digest`, and a file under `packs/` no member named exactly `sha256`, at any depth; every member is visited, a duplicated member each time; a BOM is accepted. Each hit is one `resource_verify_pin_committed` (`path`, `json_pointer` per RFC 6901, `member`); a file that is not UTF-8 JSON is `resource_declaration_invalid` naming it. The Runtime names a package by its path and ignores these keys until PKG-S1b refuses them again ([selection-graph.md](selection-graph.md), the select step's `policy`). | new; a JSON walk | identical rule |
 | `admission` | the layout of `packs/` (`bundle.ps1:221-234`): pack directories and `packs/README.md` only, `applications.json`, `maintenance.json` and `packs/` present; for **every** pack: admitted as `package preflight` admits it, its `package_id` the directory name, its game `applications.json`'s and its server declared there. Every refused pack is listed: `package_invalid` (caused by the admission's own code) or `resource_verify_layout_invalid` for the layout and identity rules. | `package_cli::preflight_admission` (`contained_resources::load` + `PreparedContainedTask::from_bundle`) | superset of CI's touched-pack load; equal to `bundle.ps1:259-289`, but lists every refused pack |
 | `format` | `package fmt --check` of every pack directory: one `package_fmt_check_failed` per pack with unformatted files, with `path` and `unformatted` | `package_tool::canonical_changes` | identical |
-| `bundle` | `bundle.ps1:189-465` with the root files and the installed root, under `--work`: `packs-root/` (the pack directories staged), `bundle/` (`package bundle` with `applications.json`, `maintenance.json`, the source and the root files present), the index and copy checks (`resource_verify_bundle_mismatch`), `out/<game>-resources-<sha7>.zip` (entries in ordinal order, `/`-separated, with `interfaces.json` `{schema_version actingcommand.component-interfaces.v1, speaks {package [3, 3]}, validated_with {repository HS7097/ActingCommand-Runtime, commit <runtime_head>}}` beside `bundle.json`, LF-terminated) and `out/SHA256SUMS` (`<hex>  <name>\n`), `read-back/<game>/` (the same entries and bytes, and `interfaces.json` as written: `resource_verify_readback_mismatch`), `installed/<game>/` (the root files beside `bundle.json`, each `packs/<id>/` as `<id>/`) checked by `standard-pack check` (its `root_files` must be `bundle.json` and the root files given; its warnings `package_bundle_entry_page_unlisted`, `package_bundle_interrupt_page_shadowed` (since 0.12.28) and `package_bundle_remedy_invalid` are carried), and every read-back pack admitted again, stating the indexed `package_id`, server and entry task. | `actingcommand_resource_tooling::package_bundle`, `check_standard_pack_root`, `package_cli::preflight_admission`, `zip` | for a release script that checked the zip layout, it replaces that check by the installed root the Runtime's registry reads |
+| `bundle` | `bundle.ps1:189-465` with the root files and the installed root, under `--work`: `packs-root/` (the pack directories staged), `bundle/` (`package bundle` with `applications.json`, `maintenance.json`, the source and the root files present, and (Workflow #444 NOTICES-3) the repository root's `notices/` as `--notices` when it holds one, found as the root files are), the index and copy checks (`resource_verify_bundle_mismatch`), `out/<game>-resources-<sha7>.zip` (entries in ordinal order, `/`-separated, the `notices/` files among them, with `interfaces.json` `{schema_version actingcommand.component-interfaces.v1, speaks {package [3, 3]}, validated_with {repository HS7097/ActingCommand-Runtime, commit <runtime_head>}}` beside `bundle.json`, LF-terminated; `package` [10, 10], the contract crate's `NOTICES_PACKAGE_REVISION`, when the bundle carries `notices/`) and `out/SHA256SUMS` (`<hex>  <name>\n`), `read-back/<game>/` (the same entries and bytes, and `interfaces.json` as written: `resource_verify_readback_mismatch`), `installed/<game>/` (the root files beside `bundle.json`, the `notices/` files in `notices/`, each `packs/<id>/` as `<id>/`) checked by `standard-pack check` (its `root_files` must be `bundle.json` and the root files given, and its `notices` the count and bytes of the zip's `notices/` files, absent without them; its warnings `package_bundle_entry_page_unlisted`, `package_bundle_interrupt_page_shadowed` (since 0.12.28) and `package_bundle_remedy_invalid` are carried), and every read-back pack admitted again, stating the indexed `package_id`, server and entry task. Without `notices/` every byte the step writes is what it wrote before NOTICES-3. | `actingcommand_resource_tooling::package_bundle`, `check_standard_pack_root`, `package_cli::preflight_admission`, `zip` | for a release script that checked the zip layout, it replaces that check by the installed root the Runtime's registry reads |
 
 The index and copy checks (`resource_verify_bundle_mismatch`, its `bundle_problem`):
 `index_schema` (bundle.json is no bundle v4 index); `maintenance_differs` (the maintenance read
 back, from the answer and from `bundle.json`, differs from `maintenance.json`, order of members
 aside); `root_file_differs` (the bundle root holds other entries than `applications.json`,
-`bundle.json`, `packs` and the root files given, or a root file differs from its source);
+`bundle.json`, `packs`, the root files given and (Workflow #444 NOTICES-3) `notices` when the
+repository holds it, or a root file differs from its source);
 `applications_differs` (the bundled `applications.json` bytes, the index's game, or a game that is
 no directory name); `source_differs`; `pack_list_differs` (the indexed packs are not the pack
 directories, or a pack's path, server or entry task differs from its source); `pack_copy_differs`
 (a copy is not its source, file for file and byte for byte); `pack_counts_differ` (`file_count`
 or `byte_count`); `default_package_unmatched` (a server's `default_package_id` names not exactly
 one bundled pack of that server); `root_files_unread` (`standard-pack check` of the installed
-root read other root files, another number of packs or another game). A pack is copied only as
+root read other root files, another number of packs or another game, or (Workflow #444
+NOTICES-3) counted other notices files or bytes than the zip carries). A pack is copied only as
 `control.json` and `resources/`, so any other file in a pack directory is a `pack_copy_differs`.
 
 Each step's failures are outcome envelopes, either existing codes or the codes below. A failure
@@ -189,7 +194,7 @@ carries `step` where its code declares the key.
   | pins | `files` |
   | admission | `packs`, `admitted` |
   | format | `packs`, `json_files`, `unformatted` (files) |
-  | bundle | `packs`, `files` and `bytes` (the indexed packs' `file_count` and `byte_count`), `zip {name, sha256, entries}` (`null` when no zip was written), `root_files`, `package_revision` |
+  | bundle | `packs`, `files` and `bytes` (the indexed packs' `file_count` and `byte_count`), `zip {name, sha256, entries}` (`null` when no zip was written), `root_files`, `package_revision` (3, or (Workflow #444 NOTICES-3) 10 when the bundle carries `notices/`) |
 
 - **No prose.** Messages appear only on the CLI's human line and in developer lines on stderr.
   Failures and warnings are outcome envelopes with typed values. Paths are absolute and native for

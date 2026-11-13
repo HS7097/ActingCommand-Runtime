@@ -18495,6 +18495,134 @@ directory, refused at the later path, in either order of case; one directory twi
 beside a directory of its name in another case still the earlier rule's), and the architecture
 pin `the_runtime_declares_each_v0120_interface_revision_once` holds `package` [3, 10].
 
+### 1.336 Slice NOTICES-3 (0.12.58): the Tools lay and check a bundle's notices directory (`package bundle --notices`, `standard-pack check`, `resource verify`) (Workflow #444; the design note `rd-1113/design-notices-in-archive.md`, read on main `29a65e2d`, design (a) with every recommended answer of its section 8 adopted by the coordinator's rulings of 11-13 on board #444, not the owner's words; coordinator work order `rd-1113/brief-444-notices-3.md`, read on the head `6df7d87d` of NOTICES-2's branch)
+
+1.336 is the coordinator's number. [package-reference.md](package-reference.md), "Notices" (the
+readers), the layout of `package bundle` and the answer of `standard-pack check`,
+[resource-verify.md](resource-verify.md) (the `bundle` step, its index checks and its counts) and
+the rows `package bundle` and `standard-pack check` of `lab-operations.json` are the contract. Added:
+one flag (`package bundle --notices <directory>`), one member of `standard-pack check`'s answer
+(`notices`), one parameter of the operation table's row `package bundle`, and one public constant of
+the contract crate. No outcome code, value key, vocabulary word, configuration key, interface
+revision, persisted shape, wire shape or record is added. After this slice nothing of the design's
+Runtime side is left: the coordinator's placement kit and the resource repositories' packer (the
+design's slices 4 and 5) are what remains.
+
+**The rules are the contract crate's** (§1.334): the Tools call `check_notice_listing`,
+`check_notice_pack_ids`, `check_notice_size` and `check_notice_text` as `place` does (§1.335) and
+state none of them. One module of the Tools crate, `crates/resource-tooling/src/notices_directory.rs`,
+reads a directory on disk for both commands: it lists every file below it with its `/`-separated
+path and its length on disk; a link below it (a symbolic link, a junction or any other reparse
+point), or an entry that is neither a file nor a directory, is refused as the pack loader refuses
+one in a pack directory (`package_invalid`, the loader's `content_directory_link_or_type`, naming
+the entry; a link at the directory itself is followed, as the loader resolves a locator). Then the
+listing goes through the set rule, the bundle's packs through the pack rule, and each file, read
+through its bound plus one byte (2,097,153), through the size and text rules. A broken rule is
+answered as a root file's problem is (`standard_pack_check::root_invalid`):
+`standard_pack_root_invalid` itself, with `game`, `standard_pack_problem` the rule's word, `path` the
+file on disk (the directory itself for the count and the total), `json_pointer` empty, and the bound
+with the value found on `limit_count` / `count` or `limit_bytes` / `actual_bytes`.
+
+**`package bundle --notices <directory>`** (`crates/resource-tooling/src/package_directory.rs`; the
+request's `StandardPackRootFiles.notices`; the CLI's read list `package_build::BUNDLE_READS`):
+
+- Before anything is created, after the root files and the loading copies are checked: a path that
+  names no directory, and a directory that holds no file, are refused as a `--loading` that names no
+  file is (`validation_failed`, naming the path); then the directory is held to the rules, its pack
+  rule over the `package_id`s the packs' `control.json` declare (`package_loading::named_packs`, the
+  reading `stale_copies` uses before anything is written). A pack named like the directory, in any
+  ASCII case, is `notice_name` with its `package_id`, `path` the pack's source directory (the
+  bundle's `bundle.json` is not written yet). A refusal leaves neither `--out` nor `<out>.part`.
+- Then, after the other root files and `loading/`, every file is laid byte for byte into
+  `<out>/notices/<path>`: no line end, byte-order mark or case of a name is changed. `bundle.json`
+  lists nothing of it and no `interfaces.json` is written.
+- Without the flag the output is byte for byte what it was: the module is not called.
+
+**`standard-pack check --root <game root>`** (`crates/resource-tooling/src/standard_pack_check.rs`):
+right after the root files and the registry are read, and before the loading copies and the
+cross-check, a directory `notices` in the game root is held to the same rules, unless the root's
+`bundle.json` lists a package named `notices` in any ASCII case (such a folder is that pack's, as
+`place` treats it, and is admitted as the pack it is). A broken rule fails the check with `path` the
+file below the game root. The answer gains `notices` `{files, bytes}` (the count of the files and
+the sum of their lengths; an empty directory counts `{0, 0}`) when it checked a directory, and has no
+such member otherwise; `notices` never joins `root_files`, and no name of a file and nothing of a text
+is echoed. A root without the directory answers byte for byte what it answered. Entries beside it
+that `place` leaves (`notices.old-<ms>`, `notices.rolledback-<ms>`, `notices.new-<ms>.part`) are not
+looked at. `place`'s `post_check` runs this check on the placed root, so from this release it checks
+a placed directory by the rules (§1.335 said the check ignored it).
+
+**`resource verify`, the `bundle` step** (`apps/actinglab/src/resource_verify/bundle.rs`): when the
+repository root holds a directory `notices` (found as the root files are, by `symlink_metadata`), the
+step passes it to `package bundle` as `--notices`, so it is laid by the code above; expects `notices`
+among the bundle root's entries (`root_file_differs` otherwise); writes `interfaces.json` declaring
+`package` [10, 10] and counts `package_revision` 10; zips the directory with the rest; lays its files
+into `installed/<game>/notices/`; and requires `standard-pack check` of that copy to answer `notices`
+with the count and the bytes of the zip's `notices/` entries (`root_files_unread` otherwise). Without
+the directory every byte it writes is what it wrote: [3, 3], `package_revision` 3, no `notices/`
+entry, and the check's member absent on both sides.
+
+**The constant.** `NOTICES_PACKAGE_REVISION` (10), which NOTICES-2 left private in
+`crates/lab-rescue/src/install/place.rs`, is now the contract crate's public constant
+(`standard_pack_notices.rs`); `place` (`notice_undeclared`) and `resource verify` (the revision it
+declares) read it from there. That is this slice's one change in `crates/lab-rescue`; no rule of the
+module changes.
+
+**Both entries** (board #434: what the Lab does is reachable through the CLI and through the MCP
+server alike). The row `package bundle` gains `{"name": "notices", "form": "option", "type": "dir",
+"required": false}`; the row `standard-pack check`'s `output` names the notices directory's count and
+bytes. The CLI reads `--notices` from its read list; the MCP server's tool is generated from the row
+(one input property per parameter) and its call goes to a `serve` child, which writes the row's
+options as flags (`engine::arguments`), so `notices` reaches `--notices` with no change to the MCP
+server. The pin `gate_434_lab5b3::lenient_rows_match_their_reads` holds the row and the read list
+equal in both directions with the new parameter.
+
+**Interfaces.** None raised. `package` stays [3, 10] (NOTICES-2): the Tools' packer mirror writes 10
+only for a bundle that carries the directory. `standard-pack check`'s answer gains an optional member
+only for a root that holds the directory (`place`'s `post_check` reads the check's exit code alone).
+
+**At deploy.** The Tools gain `package bundle --notices` and the `notices` member of `standard-pack
+check`; nothing changes for a root or a repository without the directory. No bundle that carries it
+is released before the coordinator's placement kit and the resource repositories' packer are changed
+(design §4, §5; slices 4 and 5). **Rollback** to Tools before 0.12.58: `package bundle` refuses the
+unknown flag, and `standard-pack check` ignores a placed directory again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NT3-1 | `package bundle --notices <directory>`; `StandardPackRootFiles.notices` | Tools flag, request member | NOTICES-3 | — | checked before anything is written; laid byte for byte into `notices/`; no `interfaces.json` |
+| NT3-2 | `standard-pack check`'s answer + optional `notices` `{files, bytes}` (`StandardPackNotices`) | Tools answer member | NOTICES-3 | — | absent without the directory and beside a pack named like it; never in `root_files` |
+| NT3-3 | `resource verify` `bundle` step: `--notices`, `package` [10, 10], the installed `notices/`, the check's member | Tools behaviour | NOTICES-3 | — | without the directory every byte as before |
+| NT3-4 | `NOTICES_PACKAGE_REVISION` in `actingcommand_contract` | contract constant (no shape) | NOTICES-3 | — | read by `place` and `resource verify` |
+| NT3-5 | `lab-operations.json`: `package bundle` + `notices`; `standard-pack check`'s `output` | operation table | NOTICES-3 | — | CLI and MCP serve the row as it is |
+
+Tests (exec gate row "#444 NOTICES-3", placeholder names, a notice file `NOTICE.md`):
+`crates/resource-tooling/src/gate_444_notices3.rs`:
+`notices3_package_bundle_lays_the_directory_byte_for_byte` (three files, one with a byte-order mark
+and CRLF, two in a subdirectory, one name in mixed case, laid byte for byte under their names and
+nothing else; without the flag the output's root is `applications.json`, `bundle.json` and `packs`,
+with it `notices` too and every other file and the index the same),
+`notices3_package_bundle_refuses_each_broken_rule_and_creates_nothing` (a refused suffix, a file of
+2,097,153 bytes, 65 files, 8 MiB and one byte, a control character, each with its word, file or
+directory, empty pointer and bound; a pack `Notices` at its source directory with `package_id`; no
+`--out` and no `.part`), `notices3_package_bundle_refuses_no_directory_and_an_empty_one` (a path that
+does not exist, a file, a directory holding only an empty directory: `validation_failed`, nothing
+created), `notices3_check_counts_the_directory_and_has_no_member_without_it` (no member and no key
+without it; `{files: 2, bytes}` with it, `root_files` still `bundle.json`, and three broken folders
+beside it not looked at), `notices3_check_refuses_a_broken_rule_naming_the_file` (a control character
+in `notices/texts/NOTICE.md` and an empty `notices/NOTICE.md`, at the file below the game root, the
+second with the bound 1 and 0) and `notices3_check_leaves_the_folder_of_a_pack_named_like_it` (packs
+`notices` and `NOTICES`: checked, both packs admitted, no warning, no member);
+`apps/actinglab/src/tests/gate_rv1.rs`: `notices3_the_bundle_step_carries_a_notices_directory` (a
+repository without `notices/`: 9 zip entries, none below `notices/`, [3, 3], no installed directory,
+no member; with it committed: 11 entries carrying the files byte for byte, [10, 10],
+`package_revision` 10, the installed files, the check's `{files: 2, bytes}`; the step passes both
+times). Not tested, and why: the three case-folding collisions of the set rule (two paths equal under
+ASCII case folding, a file and a directory of one name, one directory's name in two cases) cannot be
+laid on the file system the CI's Windows runners test on, which holds one entry per folded name; the
+contract gate row "#444 NOTICES-1" holds them. A link: no existing test of the pack loader's link
+refusal shows how one is made on the CI's Windows, so none is made here. Adapted, only because the
+answer's struct gained a member: `gate_cov1` and `gate_sched_c1f1` build a `StandardPackCheckResponse`
+literally and set `notices: None`; what they assert does not change.
+
 ### 1.337 Slice RG-STOP (0.12.58): a planned stop is not a failure of the run-recovery grouping (Workflow #429; a real run of 11-13 stopped on request; the coordinator's ruling of 11-13 on board #429, not the owner's words; coordinator work order `rd-1113/brief-429-rg-stop.md`, read on main `ea8ef8ea`)
 
 1.337 is the coordinator's number; another slice of this release appends 1.336.

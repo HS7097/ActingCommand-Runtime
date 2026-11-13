@@ -30,8 +30,10 @@
 //! [`NoticeIssue::package_id`] and states no rule itself.
 //!
 //! The installer's `place` calls them from NOTICES-2 (with the `package` interface's revision
-//! 10; register §1.335), on a zip's member table; NOTICES-3 (`package bundle --notices`,
-//! `standard-pack check`, `resource verify`) is still to come.
+//! 10; register §1.335), on a zip's member table; from NOTICES-3 (register §1.336) `package bundle
+//! --notices` calls them on a source directory, `standard-pack check` on a placed game root and
+//! `resource verify` through `package bundle`, and the packers read the revision a bundle that
+//! carries the directory declares from [`NOTICES_PACKAGE_REVISION`].
 
 use crate::package::safe_source_path;
 use crate::standard_pack::{STANDARD_PACK_BUNDLE_FILE, StandardPackProblem};
@@ -53,6 +55,11 @@ pub const MAX_NOTICE_FILES: usize = 64;
 pub const MAX_NOTICE_FILE_BYTES: u64 = 2_097_152;
 /// The most bytes the directory's files hold together (8 MiB).
 pub const MAX_NOTICE_TOTAL_BYTES: u64 = 8_388_608;
+/// The `package` revision that admits the directory (Workflow #444 NOTICES-2, register §1.335;
+/// moved here by NOTICES-3, §1.336): a bundle that carries it declares a `package` maximum of this
+/// at least (`notice_undeclared`), and its packer declares `package` [10, 10]
+/// (`contracts/package-reference.md`, "Notices", the row "revision").
+pub const NOTICES_PACKAGE_REVISION: u64 = 10;
 
 /// What a broken notices rule concerns.
 #[derive(Debug, Clone, PartialEq, Eq)]
