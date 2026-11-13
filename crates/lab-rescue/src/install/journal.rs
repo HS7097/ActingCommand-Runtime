@@ -377,6 +377,16 @@ impl<'h> Operation<'h> {
         self.host.after_step(&self.journal.operation_id, n)
     }
 
+    /// Workflow #454: records step `n` done with its evidence for the write that ends the
+    /// operation ([`finish`](Self::finish)), not before it: a step whose finding ends the operation
+    /// refused (a failed post-start check) is closed in the same write as the result, so that a
+    /// crash before the end leaves it `started`, for `resume` to run again.
+    pub(crate) fn close_with_end(&mut self, n: usize, evidence: Value) {
+        let step = &mut self.journal.steps[n - 1];
+        step.state = StepState::Done;
+        step.evidence = Some(evidence);
+    }
+
     /// Records step `n` undone (its part abandoned, its change reversed) with its evidence.
     pub(crate) fn undone(&mut self, n: usize, evidence: Option<Value>) -> Result<(), Outcome> {
         let step = &mut self.journal.steps[n - 1];
