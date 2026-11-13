@@ -859,6 +859,17 @@ tests = [
 ]
 incident = ["#429 R-6b1"]
 
+# Workflow #444 NOTICES-1 (0.12.58; register §1.334; brief rd-1113/brief-444-notices-1.md; contracts/package-reference.md, "Notices"): the rules of a bundle's notices directory, stated once in the contract crate (standard_pack_notices), with no reader yet. The directory is notices in exact lower case; the path rule keeps depth 2 and refuses depth 3 (notice_depth with the bound), keeps segments of 64 bytes and refuses 65 and an empty one (notice_name with the bound broken), refuses a first byte that is a dot, a dash or an underscore, a byte outside [A-Za-z0-9._-], a device name and a trailing dot, keeps every accepted suffix in lower and upper case and none, refuses any other, keeps a.tar.md and refuses a.md.html; the set rule keeps 64 files and refuses 65 (notice_count), refuses files of 0 bytes and of 2 MiB plus one and keeps 1 byte and 2 MiB (notice_bytes), keeps a total of 8 MiB and refuses one byte more (notice_total_bytes), refuses two paths equal under ASCII case folding and a file and a directory of one name, and answers the first path in byte order whatever the listing's order; the pack rule refuses a pack notices or Notices beside the directory only; the text rule keeps ASCII, UTF-8 with and without a byte-order mark, CRLF, CR and mixed line ends, TAB and FF, and refuses each of U+0000 to U+0008, U+000B, U+000E to U+001F and U+007F at the start, the middle and the end and every invalid UTF-8 sequence (notice_not_text)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::standard_pack_notices::tests::notices_path_rule_holds_each_bound_at_its_edge",
+    "actingcommand-contract::lib::standard_pack_notices::tests::notices_set_rule_holds_each_bound_at_its_edge",
+    "actingcommand-contract::lib::standard_pack_notices::tests::notices_pack_rule_refuses_a_pack_named_like_the_directory_only_beside_it",
+    "actingcommand-contract::lib::standard_pack_notices::tests::notices_text_rule_accepts_text_and_refuses_the_control_characters",
+]
+incident = ["#444 NOTICES-1"]
+
 # Workflow #434 LAB-6S1a (0.12.58; register §1.287, "Slice LAB-6S1a"; brief rd-1113/brief-lab6s1a.md; contracts/lab-two-entries.md §2.2, §4.1, §4.3; runtime-client 8): BindChannel {channel, via?, initiator?}, ChannelBound {channel, via?, initiator?} and a receipt with its initiator beside channel each round-trip with and without the member, a message of revision 7's shape (no member) decodes as one without it and is written back as it was read, and without it the member is absent from the serialization; ChannelBound naming a word outside the six does not decode. The six initiator words are written once, in the contract crate (Initiator): crates/lab-ops' Initiator, which the recordings and the installation journal write, maps onto the contract's list in its order, writes and serializes the same strings and reads them back
 [[gate]]
 coverage = "Y"
