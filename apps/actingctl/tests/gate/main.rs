@@ -25,6 +25,8 @@ mod flag_refusals;
 mod install_transition;
 // Workflow #434 LAB-5G1b: the operation layer's MCP front connects as `actingctl mcp-serve` does.
 mod lab5g1b_front_mcp;
+// Workflow #434 LAB-6S2-B2: actingctl and `mcp-serve` bind `lab` with their word.
+mod lab6s2b2;
 // Workflow #389 MCP-13a: `ac_app` is an operator tool.
 mod mcp_app;
 // Workflow #410 item 6: `actingctl capability-gap` ↔ `ac_capability_gap`.

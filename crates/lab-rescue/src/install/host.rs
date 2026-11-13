@@ -180,8 +180,9 @@ pub(crate) struct SystemHost {
 }
 
 impl SystemHost {
-    /// The machine, its Runtime reached with `initiator`: the rescue module's word, or none for
-    /// `actingctl install`, which binds the CLI channel as on 0.12.58 until LAB-6S2-B2.
+    /// The machine, its Runtime reached with `initiator`: the rescue module's word, or
+    /// `actingctl install`'s (`Lab-CLI` since Workflow #434 LAB-6S2-B2; none before, the CLI
+    /// channel as on 0.12.58).
     pub(crate) const fn of(initiator: Option<Initiator>) -> Self {
         Self {
             runtime: SystemRuntime::of(initiator),

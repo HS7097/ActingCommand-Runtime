@@ -7,10 +7,10 @@
 // it sends: the configuration facts (`RuntimeFactSnapshot`), the plan and the catalog
 // (`ScheduleExplanation`), an instance's and the global pause (`PauseScheduling`) and resume
 // (`ResumeScheduling`), the formal close (`RequestShutdown`) and the start report
-// (`StartReport`). Without a word, `actingctl install`'s host, it binds the CLI channel as on
-// 0.12.58. Each kind on a connection of its own, which the scripted Runtime (the runtime client's,
-// on loopback in a temporary state root) refuses, so that nothing waits; its status read needs a
-// held owner lock and connects to none here.
+// (`StartReport`). Without a word, `actingctl install`'s host until LAB-6S2-B2 (which gives it
+// `Lab-CLI`), it binds the CLI channel as on 0.12.58. Each kind on a connection of its own, which
+// the scripted Runtime (the runtime client's, on loopback in a temporary state root) refuses, so
+// that nothing waits; its status read needs a held owner lock and connects to none here.
 
 use super::host::{Host, SystemHost};
 use actingcommand_contract::{
@@ -79,7 +79,8 @@ fn send_every_kind(host: &SystemHost, state: &std::path::Path, owner_epoch: &str
 
 #[test]
 fn lab6s2b1_rescue_module_client_binds_lab_with_its_word_and_the_cli_envelope() {
-    // The module's word (a command line's, and the MCP server's), and `actingctl install`'s none.
+    // The module's word (a command line's, and the MCP server's), and `actingctl install`'s none
+    // (until LAB-6S2-B2; no product caller declares none since).
     for (initiator, binding) in [
         (
             Some(Initiator::LabCli),

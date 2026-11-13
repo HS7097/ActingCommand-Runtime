@@ -882,11 +882,19 @@ fn serve(mut stream: TcpStream, owner_epoch: OwnerEpoch, ledger: &Ledger) {
     while let Some(request) = next_request(&mut stream) {
         let result = match request.operation() {
             RuntimeOperation::Health => RuntimeResult::Health { owner_epoch },
-            // Workflow #389 U-2: the handshake's BindChannel.
-            RuntimeOperation::BindChannel { channel, via, .. } => RuntimeResult::ChannelBound {
+            // Workflow #389 U-2: the handshake's BindChannel. Workflow #434 LAB-6S2-B2 (adapted):
+            // its word echoed, as the Runtime echoes it (actingctl and today's MCP server declare
+            // one, whose echo the client requires).
+            RuntimeOperation::BindChannel {
+                channel,
+                via,
+                initiator,
+            } => RuntimeResult::ChannelBound {
                 channel: *channel,
                 via: *via,
-                initiator: None,
+                initiator: initiator
+                    .as_ref()
+                    .and_then(actingcommand_contract::DeclaredInitiator::initiator),
             },
             RuntimeOperation::Status => RuntimeResult::Status {
                 status: RuntimeControlPlaneStatus::new(owner_epoch, ledger.instances.clone())

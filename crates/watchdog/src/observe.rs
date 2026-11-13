@@ -593,7 +593,8 @@ pub fn live_owner(
 /// envelope (Cli, Cli) it sent on 0.12.58 and binds as `lab_ops::front::cli_envelope` says: the
 /// Lab channel with `initiator` (`Lab-看门狗` for actingwatch, the word of the Lab program that
 /// reads the watchdog's status), or, without a word, the CLI channel as on 0.12.58 (actingctl's
-/// `watchdog`, `start`, `restart`, `install` and `overview`, until LAB-6S2-B2).
+/// `watchdog`, `start`, `restart`, `install` and `overview`, until LAB-6S2-B2, since which they
+/// declare actingctl's `Lab-CLI`, and today's MCP server's overview `Lab-MCP`).
 pub fn probe_config(
     state_root: &Path,
     timeout: Option<Duration>,

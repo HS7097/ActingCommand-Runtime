@@ -115,14 +115,16 @@ pub struct System {
 }
 
 /// The machine's seams, with the monotonic clock read from here on; its health probe declares
-/// no word, the CLI channel as on 0.12.58 ([`system_as`]).
+/// no word, the CLI channel as on 0.12.58 ([`system_as`]). Workflow #434 LAB-6S2-B2: the
+/// programs use it only where no probe of the Runtime is made (a status's host probe, the rescue
+/// module's spawn).
 pub fn system() -> System {
     system_as(None)
 }
 
 /// Workflow #434 LAB-6S2-B1: [`system`], its health probe declaring `initiator`: `Lab-看门狗` for
 /// actingwatch's tick, the word of the Lab program that starts the Runtime or reads the
-/// watchdog's status, none for actingctl's (until LAB-6S2-B2).
+/// watchdog's status, `Lab-CLI` for actingctl's (since LAB-6S2-B2; none before).
 pub fn system_as(initiator: Option<Initiator>) -> System {
     System {
         origin: Instant::now(),
