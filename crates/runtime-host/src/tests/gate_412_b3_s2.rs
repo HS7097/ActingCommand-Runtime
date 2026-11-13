@@ -33,10 +33,10 @@ use actingcommand_runtime_client::{
 };
 use serde_json::{Value, json};
 
-const ALIAS: &str = "node.a";
-const PAGE_A: [u8; 3] = [255, 0, 0];
-const PAGE_B: [u8; 3] = [0, 0, 255];
-const OPERATION: &str = "op_a";
+pub(super) const ALIAS: &str = "node.a";
+pub(super) const PAGE_A: [u8; 3] = [255, 0, 0];
+pub(super) const PAGE_B: [u8; 3] = [0, 0, 255];
+pub(super) const OPERATION: &str = "op_a";
 /// The package's task timeout (`control.json` `timeout_ms`), which bounds the receipt wait.
 const TASK_TIMEOUT_MS: u64 = 30_000;
 /// LR-10: the most frames a declared operation's record lists.
@@ -51,7 +51,7 @@ const READY: [u8; 3] = [0, 255, 0];
 /// A neutral package of `width` × `height` frames whose pages `neutral/page_a` and
 /// `neutral/page_b` are told apart by pixel 0, and whose entry task declares `operation`,
 /// written into `root`.
-fn write_package(root: &TempDir, size: (u32, u32), operation: Value) -> PathBuf {
+pub(super) fn write_package(root: &TempDir, size: (u32, u32), operation: Value) -> PathBuf {
     write_task_package(root, size, operation, json!({}))
 }
 
@@ -153,7 +153,7 @@ fn page_b_after(state: &FakeState, inputs: usize) {
 }
 
 /// A host on `root` over `provider`, on a manual Runtime clock.
-fn start(root: &TempDir, provider: FakeProvider) -> RuntimeHost {
+pub(super) fn start(root: &TempDir, provider: FakeProvider) -> RuntimeHost {
     RuntimeHost::start(
         config(root).with_runtime_clock(Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0))),
         Arc::new(provider),
@@ -161,7 +161,7 @@ fn start(root: &TempDir, provider: FakeProvider) -> RuntimeHost {
     .expect("runtime host")
 }
 
-fn lab_client(root: &TempDir) -> RuntimeClient {
+pub(super) fn lab_client(root: &TempDir) -> RuntimeClient {
     RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
         RuntimeChannel::Lab,
@@ -173,7 +173,7 @@ fn lab_client(root: &TempDir) -> RuntimeClient {
 
 /// One Lab operation running `op_a` of `package`, with `seed`, verified by the Lab client (the
 /// shared evidence verifier included).
-fn run_operation(
+pub(super) fn run_operation(
     client: &RuntimeClient,
     package: &Path,
     seed: Option<u64>,

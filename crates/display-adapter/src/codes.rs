@@ -14,7 +14,8 @@ actingcommand_contract::outcome_codes! {
         /// mismatch).
         MapUnresolved => "display_map_unresolved": error / declaration_error,
         /// The geometry changed after a frame was taken and before its input: that step sends
-        /// nothing and the next frame is taken (first emitted by DA-3).
+        /// nothing. Workflow #392 DA-3 emits it: the host sends no input decided on a frame of
+        /// another size than the frame the run's map was built for, and the run ends with it.
         MapStale => "display_map_stale": warning / stability_warning,
     }
 }
@@ -44,8 +45,12 @@ actingcommand_contract::outcome_vocabulary! {
         /// DA-2b. The run ends with no input.
         TranslationUnsupported => "translation_unsupported",
         /// Workflow #392 DA-2a: the map is not the plain identity (a pure scale) and the input
-        /// side does not map boxes to the device frame yet (DA-3): the step sends nothing and the
-        /// run ends.
+        /// side does not map the input to the device frame: the step sends nothing and the run
+        /// ends. Workflow #392 DA-3 maps every input under a pure scale whose double is a whole
+        /// number (3/2, 2, 5/2, 3, ...) except a vertical-brake drag, whose brake the contract
+        /// holds at exactly 100 pixels while the map would change it; it refuses every input under
+        /// any other pure scale, where a point on a box's edge can map outside the box's device
+        /// box, and a Lab declared operation's input on a frame of another size than its package.
         InputScaleUnsupported => "input_scale_unsupported",
         /// Workflow #392 DA-2a: the game's declaration measures on the safe area and the frame's
         /// geometry has no insets: a handset that declares no device model (Workflow #392

@@ -6,5 +6,5 @@ by hand. The [summary](README.md) says what each column means. 2 codes.
 
 | Code | Category | Ladder class | Since | Status | Review | Text | Description |
 |---|---|---|---|---|---|---|---|
-| `display_map_stale` | warning | stability_warning | 0.12.15 | active | pending | TBD | The display geometry changed after a frame was taken and before its input (Workflow #392, model 392 v1.2 §6.6): that step sends no input and the next frame is… |
+| `display_map_stale` | warning | stability_warning | 0.12.15 | active | pending | TBD | The display geometry changed after a frame was taken and before its input (Workflow #392, model 392 v1.2 §6.6): that step sends no input. |
 | `display_map_unresolved` | error | declaration_error | 0.12.15 | active | pending | TBD | The display adapter cannot map a frame, a region or an input box of a task package onto the delivered frame (Workflow #392, model 392 v1.2 §9.1);… |

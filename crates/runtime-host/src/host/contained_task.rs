@@ -1692,6 +1692,10 @@ pub(super) struct RuntimeContainedTask<'a> {
     /// when the adapter could not build one (the kernel's frame gate then refuses the frame).
     geometry_basis: Option<actingcommand_display_adapter::DisplayObservation>,
     geometry_map: Option<actingcommand_display_adapter::DisplayMap>,
+    /// Workflow #392 DA-3: the input boxes (base pixels) the step's effect intent drew its points
+    /// in, kept for its input only while the run's map is not the plain identity; the input takes
+    /// them. Under the identity nothing is kept.
+    input_boxes: Option<Vec<actingcommand_display_adapter::Rect>>,
     /// Workflow #392 DA-2a (model 392 v1.2 §4.1): the run's game's display declaration, read in
     /// its preparation and fixed for the run, and the run's package base, which every layer of
     /// the run shares.
@@ -2774,7 +2778,12 @@ impl RuntimeContainedTask<'_> {
         }
     }
 
-    fn require_task_geometry_for_input(&self) -> Result<(), RequestFailure> {
+    /// The input prerequisite. Workflow #392 DA-3: its answer is the run's display map when that
+    /// map maps the input (it is not the plain identity), `None` under the plain identity, whose
+    /// input leaves as the kernel made it.
+    fn require_task_geometry_for_input(
+        &self,
+    ) -> Result<Option<actingcommand_display_adapter::DisplayMap>, RequestFailure> {
         let failure = || {
             task_geometry_request_failure(
                 task_geometry_error(HostCode::ContainedTaskGeometryInputPrerequisiteMissing),
@@ -2792,31 +2801,15 @@ impl RuntimeContainedTask<'_> {
         {
             return Err(failure());
         }
-        // Workflow #392 DA-2a: the input side maps nothing to the device frame before DA-3, so
-        // an input is made only on a frame whose map is the plain identity; under a pure scale the
-        // step sends nothing and the run ends.
+        // Workflow #392 DA-3 (`contracts/display-adapter.md` section 10): the plain identity's
+        // input leaves as the kernel made it (the one check DA-2a made here stays); any other map
+        // maps the input once the prerequisite holds (`device_input`).
         let map = self.geometry_map.as_ref().ok_or_else(failure)?;
-        if !map.is_plain_identity() {
-            return Err(task_geometry_request_failure(
-                RuntimeHostError::request(
-                    actingcommand_display_adapter::DisplayCode::MapUnresolved,
-                    HostLocation::ValidateTaskGeometryInput,
-                    RuntimeErrorCode::BackendOperationFailed,
-                )
-                .with_outcome_values(|outcome| {
-                    outcome
-                        .display_problem(
-                            actingcommand_display_adapter::DisplayProblem::InputScaleUnsupported,
-                        )
-                        .stage(actingcommand_display_adapter::DisplayLocation::InputMap)
-                        .frame_width(map.frame().width())
-                        .frame_height(map.frame().height())
-                        .base_width(map.base().width())
-                        .base_height(map.base().height())
-                }),
-                None,
-            ));
-        }
+        let mapped = if map.is_plain_identity() {
+            None
+        } else {
+            Some(*map)
+        };
         let conclusion = TaskGeometryObservation::assess(frame, current_observation);
         if !matches!(
             (self.execution_provenance, conclusion),
@@ -2847,6 +2840,77 @@ impl RuntimeContainedTask<'_> {
                     ),
                     None,
                 )
+            })?;
+        Ok(mapped)
+    }
+
+    /// Workflow #392 DA-3 (`contracts/display-adapter.md` section 10; model 392 v1.2 §6): the
+    /// run's input under `map`, a map that is not the plain identity, as it leaves for the
+    /// device, at the one place every input of the run leaves (`input`). The input side sends
+    /// under the maps the capture side admits, the identity and a pure scale; any other map is
+    /// refused with the frame gate's token (`admit_input`). An input decided on a frame of
+    /// another size than the one `map` was built for is `display_map_stale` and is not sent
+    /// (`current_for`). Each point then goes to the nearest device pixel and must lie in the device
+    /// frame and in the device box of the input box it was drawn in (the step's effect intent's
+    /// sampling regions, `input_boxes`), else `contained_task_input_out_of_bounds`; lengths scale,
+    /// durations do not. The effect intent keeps the input the package asked for, in base pixels;
+    /// the input intent records what is sent, in device pixels.
+    fn device_input(
+        &mut self,
+        map: &actingcommand_display_adapter::DisplayMap,
+        action: &InputAction,
+        decided: Option<actingcommand_contract::InputFrameReference>,
+    ) -> Result<InputAction, RequestFailure> {
+        use actingcommand_display_adapter::{
+            DisplayCode, DisplayLocation, DisplayMapUnresolved, InputCoordinates, InputMapError,
+        };
+        let boxes = self.input_boxes.take().unwrap_or_default();
+        let unresolved = |refusal: DisplayMapUnresolved| {
+            task_geometry_request_failure(
+                RuntimeHostError::request(
+                    DisplayCode::MapUnresolved,
+                    HostLocation::ValidateTaskGeometryInput,
+                    RuntimeErrorCode::BackendOperationFailed,
+                )
+                .with_outcome_values(|outcome| {
+                    outcome
+                        .display_problem(refusal.problem)
+                        .stage(refusal.stage)
+                        .frame_width(refusal.frame.width())
+                        .frame_height(refusal.frame.height())
+                        .base_width(refusal.base.width())
+                        .base_height(refusal.base.height())
+                }),
+                None,
+            )
+        };
+        map.admit_input(action).map_err(unresolved)?;
+        if let Some(decided) =
+            decided.and_then(|frame| CaptureExtent::new(frame.width, frame.height))
+        {
+            map.current_for(decided).map_err(|_| {
+                task_geometry_request_failure(
+                    RuntimeHostError::request(
+                        DisplayCode::MapStale,
+                        HostLocation::ValidateTaskGeometryInput,
+                        RuntimeErrorCode::BackendOperationFailed,
+                    )
+                    .with_outcome_values(|outcome| outcome.stage(DisplayLocation::InputMap)),
+                    None,
+                )
+            })?;
+        }
+        map.device_input(action, &boxes, InputCoordinates::Display)
+            .map_err(|error| match error {
+                InputMapError::Unresolved(refusal) => unresolved(refusal),
+                InputMapError::OutOfBounds => task_geometry_request_failure(
+                    RuntimeHostError::request(
+                        ExecutionKernelCode::ContainedTaskInputOutOfBounds.code(),
+                        HostLocation::ValidateTaskGeometryInput,
+                        RuntimeErrorCode::BackendOperationFailed,
+                    ),
+                    None,
+                ),
             })
     }
 
@@ -5303,7 +5367,17 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         let result = (|| {
             self.ensure_active()?;
             self.geometry_deadline = Some(self.geometry_operation_deadline()?);
-            self.require_task_geometry_for_input()?;
+            // Workflow #392 DA-3: the one place a run's inputs leave for the device. Under the
+            // plain identity the input leaves as the kernel made it; under any other map it is
+            // mapped to the device frame, or refused before anything is sent.
+            let action = match self.require_task_geometry_for_input()? {
+                None => action,
+                Some(map) => self.device_input(
+                    &map,
+                    &action,
+                    frame.as_ref().map(InputFrameContext::reference),
+                )?,
+            };
             // Workflow #398 RD-5b (model-398 v1.1 §7.2): on a handset, an input long after the
             // last one is preceded by the screen check.
             self.host.device_state_keepalive(
@@ -5942,6 +6016,29 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     action,
                     frame_extent,
                 };
+                // Workflow #392 DA-3: under a map that maps, the step's input keeps the boxes its
+                // points were drawn in (base pixels), so each mapped point is checked against its
+                // own device box; the record keeps them as the package drew them.
+                if self
+                    .geometry_map
+                    .as_ref()
+                    .is_some_and(|map| !map.is_plain_identity())
+                {
+                    self.input_boxes = Some(sampling.as_ref().map_or_else(Vec::new, |sampling| {
+                        sampling
+                            .source_regions()
+                            .iter()
+                            .map(|region| {
+                                actingcommand_display_adapter::Rect::new(
+                                    i64::from(region.x()),
+                                    i64::from(region.y()),
+                                    i64::from(region.width()),
+                                    i64::from(region.height()),
+                                )
+                            })
+                            .collect()
+                    }));
+                }
                 let payload = match sampling {
                     Some(sampling) => {
                         TaskPayloadDraft::semantic_with_sampling(fact, sampling, AuditInput::new())
@@ -8338,6 +8435,7 @@ impl HostShared {
             geometry_current: None,
             geometry_basis: None,
             geometry_map: None,
+            input_boxes: None,
             display_layout: standard_pack.display_layout,
             display_base: {
                 let (width, height) = prepared.resolution();

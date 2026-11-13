@@ -1038,3 +1038,11 @@ test = "actingcommand-runtime-host::lib::tests::gate_agt_1b::agent_wake_test_tak
 ruling = "Workflow #434 LAB-6S1b (contracts/lab-two-entries.md §2.4; the coordinator's work order rd-1113/brief-lab6s1b.md, board #434)"
 reason = "Renamed: its origin half (an agent's and the Lab's test refused, the Lab's invalid_agent_wake_test_origin) went with the gate; its other assertion, that the test is an instruction of no instance, is unchanged."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_agt_1b::agent_wake_test_is_an_instruction_of_no_instance, in the same host.toml row; the test from every client envelope is actingcommand-contract::lib::runtime::gate_434_lab6s1b::lab6s1b_every_family_of_a_deleted_origin_gate_takes_every_client_envelope."
+
+# host.toml, the row of Workflow #392 DA-2a's input under a pure scale, which keeps the renamed test.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_an_input_waits_for_the_input_side_under_a_pure_scale"
+ruling = "Workflow #392 DA-3 (contracts/display-adapter.md section 10; the coordinator's work order of 11-13 on board #392)"
+reason = "The test pinned that the host refuses every input under a pure scale (display_map_unresolved, input_scale_unsupported), which was to hold only until DA-3 (its row said: the input side maps from DA-3). DA-3 maps the input, so the refusal it pinned no longer exists."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_an_input_under_a_pure_scale_leaves_at_its_device_pixel, in the same host.toml row: the same package on the same 1920x1080 device completes, its tap (1, 0) leaving at (2, 0); the refusal that remains for a vertical-brake drag is actingcommand-display-adapter::lib::gate_392_da3::da3_t5_a_vertical_brake_scales_with_the_map_and_waits_for_its_bound."

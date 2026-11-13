@@ -20427,6 +20427,87 @@ new third read. Adapted by fix 2 (the code's rename, nothing else in them): the 
 `apps/actingd` and the first of `crates/lab-rescue` name `actingd_discover_completed` where they
 named `discover_completed`. No other existing test changes.
 
+### 1.347 Slice DA-3 (0.12.59): the display adapter's input side for the identity and the pure scales whose double is a whole number (#392 / #401; model 392 v1.2 §0.2 C2, C4 to C6, §4.6, §4.7, §6, §9, §12.1 row DA-3; the coordinator's work order of 11-13 on board #392, not the owner's words: the maps the capture side admits, the identity and a pure scale; its fix 1 after the independent review, the coordinator's rulings of 11-13, not the owner's words)
+
+[display-adapter.md](display-adapter.md) section 10 is the contract. **No new persisted shape, no
+configuration key, no new code, token or value key, and no interface revision moves**:
+`display_map_stale` (registered by DA-1) is emitted for the first time, and the descriptions of
+`display_map_unresolved`, `display_map_stale`, `contained_task_input_out_of_bounds` and the token
+`input_scale_unsupported` say what the input side now does (the code index is regenerated). Every
+input of a run leaves for the device at one place, the host's input of the run, mapped by the run's
+display map: under a pure scale whose double is a whole number (`den` 1 or 2: 3/2, 2, 5/2, 3, …)
+it is no longer refused; under any other pure scale every input is refused up front. A Lab declared
+operation sends its input only on a frame of its package's size. The effect intent keeps what the
+package asked for in base pixels, the input intent records what is sent in device pixels; no record
+gains a member, and the task evidence pairs the two in one coordinate system. A 1280x720 package on
+a 1280x720 device records and sends byte for byte what it did: under the plain identity nothing is
+mapped, kept or recorded. Gates: the adapter's `gate_392_da3` tests (work order points 2, 4 and 5
+at the pure level; DA3-T1, T5, T6, T7, T10 to T12, T14, T15; fix 1's scale admission), the host's
+`gate_392_da3` tests (a tap, a swipe and a path drag at two and three times the base, the identity;
+fix 1's refused scale, Lab declared operation and task evidence), the forensic leaf's
+`input_pairing` tests and DA-2a's adapted input test. The number 1.342 was provisional for parallel
+slices (1.341 is #454's); the integration train 0.12.59c renumbered it 1.347, after §1.342
+(MAPP-2a), §1.343 (FL-1), §1.344 (REC-ARCH), §1.345 (#453 S5 and S6) and §1.346 (#453 S10).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DA3-1 | the run's input at its one exit (`RuntimeContainedTask::input`, after the input prerequisite) | behaviour (memory only) | DA-3 | — | under the plain identity the input leaves as the kernel made it (the prerequisite's one identity check, DA-2a's, stays); under any other map `DisplayMap::admit_input`, `current_for` and `device_input` (the adapter crate) map it before anything is sent: every point `round_half_up(v · s)` inside the device frame and inside the device box (inward) of the input box it was drawn in (the effect intent's sampling regions), a brake's cross `round_half_up(|d| · s)` with its sign, a path drag's box inward holding every point, durations, holds and slopes kept |
+| DA3-2 | the input side's refusals, all before any input | behaviour | DA-3 | DA-3 | a translation or a cropped frame `display_map_unresolved` (`translation_unsupported`), a turned frame (`orientation_mismatch`), a pure scale whose double is not a whole number, every input whatever its point (`input_scale_unsupported`, fix 1), a vertical-brake drag under a pure scale, the one input kind a scaled device cannot use (`input_scale_unsupported`: its brake is held at exactly 100 pixels by `InputAction` and the device layer), an input box with no device pixel (`collapsed`), a point outside the scale frame (`outside_frame`), each at stage `display_input_map`; a mapped point outside the device frame or its device box `contained_task_input_out_of_bounds`, never clamped (no legal point meets it under the admitted scales); an input whose frame reference names a frame of another size than the one the map was last built for `display_map_stale` (warning, stage `display_input_map`), and the run ends with it; a geometry change after the last frame was taken is not detected (the rotation verification slice) |
+| DA3-3 | `display_map_stale` | outcome code, first emitted | DA-1 | DA-3 | its one registered value `stage`; the model's old and new frame sizes are not registered values and are not written |
+| DA3-4 | DA-2a's DA2a-5 (the input prerequisite's `input_scale_unsupported` for every input under a pure scale) | behaviour removed | DA-2a | — | replaced by DA3-1; the token keeps DA3-2's meanings (a scale whose double is not whole, the vertical brake) and DA3-6's |
+| DA3-5 | `DisplayMap::device_input` with `InputCoordinates::Display` (a cropped frame's offset added) and `DeliveredFrame` (a turned frame's quarter turn undone) | adapter function (pure) | DA-3 | — | built and tested; the host refuses cropped and turned frames until DA-2b, so no run reaches it |
+| DA3-6 | a Lab declared operation's input (`LabOperationRuntime::press`) | behaviour (fix 1) | DA-3 | DA-3 | its runtime reads no game declaration and its frames carry no producer geometry, so it sends the kernel's input only on a frame of its package's size; on any other frame `display_map_unresolved` (`input_scale_unsupported`, stage `display_input_map`, the frame's and the base's sizes) before anything is sent, only that operation failing at its `input` stage |
+| DA3-7 | `actingledger task-evidence`, an input's `source_step` | forensic reading (fix 1) | DA-3 | — | the effect intent's input converted by the product's `admit_input` and `device_input` on the map of the run's last geometry record's base and the effect intent's `frame_extent`, then compared; that record is looked up backwards from the effect intent in the whole snapshot the command reads, not only in the page it reports (fix 2), so a run read in pages pairs as one read whole; under the plain identity byte for byte as before; the forensic leaf depends on the display adapter (a pure crate of the contract alone) |
+| DA3-8 | `Scale::doubled_is_whole` and `DisplayMap::admit_input`'s refusal of the other pure scales | adapter function (fix 1) | DA-3 | — | exactly the scales under which every base point of every base box maps inside its inward device box (`display-adapter.md` section 10, "Points") |
+
+**At deploy.** Nothing changes for an instance at the base's size (every production instance runs
+its packages at 1280x720 on a 1280x720 emulator: the plain identity). An instance whose display has
+the package's aspect ratio at a larger size (for example 1920x1080 or 2560x1440 for a 1280x720
+package) now runs its taps, long presses, swipes, drags with a pause and path drags instead of
+ending `display_map_unresolved` (`input_scale_unsupported`) at its first input; a vertical-brake
+drag there still ends so. The input side serves only the pure scales whose double is a whole
+number (1920x1080 and 2560x1440 for 1280x720, 3/2 and 2), and any other, such as 1600x900 (5/4),
+still ends every run at its first input until the slice that draws the points in the device box.
+A Lab declared operation on such a device ends at its input. Such an instance is to be verified on
+a device before it is used.
+
+Tests. The adapter's `gate_392_da3`:
+`da3_points_land_in_the_device_frame_and_in_their_device_box_at_the_edges` (the last column and row
+and a one-pixel box at 3/2, 2 and 3; a point outside its device box at 4/3 refused, a one-pixel box
+there `collapsed`, a point outside the base `outside_frame`),
+`da3_identity_sends_every_input_as_it_was_made`, `da3_t1_a_box_under_a_translation_lands_by_the_hand_table`,
+`da3_t5_a_vertical_brake_scales_with_the_map_and_waits_for_its_bound`,
+`da3_t6_a_map_of_another_frame_size_is_stale`,
+`da3_t7_a_turned_frame_undoes_its_turn_for_frame_coordinates`,
+`da3_t10_t11_long_presses_swipes_and_braked_drags_keep_their_durations`,
+`da3_t12_a_path_drag_maps_its_box_and_every_point`,
+`da3_t14_a_cropped_frame_adds_its_offset_back_for_display_coordinates`,
+`da3_the_input_side_refuses_every_map_the_capture_side_refuses`. The host's `gate_392_da3`:
+`da3_a_tap_a_swipe_and_a_drag_reach_the_device_at_two_and_three_times_their_base_points` (and the
+identity at once) and `da3_identity_a_1280x720_package_on_a_1280x720_device_records_and_sends_as_before`.
+Adapted: DA-2a's `da2a_an_input_waits_for_the_input_side_under_a_pure_scale`, renamed
+`da2a_an_input_under_a_pure_scale_leaves_at_its_device_pixel` (retired entry in
+`ci/retired-gates.toml`): it pinned the refusal this slice removes.
+
+Fix 1 tests. The adapter's `da3_fix1_the_input_side_sends_under_a_scale_only_when_its_double_is_whole`
+(over an 8x4 base every point of every box admitted and sent inside its inward device box at 1,
+3/2, 2, 5/2, 3, 7/2 and 4, the expected values by hand; at 4/3, 5/4, 8/5 and 9/4 some point its
+box cannot keep; at 5/4 every point refused up front, `input_scale_unsupported`). The host's
+`da3_fix1_a_scale_whose_double_is_not_whole_refuses_the_first_input_up_front` (16x12 on 20x15:
+the run ends `input_scale_unsupported` at `display_input_map` with no input),
+`da3_fix1_a_lab_declared_operation_sends_its_base_point_only_on_a_frame_of_its_package` (16x9 on
+16x9: the device takes the literal tap (1, 0); on 32x18: the operation fails at `input`,
+`input_scale_unsupported`, the device takes nothing) and
+`da3_fix1_the_task_evidence_pairs_every_scaled_input_with_its_effect_intent` (the three inputs
+`linked` at 1, 2 and 3 times the base). The forensic leaf's `input_pairing::tests`:
+`da3_fix1_a_scaled_input_pairs_with_its_effect_intent`,
+`da3_fix1_a_mismatched_input_under_a_scale_is_still_reported`,
+`da3_fix1_under_the_identity_the_pairing_compares_byte_for_byte`. Adapted: the architecture guard
+`forensic_leaf_dependency_boundary_is_narrow_and_production_free` (the leaf's internal
+dependencies gain `actingcommand-display-adapter`, whose only dependency is the contract crate;
+its forbidden closure is unchanged); the helpers of the host's `gate_412_b3_s2` the Lab test
+reuses are visible to their sibling modules, no assertion changed.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

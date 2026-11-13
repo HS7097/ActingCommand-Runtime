@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 mod bindings;
 mod codes;
 mod frames;
+mod input_pairing;
 mod material;
 mod runtime_facts;
 mod signatures;
@@ -987,6 +988,9 @@ fn task_evidence_report(
         || !snapshot.read_complete()
         || snapshot.corrupt_tail().is_some();
     let events = &page.events;
+    // Workflow #392 DA-3 fix 2: the run's geometry record that names its map is looked up in the
+    // whole snapshot, backwards from the effect intent, not only in this page.
+    let display_maps = input_pairing::RunDisplayMaps::new(snapshot.events(), page.after_sequence);
     let mut inputs = Vec::new();
     let mut steps = Vec::new();
     let mut gaps = std::collections::BTreeSet::new();
@@ -1000,6 +1004,9 @@ fn task_evidence_report(
             // (a scan's moves, a multi select's taps), each linked to the frame it was sampled
             // on; an input's intent is the one linked to the input's own `before_frame_id`, so
             // the step's intents are narrowed by that frame before the pairing is judged unique.
+            // Workflow #392 DA-3 fix 1: the effect intent's input (base pixels) and the input's
+            // (device pixels) are compared in the device's, through the product's conversion
+            // under the run's map; under the plain identity byte for byte, as before.
             let source_step = if let Some(step_id) = step_id {
                 task_evidence_relation(
                     event,
@@ -1016,8 +1023,14 @@ fn task_evidence_report(
                     |candidate| {
                         candidate.sequence() < event.sequence()
                             && matches!(candidate.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
-                                if matches!(payload.fact(), TaskSemanticFact::EffectIntent { action, .. }
-                                    if provenance.is_some_and(|value| &value.input_action == action)))
+                            if matches!(payload.fact(), TaskSemanticFact::EffectIntent { action, frame_extent, .. }
+                                if provenance.is_some_and(|value| input_pairing::sent_as_asked(
+                                    &value.input_action,
+                                    action,
+                                    payload.sampling(),
+                                    *frame_extent,
+                                    display_maps.in_effect(candidate),
+                                ))))
                     },
                 )
             } else {
