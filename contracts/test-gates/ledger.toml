@@ -930,3 +930,15 @@ tests = [
     "actingcommand-ledger::lib::global::retention::gate_429_r6b1::r6b1_l2_the_retention_matches_a_stopped_record_with_its_failed_terminal_only",
 ]
 incident = ["#429 R-6b1"]
+
+# Workflow #429 RG-STOP (0.12.58; register §1.337; brief rd-1113/brief-429-rg-stop.md; contracts/global-ledger-query.md, the paragraph on run_recovery): in the run-recovery grouping a record whose outcome code is of the ladder class planned_stop (a stop on request, a pause) is no failure unless a failure kind knows it: it is not listed and causes no gap. On a formal root each page of the run is checked against the in-memory indexes' page of the same records at the same snapshot, the same groups. A run that was only stopped (its reset's input.intent and input.committed, its task.failed terminal, its runtime.failed and its stopped policy.execution_recorded, the last three errors of contained_task_cancelled) has no group, those three records stay errors and rows of the page in the Errors view (T1); an input failure its completion recovered, then a stop: one group, recovered, its evidence the input failure alone (T2); a warning without a recovery relation, then a stop: the group the warning had before the stop, its evidence the warning alone, missing_relation, unknown (T3); a run whose terminal and runtime.failed carry contained_task_deadline_exceeded (budget_or_permission): both listed, neither recovered, missing_relation, unknown, as before (T4); a paused run's terminal and runtime.failed of contained_task_paused are not listed and the run has no group (T5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_429_rg_stop::rg_stop_t1_a_run_that_was_only_stopped_has_no_group",
+    "actingcommand-ledger::lib::global::tests::gate_429_rg_stop::rg_stop_t2_a_recovered_input_failure_then_a_stop_is_recovered_by_the_failure_alone",
+    "actingcommand-ledger::lib::global::tests::gate_429_rg_stop::rg_stop_t3_a_warning_then_a_stop_keeps_the_warnings_group",
+    "actingcommand-ledger::lib::global::tests::gate_429_rg_stop::rg_stop_t4_a_run_failed_with_another_class_keeps_its_group",
+    "actingcommand-ledger::lib::global::tests::gate_429_rg_stop::rg_stop_t5_a_paused_runs_records_are_not_listed",
+]
+incident = ["#429 RG-STOP"]

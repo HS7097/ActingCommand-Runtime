@@ -18495,6 +18495,87 @@ directory, refused at the later path, in either order of case; one directory twi
 beside a directory of its name in another case still the earlier rule's), and the architecture
 pin `the_runtime_declares_each_v0120_interface_revision_once` holds `package` [3, 10].
 
+### 1.337 Slice RG-STOP (0.12.58): a planned stop is not a failure of the run-recovery grouping (Workflow #429; a real run of 11-13 stopped on request; the coordinator's ruling of 11-13 on board #429, not the owner's words; coordinator work order `rd-1113/brief-429-rg-stop.md`, read on main `ea8ef8ea`)
+
+1.337 is the coordinator's number; another slice of this release appends 1.336.
+[global-ledger-query.md](global-ledger-query.md), the paragraph on `run_recovery`, is the
+contract. No persisted shape, wire shape, page or group shape, outcome code, category, vocabulary
+word, configuration key or interface revision changes, and no outcome code fragment, so the index
+is not regenerated.
+
+**What was seen.** A scheduled run was stopped on request (`StopInstanceRun`). In the ledger view
+of that run, the run-recovery group listed the stop's own records as failures without a recovery:
+three positions, each "failed, no recovery seen", with the gap `missing_relation` and the state
+`unknown`. A stop on request is neither a success nor a failure of the run
+([policy-suspension.md](policy-suspension.md), "A stopped run"), and the routine summary counts
+such a run as an interruption, not a failure.
+
+**The cause.** `run_recovery` (`crates/ledger/src/global/projection/views.rs`) took as a failure
+every record of the run's context of severity `warning` or above, or of a failure kind
+(`failure_kind`). A stopped scheduled run writes, linked to the run: the Runtime's reset of the
+device (`input.intent` and `input.committed` of `input.reset`), its terminal `task.failed` with
+`contained_task_cancelled`, the policy driver's `runtime.failed` with the same code
+(`record_scheduled_policy_failure`) and its settlement, `policy.execution_recorded` of the kind
+`stopped`, with the same code. The code's category is `error` and a record's severity is its
+outcome's category, so the last three are errors; none of them has a recovery relation. Those are
+the three positions.
+
+**The rule.** In the grouping, a record whose outcome code is of the ladder class `planned_stop` is
+no failure unless a failure kind knows it: it is not listed and causes no gap. The class is the one
+the outcome catalog this build embeds gives the record's code (`planned_stop` and `ladder_class` in
+`views.rs`, over `outcome::catalog_json` and `parse_ladder_class`), read as the recovery ladder's
+trigger matching reads it (`ladder_class_of`); a code the catalog does not list has no class. The
+rule names no code: today the class holds `contained_task_cancelled` and `contained_task_paused`
+(a pause's drain, a player hold's drain).
+
+**What stays.** A record a failure kind knows (`input.failed`, `recognition.failed`, a failed entry
+recovery) is a failure whatever its code; any other record of severity `warning` or above stays a
+failure. A run whose context then holds no failure, read completely and within the context bound,
+has no group, as a run without failures had none; a context cut by the bound or the read's budget,
+or an incomplete source, still has its group with its gap. A stop whose reset failed keeps the
+reset's `input.failed` and the fence's records, of their own codes, in the group, and a cleanup
+refusal recorded beside a stop keeps its own code: those are failures a person must see. The
+records' severity, the codes' categories, `failure_kind`, `success_kind`, the page's rows, their
+views, the cursor, the read scope and the shapes of the page and of the group do not change.
+
+**The paths.** `run_recovery` has one caller, `project_selected`, the one projection of a view
+page, which every reader of a page goes through: the in-memory indexes
+(`EventIndexes::project_view_page`: the Segment store, and an offline snapshot without an SQLite
+root through `GlobalLedgerMetadata::project_view_page`), the SQLite store's view reader
+(`ViewReader::read_view_page`: the Runtime's writer and its reader pool) and the bounded offline
+snapshot on an SQLite root (`sqlite/offline.rs`, the same view reader). The host's `QueryEvents`
+(`read_events.rs`), `ledger-forensics`' `query_view_page` and the clients that show the groups read
+those pages. No other code derives a group or repeats the rule: `lab-ops`' diagnose groups errors by
+code, which is not this grouping, and the run listing, the run status and diagnose ask for their
+pages without run recovery (#422 QR-2, QR-2b).
+
+**At deploy.** A run that was stopped or paused no longer shows a run-recovery group for the stop's
+own records; a run with other failures shows them as before, without the stop's records. Nothing
+else of a page changes. Nothing is persisted: a rollback brings the earlier grouping back.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RGS-1 | `run_recovery`: a record whose outcome code is of the ladder class `planned_stop` is no failure of the grouping unless a failure kind knows it | read rule (no shape change) | RG-STOP | — | `since` 0.12.58; groups only; the class read from the embedded catalog |
+| RGS-2 | [global-ledger-query.md](global-ledger-query.md), the paragraph on `run_recovery` | contract text | RG-STOP | — | what a failure of the grouping is, a run without one has no group, and the rule |
+
+Tests (ledger gate row "#429 RG-STOP"), in `crates/ledger/src/global/tests/gate_429_rg_stop.rs` on
+a formal root, each page of the run checked against the in-memory indexes' page of the same records
+at the same snapshot (the same groups): `rg_stop_t1_a_run_that_was_only_stopped_has_no_group` (the
+stop's records above: no group; its three records stay errors, rows of the page in the Errors view),
+`rg_stop_t2_a_recovered_input_failure_then_a_stop_is_recovered_by_the_failure_alone` (an
+`input.failed` and the `input.completed` of the same action, then the stop: one group, `recovered`,
+its evidence the input failure alone with its success),
+`rg_stop_t3_a_warning_then_a_stop_keeps_the_warnings_group` (a `runtime.failed` of a warning code
+without a recovery relation, then the stop: the group the warning had before the stop, its evidence
+the warning alone, `missing_relation`, `unknown`),
+`rg_stop_t4_a_run_failed_with_another_class_keeps_its_group` (a terminal and a `runtime.failed` of
+`contained_task_deadline_exceeded`, class `budget_or_permission`: both listed, neither recovered,
+`missing_relation`, `unknown`, as before; no existing ledger test pinned a run ended by a failure
+code: `store_contract`'s query test pins a run's `command.rejected` error without an outcome code,
+listed and `unknown`, and `gate_pkg_s2` an entry recovery) and
+`rg_stop_t5_a_paused_runs_records_are_not_listed` (a terminal and a `runtime.failed` of
+`contained_task_paused`: errors, not listed, no group). No existing test changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
