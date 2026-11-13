@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #437 ORD-1 (register §1.348; the owner's rulings on board #437 as the coordinator
+// Workflow #437 ORD-1 (register §1.350; the owner's rulings on board #437 as the coordinator
 // recorded them, not the owner's words; contracts/scheduling/v2/README.md;
 // contracts/standard-pack-schedule.md, "`requires`"):
 // - ORD-1a: a V2 task may declare `max_queue_wait_ms`, the longest time its candidate may wait in

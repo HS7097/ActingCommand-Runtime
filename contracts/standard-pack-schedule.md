@@ -117,7 +117,7 @@ fact ("A run's consumption read from a fact" below) requires `consumption_fact`,
 refuses a file that writes one while `requires` does not name it, `schedule_invalid` at the first
 such `amount` in file order (for example `/rules/0/consumes/0/amount`).
 
-Workflow #437 ORD-1a (register §1.348, since 0.12.60). A rule that writes `max_queue_wait_ms`, the
+Workflow #437 ORD-1a (register §1.350, since 0.12.60). A rule that writes `max_queue_wait_ms`, the
 longest time its task may wait in its device's queue (a V2 task member that passes through,
 [scheduling/v2/README.md](scheduling/v2/README.md)), requires `queue_wait`, alike: the composer
 refuses a file that writes it while `requires` does not name it, whatever its value,

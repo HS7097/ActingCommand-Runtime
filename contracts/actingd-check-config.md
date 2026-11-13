@@ -385,7 +385,7 @@ The members of `report`:
       ([scheduling/README.md](scheduling/README.md), "A run's consumption read
       from a fact"); a `schedule.json` whose rule writes one requires it, so it
       is composed only by a Runtime that names this row.
-    - `queue_wait` (Workflow #437 ORD-1a, since 0.12.60, register §1.348):
+    - `queue_wait` (Workflow #437 ORD-1a, since 0.12.60, register §1.350):
       always on (`config_subsystem_always_on`). The Runtime reads a task's
       `max_queue_wait_ms`, the longest time a candidate of the task may wait
       in its device's queue while another application of the device is in

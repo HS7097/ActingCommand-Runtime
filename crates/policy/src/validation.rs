@@ -609,7 +609,7 @@ fn validate_fixed_value(
     }
 }
 
-/// Workflow #437 ORD-1a (register §1.348; `contracts/scheduling/v2/README.md`): a task's
+/// Workflow #437 ORD-1a (register §1.350; `contracts/scheduling/v2/README.md`): a task's
 /// `max_queue_wait_ms`. It is a V2 member (a V1 document that names it is refused as an unknown
 /// member); its value lies in `MIN_QUEUE_WAIT_MS..=MAX_QUEUE_WAIT_MS` (`limit_exceeded` at the
 /// member). A value that is no unsigned integer, an explicit `null` included, is refused when the

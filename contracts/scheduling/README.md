@@ -1438,7 +1438,7 @@ package included (register §1.215 UPD-16), meets the game's "client out of date
 
 ## Order within one device (Workflow #437 ORD-1b, since 0.12.60)
 
-Register §1.348; the owner's rulings on board #437 as the coordinator recorded them;
+Register §1.350; the owner's rulings on board #437 as the coordinator recorded them;
 [device-group.md](../device-group.md), "One pick per device per round". It applies only to a device
 whose key the device map names for two or more members, and only when the Runtime passes the
 order's inputs beside the map (`DeviceGroups::with_order`); without them the device's one pick is

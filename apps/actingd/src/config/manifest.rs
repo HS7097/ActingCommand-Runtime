@@ -224,7 +224,7 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
-        // Workflow #437 ORD-1a (register §1.348): this build reads a task's `max_queue_wait_ms`
+        // Workflow #437 ORD-1a (register §1.350): this build reads a task's `max_queue_wait_ms`
         // (the longest time its candidate may wait in its device's queue); a `schedule.json`
         // whose rule writes it requires it, so an older Runtime refuses the file instead of
         // refusing the composed task.

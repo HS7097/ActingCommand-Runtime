@@ -280,7 +280,7 @@ Today an evaluation selects at most one candidate per instance: `selected_instan
 **Ranking across members: the order within one device (ORD-1b, since 0.12.60).** With the
 order's inputs beside the map, the members of one device are ordered as
 [scheduling/README.md](scheduling/README.md), "Order within one device", writes (register
-§1.348; the owner's rulings on board #437):
+§1.350; the owner's rulings on board #437):
 
 - **The limit.** Every task has a longest time it may wait in the queue: its `max_queue_wait_ms`
   ([scheduling/v2/README.md](scheduling/v2/README.md)), else the order's default.

@@ -337,7 +337,7 @@ constant capacity, or a hard line referencing the capacity's own fact) compiles 
 `pool_lines_unspendable` at `hard_line`. A pool without the member serializes, hashes and decides
 exactly as before.
 
-Workflow #437 ORD-1a (since 0.12.60; register §1.348; `../README.md`, "Order within one device"),
+Workflow #437 ORD-1a (since 0.12.60; register §1.350; `../README.md`, "Order within one device"),
 V2 only: a task may carry `max_queue_wait_ms`, an integer in `60000..=86400000`: the longest time,
 in milliseconds, a candidate of the task may wait in its device's queue while another application
 of the device is in front. Only the order within a device group of several

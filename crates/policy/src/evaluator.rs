@@ -55,7 +55,7 @@ mod capped;
 // #428 SCHED-C1f1 (register §1.303): a run's consumption read from a fact, resolved once per
 // evaluation and instance, and read by every reader of a consumption.
 mod consumption;
-// Workflow #437 ORD-1b (register §1.348): the selection among the members of one device.
+// Workflow #437 ORD-1b (register §1.350): the selection among the members of one device.
 mod device_order;
 
 use benefit::KnownBenefit;

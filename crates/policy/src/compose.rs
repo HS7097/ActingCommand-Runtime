@@ -230,7 +230,7 @@ pub const BENEFIT_FIXED_VALUE_MEMBER: &str = "benefit_fixed_value_milli";
 /// written, as the two lines, and which requires [`crate::POOL_TRIGGER_LINE_SUBSYSTEM`].
 pub const POOL_TRIGGER_LINE_MEMBER: &str = "trigger_line";
 
-/// Workflow #437 ORD-1a (register §1.348): the V2 task member of a task's longest queue wait,
+/// Workflow #437 ORD-1a (register §1.350): the V2 task member of a task's longest queue wait,
 /// which a rule writes as any V2 member and the composer passes through, and which requires
 /// [`crate::QUEUE_WAIT_SUBSYSTEM`].
 pub const MAX_QUEUE_WAIT_MEMBER: &str = "max_queue_wait_ms";
@@ -1441,7 +1441,7 @@ fn read_game(
             ),
         ));
     }
-    // Workflow #437 ORD-1a (register §1.348): likewise a rule that writes `max_queue_wait_ms`,
+    // Workflow #437 ORD-1a (register §1.350): likewise a rule that writes `max_queue_wait_ms`,
     // the first in file order, whatever its value (the compiler checks the value).
     if !schedule
         .requires

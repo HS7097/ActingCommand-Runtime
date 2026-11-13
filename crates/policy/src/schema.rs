@@ -418,7 +418,7 @@ pub struct TaskSpec {
         deserialize_with = "written_bound"
     )]
     pub benefit_fixed_value_milli: Option<i64>,
-    /// Workflow #437 ORD-1a (register §1.348, `actingcommand.scheduling.v2` only): the longest
+    /// Workflow #437 ORD-1a (register §1.350, `actingcommand.scheduling.v2` only): the longest
     /// time, in milliseconds, a candidate of the task may wait in its device's queue while another
     /// application of the device is in front (`contracts/scheduling/v2/README.md`). Only the order
     /// within a device group of several reads it; a task without it takes that order's default.
@@ -1176,7 +1176,7 @@ pub const BENEFIT_FIXED_VALUE_SUBSYSTEM: &str = PolicyCode::BenefitFixedValue.as
 /// does not read it.
 pub const POOL_TRIGGER_LINE_SUBSYSTEM: &str = "pool_trigger_line";
 
-/// Workflow #437 ORD-1a (register §1.348): the configuration-manifest subsystem of a Runtime that
+/// Workflow #437 ORD-1a (register §1.350): the configuration-manifest subsystem of a Runtime that
 /// reads a task's `max_queue_wait_ms`; a `schedule.json` whose rule writes it names it in
 /// `requires`.
 pub const QUEUE_WAIT_SUBSYSTEM: &str = "queue_wait";
