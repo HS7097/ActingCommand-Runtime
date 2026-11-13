@@ -398,6 +398,8 @@ mod gate_429_r8;
 // Workflow #455 T1-R: the `ui` channel takes `ApplyResourceTargets`, and its `expected_version` is
 // compared with the version of the instance's record.
 mod gate_455_t1r;
+// Workflow #455 G-R2a: the goal document's value store, a v3 record written through the host.
+mod gate_455_gr2a;
 // Workflow #429 R-6b1: the readers of a stopped run's record (its projections, the remedy
 // journal and `actingd suspended`).
 mod gate_429_r6b1;

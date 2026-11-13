@@ -16,8 +16,9 @@ use actingcommand_contract::{
     ResourceTargetsRejection, ResourceTargetsRejectionReason,
 };
 use actingcommand_policy::{
-    ResourceTargetsError, StoredResourceTargetPolicy, StoredResourceTargets,
-    active_resource_targets, check_resource_targets, parse_resource_targets, targetable_resources,
+    ComposedResourceTargets, ResourceTargetsError, StoredResourceTargetPolicy,
+    StoredResourceTargets, TargetSetter, active_resource_targets, check_resource_targets,
+    parse_resource_targets, targetable_resources,
 };
 
 const RESOURCE_TARGETS_OPERATION: ContractLocation = ContractLocation::ApplyResourceTargets;
@@ -28,12 +29,20 @@ impl HostShared {
     /// `ApplyResourceTargets`. The clock is sampled before any lock and the document parsed
     /// without one. Phase A takes the policy outcome gate, the policy and the fact write gate
     /// in the order of `project_policy_input_identity`, checks the document against the
-    /// active catalog and the authoritative projection and releases every lock. Phase B
-    /// publishes the record through `publish_facts`, which replays an equal active policy.
-    /// A refused document records nothing and keeps the active policy. Workflow #455 T1-R:
-    /// with `expected_version`, Phase B, in the hold of the fact write gate that writes the
-    /// record, first compares it with the instance's active record's version (its
-    /// `fact.published` sequence, `0` without one); another is refused
+    /// active catalog and the authoritative projection and releases every lock. Phase B, in one
+    /// hold of the fact write gate (Workflow #455 G-R2a), reads the instance's active record,
+    /// composes the record the document writes over it (`CheckedResourceTargets::compose`: a v1
+    /// or v2 document over a record that is not a v3 record exactly as before G-R2a; the v3 rules
+    /// otherwise) and publishes it through `publish_facts_under_gate`, which replays an equal
+    /// active policy. The rows a v3 record takes from this request name the Runtime's clock at the
+    /// request, the channel the request is recorded with and, for a request from the Lab, the
+    /// initiator its connection declared; never anything of the document. Only a v3 document
+    /// needs that channel: on a request that names none it is refused `channel_binding_missing`
+    /// (request-level, nothing appended), and a v1 or v2 document applies as on any request. A
+    /// refused document records nothing and keeps the active policy. Workflow #455 T1-R: with
+    /// `expected_version`,
+    /// Phase B, in the same hold, first compares it with the instance's active record's version
+    /// (its `fact.published` sequence, `0` without one); another is refused
     /// `fact_observation_version_conflict` with `fact_key` and `current_version` and appends
     /// nothing. Without it nothing is compared.
     pub(super) fn apply_resource_targets(
@@ -41,9 +50,15 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         document_json: &str,
         expected_version: Option<u64>,
+        connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
-        self.apply_resource_targets_document(validated, document_json, expected_version)
-            .map_err(planning_request_failure)
+        self.apply_resource_targets_document(
+            validated,
+            document_json,
+            expected_version,
+            connection_id,
+        )
+        .map_err(planning_request_failure)
     }
 
     fn apply_resource_targets_document(
@@ -51,6 +66,7 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         document_json: &str,
         expected_version: Option<u64>,
+        connection_id: ConnectionId,
     ) -> RuntimeHostResult<OperationSuccess> {
         let sample = self.runtime_clock_sample()?;
         let time = EvaluationTime {
@@ -95,81 +111,151 @@ impl HostShared {
                 facts.ledger_position,
             )
         };
+        // Workflow #455 G-R2a: who sets the rows a v3 record takes from this request, as its
+        // receipt names them (the receipt rule of `contracts/lab-two-entries.md` §4.3): the
+        // recorded channel, and the declared initiator only for a request from the Lab. Only a v3
+        // document's rows name it (the coordinator's ruling of 11-14 on #1702): a request without
+        // a channel (the door tags every client request with one) applies a v1 or v2 document as
+        // any other, and its v3 document is refused `channel_binding_missing` below, nothing
+        // appended and the Runtime's health untouched.
+        let initiator = if validated.source() == EventSource::Lab {
+            self.connection_channel(connection_id)?
+                .and_then(|bound| bound.initiator)
+        } else {
+            None
+        };
+        let setter = validated.channel().map(|binding| TargetSetter {
+            set_unix_ms: sample.unix_ms,
+            channel: binding.channel,
+            initiator,
+        });
         let scope = FactScope::Instance {
             instance_id: parsed.instance().to_owned(),
         };
-        let bundle_hash = checked
-            .policy_sha256
-            .strip_prefix("sha256:")
-            .ok_or_else(record_invalid)?
-            .to_owned();
-        let identity = serde_json::to_vec(&(
-            &scope,
-            RESOURCE_TARGETS_FACT_KEY,
-            &checked.policy_sha256,
-            sample.unix_ms,
-        ))
-        .map_err(|_| record_invalid())?;
-        let (expires_at_unix_ms, ttl_policy) = match parsed.valid_until_unix_ms() {
-            Some(valid_until) => (
-                Some(valid_until),
-                Some(FactTtlPolicy {
-                    minimum_ms: MIN_FACT_TTL_MS,
-                    maximum_ms: MAX_FACT_TTL_MS,
-                    source: FactTtlSource::RuntimeDefault,
-                }),
-            ),
-            None => (None, None),
-        };
-        let record = FactRecord {
-            scope,
-            key: RESOURCE_TARGETS_FACT_KEY.to_owned(),
-            content: FactContent::Inline {
-                value: ContractFactValue::RecordList(checked.rows),
-            },
-            observed_at_unix_ms: sample.unix_ms,
-            expires_at_unix_ms,
-            ttl_policy,
-            confidence_milli: 1_000,
-            source_detector: RESOURCE_TARGETS_DETECTOR.to_owned(),
-            source_snapshot_id: format!("snapshot:resource-targets:{:x}", Sha256::digest(identity)),
-            schema_version: RESOURCE_TARGETS_FACT_SCHEMA.to_owned(),
-            resource_bundle_hash: bundle_hash,
-            invalidate_on: Vec::new(),
-        };
-        record.validate().map_err(|_| record_invalid())?;
-        let FactPublication {
-            event_id,
-            sequence,
-            previous_version,
-            replayed,
-        } = self.publish_facts(
-            FactObservation {
-                records: vec![record],
-            },
-            Some(validated),
-            FactPublicationPurpose::ResourceTargets { expected_version },
-        )?;
+        let written: RuntimeHostResult<WrittenTargets> = (|| {
+            let _gate = lock(
+                &self.fact_write_gate,
+                HostLocation::ApplyResourceTargetsFacts,
+            )?;
+            self.synchronize_fact_store_under_gate()?;
+            let stored = lock(&self.facts, HostLocation::ApplyResourceTargetsFacts)?
+                .active_revision(&scope, RESOURCE_TARGETS_FACT_KEY)
+                .and_then(|(record, _, _)| match &record.content {
+                    FactContent::Inline {
+                        value: ContractFactValue::RecordList(rows),
+                    } => Some(rows.clone()),
+                    _ => None,
+                });
+            let composed = checked
+                .compose(stored.as_deref(), setter)
+                .map_err(resource_targets_error)?
+                .ok_or_else(channel_missing)?;
+            let record = policy_record(&scope, &composed, sample.unix_ms)?;
+            let publication = self.publish_facts_under_gate(
+                FactObservation {
+                    records: vec![record],
+                },
+                Some(validated),
+                FactPublicationPurpose::ResourceTargets { expected_version },
+                (validated.source(), validated.actor()),
+            )?;
+            Ok(WrittenTargets {
+                publication,
+                composed,
+            })
+        })();
+        if let Err(error) = &written
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        let WrittenTargets {
+            publication:
+                FactPublication {
+                    event_id,
+                    sequence,
+                    previous_version,
+                    replayed,
+                },
+            composed,
+        } = written?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(TerminalEvent { sequence, event_id }),
             result: RuntimeResult::ResourceTargetsApplied {
                 applied: Box::new(ResourceTargetsApplied {
                     instance_alias: parsed.instance().to_owned(),
-                    policy_sha256: checked.policy_sha256,
+                    policy_sha256: composed.policy_sha256,
                     version: sequence,
                     event_id,
                     previous_version,
                     replayed,
                     checked_catalog_hash,
-                    valid_until_unix_ms: parsed.valid_until_unix_ms(),
+                    valid_until_unix_ms: composed.valid_until_unix_ms,
                     conditions_at_position,
-                    conditions: checked.conditions,
+                    conditions: composed.conditions,
                 }),
             },
             failure_outcome: None,
         })
     }
+}
+
+/// What Phase B wrote: the publication and the record it composed.
+struct WrittenTargets {
+    publication: FactPublication,
+    composed: ComposedResourceTargets,
+}
+
+/// The instance fact that holds `composed`, observed at `observed_at_unix_ms`, the clock of the
+/// request: its rows, its expiry (a v1 or v2 policy's lifetime, with the runtime default TTL
+/// policy; none for a v3 record or a withdrawal) and its identity.
+fn policy_record(
+    scope: &FactScope,
+    composed: &ComposedResourceTargets,
+    observed_at_unix_ms: u64,
+) -> RuntimeHostResult<FactRecord> {
+    let bundle_hash = composed
+        .policy_sha256
+        .strip_prefix("sha256:")
+        .ok_or_else(record_invalid)?
+        .to_owned();
+    let identity = serde_json::to_vec(&(
+        scope,
+        RESOURCE_TARGETS_FACT_KEY,
+        &composed.policy_sha256,
+        observed_at_unix_ms,
+    ))
+    .map_err(|_| record_invalid())?;
+    let (expires_at_unix_ms, ttl_policy) = match composed.expires_at_unix_ms {
+        Some(valid_until) => (
+            Some(valid_until),
+            Some(FactTtlPolicy {
+                minimum_ms: MIN_FACT_TTL_MS,
+                maximum_ms: MAX_FACT_TTL_MS,
+                source: FactTtlSource::RuntimeDefault,
+            }),
+        ),
+        None => (None, None),
+    };
+    let record = FactRecord {
+        scope: scope.clone(),
+        key: RESOURCE_TARGETS_FACT_KEY.to_owned(),
+        content: FactContent::Inline {
+            value: ContractFactValue::RecordList(composed.rows.clone()),
+        },
+        observed_at_unix_ms,
+        expires_at_unix_ms,
+        ttl_policy,
+        confidence_milli: 1_000,
+        source_detector: RESOURCE_TARGETS_DETECTOR.to_owned(),
+        source_snapshot_id: format!("snapshot:resource-targets:{:x}", Sha256::digest(identity)),
+        schema_version: RESOURCE_TARGETS_FACT_SCHEMA.to_owned(),
+        resource_bundle_hash: bundle_hash,
+        invalidate_on: Vec::new(),
+    };
+    record.validate().map_err(|_| record_invalid())?;
+    Ok(record)
 }
 
 const RESOURCE_TARGET_VIEW_OPERATION: ContractLocation = ContractLocation::ResourceTargetView;
@@ -274,7 +360,8 @@ impl HostShared {
                     schema_version: schema_version.to_owned(),
                     version,
                     event_id,
-                    valid_until_unix_ms: Some(valid_until_unix_ms),
+                    // Workflow #455 G-R2a: absent for a v3 record, whose targets carry their own.
+                    valid_until_unix_ms,
                     expired,
                     targets,
                     conditions,
@@ -355,5 +442,18 @@ fn record_invalid() -> RuntimeHostError {
         HostCode::ResourceTargetsRecordInvalid,
         RESOURCE_TARGETS_OPERATION,
         RuntimeErrorCode::RuntimeHalted,
+    )
+}
+
+/// Workflow #455 G-R2a (the coordinator's ruling of 11-14 on #1702): a v3 document's rows name
+/// the channel that set them, and the request names none (the door tags every client request
+/// with its connection's channel). A request-level refusal, Denied `invalid_request` with the host
+/// code `channel_binding_missing` at `apply_resource_targets`: nothing is appended and nothing
+/// latches.
+fn channel_missing() -> RuntimeHostError {
+    RuntimeHostError::request(
+        HostCode::ChannelBindingMissing,
+        RESOURCE_TARGETS_OPERATION,
+        RuntimeErrorCode::InvalidRequest,
     )
 }

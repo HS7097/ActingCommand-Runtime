@@ -110,7 +110,7 @@ impl HostShared {
         .copied())
     }
 
-    fn process_request_at_door(
+    pub(super) fn process_request_at_door(
         &self,
         request: &RuntimeRequest,
         channel: Option<ChannelBinding>,
@@ -736,7 +736,12 @@ impl HostShared {
             RuntimeOperation::ApplyResourceTargets {
                 document_json,
                 expected_version,
-            } => self.apply_resource_targets(validated, document_json, *expected_version),
+            } => self.apply_resource_targets(
+                validated,
+                document_json,
+                *expected_version,
+                connection_id,
+            ),
             RuntimeOperation::ResourceTargetView { instance_alias } => {
                 self.resource_target_view(instance_alias)
             }
