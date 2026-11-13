@@ -228,8 +228,10 @@ naming this file.
 - **Who started it.** The detached run records `Lab-MCP` in its journal, as the rescue rows the
   server serves in its own process do: its start sets the initiator's variable and, beside it, a
   marker only that start sets, without which a Lab process refuses `Lab-MCP`
-  (`contracts/lab-two-entries.md` §4.2). Its requests to a running Runtime go on the command
-  line's channel, as every rescue row's do until LAB-6.
+  (`contracts/lab-two-entries.md` §4.2). Its requests to a running Runtime, as every rescue row's
+  of this server, bind the Lab channel with `Lab-MCP` and keep the command line's envelope (since
+  Workflow #434 LAB-6S2-B1, 0.12.59; on the CLI channel before): none writes a record that names
+  a channel, and their answers name the channel `mcp` where they named `cli`.
 - **Production.** Until LAB-7 a production installation deploys and rolls back through
   `actingctl install` (the coordinator's deploy kit), not through the rescue module and not
   through this server: the module's `deploy` and `rollback` are not used on the production root

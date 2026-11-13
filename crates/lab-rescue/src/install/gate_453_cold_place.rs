@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 (register §1.340; contracts/install-cli.md, "The Lab's rescue module", `place`;
+// Workflow #453 (register §1.341; contracts/install-cli.md, "The Lab's rescue module", `place`;
 // coordinator work order `rd-1113/brief-453-s5s6-cold-place.md`; design note
 // `rd-1113/fresh-root-design.md` §2): the rescue module's `place` on a root whose instances do not
 // bind the bundle's game, and while the Runtime is stopped.

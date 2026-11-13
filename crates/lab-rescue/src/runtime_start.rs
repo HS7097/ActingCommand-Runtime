@@ -39,8 +39,9 @@ use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::watchdog::{self, decide, io_failure, observe, start};
 use actingcommand_contract::outcome::{Category, CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
-    EventActor, EventSource, InstancePauseState, OwnerEpoch, RuntimeReceipt, SchedulingPauseState,
+    InstancePauseState, OwnerEpoch, RuntimeReceipt, SchedulingPauseState,
 };
+use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_lab_ops::shutdown_wait;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde::Serialize;
@@ -79,14 +80,21 @@ pub fn dispatch(arguments: &[OsString]) -> Option<Exit> {
         Ok(parsed) => parsed,
         Err(usage) => return Some(cli_line::failure(&usage, Some(USAGE))),
     };
-    Some(exit_of(run(mode, &parsed)))
+    // Workflow #434 LAB-6S2-B1: actingctl's connections declare no word until LAB-6S2-B2.
+    Some(exit_of(run(mode, &parsed, None)))
 }
 
 /// Workflow #434 LAB-3: `start` or `restart` of the installation at `root`, with `config` (a
 /// single-location root's configuration file) or without it (an A/B root's selection), as
 /// `actingctl start|restart --root <root> [--config <config>]` runs it: the rescue module's `up`
-/// on an A/B root and its `restart`.
-pub(crate) fn run_located(mode: Mode, root: &Path, config: Option<&Path>) -> Exit {
+/// on an A/B root and its `restart`. Workflow #434 LAB-6S2-B1: every connection it makes, the
+/// readiness probe's included, declares `initiator`, the rescue module's word.
+pub(crate) fn run_located(
+    mode: Mode,
+    root: &Path,
+    config: Option<&Path>,
+    initiator: Option<Initiator>,
+) -> Exit {
     exit_of(run(
         mode,
         &Arguments {
@@ -96,7 +104,19 @@ pub(crate) fn run_located(mode: Mode, root: &Path, config: Option<&Path>) -> Exi
             ready_timeout: None,
             wait_idle: Duration::ZERO,
         },
+        initiator,
     ))
+}
+
+/// Workflow #434 LAB-6S2-B1 (`contracts/lab-two-entries.md` §2.4, §4.3): the configuration of
+/// every connection the rescue module's own client makes to the Runtime of `state_root` (its
+/// status, configuration and plan reads, its pauses and resumes, the formal close, the start
+/// report and this module's start and restart). It keeps the CLI's envelope (Cli, Cli), which the
+/// module sent on 0.12.58, and binds the Lab channel with `initiator`, the module's word
+/// (`Lab-CLI`, `Lab-制包`, `Lab-救急` or `Lab-MCP`); without a word, `actingctl install`, `start`
+/// and `restart`, the CLI channel as on 0.12.58, until LAB-6S2-B2 (`lab_ops::front::cli_envelope`).
+pub fn client_config(state_root: &Path, initiator: Option<Initiator>) -> RuntimeClientConfig {
+    actingcommand_lab_ops::front::cli_envelope(state_root, initiator)
 }
 
 /// The line of a start's or a restart's result.
@@ -286,8 +306,13 @@ struct ShutdownReport {
 }
 
 /// The report and its success outcome: `start_runtime_started` or `start_runtime_restarted`,
-/// with the answering owner's `pid`, `owner_epoch` and the start `log`.
-fn run(mode: Mode, arguments: &Arguments) -> Result<(Report, Outcome), Failed> {
+/// with the answering owner's `pid`, `owner_epoch` and the start `log`. Every connection declares
+/// `initiator` ([`client_config`]).
+fn run(
+    mode: Mode,
+    arguments: &Arguments,
+    initiator: Option<Initiator>,
+) -> Result<(Report, Outcome), Failed> {
     let located = Located::resolve(arguments)?;
     // #411 A66: an explicit `--ready-timeout-s` wins; otherwise the start may take the
     // configuration's start window (`watchdog.start_window_ms`), as a watchdog start may.
@@ -300,8 +325,8 @@ fn run(mode: Mode, arguments: &Arguments) -> Result<(Report, Outcome), Failed> {
             .unwrap_or(Duration::from_millis(located.start_window_ms)),
     };
     let report = match mode {
-        Mode::Start => Report::Start(start_runtime(&located, &target)?),
-        Mode::Restart => restart_runtime(&located, &target, arguments.wait_idle)?,
+        Mode::Start => Report::Start(start_runtime(&located, &target, initiator)?),
+        Mode::Restart => restart_runtime(&located, &target, arguments.wait_idle, initiator)?,
     };
     let outcome = match &report {
         Report::Start(start) => started(ActingctlCode::StartRuntimeStarted, start),
@@ -420,17 +445,20 @@ fn same_state_root(requested: &Path, configured: PathBuf) -> Result<PathBuf, Out
 
 /// Step 1: a live Runtime on this state root (its owner lock held) refuses the start with
 /// `start_runtime_already_running` (`path` = the state root; the answering owner's `pid` and
-/// `owner_epoch`, or the client's failure as a `related` link when it does not answer).
-fn refuse_live(state_root: &Path) -> Result<(), Failed> {
+/// `owner_epoch`, or the client's failure as a `related` link when it does not answer). The
+/// probe declares `initiator`.
+fn refuse_live(state_root: &Path, initiator: Option<Initiator>) -> Result<(), Failed> {
     let (lock, _) = observe::owner_journal(state_root)?;
     if lock != decide::OwnerLock::Locked {
         return Ok(());
     }
     let refusal = Outcome::new(ActingctlCode::StartRuntimeAlreadyRunning).path(state_root);
-    Err(Failed::new(match observe::live_owner(state_root, None) {
-        Ok(owner) => refusal.pid(owner.pid).owner_epoch(owner.owner_epoch),
-        Err(failure) => refusal.link(CauseRelation::Related, failure),
-    }))
+    Err(Failed::new(
+        match observe::live_owner(state_root, None, initiator) {
+            Ok(owner) => refusal.pid(owner.pid).owner_epoch(owner.owner_epoch),
+            Err(failure) => refusal.link(CauseRelation::Related, failure),
+        },
+    ))
 }
 
 /// Row 7a as the watchdog decides it (`watchdog/decide.rs`), through its own probe: while
@@ -468,15 +496,19 @@ pub(crate) fn start_refusal_for_test(root: &Path, config: &Path) -> Option<Outco
         Ok(located) => located,
         Err(failed) => return Some(failed.outcome),
     };
-    refuse_live(&located.state_root)
+    refuse_live(&located.state_root, None)
         .and_then(|()| refuse_installer_busy(&located.root).map(drop))
         .err()
         .map(|failed| failed.outcome)
 }
 
-fn start_runtime(located: &Located, target: &start::Target<'_>) -> Result<StartReport, Failed> {
+fn start_runtime(
+    located: &Located,
+    target: &start::Target<'_>,
+    initiator: Option<Initiator>,
+) -> Result<StartReport, Failed> {
     // 1. A live Runtime refuses; nothing has been touched yet.
-    refuse_live(&located.state_root)?;
+    refuse_live(&located.state_root, initiator)?;
     // Row 7a: an installer write refuses too, still before anything is touched.
     let writer = refuse_installer_busy(&located.root)?;
     start::preflight(target)?;
@@ -499,14 +531,14 @@ fn start_runtime(located: &Located, target: &start::Target<'_>) -> Result<StartR
     );
     let run_lock = watchdog::hold_run_lock(&directory, run_lock_wait).map_err(refused)?;
     // A tick that held the lock may have started the Runtime meanwhile.
-    refuse_live(&located.state_root)?;
+    refuse_live(&located.state_root, initiator)?;
     // 3-4. The watchdog's manual start and readiness. The log lies in the root, where the
     // watchdog looks for a FATAL (`contracts/runtime-watchdog.md`, "Starters and logs").
     let spawn_at_unix_ms = observe::unix_ms(SystemTime::now());
     let log = located
         .root_plain
         .join(format!("actingd-{spawn_at_unix_ms}.log"));
-    let attempt = start::start_target(target, &log, spawn_at_unix_ms, false);
+    let attempt = start::start_target(target, &log, spawn_at_unix_ms, false, initiator);
     drop(run_lock);
     drop(writer);
     let owner = attempt
@@ -519,7 +551,8 @@ fn start_runtime(located: &Located, target: &start::Target<'_>) -> Result<StartR
         owner.pid,
         log.display()
     );
-    let client = connect(&located.state_root).map_err(|failed| failed.after(&started))?;
+    let client =
+        connect(&located.state_root, initiator).map_err(|failed| failed.after(&started))?;
     let status = client
         .status()
         .map_err(|error| Failed::runtime(&error).after(&started))?;
@@ -549,12 +582,13 @@ fn restart_runtime(
     located: &Located,
     target: &start::Target<'_>,
     wait_idle: Duration,
+    initiator: Option<Initiator>,
 ) -> Result<Report, Failed> {
     // What the start needs is checked before anything stops: no installer write (row 7a),
     // held off until the restart ends, and the fixed entry and its paths.
     let _writer = refuse_installer_busy(&located.root)?;
     start::preflight(target)?;
-    let client = connect(&located.state_root)?;
+    let client = connect(&located.state_root, initiator)?;
     // 1. Every instance idle: no lease, nothing queued; past `--wait-idle` nothing is stopped
     // (`start_wait_idle_expired` with `timeout_ms` and the busy `aliases`).
     let deadline = Instant::now() + wait_idle;
@@ -590,7 +624,7 @@ fn restart_runtime(
         shutdown_wait::wait_for_shutdown(&located.state_root, &shutdown_target, SHUTDOWN_WAIT)
             .map_err(Failed::from)?;
     // 4. The start.
-    let start = start_runtime(located, target)
+    let start = start_runtime(located, target, initiator)
         .map_err(|failed| failed.after("the Runtime was shut down"))?;
     Ok(Report::Restart {
         shutdown: Box::new(ShutdownReport { receipt, wait }),
@@ -598,14 +632,9 @@ fn restart_runtime(
     })
 }
 
-fn connect(state_root: &Path) -> Result<RuntimeClient, Failed> {
-    RuntimeClient::connect(RuntimeClientConfig::new(
-        state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .map_err(|error| Failed::runtime(&error))
+fn connect(state_root: &Path, initiator: Option<Initiator>) -> Result<RuntimeClient, Failed> {
+    RuntimeClient::connect(client_config(state_root, initiator))
+        .map_err(|error| Failed::runtime(&error))
 }
 
 #[cfg(test)]
