@@ -809,6 +809,10 @@ pub(super) struct FakeRuntime {
     /// Workflow #454: called with the build of the running Runtime at every `StartReport` read,
     /// before it answers (none by default).
     pub(super) on_report: RefCell<Option<ReportHook>>,
+    /// Workflow #454 (register §1.342): by build, the members of the `config.start` fact its
+    /// configuration facts carry, over `{owner_epoch: <the running owner's>}`; a build not listed
+    /// records none (a build before 0.12.59).
+    pub(super) start_fact: RefCell<BTreeMap<String, Value>>,
     /// Workflow #421 INST-5b: every status read of the running Runtime: how many calls `calls`
     /// listed then, and the reason of the global pause it showed.
     pub(super) status_reads: RefCell<Vec<(usize, Option<String>)>>,
@@ -849,6 +853,7 @@ impl FakeRuntime {
             registers_at_start: RefCell::new(Vec::new()),
             drops_at_start: RefCell::new(Vec::new()),
             on_report: RefCell::new(None),
+            start_fact: RefCell::new(BTreeMap::new()),
             status_reads: RefCell::new(Vec::new()),
         }
     }
@@ -1046,9 +1051,23 @@ impl RuntimeLink for FakeRuntime {
         if !self.running.get() {
             return Err(refused());
         }
+        let start = self
+            .start_fact
+            .borrow()
+            .get(&*self.build.borrow())
+            .map(|members| {
+                let mut row = json!({"owner_epoch": self.owner.borrow().epoch.clone()});
+                if let Value::Object(members) = members {
+                    for (member, value) in members {
+                        row[member] = value.clone();
+                    }
+                }
+                row
+            });
         Ok(ConfigSeen {
             instructions: self.instructions.borrow().clone(),
             sources: self.sources.borrow().clone(),
+            start,
         })
     }
 

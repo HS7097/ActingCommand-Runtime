@@ -601,6 +601,20 @@ the backend self-check facts (source `device-proxy` or `capture`).
     `policy.monitor.io_timeout_ms`, `policy.monitor.retry_limit`,
     `policy.monitor.retry_backoff_ms` and `policy.monitor.retry_backoff_max_ms`, actingd's own
     policy monitor settings as assembly resolved them, each `explicit` when the file named it.
+- `config.start` (Workflow #454, 0.12.59; register §1.342) — runtime scope, `record_list`, no
+  lifetime, source `runtime`: what this start found, one row `{owner_epoch, first_start,
+  tagged_state}`: the start's owner epoch (as the status spells it), whether it found no earlier
+  start record (`first_start` true: no `runtime.started` or `runtime.takeover` before its own, the
+  root's first start, which writes no seeding marker, [ledger-observer.md](ledger-observer.md)
+  §11.5) and whether it seeded or loaded the tagged state (`seed`, `load`). Every start that
+  records the configuration facts records it with them, after `config.parameters.<section>` and
+  before any instance is prepared, so the record an earlier start left (the start replays it) is
+  superseded before the Runtime is ready and the fact never describes an earlier epoch; a refusal
+  fails the start, as for the other configuration facts. Hosts built without a manifest record
+  none. Re-observed like every `config.` fact (`ledger_observer.tag.reobserve_prefixes`), never
+  tagged. `actingctl install` reads it before a stop ([install-cli.md](install-cli.md), "The
+  post-start checks (INST-2)"); a reader built before it ignores it, as every reader of the
+  snapshot reads only the keys it knows.
 
 - `host.scheduling_pause` (Workflow #361 B1) — runtime scope, `record_list`,
   no lifetime: the operator's held scheduling pauses, one row per pause

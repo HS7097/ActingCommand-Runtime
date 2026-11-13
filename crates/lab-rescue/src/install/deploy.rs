@@ -336,28 +336,25 @@ fn pause(
 }
 
 /// The instructions and the other parties' pauses as the close reads them before
-/// `request-shutdown` (review S2 L5): S0 again, without the hold's own pauses. Workflow #454: and
-/// whether the Runtime about to close is in its root's first epoch.
-fn reread_s0(operation: &mut Operation<'_>, loaded: &Loaded) -> Result<(), Outcome> {
+/// `request-shutdown` (review S2 L5): S0 again, without the hold's own pauses. Workflow #454
+/// (register §1.342): and, from the same two reads, whether the Runtime about to close is in its
+/// root's first epoch: the members of the close step's evidence it answers
+/// ([`first_epoch_evidence`]; a read that fails names its code in `first_epoch_unread`).
+fn reread_s0(
+    operation: &mut Operation<'_>,
+    loaded: &Loaded,
+) -> Result<Map<String, Value>, Outcome> {
     let runtime = operation.host().runtime();
-    let Ok(Some(mut seen)) = runtime.status(&loaded.state_root) else {
-        return Ok(());
+    let mut seen = match runtime.status(&loaded.state_root) {
+        Ok(Some(seen)) => seen,
+        Ok(None) => return Ok(first_epoch_unread(NO_RUNTIME)),
+        Err(cause) => return Ok(first_epoch_unread(cause.code().as_str())),
     };
-    let Ok(config) = runtime.config(&loaded.state_root) else {
-        return Ok(());
+    let config = match runtime.config(&loaded.state_root) {
+        Ok(config) => config,
+        Err(cause) => return Ok(first_epoch_unread(cause.code().as_str())),
     };
-    // Workflow #454 (register §1.342): the Runtime's own start report, of the epoch S0 names. A
-    // read that fails, a build that does not know the read or the member, and a report of another
-    // epoch record no first epoch: the next start's `no_seeding` then requires `load`, as before.
-    let epoch = operation
-        .journal()
-        .s0
-        .as_ref()
-        .and_then(|s0| s0.epoch.clone());
-    let first_epoch = match runtime.start_report(&loaded.state_root) {
-        Ok(Some(report)) => postcheck::first_epoch_of(&report, epoch.as_deref()),
-        Ok(None) | Err(_) => false,
-    };
+    let first_epoch = first_epoch_evidence(operation, config.start.as_ref());
     if let Some(intent) = pause_intent(operation.journal()) {
         for instance in &mut seen.instances {
             if intent.instances.contains(&instance.alias)
@@ -373,8 +370,120 @@ fn reread_s0(operation: &mut Operation<'_>, loaded: &Loaded) -> Result<(), Outco
     operation.record_s0_reads(
         hold::pauses_value(&seen),
         hold::instructions_value(&config.instructions),
-        first_epoch,
-    )
+    )?;
+    Ok(first_epoch)
+}
+
+/// Workflow #454: `first_epoch_unread` when no Runtime answered the close's status read.
+const NO_RUNTIME: &str = "runtime_not_running";
+/// Workflow #454: `first_epoch_unread` when the Runtime records no `config.start` (a build before
+/// 0.12.59).
+const FACT_ABSENT: &str = "fact_absent";
+
+/// Workflow #454 (register §1.342): the close step's evidence when the close could not read
+/// whether the Runtime it stops is in its root's first epoch: `first_epoch` false, and why in
+/// `first_epoch_unread` (the failed read's code, [`NO_RUNTIME`] or [`FACT_ABSENT`]). The next
+/// start's `no_seeding` then requires `load`, as before.
+fn first_epoch_unread(why: &str) -> Map<String, Value> {
+    let mut members = Map::new();
+    members.insert("first_epoch".to_owned(), Value::Bool(false));
+    members.insert(
+        "first_epoch_unread".to_owned(),
+        Value::String(why.to_owned()),
+    );
+    members
+}
+
+/// Workflow #454 (register §1.342): the close step's evidence that says whether the Runtime the
+/// close stops is in its root's first epoch, from its `config.start` fact (`start`): `first_epoch`
+/// true when the fact is of S0's owner epoch and says `first_start` with `tagged_state` `seed`
+/// ([`postcheck::first_epoch_of`]) and the second guard ([`other_epoch`]) finds no S0 of another
+/// owner epoch among the root's own journals, which `first_epoch_guard` names otherwise. Without
+/// the fact, [`first_epoch_unread`] with [`FACT_ABSENT`].
+fn first_epoch_evidence(operation: &Operation<'_>, start: Option<&Value>) -> Map<String, Value> {
+    let Some(start) = start else {
+        return first_epoch_unread(FACT_ABSENT);
+    };
+    let epoch = operation
+        .journal()
+        .s0
+        .as_ref()
+        .and_then(|s0| s0.epoch.as_deref());
+    let first = postcheck::first_epoch_of(start, epoch);
+    let guard = if first {
+        other_epoch(operation, epoch)
+    } else {
+        None
+    };
+    let mut members = Map::new();
+    members.insert(
+        "first_epoch".to_owned(),
+        Value::Bool(first && guard.is_none()),
+    );
+    if let Some(guard) = guard {
+        members.insert("first_epoch_guard".to_owned(), guard);
+    }
+    members
+}
+
+/// Workflow #454 (register §1.342), the second guard: the first journal of the root's own
+/// operations, other than `operation`'s, whose S0 names an owner epoch other than `epoch`
+/// (`{operation_id, owner_epoch}`): a Runtime of another epoch ran on this root and an operation
+/// stopped it, so the one about to close is not in its root's first epoch, whatever its fact says.
+/// A journal that cannot be read (`{operation_id, code}`), or journals that cannot be listed
+/// (`{code}`), count as such: the guard fails closed. A Runtime that ran and stopped with no
+/// operation of this installer around it leaves no S0, and the guard cannot see it.
+fn other_epoch(operation: &Operation<'_>, epoch: Option<&str>) -> Option<Value> {
+    let paths = operation.paths();
+    let ids = match journal::operation_ids(paths) {
+        Ok(ids) => ids,
+        Err(cause) => return Some(json!({"code": cause.code().as_str()})),
+    };
+    for id in ids.iter().filter(|id| id.as_str() != operation.id()) {
+        let command = operation.journal().kind.location();
+        match Operation::load(operation.host(), paths, id, command) {
+            Ok(other) => {
+                if let Some(theirs) = other
+                    .journal()
+                    .s0
+                    .as_ref()
+                    .and_then(|s0| s0.epoch.as_deref())
+                    && Some(theirs) != epoch
+                {
+                    return Some(json!({"operation_id": id, "owner_epoch": theirs}));
+                }
+            }
+            Err(cause) => {
+                return Some(json!({"operation_id": id, "code": cause.code().as_str()}));
+            }
+        }
+    }
+    None
+}
+
+/// Workflow #454 (register §1.342): whether a close step's evidence records that the Runtime it
+/// stopped was in its root's first epoch.
+fn recorded_first_epoch(evidence: Option<&Value>) -> bool {
+    evidence
+        .and_then(|evidence| evidence.get("first_epoch"))
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
+/// Workflow #454 (register §1.342): whether the Runtime whose close preceded step `n` was in its
+/// root's first epoch, as that close recorded it: the newest close step before `n` that is not an
+/// automatic rollback's. An operation without one (`install start`) reads what [`last_stop`]
+/// carried into its inputs (`first_epoch`) from the close of the operation that stopped the
+/// Runtime.
+fn closed_first_epoch(journal: &journal::Journal, n: usize) -> bool {
+    match journal.steps[..n - 1]
+        .iter()
+        .rev()
+        .find(|step| step.kind == StepKind::Close && !of_rollback(&step.intent))
+    {
+        Some(close) => recorded_first_epoch(close.evidence.as_ref()),
+        None => journal.inputs.get("first_epoch").and_then(Value::as_bool) == Some(true),
+    }
 }
 
 fn close(
@@ -403,9 +512,13 @@ fn close(
         return Ok(end);
     }
     operation.start(n)?;
-    if !rollback {
-        reread_s0(operation, loaded)?;
-    }
+    // Workflow #454 (register §1.342): what the close read of whether the Runtime it stops is in
+    // its root's first epoch, for its evidence; a rollback's close records nothing of it.
+    let first_epoch = if rollback {
+        Map::new()
+    } else {
+        reread_s0(operation, loaded)?
+    };
     let host = operation.host();
     let (evidence, caveat) = match hold::run_close(
         host.runtime(),
@@ -478,6 +591,9 @@ fn close(
     }
     let mut evidence = evidence;
     evidence["head"] = json!(head);
+    for (member, value) in first_epoch {
+        evidence[member.as_str()] = value;
+    }
     Ok(StepEnd::Done(Some(evidence)))
 }
 
@@ -631,15 +747,10 @@ fn post_check(
     } else {
         postcheck::added_keys(journal.plan.as_ref())
     };
-    // Workflow #454 (register §1.342): S0's first epoch speaks of the Runtime S0 closed, whose next
-    // start is the operation's own; an automatic rollback's start follows the new build's Runtime
-    // instead, so its checks judge without it.
-    let s0 = journal.s0.clone().map(|mut s0| {
-        if rollback {
-            s0.first_epoch = false;
-        }
-        s0
-    });
+    // Workflow #454 (register §1.342): the close's first epoch speaks of the Runtime S0 closed,
+    // whose next start is the operation's own; an automatic rollback's start follows the new
+    // build's Runtime instead, so its checks judge without it.
+    let first_epoch = !rollback && closed_first_epoch(&journal, n);
     operation.start(n)?;
     let rows = postcheck::evaluate(
         operation.host(),
@@ -648,7 +759,8 @@ fn post_check(
             ready,
             started_epoch,
             log: &log,
-            s0: s0.as_ref(),
+            s0: journal.s0.as_ref(),
+            first_epoch,
             hold: hold.as_ref(),
             config: &given_config,
             config_sha256: &config_sha256,
@@ -1888,8 +2000,11 @@ fn started_since(host: &dyn Host, root: &std::path::Path, since_unix_ms: u64) ->
 
 /// The S0 and the hold of the newest journalled operation that stopped the Runtime: what a
 /// standalone start's post-start checks judge against; none when a Runtime started after that
-/// operation ended (review S2 L4: its S0 is no longer what this start restores).
-fn last_stop(host: &dyn Host, paths: &Paths) -> Option<(String, journal::S0, Option<Value>)> {
+/// operation ended (review S2 L4: its S0 is no longer what this start restores). Workflow #454
+/// (register §1.342): and whether its close recorded the Runtime it stopped in its root's first
+/// epoch, only when that operation began no start of its own after the close (a start it made
+/// is the one that followed S0's Runtime, and it may have written the seeding marker).
+fn last_stop(host: &dyn Host, paths: &Paths) -> Option<(String, journal::S0, Option<Value>, bool)> {
     for id in journal::operation_ids(paths)
         .unwrap_or_default()
         .iter()
@@ -1913,7 +2028,12 @@ fn last_stop(host: &dyn Host, paths: &Paths) -> Option<(String, journal::S0, Opt
                 .iter()
                 .find(|step| step.kind == StepKind::Pause)
                 .map(|step| step.intent.clone());
-            return Some((id.clone(), s0.clone(), hold));
+            let first_epoch = !journal
+                .steps
+                .iter()
+                .any(|step| step.kind == StepKind::Start && step.state != StepState::Planned)
+                && closed_first_epoch(journal, journal.steps.len() + 1);
+            return Some((id.clone(), s0.clone(), hold, first_epoch));
         }
     }
     None
@@ -1967,20 +2087,29 @@ pub(crate) fn start_command(
         return Answer::new(refusal).with("guards", guards::values(&rows));
     }
     let stopped = last_stop(host, &paths);
+    let mut inputs = json!({
+        "commit": live.commit,
+        "s0_from": stopped.as_ref().map(|(id, _, _, _)| id),
+        "hold_intent": stopped.as_ref().and_then(|(_, _, hold, _)| hold.clone()),
+        "config_sha256": loaded.config_sha256,
+    });
+    // Workflow #454 (register §1.342): the stopping operation's close recorded its Runtime in its
+    // root's first epoch; this start's checks read it here (absent otherwise).
+    if stopped
+        .as_ref()
+        .is_some_and(|(_, _, _, first_epoch)| *first_epoch)
+    {
+        inputs["first_epoch"] = json!(true);
+    }
     let opening = Opening {
         kind: OperationKind::Start,
         initiator: face.initiator(),
         one_way: false,
-        inputs: json!({
-            "commit": live.commit,
-            "s0_from": stopped.as_ref().map(|(id, _, _)| id),
-            "hold_intent": stopped.as_ref().and_then(|(_, _, hold)| hold.clone()),
-            "config_sha256": loaded.config_sha256,
-        }),
+        inputs,
         plan_id: None,
         plan: None,
         acknowledged: acks.iter().map(|ack| format!("guard:{ack}")).collect(),
-        s0: stopped.map(|(_, s0, _)| s0),
+        s0: stopped.map(|(_, s0, _, _)| s0),
         previous: Previous {
             live: Some(live.commit.clone()),
             state: None,

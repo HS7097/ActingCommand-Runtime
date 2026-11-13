@@ -14,9 +14,9 @@ use crate::watchdog::observe;
 use crate::watchdog::start::{self, StartedProcess, Target, TickSeams};
 use actingcommand_contract::outcome::{Category, IoOp, Outcome};
 use actingcommand_contract::{
-    CONFIG_OVERRIDES_FACT_KEY, CONFIG_PARAMETERS_FACT_PREFIX, FactScalar, FactValue, OwnerEpoch,
-    RuntimeResult, ScheduleCandidateEligibility, SchedulingPauseExpectation, SchedulingPauseReason,
-    SchedulingPauseScope,
+    CONFIG_OVERRIDES_FACT_KEY, CONFIG_PARAMETERS_FACT_PREFIX, CONFIG_START_FACT_KEY, FactScalar,
+    FactValue, OwnerEpoch, RuntimeResult, ScheduleCandidateEligibility, SchedulingPauseExpectation,
+    SchedulingPauseReason, SchedulingPauseScope,
 };
 use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_runtime_client::RuntimeClient;
@@ -71,11 +71,14 @@ impl RuntimeSeen {
 
 /// The configuration facts of the Runtime: each run-time instruction in effect, `(config_key,
 /// value_json)` in key order, and where each parameter's value comes from (`explicit`,
-/// `default`, `discovered`, `instruction`), by key.
+/// `default`, `discovered`, `instruction`), by key. Workflow #454 (register §1.342): and what its
+/// own start found, the `config.start` fact's row `{owner_epoch, first_start, tagged_state}`
+/// (`start_row`); `None` when the Runtime records none (a build before 0.12.59).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ConfigSeen {
     pub(crate) instructions: Vec<(String, String)>,
     pub(crate) sources: BTreeMap<String, String>,
+    pub(crate) start: Option<Value>,
 }
 
 /// One instance of the latest policy evaluation: its earliest wake, its selected decision and
@@ -237,6 +240,22 @@ fn scalar_text(value: Option<&FactScalar>) -> Option<String> {
     }
 }
 
+/// Workflow #454 (register §1.342): the `config.start` fact's row as the installer's predicate
+/// reads it (`postcheck::first_epoch_of`): its text members as strings, its boolean members as
+/// booleans; a member of another type is left out, so it reads as absent.
+fn start_row(row: &BTreeMap<String, FactScalar>) -> Value {
+    let mut members = serde_json::Map::new();
+    for (member, scalar) in row {
+        let value = match scalar {
+            FactScalar::String(text) => Value::String(text.clone()),
+            FactScalar::Boolean(flag) => Value::Bool(*flag),
+            _ => continue,
+        };
+        members.insert(member.clone(), value);
+    }
+    Value::Object(members)
+}
+
 /// Lifts exactly the pause of `scope` the caller saw: in `owner_epoch` at `revision`, on a
 /// connection that declares `initiator`.
 fn resume_seen(
@@ -330,6 +349,10 @@ impl RuntimeLink for SystemRuntime {
                         seen.sources.insert(key, source);
                     }
                 }
+            } else if record.key == CONFIG_START_FACT_KEY
+                && let Some(row) = rows.first()
+            {
+                seen.start = Some(start_row(row));
             }
         }
         seen.instructions.sort();

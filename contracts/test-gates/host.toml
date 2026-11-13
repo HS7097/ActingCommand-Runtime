@@ -2623,6 +2623,14 @@ tests = [
 ]
 incident = ["#422 LN-4"]
 
+# Workflow #454, the real cause, fix 1 (0.12.59; register §1.342; brief rd-1113/brief-1685-fix1.md, point 3; contracts/runtime-fact-store.md, "Producers", config.start): on a real host whose starts record the configuration facts, a new root's first start's config.start says first_start true with tagged_state seed and its own owner epoch, and no marker is written; its second start says first_start false, seeds and writes the marker (ledger_tagged_state_seeded); its third start says first_start false and loads, the marker the only one
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln4::ln4_f_only_a_new_roots_first_start_says_it_found_no_earlier_start",
+]
+incident = ["#454 FIRST EPOCH"]
+
 # LN-TUNE (#422, brief rd-1026 items 1 and 3): `ledger_observer.writer_reply_timeout_ms` (actingd-config revision 12) is read from the defaults file (10 000 ms) and from an explicit value when the ledger opens, is not settable, refuses a value outside 1 000..=600 000 ms (`out_of_range`) and a read budget not below it (`section_check`); the planning-signal recovery of a second start on a root reads no record at or before the planning checkpoint the first host committed
 [[gate]]
 coverage = "Y"

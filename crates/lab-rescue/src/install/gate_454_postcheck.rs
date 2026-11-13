@@ -26,20 +26,30 @@
 //   `config replace` whose check failed does not happen (a crash before it): the operation is
 //   `install_operation_interrupted`, its `post_check` step `started` with no evidence, no result,
 //   `current.json` still naming it;
-// and the main point, a restart of a Runtime in its root's first epoch:
+// and the main point, a restart of a Runtime in its root's first epoch (fix 1, brief
+// `rd-1113/brief-1685-fix1.md`: the fact is the Runtime's program fact `config.start`, read with
+// the configuration facts just before the close, and the close records it in its step's evidence,
+// not in S0, which keeps the shape it has on main):
 // - `postcheck_454_config_replace_after_a_first_epoch_passes_its_designed_seeding` and
 //   `postcheck_454_instance_add_after_a_first_epoch_passes_its_designed_seeding`: the Runtime the
-//   operation closes reports its start the root's first (`first_start`, seeded); S0 records
-//   `first_epoch`, the new start's `seed` passes `no_seeding` with the member that names it, the
-//   operation ends done and the hold is released;
+//   operation closes says its start was the root's first (`first_start`, seeded); the close's
+//   evidence records `first_epoch`, the new start's `seed` passes `no_seeding` with the member that
+//   names it, the operation ends done and the hold is released;
 // - `postcheck_454_a_restart_past_the_first_epoch_fails_as_before`: the closed Runtime seeded but
 //   was not the first (the root's second start, which wrote the marker): both commands fail as on
-//   the base, the row `{tagged_state: seed}`, S0 without `first_epoch`, the hold kept;
+//   the base, the row `{tagged_state: seed}`, no `first_epoch`, the hold kept;
 // - `postcheck_454_an_older_runtime_that_does_not_report_the_fact_is_judged_as_before`: a closed
-//   Runtime whose report lacks the member, and one without the read, are judged as before;
+//   Runtime that records no `config.start` (a build before 0.12.59), and one whose facts still
+//   hold the fact of an earlier epoch (left by a newer build that ran before it), are judged as
+//   before;
 // - `postcheck_454_a_deployment_past_the_first_epoch_rolls_back_as_before`: `actingctl install`'s
 //   composite update over a closed Runtime that seeded but was not the first rolls back on
 //   `no_seeding` as before;
+// - `postcheck_454_a_record_this_build_writes_is_read_by_mains_shapes` (fix 1, point 1): the
+//   journal of a first-epoch `config replace` reads as main's journal and main's S0, the close's
+//   evidence carrying `first_epoch`;
+// - `postcheck_454_the_predicate_refuses_another_epoch_and_a_load` (fix 1, point 5): the predicate
+//   is false for a fact of another epoch than S0's, and for a first start that loaded;
 // and the review's first point, `bindings` against the configuration the restarted Runtime was
 // given:
 // - `postcheck_454_bindings_judges_the_new_configuration_without_a_removed_instance`: a `config
@@ -411,24 +421,39 @@ fn postcheck_454_config_replace_passed_check_keeps_its_record() {
 
 // ---- Workflow #454, the real cause (register §1.342) ----
 
-/// The Runtime the test booted (build `live`, the one the operation closes) reports that its start
-/// was the root's first: it found no earlier start record and seeded, so it wrote no seeding
-/// marker (Workflow #422 LN-4) and the root's next start seeds by design.
+/// The Runtime the test booted (build `live`, the one the operation closes) says, in its
+/// `config.start` fact of its own epoch, that its start was the root's first: it found no earlier
+/// start record and seeded, so it wrote no seeding marker (Workflow #422 LN-4) and the root's next
+/// start seeds by design.
 fn first_start_before(host: &FakeHost) {
-    host.runtime.report_patch.borrow_mut().insert(
+    host.runtime.start_fact.borrow_mut().insert(
         "live".to_owned(),
-        json!({"tagged_state": "seed", "first_start": true}),
+        json!({"first_start": true, "tagged_state": "seed"}),
     );
 }
 
-/// The Runtime the test booted reports a seeded start without `first_start`: the root's second
+/// The Runtime the test booted says a seeded start that was not the first: the root's second
 /// start, which found the first one's start record and wrote the marker, so the next start must
-/// load; a build before the member reports every seeded start so.
+/// load.
 fn seeded_before(host: &FakeHost) {
-    host.runtime
-        .report_patch
-        .borrow_mut()
-        .insert("live".to_owned(), json!({"tagged_state": "seed"}));
+    host.runtime.start_fact.borrow_mut().insert(
+        "live".to_owned(),
+        json!({"first_start": false, "tagged_state": "seed"}),
+    );
+}
+
+/// The evidence of `journal`'s close step that is not an automatic rollback's (the close of the
+/// Runtime S0 names).
+fn close_evidence(journal: &Value) -> Value {
+    journal["steps"]
+        .as_array()
+        .and_then(|steps| {
+            steps
+                .iter()
+                .find(|step| step["kind"] == "close" && step["intent"].get("rollback").is_none())
+        })
+        .map(|step| step["evidence"].clone())
+        .unwrap_or_else(|| panic!("a close step: {journal}"))
 }
 
 /// The row `id` of a post-start check's evidence.
@@ -470,13 +495,18 @@ fn replace(host: &FakeHost, base: &Path, root: &Path) -> (Value, u8) {
     )
 }
 
-/// A commit whose new start seeded by design after a first epoch: done, the journal's S0 records
-/// `first_epoch`, its `post_check` step `done` with nothing failed, and the row `no_seeding`
-/// passed with the tagged state it read and the member that names the first epoch.
+/// A commit whose new start seeded by design after a first epoch: done, the journal's close step
+/// records `first_epoch` in its evidence (fix 1: not S0), its `post_check` step `done` with nothing
+/// failed, and the row `no_seeding` passed with the tagged state it read and the member that names
+/// the first epoch.
 fn assert_designed_seeding_passed(line: &Value, exit: u8, journal: &Value) {
     assert_eq!(exit, 0, "{line}");
     assert_eq!(line["outcome"]["code"], "install_command_done", "{line}");
-    assert_eq!(journal["s0"]["first_epoch"], json!(true), "{journal}");
+    assert_eq!(
+        close_evidence(journal)["first_epoch"],
+        json!(true),
+        "{journal}"
+    );
     assert_eq!(
         journal["result"]["code"], "install_command_done",
         "{journal}"
@@ -496,18 +526,24 @@ fn assert_designed_seeding_passed(line: &Value, exit: u8, journal: &Value) {
     );
 }
 
-/// The journal's S0 as the base writes it: no member `first_epoch`.
-fn assert_s0_without_first_epoch(journal: &Value) {
+/// No first epoch recorded: the journal's S0 as the base writes it, without a member
+/// `first_epoch`, and (fix 1) the close step's evidence with `first_epoch` false.
+fn assert_no_first_epoch(journal: &Value) {
     let s0 = journal["s0"]
         .as_object()
         .unwrap_or_else(|| panic!("an S0: {journal}"));
     assert!(!s0.contains_key("first_epoch"), "{journal}");
+    assert_eq!(
+        close_evidence(journal)["first_epoch"],
+        json!(false),
+        "{journal}"
+    );
 }
 
-/// What the base keeps after `no_seeding` failed a commit: S0 without `first_epoch`, and the hold
+/// What the base keeps after `no_seeding` failed a commit: no first epoch recorded, and the hold
 /// kept on every instance it took (`held`).
 fn assert_failed_as_before(host: &FakeHost, line: &Value, journal: &Value, held: &[&str]) {
-    assert_s0_without_first_epoch(journal);
+    assert_no_first_epoch(journal);
     assert_eq!(line["hold"]["kept"], json!(true), "{line}");
     let reason = line["hold"]["reason"]
         .as_str()
@@ -606,22 +642,22 @@ fn postcheck_454_a_restart_past_the_first_epoch_fails_as_before() {
     }
 }
 
-// Path 2's own test: a closed Runtime that does not report the fact is judged as before, whether
-// its report lacks the member (a build before 0.12.59, even on a root's first start) or it does
-// not know the read (a build before `StartReport`).
+// The older Runtime's test: a closed Runtime that does not say the fact of its own epoch is judged
+// as before, whether it records no `config.start` (a build before 0.12.59, even on a root's first
+// start) or its facts still hold the one a newer build recorded in an earlier epoch, saying that
+// start was the first (fix 1: a build that does not record the fact does not supersede it).
 #[test]
 fn postcheck_454_an_older_runtime_that_does_not_report_the_fact_is_judged_as_before() {
-    for without_the_read in [false, true] {
+    for an_earlier_epochs_fact in [false, true] {
         let temp = TempDir::new().expect("tempdir");
         let host = FakeHost::new(&temp.path().join("work"));
         let root = running_root(temp.path(), "older", &host);
-        if without_the_read {
-            host.runtime
-                .unsupported
-                .borrow_mut()
-                .push("live".to_owned());
-        } else {
-            seeded_before(&host);
+        if an_earlier_epochs_fact {
+            // The booted Runtime runs in `epoch-1`; the fact names the epoch before it.
+            host.runtime.start_fact.borrow_mut().insert(
+                "live".to_owned(),
+                json!({"owner_epoch": "epoch-0", "first_start": true, "tagged_state": "seed"}),
+            );
         }
         seeded_on_start(&host);
         let (line, exit) = replace(&host, temp.path(), &root);
@@ -771,7 +807,7 @@ fn postcheck_454_a_deployment_past_the_first_epoch_rolls_back_as_before() {
         "{answer:?}"
     );
     let journal = journal_of_answer(&root, &answer);
-    assert_s0_without_first_epoch(&journal);
+    assert_no_first_epoch(&journal);
     let checked = journal["steps"]
         .as_array()
         .and_then(|steps| {
@@ -837,7 +873,7 @@ fn postcheck_454_a_composite_rollback_failed_check_closes_its_step_with_its_rows
 
     let journal = journal_of_answer(&root, &answer);
     assert_eq!(journal["kind"], "rollback", "{journal}");
-    assert_s0_without_first_epoch(&journal);
+    assert_no_first_epoch(&journal);
     assert_eq!(
         journal["result"]["values"]["install_refusal"], "post_check_failed",
         "{journal}"
@@ -1020,4 +1056,68 @@ fn postcheck_454_bindings_judges_the_new_configuration_with_an_added_instance() 
             "{step}"
         );
     }
+}
+
+// ---- Fix 1 (brief rd-1113/brief-1685-fix1.md) ----
+
+/// S0 as main declares it (`journal.rs`, which this slice leaves as it is on main): its four
+/// members and no other, refusing any other as main's does.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MainS0 {
+    head: Option<u64>,
+    epoch: Option<String>,
+    pauses: Option<Value>,
+    instructions: Option<Value>,
+}
+
+// Point 1: a journal this build writes for a first-epoch `config replace` is read by the
+// structures as they are on main: the whole record by the journal's own structure (main's shape,
+// byte for byte), its S0 by main's four members, and the fact is in the close step's free-form
+// evidence, which every version reads.
+#[test]
+fn postcheck_454_a_record_this_build_writes_is_read_by_mains_shapes() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = running_root(temp.path(), "main-shapes", &host);
+    first_start_before(&host);
+    seeded_on_start(&host);
+    let (line, exit) = replace(&host, temp.path(), &root);
+    assert_eq!(exit, 0, "{line}");
+    let journal = config_replace_journal(&root);
+
+    let read = serde_json::from_value::<super::journal::Journal>(journal.clone())
+        .unwrap_or_else(|error| panic!("main's journal reads it: {error}: {journal}"));
+    assert!(read.finished(), "{journal}");
+    let MainS0 {
+        head,
+        epoch,
+        pauses,
+        instructions,
+    } = serde_json::from_value::<MainS0>(journal["s0"].clone())
+        .unwrap_or_else(|error| panic!("main's S0 reads it: {error}: {journal}"));
+    assert!(head.is_some(), "{journal}");
+    assert_eq!(epoch.as_deref(), Some("epoch-1"), "{journal}");
+    assert!(pauses.is_some(), "{journal}");
+    assert!(instructions.is_some(), "{journal}");
+    assert_eq!(
+        close_evidence(&journal)["first_epoch"],
+        json!(true),
+        "{journal}"
+    );
+}
+
+// Point 5: the predicate gives false for a fact of another epoch than S0's, and for a first start
+// that loaded; the same fact of S0's epoch that seeded gives true.
+#[test]
+fn postcheck_454_the_predicate_refuses_another_epoch_and_a_load() {
+    use super::postcheck::first_epoch_of;
+    let seeded = json!({"owner_epoch": "epoch-1", "first_start": true, "tagged_state": "seed"});
+    assert!(first_epoch_of(&seeded, Some("epoch-1")), "S0's first epoch");
+    assert!(
+        !first_epoch_of(&seeded, Some("epoch-2")),
+        "the fact belongs to another epoch than S0"
+    );
+    let loaded = json!({"owner_epoch": "epoch-1", "first_start": true, "tagged_state": "load"});
+    assert!(!first_epoch_of(&loaded, Some("epoch-1")), "first but load");
 }

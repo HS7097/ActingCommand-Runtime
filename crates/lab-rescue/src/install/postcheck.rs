@@ -13,7 +13,8 @@
 //! (review S2 H1) `config` is judged against the file as it was when the operation began, so an
 //! edit after the adopt is no failure. Workflow #454 (register §1.342): `no_seeding` also passes
 //! the seeding of a start whose S0 Runtime was in its root's first epoch (it wrote no seeding
-//! marker, so this start seeds by design), and `bindings` judges the configuration the restarted
+//! marker, so this start seeds by design), as the close recorded it in its step's evidence from
+//! that Runtime's `config.start` fact, and `bindings` judges the configuration the restarted
 //! Runtime was given, the root's file as the checks read it.
 //!
 //! | id | judged | fail-class |
@@ -110,6 +111,9 @@ pub(crate) struct CheckInputs<'a> {
     pub(crate) log: &'a Path,
     /// S0 of the operation that stopped this Runtime, when there is one.
     pub(crate) s0: Option<&'a S0>,
+    /// Workflow #454 (register §1.342): the Runtime S0 closed was in its root's first epoch, as
+    /// the close recorded it in its step's evidence (`first_epoch`); `false` without it.
+    pub(crate) first_epoch: bool,
     /// The hold: its reason and the instances it took.
     pub(crate) hold: Option<&'a hold::PauseIntent>,
     /// The root's configuration document (Workflow #454: the one the start was given, see
@@ -295,10 +299,10 @@ pub(crate) fn evaluate(
 
     // no_seeding: a root that ran before (an S0) loads the tagged state it seeded. Workflow #454
     // (register §1.342): unless the Runtime S0 closed was in its root's first epoch, which wrote no
-    // seeding marker: then this start seeds by design (LN-4), and `seed` passes as `load` does,
-    // the row naming `first_epoch`.
+    // seeding marker (`first_epoch`, as the close recorded it): then this start seeds by design
+    // (LN-4), and `seed` passes as `load` does, the row naming `first_epoch`.
     rows.push(match (&report, inputs.s0) {
-        (Some(report), Some(s0)) if s0.first_epoch => {
+        (Some(report), Some(_)) if inputs.first_epoch => {
             let state = report["tagged_state"].as_str().unwrap_or("unknown");
             check(
                 "no_seeding",
@@ -635,11 +639,12 @@ pub(crate) fn given_config(path: &Path, loaded: &Value) -> Value {
         .unwrap_or_else(|| loaded.clone())
 }
 
-/// Workflow #454 (register §1.342): whether a running Runtime's own start report says its epoch is
-/// the root's first, the epoch `epoch` (S0's) only: the start found no earlier start
-/// (`first_start`) and seeded (`tagged_state` `seed`), so it wrote no seeding marker and the root's
-/// next start seeds by design (LN-4). A report without the member (a build before it, or any later
-/// start) or of another epoch is no first epoch.
+/// Workflow #454 (register §1.342): whether what a running Runtime's own start found (its
+/// `config.start` fact's row, `runtime::ConfigSeen::start`) says its epoch is the root's first,
+/// the epoch `epoch` (S0's) only: the start found no earlier start (`first_start`) and seeded
+/// (`tagged_state` `seed`), so it wrote no seeding marker and the root's next start seeds by design
+/// (LN-4). A row that says otherwise (a later start), lacks a member, or is of another epoch (one
+/// an earlier start left, under a build that does not record it again) is no first epoch.
 pub(crate) fn first_epoch_of(report: &Value, epoch: Option<&str>) -> bool {
     epoch.is_some_and(|epoch| report["owner_epoch"].as_str() == Some(epoch))
         && report["first_start"].as_bool() == Some(true)

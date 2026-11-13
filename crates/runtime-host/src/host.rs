@@ -2278,10 +2278,6 @@ impl RuntimeHost {
             // Workflow #422 LN-4: a root's first start has no earlier epoch to seed and writes
             // no marker; read before this start's own start record.
             let earlier_start = crate::tagged_state::earlier_start(&shared.ledger)?;
-            // Workflow #454: whether this start is the root's first, for `StartReport`: the
-            // installer reads it before a stop, so that the next start's designed seeding passes
-            // its check `no_seeding`.
-            shared.note_start_first(!earlier_start)?;
             // Workflow #381 R6: each recovery step is timed, and the line is printed whether
             // the recovery succeeds or fails.
             let recovery_started = Instant::now();
@@ -2537,6 +2533,14 @@ impl RuntimeHost {
             // before any instance is prepared.
             if let Some(config_manifest) = &config.config_manifest {
                 shared.start_runtime_config(config_manifest, config.config_selection.as_ref())?;
+                // Workflow #454 (register §1.342): `config.start`, what this start found, with the
+                // configuration facts: the installer reads it before a stop, so that the next
+                // start's designed seeding (LN-4) passes its check `no_seeding`.
+                shared.record_config_start(
+                    owner_epoch,
+                    !earlier_start,
+                    tagged_start == TaggedStart::Seed,
+                )?;
             }
             // #402 HS-2 (design HS-M §3.8): the backends in effect, a restored instruction's
             // included, written into the registry before any instance is prepared; no session

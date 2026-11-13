@@ -1527,7 +1527,9 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   section"), and `host.capped_episodes` in #428 SCHED-C1d (0.12.53; the capped spending order's
   episodes, [scheduling/README.md](scheduling/README.md), "Episodes survive");
   `host.pack_registry.` joins `tag.reobserve_prefixes` (Workflow #389 §6.5); `config.selection`
-  (#387) and `config.catalog` (MCP-9a) fall under the existing `config.` prefix.
+  (#387), `config.catalog` (MCP-9a) and `config.start` (Workflow #454, 0.12.59: what a start
+  found, recorded by every start, [runtime-fact-store.md](runtime-fact-store.md)) fall under the
+  existing `config.` prefix.
 - These defaults are a starting point; AO-2's first round fills them from a real-machine copy.
 - Removed keys of model v1.1 never shipped: `decision_buffer_records`,
   `observation_buffer_records`, `buffer_warn_percent`, `exception_reserve_records`,

@@ -61,6 +61,13 @@ pub const CONFIG_CATALOG_WARNINGS_FACT_KEY: &str = "config.catalog_warnings";
 /// composed generation had a fixed value or a declared valuation; recorded empty once the active
 /// one has none.
 pub const CONFIG_CATALOG_PROVENANCE_FACT_KEY: &str = "config.catalog_provenance";
+/// Key of the runtime fact that says what a start found (Workflow #454, register §1.342): one row
+/// `{owner_epoch, first_start, tagged_state}`, the start's owner epoch, whether it found no
+/// earlier start record (`runtime.started` or `runtime.takeover`, read before its own: the root's
+/// first start, which writes no seeding marker) and whether it seeded or loaded the tagged state
+/// (`seed`, `load`). Every start records it with the configuration facts, re-observed as every
+/// `config.` fact is, so it never describes an earlier epoch once the Runtime is ready.
+pub const CONFIG_START_FACT_KEY: &str = "config.start";
 /// Key of the runtime fact that holds the settings an instruction changed (Workflow #387 D1b,
 /// model v1.2 §5.7): one row per overridden key, restored at start.
 pub const CONFIG_OVERRIDES_FACT_KEY: &str = "host.config_overrides";

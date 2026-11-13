@@ -707,7 +707,6 @@ pub(crate) fn apply_command(
                     epoch: None,
                     pauses: None,
                     instructions: None,
-                    first_epoch: false,
                 }),
                 previous: Previous {
                     live: Some(planned.live.commit.clone()),

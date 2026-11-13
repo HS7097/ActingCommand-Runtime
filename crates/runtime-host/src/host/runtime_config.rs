@@ -18,15 +18,18 @@
 //! - #402 HS-2 (register §1.270): a `ConfigureSettings` that switches an instance's backends
 //!   switches the device first (`backend_switch.rs`), then commits as any other change, with
 //!   `device.backend_switched` before its `command.validated`.
+//! - Workflow #454 (register §1.342): `config.start`, what the start found (its owner epoch,
+//!   whether it found no earlier start record, whether it seeded or loaded the tagged state),
+//!   recorded by every start with the configuration facts.
 
 use super::backend_switch::SwitchBackends;
 use super::*;
 use crate::codes::{ConfigHostCode, ConfigHostLocation};
 use actingcommand_contract::{
     ApprovalTarget, CONFIG_CATALOG_FACT_KEY, CONFIG_OVERRIDES_FACT_KEY,
-    CONFIG_PARAMETERS_FACT_PREFIX, CatalogPayload, ConfigCatalog, ConfigSelection,
-    ConfigSettingChange, DeviceBackendSwitched, InstanceDeviceKind, InstanceStuckRecovery,
-    config_parameters_fact_key,
+    CONFIG_PARAMETERS_FACT_PREFIX, CONFIG_START_FACT_KEY, CatalogPayload, ConfigCatalog,
+    ConfigSelection, ConfigSettingChange, DeviceBackendSwitched, InstanceDeviceKind,
+    InstanceStuckRecovery, config_parameters_fact_key,
 };
 use actingcommand_runtime_config::{
     AppliedSettings, CheckContext, EffectiveConfig, InstructionStamp, LadderConfig, LadderProfile,
@@ -180,6 +183,44 @@ impl HostShared {
             ConfigHostLocation::RecordRuntimeConfig,
         )? = effective;
         Ok(())
+    }
+
+    /// Workflow #454 (register §1.342): records `config.start`, what this start found: one row
+    /// `{owner_epoch, first_start, tagged_state}`, its owner epoch, whether it found no earlier
+    /// start record (`first_start`: the root's first start, which writes no seeding marker, so the
+    /// root's next start seeds by design, Workflow #422 LN-4) and whether it seeded or loaded the
+    /// tagged state (`seed`, `load`). Every start records it with the configuration facts, before
+    /// the Runtime is ready, so the record an earlier start left never describes the running
+    /// epoch. Any refusal fails the start, as for the other configuration facts.
+    pub(super) fn record_config_start(
+        &self,
+        owner_epoch: actingcommand_contract::OwnerEpoch,
+        first_start: bool,
+        seeded: bool,
+    ) -> RuntimeHostResult<()> {
+        let tagged_state = if seeded { "seed" } else { "load" };
+        let row = BTreeMap::from([
+            (
+                "owner_epoch".to_owned(),
+                FactScalar::String(identity_text(
+                    &owner_epoch,
+                    ConfigHostLocation::RecordRuntimeConfig,
+                )?),
+            ),
+            ("first_start".to_owned(), FactScalar::Boolean(first_start)),
+            (
+                "tagged_state".to_owned(),
+                FactScalar::String(tagged_state.to_owned()),
+            ),
+        ]);
+        self.record_config_fact(RuntimeFactRecord {
+            scope: RuntimeFactScope::Runtime,
+            key: CONFIG_START_FACT_KEY.to_owned(),
+            value: ContractFactValue::RecordList(vec![row]),
+            observed_at_unix_ms: 0,
+            source: OriginModule::Runtime,
+            ttl_ms: None,
+        })
     }
 
     /// `ConfigureSettings` (Workflow #387 D1b, model v1.2 §5.6, §5.7). Workflow #429 R-4 (A.6

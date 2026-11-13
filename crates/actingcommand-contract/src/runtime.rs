@@ -91,9 +91,7 @@ pub use schedule_history::*;
 // 0.12.35): the player hold's two request kinds, their results, three status members and three
 // start report members (`player_hold.rs`), declared [2, 4]; R-7b, which first fills a status
 // member, raises `min` to 4. Revision 8 (Workflow #434 LAB-6S1a, since 0.12.58): the optional
-// `initiator` of `BindChannel`, `ChannelBound` and the receipt, declared [3, 8]. Revision 9
-// (Workflow #454, register §1.342, since 0.12.59): the start report's optional `first_start`,
-// declared [3, 9].
+// `initiator` of `BindChannel`, `ChannelBound` and the receipt, declared [3, 8].
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
