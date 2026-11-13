@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #450 FL-1a and FL-1b (register §1.340; `contracts/resource-readings.md`, "Lists from
+// Workflow #450 FL-1a and FL-1b (register §1.342; `contracts/resource-readings.md`, "Lists from
 // fields"): a field list groups the fields of one group of a task's `fields_v1` declaration, read
 // one position per collected frame, into one list, whole or not at all.
 //

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #450 FL-1a and FL-1b (`contracts/resource-readings.md`, "Lists from fields"; register
-//! §1.340): a task's field list groups the OCR fields of one `group` of its `fields_v1`
+//! §1.342): a task's field list groups the OCR fields of one `group` of its `fields_v1`
 //! declaration, read one position per collected frame, into one list that the host writes as one
 //! `record_list` fact, as it writes a `read_list` step's list.
 //!

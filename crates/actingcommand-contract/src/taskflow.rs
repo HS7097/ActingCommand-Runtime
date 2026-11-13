@@ -2752,7 +2752,7 @@ pub enum TaskParamValue {
     Object(BTreeMap<String, TaskParamValue>),
 }
 
-// Workflow #450 FL-1a (register §1.340): the shared rule of a task's field lists.
+// Workflow #450 FL-1a (register §1.342): the shared rule of a task's field lists.
 #[cfg(test)]
 #[path = "taskflow/gate_450_fl1.rs"]
 mod gate_450_fl1;

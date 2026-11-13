@@ -19641,10 +19641,11 @@ add`, the journal's input naming the added alias) and
 `postcheck_454_config_replace_passed_check_keeps_its_record` (checks that pass: the step `done`
 with the same three members, `failed` empty, no row failed). No existing test changes.
 
-### 1.340 Slice FL-1 (0.12.59): field lists, the declaration, the list builder, the gate and the kernel; `package` revision 11 (Workflow #450; the owner approved the feature on 11-13, board #450; the design note `rd-1113/design-list-from-fields.md`, design (a), read on main `abee78ed`, with the coordinator's decisions of its section 7 and the work order's rulings, not the owner's words; coordinator work order `rd-1113/brief-450-fl1.md`, read on main `98924e28`)
+### 1.342 Slice FL-1 (0.12.59): field lists, the declaration, the list builder, the gate and the kernel; `package` revision 11 (Workflow #450; the owner approved the feature on 11-13, board #450; the design note `rd-1113/design-list-from-fields.md`, design (a), read on main `abee78ed`, with the coordinator's decisions of its section 7 and the work order's rulings, not the owner's words; coordinator work order `rd-1113/brief-450-fl1.md`, read on main `98924e28`)
 
-1.340 is the next free section on `98924e28`; the coordinator renumbers it if a slice of the same
-release takes it first. The design note's slices FL-0 (the contract text), FL-1a (the declaration
+1.342 is the next free section on main `10f538ea`, merged into this slice (1.340 and 1.341 were
+taken first); the coordinator renumbers it if a slice of the same release takes it first. The
+design note's slices FL-0 (the contract text), FL-1a (the declaration
 and the pure list builder) and FL-1b (the gate, admission, the collector's bookkeeping, the
 end-frame traces, the run kinds, the catalog and the `package` raise) are one pull request, because
 FL-1a alone would be code no caller reaches. [resource-readings.md](resource-readings.md), "Lists

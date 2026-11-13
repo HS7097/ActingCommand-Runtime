@@ -894,7 +894,7 @@ step, with the list reading's own effect:
 
 ## Lists from fields
 
-Workflow #450 FL-1 (Runtime 0.12.59; [v012-register.md](v012-register.md) §1.340; the owner
+Workflow #450 FL-1 (Runtime 0.12.59; [v012-register.md](v012-register.md) §1.342; the owner
 approved the feature on 11-13, board #450). A package that reads a set of items one by one (it
 opens an item's detail page, reads its name and its exact quantity as OCR fields, and steps to the
 next) groups those fields into one list: a **field list**. The host writes it as one instance fact

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #450 FL-1a (register §1.340; `contracts/resource-readings.md`, "Lists from fields",
+// Workflow #450 FL-1a (register §1.342; `contracts/resource-readings.md`, "Lists from fields",
 // "Declaration"): the one rule of a task's `field_lists`, which the declaration gate and admission
 // share. A field list groups the fields of one `group` of the task's `fields_v1` declaration, keyed
 // by a dictionary field, into one list. Every refusal names its member: the gate reports the
