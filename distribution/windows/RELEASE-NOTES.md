@@ -19,7 +19,7 @@ v0.12.57 的改动（SBUD-1、IDLE-3、新 MCP 服务器的两个 Tools 文件�
 `runtime-client` [3, 8] 和 `package` [3, 10]，两项都不是单向的。运行上要知道的是这几处：
 
 - **Runtime 不再因为请求自称的来源（信封）拒它**（#434 LAB-6S1b，登记 §1.287「Slice LAB-6S1b」；`contracts/lab-two-entries.md` §2.4）。
-  - **原来拒的**（v0.12.57 的 `crates/actingcommand-contract/src/runtime.rs` 4773–4974，`RuntimeRequest::validate()` 里十三处按 `(actor, source)` 拒）：关机 `RequestShutdown` 和安装切换
+  - **原来拒的**（v0.12.57 的 `crates/actingcommand-contract/src/runtime.rs` 4773–4974，`RuntimeRequest::validate()` 里十四处按 `(actor, source)` 拒）：关机 `RequestShutdown` 和安装切换
     `InstallTransition` 只收人 `(User, Ui)` 和操作员 `(Cli, Cli)`；制包事件 `RecordAuthoringEvent`、签名的登记、匹配和撤下，调试事件、Lab 钉、受控 Lab 操作、画面识别、调试包和证据导出只收
     Lab `(Lab, Lab)`；身份卡只收人和操作员、批准只收人；模拟器控制、实例发现、自检、阶梯演练只收人和操作员；调度的暂停和恢复只收人和操作员；叫醒测试 `AgentWakeTest` 只收人和操作员；
     按键族发布事实只收代理调度器 `(Agent, Adapter)`，带来源例外的键族（手动优先级偏移、补救选择、包的日程）另收人和操作员；代理调度器的那些请求（规划会话的十种和 `ApplyResourceTargets`）
@@ -65,8 +65,8 @@ v0.12.57 的改动（SBUD-1、IDLE-3、新 MCP 服务器的两个 Tools 文件�
     （`RuntimeClientConfig::with_initiator` 只有测试调用；声明是 LAB-6S2）。
   - **它定下的次序（按代码核过）**：本版之前的 Runtime 解不了带 `initiator` 的 `BindChannel`：v0.12.57 的 `RuntimeOperation` 拒未知成员（v0.12.57 的 `runtime.rs` 3778），解码失败就以
     `runtime_request_decode_failed` 掐断连接、不给回执（v0.12.57 的 `crates/runtime-host/src/host/requests.rs` 1399–1410）。本版的客户端遇到这种掐断，在同一个属主纪元里重连一次，
-    之后不再发 `BindChannel`、以未绑定的连接继续，每个进程报一次 `client_channel_unsupported`（`crates/runtime-client/src/client.rs` 1021–1069）；旧 Runtime 再按第一条请求的信封把它归到
-    `lab`（v0.12.57 的 `requests.rs` 56–84），照旧服务，词哪里都不留。所以声明词的版本（LAB-6S2）应当部署在本版之上；部署在更早的 Runtime 上，或者退回到本版之前，都是上面这种降级：照旧服务，词不留。
+    之后不再发 `BindChannel`、以未绑定的连接继续，每个进程报一次 `client_channel_unsupported`（`crates/runtime-client/src/client.rs` 1021–1069）；旧 Runtime 再按第一条请求的信封给它归通道
+    （v0.12.57 的 `requests.rs` 56–84），照那个 Runtime 自己的规则（包括它的来源门）回答，词哪里都不留。所以声明词的版本（LAB-6S2）应当部署在本版之上；部署在更早的 Runtime 上，或者退回到本版之前，都是上面这种降级：照那个 Runtime 的规则回答，词不留。
 - **经 Lab 的 MCP 服务器部署和回滚**（#434 LAB-6S0，登记 §1.287「Slice LAB-6S0」；`apps/actinglab-mcp/MANUAL.md` 第 9、10 节）。
   - **变了的**：Windows 上 `ac_deploy`、`ac_rollback` 不再答 `mcp_operation_unsupported`，而是服务：服务器自己给这两行的 `detach` 填 true（`apps/actinglab-mcp/src/tools.rs` 136–141、
     245–256），救急模块起一个分离的 `actinglab.exe`（服务器旁边的那个；不在就当场拒、带路径，`crates/lab-rescue/src/install/host.rs` 293–317），带 `ACTINGCOMMAND_INITIATOR=Lab-MCP`
@@ -109,7 +109,7 @@ v0.12.57 的改动（SBUD-1、IDLE-3、新 MCP 服务器的两个 Tools 文件�
     （资源仓的脚本还没学，`resource verify` 的镜像已经会写）；`package bundle` 不写 `interfaces.json`；不带这个目录的包保留原来的修订，压缩包、`SHA256SUMS`、计划和流水都不变。
   - **本版之前的程序**：本版之前的 `place` 在布局检查就拒带 `notices/` 的压缩包（`pack_invalid`，点名按名字排第一个的 `notices/` 成员；v0.12.57 的 `place.rs` 417–441 在边 443–460 之前），
     在挂暂停之前，什么都没暂停、没写；游戏根里已经有 `notices\` 时，它照常放不带目录的包、不碰这个目录。本版之前的 Runtime 和 `standard-pack check` 把有 `notices\` 的根当成没有它来读。
-    本版之前的安装工具读不了带 `notices` 条目的 `pack_place` 流水（v0.12.57 的 `place.rs` 101–111 只有三种），撤销不了它。
+    本版之前的安装工具读得了这份 `pack_place` 流水，但解不了里面种类是 `notices` 的那一条（v0.12.57 的 `place.rs` 101–111 只有三种）：撤销时报错，核对时跳过它。
   - **总览的放包工具和资源仓的打包脚本还不认这个目录：改好之前不发布带这个目录的包。**
 - **运行恢复分组不再把计划内的停下当失败**（#429 RG-STOP，登记 §1.337；`contracts/global-ledger-query.md` 里 `run_recovery` 那一段）。
   - **原来显示的**：一次被请求停下的调度运行，账本视图的运行恢复分组把停下自己的三条记录（运行的收尾 `task.failed`、调度驱动的 `runtime.failed`、`policy.execution_recorded` 的 `stopped`
@@ -130,7 +130,7 @@ v0.12.57 的改动（SBUD-1、IDLE-3、新 MCP 服务器的两个 Tools 文件�
 `package` [3, 9] → [3, 10]（9，NOTICES-2），`runtime-outcomes` [1, 1] 没变；架构测试 `tools/actinglab-architecture/tests/component_interfaces.rs` 的 `V0120`（148–154）跟着钉。
 
 - `contracts/component-interfaces.md`：新加 `runtime-client` 修订 8 一行（149）和 `package` 修订 10 一行（159）；「Planned: Workflow #434」一节（267 起）把 LAB-0 预留、后来被别的片占掉的号改成
-  现在的 8（LAB-6S1a）、9（`ledger`，LAB-6S5）、30（`actingd-config`，LAB-6S4b），都还没生效。`actingd-config` 29、`ledger` 8 的行没动；`install-selection`、`install-control`、
+  现在的 8（`runtime-client`：LAB-6S1a 已经打开其中一部分，其余归 LAB-6S3、S4a、S4b）、9（`ledger`，LAB-6S5）、30（`actingd-config`，LAB-6S4b）；9 和 30 都还没生效。`actingd-config` 29、`ledger` 8 的行没动；`install-selection`、`install-control`、
   `player-hold`、`tools-layout` 不变。两项升级都不是单向的：账本、覆盖行、录制、安装流水没有一样新形状，`ledger` 不动。
 - 配置键：没有新增，也没有去掉。`distribution/windows/actingd.defaults.json` 自 v0.12.56 一字没改；`apps/actingd` 和 `crates/runtime-config` 自 v0.12.57 没改；`contracts/runtime-config.md`
   只在「Console tiers」一节加了一句 `ui` 通道照档位判（1963–1966）。`config.subsystems` 不变（`apps/actingd/src/config/manifest.rs`、`crates/policy/src/compose.rs` 没改）。
@@ -171,7 +171,7 @@ v0.12.57 的改动（SBUD-1、IDLE-3、新 MCP 服务器的两个 Tools 文件�
 - **v0.12.54 的安装工具直接装本版：能装，和从 v0.12.54 装 v0.12.56 一样要带 `--accept-ledger-one-way`**（预览、`install update plan`、`install update apply` 三步都带；不带时 `ledger` 的
   `one_way` 不过，以 `interface_edge` 拒，`plan.rs` 295–301、1030–1041），计划多一步 `ledger_verify`（915）。v0.12.54 声明 `runtime-client` [3, 6]、`package` [3, 8]：`runtime-client` 的
   [3, 6] 和 Rp [3, 6]、R\* [3, 8] 都相交，过；`package` 照旧是警告。`defaults_diff` 是那三行（`recovery_ladder.profiles.without_emulator_restart.rungs`、`scheduling.task_held.after_ms`、
-  `scheduling.task_held.enabled`；默认值文件自 v0.12.56 没改），部署后检查的 `new_keys` 核两个压着键的来源是 `default`；`installer_knows_keys` 不认识 `scheduling.task_held`，文件里不要提前写它；
+  `scheduling.task_held.enabled`；默认值文件自 v0.12.56 没改），部署后检查的 `new_keys` 核这三个键（两个压着键的来源是 `default`；档的那一行进 `unseen`，不算不过）；`installer_knows_keys` 不认识 `scheduling.task_held`，文件里不要提前写它；
   两个新的 Tools 文件是 `new`。**比经过 v0.12.56 差的地方**：装上并跑过以后同一个状态根上没有退回的路（见下），部署后检查不过时的自动回退也走不了；v0.12.55 到本版四个版本的改动
   （单向的账本、两个条目一台设备被拒、压着记录、补救表、SBUD-1、IDLE-3、本版这几处）在同一次部署里一起到生产；控制台要先换成 UI v0.12.16。没有让它装不上的东西。
 - **退回（按安装工具的边和回退门核过）**：
