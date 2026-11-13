@@ -4,8 +4,8 @@
 // §4.1, §4.2; the coordinator's rulings of 2026-11-13 on board #434, not the owner's words): the
 // watchdog's probe (`observe::live_owner`) takes a word and binds `lab` with it and no `via`,
 // keeps the envelope (Cli, Cli) it sent on 0.12.58 and still sends only `Health` and
-// `BindChannel`; without a word, as actingctl's callers probe until LAB-6S2-B2, it binds the CLI
-// channel as on 0.12.58. A Runtime that cannot decode a declared word (one before LAB-6S1a) drops
+// `BindChannel`; without a word, as actingctl's callers probed until LAB-6S2-B2 (which gives them
+// `Lab-CLI`), it binds the CLI channel as on 0.12.58. A Runtime that cannot decode a declared word (one before LAB-6S1a) drops
 // the binding: the probe reconnects once, goes on unbound, is answered, and the runtime client's
 // one report of the process, `client_channel_unsupported`, is made once. Fakes only: the runtime
 // client's scripted Runtime on loopback in a temporary state root; no clock, no sleep.
@@ -66,7 +66,7 @@ fn assert_cli_envelope(record: &ScriptedConnectionRecord) {
 #[test]
 fn lab6s2b1_watchdog_probe_binds_lab_with_its_word_and_sends_health_and_bind_only() {
     // actingwatch's word, a Lab program's (the rescue module's `alive` from a command line), and
-    // actingctl's none.
+    // none (actingctl's until LAB-6S2-B2; no product caller declares none since).
     for (initiator, binding) in [
         (
             Some(Initiator::LabWatchdog),

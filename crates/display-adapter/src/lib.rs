@@ -22,12 +22,21 @@
 //! a delivered frame from the frame's own geometry ([`DisplayObservation::of_frame`]) and the
 //! game's declaration ([`DisplayRule`] from the contract's `StandardPackDisplayLayout`), and the
 //! host records it ([`DisplayMap::record`]).
+//!
+//! Workflow #392 DA-3: the input side. An input the kernel made in base coordinates leaves for
+//! the device through [`DisplayMap::device_input`]: every point to the nearest device pixel,
+//! inside the device frame and inside the device box its input box maps to (inward), lengths
+//! scaled, durations untouched; a cropped frame's input gains the crop's offset and a turned
+//! frame's has the turn undone for a backend that takes frame coordinates. The host sends only
+//! under the maps the capture side admits ([`DisplayMap::admit_input`]) and only when the map in
+//! effect is the one the input was decided under ([`DisplayMap::current_for`]).
 
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     CaptureExtent, CaptureFrameCrop, CaptureFrameTransform, CaptureGeometryObservation,
     CaptureInsets, CaptureRotation, CaptureRotationObservation, DisplayArea, DisplayInsetsSource,
-    DisplayMapKind, DisplayScaleBy, StandardPackDisplayLayout, TaskGeometryDisplayMap,
+    DisplayMapKind, DisplayScaleBy, InputAction, InputPathPoint, StandardPackDisplayLayout,
+    TaskGeometryDisplayMap,
 };
 use std::cmp::Ordering;
 
@@ -37,6 +46,8 @@ pub use codes::{DisplayCode, DisplayLocation, DisplayProblem};
 
 #[cfg(test)]
 mod gate_392_da1;
+#[cfg(test)]
+mod gate_392_da3;
 
 /// A point in one of the adapter's spaces, in pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -357,6 +368,13 @@ impl Scale {
         self.num == self.den
     }
 
+    /// Workflow #392 DA-3 fix 1: whether `2 · s` is a whole number. `s` is reduced, so that is a
+    /// denominator of 1 or 2: exactly the scales under which every base point of every base box
+    /// maps inside that box's inward device box ([`DisplayMap::admit_input`]).
+    pub const fn doubled_is_whole(self) -> bool {
+        self.den <= 2
+    }
+
     fn reduced(num: u32, den: u32) -> Self {
         let divisor = greatest_common_divisor(num, den).max(1);
         Self {
@@ -444,6 +462,50 @@ pub enum DisplayMapError {
     /// that is not the frame (model 392 §2.1, row 4); the host reports
     /// `contained_task_geometry_frame_display_mismatch`.
     FrameDisplayMismatch,
+}
+
+/// Workflow #392 DA-3 (model 392 v1.2 §6.7): the coordinates a backend that receives an input
+/// takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InputCoordinates {
+    /// The logical display's, as `adb input` and the touch protocols take them: a cropped frame's
+    /// input gains the crop's offset.
+    Display,
+    /// The delivered frame's, as a backend that presses on a frame it captured takes them: a
+    /// turned frame's input has the quarter turn undone.
+    DeliveredFrame,
+}
+
+/// Workflow #392 DA-3: why an input cannot leave for the device under a map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMapError {
+    /// `display_map_unresolved` at stage `display_input_map`: an input box with less than one
+    /// device pixel left (`collapsed`), a point or a box outside the scale frame
+    /// (`outside_frame`), or a vertical brake a turned frame cannot keep for a backend that takes
+    /// frame coordinates (`orientation_mismatch`).
+    Unresolved(DisplayMapUnresolved),
+    /// A mapped point outside the device frame, or outside the device box its input box maps to
+    /// (model 392 v1.2 §6.2, §9.3: the kernel's `contained_task_input_out_of_bounds`). A point is
+    /// never clamped.
+    OutOfBounds,
+}
+
+/// Workflow #392 DA-3 (model 392 v1.2 §6.6): the map in effect when an input is sent was built
+/// for a frame of another size than the frame the input was decided on: the geometry changed in
+/// between (`display_map_stale`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayMapStale {
+    /// The size of the frame the input was decided on.
+    pub decided: CaptureExtent,
+    /// The size of the frame the map in effect was built for.
+    pub current: CaptureExtent,
+}
+
+impl DisplayMapStale {
+    /// `display_map_stale` at stage `display_input_map` (its one registered value).
+    pub fn outcome(&self) -> Outcome {
+        Outcome::new(DisplayCode::MapStale).stage(DisplayLocation::InputMap)
+    }
 }
 
 const NO_INSETS: CaptureInsets = CaptureInsets {
@@ -847,6 +909,312 @@ impl DisplayMap {
         }
     }
 
+    /// Workflow #392 DA-3 (`contracts/display-adapter.md` section 10): whether this Runtime sends
+    /// `action` under this map. The input side sends under the maps the capture side admits
+    /// (section 8), the identity and a pure scale; under any other map it refuses with the token
+    /// the frame gate gives that map: a turned frame `orientation_mismatch`, a translation or a
+    /// cropped frame `translation_unsupported` (until DA-2b admits them). Workflow #392 DA-3 fix
+    /// 1: of the pure scales it sends under those whose double is a whole number
+    /// ([`Scale::doubled_is_whole`]), the scales under which every base point of every base box
+    /// lands inside that box's inward device box; any other pure scale refuses every input
+    /// `input_scale_unsupported`, whatever its point, so the refusal never depends on a draw. A
+    /// vertical-brake drag whose brake the map changes (a scale other than 1) is refused
+    /// `input_scale_unsupported` too: the contract holds that drag's brake at exactly 100
+    /// pixels. Every refusal is at stage `display_input_map`, with the frame's and the base's
+    /// sizes.
+    pub fn admit_input(&self, action: &InputAction) -> Result<(), DisplayMapUnresolved> {
+        let problem = if self.turn.is_some() {
+            Some(DisplayProblem::OrientationMismatch)
+        } else if self.kind == DisplayMapKind::Translate || self.crop.is_some() {
+            Some(DisplayProblem::TranslationUnsupported)
+        } else if !self.scale.doubled_is_whole() {
+            Some(DisplayProblem::InputScaleUnsupported)
+        } else if let InputAction::SingleTouchDragWithVerticalBrakeV1 {
+            brake_distance_px, ..
+        } = action
+            && self.device_length(i64::from(*brake_distance_px)) != i64::from(*brake_distance_px)
+        {
+            Some(DisplayProblem::InputScaleUnsupported)
+        } else {
+            None
+        };
+        match problem {
+            Some(problem) => Err(self.unresolved(problem, DisplayLocation::InputMap)),
+            None => Ok(()),
+        }
+    }
+
+    /// Workflow #392 DA-3 (model 392 v1.2 §6.6): whether this map, in effect when an input is
+    /// sent, is the map of the frame the input was decided on, a frame of the size `decided`.
+    /// Under the maps the input side sends (the identity and a pure scale) a frame's size decides
+    /// its map, so a frame of another size means the geometry changed after that frame was taken:
+    /// `display_map_stale`, and the input is not sent.
+    pub fn current_for(&self, decided: CaptureExtent) -> Result<(), DisplayMapStale> {
+        if decided == self.frame {
+            Ok(())
+        } else {
+            Err(DisplayMapStale {
+                decided,
+                current: self.frame,
+            })
+        }
+    }
+
+    /// Workflow #392 DA-3 (model 392 v1.2 §4.6, §6.1, §6.2, §6.4, §6.7): `action`, made in base
+    /// coordinates, as it leaves for the device.
+    ///
+    /// - Each point goes into the scale frame by the anchor of its own zone (outside it:
+    ///   `outside_frame`), then to the device frame to the nearest, `round_half_up(v · s)`.
+    /// - A mapped point must lie inside the device frame and, when it was drawn in a box, inside
+    ///   the device box that box maps to (inward); otherwise [`InputMapError::OutOfBounds`]: a
+    ///   point is never clamped. `boxes` are the input boxes the step drew its points in, in
+    ///   order (a tap's or a long press's one, a drag's press and end); none for a point.
+    /// - A length (a vertical drag's brake, the cross of a drag's brake) is
+    ///   `round_half_up(|v| · s)` with its sign; a path drag's own box maps inward and holds all
+    ///   its points.
+    /// - Durations, holds, slopes and the number of points never change.
+    /// - The points then take the backend's `coordinates`: a cropped frame's gain the crop's
+    ///   offset (display coordinates), a turned frame's have the turn undone (frame coordinates).
+    ///
+    /// Keys, text and the reset carry no coordinate and leave as they are.
+    pub fn device_input(
+        &self,
+        action: &InputAction,
+        boxes: &[Rect],
+        coordinates: InputCoordinates,
+    ) -> Result<InputAction, InputMapError> {
+        Ok(match action {
+            InputAction::Tap { x, y } => {
+                let press = self.device_input_point(*x, *y, self.drawn_box(boxes, 0)?)?;
+                let (x, y) = self.sent_point(press, coordinates)?;
+                InputAction::Tap { x, y }
+            }
+            InputAction::LongTap { x, y, duration_ms } => {
+                let press = self.device_input_point(*x, *y, self.drawn_box(boxes, 0)?)?;
+                let (x, y) = self.sent_point(press, coordinates)?;
+                InputAction::LongTap {
+                    x,
+                    y,
+                    duration_ms: *duration_ms,
+                }
+            }
+            InputAction::Swipe {
+                x1,
+                y1,
+                x2,
+                y2,
+                duration_ms,
+            } => {
+                let start = self.device_input_point(*x1, *y1, self.drawn_box(boxes, 0)?)?;
+                let end = self.device_input_point(*x2, *y2, self.drawn_box(boxes, 1)?)?;
+                let (x1, y1) = self.sent_point(start, coordinates)?;
+                let (x2, y2) = self.sent_point(end, coordinates)?;
+                InputAction::Swipe {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    duration_ms: *duration_ms,
+                }
+            }
+            InputAction::SingleTouchDragWithVerticalBrakeV1 {
+                x1,
+                y1,
+                x2,
+                y2,
+                horizontal_duration_ms,
+                corner_hold_ms,
+                brake_distance_px,
+                brake_duration_ms,
+                slope_in,
+                slope_out,
+                ..
+            } => {
+                // The brake runs up the upright frame; a quarter turn undone for frame
+                // coordinates would make it run across, which this drag cannot say.
+                if coordinates == InputCoordinates::DeliveredFrame && self.turn.is_some() {
+                    return Err(InputMapError::Unresolved(self.unresolved(
+                        DisplayProblem::OrientationMismatch,
+                        DisplayLocation::InputMap,
+                    )));
+                }
+                let start = self.device_input_point(*x1, *y1, self.drawn_box(boxes, 0)?)?;
+                let corner = self.device_input_point(*x2, *y2, self.drawn_box(boxes, 1)?)?;
+                let brake = self.device_length(i64::from(*brake_distance_px));
+                let end = Point::new(corner.x, corner.y - brake);
+                if !self.in_device_frame(end) {
+                    return Err(InputMapError::OutOfBounds);
+                }
+                let (x1, y1) = self.sent_point(start, coordinates)?;
+                let (x2, y2) = self.sent_point(corner, coordinates)?;
+                let (x3, y3) = self.sent_point(end, coordinates)?;
+                InputAction::SingleTouchDragWithVerticalBrakeV1 {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    x3,
+                    y3,
+                    horizontal_duration_ms: *horizontal_duration_ms,
+                    corner_hold_ms: *corner_hold_ms,
+                    brake_distance_px: narrow(brake)?,
+                    brake_duration_ms: *brake_duration_ms,
+                    slope_in: *slope_in,
+                    slope_out: *slope_out,
+                }
+            }
+            InputAction::SingleTouchDragWithPauseAndBrakeV1 {
+                x1,
+                y1,
+                x2,
+                y2,
+                drag_duration_ms,
+                pause_ms,
+                x3,
+                y3,
+                brake_duration_ms,
+            } => {
+                let start = self.device_input_point(*x1, *y1, self.drawn_box(boxes, 0)?)?;
+                let end = self.device_input_point(*x2, *y2, self.drawn_box(boxes, 1)?)?;
+                let brake = Point::new(
+                    end.x + self.device_offset(i64::from(*x3) - i64::from(*x2)),
+                    end.y + self.device_offset(i64::from(*y3) - i64::from(*y2)),
+                );
+                if !self.in_device_frame(brake) {
+                    return Err(InputMapError::OutOfBounds);
+                }
+                let (x1, y1) = self.sent_point(start, coordinates)?;
+                let (x2, y2) = self.sent_point(end, coordinates)?;
+                let (x3, y3) = self.sent_point(brake, coordinates)?;
+                InputAction::SingleTouchDragWithPauseAndBrakeV1 {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    drag_duration_ms: *drag_duration_ms,
+                    pause_ms: *pause_ms,
+                    x3,
+                    y3,
+                    brake_duration_ms: *brake_duration_ms,
+                }
+            }
+            InputAction::SingleTouchPathDragV1 {
+                box_x,
+                box_y,
+                box_width,
+                box_height,
+                points,
+                segment_duration_ms,
+                corner_hold_ms,
+            } => {
+                let device_box = self
+                    .map_input_box(
+                        Rect::new(
+                            i64::from(*box_x),
+                            i64::from(*box_y),
+                            i64::from(*box_width),
+                            i64::from(*box_height),
+                        ),
+                        None,
+                    )
+                    .map_err(InputMapError::Unresolved)?;
+                let points = points
+                    .iter()
+                    .map(|point| {
+                        let device = self.device_input_point(point.x, point.y, Some(device_box))?;
+                        let (x, y) = self.sent_point(device, coordinates)?;
+                        Ok(InputPathPoint { x, y })
+                    })
+                    .collect::<Result<Vec<_>, InputMapError>>()?;
+                // The box's first and last pixels, sent as points: a turn may swap its sides.
+                let first = self.sent_point(Point::new(device_box.x, device_box.y), coordinates)?;
+                let last = self.sent_point(
+                    Point::new(device_box.right() - 1, device_box.bottom() - 1),
+                    coordinates,
+                )?;
+                let (left, top) = (first.0.min(last.0), first.1.min(last.1));
+                let (right, bottom) = (first.0.max(last.0), first.1.max(last.1));
+                InputAction::SingleTouchPathDragV1 {
+                    box_x: left,
+                    box_y: top,
+                    box_width: right - left + 1,
+                    box_height: bottom - top + 1,
+                    points,
+                    segment_duration_ms: segment_duration_ms.clone(),
+                    corner_hold_ms: *corner_hold_ms,
+                }
+            }
+            InputAction::Key { .. } | InputAction::Text { .. } | InputAction::Reset => {
+                action.clone()
+            }
+        })
+    }
+
+    /// The device frame upright: the delivered frame, its sides swapped when it was turned.
+    fn upright_frame(&self) -> CaptureExtent {
+        match self.turn {
+            Some(_) => swapped(self.frame),
+            None => self.frame,
+        }
+    }
+
+    fn in_device_frame(&self, point: Point) -> bool {
+        let frame = self.upright_frame();
+        (0..i64::from(frame.width())).contains(&point.x)
+            && (0..i64::from(frame.height())).contains(&point.y)
+    }
+
+    /// The device box the base input box `boxes[index]` maps to (inward), when the step drew its
+    /// point in one.
+    fn drawn_box(&self, boxes: &[Rect], index: usize) -> Result<Option<Rect>, InputMapError> {
+        boxes
+            .get(index)
+            .map(|rect| {
+                self.map_input_box(*rect, None)
+                    .map_err(InputMapError::Unresolved)
+            })
+            .transpose()
+    }
+
+    /// A base point of an input in device-frame pixels, inside the device frame and inside
+    /// `within`, the device box it was drawn in, when it has one.
+    fn device_input_point(
+        &self,
+        x: i32,
+        y: i32,
+        within: Option<Rect>,
+    ) -> Result<Point, InputMapError> {
+        let scale_point = self
+            .map_point(Point::new(i64::from(x), i64::from(y)), None)
+            .map_err(InputMapError::Unresolved)?;
+        let device = self.device_point(scale_point);
+        if self.in_device_frame(device) && within.is_none_or(|rect| rect_contains(rect, device)) {
+            Ok(device)
+        } else {
+            Err(InputMapError::OutOfBounds)
+        }
+    }
+
+    /// A signed length in base pixels in device-frame pixels: its size to the nearest, its sign
+    /// kept.
+    fn device_offset(&self, length: i64) -> i64 {
+        let size = self.device_length(length.abs());
+        if length < 0 { -size } else { size }
+    }
+
+    /// A device-frame point in the coordinates the backend takes.
+    fn sent_point(
+        &self,
+        point: Point,
+        coordinates: InputCoordinates,
+    ) -> Result<(i32, i32), InputMapError> {
+        let sent = match coordinates {
+            InputCoordinates::Display => self.display_point(point),
+            InputCoordinates::DeliveredFrame => self.delivered_point(point),
+        };
+        Ok((narrow(sent.x)?, narrow(sent.y)?))
+    }
+
     fn region_in_frame(
         &self,
         region: Rect,
@@ -960,6 +1328,16 @@ fn crop_shows(crop: CaptureFrameCrop, frame: CaptureExtent, display: CaptureExte
         && crop.height == frame.height()
         && u64::from(crop.x) + u64::from(crop.width) <= u64::from(display.width())
         && u64::from(crop.y) + u64::from(crop.height) <= u64::from(display.height())
+}
+
+/// Whether `point` lies in `rect`, its right and bottom edges open.
+fn rect_contains(rect: Rect, point: Point) -> bool {
+    (rect.x..rect.right()).contains(&point.x) && (rect.y..rect.bottom()).contains(&point.y)
+}
+
+/// A device coordinate as an input's `i32`; one that does not fit lies outside every frame.
+fn narrow(value: i64) -> Result<i32, InputMapError> {
+    i32::try_from(value).map_err(|_| InputMapError::OutOfBounds)
 }
 
 fn same_aspect(left: CaptureExtent, right: CaptureExtent) -> bool {

@@ -424,6 +424,8 @@ mod gate_392_da2a;
 // Workflow #392 DA-4b-D (Alice's ruling 69): the declared safe area, its live changes and its
 // refusals.
 mod gate_392_da4bd;
+// Workflow #392 DA-3: the input side: every input of a run mapped at its one exit to the device.
+mod gate_392_da3;
 mod gate_398_rd1a;
 mod gate_398_rd1b;
 // Workflow #398 RD-2: a handset's wired device link through the host.

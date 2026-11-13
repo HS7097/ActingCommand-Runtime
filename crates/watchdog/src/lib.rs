@@ -222,10 +222,15 @@ enum Subcommand {
 
 /// Runs `watchdog …` when the first argument names it; `None` leaves every other command to
 /// the CLI, unchanged. Its developer lines go to `developer` (Workflow #434 LAB-4 fix 1). Its
-/// probe of the Runtime declares no word: actingctl's, the CLI channel as on 0.12.58, until
-/// LAB-6S2-B2.
-pub fn dispatch(arguments: &[OsString], developer: DeveloperSink<'_>) -> Option<ExitCode> {
-    dispatch_exit(arguments, developer, None).map(ExitCode::from)
+/// probe of the Runtime declared no word until Workflow #434 LAB-6S2-B2 (actingctl's, the CLI
+/// channel as on 0.12.58); since then it declares `initiator`, the caller's word (actingctl's
+/// `Lab-CLI`).
+pub fn dispatch(
+    arguments: &[OsString],
+    developer: DeveloperSink<'_>,
+    initiator: Initiator,
+) -> Option<ExitCode> {
+    dispatch_exit(arguments, developer, Some(initiator)).map(ExitCode::from)
 }
 
 /// [`dispatch`], with the process's exit code as a number (Workflow #434 LAB-4: actingwatch

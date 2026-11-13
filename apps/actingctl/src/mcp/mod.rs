@@ -87,7 +87,13 @@ impl From<Outcome> for Ended {
 pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     let command = arguments.first()?.to_str()?;
     let result = match command {
-        "mcp-serve" => serve(&arguments[1..]),
+        "mcp-serve" => {
+            // Workflow #434 LAB-6S2-B2 (`contracts/lab-two-entries.md` §4.2): this process is an
+            // MCP server, whose word is `Lab-MCP`; what reads the program in force (the overview's
+            // `watchdog` block, its probe of the Runtime) declares it, as in the Lab's MCP server.
+            let _ = actingcommand_lab_ops::front::set(actingcommand_lab_ops::front::Front::Mcp);
+            serve(&arguments[1..])
+        }
         "mcp-config" => config(&arguments[1..]),
         _ => return None,
     };

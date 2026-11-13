@@ -942,3 +942,21 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_429_rg_stop::rg_stop_t5_a_paused_runs_records_are_not_listed",
 ]
 incident = ["#429 RG-STOP"]
+
+# Workflow #392 DA-3 fix 1 (work order point 2; contracts/display-adapter.md section 10, "The task evidence"): the task evidence pairs an input with its effect intent in one coordinate system, through the display adapter's admit_input and device_input on the map of the run's geometry record's base and the effect intent's frame_extent: a scaled tap, swipe and path drag at 2, 3 and 3/2 pair; the base input sent unconverted, one device pixel off, another kind, or any input under 5/4 pairs with nothing; without a recorded map the comparison is byte for byte, as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger-forensics::lib::input_pairing::tests::da3_fix1_a_scaled_input_pairs_with_its_effect_intent",
+    "actingcommand-ledger-forensics::lib::input_pairing::tests::da3_fix1_a_mismatched_input_under_a_scale_is_still_reported",
+    "actingcommand-ledger-forensics::lib::input_pairing::tests::da3_fix1_under_the_identity_the_pairing_compares_byte_for_byte",
+]
+incident = ["#392 DA-3"]
+
+# Workflow #392 DA-3 fix 2 (the review's one point; contracts/display-adapter.md section 10, "The task evidence"): the task evidence finds the run's geometry record in the whole snapshot, backwards from the effect intent, not only in the page read: on a page that starts after a scaled run's geometry record (a pure scale of 2), the tap sent at its device point relates linked to its effect intent and the tap sent one device pixel off is still source_mismatch
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::forensics_read_only::da3_fix2_a_scaled_run_read_on_a_page_without_its_geometry_record_pairs_its_inputs",
+]
+incident = ["#392 DA-3"]

@@ -15,22 +15,22 @@ every code of its fragment, retired ones included, sorted by code, with its cate
 `since`, status (a retired code with the code that replaces it, where it names one), review, text
 (`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
 at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1752 locations are not in it, and 10 of the header's 41 owners have no fragment file and so no file
+1753 locations are not in it, and 10 of the header's 41 owners have no fragment file and so no file
 here.
 
 ## Codes by status
 
 | Status | Codes |
 |---|---:|
-| active | 3900 |
+| active | 3901 |
 | retired | 28 |
-| all | 3928 |
+| all | 3929 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
-| success | 126 |
+| success | 127 |
 | info | 209 |
 | warning | 148 |
 | error | 3403 |
@@ -40,12 +40,12 @@ here.
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 713 |
+| `common_causes` and `handling` both written | 714 |
 | one of the two written, the other `TBD` or empty | 3 |
 | neither written (`TBD` or empty) | 3184 |
 | `settled` | 170 |
-| `pending` | 3730 |
-| all active codes | 3900 |
+| `pending` | 3731 |
+| all active codes | 3901 |
 
 ## By owner
 
@@ -53,7 +53,7 @@ here.
 |---|---:|---:|---:|---:|
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
 | [actingctl](actingctl.md) | 199 | 198 | 39 | 11 |
-| [actingd](actingd.md) | 152 | 151 | 96 | 86 |
+| [actingd](actingd.md) | 153 | 152 | 97 | 86 |
 | [actinglab](actinglab.md) | 40 | 39 | 39 | 0 |
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 3 | 3 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
@@ -82,4 +82,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3928 | 3900 | 713 | 170 |
+| all | 3929 | 3901 | 714 | 170 |

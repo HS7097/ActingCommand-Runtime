@@ -40,7 +40,7 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-6S1b | Runtime | the origin gates of `RuntimeRequest::validate()` go (built, 0.12.58: section 2.4); their codes retire. Way back: yes |
 | LAB-6S2-M | Runtime | the host's half of the move to `lab` (built, 0.12.59): on a `lab` binding that declares a word the Runtime records the channel that program's binding had on 0.12.58, by the word and the request's envelope (section 2.4, the map M), and receipts a request from any client envelope but the Lab's with it, without `initiator` (section 4.3, the receipt rule R); dormant until a program declares a word. Way back: yes |
 | LAB-6S2-B1 | Runtime | the Lab's own programs (`actinglab`, its `serve`, `actinglab-mcp`, the rescue module, `actingwatch`) bind `lab` with their word and keep the envelope they sent on 0.12.58; LAB-6S2-M in the same Runtime build. Built, 0.12.59 (register §1.287, "Slice LAB-6S2-B1"): `actinglab`'s core rows (`Front::Actinglab`, (Lab, Lab)) and its own commands ((Lab, Lab)) with the process's word, `Lab-CLI` or the `Lab-制包` / `Lab-救急` of `ACTINGCOMMAND_INITIATOR`; `serve --stdio` the same, and with `--front mcp` `Lab-MCP`; MCP's `--via mcp` actinglab child `Lab-MCP` without `via` (`--via ui`, which no word names, binds as before); `actinglab-mcp` in its own process (`Front::Mcp`, (Cli, Cli)) `Lab-MCP`; the rescue module's own client ((Cli, Cli)) with the module's word, `Lab-MCP` for `actinglab-mcp`, `serve --front mcp` and the detached run; the watchdog's probe ((Cli, Cli), `Health` and `BindChannel` only) `Lab-看门狗` in `actingwatch`, else the word of the Lab program that reads the watchdog's status or starts the Runtime. `actingctl install` (the rescue module as `actingctl` calls it) and `actingctl`'s other paths through the code it shares with the Lab (`start`, `restart`, `watchdog` and the overview's `watchdog` block) declare no word in this slice and bind as on 0.12.58, `cli` without a word; LAB-6S2-B2 moves them, with the rest of `actingctl` and today's MCP server, which keep their binding until then. Way back: yes |
-| LAB-6S2-B2 | Runtime | `actingctl` and today's MCP server (`actingctl mcp-serve`) the same: `lab` with `Lab-CLI` or `Lab-MCP`, the envelope they sent on 0.12.58; after LAB-6S2-M. Way back: yes |
+| LAB-6S2-B2 | Runtime | `actingctl` and today's MCP server (`actingctl mcp-serve`) the same: `lab` with `Lab-CLI` or `Lab-MCP`, the envelope they sent on 0.12.58; after LAB-6S2-M. Built, 0.12.59 (register §1.287, "Slice LAB-6S2-B2"): every connection of `actingctl`'s command lines declares `Lab-CLI`: its own commands ((Cli, Cli); (Agent, Adapter) for `agent-publish-facts` and `agent-apply-resource-targets`), the operation layer's commands (`Front::Actingctl`, (Cli, Cli)) and the code it shares with the Lab, (Cli, Cli): `install` (the rescue module as `actingctl` calls it; its journals still record no initiator), `start`, `restart`, `watchdog` and the overview's `watchdog` block; every connection of today's MCP server declares `Lab-MCP`: the kept one and each write's ((Cli, Cli); (Agent, Adapter) for the resource targets, the remedy choices and the evidence read confirmation), and its overview's `watchdog` block (the server says it is `Front::Mcp`); its actinglab children (`--via mcp`) bind `Lab-MCP` without `via` since LAB-6S2-B1. The Runtime records and answers every request of theirs on `cli` and `mcp` as on 0.12.58 (section 2.4, the map M; section 4.3, the receipt rule R). Since this slice no program of this repository binds `cli` or `mcp`; a `lab` binding without a word is left only where LAB-6S2-B1 keeps one (`--via ui`, and actinglab's own commands under a variable that names no word). Way back: yes |
 | LAB-6S3 | Runtime | the UI list on `ui` (section 3, `ui_allows`; section 2.3 step 5): a `ui` connection is refused, `channel_request_refused`, every kind off the list and a setting outside the console's tiers; every other connection as before. Way back: yes |
 | LAB-6S4a | Runtime | the five kinds deleted; `install-control` [0, 0]. Way back: yes |
 | LAB-6S4b | Runtime | `cli`, `mcp` and a `lab` without a word refused; `via` off the wire; `runtime-client` [8, 8]; `actingd-config` 30. Way back: yes |
@@ -319,9 +319,13 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   actinglab's own other commands take no word from the variable and do not refuse it: their
   connections bind the Lab channel without a word, as on 0.12.58, and send (Workflow #434
   LAB-6S2-B1; register §1.287, "Slice LAB-6S2-B1", decision (b)). `actingctl` does not read the
-  variable: in LAB-6S2-B1 its connections declare no word, `actingctl install` (the rescue module
-  as `actingctl` calls it) and its other paths through the code it shares with the Lab included,
-  and bind as on 0.12.58 until LAB-6S2-B2 (the slice table).
+  variable: in LAB-6S2-B1 its connections declared no word and bound as on 0.12.58. Since
+  LAB-6S2-B2 (0.12.59; register §1.287, "Slice LAB-6S2-B2"; the coordinator's rulings of
+  2026-11-13 on board #434, not the owner's words) a command line of `actingctl` declares
+  `Lab-CLI` on every connection, `actingctl install` (the rescue module as `actingctl` calls it,
+  whose journals still record no initiator: the face of `install-cli` revision 1) and its other
+  paths through the code it shares with the Lab included, and `actingctl mcp-serve`, today's MCP
+  server, declares `Lab-MCP`, the probe of its overview's `watchdog` block included.
 - **The detached run's marker** (Workflow #434 LAB-6S0, 0.12.58; the coordinator's ruling of
   2026-11-13 on board #434, not the owner's words). `actinglab.exe` takes `Lab-MCP` from the
   variable only beside the marker `ACTINGCOMMAND_DETACHED_RUN` set to `rescue`, compared byte for
@@ -470,7 +474,11 @@ Alice's answer 4. From LAB-3, in the rescue module:
   alive, release; never prints the file); `place <bundle.zip>` (plan, pause the instances bound to
   the bundle's games, wait until idle, place, re-run, `standard-pack check`, wait for the new
   composition, resume, check the schedule; the games come from the bundle, no game is named in
-  code); `alive [--wait]`; and (Workflow #421 INST-5, first slice) `instance add <alias>` (compose
+  code; since 0.12.59, Workflow #453 S5, the composition is waited for only when an instance binds
+  the game, and, S6, with the Runtime stopped: plan, the stopped rule under the writer lock, place,
+  re-run, `standard-pack check` and the live build's check-config, with no hold;
+  [install-cli.md](install-cli.md), "The Lab's rescue module"); `alive [--wait]`; and (Workflow
+  #421 INST-5, first slice) `instance add <alias>` (compose
   the candidate, then `config replace`'s steps with the new instance paused after the start,
   before the release). The download stays outside the Lab.
 - **Without `--root` and `--state-root`:** every rescue operation acts on the root of the

@@ -17,6 +17,9 @@
 //! `Lab-MCP` and no counter, where today's server binds the MCP channel; every other request and
 //! every envelope are today's server's, and the members of its configuration but its binding equal
 //! those of today's expression.
+//!
+//! Workflow #434 LAB-6S2-B2 (register §1.287, "Slice LAB-6S2-B2"; adapted: today's server's
+//! binding moved): today's server binds `lab` with `Lab-MCP` and no counter too.
 
 use crate::mcp_harness::McpServer;
 use actingcommand_contract::{
@@ -118,9 +121,10 @@ fn lab5g1b_front_mcp_connects_as_todays_mcp_server() {
             initiator.as_ref().and_then(DeclaredInitiator::initiator),
         )
     };
+    // Workflow #434 LAB-6S2-B2 (adapted): today's server binds as `Front::Mcp` does.
     assert_eq!(
         bound(&server.requests[1]),
-        (RuntimeChannel::Mcp, None, None)
+        (RuntimeChannel::Lab, None, Some(Initiator::LabMcp))
     );
     assert_eq!(
         bound(&lab.requests[1]),

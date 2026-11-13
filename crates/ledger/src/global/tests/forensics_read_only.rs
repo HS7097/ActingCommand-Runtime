@@ -1651,6 +1651,184 @@ fn task_evidence_pairs_each_scan_drag_of_one_step_with_its_own_input() {
     assert!(!report.gaps.contains(&"ambiguous"), "{:?}", report.gaps);
 }
 
+/// Workflow #392 DA-3 fix 2 (`contracts/display-adapter.md` section 10, "The task evidence"): a
+/// scaled run read in pages. The run's geometry record names a pure scale of 2 (a 16x9 package
+/// on a 32x18 frame); the page read starts after it, so the page holds the run's two effect
+/// intents of the tap (5, 3) and their input intents but not the record. The tap sent at (10, 6),
+/// `round_half_up(5 · 2)` and `round_half_up(3 · 2)` by hand, relates `linked` to its effect
+/// intent; the tap sent at (11, 6), one device pixel off, is still `source_mismatch`.
+#[test]
+fn da3_fix2_a_scaled_run_read_on_a_page_without_its_geometry_record_pairs_its_inputs() {
+    use actingcommand_contract::{
+        CaptureBackendName, CaptureExtent, CaptureGeometryNotApplicable,
+        CaptureGeometryObservation, DisplayArea, DisplayMapKind, DisplayScaleBy, InputAction,
+        InputPayloadDraft, TaskGeometryConclusion, TaskGeometryDisplayMap, TaskGeometryFrame,
+        TaskGeometryObservation, TaskGeometryPhase, TaskSemanticFact,
+    };
+    let temp = tempfile::tempdir().expect("tempdir");
+    let state_root = temp.path();
+    let identifiers = IdentifierIssuer::new().expect("identifiers");
+    let writer = GlobalLedger::open(GlobalLedgerConfig::new(
+        state_root.join("ledger"),
+        "scaled-pairing-source",
+    ))
+    .expect("open scaled pairing source");
+    let append = |links: EventLinksDraft, payload: EventPayloadDraft| {
+        writer
+            .append(
+                EventDraft::new(
+                    identifiers.mint_event_id().unwrap(),
+                    1_752_147_200_200,
+                    EventSeverity::Info,
+                    EventOrigin::new(
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
+                    ),
+                    links,
+                    payload,
+                )
+                .sanitize(&Sha256SecretFingerprinter::new(b"scaled-pairing-spec").unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+    };
+    let links = EventLinksDraft::default()
+        .with_request_id(identifiers.mint_request_id().unwrap())
+        .with_task_id(identifiers.mint_task_id().unwrap())
+        .with_run_id(identifiers.mint_run_id().unwrap())
+        .with_instance_id(identifiers.mint_instance_id().unwrap())
+        .with_lease_id(identifiers.mint_lease_id().unwrap())
+        .with_correlation_id(identifiers.mint_correlation_id().unwrap());
+    let device = CaptureExtent::new(32, 18).expect("the 32x18 device frame");
+    let fixture =
+        CaptureGeometryObservation::NotApplicable(CaptureGeometryNotApplicable::FixtureSimulation);
+    let first_frame = identifiers.mint_frame_id().unwrap();
+    // The run's first geometry record, as the host writes it for a fixture frame: the map is a
+    // pure scale of 2 on the 16x9 base.
+    let geometry = append(
+        links.clone().with_frame_id(first_frame),
+        TaskPayloadDraft::semantic(
+            TaskSemanticFact::GeometryObserved {
+                observation: Box::new(TaskGeometryObservation {
+                    phase: TaskGeometryPhase::Initial,
+                    frame: Some(TaskGeometryFrame {
+                        frame_id: *first_frame.transport(),
+                        extent: device,
+                        backend: CaptureBackendName::FixtureSimulation,
+                        captured_at: std::time::UNIX_EPOCH
+                            + std::time::Duration::from_millis(1_752_147_200_100),
+                        producer: fixture.clone(),
+                    }),
+                    observation: Some(fixture),
+                    conclusion: TaskGeometryConclusion::FixtureNotApplicable,
+                    trigger: None,
+                    original_failure: None,
+                    unavailable: None,
+                    display_map: Some(TaskGeometryDisplayMap {
+                        kind: DisplayMapKind::Scale,
+                        scale_num: 2,
+                        scale_den: 1,
+                        scale_width: 16,
+                        scale_height: 9,
+                        base_width: 16,
+                        base_height: 9,
+                        scale_by: DisplayScaleBy::Width,
+                        scale_area: DisplayArea::Screen,
+                        anchor_area: DisplayArea::Screen,
+                        insets_source: None,
+                        declared: false,
+                    }),
+                }),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+    );
+    // Per step: its effect intent (the tap (5, 3) in base pixels, the device frame's size) and
+    // the input intent of what was sent, in device pixels.
+    let mut pairs = Vec::new();
+    for sent in [
+        InputAction::Tap { x: 10, y: 6 },
+        InputAction::Tap { x: 11, y: 6 },
+    ] {
+        let step = identifiers.mint_action_id().unwrap();
+        let viewport = identifiers.mint_frame_id().unwrap();
+        let effect_intent = append(
+            links.clone().with_action_id(step).with_frame_id(viewport),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::EffectIntent {
+                    frame_extent: Some(device),
+                    step_index: 1,
+                    operation_label: "neutral_press".into(),
+                    action: InputAction::Tap { x: 5, y: 3 },
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        );
+        let input = append(
+            links
+                .clone()
+                .with_action_id(identifiers.mint_action_id().unwrap()),
+            InputPayloadDraft::intent_with_provenance(
+                sent,
+                None,
+                Some(*step.transport()),
+                Some(*viewport.transport()),
+                AuditInput::new(),
+            )
+            .into(),
+        );
+        pairs.push((input.sequence(), effect_intent.sequence()));
+    }
+    writer.close().expect("close scaled pairing source");
+
+    let request = ForensicRequest::task_evidence(
+        state_root,
+        ForensicEventsRequest::new(
+            ForensicEventFilter::default(),
+            geometry.sequence(),
+            None,
+            1024,
+        )
+        .unwrap(),
+    );
+    let ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) = run(request).unwrap()
+    else {
+        panic!("task evidence report");
+    };
+    assert!(
+        report
+            .page
+            .events
+            .iter()
+            .all(|event| event.sequence() > geometry.sequence()),
+        "the page holds no geometry record: {report:?}"
+    );
+    assert_eq!(
+        report
+            .inputs
+            .iter()
+            .map(|row| (
+                row.intent_sequence,
+                row.source_step.state,
+                row.source_step.source_sequences.clone()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (pairs[0].0, "linked", vec![pairs[0].1]),
+            (pairs[1].0, "source_mismatch", vec![pairs[1].1]),
+        ],
+        "{report:?}"
+    );
+    assert!(
+        report.gaps.contains(&"source_mismatch"),
+        "{:?}",
+        report.gaps
+    );
+}
+
 #[test]
 fn replays_a_sealed_archive_through_the_canonical_verifier() {
     let temp = tempfile::tempdir().expect("tempdir");

@@ -1206,11 +1206,15 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         names.sort_unstable();
         names
     };
+    // Workflow #392 DA-3 fix 1: the task evidence pairs an input with its effect intent through
+    // the product's own input conversion, the display adapter's, a pure crate of the contract
+    // alone; the forbidden closure below holds as before.
     assert_eq!(
         internal_dependencies(leaf),
         vec![
             "actingcommand-artifact-store".to_owned(),
             "actingcommand-contract".to_owned(),
+            "actingcommand-display-adapter".to_owned(),
             "actingcommand-ledger".to_owned()
         ],
         "forensic leaf internal dependency boundary changed"
