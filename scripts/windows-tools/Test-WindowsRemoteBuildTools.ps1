@@ -457,7 +457,7 @@ try {
     Assert-True -Condition ($ortDml.archive.url -ceq 'https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/1.24.4/microsoft.ml.onnxruntime.directml.1.24.4.nupkg') -Message 'ONNX Runtime DirectML source is not the official NuGet package'
     Assert-True -Condition ([long]$ortDml.archive.size -eq 12458649) -Message 'ONNX Runtime DirectML package size is not frozen'
     Assert-True -Condition ($ortDml.archive.sha256 -ceq '57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681') -Message 'ONNX Runtime DirectML package SHA-256 is not frozen'
-    Assert-True -Condition ($ortDml.license.redistribution -ceq 'task_local_cache_only') -Message 'ONNX Runtime DirectML must stay a task-local cache'
+    Assert-True -Condition ($ortDml.license.redistribution -ceq 'redistributed_in_installation_package_by_owner_decision') -Message 'ONNX Runtime DirectML must be redistributed in the installation package only (Workflow #441)'
     Assert-True -Condition (@($ortDml.extract_allowlist).Count -eq 4) -Message 'ONNX Runtime DirectML extraction allowlist is not exact'
     $ortDmlPins = @($ortDml.pinned_files)
     Assert-True -Condition ($ortDmlPins.Count -eq 2) -Message 'ONNX Runtime DirectML must pin exactly two files'
@@ -468,7 +468,7 @@ try {
     Assert-True -Condition ($directml.archive.url -ceq 'https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg') -Message 'DirectML source is not the official NuGet package'
     Assert-True -Condition ([long]$directml.archive.size -eq 202292617) -Message 'DirectML package size is not frozen'
     Assert-True -Condition ($directml.archive.sha256 -ceq '4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9') -Message 'DirectML package SHA-256 is not frozen'
-    Assert-True -Condition ($directml.license.redistribution -ceq 'task_local_cache_only') -Message 'DirectML must stay a task-local cache'
+    Assert-True -Condition ($directml.license.redistribution -ceq 'redistributed_in_installation_package_by_owner_decision') -Message 'DirectML must be redistributed in the installation package only (Workflow #441)'
     Assert-True -Condition (@($directml.extract_allowlist).Count -eq 4) -Message 'DirectML extraction allowlist is not exact'
     $directmlPins = @($directml.pinned_files)
     Assert-True -Condition ($directmlPins.Count -eq 1) -Message 'DirectML must pin exactly one file'

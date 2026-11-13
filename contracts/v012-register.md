@@ -19532,6 +19532,64 @@ with the item `notices` `new` first, placed, the journalled plan document's `pac
 file on disk the zip's bytes). No existing test changes: the earlier gates' bundles keep their
 six-interface declarations, which the new reader reads by their `package` pair.
 
+### 1.340 Workflow #441: the owner's decision on redistributing the vision runtime (0.12.59) (the owner's decision of 2026-11-13 on board #441; how this repository records it is the coordinator's ruling, not the owner's words; coordinator work order `rd-1113/brief-441-vision-redistribution.md`, read on main `98924e28`)
+
+1.340 was the next free number on the base `98924e28`. Text and data, and two tests adapted: no
+product code, outcome code, configuration key, interface revision, wire shape or record changes.
+
+**The decision.** The Windows installation package (the complete, offline package the graphical
+installer installs from; it is assembled outside this repository and published in the umbrella
+repository) carries `onnxruntime.dll` and
+`onnxruntime_providers_shared.dll` of `onnxruntime-directml-1.24.4` (ONNX Runtime's DirectML build,
+MIT) with its `LICENSE` and `ThirdPartyNotices.txt`; `DirectML.dll` of `directml-1.15.4`
+(Microsoft's own license terms) with the package's license terms, so that the installation can
+offer GPU acceleration; and the detector, recognizer and dictionary of `ppocrv6-medium-onnx`
+(Apache-2.0) with PaddleOCR's `LICENSE`.
+
+**What changed.** In the tool registry `scripts/windows-tools/windows-tool-sources.v1.json`, the
+three components' `license.redistribution` is the new word
+`redistributed_in_installation_package_by_owner_decision` (the first two were
+`task_local_cache_only`, the third had none), formed like `platform-tools-37.0.1`'s and the scrcpy
+server's, each with a `redistribution_note` in their form (the files, their license files, the
+installation package only, Workflow #441, 2026-11-13, and "This records the owner's decision; it is
+not a legal opinion."); `directml-1.15.4`'s note also says what the terms require of this
+redistribution and that `DirectML.dll` is governed by Microsoft's terms, not by the project's own
+licenses. The sentence of the two `placement_note`s on who carries the files says what is now
+decided. `onnxruntime-gpu-1.24.4` stays `task_local_cache_only`. [NOTICE.md](../NOTICE.md), the
+ONNXRuntime "Release boundary": the Runtime and Tools artifacts carry neither ONNX Runtime, DirectML
+nor models; the installation package carries the files above, each named with its size, SHA-256,
+source package and license; its first sentence, which said GPU and DirectML were disabled, now
+names the execution providers the configuration selects since 0.12.44; the notice's date of state
+is 2026-11-13. Four more sentences of the notice: FastDeploy / PPOCR "Current status" and "Artifact
+contract status" (no PPOCR model or dictionary is in this repository or its Runtime and Tools
+artifacts; those the installation package carries are listed under the release boundary), and
+ONNXRuntime "Current status" (a classifier runs on the CPU under `directml`) and "Engine
+implementation" (the engine registers DirectML in its DirectML OCR sessions).
+[vision-model-folders.md](vision-model-folders.md), "Vision root" and "DirectML runtime",
+`scripts/windows-tools/README.md`, [INSTALL.md](../distribution/windows/INSTALL.md) and the
+documentation comment of `crates/vision-ffi/src/runtime_pin.rs`: who carries the files, as the
+registry says; no rule and no code changes.
+
+**What did not change.** No Rust product code (one documentation comment only), interface or
+outcome code. The Runtime artifact and the Tools artifact carry none of these files, as before.
+`Materialize-VisionRoot.ps1` and `Materialize-TaskToolCache.ps1` are unchanged (the latter copies
+the word into its provenance note as it is); no reader holds a list of `redistribution` words.
+
+**At deploy.** Nothing changes in a deployed Runtime: the registry and the notice are repository
+files; the Runtime artifact's `INSTALL.md` carries the corrected sentence from 0.12.59.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| VR-1 | `windows-tool-sources.v1.json` `license.redistribution` `redistributed_in_installation_package_by_owner_decision` with `redistribution_note`, on `onnxruntime-directml-1.24.4`, `directml-1.15.4` and `ppocrv6-medium-onnx` | tool source | #441 | — | the two `placement_note`s' sentence on who carries the files; pins unchanged |
+| VR-2 | [NOTICE.md](../NOTICE.md), the ONNXRuntime "Release boundary", and four sentences of the vision section | notice text | #441 | — | the three runtime files with the sizes and SHA-256 of vision-model-folders.md, the three model files with the registry's; `DirectML.dll` with `LICENSE.txt`, `LICENSE-CODE.txt` and `ThirdPartyNotices.txt` |
+| VR-3 | [vision-model-folders.md](vision-model-folders.md), `scripts/windows-tools/README.md`, [INSTALL.md](../distribution/windows/INSTALL.md), the documentation comment of `runtime_pin.rs`: who carries the files | contract and document text (no rule change) | #441 | — | the Runtime and Tools packages carry none of them |
+
+Tests (adapted; the requirement deliberately changes what they pin, nothing else in them):
+`the_runtime_pin_equals_the_tool_sources_entries` (exec gate row "#407 GPU-1 A",
+`crates/vision-ffi/src/gate_407_gpu1a.rs`) and the case `parse-and-workflow-structure` of
+`scripts/windows-tools/Test-WindowsRemoteBuildTools.ps1` each pinned `task_local_cache_only` for
+the two DirectML components and now pin the new word. No test is added.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
