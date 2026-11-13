@@ -368,6 +368,16 @@ pub(super) struct Programs {
     /// (`run_program_ending`) that never exits (a word of `stall`) and was ended there, by that
     /// word, with its deadline.
     pub(super) ended: RefCell<Vec<(String, u64)>>,
+    /// Workflow #453 S7: the exit code and the line of `actingd vision <word>`, by its word
+    /// (`manifest`, `check`; none set: `null`, no report).
+    pub(super) vision: RefCell<BTreeMap<String, (i32, Value)>>,
+    /// Workflow #453 S7: the exit code and the line of the Tools' `standard-pack check --root
+    /// <game root>`, by the game root as the command line names it (none set: a panic).
+    pub(super) standard_pack_checks: RefCell<BTreeMap<String, (i32, Value)>>,
+    /// Workflow #453 S7 fix 1: how long each program run to be ended at its deadline
+    /// (`run_program_ending`) that exits takes on the fake clock (none by default); one that never
+    /// exits takes its deadline.
+    pub(super) run_ms: Cell<u64>,
 }
 
 /// The process id of a fake program left running at its deadline.
@@ -406,6 +416,9 @@ impl FakeHost {
                 deadlines: RefCell::new(Vec::new()),
                 discover: RefCell::new((0, Value::Null)),
                 ended: RefCell::new(Vec::new()),
+                vision: RefCell::new(BTreeMap::new()),
+                standard_pack_checks: RefCell::new(BTreeMap::new()),
+                run_ms: Cell::new(0),
             },
             on_step: RefCell::new(None),
             log: RefCell::new(Vec::new()),
@@ -599,6 +612,33 @@ impl Host for FakeHost {
                 let (exit_code, line) = self.programs.discover.borrow().clone();
                 ran(exit_code, line)
             }
+            // Workflow #453 S7: the line the test set for the word after `vision`.
+            ("actingcommand-actingd.exe", Some("vision")) => {
+                let word = words.get(1).cloned().unwrap_or_default();
+                let (exit_code, line) = self
+                    .programs
+                    .vision
+                    .borrow()
+                    .get(&word)
+                    .cloned()
+                    .unwrap_or((0, Value::Null));
+                ran(exit_code, line)
+            }
+            // Workflow #453 S7: the Tools' `standard-pack check` of a game root, the line the
+            // test set for that root.
+            ("actinglab.exe", Some("--json"))
+                if words.get(1).map(String::as_str) == Some("standard-pack") =>
+            {
+                let game_root = words.last().cloned().unwrap_or_default();
+                let (exit_code, line) = self
+                    .programs
+                    .standard_pack_checks
+                    .borrow()
+                    .get(&game_root)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("no standard-pack check set for {game_root}"));
+                ran(exit_code, line)
+            }
             // The bounded head read (S0): no row but the head's.
             ("actingledger.exe", _)
                 if doing == "export"
@@ -649,6 +689,9 @@ impl Host for FakeHost {
     /// Workflow #453 S10 fix 1: a program whose word is in `stall` never exits; it is ended at its
     /// deadline, kept in `ended`, and left among no processes (unlike [`Self::run_program`]'s, which
     /// is left running with `STALLED_PID`). Any other program answers as `run_program` does.
+    /// Workflow #453 S7 fix 1: the fake clock moves by `run_ms` for a program that exits, by the
+    /// deadline for one that never does. Fix 2: a program that would take longer than its
+    /// deadline (`run_ms` past it) is ended there too, as one that never exits.
     fn run_program_ending(
         &self,
         program: &Path,
@@ -659,13 +702,15 @@ impl Host for FakeHost {
             .first()
             .map(|word| word.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if !self
+        let stalled = self
             .programs
             .stall
             .borrow()
             .iter()
-            .any(|stalled| *stalled == doing)
-        {
+            .any(|word| *word == doing);
+        if !stalled && self.programs.run_ms.get() <= timeout_ms {
+            self.clock
+                .set(self.clock.get() + self.programs.run_ms.get());
             return self.run_program(program, arguments, timeout_ms).map_err(
                 |not_ran| match not_ran {
                     NotRan::Failed(cause) => NotFinished::Failed(cause),
@@ -688,6 +733,7 @@ impl Host for FakeHost {
             .borrow_mut()
             .push((doing.clone(), timeout_ms));
         // It runs on to its deadline; there it is ended and reaped.
+        self.clock.set(self.clock.get() + timeout_ms);
         self.programs.ended.borrow_mut().push((doing, timeout_ms));
         Err(NotFinished::Ended)
     }

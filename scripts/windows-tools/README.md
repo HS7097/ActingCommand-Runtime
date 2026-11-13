@@ -114,6 +114,9 @@ on drive `D:`. Component selection is explicit:
   does not read its `compatibility.state`, which says `Ready` since Workflow #428
   CI-OCR-1 (the Runtime's vision pipeline runs these files; see the entry's
   `reason`). `Materialize-VisionRoot.ps1` places these files in a vision root.
+  Since Workflow #453 S7 the entry names its model (`model_ref`, `family`) and
+  each artifact its place in a vision root (`vision_root_path`), which
+  `actingd vision manifest` reads; the script keeps its own constants.
 - `onnxruntime-gpu-1.24.4` downloads the exact official ONNX Runtime v1.24.4
   Windows GPU archive and extracts only `onnxruntime.dll`,
   `onnxruntime_providers_shared.dll`, and `onnxruntime_providers_cuda.dll` under
@@ -136,7 +139,8 @@ on drive `D:`. Component selection is explicit:
   equal the runtime pin in `crates/vision-ffi/src/runtime_pin.rs` (a logic test
   holds them equal, and `Test-WindowsRemoteBuildTools.ps1` freezes both entries).
   `onnxruntime-directml-1.24.4` also pins its two license files the same way
-  (`pinned_license_files`, Workflow #428 CI-OCR-1).
+  (`pinned_license_files`, Workflow #428 CI-OCR-1), and `directml-1.15.4` its
+  three (Workflow #453 S7, read from the pinned package itself).
 - `mumu-nemu-installed` records metadata for one explicit installed root and
   `nx_device` version. Vendor files remain in place and are never copied or run.
 

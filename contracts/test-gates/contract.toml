@@ -896,3 +896,14 @@ tests = [
     "actingcommand-contract::lib::taskflow::gate_450_fl1::field_list_declaration_rules",
 ]
 incident = ["#450 FL-1"]
+
+# Workflow #455 G-R1 (0.12.60; register §1.356; brief rd-1114/brief-455-gr1.md; contracts/standard-pack-goals.md): the reader of a game root's goal declaration goals.json (parse_standard_pack_goals) in the contract crate. The design's neutral example reads to its typed entries in file order (a heading; a resource entry with its pool and rate; a choice governing one package, with its options and default), and its references hold against a root that offers the valued pool and the package; one entry of each of the eight types reads with every member its type has (each type's base block written, help texts, an integer with a step and a text unit and one with a time unit and the step 1, a choice, a switch, an ordered entry from options and one from a table with names, a tier with its scales), and its references hold against a root that offers them; the reader is strict: an unknown member of an entry, of governs and of the document, a member another type has, a missing member, another version, a name outside the name rule, a number that is no integer, a member repeated in one object and no JSON are each malformed at their pointer, 97 entries and a file over 1 MiB goal_out_of_limits (fix round 1, brief rd-1114/brief-1694-fix1.md), another game is game_mismatch at /game, and an unknown type and a type of a later version (slider) are goal_type_unknown at /entries/<i>/type. Fix round 1: references are made only from what every package of the root provides; with made-up packages (one marking a capability irreversible, one providing it unmarked, one providing nothing, one the references were not told of, each running a rule with a fixed value), a switch entry over the four packages and a tier entry over their four rules are goal_governs_irreversible for the marking and the unmarked provider and goal_package_unknown for the untold package, each at its pointer, and pass the third; references made from no package pass no package and no rule
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::standard_pack_goals::tests::goals_neutral_example_reads_to_typed_entries",
+    "actingcommand-contract::lib::standard_pack_goals::tests::goals_each_type_reads_its_members",
+    "actingcommand-contract::lib::standard_pack_goals::tests::goals_reader_is_strict",
+    "actingcommand-contract::lib::standard_pack_goals::tests::goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root",
+]
+incident = ["#455 G-R1"]

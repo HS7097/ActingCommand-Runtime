@@ -27,8 +27,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The pin the Windows exact-SHA build checks the shipped platform-tools files against. Its
-/// `distributed_files` are the only source of the expected SHA-256 values here.
-const TOOL_SOURCES_PIN: &str =
+/// `distributed_files` are the only source of the expected SHA-256 values here. Workflow #453
+/// S7: `actingd vision` builds a vision root's manifest from the same embedded registry; the
+/// reader below ignores every member it does not name.
+pub(crate) const TOOL_SOURCES_PIN: &str =
     include_str!("../../../../scripts/windows-tools/windows-tool-sources.v1.json");
 /// The pin path of the adb itself, relative to `<install root>\tools`; the pin must list it.
 const PINNED_ADB: &str = "platform-tools/adb.exe";
