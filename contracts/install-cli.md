@@ -668,7 +668,17 @@ read it from the newest close step before them that is not an automatic rollback
 start` reads it from the close of the operation that stopped the Runtime (`last_stop`, carried in
 its journal's `inputs` as `"first_epoch": true`), and only when that operation began no start of
 its own after its close. An automatic rollback's checks judge without it (their start follows the
-new build's Runtime, not S0's).
+new build's Runtime, not S0's). Two cases judge a true first epoch not first, the safe side: (a) a
+close that finds no Runtime answering its status read, as when a close is resumed after the
+Runtime it stopped is gone, records `first_epoch` `false` with `first_epoch_unread`
+`runtime_not_running` and takes no fact; (b) an operation with a `start` step in any state other
+than `planned` counts as having started the Runtime itself (that start may have written the
+seeding marker), also when its start never reached a Runtime, and carries no `first_epoch` to
+`install start`. In both the root's next start seeds and fails `no_seeding` as before Workflow
+#454, with what a failed check does in that command; that start found the first epoch's start
+record, so it wrote the seeding marker, and a start after it loads: the person runs the command
+once more, or, where the Runtime is down, starts it with `install start` (the rescue module's
+`up`).
 
 | id | Judged | Fail-class |
 |---|---|---|
