@@ -11755,9 +11755,16 @@ renamed for what they keep, `runtime_debug_events_are_strict_and_require_lab_ori
 (now `agent_wake_test_is_an_instruction_of_no_instance`). Adapted, each for its origin half only:
 `list_reading_key_reserved` (the key from `(Cli, Cli)`, `(User, Ui)`, `(Lab, Lab)` now reaches the
 host and is `list_reading_key_reserved`), `a4_a_request_the_contract_refuses_carries_the_refusal_code`
-(an envelope outside the client set), and, outside the gate maps, the contract crate's tests that
-built a refused envelope beside their shape checks (signatures, package debug, evidence export,
-fact publication and the policy input identity, planning, authoring).
+(an envelope outside the client set), the host's
+`second_owner_is_rejected_and_clean_restart_gets_a_new_epoch` (host row 1: the shutdown it forges
+to be refused now carries an envelope outside the client set, since an agent adapter's is
+admitted), and, outside the gate maps, the host's forged authoring event (now
+`runtime_rejects_an_authoring_event_from_outside_the_client_set_without_ledger_effect`, the same
+change: a (Cli, Cli) authoring event is taken and recorded as the Lab's, the record's origin being
+the kind's) and the contract crate's tests that built a refused envelope beside their shape checks
+(signatures, package debug, evidence export, fact publication and the policy input identity,
+planning, authoring). The two host tests were found red by CI on the pull request's first full
+round and adapted by the coordinator.
 
 **At deploy.** The Lab's own programs are no longer refused for their envelope (the list above).
 No program changes what it sends. A rollback to the build before this slice brings the gates
