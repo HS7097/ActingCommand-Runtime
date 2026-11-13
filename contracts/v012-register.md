@@ -22113,6 +22113,13 @@ review; the three decisions above accepted):
   before), and each is read back from the disk: two configurations of one installation root that
   start for the first time together keep the identity the first placed, and the record carries
   its number.
+- *Without hard links* (fix round 2, the coordinator's ruling of 11-14): a hard link that fails
+  for any other reason than "already exists" (FAT32, exFAT) falls back to an exclusive create of
+  the target itself (`create_new`), written and flushed, then read back as after a link; "already
+  exists" on either means another start placed the file, which is kept and used; only when the
+  fallback fails too is the claim `state_root_claim_failed`. A file system without hard links
+  keeps no Runtime from starting; what the fallback gives up is that a crash while its few bytes
+  are written can leave an incomplete file, which the next start refuses as invalid.
 - *The contract says the limits*: an A/B root of the older installer configured from
   `install\generations\…` is `not_installed`; the one more file-metadata read of a Runtime without
   an installation root and the refusal when it fails other than "not found"; a leftover
@@ -22133,10 +22140,12 @@ list does not name the fact, whose one record stays in the ledger as written; a 
 names another installation's state root starts on it again. The files stay; the next start of
 this release or a later one reads them and matches.
 
-Tests: host rows "#453 S11", `actingcommand-runtime-host::lib::tests::gate_453_s11` (twelve
+Tests: host rows "#453 S11", `actingcommand-runtime-host::lib::tests::gate_453_s11` (fourteen
 tests, the start fixture on temporary state roots and installation roots, no sleep, no clock read
 by a test; the test of a Runtime without an installation root pins the state root's entries and
-the start's runtime facts as main `691c20f5`'s code leaves them, written out in the test);
+the start's runtime facts as main `691c20f5`'s code leaves them, written out in the test, and
+not the start's whole record list, whose capacity monitor records vary with the machine's disk
+and the timing);
 apps rows "#453 S11", `gate_453_s11::s11_check_config_reports_each_state_of_the_state_root_and_never_writes`
 (actingd) and `gate_inst1_update::s11_an_update_and_a_rollback_leave_the_installation_identity_in_place`
 (lab-rescue, the installer's fake host). Two existing tests change with the slice, keeping their

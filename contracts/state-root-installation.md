@@ -134,7 +134,8 @@ Only a start claims, **under the owner lock**, right after it took it
    a later start that records a missing fact from the record writes no line.
 
 A step that cannot be done (the random source fails; a `.part` cannot be removed, created,
-written or flushed; the placement fails other than because the file is there; the part's name
+written or flushed; the placement fails, by the hard link and then by its fallback ("Without
+hard links" below), other than because the file is there; the part's name
 cannot be removed afterwards; a placed or found file is gone when it is read back) is fatal
 `state_root_claim_failed` (`path` the file, the operating system's failure as its `caused_by`
 link); the start fails and closes its epoch, and the next start claims again.
@@ -152,9 +153,19 @@ entry for an existing, complete and flushed file in a single file-system operati
 with "already exists" when the target name is taken: it never replaces a file, unlike a rename,
 which the operating system lets replace its target. So on Windows (NTFS) the target appears
 complete, or not at all, and a file another writer placed first is kept as it is; the claim then
-reads back what the disk holds. A rename is not used. A file system without hard links (FAT32,
-exFAT) cannot take the placement: the claim fails `state_root_claim_failed` and the start is
-refused, never placed another way.
+reads back what the disk holds. A rename is not used.
+
+**Without hard links.** A hard link that fails for any other reason than "already exists" (a
+file system without hard links, such as FAT32 or exFAT on a removable drive) falls back to an
+**exclusive create of the target itself** (`create_new`): it fails when the target exists, and
+otherwise the bytes are written and flushed. "Already exists" on either the link or the create
+means another start placed the file: it is kept, read back and used. Either way the claim then
+reads the file back from the disk and uses that value, exactly as after a link. Only when the
+fallback fails too is the claim failed, `state_root_claim_failed` (the fallback's failure as its
+`caused_by` link, the link's as a `note`). What the fallback gives up: the file appears before
+its few bytes are written, so on such a file system a crash while they are written can leave an
+incomplete file, which the next start refuses as `state_root_installation_record_invalid`; the
+way out is the one for a corrupt file below ("When a start is refused").
 
 A crash between these steps can leave `identity.json.part` (or `installation.json.part`), which
 the installer's `install leftovers` lists as a `.part` file. The next mint reuses that name: it

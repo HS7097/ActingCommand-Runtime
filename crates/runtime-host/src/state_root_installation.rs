@@ -154,6 +154,10 @@ pub(crate) struct ClaimRequest<'a> {
     /// placement, as another configuration of the same installation minting first would.
     #[cfg(test)]
     pub(crate) identity_before_placement: Option<&'a [u8]>,
+    /// Test only (fix round 2): every hard link of the claim fails with "unsupported", as on a
+    /// file system without hard links, so each file is placed by the fallback.
+    #[cfg(test)]
+    pub(crate) hard_link_fails: bool,
 }
 
 /// Ruling 2 of #453 S11: the installation root of a writer that is not told one, the directory
@@ -236,6 +240,18 @@ pub(crate) fn claim(request: &ClaimRequest<'_>) -> RuntimeHostResult<StateRootCl
     }
     let pid = std::process::id();
     let build_commit = request.build_commit.map(str::to_owned);
+    // The hard link; a test may make it fail as a file system without hard links does.
+    #[cfg(test)]
+    let hard_link_fails = request.hard_link_fails;
+    #[cfg(not(test))]
+    let hard_link_fails = false;
+    let link = |part: &Path, path: &Path| -> std::io::Result<()> {
+        if hard_link_fails {
+            Err(std::io::Error::from(ErrorKind::Unsupported))
+        } else {
+            fs::hard_link(part, path)
+        }
+    };
     let identity = match identity {
         Some(identity) => identity,
         None => {
@@ -253,7 +269,7 @@ pub(crate) fn claim(request: &ClaimRequest<'_>) -> RuntimeHostResult<StateRootCl
             if let Some(bytes) = request.identity_before_placement {
                 fs::write(&path, bytes).expect("the test's identity before the placement");
             }
-            place_once(&path, &minted)?;
+            place_once(&path, &minted, &link)?;
             // Placed or found: the identity the disk holds is the installation's.
             read_identity(request.installation_root, LOCATION)?.ok_or_else(|| vanished(&path))?
         }
@@ -269,7 +285,7 @@ pub(crate) fn claim(request: &ClaimRequest<'_>) -> RuntimeHostResult<StateRootCl
         },
     };
     let record_path = request.state_root.join(STATE_ROOT_INSTALLATION_FILE);
-    let placed = place_once(&record_path, &record)?;
+    let placed = place_once(&record_path, &record, &link)?;
     // Placed or found: the record the disk holds is judged as the check judges it.
     let record =
         read_record(request.state_root, LOCATION)?.ok_or_else(|| vanished(&record_path))?;
@@ -453,7 +469,16 @@ fn mint_installation_id(identity_path: &Path) -> RuntimeHostResult<String> {
 /// Windows, `link` elsewhere) and fails when `path` exists, never replacing it, so a file another
 /// writer placed first is kept as it is. The part's name is removed afterwards. `true` when this
 /// call placed the file, `false` when one was there. A failed step is `state_root_claim_failed`.
-fn place_once(path: &Path, document: &impl Serialize) -> RuntimeHostResult<bool> {
+///
+/// Fix round 2: a hard link that fails for any other reason than "already exists" (a file system
+/// without hard links: FAT32, exFAT) falls back to [`create_exclusive`] of `path` itself; only
+/// when that fails too is the claim failed, with the link's failure as a `note` link. `link` is
+/// the hard link ([`fs::hard_link`]; a test gives one that fails).
+fn place_once(
+    path: &Path,
+    document: &impl Serialize,
+    link: &HardLink<'_>,
+) -> RuntimeHostResult<bool> {
     let mut bytes = serde_json::to_vec(document).map_err(|_| {
         RuntimeHostError::fatal(
             HostCode::StateRootClaimFailed,
@@ -481,13 +506,48 @@ fn place_once(path: &Path, document: &impl Serialize) -> RuntimeHostResult<bool>
     file.sync_all()
         .map_err(|error| claim_failed(&part, &error, IoOp::Sync))?;
     drop(file);
-    let placed = match fs::hard_link(&part, path) {
+    let placed = match link(&part, path) {
         Ok(()) => true,
         Err(error) if error.kind() == ErrorKind::AlreadyExists => false,
-        Err(error) => return Err(claim_failed(path, &error, IoOp::Create)),
+        Err(unlinked) => create_exclusive(path, &bytes)
+            .map_err(|error| error.with_note(Outcome::from_io_error(&unlinked, IoOp::Create)))?,
     };
     fs::remove_file(&part).map_err(|error| claim_failed(&part, &error, IoOp::Remove))?;
     Ok(placed)
+}
+
+/// The hard link of a part file to its target, as [`place_once`] takes it.
+type HardLink<'a> = dyn Fn(&Path, &Path) -> std::io::Result<()> + 'a;
+
+/// Fix round 2: the placement where no hard link can be made: an exclusive create of `path`
+/// itself (it fails when `path` exists), the bytes written and flushed. `false` when the file is
+/// there ("already exists": another start placed it, and it is kept as it is). What it gives up
+/// against the link: the file appears before its bytes are written, so a crash while they are
+/// written can leave an incomplete file, which the next start refuses as
+/// `state_root_installation_record_invalid`. A failed step is `state_root_claim_failed`.
+fn create_exclusive(path: &Path, bytes: &[u8]) -> RuntimeHostResult<bool> {
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => return Err(claim_failed(path, &error, IoOp::Create)),
+    };
+    file.write_all(bytes)
+        .map_err(|error| claim_failed(path, &error, IoOp::Write))?;
+    file.sync_all()
+        .map_err(|error| claim_failed(path, &error, IoOp::Sync))?;
+    Ok(true)
+}
+
+/// Test only (fix round 2): [`place_once`] of `document` at `path` with a hard link that always
+/// fails with "unsupported", as on a file system without hard links.
+#[cfg(test)]
+pub(crate) fn place_once_without_hard_link_for_test(
+    path: &Path,
+    document: &serde_json::Value,
+) -> RuntimeHostResult<bool> {
+    place_once(path, document, &|_, _| {
+        Err(std::io::Error::from(ErrorKind::Unsupported))
+    })
 }
 
 /// `state_root_claim_failed` for a file the claim placed or found that is gone when it is read

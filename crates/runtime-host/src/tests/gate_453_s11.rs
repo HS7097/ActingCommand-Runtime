@@ -31,6 +31,10 @@
 //!   the fact to the next start, which writes it from the record once, without the daemon line;
 //! - an identity file another configuration of the installation placed between the mint and the
 //!   placement is kept byte for byte, and the record carries its number.
+//!
+//! Fix round 2 (the coordinator's ruling of 11-14): without hard links (a test-only hook makes
+//! them fail) a file is placed by an exclusive create of itself, once, and an existing one is
+//! kept and used; the start still claims.
 
 use super::instance_workers::closed_ledger_events;
 use super::*;
@@ -646,7 +650,8 @@ fn s11_a_moved_installation_root_passes() {
 // the one runtime fact a start records before it. A new root's start writes one
 // `runtime.started` and no `runtime.takeover`. An installation folder beside it that the start
 // is not told of gets no identity; the state root gets no record, the ledger no fact and actingd
-// no daemon line.
+// no daemon line. The start's whole record list is not pinned: the capacity monitor's records
+// among them vary with the machine's disk and the timing.
 #[test]
 fn s11_a_runtime_not_started_from_an_installation_root_writes_what_it_wrote_before() {
     let installation = installation_root();
@@ -975,5 +980,83 @@ fn s11_an_identity_placed_between_the_mint_and_the_placement_is_kept_and_used() 
         "this start placed the record and writes the line"
     );
     assert!(!names(state.path()).contains("installation.json.part"));
+    assert_eq!(claim_facts(state.path()).len(), 1);
+}
+
+// Fix round 2 (the coordinator's ruling of 11-14): a file system without hard links must not keep
+// a Runtime from starting. With the hard link made to fail ("unsupported", a test-only hook) the
+// placement falls back to an exclusive create of the file itself: the file is placed, its bytes
+// read back are the document written, no part file is left; a second placement finds it, answers
+// that it placed nothing, and changes nothing.
+#[test]
+fn s11_without_a_hard_link_the_file_is_placed_by_an_exclusive_create_once() {
+    let folder = TempDir::new().expect("tempdir");
+    let path = folder.path().join(RECORD);
+    let first = json!({"placed": "first"});
+    let mut written = serde_json::to_vec(&first).expect("the document's bytes");
+    written.push(b'\n');
+
+    let placed =
+        crate::state_root_installation::place_once_without_hard_link_for_test(&path, &first)
+            .expect("the fallback places the file");
+    assert!(placed, "this placement placed the file");
+    assert_eq!(fs::read(&path).ok(), Some(written.clone()), "read back");
+    assert_eq!(
+        names(folder.path()),
+        BTreeSet::from([RECORD.to_owned()]),
+        "no part file left"
+    );
+
+    let again = crate::state_root_installation::place_once_without_hard_link_for_test(
+        &path,
+        &json!({"placed": "second"}),
+    )
+    .expect("the second placement finds the file");
+    assert!(!again, "the second placement placed nothing");
+    assert_eq!(fs::read(&path).ok(), Some(written), "the file as it was");
+    assert_eq!(
+        names(folder.path()),
+        BTreeSet::from([RECORD.to_owned()]),
+        "no part file left"
+    );
+}
+
+// Fix round 2: a start on a file system without hard links (every hard link of its claim fails,
+// a test-only hook) still claims. The identity another configuration placed first is found by the
+// fallback's exclusive create ("already exists") and kept byte for byte, its number read back and
+// recorded; the record is placed by the fallback; the start writes its daemon line and the fact
+// once, and no part file is left.
+#[test]
+fn s11_without_a_hard_link_the_fallback_keeps_an_existing_identity_and_the_start_claims() {
+    let installation = installation_root();
+    let install = install_folder(&installation);
+    let state = TempDir::new().expect("tempdir");
+    let placed_first = identity(THIS_ID);
+
+    let host = start_with(
+        config(&state)
+            .with_installation_root(installation.path())
+            .with_hard_link_failure_for_test()
+            .with_identity_before_placement_for_test(placed_first.clone()),
+        instance_id(),
+    )
+    .expect("the start passes without hard links");
+    let claimed = host.state_root_claimed().cloned();
+    host.close().expect("close the host");
+
+    assert_eq!(
+        fs::read(install.join(IDENTITY)).ok(),
+        Some(placed_first),
+        "the existing identity, byte for byte"
+    );
+    assert_eq!(
+        names(&install),
+        BTreeSet::from(["state.json".to_owned(), IDENTITY.to_owned()]),
+        "no part file left"
+    );
+    let record = json_file(&state.path().join(RECORD));
+    assert_eq!(record["installation_id"], json!(THIS_ID));
+    assert!(!names(state.path()).contains("installation.json.part"));
+    assert!(claimed.is_some(), "this start placed the record");
     assert_eq!(claim_facts(state.path()).len(), 1);
 }

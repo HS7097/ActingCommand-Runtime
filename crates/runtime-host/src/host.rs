@@ -722,6 +722,10 @@ pub struct RuntimeHostConfig {
     /// [`RuntimeHostConfig::with_start_failure_after_claim_for_test`].
     #[cfg(test)]
     fail_after_claim_for_test: bool,
+    /// Workflow #453 S11 fix round 2, test only: see
+    /// [`RuntimeHostConfig::with_hard_link_failure_for_test`].
+    #[cfg(test)]
+    hard_link_fails_for_test: bool,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -806,6 +810,8 @@ impl RuntimeHostConfig {
             identity_before_placement_for_test: None,
             #[cfg(test)]
             fail_after_claim_for_test: false,
+            #[cfg(test)]
+            hard_link_fails_for_test: false,
         }
     }
 
@@ -834,6 +840,15 @@ impl RuntimeHostConfig {
     #[cfg(test)]
     pub(crate) fn with_start_failure_after_claim_for_test(mut self) -> Self {
         self.fail_after_claim_for_test = true;
+        self
+    }
+
+    /// Workflow #453 S11 fix round 2, test only: every hard link of the start's claim fails with
+    /// "unsupported", as on a file system without hard links (FAT32, exFAT), so the identity and
+    /// the record are placed by the fallback, an exclusive create of the file itself.
+    #[cfg(test)]
+    pub(crate) fn with_hard_link_failure_for_test(mut self) -> Self {
+        self.hard_link_fails_for_test = true;
         self
     }
 
@@ -1668,6 +1683,8 @@ impl RuntimeHost {
                     build_commit: config.runtime_commit.as_deref(),
                     #[cfg(test)]
                     identity_before_placement: config.identity_before_placement_for_test.as_deref(),
+                    #[cfg(test)]
+                    hard_link_fails: config.hard_link_fails_for_test,
                 },
             )?),
             None => None,
