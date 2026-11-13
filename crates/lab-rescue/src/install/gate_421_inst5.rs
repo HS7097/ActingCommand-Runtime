@@ -38,6 +38,24 @@
 //   the hold's pause and nothing else;
 // - `inst5b_config_replace_and_restore_send_no_global_pause`: neither asks for a global pause or
 //   resume.
+// Workflow #452 (register §1.300, "Fix #452"; coordinator work order
+// `rd-1113/brief-452-inst5-appid.md`): `instance add` writes the entry's `application_id`, the one
+// given or the one the game root's `applications.json` declares for the server. The fake game root
+// of every test above declares [`DECLARED`] for [`SERVER`] (the one change to their fixture).
+// - `inst5_452_a_given_application_id_is_written_over_the_declared_one`: with `application_id`
+//   given (not the declared one) the entry is the six members in order with the given id, and the
+//   answer's `added` and the journal's input record it with `application_id_from` `given`;
+// - `inst5_452_without_the_option_the_declared_id_is_written`: without it the entry carries the
+//   declared id, and both records say `declared`;
+// - `inst5_452_without_a_declared_id_nothing_is_written`: without it and with no file, a file that
+//   is no JSON, no member of the server, a member without `application_id`, or a blank one, each is
+//   refused `instance_invalid` with `game`, `server` and the file's `path` (the read's failure as
+//   the cause when the read failed, none otherwise): the root byte for byte as it was (nothing
+//   staged), no journal, no call to the Runtime;
+// - `inst5_452_a_malformed_application_id_is_refused_by_the_assembly_rule`: an empty, a blank, a
+//   257-byte one and one with a control character are `actingctl_usage_invalid` `unusable` (a
+//   number `wrong_type`) naming `--application-id`, nothing written and nothing asked; a 256-byte
+//   one with spaces and capitals, which the assembly takes, is written as given.
 // The machine is the fake host of `fixture.rs` with its fake Runtime, fake watchdog and fake
 // clock: no device, no emulator, no sleep; every root is a temporary folder with neutral files.
 
@@ -59,6 +77,10 @@ const HOST_ID: &str = "neutral.host";
 const ADDED: &str = "neutral.added";
 const ID_A: &str = "instance_0000000000000000000000000000000a";
 const ID_B: &str = "instance_0000000000000000000000000000000b";
+/// Workflow #452: the application id the game root declares for [`SERVER`] (`applications.json`).
+const DECLARED: &str = "neutral.application";
+/// Workflow #452: an application id a caller gives, not the declared one.
+const GIVEN: &str = "neutral.application.given";
 
 fn entry(alias: &str, instance_id: &str, index: u16) -> Value {
     json!({
@@ -131,6 +153,17 @@ fn installed(base: &Path, name: &str, host: &FakeHost) -> PathBuf {
                 "file_count": 1,
                 "byte_count": 2,
             }],
+        }),
+    );
+    // Workflow #452: the game root's applications table, which declares the application of
+    // [`SERVER`], as a game root a bundle places holds it; without `application_id` the command
+    // takes this one.
+    write_json(
+        &game_root.join("applications.json"),
+        &json!({
+            "schema_version": "actingcommand.applications.v1",
+            "game": GAME,
+            "servers": {SERVER: {"application_id": DECLARED}},
         }),
     );
     root
@@ -783,4 +816,255 @@ fn inst5b_config_replace_and_restore_send_no_global_pause() {
         "{calls:?}"
     );
     assert_eq!(global_seen(&host), None);
+}
+
+/// Workflow #452: the members of an added entry, in the order the configuration file holds them:
+/// the application id after the instance id.
+const ENTRY_MEMBERS: [&str; 6] = [
+    "alias",
+    "instance_id",
+    "application_id",
+    "instance_index",
+    "touch_backend",
+    "capture_backend",
+];
+
+/// Workflow #452: the parameters of `instance add <alias>` of [`GAME`] on [`SERVER`] at the
+/// emulator index `index`, with `application_id` when one is given.
+fn add_params(alias: &str, index: u64, application_id: Option<Value>) -> Value {
+    let mut params = json!({
+        "alias": alias,
+        "game": GAME,
+        "server": SERVER,
+        "mumu_index": index,
+        "touch_backend": "neutral-touch",
+        "capture_backend": "neutral-capture",
+    });
+    if let Some(application_id) = application_id {
+        params["application_id"] = application_id;
+    }
+    params
+}
+
+/// The names of an entry's members, in the file's order.
+fn members_of(entry: &Value) -> Vec<&str> {
+    entry
+        .as_object()
+        .map(|members| members.keys().map(String::as_str).collect())
+        .unwrap_or_default()
+}
+
+// Workflow #452, the work order's "Tests": the parameter given (build points 1, 4 and 5).
+#[test]
+fn inst5_452_a_given_application_id_is_written_over_the_declared_one() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = running(temp.path(), "given", &host);
+    let before = journals(&root);
+
+    let (line, exit) = rescue_line(
+        &host,
+        &root,
+        "instance add",
+        add_params(ADDED, 2, Some(json!(GIVEN))),
+    );
+    assert_eq!(exit, 0, "{line}");
+    assert_eq!(top_code(&line), "install_command_done", "{line}");
+
+    // The entry: its six members in order, the given id, though the game root declares another.
+    let config = config_of(&root);
+    let entry = member_of(&config, "/instances", "alias", ADDED).expect("the instance's entry");
+    assert_eq!(members_of(entry), ENTRY_MEMBERS, "{entry}");
+    assert_eq!(entry["application_id"], GIVEN, "{entry}");
+
+    // The answer and the journal's input record it and where it came from.
+    assert_eq!(line["added"]["application_id"], GIVEN, "{line}");
+    assert_eq!(line["added"]["application_id_from"], "given", "{line}");
+    let written = new_journals(&root, &before);
+    let added = &written[0].1["inputs"]["instance_add"];
+    assert_eq!(added["application_id"], GIVEN, "{added}");
+    assert_eq!(added["application_id_from"], "given", "{added}");
+}
+
+// Workflow #452, the work order's "Tests": the parameter absent, the game root declaring an id
+// (build points 2 and 5).
+#[test]
+fn inst5_452_without_the_option_the_declared_id_is_written() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = running(temp.path(), "declared", &host);
+    let before = journals(&root);
+
+    let (line, exit) = rescue_line(&host, &root, "instance add", add_params(ADDED, 2, None));
+    assert_eq!(exit, 0, "{line}");
+    assert_eq!(top_code(&line), "install_command_done", "{line}");
+
+    let config = config_of(&root);
+    let entry = member_of(&config, "/instances", "alias", ADDED).expect("the instance's entry");
+    assert_eq!(members_of(entry), ENTRY_MEMBERS, "{entry}");
+    assert_eq!(entry["application_id"], DECLARED, "{entry}");
+
+    assert_eq!(line["added"]["application_id"], DECLARED, "{line}");
+    assert_eq!(line["added"]["application_id_from"], "declared", "{line}");
+    let written = new_journals(&root, &before);
+    let added = &written[0].1["inputs"]["instance_add"];
+    assert_eq!(added["application_id"], DECLARED, "{added}");
+    assert_eq!(added["application_id_from"], "declared", "{added}");
+}
+
+// Workflow #452, the work order's "Tests": the parameter absent and no id declared (build point
+// 3).
+#[test]
+fn inst5_452_without_a_declared_id_nothing_is_written() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = running(temp.path(), "undeclared", &host);
+    let table = temp
+        .path()
+        .join("undeclared-packs")
+        .join(GAME)
+        .join("applications.json");
+    let before = tree(&root);
+    let journals_before = journals(&root);
+    let declaring = |servers: Value| {
+        serde_json::to_vec(&json!({
+            "schema_version": "actingcommand.applications.v1",
+            "game": GAME,
+            "servers": servers,
+        }))
+        .expect("JSON")
+    };
+
+    // Each case: what the file holds (none: the file is moved aside) and the code of the read's
+    // failure, when the read failed.
+    let cases = [
+        ("no file", None, Some("foreign_os_error")),
+        (
+            "no JSON",
+            Some(b"{ no JSON".to_vec()),
+            Some("foreign_data_error"),
+        ),
+        (
+            "no member of the server",
+            Some(declaring(
+                json!({"neutral-other": {"application_id": DECLARED}}),
+            )),
+            None,
+        ),
+        (
+            "no application_id",
+            Some(declaring(
+                json!({SERVER: {"default_package_id": "neutral.pack"}}),
+            )),
+            None,
+        ),
+        (
+            "a blank one",
+            Some(declaring(json!({SERVER: {"application_id": "   "}}))),
+            None,
+        ),
+    ];
+    for (name, holds, cause) in cases {
+        match holds {
+            Some(bytes) => fs::write(&table, bytes).expect("the applications table"),
+            None => fs::rename(&table, table.with_extension("json.aside"))
+                .expect("the applications table moved aside"),
+        }
+        let (refused, exit) = rescue_line(&host, &root, "instance add", add_params(ADDED, 2, None));
+        assert_eq!(exit, 1, "{name}: {refused}");
+        assert_eq!(
+            top_code(&refused),
+            "install_command_refused",
+            "{name}: {refused}"
+        );
+        assert_eq!(top_value(&refused, "operation"), "install_instance_add");
+        assert_eq!(
+            top_value(&refused, "install_refusal"),
+            "instance_invalid",
+            "{name}: {refused}"
+        );
+        assert_eq!(top_value(&refused, "game"), GAME, "{name}: {refused}");
+        assert_eq!(top_value(&refused, "server"), SERVER, "{name}: {refused}");
+        assert!(
+            top_value(&refused, "path")
+                .as_str()
+                .is_some_and(|path| path.ends_with("applications.json")),
+            "{name}: {refused}"
+        );
+        let causes = &refused["outcome"]["causes"];
+        match cause {
+            Some(code) => assert_eq!(causes[0]["code"], code, "{name}: {refused}"),
+            None => assert!(
+                causes.as_array().is_none_or(Vec::is_empty),
+                "{name}: {refused}"
+            ),
+        }
+        // Nothing staged, no journal, nothing asked.
+        assert_eq!(tree(&root), before, "{name}");
+        assert!(new_journals(&root, &journals_before).is_empty(), "{name}");
+        assert!(calls(&host).is_empty(), "{name}: {:?}", calls(&host));
+    }
+}
+
+// Workflow #452, the work order's "Tests": a malformed parameter, judged by the rule of the
+// configuration's assembly and by no stricter one (build point 1).
+#[test]
+fn inst5_452_a_malformed_application_id_is_refused_by_the_assembly_rule() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = running(temp.path(), "malformed", &host);
+    let before = tree(&root);
+
+    let cases = [
+        ("empty", json!(""), "unusable"),
+        ("blank", json!("   "), "unusable"),
+        ("257 bytes", json!("a".repeat(257)), "unusable"),
+        (
+            "a control character",
+            json!("neutral\u{7}application"),
+            "unusable",
+        ),
+        ("a number", json!(7), "wrong_type"),
+    ];
+    for (name, given, problem) in cases {
+        let (refused, exit) = rescue_line(
+            &host,
+            &root,
+            "instance add",
+            add_params(ADDED, 2, Some(given)),
+        );
+        assert_eq!(exit, 1, "{name}: {refused}");
+        assert_eq!(
+            top_code(&refused),
+            "actingctl_usage_invalid",
+            "{name}: {refused}"
+        );
+        assert_eq!(
+            top_value(&refused, "argument"),
+            "--application-id",
+            "{name}: {refused}"
+        );
+        assert_eq!(
+            top_value(&refused, "argument_problem"),
+            problem,
+            "{name}: {refused}"
+        );
+    }
+    assert_eq!(tree(&root), before);
+    assert!(calls(&host).is_empty(), "{:?}", calls(&host));
+
+    // 256 bytes with spaces and capitals: the assembly takes it, and so does the command.
+    let head = " Neutral Application ";
+    let longest = format!("{head}{}", "x".repeat(256 - head.len()));
+    let (line, exit) = rescue_line(
+        &host,
+        &root,
+        "instance add",
+        add_params(ADDED, 2, Some(json!(longest))),
+    );
+    assert_eq!(exit, 0, "{line}");
+    let config = config_of(&root);
+    let entry = member_of(&config, "/instances", "alias", ADDED).expect("the instance's entry");
+    assert_eq!(entry["application_id"], longest.as_str(), "{entry}");
+    assert_eq!(line["added"]["application_id_from"], "given", "{line}");
 }
