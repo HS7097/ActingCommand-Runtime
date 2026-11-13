@@ -2199,7 +2199,8 @@
         {"name": "schedule", "form": "option", "type": "file", "required": false},
         {"name": "display_layout", "form": "option", "type": "file", "required": false},
         {"name": "loading", "form": "option", "type": "file", "required": false},
-        {"name": "notices", "form": "option", "type": "dir", "required": false}
+        {"name": "notices", "form": "option", "type": "dir", "required": false},
+        {"name": "goals", "form": "option", "type": "file", "required": false}
       ],
       "help": "Lays out a bundle of standard packs from an applications file and a packs directory in a new directory, checking its root files.",
       "output": "as today's command",

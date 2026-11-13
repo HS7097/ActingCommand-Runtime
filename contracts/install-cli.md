@@ -1020,6 +1020,11 @@ the rescue face:
   #451 LOAD-P), placed after the packs and before the root files, so the templates are in place
   before the `loading.json` that declares them, and, when the zip no longer carries it, set aside
   as `loading.old-<ms>` as `loading.json` is (not when a pack of the bundle is named `loading`);
+  from 0.12.60 (Workflow #455 G-R1, `package` 12) the goal declaration `goals.json` is a root file
+  of the layout, placed last among the root files and, when the zip no longer carries it, set
+  aside as `goals.json.old-<ms>` as the other root files the readers open are, and a zip that
+  carries it declares a `package` maximum of 12 at least (`pack_invalid`, `goal_undeclared` at
+  `<zip>\interfaces.json`, in the plan, as `notice_undeclared`);
   `alive [--wait]`
   is the watchdog's status of the root; `instance add <alias> …` (Workflow #421 INST-5, first
   slice; "Configuration, instances, packs and a fresh root", "Instances, the first slice") composes
@@ -1210,7 +1215,7 @@ will run, **B** a placed bundle (the register's declared range) or a new one (it
 |---|---|
 | update, rollback | `ledger`: Rp.max ∈ R\*; R\*.max > Rp.max needs `--accept-ledger-one-way` (journalled; it closes later rollbacks by the same edge). `runtime-outcomes`: R\*.max ∈ I. `install-control`: I ∩ Rp and I ∩ R\*. `runtime-client`: I ∩ Rp and I ∩ R\*. `package`: every placed B.max ∈ R\* (unknown: the warning). `actingd-config`: C passes R\*'s check-config, and I's key table knows every key C names in the sections the configuration mechanism resolves. Each build's Runtime and Tools manifests declare equal `speaks`. |
 | config commit, restore | C passes the check-config of the build in `runtime\`. |
-| pack place | B.max ∈ the live Runtime's `package` and ∈ I's, checked before the layout; a bundle that carries `notices/` declares B.max ≥ 10 (`pack_invalid`, `notice_undeclared`). |
+| pack place | B.max ∈ the live Runtime's `package` and ∈ I's, checked before the layout; a bundle that carries `notices/` declares B.max ≥ 10 (`pack_invalid`, `notice_undeclared`); from 0.12.60 a bundle that carries `goals.json` declares B.max ≥ 12 (`pack_invalid`, `goal_undeclared`). |
 | new | I ∩ R for `actingd-config`; R's check-config passes. |
 
 An edge row is `{interface, check, result: pass | fail | warning, parties: [{party, source,

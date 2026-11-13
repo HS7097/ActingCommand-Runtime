@@ -245,8 +245,8 @@ declares.
 `actinglab package bundle --applications <file> --packs-root <directory> --out <new
 directory> [--source-repository <owner>/<name> --source-commit <commit>] [--maintenance <file>]
 [--pages <file>] [--interrupts <file>] [--navigation <file>] [--schedule <file>]
-[--display-layout <file>] [--loading <file>] [--notices <directory>]` lays out the resource
-section of a standard package:
+[--display-layout <file>] [--loading <file>] [--notices <directory>] [--goals <file>]` lays out
+the resource section of a standard package:
 
 ```text
 applications.json              the given applications table, copied byte for byte
@@ -256,6 +256,7 @@ interrupts.json                with --interrupts, copied byte for byte
 navigation.json                with --navigation, copied byte for byte
 schedule.json                  with --schedule, copied byte for byte (ROUT-L RL-1a)
 display-layout.json            with --display-layout, copied byte for byte (Workflow #392 DA-4)
+goals.json                     with --goals, copied byte for byte (Workflow #455 G-R1)
 loading.json                   with --loading, copied byte for byte (Workflow #407 LOAD-1)
 loading/<file>.png             with --loading, every template it declares, byte for byte
 notices/<path>                 with --notices, every file of the directory, byte for byte (Workflow #444)
@@ -367,8 +368,14 @@ declaration; every pack is admitted for real as with the other root files, the f
 the one structure check ("Standard package root", `display-layout.json`: a refusal is
 `standard_pack_root_invalid` with `game`, the given file's `path`, `standard_pack_problem` and
 `json_pointer`), and it is laid beside `bundle.json` as `display-layout.json` whatever the given
-file is named; it names no package, so the cross-check checks nothing more of it. The root files
-are copied byte for byte last.
+file is named; it names no package, so the cross-check checks nothing more of it. Workflow #455
+G-R1 (since 0.12.60; [standard-pack-goals.md](standard-pack-goals.md)): `--goals` names the game's
+goal declaration; every pack is admitted for real as with the other root files, and after the
+composition (with `--schedule`) the file is read and its references held to the root the bundle
+makes, no table judged (the bundle holds none): a refused file is `standard_pack_root_invalid` with
+`game`, the given file's `path`, `standard_pack_problem` (one of the file's words, its first
+problem) and `json_pointer`, and an accepted one is laid beside `bundle.json` as `goals.json`. The
+root files are copied byte for byte last.
 
 **Loading pages** (Workflow #407 LOAD-1, since 0.12.37; [resource-declarations.md](resource-declarations.md),
 "Loading pages"). `--loading` names the game's `loading.json`, with its templates in the
@@ -433,7 +440,11 @@ its `loading.json`, every package's loading copy as `package loading --check` ch
 templates read from the root's `loading/` (the file is then listed in `root_files`, last), and
 without it, every package that carries a loading copy is refused (`loading_pack_stale`); from
 LOAD-2 this check runs before the cross-check admits the packages, whose loader compiles a copy,
-so a stale copy is named as stale. It only
+so a stale copy is named as stale. Workflow #455 G-R1 (since 0.12.60): with `goals.json` (listed
+in `root_files` after `display-layout.json`), the file is read after the composition and held to
+the root and its tables; each problem of a refused file is one `standard_pack_root_invalid`
+warning, last, in file order, and the root is checked as without the file
+([standard-pack-goals.md](standard-pack-goals.md), "Who reads it"). It only
 reads. Every package of the registry is admitted, once, by its directory, with or
 without the navigation files (Workflow #411 A25): a package a root file names first for its
 part, every other package of the registry after them. Its answer is `{status: "checked", root,
@@ -739,6 +750,7 @@ data files beside its package directories, one directory per game below the conf
   schedule.json      actingcommand.schedule.v1: the game's schedule rules (ROUT-L RL-1a)
   display-layout.json  actingcommand.display-layout.v1: the game's display declaration (#392 DA-4)
   ui.json            actingcommand.ui.v1, optional: display metadata for clients (#429 R-11)
+  goals.json         actingcommand.goals.v1, optional: the goal entries the game offers (#455 G-R1)
   loading.json       actingcommand.loading.v1, optional: the game's loading pages, for audit (#407 LOAD-1)
   loading/           the templates loading.json declares (#407 LOAD-1)
   notices/           the package author's notice texts; no reader of the Runtime opens them (#444)
@@ -961,6 +973,19 @@ data files beside its package directories, one directory per game below the conf
     reader, its startup and run preparation, the policy crate and check-config never read it,
     so the file never changes a run, and a directory that holds only `ui.json` is no game root
     for them. A real standard package's `ui.json` is the resource side's to write.
+- **`goals.json`** (Workflow #455 G-R1, since 0.12.60; `v012-register.md` §1.350;
+  [standard-pack-goals.md](standard-pack-goals.md) is the contract). Optional. The goal entries the
+  game offers on one page, in file order: each entry's stable name, its type (one of eight), its
+  block, its texts and what it governs (a pool or rules of `schedule.json`, or packages of
+  `bundle.json`); no value is stored in it. `actinglab standard-pack check` and `package bundle
+  --goals` read it after the composition they already run: the check reports each problem of a
+  refused file as a `standard_pack_root_invalid` warning and never fails the root for it, and the
+  bundle refuses a refused file. The installer's `place` places it as the last root file and sets it
+  aside when a later bundle carries none; a bundle that carries it declares `package` [12, 12]
+  ([component-interfaces.md](component-interfaces.md), row 12), and `place` refuses one that declares
+  a maximum below 12 (`goal_undeclared`, G-R1 fix round 1). The Runtime's root reader, its
+  startup, a run's preparation, the policy crate and check-config never read it in G-R1, so the
+  file changes no run yet.
 - **`loading.json`** (Workflow #407 LOAD-1, since 0.12.37; [resource-declarations.md](resource-declarations.md),
   "Loading pages"). Optional; laid with its `loading/` templates by `package bundle --loading`, for
   audit only. What runs is each pack's own copy (`resources/loading.json`), which the pack's

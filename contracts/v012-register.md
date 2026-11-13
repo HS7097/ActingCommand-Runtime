@@ -21800,6 +21800,253 @@ stderr as the cause.
 **Rollback.** Nothing persisted: code, two table rows, registry members, catalog entries,
 contract sections and test files.
 
+### 1.350 Slice G-R1 (0.12.60): a standard pack's goal declaration `goals.json`, its reader, its check, `package bundle --goals` and the installer's root file; `package` revision 12 (Workflow #455; the final design note `rd-1114/455-goals-design-final.md`, sections 3.1 to 3.3, 3.11 and the rows G-R1 of its sections 4 and 5, read on main `fa724931`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-455-gr1.md`, read on main `fa724931`)
+
+1.348 was the next free section on main `fa724931`; the integration train 0.12.59d (main
+`71a658f1`, merged into this slice) took 1.348 and 1.349, so this slice is 1.350.
+[standard-pack-goals.md](standard-pack-goals.md)
+is the contract; [package-reference.md](package-reference.md) (`package bundle`, `standard-pack
+check`, and "Standard package root": the listing and `goals.json`), [install-cli.md](install-cli.md),
+"The Lab's rescue module" (`place`), the `package` row 12 of
+[component-interfaces.md](component-interfaces.md) and the row `package bundle` of
+`lab-operations.json` change with it. Board #455: a person (through
+the console) or an agent (through the Lab) sets goals for an application, and a standard pack says
+which goal entries its game offers. This slice gives that declaration its form and its checks.
+**Nothing reads a value**: no request, no fact, no view, no change of the scheduler, the host or a
+run; a game root without the file is exactly what it was.
+
+**What it builds.**
+
+- *The contract* `contracts/standard-pack-goals.md`: an optional root file of the game root,
+  `actingcommand.goals.v1` with `game` the directory's, by the root-file rule; an entry's members
+  (`name`, `type`, `block?`, `title`, `help?`, `governs?` and the type's members); the eight types
+  of version 1 (`heading`, `note`, `resource`, `integer`, `choice`, `switch`, `ordered`, `tier`, with
+  `tier` and a `resource` entry's `rate` accepted now, their behaviour later slices'); the name rule;
+  position by file order; defaults in the file; texts as `ui.json`'s; the limits (96 entries, the
+  list bounds, 1 MiB); the seven blocks, one base block per type, and the fallback rule; every
+  refusal with its pointer; who reads the file; and what is not the file's, the safety lines kept out
+  at three places as the design words them.
+- *The reader* (`crates/actingcommand-contract/src/standard_pack_goals.rs`, beside the readers of
+  `ui.json` and `schedule.json`): `parse_standard_pack_goals` reads the file strictly into typed
+  entries (`StandardPackGoals`, `DeclaredGoal`, `DeclaredGoalKind`), every problem one
+  `StandardPackRootIssue` of `goals.json` at its pointer, at most 64, in document order;
+  `check_standard_pack_goal_references` holds an accepted file to what the game root offers
+  (`GoalReferences`: the composed schedule's pools and rules, each rule with the package it runs
+  (`GoalRule`), every package of the bundle with what its control declaration provides, made only by
+  `GoalReferences::new`, and the root's tables when the reader holds them; fix round 1 below).
+- *The check* (`crates/resource-tooling/src/standard_pack_goals.rs`): `actinglab standard-pack check`
+  lists `goals.json` in `root_files` and, after the composition it already runs, reads the file with
+  the contract crate's two functions, every package's `provides` (fix round 1; before it, the
+  governed packages' only) read by the Runtime's metadata reader and the root's tables by
+  `read_standard_pack_table`; each problem is one
+  `standard_pack_root_invalid` warning (`game`, `path`, `standard_pack_problem`, `json_pointer`),
+  after the other warnings, in file order. **A refused file never fails the root**: the check
+  answers `checked`, and the answer is otherwise what it is without the file.
+- *`package bundle --goals <file>`* (`StandardPackRootFiles.goals`; the CLI's read list
+  `package_build::BUNDLE_READS`; the row `package bundle` gains `{"name": "goals", "form": "option",
+  "type": "file", "required": false}`): the file is read with the other root files, held after the
+  composition to the root the bundle makes (no table: the bundle holds none), laid beside
+  `bundle.json` byte for byte when accepted; a refused file refuses the bundle as a refused root file
+  does (`standard_pack_root_invalid`, its first problem, `path` the file given, every problem in the
+  message), `--out` not written. `package bundle` writes no `interfaces.json`.
+- *The installer's `place`* (`crates/lab-rescue/src/install/place.rs`): `goals.json` joins
+  `ROOT_FILES`, last (after `schedule.json`, whose pools and rules its entries name), and
+  `RETIRED_WHEN_ABSENT`, first: a later bundle without it sets the placed one aside as
+  `goals.json.old-<ms>`, as the other root files are, and `undo` puts it back. A bundle without the
+  file on a root without it plans, journals and places exactly as before. Fix round 1: a zip that
+  carries the file and declares a `package` maximum below 12 is refused in the plan, `pack_invalid`
+  caused by `standard_pack_root_invalid` with `goal_undeclared` at `<zip>\interfaces.json`, as
+  NOTICES-2 refuses `notice_undeclared` (`check_goals_declared`, a dozen lines).
+
+**The thirteen words** (`goal_name_duplicate`, `goal_type_unknown`, `goal_block_mismatch`,
+`goal_pool_unknown`, `goal_pool_unvalued`, `goal_package_unknown`, `goal_governs_irreversible`,
+`goal_rule_unknown`, `goal_tier_without_fixed_value`, `goal_range_invalid`, `goal_default_invalid`,
+`goal_table_unknown`, `goal_rate_invalid`) are registered as `ui.json`'s problems are (R11-4): tokens
+of the vocabulary `standard_pack_problem`, in the catalog header's vocabularies and in the contract
+crate's `StandardPackProblem` (`outcome_vocabulary!`), which the outcome guard holds equal both ways
+(G7). They are values of the existing code `standard_pack_root_invalid` with its existing keys. No
+outcome code, location or value key is added; the guard's prefix rule (G8) and its literal rule
+(G5) bind codes and locations, and no string literal of the slice's product code equals a
+registered code or location; no `json!` key is written. The index of the catalog is regenerated,
+unchanged (it lists codes). The words `malformed` and `game_mismatch` are reused for the file's
+shape and its game. Fix round 1 adds two words the same way: `goal_out_of_limits` (the file's
+fourteenth, a bound of the shape broken, at what exceeds) and `goal_undeclared` (the installer's,
+modelled on `notice_undeclared`).
+
+**Where the design left a detail open, as built** (each in the contract): the block words are part
+2's names for the blocks the design keeps (`group`, `text`, `goal_row`, `number`, `choice`, `switch`,
+`ordered_list`), one per type, any other `block` `goal_block_mismatch`; a shape bound (a text, a
+list, a map, the length of a name, an option value, an id, a key or a locale, the file) is the
+file's own `goal_out_of_limits` at what exceeds, as `ui.json` has `ui_out_of_limits` for its own
+(fix round 1; the slice first wrote `malformed` here, for want of a word); a `governs` list holds 1
+to 32 ids of 1 to 128 bytes; an option value is 1 to 64
+bytes of `[a-z0-9][a-z0-9_.:-]*`; an `ordered` entry takes 1 to 1024 options or a table's keys, its
+`max_count` 1 to 32; a tier's `scale_milli` is 1 to 1,000,000; a time unit's values are milliseconds
+(part 2's rule).
+
+**The raise, as FL-1 made it (§1.343).** `package` [3, 11] → [3, 12]:
+`distribution/windows/component-interfaces.json`, the architecture pin
+(`tools/actinglab-architecture/tests/component_interfaces.rs`, its `V0120` and its history comment),
+the row 12 of component-interfaces.md, and this section; the contract crate's constant
+`GOALS_PACKAGE_REVISION` (12) states what a bundle that carries the file declares. **Every reader of
+the `package` range, as §1.335 and §1.343 checked them:** `place` reads its own installer's range,
+so `place` of 0.12.59 ([3, 11]) refuses a bundle declaring [12, 12] with `interface_edge` at
+`<zip>\interfaces.json`, in the plan, before the hold and any write, and a zip that carries the file
+and declares less at its layout check (`pack_invalid` naming `goals.json`), and this release's takes
+a zip that carries the file and declares [12, 12] and (fix round 1) refuses one that declares a
+maximum below 12 (`goal_undeclared`); the update's and the rollback's
+`package` edges compare the register's range, unknown for every root (the warning
+`pack_declaration_unknown`); the Runtime reads no `interfaces.json` and no range, and its readers open
+named files only, so a Runtime before 0.12.60 reads a root that holds the file as one without it;
+`resource verify`'s `bundle` step writes [3, 3], or [10, 10] for a notices bundle, and does not pass
+the file (its row is not this slice's), so the packer of a bundle that carries it declares [12, 12]
+itself; `standard-pack check` reads no range. None of them refuses a bundle or a root that is
+accepted today. A bundle without the file keeps its revision.
+
+**What programs of an earlier release do:**
+
+| Program | A zip that carries `goals.json` | A game root that holds `goals.json` |
+|---|---|---|
+| rescue `place` before 0.12.60 | `interface_edge` when it declares 12, `pack_invalid` naming `goals.json` otherwise; before the hold: nothing paused, nothing written | a bundle without the file is placed and `goals.json` is left as it is |
+| `standard-pack check` before 0.12.60 | reads no zip | ignores the file; the root checks as before |
+| the Runtime (actingd), check-config, the composer | read no zip | ignore the file: no catalog, no composed generation, no run changes |
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GR1-1 | `goals.json` (`actingcommand.goals.v1`): entries, types, blocks, texts, `governs`, defaults, `rate`, tiers | game root file | G-R1 | the resource repository (G-P1) | read by no Runtime reader in G-R1 |
+| GR1-2 | `standard_pack_problem` + the thirteen `goal_*` words; fix round 1: + `goal_out_of_limits`, `goal_undeclared` | outcome vocabulary words | G-R1 | the Tools' check; `place` (`goal_undeclared`) | catalog only; `runtime-outcomes` stays 1 |
+| GR1-3 | `standard-pack check`: `goals.json` in `root_files`, its problems as warnings | Tools behaviour | G-R1 | — | the root is never failed by the file |
+| GR1-4 | `package bundle --goals <file>`; `StandardPackRootFiles.goals`; the row `package bundle` + `goals` | Tools flag, request member, operation table | G-R1 | — | refused file refuses the bundle; laid byte for byte |
+| GR1-5 | `place`: `goals.json` in `ROOT_FILES` (last) and `RETIRED_WHEN_ABSENT` (first); fix round 1: a zip that carries it declares `package` 12 at least (`goal_undeclared`) | installer behaviour | G-R1 | — | no item without the file |
+| GR1-6 | `package` [3, 11] → [3, 12]; `GOALS_PACKAGE_REVISION` | interface revision, contract constant | G-R1 | the packer (G-P1) | component-interfaces.md row 12 |
+
+**Not moved.** `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes`; the Runtime's
+root reader, the host, the scheduler workbench, the policy crate, `schedule.json`'s reader and
+members, `ui.json`, the resource-target document, the console and every Lab row but `package
+bundle`. The operation table's rows `standard-pack check` and `resource verify` are unchanged: the
+check's answer gains no member (`root_files` lists one more file, as for any root file), and
+`resource verify` passes no `goals.json`.
+
+**At deploy.** Nothing changes for an installation in use: no released bundle carries the file, and
+nothing reads it at run time until a later slice. The Runtime declares `package` [3, 12]. A rollback
+to 0.12.59 is not refused (the register records a root's range only at adoption, and that range is
+absent, so the `package` edge is the warning `pack_declaration_unknown`): a Runtime before this
+slice treats the file as absent; an installer before this slice refuses a bundle that carries the
+file, and when it places a bundle without it, it leaves an existing `goals.json` where it is.
+
+Tests. Contract gate row "#455 G-R1" (`crates/actingcommand-contract/src/standard_pack_goals_tests.rs`):
+`goals_neutral_example_reads_to_typed_entries` (the design's neutral example, as the design writes
+it, reads to its three typed entries in file order, and its references hold against a root that
+offers the valued pool and the package), `goals_each_type_reads_its_members` (one entry of each type
+with every member its type has, each typed value asserted, and its references holding against a
+root that offers them) and `goals_reader_is_strict` (an unknown member of an entry, of `governs` and
+of the document, a member another type has, a missing member, another version, a name outside the
+rule, a number that is no integer, a repeated member and no JSON: `malformed` at their pointer; 97
+entries and a file over 1 MiB: `goal_out_of_limits` since fix round 1; another game
+`game_mismatch`; an unknown type and a later version's type `slider`: `goal_type_unknown`). Exec
+gate row "#455 G-R1"
+(`crates/resource-tooling/src/gate_455_gr1.rs`, an installed root of four made-up packages, one
+providing an irreversible capability and one a capability that is not, a schedule with a rule with
+a fixed value and one without, a valued pool and one without a gap weight, and a table):
+`gr1_check_reports_each_refusal_at_its_pointer` (the thirteen words and, since fix round 1,
+`goal_out_of_limits`, one fixture each, exactly one warning each with the game, the file, the word
+and the pointer, the root checked),
+`gr1_check_answers_alike_with_and_without_a_valid_file` (every member alike but `root_files`),
+`gr1_check_reports_a_refused_file_in_file_order_and_never_fails_the_root` (the reader's four problems
+and the references' four in file order, last; without them and without `goals.json` in `root_files`
+the answer is the one without the file), `gr1_governs_irreversible_is_refused_by_the_check_and_the_bundle`
+(the check warns, the bundle is refused at the source file with `--out` not written; the package
+whose capability is not irreversible governed without a problem) and
+`gr1_package_bundle_lays_the_file_and_refuses_a_refused_one` (laid byte for byte, the rest of the
+output and the index as without the flag, the `ordered` entry's table not judged; a refused file
+refused at the source file with `--out` not written). Apps gate row "#455 G-R1"
+(`crates/lab-rescue/src/install/gate_455_gr1.rs`, the fake host):
+`goals_file_is_placed_last_and_retired_when_a_later_bundle_carries_none` (installer [3, 12], bundle
+[12, 12]: `goals.json root new` after `bundle.json`, placed byte for byte, the journal's plan
+declaring [12, 12]; a later bundle without it: `retire` before the root files, kept as
+`goals.json.old-<ms>`, put back by `undo`) and `goals_bundle_is_refused_by_an_installer_before_revision_12`
+(installer [3, 11]: `interface_edge` at `interfaces.json`, no pause, no journal, an empty game root).
+Of the earlier note's R1 tests (part 1, section 8, row R1) this slice keeps "every refusal at its
+pointer", "a root with the file and one without check alike otherwise" and "`place` takes and retires
+the file", and drops "extremes composed": the final design composes no value (a value is read by
+the overlay and the evaluator of later slices, and only a `tier` table is compiled, in G-R5).
+Adapted, because the requirement changes what it pins: the architecture pin
+`the_runtime_declares_each_v0120_interface_revision_once` holds `package` [3, 12]. The three gates
+that hold the operation table to the code: `lab_ops_table_complete` takes the parameter (type
+`file`), `gate_434_lab5b3::lenient_rows_match_their_reads` holds the row's `goals` and the read
+list's `--goals` equal both ways, and the Lab MCP server's tools are generated from the row
+(`mcp_tools_from_op_table`), so `goals` reaches `--goals` with no change to the server.
+
+**Fix round 1** (coordinator work order `rd-1114/brief-1694-fix1.md`, after the independent review,
+which confirmed that a root without the file is unchanged, that a refused file only warns, that the
+thirteen refusals match the contract and that the outcome guard finds nothing, and found two ways
+around the safety line `goal_governs_irreversible`). Nothing reads a value, a root without the file
+is unchanged, and a refused file still never fails a root.
+
+- *A `tier` entry is held to its rules' packages.* `GoalReferences.rules` holds each rule with the
+  package it runs (`GoalRule {package_id, fixed_value}`); a governed rule whose package can do
+  something irreversible is `goal_governs_irreversible` at `/entries/<i>/governs/rules/<j>` (before
+  `goal_tier_without_fixed_value`), one whose package the references do not know
+  `goal_package_unknown` there (the composition refuses such a rule first,
+  `rule_package_unregistered`).
+- *Irreversibility is a capability's, across the root.* `goal_issues` reads what every package of
+  the registry provides (not the governed ones only), and `GoalReferences::new` collects the
+  capabilities any package marks `irreversible: true` before it judges a package: one that provides
+  such a capability, marked by itself or not, can do something irreversible
+  (contracts/remedies.md §2.3, "any provider").
+- *No default answer.* `GoalReferences` has no `Default` and a private package map; its only
+  constructor, `GoalReferences::new`, takes what every package of the root provides, so a reader
+  cannot leave "which packages are irreversible" empty by omission, and a package it was not told
+  of is never passed.
+- *`goal_out_of_limits`* for a bound of the shape broken (the file's size, a list's or a map's count,
+  a text's locales, the length of a text, a locale, a name, an option value, an id or a key), at
+  what exceeds; a form broken stays `malformed`.
+- *`goal_undeclared`*: `place` refuses a zip that carries the file and declares a `package` maximum
+  below 12, as NOTICES-2 refuses `notice_undeclared`; built (a dozen product lines), with its test.
+- *Contract and code aligned, which side each:* a member repeated in one object is reported before
+  the file's other problems (the reader meets it while it reads the document): the contract now says
+  so (contract to code, as `ui.json`'s reader does the same); a `scale_milli` that is no safe integer
+  is `malformed` as every integer member is (code to contract: `Check::scale` reads it through
+  `Check::integer` first), while an `integer` entry's `default` of any type or size that is not a
+  value of its range is `goal_default_invalid` (contract to code: a default's type is judged as the
+  `switch` and `ordered` defaults' are); a file with a byte-order mark is `malformed` (contract to
+  code).
+- *Rollback*: the "At deploy" sentence above is corrected to what the installer does.
+- *`resource verify`* still passes over a repository's `goals.json` without a word: a warning in its
+  answer needs an outcome code (no existing warning code says "a file this step does not check"),
+  which this slice does not add; so it is not built. What a later slice owes before any pack
+  carries the file, now in the contract ("Before any pack carries the file"): **`resource verify`
+  checks a repository's `goals.json` and the packer declares the revision.**
+- *Not in this round (the coordinator's ruling, recorded in the contract's safety lines):* a
+  `resource` entry can push an irreversible package indirectly, through a pool such a package's rule
+  produces; the check does not refuse it, and leaves to the evaluator the rule that **a goal's
+  shortfall never raises the weight of a rule whose package can do something irreversible**, which
+  the slice that makes the evaluator read goal entries must build. No evaluator code changes.
+
+Tests of fix round 1. Contract gate row "#455 G-R1":
+`goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root` (made-up packages, one
+marking a capability irreversible, one providing it unmarked, one providing nothing and one the
+references were not told of, each running a rule with a fixed value: a `switch` entry over the four
+and a `tier` entry over their rules are `goal_governs_irreversible` for the first two and
+`goal_package_unknown` for the fourth, each at its pointer; references made from no package pass
+nothing). Exec gate row "#455 G-R1": `gr1_a_tier_over_a_rule_of_an_irreversible_package_is_refused`
+(the package with the irreversible capability runs a rule with a fixed value: the tier over it is
+`goal_governs_irreversible` at `/entries/7/governs/rules/1` and nothing else, for the check and the
+bundle; the tier over a reversible package's rule passes both) and
+`gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused` (the valid file's
+`choice` entry governs a package that provides, unmarked, the capability another marks
+irreversible: `goal_governs_irreversible` at `/entries/4/governs/packages/1` and nothing else, for
+the check and the bundle). Apps gate row "#455 G-R1":
+`goals_bundle_that_does_not_declare_revision_12_is_refused_goal_undeclared` (installer [3, 12],
+bundle [3, 11] carrying the file: `pack_invalid` caused by `goal_undeclared` at `interfaces.json`,
+the pointer empty; no pause, no journal, an empty game root). The existing irreversible test is
+kept as it was. Adapted, because the requirement changes what it pins: `goals_reader_is_strict`
+(97 entries and a file over 1 MiB now `goal_out_of_limits`),
+`gr1_check_reports_each_refusal_at_its_pointer` (one more case, `goal_out_of_limits` at a title one
+byte over its limit), and `goals_neutral_example_reads_to_typed_entries` and
+`goals_each_type_reads_its_members` (their references made by `GoalReferences::new`, no assertion
+changed).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -71,7 +71,10 @@ crate::outcome_vocabulary! {
     /// Workflow #373 NAV-6) or, since Workflow #357 DB-1, a table file of the root's `tables/`
     /// (M-357a v1.1 §6.2), or, since Workflow #407 LOAD-1, a pack's loading copy, or, since
     /// Workflow #444 NOTICES-1, a bundle's notices directory ([`crate::standard_pack_notices`]),
-    /// or, since Workflow #451 LOAD-P, a bundle zip's loading templates directory.
+    /// or, since Workflow #451 LOAD-P, a bundle zip's loading templates directory. Since Workflow
+    /// #455 G-R1 the root file `goals.json` has the fourteen `goal_*` words of its own (the
+    /// fourteenth, `goal_out_of_limits`, since its fix round 1), and a bundle zip that carries it
+    /// `goal_undeclared`.
     pub enum StandardPackProblem: "standard_pack_problem" {
         /// The file is not JSON of the file's shape and version (for a table: not canonical
         /// JSON either, that is with a floating point number, an unsafe integer or a duplicate
@@ -220,6 +223,44 @@ crate::outcome_vocabulary! {
         /// directory `loading/` lists a pack named `loading` in any ASCII case; placed, the two
         /// would share one folder of the game root.
         LoadingPackName => "loading_pack_name",
+        /// Workflow #455 G-R1 (since 0.12.60; [`crate::standard_pack_goals`]): an entry of
+        /// `goals.json` has a name an earlier entry has.
+        GoalNameDuplicate => "goal_name_duplicate",
+        /// G-R1: an entry's `type` is none of the eight types of version 1.
+        GoalTypeUnknown => "goal_type_unknown",
+        /// G-R1: an entry's `block` is not the block its type is shown with.
+        GoalBlockMismatch => "goal_block_mismatch",
+        /// G-R1: a `resource` entry's pool is not a pool of the composed schedule.
+        GoalPoolUnknown => "goal_pool_unknown",
+        /// G-R1: a `resource` entry's pool has no `valuation` with `scale` and `gap`.
+        GoalPoolUnvalued => "goal_pool_unvalued",
+        /// G-R1: a governed package is not a package of `bundle.json`.
+        GoalPackageUnknown => "goal_package_unknown",
+        /// G-R1: a governed package, or (fix round 1) the package a governed rule runs, provides a
+        /// capability that a package of the game root marks `irreversible: true` in its control
+        /// declaration's `provides[]`; no goal entry governs such a package or rule.
+        GoalGovernsIrreversible => "goal_governs_irreversible",
+        /// G-R1: a `tier` entry's rule is not a rule of `schedule.json`.
+        GoalRuleUnknown => "goal_rule_unknown",
+        /// G-R1: a `tier` entry's rule writes no `fixed_value_milli`.
+        GoalTierWithoutFixedValue => "goal_tier_without_fixed_value",
+        /// G-R1: what an entry declares as its values cannot hold one (a range, a step, a count,
+        /// an option written twice, a tier's scale, a table of more than 1024 keys).
+        GoalRangeInvalid => "goal_range_invalid",
+        /// G-R1: an entry's `default` is not a value of its declaration.
+        GoalDefaultInvalid => "goal_default_invalid",
+        /// G-R1: an `ordered` entry's table is no table of the game root, or a key under its
+        /// `names` no key of that table.
+        GoalTableUnknown => "goal_table_unknown",
+        /// G-R1: a `resource` entry's `rate` has its ceiling below its floor.
+        GoalRateInvalid => "goal_rate_invalid",
+        /// G-R1 fix round 1: `goals.json` is larger than 1 MiB, or one of its lists, maps, names,
+        /// option values, ids, keys, locales or texts is outside its limit.
+        GoalOutOfLimits => "goal_out_of_limits",
+        /// G-R1 fix round 1: a bundle zip carries `goals.json` and declares a `package` maximum
+        /// below 12. Refused by the installer's `place` at `interfaces.json`, as
+        /// `notice_undeclared` is.
+        GoalUndeclared => "goal_undeclared",
     }
 }
 
@@ -293,8 +334,9 @@ pub struct StandardPackRootIssue {
     /// One of [`STANDARD_PACK_BUNDLE_FILE`], [`STANDARD_PACK_PAGES_FILE`],
     /// [`STANDARD_PACK_INTERRUPTS_FILE`], [`STANDARD_PACK_NAVIGATION_FILE`], (Workflow #392
     /// DA-4) [`crate::STANDARD_PACK_DISPLAY_LAYOUT_FILE`], (Workflow #429 R-11)
-    /// [`crate::STANDARD_PACK_UI_FILE`] or (Workflow #407 LOAD-1)
-    /// [`crate::STANDARD_PACK_LOADING_FILE`] and a pack's [`crate::PACK_LOADING_FILE`].
+    /// [`crate::STANDARD_PACK_UI_FILE`], (Workflow #407 LOAD-1)
+    /// [`crate::STANDARD_PACK_LOADING_FILE`] and a pack's [`crate::PACK_LOADING_FILE`], or
+    /// (Workflow #455 G-R1) [`crate::STANDARD_PACK_GOALS_FILE`].
     pub file: &'static str,
     pub problem: StandardPackProblem,
     pub pointer: String,

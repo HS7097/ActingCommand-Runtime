@@ -6657,6 +6657,51 @@
         },
         "loading_pack_name": {
           "description": "A bundle zip that carries the loading templates directory loading/ lists a pack named loading in any ASCII case (package_id); placed, the two would share one folder of the game root. Refused by the installer's place at bundle.json (Workflow #451 LOAD-P, since 0.12.59)."
+        },
+        "goal_name_duplicate": {
+          "description": "An entry of goals.json has a name an earlier entry has, at the later name (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_type_unknown": {
+          "description": "An entry's type in goals.json is none of the eight types of version 1, a later version's type included (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_block_mismatch": {
+          "description": "An entry's block in goals.json is not the block its type is shown with (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_pool_unknown": {
+          "description": "A resource entry of goals.json governs a pool that is not a pool of the composed schedule (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_pool_unvalued": {
+          "description": "A resource entry of goals.json governs a pool whose valuation has no scale and gap (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_package_unknown": {
+          "description": "An entry of goals.json governs a package that is not a package of bundle.json (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_governs_irreversible": {
+          "description": "An entry of goals.json governs a package, or a tier entry a rule whose package, provides a capability that a package of the game root marks irreversible true in its control declaration's provides; no goal entry governs such a package or rule (Workflow #455 G-R1, since 0.12.60; rules and capabilities across the root since its fix round 1)."
+        },
+        "goal_rule_unknown": {
+          "description": "A tier entry of goals.json governs a rule that is not a rule of schedule.json (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_tier_without_fixed_value": {
+          "description": "A tier entry of goals.json governs a rule that writes no fixed_value_milli (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_range_invalid": {
+          "description": "What an entry of goals.json declares as its values cannot hold one: an integer's min above its max or a step below 1, an option value written twice, an ordered entry's max_count of 0 or above 32 or its min_count above its max_count or its values, a tier's scale_milli outside 1 to 1000000, or a table of more than 1024 keys (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_default_invalid": {
+          "description": "An entry's default in goals.json is not a value of its declaration (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_table_unknown": {
+          "description": "An ordered entry of goals.json takes its values from a table that is no table of the game root, or names a key its table does not hold (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_rate_invalid": {
+          "description": "A resource entry's rate in goals.json has its ceiling below its floor (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_out_of_limits": {
+          "description": "goals.json is larger than 1 MiB, or one of its lists, maps, names, option values, ids, keys, locales or texts is outside its limit, at the pointer of what exceeds (Workflow #455 G-R1 fix round 1, since 0.12.60)."
+        },
+        "goal_undeclared": {
+          "description": "A bundle zip carries goals.json and declares a package interface maximum below 12. Refused by the installer's place at interfaces.json (Workflow #455 G-R1 fix round 1, since 0.12.60)."
         }
       }
     },
