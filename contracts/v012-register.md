@@ -11384,6 +11384,95 @@ section 11).
 
 **Rollback** (to the release before it). Nothing persisted: a text constant and a document.
 
+#### Slice LAB-6S1a (0.12.58): the door also takes `BindChannel{channel: lab, initiator}`; `runtime-client` [3, 8]
+
+Coordinator work order `rd-1113/brief-lab6s1a.md`, after the read-only survey
+`rd-1113/lab6-step0-survey.md`; the coordinator's rulings of 2026-11-13 on board #434, not the
+owner's words; on main `29a65e2d`. The contracts are [lab-two-entries.md](lab-two-entries.md)
+(the slice table, §2.2, §4.1, §4.3, §10), [runtime-interface.md](runtime-interface.md)
+("Binding" rule 9, "Old Runtimes", "New request kinds") and
+[component-interfaces.md](component-interfaces.md) (`runtime-client` 8, "Planned: Workflow #434").
+
+**The staging, and why.** The contract described LAB-6 as one step: the door takes `lab` with an
+initiator and `ui`, and refuses `cli` and `mcp`. The survey showed that, done at once, it breaks
+every client of the door on the day of the deploy (actingctl and the kits' installer, the
+watchdog and today's MCP server bind `cli` or `mcp`; the installed console cannot decode a
+receipt with a member it does not know), and production deploys what is merged. So the
+coordinator cut LAB-6 into slices that each leave main deployable: LAB-6S0 (`deploy` and
+`rollback` through the Lab's MCP server), LAB-6S1a (this slice), LAB-6S1b (the origin gates of
+`RuntimeRequest::validate()` go), LAB-6S2 (every client of this repository binds `lab` with its
+word, after LAB-6S1a and LAB-6S1b have been deployed by themselves), LAB-6S3 (the UI list on
+`ui`), LAB-6S4a (the five kinds deleted; `install-control` [0, 0]), LAB-6S4b (`cli`, `mcp` and a
+`lab` without a word refused; `via` off the wire; `runtime-client` [8, 8]; `actingd-config` 30)
+and LAB-6S5 (the initiator in the ledger and the settings rows; `ledger` 9). Each has a way back
+but LAB-6S5. The contract's slice table carries the staging; the numbers LAB-0 planned for LAB-6
+(`runtime-client` 7, `ledger` 8, `actingd-config` 28) were taken by other slices, and are now 8
+(LAB-6S1a), 9 (LAB-6S5) and 30 (LAB-6S4b).
+
+**This slice is additive.** Every connection that binds today binds as today and reads the bytes
+it reads today; the only new thing is a connection that declares a word, and no program of this
+build declares one (that is LAB-6S2).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L6S1a-1 | `Initiator` (`UI`, `Lab-CLI`, `Lab-MCP`, `Lab-制包`, `Lab-救急`, `Lab-看门狗`): `ALL`, `as_str`, `is_lab_word`, `from_word`, `Serialize`, `Deserialize` | closed vocabulary of the contract crate | LAB-6S1a | — | the one place the six strings are written; a word outside them does not decode. `crates/lab-ops`' `initiator::Initiator` keeps its methods and converts (`word`), its `as_str` being the contract's, so the recordings and the installation journal write what they wrote. A rename before the release is one line of `as_str` |
+| L6S1a-2 | `BindChannel{channel, via?, initiator?}`, `initiator` the word as sent (`DeclaredInitiator`, any string) | wire, request | LAB-6S1a | — | taken only with `channel` `lab`, without `via`, and only as one of the five Lab words (`ChannelBinding::requested`, checked by `validate()`); a word on `ui`, `cli` or `mcp`, a word with `via`, `UI` and a word outside the list are `invalid_bind_channel`, and the connection stays unbound. Absent, the request is revision 7's |
+| L6S1a-3 | `ChannelBound{channel, via?, initiator?}` | wire, answer | LAB-6S1a | the host's `bind_channel` | echoes the word of a connection that declared one; absent otherwise, on `ui` included (its `UI` is implied by its channel) |
+| L6S1a-4 | the receipt's `initiator`, beside `channel` (`RuntimeReceipt::initiator`) | wire, answer | LAB-6S1a | the door (`with_channel`) | on every receipt of a connection that declared a word; absent otherwise |
+| L6S1a-5 | the connection table's `ChannelBinding.initiator` | in memory | LAB-6S1a | — | kept with the channel, gone with its connection, reported by no status read; the gate reads no word and refuses nothing by channel or by word; the binding a connection's first request makes has none |
+| L6S1a-6 | `RuntimeClientConfig::with_initiator`; the handshake's echo check | client | LAB-6S1a | — | the one handshake function sends the word and takes the answer only when it echoes channel, `via` and word (another echo is `runtime_result_unexpected`, as another channel is); `connect`, the reconnect in the owner's epoch, the contained-task timeout recovery and the player hold's temporary client carry it as they carry the channel; a word on another channel, with `via`, or `UI` is `runtime_client_config_invalid` at connect. No caller in product code sets it |
+
+**Byte for byte.** A binding without a word (`lab` alone, `lab` with `via`, `cli`, `mcp`, `ui`,
+and the binding a connection's first request makes) is answered and receipted exactly as on the
+base: each new member is optional and left out when absent, and nothing else of the three shapes
+changed. `gate_434_lab6s1a::lab6s1a_a_binding_without_a_word_answers_byte_for_byte_as_before`
+holds it: for each such binding the bytes of its `ChannelBound` receipt and of a later `Health`
+receipt, read off the connection, equal literal JSON written in the test.
+
+**Nothing persisted changes.** No persisted record embeds a receipt or a `ChannelBound` (read on
+the base: the ledger's command records take `channel` and `via` from the binding,
+`ObservationDraft::sanitize`; the `host.config_overrides` rows take its `channel`; the
+recordings and the installation journal take `crates/lab-ops`' type, whose strings do not
+change; the reports that print a receipt, `restart`'s and `request-shutdown --wait`'s, persist
+nothing). No ledger payload, override row, recording or journal gains or loses a member, and
+`ledger` does not move.
+
+**Interface.** `runtime-client` [3, 8] (component-interfaces.md, revision 8): revision 7 plus the
+initiator in `BindChannel`, `ChannelBound` and the receipt; a client of 3 to 7 neither sends nor
+receives it. Read before the code: the installer's edges (`crates/lab-rescue/src/install/plan.rs`,
+`interface_edges` and `meet`: `installer_meets_previous` and `installer_meets_next` intersect
+ranges) pass an update from a [3, 7] build to this one and the rollback from it to that build,
+whichever of the two is the installer; `ledger` is unchanged, so no one-way edge. The console of
+the UI's release v0.12.16 declares [3, 7]: its installer negotiates the highest common revision
+with the Runtime (`crates/acui-setup/src/interfaces.rs`, `negotiate` with `Range::common`; 7
+here), the console compares no range, and its pinned client binds `ui` without a word, which is
+answered byte for byte as before.
+
+**An earlier Runtime and a client that sends a word.** A Runtime before this slice cannot decode a
+`BindChannel` that names `initiator` (`RuntimeOperation` denies unknown members): it drops the
+connection without a receipt (`runtime_request_decode_failed`), and the client then reconnects
+once, goes on unbound and reports `client_channel_unsupported`, as for an actingd before U-2. So no
+client sends a word before this slice is deployed in production; LAB-6S2 waits for it.
+
+**Tests.** New: host row "#434 LAB-6S1a" (`gate_434_lab6s1a` of the host, the first part of the
+contract's `gate_two_entries`: `lab` with each Lab word bound, echoed and on its receipts, a
+second `BindChannel` `channel_binding_exists`; the byte-for-byte test above; every refused word
+`invalid_bind_channel` with the connection left unbound and bound afterwards; and of the runtime
+client: the handshake with a word, an echo that differs, the reconnect and the temporary client
+keeping the word) and contract row "#434 LAB-6S1a" (`BindChannel`, `ChannelBound` and the receipt
+round-trip with and without the member and read revision 7's shape; `crates/lab-ops`' words are
+the contract's, in its order). Adapted, each for the new member only: the declaration's pins
+(`component_interfaces::V0120`, `gate_429_r0b_pairing`'s two `[3, 7]`); the test fakes and tests
+that build or match `BindChannel`, `ChannelBound` or `ChannelBinding` (`initiator: None` or `..`;
+the shared scripted Runtime of `runtime-client`'s `test_support` echoes a declared word). The
+catalog text of `invalid_bind_channel` names the new refusals; no code is added.
+
+**What LAB-6S1a changes live.** Nothing for any client that exists: no program of this build
+declares a word, and every binding answers as before.
+
+**LAB-6S1a rollback** (to the release before it). Two-way: nothing persisted; the earlier build
+declares [3, 7], which every client of this build meets, and no client sent a word.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

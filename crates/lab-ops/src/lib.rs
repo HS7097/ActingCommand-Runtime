@@ -160,6 +160,10 @@ mod gate_434_lab5b1;
 // the mark on its `not_run` rows).
 #[cfg(test)]
 mod gate_438_held;
+// Test-only: Workflow #434 LAB-6S1a, the six initiator words this crate writes are the contract
+// crate's (`lab_ops_initiator_words_are_the_contracts`).
+#[cfg(test)]
+mod gate_434_lab6s1a;
 // Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
 #[cfg(test)]
 #[path = "../../../tests/support/standard_pack_schedule.rs"]

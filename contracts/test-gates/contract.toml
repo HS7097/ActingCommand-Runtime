@@ -858,3 +858,14 @@ tests = [
     "actingcommand-contract::lib::event::tests::gate_429_r6b1::r6b1_c3_the_two_existing_kinds_serialize_as_before",
 ]
 incident = ["#429 R-6b1"]
+
+# Workflow #434 LAB-6S1a (0.12.58; register §1.287, "Slice LAB-6S1a"; brief rd-1113/brief-lab6s1a.md; contracts/lab-two-entries.md §2.2, §4.1, §4.3; runtime-client 8): BindChannel {channel, via?, initiator?}, ChannelBound {channel, via?, initiator?} and a receipt with its initiator beside channel each round-trip with and without the member, a message of revision 7's shape (no member) decodes as one without it and is written back as it was read, and without it the member is absent from the serialization; ChannelBound naming a word outside the six does not decode. The six initiator words are written once, in the contract crate (Initiator): crates/lab-ops' Initiator, which the recordings and the installation journal write, maps onto the contract's list in its order, writes and serializes the same strings and reads them back
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::gate_434_lab6s1a::lab6s1a_bind_channel_round_trips_with_and_without_the_initiator",
+    "actingcommand-contract::lib::runtime::gate_434_lab6s1a::lab6s1a_channel_bound_round_trips_with_and_without_the_initiator",
+    "actingcommand-contract::lib::runtime::gate_434_lab6s1a::lab6s1a_a_receipt_round_trips_with_and_without_the_initiator",
+    "actingcommand-lab-ops::lib::gate_434_lab6s1a::lab_ops_initiator_words_are_the_contracts",
+]
+incident = ["#434 LAB-6S1a"]

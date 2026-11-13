@@ -136,7 +136,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   request is answered as before, so [3, 6]. Workflow #428 S168-LB1a (0.12.55, register §1.309,
 ///   §1.311) raises `max` to 7: an `InstanceFactSnapshot` view with a record list of 257 to 1024
 ///   rows, the request's optional `key_prefix` and the answer's optional `records_total`; a
-///   request without the member is answered as before, so [3, 7].
+///   request without the member is answered as before, so [3, 7]. Workflow #434 LAB-6S1a
+///   (0.12.58, register §1.287, "Slice LAB-6S1a") raises `max` to 8: the optional `initiator` of
+///   `BindChannel`, `ChannelBound` and the receipt; a client of 3 to 7 neither sends nor receives
+///   it, so [3, 8].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 29]),
@@ -144,7 +147,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
     ("package", [3, 9]),
-    ("runtime-client", [3, 7]),
+    ("runtime-client", [3, 8]),
     ("runtime-outcomes", [1, 1]),
 ];
 

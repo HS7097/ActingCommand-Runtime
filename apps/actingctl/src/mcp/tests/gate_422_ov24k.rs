@@ -1255,9 +1255,10 @@ fn serve(
     while let Some(request) = next_request(&mut stream) {
         let result = match request.operation() {
             RuntimeOperation::Health => RuntimeResult::Health { owner_epoch },
-            RuntimeOperation::BindChannel { channel, via } => RuntimeResult::ChannelBound {
+            RuntimeOperation::BindChannel { channel, via, .. } => RuntimeResult::ChannelBound {
                 channel: *channel,
                 via: *via,
+                initiator: None,
             },
             RuntimeOperation::Status => {
                 record("status");

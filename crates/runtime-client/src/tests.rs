@@ -38,6 +38,8 @@ mod gate_412_b3_s2;
 mod gate_429_r0c;
 // Workflow #429 R-7a (register §1.233): the player hold's client methods and their settlement.
 mod gate_429_r7a;
+// Workflow #434 LAB-6S1a: a Lab session's initiator in the handshake, its echo and its reconnects.
+mod gate_434_lab6s1a;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,
@@ -1837,7 +1839,7 @@ fn respond_to_handshake(stream: &mut TcpStream, owner_epoch: OwnerEpoch) {
 // A BindChannel answered with the binding it asked for (Workflow #389 U-2).
 fn respond_to_bind_channel(stream: &mut TcpStream) {
     let request = read_scripted_request(stream);
-    let RuntimeOperation::BindChannel { channel, via } = request.operation() else {
+    let RuntimeOperation::BindChannel { channel, via, .. } = request.operation() else {
         panic!(
             "expected BindChannel after Health, got {:?}",
             request.operation()
@@ -1846,6 +1848,7 @@ fn respond_to_bind_channel(stream: &mut TcpStream) {
     let result = RuntimeResult::ChannelBound {
         channel: *channel,
         via: *via,
+        initiator: None,
     };
     write_scripted_result(stream, &request, result);
 }
