@@ -136,6 +136,9 @@ mod gate_434_lab6s2b1;
 // bundle's game, and while the Runtime is stopped.
 #[cfg(test)]
 mod gate_453_cold_place;
+// Test-only: Workflow #454, a post-start check that fails closes its step with what it read.
+#[cfg(test)]
+mod gate_454_postcheck;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.

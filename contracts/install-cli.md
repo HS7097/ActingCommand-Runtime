@@ -621,6 +621,16 @@ not report `runtime_operation_unsupported`) fails the fail-class checks it feeds
 fail-class check acts (the automatic rollback, or `post_check_failed`); `not_evaluated` never
 does.
 
+The `post_check` step's evidence is `{commit, checks, failed}`: every row, and the ids of the
+fail-class checks that failed. A step whose checks pass, and one that begins an automatic rollback
+(with the member `rollback`), is `done` with it as before. Workflow #454 (0.12.59): a step whose
+failed check ends the command `post_check_failed` (a composite rollback, the rescue module's
+`config replace`, `config restore` and `instance add`) is closed `done` with the same evidence in
+the write that records the operation's result, so the record says which row failed and what it
+read; before, it stayed `started` with no evidence, the rows only in the answer's `post_check` and
+`failed_checks`. A crash before that write leaves the step `started`, and `install resume` runs the
+checks again.
+
 | id | Judged | Fail-class |
 |---|---|---|
 | `ready` | the start reached readiness (`ready_ms`), and the owner it made ready still answers (a Runtime gone or restarted at check time fails) | yes |
@@ -962,7 +972,7 @@ the rescue face:
   start (step `pause_added`) before the release, and its hold's global pause kept across the
   restart until that release (INST-5b). `--detach` runs the module's own command again
   through the WMI start with the same initiator. The download stays outside.
-- **The composition after a placement** (Workflow #453 S5, since 0.12.59; register §1.341; the
+- **The composition after a placement** (Workflow #453 S5, since 0.12.59; register §1.342; the
   coordinator's rulings of 11-13 on board #453, not the owner's words). The journal of `place`
   records, as the input `bound`, the instances the running Runtime's status binds to the bundle's
   game, paused or not (those its hold is chosen from). The row `composition` of its `post_check`
@@ -976,7 +986,7 @@ the rescue face:
   change it passes at its first read, `expected` `unchanged`, as before. A journal without `bound`
   (an operation an earlier build began, resumed by this one) keeps the wait. A catalog that cannot
   be read is `not_evaluated`, as before.
-- **`place` while the Runtime is stopped** (Workflow #453 S6, since 0.12.59; register §1.341; the
+- **`place` while the Runtime is stopped** (Workflow #453 S6, since 0.12.59; register §1.342; the
   coordinator's rulings of 11-13 on board #453, not the owner's words). With no Runtime answering,
   `place` no longer refuses `runtime_not_running`. After its plan, which holds no running state
   (the same plan and `plan_id` as with a Runtime; `--plan` answers it as before), it takes the
