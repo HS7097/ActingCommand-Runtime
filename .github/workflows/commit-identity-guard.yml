@@ -55,18 +55,29 @@ jobs:
           fi
 
           echo "checking range: $RANGE"
+          # Fail loud: the log is read into a variable first, so that a `git log` that fails
+          # ends the step (`set -e` does not see the failure of a process substitution, and the
+          # loop below would then read nothing and the step would pass). A range without a
+          # commit is refused too: a pull request and a push each bring at least one.
+          log="$(git log --format=$'%H\t%ae\t%ce' $RANGE)"
+          if [ -z "$log" ]; then
+            echo "::error::commit identity guard read no commit in the range $RANGE"
+            exit 1
+          fi
           bad=0
+          count=0
           while IFS=$'\t' read -r sha ae ce; do
+            count=$((count + 1))
             for mail in "$ae" "$ce"; do
               if ! [[ "$mail" =~ $ALLOW ]]; then
                 echo "::error::commit $sha carries non-family identity: $mail"
                 bad=1
               fi
             done
-          done < <(git log --format=$'%H\t%ae\t%ce' $RANGE)
+          done <<< "$log"
 
           if [ "$bad" -ne 0 ]; then
             echo "::error::commit identity guard failed: only HS7097-family no-reply identities may author or commit. Fix git user.email and amend before merge. A commit GitHub made for the account (Update branch, a web merge or edit) is redone as a local merge with the no-reply identity."
             exit 1
           fi
-          echo "all commit identities are family identities"
+          echo "all $count commit identities are family identities"
