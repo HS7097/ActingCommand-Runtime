@@ -30,6 +30,11 @@
 //! frame's has the turn undone for a backend that takes frame coordinates. The host sends only
 //! under the maps the capture side admits ([`DisplayMap::admit_input`]) and only when the map in
 //! effect is the one the input was decided under ([`DisplayMap::current_for`]).
+//!
+//! Workflow #392 DA-3b: under a scale other than 1 a vertical-brake drag leaves as the drag with
+//! a pause and a brake the device performs with the same events, its brake scaled
+//! (`vertical_brake_as_paused_drag`, in [`DisplayMap::device_input`]); under a scale of 1 it
+//! leaves as the kind it is.
 
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
@@ -48,6 +53,8 @@ pub use codes::{DisplayCode, DisplayLocation, DisplayProblem};
 mod gate_392_da1;
 #[cfg(test)]
 mod gate_392_da3;
+#[cfg(test)]
+mod gate_392_da3b;
 
 /// A point in one of the adapter's spaces, in pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -910,30 +917,24 @@ impl DisplayMap {
     }
 
     /// Workflow #392 DA-3 (`contracts/display-adapter.md` section 10): whether this Runtime sends
-    /// `action` under this map. The input side sends under the maps the capture side admits
+    /// an input under this map. The input side sends under the maps the capture side admits
     /// (section 8), the identity and a pure scale; under any other map it refuses with the token
     /// the frame gate gives that map: a turned frame `orientation_mismatch`, a translation or a
     /// cropped frame `translation_unsupported` (until DA-2b admits them). Workflow #392 DA-3 fix
     /// 1: of the pure scales it sends under those whose double is a whole number
     /// ([`Scale::doubled_is_whole`]), the scales under which every base point of every base box
     /// lands inside that box's inward device box; any other pure scale refuses every input
-    /// `input_scale_unsupported`, whatever its point, so the refusal never depends on a draw. A
-    /// vertical-brake drag whose brake the map changes (a scale other than 1) is refused
-    /// `input_scale_unsupported` too: the contract holds that drag's brake at exactly 100
-    /// pixels. Every refusal is at stage `display_input_map`, with the frame's and the base's
-    /// sizes.
-    pub fn admit_input(&self, action: &InputAction) -> Result<(), DisplayMapUnresolved> {
+    /// `input_scale_unsupported`, whatever its point, so the refusal never depends on a draw.
+    /// Every refusal is at stage `display_input_map`, with the frame's and the base's sizes.
+    /// Workflow #392 DA-3b: the answer is the same for every kind of input. A vertical-brake drag
+    /// under an admitted scale other than 1 is no longer refused for its brake: it leaves as a
+    /// drag with a pause and a brake ([`Self::device_input`]).
+    pub fn admit_input(&self, _action: &InputAction) -> Result<(), DisplayMapUnresolved> {
         let problem = if self.turn.is_some() {
             Some(DisplayProblem::OrientationMismatch)
         } else if self.kind == DisplayMapKind::Translate || self.crop.is_some() {
             Some(DisplayProblem::TranslationUnsupported)
         } else if !self.scale.doubled_is_whole() {
-            Some(DisplayProblem::InputScaleUnsupported)
-        } else if let InputAction::SingleTouchDragWithVerticalBrakeV1 {
-            brake_distance_px, ..
-        } = action
-            && self.device_length(i64::from(*brake_distance_px)) != i64::from(*brake_distance_px)
-        {
             Some(DisplayProblem::InputScaleUnsupported)
         } else {
             None
@@ -975,6 +976,12 @@ impl DisplayMap {
     /// - Durations, holds, slopes and the number of points never change.
     /// - The points then take the backend's `coordinates`: a cropped frame's gain the crop's
     ///   offset (display coordinates), a turned frame's have the turn undone (frame coordinates).
+    /// - Workflow #392 DA-3b: every input keeps its kind but one. Under a scale other than 1 a
+    ///   vertical-brake drag leaves as a drag with a pause and a brake: its press and corner
+    ///   mapped as above, its brake's end `round_half_up(brake · s)` straight above the corner
+    ///   (outside the device frame: [`InputMapError::OutOfBounds`], never clamped), its
+    ///   horizontal duration, corner hold and brake duration as the drag's, pause and brake
+    ///   durations. Under a scale of 1 it leaves as a vertical-brake drag.
     ///
     /// Keys, text and the reset carry no coordinate and leave as they are.
     pub fn device_input(
@@ -1048,19 +1055,31 @@ impl DisplayMap {
                 let (x1, y1) = self.sent_point(start, coordinates)?;
                 let (x2, y2) = self.sent_point(corner, coordinates)?;
                 let (x3, y3) = self.sent_point(end, coordinates)?;
-                InputAction::SingleTouchDragWithVerticalBrakeV1 {
-                    x1,
-                    y1,
-                    x2,
-                    y2,
-                    x3,
-                    y3,
-                    horizontal_duration_ms: *horizontal_duration_ms,
-                    corner_hold_ms: *corner_hold_ms,
-                    brake_distance_px: narrow(brake)?,
-                    brake_duration_ms: *brake_duration_ms,
-                    slope_in: *slope_in,
-                    slope_out: *slope_out,
+                if self.scale.is_one() {
+                    InputAction::SingleTouchDragWithVerticalBrakeV1 {
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        x3,
+                        y3,
+                        horizontal_duration_ms: *horizontal_duration_ms,
+                        corner_hold_ms: *corner_hold_ms,
+                        brake_distance_px: narrow(brake)?,
+                        brake_duration_ms: *brake_duration_ms,
+                        slope_in: *slope_in,
+                        slope_out: *slope_out,
+                    }
+                } else {
+                    // Workflow #392 DA-3b: the interface holds this kind's brake at 100 pixels;
+                    // under a scale the brake is not 100 device pixels, so the drag leaves as the
+                    // kind the device performs with the same events.
+                    vertical_brake_as_paused_drag(
+                        [(x1, y1), (x2, y2), (x3, y3)],
+                        *horizontal_duration_ms,
+                        *corner_hold_ms,
+                        *brake_duration_ms,
+                    )
                 }
             }
             InputAction::SingleTouchDragWithPauseAndBrakeV1 {
@@ -1338,6 +1357,35 @@ fn rect_contains(rect: Rect, point: Point) -> bool {
 /// A device coordinate as an input's `i32`; one that does not fit lies outside every frame.
 fn narrow(value: i64) -> Result<i32, InputMapError> {
     i32::try_from(value).map_err(|_| InputMapError::OutOfBounds)
+}
+
+/// Workflow #392 DA-3b (`contracts/display-adapter.md` section 10, "The vertical brake"): a
+/// vertical-brake drag as it leaves for a device under a scale other than 1, from its press, its
+/// corner and its brake's end, already in the coordinates the backend takes, and its three
+/// times: the drag with a pause and a brake from the press to the corner over the drag's
+/// horizontal duration, held still at the corner for its corner hold, then moved to the brake's
+/// end over its brake duration. The device layer performs it with the same events as a
+/// vertical-brake drag of the same points: the press, a segment, the hold, a segment, the
+/// release, each segment on the same curve. The slopes are the interface's constants, which no
+/// plan reads, and are not sent. `InputAction` and the device layer accept this kind for a brake
+/// of any length that moves the touch, so no bound of either moves.
+fn vertical_brake_as_paused_drag(
+    [(x1, y1), (x2, y2), (x3, y3)]: [(i32, i32); 3],
+    horizontal_duration_ms: u64,
+    corner_hold_ms: u64,
+    brake_duration_ms: u64,
+) -> InputAction {
+    InputAction::SingleTouchDragWithPauseAndBrakeV1 {
+        x1,
+        y1,
+        x2,
+        y2,
+        drag_duration_ms: horizontal_duration_ms,
+        pause_ms: corner_hold_ms,
+        x3,
+        y3,
+        brake_duration_ms,
+    }
 }
 
 fn same_aspect(left: CaptureExtent, right: CaptureExtent) -> bool {

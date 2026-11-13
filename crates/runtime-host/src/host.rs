@@ -2570,6 +2570,14 @@ impl RuntimeHost {
             // before any instance is prepared.
             if let Some(config_manifest) = &config.config_manifest {
                 shared.start_runtime_config(config_manifest, config.config_selection.as_ref())?;
+                // Workflow #454 (register §1.348): `config.start`, what this start found, with the
+                // configuration facts: the installer reads it before a stop, so that the next
+                // start's designed seeding (LN-4) passes its check `no_seeding`.
+                shared.record_config_start(
+                    owner_epoch,
+                    !earlier_start,
+                    tagged_start == TaggedStart::Seed,
+                )?;
             }
             // #402 HS-2 (design HS-M §3.8): the backends in effect, a restored instruction's
             // included, written into the registry before any instance is prepared; no session

@@ -960,3 +960,12 @@ tests = [
     "actingcommand-ledger::lib::global::tests::forensics_read_only::da3_fix2_a_scaled_run_read_on_a_page_without_its_geometry_record_pairs_its_inputs",
 ]
 incident = ["#392 DA-3"]
+
+# Workflow #392 DA-3b (work order point 2 and test 5, route E; contracts/display-adapter.md section 10, "The task evidence"): a scaled run's vertical-brake step pairs, its effect intent's drag converted by the product's admit_input and device_input: at 2 (320x180 on 640x360) the drag sent as the drag with a pause and a brake (600, 300) → (40, 300) → (40, 100), at 3/2 (1280x720 on 1920x1080) as (302, 902) → (1352, 752) → (1352, 602); against the first, the vertical kind with a brake of 200, the brake left at 100, the base points, the base drag, one device pixel off or another pause pairs with nothing; without a recorded map the drag pairs with itself only, not with the drag with a pause and a brake through its points
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger-forensics::lib::input_pairing::tests::da3b_a_scaled_vertical_brake_step_pairs_with_the_drag_sent",
+    "actingcommand-ledger-forensics::lib::input_pairing::tests::da3b_a_mismatched_vertical_brake_step_is_still_reported",
+]
+incident = ["#392 DA-3b"]
