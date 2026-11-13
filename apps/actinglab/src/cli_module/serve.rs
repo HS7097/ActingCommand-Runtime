@@ -19,8 +19,10 @@
 //!   mark its commands add to a recording carries it (the loop runs actinglab's own commands with
 //!   `via` `mcp`, as MCP's `--via mcp` child runs them), and so does a rescue row's journal. The
 //!   connections actinglab's own commands open bind as that child's do
-//!   (`crate::lab_client_config`: the Lab channel, `via` `mcp`, the envelope (Lab, Lab)), until
-//!   LAB-6; the core rows `lab-ops` serves, which that child never serves, connect as before. Its
+//!   (`crate::lab_client_config`: the envelope (Lab, Lab); Workflow #434 LAB-6S2-B1: the Lab
+//!   channel with `Lab-MCP`, where it was `via` `mcp`, which the Runtime still records). Since
+//!   LAB-6S2-B1 the core rows `lab-ops` serves, which no MCP server sends its child, connect with
+//!   `Lab-MCP` too, and a rescue row's connections. Its
 //!   lines stay this loop's (since LAB-5G4b each inside the envelope below), never the envelope a
 //!   `--via` line prints. With the option,
 //!   `ACTINGCOMMAND_INITIATOR` set to anything is refused before the loop starts: the variable
@@ -76,15 +78,16 @@ const LINE: &str = "line";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Front {
     /// `--front mcp`: an MCP server's child. Its initiator is `Lab-MCP`, and its connections bind
-    /// as MCP's `--via mcp` child's do.
+    /// as MCP's `--via mcp` child's do (Workflow #434 LAB-6S2-B1: the Lab channel with
+    /// `Lab-MCP`).
     Mcp,
 }
 
 impl Front {
-    /// The counter that forwarded the work, as MCP's `--via mcp` child names it: the `via` the
-    /// connections of actinglab's own commands bind (`crate::lab_client_config`) and the commands
-    /// the loop runs carry, so that their recordings carry `Lab-MCP`
-    /// (`super::recording_initiator`).
+    /// The counter that forwarded the work, as MCP's `--via mcp` child names it: the commands the
+    /// loop runs carry it, so that their recordings carry `Lab-MCP`
+    /// (`super::recording_initiator`), and the connections of actinglab's own commands bind with
+    /// `Lab-MCP` for it (`crate::lab_client_config`; Workflow #434 LAB-6S2-B1).
     pub(crate) const fn via(self) -> ChannelVia {
         match self {
             Self::Mcp => ChannelVia::Mcp,
@@ -101,6 +104,9 @@ pub(super) fn main(words: &[String]) -> ExitCode {
         Ok(front) => front,
         Err(refused) => return super::print(&refused, true),
     };
+    // Workflow #434 LAB-6S2-B1: the core rows connect with the process's word, `Lab-MCP` under the
+    // option.
+    super::set_front(front);
     if let Err(exit) = super::admitted() {
         return super::print(&exit, true);
     }

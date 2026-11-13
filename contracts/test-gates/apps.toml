@@ -1812,3 +1812,23 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_451_place_pkg::place_pkg_notices_bundle_declaring_package_alone",
 ]
 incident = ["#451 PLACE-PKG"]
+
+# Workflow #434 LAB-6S2-B1 (0.12.59; register §1.287, "Slice LAB-6S2-B1"; brief rd-1113/brief-lab6s2b1.md; contracts/lab-two-entries.md §2.4, §4.2): the Lab's own programs bind lab with their initiator word and no via and keep the envelope they sent on 0.12.58. On the runtime client's scripted Runtime: the CLI's core rows connect as actinglab with the process's word (Lab-CLI, the Lab-制包 or Lab-救急 of ACTINGCOMMAND_INITIATOR, Lab-MCP under serve --stdio --front mcp), BindChannel naming lab, the word and no via, every request (Lab, Lab); actinglab's own commands (a command line, serve without and with --front mcp, MCP's --via mcp child) bind lab with the process's word or Lab-MCP without via, --via ui and a variable that names no word as on 0.12.58, every request (Lab, Lab); the rescue module's own client (configuration facts, plan, catalog, instance and global pause and resume, the formal close, the start report) binds lab with Lab-CLI or Lab-MCP and actingctl install's none binds cli, every request (Cli, Cli); the Lab's MCP server's write connection sends today's server's requests but its binding, lab with Lab-MCP, and Front::Mcp today's server's but its binding; the watchdog's probe binds lab with Lab-看门狗 or a Lab program's word, cli without one, sending Health and BindChannel only, (Cli, Cli); a Runtime that drops a declared word leaves the probe unbound after one reconnect without BindChannel, answered, and client_channel_unsupported reported once per process. On the test host, one ConfigureSettings of a key no configuration holds through each front's own configuration: the CLI's core rows and serve without --front record lab.request (Lab, actinglab, Lab) and command.received lab without via; serve --front mcp and the MCP child lab.request and lab with via mcp; the rescue module's client with Lab-CLI cli.command (Cli, actingctl, Cli) and cli; the MCP server in process cli.command and mcp; the watchdog's probe with Lab-看门狗 is answered and records nothing
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab6s2b1_cli_core_rows_bind_lab_with_the_process_word",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab6s2b1_own_commands_serve_and_the_mcp_child_bind_lab_with_their_word",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab6s2b1_cli_core_rows_record_as_on_0_12_58",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab6s2b1_cli_rescue_rows_record_as_on_0_12_58",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab6s2b1_serve_without_the_mcp_front_records_as_on_0_12_58",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab6s2b1_serve_with_the_mcp_front_and_the_mcp_child_record_as_on_0_12_58",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab6s2b1_mcp_server_in_process_records_as_on_0_12_58",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab6s2b1_watchdog_probe_records_nothing",
+    "actingcommand-lab-rescue::lib::install::gate_434_lab6s2b1::lab6s2b1_rescue_module_client_binds_lab_with_its_word_and_the_cli_envelope",
+    "actingcommand-watchdog::lib::gate_434_lab6s2b1::lab6s2b1_watchdog_probe_binds_lab_with_its_word_and_sends_health_and_bind_only",
+    "actingcommand-watchdog::lib::gate_434_lab6s2b1::lab6s2b1_a_runtime_that_drops_the_word_leaves_the_probe_unbound_once",
+    "actingcommand-actinglab-mcp::serve_calls::mcp_write_provenance_as_todays_server",
+    "actingcommand-actingctl::gate::lab5g1b_front_mcp::lab5g1b_front_mcp_connects_as_todays_mcp_server",
+]
+incident = ["#434 LAB-6S2-B1"]

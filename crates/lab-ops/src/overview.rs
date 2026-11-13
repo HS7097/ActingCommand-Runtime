@@ -68,6 +68,7 @@ use crate::budget::Budget;
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::front::Connection;
+use crate::initiator::Initiator;
 use crate::instance_selector::{self, SelectorMiss};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
@@ -768,10 +769,12 @@ fn benefit_provenance(facts: &RuntimeFactSnapshot) -> Result<Option<Value>, Outc
 }
 
 /// `actingctl watchdog status` of the install root, read locally (command table §4.10): its
-/// `decision`, `attention`, `starts_24h` and `last_tick`; null without an install root.
+/// `decision`, `attention`, `starts_24h` and `last_tick`; null without an install root. Workflow
+/// #434 LAB-6S2-B1: its probe of the Runtime declares the word of the program in force
+/// (`crate::front::current`), none for actingctl's.
 fn watchdog_block(place: &Place<'_>, envelope: &dyn Fn(&Outcome) -> Value) -> Value {
     match (place.install_root, WATCHDOG_BLOCK.get()) {
-        (Some(root), Some(block)) => block(root, envelope),
+        (Some(root), Some(block)) => block(root, crate::front::current().initiator(), envelope),
         _ => Value::Null,
     }
 }
@@ -780,8 +783,9 @@ fn watchdog_block(place: &Place<'_>, envelope: &dyn Fn(&Outcome) -> Value) -> Va
 /// install root written with `envelope`. Since LAB-4 the watchdog is `crates/watchdog`, which
 /// reads actingctl's codes from this crate and so cannot be linked by it: the program hands the
 /// crate's reader (`overview_block`) over at its start ([`set_watchdog_block`]); on Windows only,
-/// where the watchdog runs, as before.
-pub type WatchdogBlock = fn(&Path, &dyn Fn(&Outcome) -> Value) -> Value;
+/// where the watchdog runs, as before. Workflow #434 LAB-6S2-B1: with the word its probe of the
+/// Runtime declares (`None`: the CLI channel without a word, as on 0.12.58).
+pub type WatchdogBlock = fn(&Path, Option<Initiator>, &dyn Fn(&Outcome) -> Value) -> Value;
 
 static WATCHDOG_BLOCK: OnceLock<WatchdogBlock> = OnceLock::new();
 

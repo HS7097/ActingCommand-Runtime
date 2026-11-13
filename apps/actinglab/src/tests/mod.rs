@@ -166,6 +166,10 @@ mod gate_434_lab5b1;
 // module's detached start sets.
 #[path = "gate_434_lab6s0.rs"]
 mod gate_434_lab6s0;
+// Workflow #434 LAB-6S2-B1: actinglab's connections bind `lab` with the process's word and keep
+// the envelope of 0.12.58; the host records them as it did.
+#[path = "gate_434_lab6s2b1.rs"]
+mod gate_434_lab6s2b1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

@@ -37,6 +37,9 @@ mod gate_381a;
 // Test-only: Workflow #382 A-4, test plan v2.2 APPS-G12 (a whole tick on the APPS-I3 seams).
 #[cfg(test)]
 mod gate_382_a4;
+// Test-only: Workflow #434 LAB-6S2-B1, the probe binds `lab` with its caller's word.
+#[cfg(test)]
+mod gate_434_lab6s2b1;
 // Test-only: Workflow #390 WD-1, the watchdog of a single-location root.
 #[cfg(test)]
 mod gate_wd1;
@@ -67,6 +70,7 @@ use actingcommand_contract::outcome::{
 // Workflow #434 LAB-4: actingctl's modules this code reads, from `crates/lab-ops` (LAB-1), bound
 // at the root so that every `crate::<module>` path of the moved files names them unchanged.
 use actingcommand_lab_ops::codes::{self, ActingctlCode, ArgumentProblem};
+use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_lab_ops::{cli_line, packs, process_probe};
 use decide::{Decision, Journal, Observed, OwnerLock, OwnerRecord, Stage, StartProbes};
 use log::Level;
@@ -217,14 +221,21 @@ enum Subcommand {
 }
 
 /// Runs `watchdog …` when the first argument names it; `None` leaves every other command to
-/// the CLI, unchanged. Its developer lines go to `developer` (Workflow #434 LAB-4 fix 1).
+/// the CLI, unchanged. Its developer lines go to `developer` (Workflow #434 LAB-4 fix 1). Its
+/// probe of the Runtime declares no word: actingctl's, the CLI channel as on 0.12.58, until
+/// LAB-6S2-B2.
 pub fn dispatch(arguments: &[OsString], developer: DeveloperSink<'_>) -> Option<ExitCode> {
-    dispatch_exit(arguments, developer).map(ExitCode::from)
+    dispatch_exit(arguments, developer, None).map(ExitCode::from)
 }
 
 /// [`dispatch`], with the process's exit code as a number (Workflow #434 LAB-4: actingwatch
-/// exits with it).
-pub fn dispatch_exit(arguments: &[OsString], developer: DeveloperSink<'_>) -> Option<u8> {
+/// exits with it). Workflow #434 LAB-6S2-B1: every probe of the Runtime the subcommand makes
+/// declares `initiator` (actingwatch's `Lab-看门狗`; `observe::probe_config`).
+pub fn dispatch_exit(
+    arguments: &[OsString],
+    developer: DeveloperSink<'_>,
+    initiator: Option<Initiator>,
+) -> Option<u8> {
     if arguments.first()?.to_str()? != "watchdog" {
         return None;
     }
@@ -255,8 +266,8 @@ pub fn dispatch_exit(arguments: &[OsString], developer: DeveloperSink<'_>) -> Op
     // Under the task, stderr goes into watchdog.log: the developer line is for a person only.
     let quiet = matches!(subcommand, Subcommand::RunOnce { from_task: true });
     let report = match subcommand {
-        Subcommand::Status => status(&root),
-        Subcommand::RunOnce { from_task } => run_once(&root, from_task),
+        Subcommand::Status => status(&root, initiator),
+        Subcommand::RunOnce { from_task } => run_once(&root, from_task, initiator),
         Subcommand::Install => install(&root),
         Subcommand::Uninstall => uninstall(&root),
     };
@@ -286,10 +297,11 @@ pub struct Answered {
 }
 
 /// Workflow #434 LAB-3: `asked` of the installation at `root`, as `actingctl watchdog` runs it,
-/// with nothing printed.
-pub fn answer(asked: Asked, root: &Path, detail: Detail) -> Answered {
+/// with nothing printed. Workflow #434 LAB-6S2-B1: the status's probe of the Runtime declares
+/// `initiator`, the rescue module's word.
+pub fn answer(asked: Asked, root: &Path, detail: Detail, initiator: Option<Initiator>) -> Answered {
     let report = match asked {
-        Asked::Status => status(root),
+        Asked::Status => status(root, initiator),
         Asked::Install => install(root),
         Asked::Uninstall => uninstall(root),
     };
@@ -404,7 +416,12 @@ struct Tick {
 }
 
 impl Tick {
-    fn observe(root: &Path, watchdog_dir: &Path) -> Result<Self, Outcome> {
+    /// Workflow #434 LAB-6S2-B1: the probe of a locked owner declares `initiator`.
+    fn observe(
+        root: &Path,
+        watchdog_dir: &Path,
+        initiator: Option<Initiator>,
+    ) -> Result<Self, Outcome> {
         let installation = Installation::resolve(root)?;
         // F matters only for an unlocked journal with a record: a terminal outcome newer than
         // it, of this root.
@@ -415,7 +432,7 @@ impl Tick {
             installation.start_window_ms,
         )?;
         let live = (observed.lock == OwnerLock::Locked)
-            .then(|| observe::live_owner(&installation.state_root, None));
+            .then(|| observe::live_owner(&installation.state_root, None, initiator));
         Ok(Self {
             runtime_info: observe::runtime_info(&installation.state_root),
             installation,
@@ -541,8 +558,14 @@ fn watchdog_log(directory: &Path) -> Value {
 /// overview` and `ac_overview`, read as [`status`] reads it (read-only; it writes nothing): the
 /// decision, the attention outcomes, each written as `envelope` writes an outcome, the watchdog's
 /// starts of the last 24 h and its last tick. A member the report does not hold is left out.
-pub fn overview_block(root: &Path, envelope: &dyn Fn(&Outcome) -> Value) -> Value {
-    let report = status(root);
+/// Workflow #434 LAB-6S2-B1: its probe of the Runtime declares `initiator`, the word of the
+/// program whose overview it is (`lab_ops::overview::WatchdogBlock`).
+pub fn overview_block(
+    root: &Path,
+    initiator: Option<Initiator>,
+    envelope: &dyn Fn(&Outcome) -> Value,
+) -> Value {
+    let report = status(root, initiator);
     let mut block = Map::new();
     block.insert("decision".to_owned(), envelope(&report.outcome));
     block.insert(
@@ -563,7 +586,8 @@ pub fn overview_block(root: &Path, envelope: &dyn Fn(&Outcome) -> Value) -> Valu
 /// `status`: read-only. It writes nothing and takes no lock but the momentary writer-lock
 /// probe, and only when a start would be considered. Its top is the decision; its attention
 /// outcomes (warnings, and the failures that kept something unread) leave the exit alone.
-fn status(root: &Path) -> Report {
+/// Workflow #434 LAB-6S2-B1: its probe of a locked owner declares `initiator`.
+fn status(root: &Path, initiator: Option<Initiator>) -> Report {
     let now = now_unix_ms();
     let (root, directory) = match watchdog_dir(root) {
         Ok(paths) => paths,
@@ -574,7 +598,7 @@ fn status(root: &Path) -> Report {
         Ok(loaded) => loaded,
         Err(failure) => return misconfigured_report(Some(&directory), failure, false, false),
     };
-    let mut tick = match Tick::observe(&root, &directory) {
+    let mut tick = match Tick::observe(&root, &directory, initiator) {
         Ok(tick) => tick,
         Err(failure) => return misconfigured_report(Some(&directory), failure, false, false),
     };
@@ -682,9 +706,10 @@ fn status(root: &Path) -> Report {
     report
 }
 
-/// `run-once`: one supervision tick (`contracts/runtime-watchdog.md`, "Decision").
-fn run_once(root: &Path, from_task: bool) -> Report {
-    run_once_with(&start::system(), root, from_task)
+/// `run-once`: one supervision tick (`contracts/runtime-watchdog.md`, "Decision"). Workflow #434
+/// LAB-6S2-B1: its probes declare `initiator` (`start::system_as`).
+fn run_once(root: &Path, from_task: bool, initiator: Option<Initiator>) -> Report {
+    run_once_with(&start::system_as(initiator), root, from_task)
 }
 
 /// Test-only (Workflow #421 INST-1, IT-10): the decision of one task tick on `seams`. Workflow
@@ -793,7 +818,7 @@ fn tick_once(
     now: u64,
     from_task: bool,
 ) -> (Decision, Option<Tick>, bool) {
-    let mut tick = match Tick::observe(root, directory) {
+    let mut tick = match Tick::observe(root, directory, seams.initiator()) {
         Ok(tick) => tick,
         Err(failure) => return (Decision::Misconfigured(failure), None, false),
     };
