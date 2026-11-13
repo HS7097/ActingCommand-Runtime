@@ -218,6 +218,15 @@ impl Switching {
             capability_operation_ids: vec!["operation.observe".to_owned()],
             preferred_task_ids: Vec::new(),
         });
+        // The policy's configured identities are the registered aliases, all four
+        // (`validate_policy_input_authority`); C and D take A's static identity and are not
+        // available to the policy, which has no task of theirs.
+        for alias in [C, D] {
+            let mut identity = facts.instances[0].clone();
+            identity.instance_id = alias.to_owned();
+            identity.available = false;
+            facts.instances.push(identity);
+        }
         let resources = pending_policy_resources();
         let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
         let startup = ContainedTaskRequest::new(package.to_string_lossy().into_owned())
