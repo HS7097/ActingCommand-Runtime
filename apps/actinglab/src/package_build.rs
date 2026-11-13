@@ -34,6 +34,8 @@ pub(crate) const BUNDLE_READS: crate::flag_args::reads::FlagReads =
                 "--schedule",
                 "--display-layout",
                 "--loading",
+                // Workflow #444 NOTICES-3: the package author's notices directory.
+                "--notices",
             ],
             switches: &[],
             refused: &[],
@@ -48,7 +50,9 @@ pub(crate) const BUNDLE_READS: crate::flag_args::reads::FlagReads =
 /// `bundle.json`; ROUT-L RL-1a: so does `--schedule` (`schedule.json`); Workflow #392 DA-4: and
 /// `--display-layout` (`display-layout.json`). Workflow #407 LOAD-1: `--loading` names the
 /// game's `loading.json`: every pack's loading copy is checked against it, and it is laid beside
-/// `bundle.json` with its templates.
+/// `bundle.json` with its templates. Workflow #444 NOTICES-3: `--notices` names a directory of
+/// the package author's notice texts: every file is held to the notices rules before anything is
+/// written, then laid byte for byte into `notices/` beside `bundle.json`.
 ///
 /// Workflow #434 LAB-5B3: whether a flag was given is read through `FlagArgs::given`.
 pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
@@ -110,6 +114,7 @@ pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
             schedule: root_file("--schedule")?,
             display_layout: root_file("--display-layout")?,
             loading: root_file("--loading")?,
+            notices: root_file("--notices")?,
         },
     };
     let mut lab = super::env_detection::build_readonly_lab()?;

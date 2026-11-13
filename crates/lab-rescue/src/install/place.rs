@@ -46,13 +46,13 @@ use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
-    BundleIndex, MAX_NOTICE_FILE_BYTES, NoticeBound, NoticeEntry, NoticeIssue,
-    RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
-    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRootBytes, check_notice_listing,
-    check_notice_pack_ids, check_notice_size, check_notice_text, notice_relative_path,
-    read_standard_pack_root,
+    BundleIndex, MAX_NOTICE_FILE_BYTES, NOTICES_PACKAGE_REVISION, NoticeBound, NoticeEntry,
+    NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRootBytes,
+    check_notice_listing, check_notice_pack_ids, check_notice_size, check_notice_text,
+    notice_relative_path, read_standard_pack_root,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -104,10 +104,6 @@ const RETIRED_WHEN_ABSENT: [&str; 7] = [
     STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_PAGES_FILE,
 ];
-/// Workflow #444 NOTICES-2: the `package` revision that admits a bundle's notices directory; a
-/// bundle that carries it declares a `package` maximum of this at least (`notice_undeclared`;
-/// `contracts/package-reference.md`, "Notices", the row "revision").
-const NOTICES_PACKAGE_REVISION: u64 = 10;
 
 /// What an item is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

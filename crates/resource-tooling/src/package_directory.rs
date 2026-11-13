@@ -13,9 +13,14 @@
 //! Workflow #407 LOAD-1: with `--loading`, every pack's loading copy is checked as `package
 //! loading --check` checks it before anything is written, and `loading.json` with the templates it
 //! declares is laid beside `bundle.json` (`loading/`), for audit only; without it, a pack that
-//! carries a loading copy is refused (`package_loading`).
+//! carries a loading copy is refused (`package_loading`). Workflow #444 NOTICES-3: with
+//! `--notices <directory>`, the directory is held to the contract crate's notices rules before
+//! anything is written (`notices_directory`), and its files are laid byte for byte into
+//! `notices/` beside `bundle.json`, last; it is not listed in `bundle.json`, and no
+//! `interfaces.json` is written either way.
 
 use crate::codes::ResourceToolingCode;
+use crate::notices_directory::{NoticesDirectory, bundle_source};
 use crate::package_loading::{LoadingRoot, check_loading, named_packs, stale_copies};
 use crate::standard_pack_check::{
     RootFileInputs, cross_check, probe_keys_marked, store_update_cooldowns,
@@ -26,7 +31,7 @@ use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     BundleIndex, BundleIndexVersion, BundleMaintenance, BundlePack, LabError, LabErrorClass,
     LabResult, MaintenanceUse, STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE,
-    package_id_names_one_path_segment, reserved_package_id,
+    STANDARD_PACK_NOTICES_DIRECTORY, package_id_names_one_path_segment, reserved_package_id,
 };
 use actingcommand_execution_kernel::{NavigationPackageDescriptor, TaskPackageDescriptor};
 use actingcommand_execution_kernel::{PreparedContainedTask, validate_bundle_maintenance};
@@ -98,6 +103,14 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
             None
         }
     };
+    // Workflow #444 NOTICES-3: the notices directory, held to its rules with the packs the bundle
+    // will list, before anything is written.
+    let notices = request
+        .root_files
+        .notices
+        .as_deref()
+        .map(|directory| bundle_source(directory, &applications.game, &named_packs(&directories)))
+        .transpose()?;
     fs::create_dir(&staging).map_err(|error| write_error(&staging, error))?;
     write_bundle(
         &staging,
@@ -111,6 +124,9 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
     .and_then(|(index, warnings, schedule)| {
         if let Some(loading) = &loading {
             lay_loading(&staging, loading)?;
+        }
+        if let Some(notices) = &notices {
+            lay_notices(&staging, notices)?;
         }
         fs::rename(&staging, &out).map_err(|error| write_error(&out, error))?;
         // #428 COV-1: the chain followers, none without `--schedule`.
@@ -365,6 +381,24 @@ fn lay_loading(staging: &Path, loading: &LoadingRoot) -> LabResult<()> {
     Ok(())
 }
 
+/// Workflow #444 NOTICES-3: every file of the checked notices directory, byte for byte, as
+/// `notices/<path>` beside `bundle.json`, its name as the source spells it, after the other root
+/// files.
+fn lay_notices(staging: &Path, notices: &NoticesDirectory) -> LabResult<()> {
+    let directory = staging.join(STANDARD_PACK_NOTICES_DIRECTORY);
+    fs::create_dir(&directory).map_err(|error| write_error(&directory, error))?;
+    for (path, bytes) in notices.files() {
+        let file = path
+            .split('/')
+            .fold(directory.clone(), |parent, segment| parent.join(segment));
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent).map_err(|error| write_error(parent, error))?;
+        }
+        write_new(&file, bytes)?;
+    }
+    Ok(())
+}
+
 /// The `package_id` a pack source's `control.json` declares, which names the pack's directory
 /// (`packs/<package_id>`): one path segment, and never a name the game root reserves (its
 /// `tables` directory, Workflow #357 M-357a §2.1; Workflow #373 NAV-T, M-373 §3.1: a root file's
@@ -594,8 +628,9 @@ fn write_new(path: &Path, bytes: &[u8]) -> LabResult<()> {
         .map_err(|error| write_error(path, error))
 }
 
-/// The loader's refusal of one pack directory.
-fn pack_error(locator: &Path, error: ContainmentError) -> LabError {
+/// The loader's refusal of one pack directory (Workflow #444 NOTICES-3: and of a link in a notices
+/// directory, `notices_directory`).
+pub(crate) fn pack_error(locator: &Path, error: ContainmentError) -> LabError {
     LabError::package_invalid(format!("{}: {error}", locator.display()))
 }
 
