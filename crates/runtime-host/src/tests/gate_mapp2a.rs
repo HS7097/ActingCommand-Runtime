@@ -21,7 +21,7 @@ use actingcommand_contract::{
     APPLICATION_FOREGROUND_FACT_KEY, InstanceStuckRecovery, RuntimeFactRecord, RuntimeFactScope,
     RuntimeLifecyclePhase,
 };
-use actingcommand_scheduler::ClaimKind;
+use actingcommand_scheduler::{ClaimKind, DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS};
 use serde_json::{Value, json};
 
 const A: &str = POLICY_INSTANCE_ALIAS;
@@ -48,6 +48,11 @@ const RUN_DEADLINE_MS: u64 = 600_000;
 const STARTUP_DEADLINE_MS: u64 = 60_000;
 /// The time B's run asks to keep on the key after the switch.
 const AFTER_MS: u64 = 60_000;
+/// The wait A's queued claim asks: the longest the fixture's scheduler takes (its configured
+/// `maximum_queue_timeout_ms`, which `config` leaves at the default). The scheduler counts it on
+/// the Runtime clock, which only the kernel's waits move, and the test's two startup runs end
+/// within their package's own `timeout_ms` (8 s) each, well inside it.
+const QUEUE_TIMEOUT_MS: u64 = DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS;
 /// The connection of every policy run's key (the host's `POLICY_CONNECTION_VALUE`).
 const POLICY_CONNECTION: u64 = u64::MAX;
 const TASK_PAGE: &str = "task.page";
@@ -714,7 +719,7 @@ fn mapp2a_a_startup_run_on_a_borrowed_key_hands_the_same_key_back_and_the_queued
         RuntimeOperation::queue_lease(
             A,
             ids.mint_holder_id().expect("holder"),
-            LeaseQueuePolicy::new(LeasePriority::Normal, 3_600_000).expect("queue policy"),
+            LeaseQueuePolicy::new(LeasePriority::Normal, QUEUE_TIMEOUT_MS).expect("queue policy"),
         ),
         72,
     );
