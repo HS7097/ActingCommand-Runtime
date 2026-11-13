@@ -953,3 +953,111 @@ fn rv1_no_list_file_is_written_into_the_repository() {
             .exists()
     );
 }
+
+/// Workflow #444 NOTICES-3: every entry of the zip at `path`, by name, with its bytes.
+fn zip_entries(path: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(fs::File::open(path).unwrap()).unwrap();
+    let mut entries = std::collections::BTreeMap::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        entries.insert(entry.name().to_owned(), bytes);
+    }
+    entries
+}
+
+/// Workflow #444 NOTICES-3: the `notices` member of `standard-pack check` of the game root `root`.
+fn checked_notices(root: &Path) -> Option<actingcommand_resource_tooling::StandardPackNotices> {
+    actingcommand_resource_tooling::check_standard_pack_root(
+        actingcommand_resource_tooling::StandardPackCheckRequest {
+            root: root.to_owned(),
+        },
+    )
+    .unwrap_or_else(|error| panic!("{}: {}: {}", root.display(), error.code, error.message))
+    .notices
+}
+
+// Workflow #444 NOTICES-3 (register §1.336; contracts/resource-verify.md, the `bundle` step): a
+// repository root without `notices/` yields what the step yields today (a zip of 9 entries with no
+// `notices/` entry, `interfaces.json` declaring `package` [3, 3], an installed copy without the
+// directory, whose check has no `notices` member); the same repository with `notices/` committed
+// yields a zip that carries its files byte for byte under `notices/` and an `interfaces.json`
+// declaring [10, 10], an installed copy that holds the directory, and a check that counts its
+// files and bytes; the step passes both times.
+#[test]
+fn notices3_the_bundle_step_carries_a_notices_directory() {
+    let fixture = Fixture::new();
+    let head = fixture.commit("neutral fixture");
+    let result = fixture.verify("plain", &[]);
+    assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
+    let report = fixture.report_of("plain", &result);
+    assert_failed_steps(&report, &[]);
+    let counts = &step(&report, "bundle")["counts"];
+    assert_eq!(counts["package_revision"], 3);
+    assert_eq!(counts["zip"]["entries"], 9);
+    let zip_of = |run: &str, head: &str| {
+        zip_entries(
+            &fixture
+                .work(run)
+                .join("out")
+                .join(format!("neutral-resources-{}.zip", &head[..7])),
+        )
+    };
+    let interfaces = |entries: &std::collections::BTreeMap<String, Vec<u8>>| {
+        serde_json::from_slice::<Value>(&entries["interfaces.json"]).unwrap()["speaks"]["package"]
+            .clone()
+    };
+    let entries = zip_of("plain", head.as_str());
+    assert!(
+        entries.keys().all(|name| !name.starts_with("notices/")),
+        "{:?}",
+        entries.keys()
+    );
+    assert_eq!(interfaces(&entries), json!([3, 3]));
+    let installed = fixture.work("plain").join("installed").join("neutral");
+    assert!(installed.join("bundle.json").is_file());
+    assert!(!installed.join("notices").exists());
+    assert_eq!(checked_notices(&installed), None);
+
+    let notice: &[u8] = b"\xef\xbb\xbfPlaceholder notice.\r\nSecond line.\r\n";
+    let other: &[u8] = b"Placeholder text.\n";
+    fixture.write("notices/NOTICE.md", notice);
+    fixture.write("notices/texts/OTHER.txt", other);
+    let head = fixture.commit("a notices directory");
+    let result = fixture.verify("notices", &[]);
+    assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
+    let report = fixture.report_of("notices", &result);
+    assert_failed_steps(&report, &[]);
+    let counts = &step(&report, "bundle")["counts"];
+    assert_eq!(counts["package_revision"], 10);
+    assert_eq!(counts["zip"]["entries"], 11);
+    assert_eq!(counts["root_files"], json!([]));
+    let entries = zip_of("notices", head.as_str());
+    assert_eq!(
+        entries.get("notices/NOTICE.md").map(Vec::as_slice),
+        Some(notice)
+    );
+    assert_eq!(
+        entries.get("notices/texts/OTHER.txt").map(Vec::as_slice),
+        Some(other)
+    );
+    assert_eq!(interfaces(&entries), json!([10, 10]));
+    let installed = fixture.work("notices").join("installed").join("neutral");
+    assert_eq!(
+        fs::read(installed.join("notices").join("NOTICE.md")).unwrap(),
+        notice
+    );
+    assert_eq!(
+        fs::read(installed.join("notices").join("texts").join("OTHER.txt")).unwrap(),
+        other
+    );
+    assert_eq!(
+        checked_notices(&installed),
+        Some(actingcommand_resource_tooling::StandardPackNotices {
+            files: 2,
+            bytes: (notice.len() + other.len()) as u64,
+        })
+    );
+}

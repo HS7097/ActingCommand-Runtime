@@ -578,7 +578,9 @@ pub(super) enum Counts {
         bytes: u64,
         zip: Option<ZipCounts>,
         root_files: Vec<String>,
-        package_revision: u32,
+        /// The `package` revision the zip's `interfaces.json` declares: 3, or (Workflow #444
+        /// NOTICES-3) 10 when the bundle carries the notices directory.
+        package_revision: u64,
     },
 }
 

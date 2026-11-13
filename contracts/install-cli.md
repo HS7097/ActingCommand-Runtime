@@ -897,11 +897,16 @@ the rescue face:
   before anything changes, then stops with hold, stages it as `actingd.config.json.new-<ms>.part`,
   swaps it in with the replaced file kept as `actingd.config.json.prev-<ms>`, starts, waits for
   `alive` and releases (the file's content is never printed, only its SHA-256); `config restore
-  <prev>` does the same with a kept `.prev-<ms>`; `place <bundle.zip>` plans with the contract
-  crate's readers and the `package` edge, holds the instances bound to the bundle's game (the game
-  comes from the bundle), waits until they are idle, places each item `.part` → `.old-<ms>` → in
-  place (step `pack_item`), checks the bundle again and runs `<root>\tools\actinglab.exe
-  standard-pack check` on the placed game root, releases and reads the schedule; `alive [--wait]`
+  <prev>` does the same with a kept `.prev-<ms>`; `place <bundle.zip>` checks the `package` edge
+  first, then plans with the contract crate's readers (the layout: the root files,
+  `packs/<listed id>/…`, `tables/<listed id>.json` and, from `package` 10, the notices directory
+  `notices/` under the rules of [package-reference.md](package-reference.md), "Notices"), holds
+  the instances bound to the bundle's game (the game comes from the bundle), waits until they are
+  idle, places each item `.part` → `.old-<ms>` → in place (step `pack_item`), checks the bundle
+  again and runs `<root>\tools\actinglab.exe standard-pack check` on the placed game root,
+  releases and reads the schedule; the notices directory is one item (kind `notices`, Workflow
+  #444 NOTICES-2), placed first and, when the zip no longer carries it, set aside as a root file
+  is; `alive [--wait]`
   is the watchdog's status of the root; `instance add <alias> …` (Workflow #421 INST-5, first
   slice; "Configuration, instances, packs and a fresh root", "Instances, the first slice") composes
   the candidate and commits it as `config replace` does, with the new instance paused after the
@@ -932,7 +937,7 @@ will run, **B** a placed bundle (the register's declared range) or a new one (it
 |---|---|
 | update, rollback | `ledger`: Rp.max ∈ R\*; R\*.max > Rp.max needs `--accept-ledger-one-way` (journalled; it closes later rollbacks by the same edge). `runtime-outcomes`: R\*.max ∈ I. `install-control`: I ∩ Rp and I ∩ R\*. `runtime-client`: I ∩ Rp and I ∩ R\*. `package`: every placed B.max ∈ R\* (unknown: the warning). `actingd-config`: C passes R\*'s check-config, and I's key table knows every key C names in the sections the configuration mechanism resolves. Each build's Runtime and Tools manifests declare equal `speaks`. |
 | config commit, restore | C passes the check-config of the build in `runtime\`. |
-| pack place | B.max ∈ the live Runtime's `package` and ∈ I's. |
+| pack place | B.max ∈ the live Runtime's `package` and ∈ I's, checked before the layout; a bundle that carries `notices/` declares B.max ≥ 10 (`pack_invalid`, `notice_undeclared`). |
 | new | I ∩ R for `actingd-config`; R's check-config passes. |
 
 An edge row is `{interface, check, result: pass | fail | warning, parties: [{party, source,

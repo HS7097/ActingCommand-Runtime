@@ -3271,3 +3271,7 @@ mod gate_ra1;
 // Workflow 114-A (register §1.236): the index keys and the durability of `policy.not_run_changed`.
 #[path = "tests/gate_114a.rs"]
 mod gate_114a;
+// Workflow #429 RG-STOP (register §1.337): a record whose outcome code is of the ladder class
+// `planned_stop` is no failure of the run-recovery grouping.
+#[path = "tests/gate_429_rg_stop.rs"]
+mod gate_429_rg_stop;

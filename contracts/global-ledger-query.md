@@ -188,7 +188,19 @@ Context comes from the complete related run through the snapshot, independently
 of the selected page, module, time or severity filters. Context is bounded by the
 existing 1024-event query ceiling per run; a larger run yields Unknown with an
 explicit context limit. Missing relations, conflicting outcomes and incomplete
-sources also yield Unknown.
+sources also yield Unknown. A failure of the grouping is a record of the run's
+context of one of the failure kinds it pairs with a later success (an
+`input.failed`, a `recognition.failed`, a failed entry recovery), or any other
+record of severity `warning` or above; a run whose context holds no failure, read
+completely and within the bound, has no group. #429 RG-STOP (since 0.12.58,
+[v012-register.md](v012-register.md) §1.337): a record whose outcome code is of
+the ladder class `planned_stop` (a stop on request, a pause; today
+`contained_task_cancelled` and `contained_task_paused`) is no failure of the
+grouping unless it is of one of those failure kinds, whatever its severity: it is
+not listed and causes no gap, so a run that was only stopped or paused has no
+group. The rule reads the class the outcome catalog gives the record's code and
+names no code. The records' own severity, the page's rows, their views, the
+cursor and the read scope do not change.
 
 #422 QR-2 (since 0.12.23): a page request may ask for no run recovery
 (`RuntimeEventQueryPageRequest::without_run_recovery`, the optional request

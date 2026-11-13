@@ -2834,7 +2834,10 @@ fn require_regular_file(path: &Path, label: &str) -> LabResult<()> {
     Ok(())
 }
 
-fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+/// A symbolic link, a junction or any other reparse point (Workflow #444 NOTICES-3: and the
+/// entries of a notices directory, `notices_directory`, which refuses them as the pack loader
+/// does).
+pub(crate) fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink() || metadata_is_reparse_point(metadata)
 }
 

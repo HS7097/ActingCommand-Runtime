@@ -204,8 +204,10 @@ crate::outcome_vocabulary! {
         NoticeDepth => "notice_depth",
         /// NOTICES-1: a path of the notices directory breaks the name rules (a segment's length,
         /// alphabet or first byte, a device name or a trailing dot, a file name's suffix), two of
-        /// its paths are equal in any ASCII case, a file's path is another path's directory, or
-        /// the bundle that carries it lists a pack named `notices` in any ASCII case.
+        /// its paths are equal in any ASCII case, a file's path is another path's directory, two
+        /// of its directories' names are equal in any ASCII case and not byte for byte
+        /// (NOTICES-2), or the bundle that carries it lists a pack named `notices` in any ASCII
+        /// case.
         NoticeName => "notice_name",
         /// NOTICES-1: a file of the notices directory is not strict UTF-8, or holds a control
         /// character other than TAB, LF, FF and CR.

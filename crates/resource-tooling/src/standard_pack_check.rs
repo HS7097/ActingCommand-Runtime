@@ -71,8 +71,15 @@
 //! (`package_loading`), the templates read from the root's `loading/`, and lists the file in
 //! `root_files`; of a root without it, a package that carries a loading copy is refused
 //! (`loading_pack_stale`). No Runtime reader reads either file.
+//!
+//! Workflow #444 NOTICES-3 (register §1.336): right after the root files, a game root's directory
+//! `notices` is held to the contract crate's notices rules (`notices_directory`) when no package
+//! of the registry is named like it in any ASCII case (such a folder is that pack's), and the
+//! answer gains `notices` `{files, bytes}`; a root without it answers as before. Nothing beside it
+//! (`notices.old-<ms>`, `notices.rolledback-<ms>`, a `.part`) is looked at.
 
 use crate::codes::ResourceToolingCode;
+use crate::notices_directory::game_root_notices;
 use crate::package_directory::{PACK_DEADLINE, packs_empty};
 use crate::package_loading::{check_loading, stale_copies};
 use crate::standard_pack_schedule::report_schedule;
@@ -294,6 +301,8 @@ pub fn check_standard_pack_root(
         };
         root_invalid(&game, &root.join(STANDARD_PACK_BUNDLE_FILE), &issue)
     })?;
+    // Workflow #444 NOTICES-3: the notices directory, unless a package is named like it.
+    let notices = game_root_notices(&root, &game, checked.registry.package_ids())?;
     // Workflow #407 LOAD-1: with `loading.json`, every package's loading copy is the one it
     // makes, as `package loading --check` checks it; without it, no package carries one. LOAD-2:
     // before the cross-check admits the packages, whose loader compiles a copy, so a stale copy is
@@ -379,6 +388,7 @@ pub fn check_standard_pack_root(
         benefit_provenance,
         benefit_followers,
         consumption_facts,
+        notices,
     })
 }
 

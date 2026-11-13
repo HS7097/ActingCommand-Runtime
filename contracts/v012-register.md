@@ -18495,6 +18495,360 @@ and without a byte-order mark and one after the start, CRLF, CR and mixed line e
 kept; each of the 29 refused characters refused at the start, the middle and the end, every other
 ASCII byte kept there; six invalid UTF-8 sequences refused). No existing test changes.
 
+### 1.335 Slice NOTICES-2 (0.12.58): the installer's `place` takes a bundle's notices directory; `package` revision 10 (Workflow #444; the design note `rd-1113/design-notices-in-archive.md`, read on main `29a65e2d`, design (a) with every recommended answer of its section 8 adopted by the coordinator's rulings of 11-13 on board #444, not the owner's words; coordinator work order `rd-1113/brief-444-notices-2.md`, read on main `734dd786`)
+
+1.335 is the coordinator's number. [install-cli.md](install-cli.md), "The Lab's rescue module"
+(`place`) and "Interface checks" (`pack place`), [package-reference.md](package-reference.md),
+"Notices" and "Standard package root", and the `package` row 10 of
+[component-interfaces.md](component-interfaces.md) are the contract. Added: one value of the
+`pack_item` intent's `kind` (`notices`), one rule of the notices set rule, and the `package` raise.
+No outcome code, value key, vocabulary word, configuration key, step kind, intent member, wire
+shape or record is added. **A bundle without the directory on a root without it plans, journals
+and places exactly as before.**
+
+**What `place` does with the directory** (crate `lab-rescue`, `src/install/place.rs`; design
+§3.2, §3.3, §3.6):
+
+- **The edge first.** The `package` edge (the maximum the bundle's `interfaces.json` declares lies
+  in this installer's `package` range) is checked right after `bundle.json` and before the layout,
+  so that a bundle of a later revision is refused through `package` and not through a member this
+  installer does not know. The one refusal that changes: a bundle that fails both the edge and the
+  layout is refused `interface_edge` where it was `pack_invalid` (design Q2, accepted; no released
+  bundle is in that class). Every other refusal and its order are as before.
+- **The layout** takes the members `notices/<path>` (exact lower case: a member `Notices/…` stays
+  unknown, `pack_invalid` naming it). When the zip carries one or more, in this order: a declared
+  `package` maximum below 10 is `notice_undeclared`; the listing (each file's path below the
+  directory with the size the zip declares) goes through `check_notice_listing`; the bundle's
+  listed packs through `check_notice_pack_ids`; each file is read through 2,097,153 bytes (its
+  bound plus one) and what was read goes through `check_notice_size` and `check_notice_text`, so a
+  member that holds more than the zip declares is still refused at its bound. All of it in the
+  plan, before the hold and before any write, as a root file's problem is refused: `pack_invalid`
+  (`path` the zip) caused by `standard_pack_root_invalid` with `game`, `standard_pack_problem` the
+  rule's word, `path` the member below the zip (`<zip>\notices\…`; `<zip>\notices` for the count
+  or the total; `<zip>\bundle.json` with `package_id` for a pack named like the directory;
+  `<zip>\interfaces.json` for `notice_undeclared`), `json_pointer` empty, and the bound with the
+  value found on `limit_count` / `count` or `limit_bytes` / `actual_bytes`. The rules are the
+  contract crate's (§1.334); `place` states none of them.
+- **The item.** One folder item of kind `notices` (`ItemKind::Notices`), `item` `notices`, `dst`
+  `<game root>\notices`, its members `<path>` → `notices/<path>`, digested as a pack's folder is
+  (the listing digest of each file's SHA-256), and **placed first** among the items, before the
+  tables, the packs and the root files, so the texts are in place before the material they
+  accompany. States `new`, `replace`, `unchanged`, and `retire` when the game root holds
+  `notices\` and the zip carries none (design Q3): set aside as `notices.old-<ms>` and kept, as a
+  reader's root file is; not when a pack of the bundle is named `notices` in any ASCII case (that
+  folder is the pack's, and two items would share one place). Its step is one more `pack_item`,
+  its part `notices.new-<ms>.part` in the game root, where the leftover check already looks; no
+  new step kind and no new intent member. The item's files are read through their bound also
+  when it is digested and when its part is written.
+- **`post_check`** covers the item through its rerun (its listing digest, or its absence after
+  `retire`). This release's `standard-pack check` ignores the directory (NOTICES-3 teaches it); a
+  change of the notices alone leaves `schedule_changes` false, so the composition row expects the
+  catalog unchanged. **`undo`** reverses the item by kind and digest: the placed directory set
+  aside as `notices.rolledback-<ms2>` and the kept one renamed back; a retired one renamed back.
+  Nothing is deleted.
+- **Fixed point 4.** A zip without `notices/` on a root without it gets no item: the same canonical
+  plan document and plan id, the same steps and the same journal.
+
+**The added set rule** (`crates/actingcommand-contract/src/standard_pack_notices.rs`,
+`check_notice_listing`, after its two collisions; the coordinator found it reading NOTICES-1):
+two paths whose directories' names are equal under ASCII case folding and not byte for byte
+(`A/x.md` beside `a/y.md`) are refused `notice_name` at the later path in byte order. Their whole
+paths differ, so the two earlier collisions passed them; on a file system that folds case they land
+in one directory, and the placed directory no longer lists as the zip does (the item's digest after
+the swap would not match). One directory spelled alike by several paths is kept; a file `A` beside
+a directory `a/…` stays the earlier rule's. The catalog's description of `notice_name` and the
+"uniqueness" row of package-reference.md say so; the vocabulary does not move.
+
+**The raise.** `package` [3, 9] → [3, 10]: `distribution/windows/component-interfaces.json`, the
+architecture pin (`tools/actinglab-architecture/tests/component_interfaces.rs`) and the row 10 of
+component-interfaces.md, which says that once an installation's register records a root's declared
+range, a rollback below 10 is refused by the `package` edge for a root placed from a notices bundle,
+and that placing a bundle without the directory first is the way (design Q6). A bundle declares
+[10, 10] only when it carries the directory; a bundle without it keeps its revision, so its zip,
+`SHA256SUMS`, plan and journal stay what they are. The packer writes the revision (the resource
+repositories' script and `resource verify`'s mirror, NOTICES-3 and later); `package bundle` writes
+no `interfaces.json`. **Every reader of the `package` range, checked before the raise:** the
+update's and the rollback's `package` edge (`plan.rs`, `interface_edges`: each registered bundle's
+maximum in R\*'s range) compares the register's range, which is unknown for every root
+(`adopt.rs`, `package_range: None`), so it is the warning `pack_declaration_unknown` for [3, 9] →
+[3, 10] and for [3, 10] → [3, 9] alike, and a register holding [3, 3] would pass both; `undo` of an
+update judges the same edges (`rollback_edges`); the update's other edges do not read `package`;
+`place` reads I's range, which now takes [3, 3] to [10, 10]; the Runtime reads no `interfaces.json`
+and no range (its root reader, the composer, check-config); `resource verify` writes [3, 3] and
+compares it with nothing of the Runtime's; `standard-pack check` reads no range; the exact-SHA build
+checks the declaration's form only, and the release reader that both halves declare alike. None of
+them refuses a bundle or a root that is accepted today.
+
+**What programs of an earlier release do** (design §3.2):
+
+| Program | A zip that carries `notices/` | A game root that holds `notices/` |
+|---|---|---|
+| rescue `place` before 0.12.58 | `pack_invalid` naming the first `notices/` member in name order (its layout check, which runs before its `package` edge), before the hold: nothing paused, nothing written | a bundle without the directory is placed and `notices\` is left as it is; a notices bundle is refused as on the left |
+| the coordinator's placement kit, until it learns the directory (design §5) | refused at its layout check, and its release facts check refuses `package` 10 | lists `notices` as an unlisted directory; nothing refused |
+| `standard-pack check` | reads no zip | ignores the directory; the root checks as before |
+| the Runtime (actingd), check-config, the composer | read no zip | ignore it: no catalog, no composed generation, no activation |
+| an earlier installer's `undo` of a `pack_place` journal with a `notices` item | — | cannot read the kind ([install-cli.md](install-cli.md), "Journals across versions": no old-version compatibility); undo with this build first, or leave the inert directory |
+
+`actingctl install` has no pack placement of its own (`actingctl install pack plan|place`, INST-4,
+is not built; the word `pack` is `actingctl_usage_invalid`, `unknown`), so it never opens such a
+zip.
+
+**At deploy.** The Runtime declares `package` [3, 10]; nothing changes for a bundle without the
+directory. A bundle that carries it is placed only by this release's `place`. The coordinator's
+placement kit and the resource repository's packer do not know the directory yet, so no bundle
+that carries it is released before they are changed (design §4, §5; slices 4 and 5). **Rollback**
+to a build before 0.12.58: the update's `package` edge stays the warning
+`pack_declaration_unknown`, and the earlier Runtime reads a root that holds `notices\` as one
+without it; an earlier installer cannot undo a `pack_place` that placed or retired the directory.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NT2-1 | `place`: the `package` edge before the layout | installer behaviour | NOTICES-2 | — | one refusal changes: a bundle that fails both is `interface_edge` (was `pack_invalid`) |
+| NT2-2 | `place`'s layout: `notices/<path>`, the notices rules, `notice_undeclared`, the bounded reads | installer behaviour | NOTICES-2 | — | in the plan, before the hold and any write; `pack_invalid` caused by `standard_pack_root_invalid` |
+| NT2-3 | the `pack_item` intent's and the plan document's `kind` + `notices` | journal value (no new member) | NOTICES-2 | NOTICES-2 | placed first; `retire` when a later bundle carries none; an installer before 0.12.58 cannot read it |
+| NT2-4 | `check_notice_listing` + the directory names' spelling | contract rule (no shape) | NOTICES-2 | — | `notice_name` at the later path; the catalog's description of the word |
+| NT2-5 | `package` [3, 10] | interface revision | NOTICES-2 | the packer (NOTICES-3, the resource repository) | component-interfaces.md row 10 |
+
+Tests (apps gate row "#444 NOTICES-2", `crates/lab-rescue/src/install/gate_444_notices2.rs`, on the
+fake host with placeholder names, a notice file `NOTICE.md`; the fake installer's `package` range is
+a field of `fixture.rs`'s `FakeHost`, by default the fixture's [3, 5]):
+`notices_are_placed_first_and_read_back_unchanged` (a bundle that carries the directory, declared
+10, planned with the item `notices` `new` and first; placed, its step the operation's first, the
+files on disk the zip's bytes; planned again with every item `unchanged`; `undo` sets the placed
+directory aside), `notices_replace_unchanged_retire_and_undo` (a changed text: `replace`, the
+replaced directory kept as `.old-<ms>`; the same texts while the pack changes: `unchanged`, no step
+touches the directory; a bundle without it: `retire`, shown by the plan, the directory kept as
+`.old-<ms>`; each `undo` puts back what was there), `notices_absent_bundle_plans_as_before` (a
+bundle without the directory on a root without it: the journalled plan document is exactly the
+earlier one, its members `game`, `zip_sha256`, `package` and `items` and each item's `item`,
+`kind`, `state` and `digest` as the earlier code computes them, the plan id `plan-` and 16 hex
+digits of the SHA-256 of its canonical form, the same six steps, and every `pack_item` intent with
+only the earlier members; the work order asked to pin the plan id main gave before the slice, which
+cannot be known here without a build, because it covers the zip's SHA-256 and the zip writer's
+bytes decide that, so the test holds the document and the formula instead),
+`notices_refusals_come_before_the_hold` (`notice_undeclared` at `<zip>\interfaces.json`; a refused
+suffix; a size the zip declares below what the member holds, refused at the bound with 2,097,153
+read; 65 files; 8 MiB and one byte; a control character; a pack named like the directory, at
+`<zip>\bundle.json` with `package_id`; one directory's name in two cases, at the later path; each
+`pack_invalid` caused by `standard_pack_root_invalid` with its word, member, empty pointer and
+bound, and no pause, no journal, nothing in the game root) and
+`notices_edge_is_checked_before_the_layout` (a bundle declared [11, 11] with an unknown member:
+`interface_edge`; the same bundle declared 10: `pack_invalid` at that member). Adapted, because the
+requirement changes what they pin: the contract gate row "#444 NOTICES-1"'s
+`notices_set_rule_holds_each_bound_at_its_edge` gains the added rule's edges (two cases of one
+directory, refused at the later path, in either order of case; one directory twice kept; a file
+beside a directory of its name in another case still the earlier rule's), and the architecture
+pin `the_runtime_declares_each_v0120_interface_revision_once` holds `package` [3, 10].
+
+### 1.336 Slice NOTICES-3 (0.12.58): the Tools lay and check a bundle's notices directory (`package bundle --notices`, `standard-pack check`, `resource verify`) (Workflow #444; the design note `rd-1113/design-notices-in-archive.md`, read on main `29a65e2d`, design (a) with every recommended answer of its section 8 adopted by the coordinator's rulings of 11-13 on board #444, not the owner's words; coordinator work order `rd-1113/brief-444-notices-3.md`, read on the head `6df7d87d` of NOTICES-2's branch)
+
+1.336 is the coordinator's number. [package-reference.md](package-reference.md), "Notices" (the
+readers), the layout of `package bundle` and the answer of `standard-pack check`,
+[resource-verify.md](resource-verify.md) (the `bundle` step, its index checks and its counts) and
+the rows `package bundle` and `standard-pack check` of `lab-operations.json` are the contract. Added:
+one flag (`package bundle --notices <directory>`), one member of `standard-pack check`'s answer
+(`notices`), one parameter of the operation table's row `package bundle`, and one public constant of
+the contract crate. No outcome code, value key, vocabulary word, configuration key, interface
+revision, persisted shape, wire shape or record is added. After this slice nothing of the design's
+Runtime side is left: the coordinator's placement kit and the resource repositories' packer (the
+design's slices 4 and 5) are what remains.
+
+**The rules are the contract crate's** (§1.334): the Tools call `check_notice_listing`,
+`check_notice_pack_ids`, `check_notice_size` and `check_notice_text` as `place` does (§1.335) and
+state none of them. One module of the Tools crate, `crates/resource-tooling/src/notices_directory.rs`,
+reads a directory on disk for both commands: it lists every file below it with its `/`-separated
+path and its length on disk; a link below it (a symbolic link, a junction or any other reparse
+point), or an entry that is neither a file nor a directory, is refused as the pack loader refuses
+one in a pack directory (`package_invalid`, the loader's `content_directory_link_or_type`, naming
+the entry; a link at the directory itself is followed, as the loader resolves a locator). Then the
+listing goes through the set rule, the bundle's packs through the pack rule, and each file, read
+through its bound plus one byte (2,097,153), through the size and text rules. A broken rule is
+answered as a root file's problem is (`standard_pack_check::root_invalid`):
+`standard_pack_root_invalid` itself, with `game`, `standard_pack_problem` the rule's word, `path` the
+file on disk (the directory itself for the count and the total), `json_pointer` empty, and the bound
+with the value found on `limit_count` / `count` or `limit_bytes` / `actual_bytes`.
+
+**`package bundle --notices <directory>`** (`crates/resource-tooling/src/package_directory.rs`; the
+request's `StandardPackRootFiles.notices`; the CLI's read list `package_build::BUNDLE_READS`):
+
+- Before anything is created, after the root files and the loading copies are checked: a path that
+  names no directory, and a directory that holds no file, are refused as a `--loading` that names no
+  file is (`validation_failed`, naming the path); then the directory is held to the rules, its pack
+  rule over the `package_id`s the packs' `control.json` declare (`package_loading::named_packs`, the
+  reading `stale_copies` uses before anything is written). A pack named like the directory, in any
+  ASCII case, is `notice_name` with its `package_id`, `path` the pack's source directory (the
+  bundle's `bundle.json` is not written yet). A refusal leaves neither `--out` nor `<out>.part`.
+- Then, after the other root files and `loading/`, every file is laid byte for byte into
+  `<out>/notices/<path>`: no line end, byte-order mark or case of a name is changed. `bundle.json`
+  lists nothing of it and no `interfaces.json` is written.
+- Without the flag the output is byte for byte what it was: the module is not called.
+
+**`standard-pack check --root <game root>`** (`crates/resource-tooling/src/standard_pack_check.rs`):
+right after the root files and the registry are read, and before the loading copies and the
+cross-check, a directory `notices` in the game root is held to the same rules, unless the root's
+`bundle.json` lists a package named `notices` in any ASCII case (such a folder is that pack's, as
+`place` treats it, and is admitted as the pack it is). A broken rule fails the check with `path` the
+file below the game root. The answer gains `notices` `{files, bytes}` (the count of the files and
+the sum of their lengths; an empty directory counts `{0, 0}`) when it checked a directory, and has no
+such member otherwise; `notices` never joins `root_files`, and no name of a file and nothing of a text
+is echoed. A root without the directory answers byte for byte what it answered. Entries beside it
+that `place` leaves (`notices.old-<ms>`, `notices.rolledback-<ms>`, `notices.new-<ms>.part`) are not
+looked at. `place`'s `post_check` runs this check on the placed root, so from this release it checks
+a placed directory by the rules (§1.335 said the check ignored it).
+
+**`resource verify`, the `bundle` step** (`apps/actinglab/src/resource_verify/bundle.rs`): when the
+repository root holds a directory `notices` (found as the root files are, by `symlink_metadata`), the
+step passes it to `package bundle` as `--notices`, so it is laid by the code above; expects `notices`
+among the bundle root's entries (`root_file_differs` otherwise); writes `interfaces.json` declaring
+`package` [10, 10] and counts `package_revision` 10; zips the directory with the rest; lays its files
+into `installed/<game>/notices/`; and requires `standard-pack check` of that copy to answer `notices`
+with the count and the bytes of the zip's `notices/` entries (`root_files_unread` otherwise). Without
+the directory every byte it writes is what it wrote: [3, 3], `package_revision` 3, no `notices/`
+entry, and the check's member absent on both sides.
+
+**The constant.** `NOTICES_PACKAGE_REVISION` (10), which NOTICES-2 left private in
+`crates/lab-rescue/src/install/place.rs`, is now the contract crate's public constant
+(`standard_pack_notices.rs`); `place` (`notice_undeclared`) and `resource verify` (the revision it
+declares) read it from there. That is this slice's one change in `crates/lab-rescue`; no rule of the
+module changes.
+
+**Both entries** (board #434: what the Lab does is reachable through the CLI and through the MCP
+server alike). The row `package bundle` gains `{"name": "notices", "form": "option", "type": "dir",
+"required": false}`; the row `standard-pack check`'s `output` names the notices directory's count and
+bytes. The CLI reads `--notices` from its read list; the MCP server's tool is generated from the row
+(one input property per parameter) and its call goes to a `serve` child, which writes the row's
+options as flags (`engine::arguments`), so `notices` reaches `--notices` with no change to the MCP
+server. The pin `gate_434_lab5b3::lenient_rows_match_their_reads` holds the row and the read list
+equal in both directions with the new parameter.
+
+**Interfaces.** None raised. `package` stays [3, 10] (NOTICES-2): the Tools' packer mirror writes 10
+only for a bundle that carries the directory. `standard-pack check`'s answer gains an optional member
+only for a root that holds the directory (`place`'s `post_check` reads the check's exit code alone).
+
+**At deploy.** The Tools gain `package bundle --notices` and the `notices` member of `standard-pack
+check`; nothing changes for a root or a repository without the directory. No bundle that carries it
+is released before the coordinator's placement kit and the resource repositories' packer are changed
+(design §4, §5; slices 4 and 5). **Rollback** to Tools before 0.12.58: `package bundle` refuses the
+unknown flag, and `standard-pack check` ignores a placed directory again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NT3-1 | `package bundle --notices <directory>`; `StandardPackRootFiles.notices` | Tools flag, request member | NOTICES-3 | — | checked before anything is written; laid byte for byte into `notices/`; no `interfaces.json` |
+| NT3-2 | `standard-pack check`'s answer + optional `notices` `{files, bytes}` (`StandardPackNotices`) | Tools answer member | NOTICES-3 | — | absent without the directory and beside a pack named like it; never in `root_files` |
+| NT3-3 | `resource verify` `bundle` step: `--notices`, `package` [10, 10], the installed `notices/`, the check's member | Tools behaviour | NOTICES-3 | — | without the directory every byte as before |
+| NT3-4 | `NOTICES_PACKAGE_REVISION` in `actingcommand_contract` | contract constant (no shape) | NOTICES-3 | — | read by `place` and `resource verify` |
+| NT3-5 | `lab-operations.json`: `package bundle` + `notices`; `standard-pack check`'s `output` | operation table | NOTICES-3 | — | CLI and MCP serve the row as it is |
+
+Tests (exec gate row "#444 NOTICES-3", placeholder names, a notice file `NOTICE.md`):
+`crates/resource-tooling/src/gate_444_notices3.rs`:
+`notices3_package_bundle_lays_the_directory_byte_for_byte` (three files, one with a byte-order mark
+and CRLF, two in a subdirectory, one name in mixed case, laid byte for byte under their names and
+nothing else; without the flag the output's root is `applications.json`, `bundle.json` and `packs`,
+with it `notices` too and every other file and the index the same),
+`notices3_package_bundle_refuses_each_broken_rule_and_creates_nothing` (a refused suffix, a file of
+2,097,153 bytes, 65 files, 8 MiB and one byte, a control character, each with its word, file or
+directory, empty pointer and bound; a pack `Notices` at its source directory with `package_id`; no
+`--out` and no `.part`), `notices3_package_bundle_refuses_no_directory_and_an_empty_one` (a path that
+does not exist, a file, a directory holding only an empty directory: `validation_failed`, nothing
+created), `notices3_check_counts_the_directory_and_has_no_member_without_it` (no member and no key
+without it; `{files: 2, bytes}` with it, `root_files` still `bundle.json`, and three broken folders
+beside it not looked at), `notices3_check_refuses_a_broken_rule_naming_the_file` (a control character
+in `notices/texts/NOTICE.md` and an empty `notices/NOTICE.md`, at the file below the game root, the
+second with the bound 1 and 0) and `notices3_check_leaves_the_folder_of_a_pack_named_like_it` (packs
+`notices` and `NOTICES`: checked, both packs admitted, no warning, no member);
+`apps/actinglab/src/tests/gate_rv1.rs`: `notices3_the_bundle_step_carries_a_notices_directory` (a
+repository without `notices/`: 9 zip entries, none below `notices/`, [3, 3], no installed directory,
+no member; with it committed: 11 entries carrying the files byte for byte, [10, 10],
+`package_revision` 10, the installed files, the check's `{files: 2, bytes}`; the step passes both
+times). Not tested, and why: the three case-folding collisions of the set rule (two paths equal under
+ASCII case folding, a file and a directory of one name, one directory's name in two cases) cannot be
+laid on the file system the CI's Windows runners test on, which holds one entry per folded name; the
+contract gate row "#444 NOTICES-1" holds them. A link: no existing test of the pack loader's link
+refusal shows how one is made on the CI's Windows, so none is made here. Adapted, only because the
+answer's struct gained a member: `gate_cov1` and `gate_sched_c1f1` build a `StandardPackCheckResponse`
+literally and set `notices: None`; what they assert does not change.
+
+### 1.337 Slice RG-STOP (0.12.58): a planned stop is not a failure of the run-recovery grouping (Workflow #429; a real run of 11-13 stopped on request; the coordinator's ruling of 11-13 on board #429, not the owner's words; coordinator work order `rd-1113/brief-429-rg-stop.md`, read on main `ea8ef8ea`)
+
+1.337 is the coordinator's number; another slice of this release appends 1.336.
+[global-ledger-query.md](global-ledger-query.md), the paragraph on `run_recovery`, is the
+contract. No persisted shape, wire shape, page or group shape, outcome code, category, vocabulary
+word, configuration key or interface revision changes, and no outcome code fragment, so the index
+is not regenerated.
+
+**What was seen.** A scheduled run was stopped on request (`StopInstanceRun`). In the ledger view
+of that run, the run-recovery group listed the stop's own records as failures without a recovery:
+three positions, each "failed, no recovery seen", with the gap `missing_relation` and the state
+`unknown`. A stop on request is neither a success nor a failure of the run
+([policy-suspension.md](policy-suspension.md), "A stopped run"), and the routine summary counts
+such a run as an interruption, not a failure.
+
+**The cause.** `run_recovery` (`crates/ledger/src/global/projection/views.rs`) took as a failure
+every record of the run's context of severity `warning` or above, or of a failure kind
+(`failure_kind`). A stopped scheduled run writes, linked to the run: the Runtime's reset of the
+device (`input.intent` and `input.committed` of `input.reset`), its terminal `task.failed` with
+`contained_task_cancelled`, the policy driver's `runtime.failed` with the same code
+(`record_scheduled_policy_failure`) and its settlement, `policy.execution_recorded` of the kind
+`stopped`, with the same code. The code's category is `error` and a record's severity is its
+outcome's category, so the last three are errors; none of them has a recovery relation. Those are
+the three positions.
+
+**The rule.** In the grouping, a record whose outcome code is of the ladder class `planned_stop` is
+no failure unless a failure kind knows it: it is not listed and causes no gap. The class is the one
+the outcome catalog this build embeds gives the record's code (`planned_stop` and `ladder_class` in
+`views.rs`, over `outcome::catalog_json` and `parse_ladder_class`), read as the recovery ladder's
+trigger matching reads it (`ladder_class_of`); a code the catalog does not list has no class. The
+rule names no code: today the class holds `contained_task_cancelled` and `contained_task_paused`
+(a pause's drain, a player hold's drain).
+
+**What stays.** A record a failure kind knows (`input.failed`, `recognition.failed`, a failed entry
+recovery) is a failure whatever its code; any other record of severity `warning` or above stays a
+failure. A run whose context then holds no failure, read completely and within the context bound,
+has no group, as a run without failures had none; a context cut by the bound or the read's budget,
+or an incomplete source, still has its group with its gap. A stop whose reset failed keeps the
+reset's `input.failed` and the fence's records, of their own codes, in the group, and a cleanup
+refusal recorded beside a stop keeps its own code: those are failures a person must see. The
+records' severity, the codes' categories, `failure_kind`, `success_kind`, the page's rows, their
+views, the cursor, the read scope and the shapes of the page and of the group do not change.
+
+**The paths.** `run_recovery` has one caller, `project_selected`, the one projection of a view
+page, which every reader of a page goes through: the in-memory indexes
+(`EventIndexes::project_view_page`: the Segment store, and an offline snapshot without an SQLite
+root through `GlobalLedgerMetadata::project_view_page`), the SQLite store's view reader
+(`ViewReader::read_view_page`: the Runtime's writer and its reader pool) and the bounded offline
+snapshot on an SQLite root (`sqlite/offline.rs`, the same view reader). The host's `QueryEvents`
+(`read_events.rs`), `ledger-forensics`' `query_view_page` and the clients that show the groups read
+those pages. No other code derives a group or repeats the rule: `lab-ops`' diagnose groups errors by
+code, which is not this grouping, and the run listing, the run status and diagnose ask for their
+pages without run recovery (#422 QR-2, QR-2b).
+
+**At deploy.** A run that was stopped or paused no longer shows a run-recovery group for the stop's
+own records; a run with other failures shows them as before, without the stop's records. Nothing
+else of a page changes. Nothing is persisted: a rollback brings the earlier grouping back.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RGS-1 | `run_recovery`: a record whose outcome code is of the ladder class `planned_stop` is no failure of the grouping unless a failure kind knows it | read rule (no shape change) | RG-STOP | — | `since` 0.12.58; groups only; the class read from the embedded catalog |
+| RGS-2 | [global-ledger-query.md](global-ledger-query.md), the paragraph on `run_recovery` | contract text | RG-STOP | — | what a failure of the grouping is, a run without one has no group, and the rule |
+
+Tests (ledger gate row "#429 RG-STOP"), in `crates/ledger/src/global/tests/gate_429_rg_stop.rs` on
+a formal root, each page of the run checked against the in-memory indexes' page of the same records
+at the same snapshot (the same groups): `rg_stop_t1_a_run_that_was_only_stopped_has_no_group` (the
+stop's records above: no group; its three records stay errors, rows of the page in the Errors view),
+`rg_stop_t2_a_recovered_input_failure_then_a_stop_is_recovered_by_the_failure_alone` (an
+`input.failed` and the `input.completed` of the same action, then the stop: one group, `recovered`,
+its evidence the input failure alone with its success),
+`rg_stop_t3_a_warning_then_a_stop_keeps_the_warnings_group` (a `runtime.failed` of a warning code
+without a recovery relation, then the stop: the group the warning had before the stop, its evidence
+the warning alone, `missing_relation`, `unknown`),
+`rg_stop_t4_a_run_failed_with_another_class_keeps_its_group` (a terminal and a `runtime.failed` of
+`contained_task_deadline_exceeded`, class `budget_or_permission`: both listed, neither recovered,
+`missing_relation`, `unknown`, as before; no existing ledger test pinned a run ended by a failure
+code: `store_contract`'s query test pins a run's `command.rejected` error without an outcome code,
+listed and `unknown`, and `gate_pkg_s2` an entry recovery) and
+`rg_stop_t5_a_paused_runs_records_are_not_listed` (a terminal and a `runtime.failed` of
+`contained_task_paused`: errors, not listed, no group). No existing test changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
