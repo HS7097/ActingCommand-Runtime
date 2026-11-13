@@ -1388,7 +1388,7 @@ impl Check {
             (Some(options), None) => self
                 .options(options, &at(pointer, "options"), (1, MAX_GOAL_LIST_VALUES))
                 .map(GoalValues::Options),
-            (None, Some(table)) => self.from_table(table, &at(pointer, "from_table")),
+            (None, Some(table)) => self.values_of_table(table, &at(pointer, "from_table")),
             (Some(_), Some(_)) => {
                 self.malformed(at(pointer, "from_table"));
                 None
@@ -1448,7 +1448,7 @@ impl Check {
 
     /// `from_table`: `{table, names?}`, the table an id of the table rule, each name's key an id
     /// and its text a title.
-    fn from_table(&mut self, value: &Value, pointer: &str) -> Option<GoalValues> {
+    fn values_of_table(&mut self, value: &Value, pointer: &str) -> Option<GoalValues> {
         let from_table = self.object(value, pointer, &["table"], &["names"])?;
         let table = match from_table.get("table")?.as_str() {
             Some(table) if standard_pack_table_id(table) => Some(table.to_owned()),
