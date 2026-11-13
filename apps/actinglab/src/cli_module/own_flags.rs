@@ -93,7 +93,8 @@ pub(crate) const STRICT_ROWS: [&str; 30] = [
 /// its list (`FlagArgs::parse_reading`) and refuses a flag or a positional the list does not hold,
 /// so they are strict too, by their list; no row of the two modules is lenient. Workflow #434
 /// LAB-5G4c: `record draft`, whose command that slice built, parsed by its list from the start.
-pub(crate) const READ_LIST_ROWS: [&str; 25] = [
+/// Workflow #449 REC-ARCH: `record archive` and `record reopen` the same.
+pub(crate) const READ_LIST_ROWS: [&str; 27] = [
     "touch-probe",
     "recover",
     "tap-target",
@@ -107,6 +108,8 @@ pub(crate) const READ_LIST_ROWS: [&str; 25] = [
     "record amend",
     "record step",
     "record draft",
+    "record archive",
+    "record reopen",
     "package validate",
     "package inspect",
     "package bundle",
@@ -407,6 +410,8 @@ pub(crate) fn reads(row: &str) -> Option<Reads> {
         "record amend" => (&session_record::RECORD_AMEND_READS, Some("--step-id")),
         "record step" => (&session_record::RECORD_STEP_READS, None),
         "record draft" => (&crate::record_draft::RECORD_DRAFT_READS, None),
+        "record archive" => (&session_record::RECORD_ARCHIVE_READS, None),
+        "record reopen" => (&session_record::RECORD_REOPEN_READS, None),
         "package validate" => (&package_cli::VALIDATE_READS, None),
         "package inspect" => (&lab_package_control::INSPECT_READS, None),
         "package bundle" => (&package_build::BUNDLE_READS, None),

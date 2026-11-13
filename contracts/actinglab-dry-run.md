@@ -146,7 +146,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `navigate` | preview | `executed_false` | |
 | `monitor` | no_effect | | retired |
 | `stream` | mixed | | `stream check`: no_effect; every other form, `--input-relay` included: preview, `capture_dry_run` |
-| `record` | mixed | | `start`, `step`, `amend`: refused, `dry_run_unsupported`, action name only, alternative `record status` (start) or `record candidates` (step, amend); `status`, `candidates`: no_effect; `stop`, `mark`: preview, `dry_run`; `build-task`, `promote`, `publish`: refused, `resource_production_retired`; `draft` (`record` only, since Workflow #434 LAB-5G4c, its own entry `record draft`): no_effect, it changes nothing |
+| `record` | mixed | | `start`, `step`, `amend`, and (Workflow #449 REC-ARCH) `archive` and `reopen`: refused, `dry_run_unsupported`, action name only, alternative `record status` (start, archive, reopen) or `record candidates` (step, amend); `status`, `candidates`: no_effect; `stop`, `mark`: preview, `dry_run`; `build-task`, `promote`, `publish`: refused, `resource_production_retired`; `draft` (`record` only, since Workflow #434 LAB-5G4c, its own entry `record draft`): no_effect, it changes nothing |
 | `explain` | no_effect | | |
 | `config get` | no_effect | | |
 | `config set` | preview | `dry_run` | `validated`, `persisted: false` |

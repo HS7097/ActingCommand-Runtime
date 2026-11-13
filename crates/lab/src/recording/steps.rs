@@ -2774,26 +2774,19 @@ pub(crate) fn plan_click(
     {
         return plan_gesture(recording, index, click, gesture, request);
     }
-    if request.swipe.is_some() {
-        return Err(match &step.click {
-            None => with_details(
-                blocked(
-                    "record_step_click_missing",
-                    format!(
-                        "step {index} declares no drag; declare it with `record mark --click \
-                         x,y,w,h --drag-to x,y,w,h --duration-ms <ms>` first"
-                    ),
-                ),
-                json!({"step": index}),
-            ),
-            Some(click) => with_details(
+    if let Some(swipe) = request.swipe {
+        return match &step.click {
+            // Workflow #449 REC-ARCH: a swipe on a step without a declared effect is the step's
+            // effect, as `--tap-rect` declares a tap: a drag between the two points it presses.
+            None => plan_swipe(recording, index, swipe, request),
+            Some(click) => Err(with_details(
                 blocked(
                     "record_click_rect_conflict",
                     format!("step {index} declares a tap; --swipe executes a declared drag"),
                 ),
                 json!({"step": index, "declared": click.rect}),
-            ),
-        });
+            )),
+        };
     }
     let (rect, source, declares_click) = match (request.tap_rect, &step.click) {
         (Some(rect), None) => {
@@ -2864,6 +2857,74 @@ pub(crate) fn plan_click(
         sampling,
     })
 }
+
+/// Workflow #449 REC-ARCH: `do --capture --record --swipe x1,y1,x2,y2,ms` on the open step that
+/// declares no effect. The swipe becomes the step's effect, a drag from a box of one pixel at its
+/// first point to a box of one pixel at its second over its duration, `source: "swipe"`, as
+/// `--tap-rect` declares a tap; `record stop` generates it as the `drag` click of the standard
+/// package's task schema. Both points lie inside the frame and the duration is 1..=60000 ms, as a
+/// declared drag's (`validation_failed` otherwise, nothing pressed); `--tap`, `--tap-rect` and a
+/// seed press no swipe and are refused with it.
+fn plan_swipe(
+    recording: &LabRecording,
+    index: u32,
+    swipe: super::model::PlannedSwipe,
+    request: &super::model::PlanClickRequest,
+) -> LabResult<super::model::ClickPlan> {
+    if request.tap.is_some() || request.tap_rect.is_some() || request.draw.is_some() {
+        return Err(invalid(
+            "validation_failed",
+            "--swipe declares the step's swipe by its two points; it takes no --tap, --tap-rect or \
+             --seed",
+        ));
+    }
+    let point_box = |point: RecordPoint| RecordRect {
+        x: point.x,
+        y: point.y,
+        width: 1,
+        height: 1,
+    };
+    let (from, to) = (point_box(swipe.from), point_box(swipe.to));
+    let inside = recording
+        .coordinate_space
+        .is_some_and(|size| rect_inside(from, size) && rect_inside(to, size));
+    if !inside {
+        return Err(with_details(
+            invalid(
+                "validation_failed",
+                "--swipe must start and end inside the frame",
+            ),
+            json!({"step": index, "swipe_from": swipe.from, "swipe_to": swipe.to}),
+        ));
+    }
+    if !(1..=LAB_RECORDING_MAX_GESTURE_MS).contains(&swipe.duration_ms) {
+        return Err(with_details(
+            invalid(
+                "validation_failed",
+                format!("--swipe must last 1..={LAB_RECORDING_MAX_GESTURE_MS} ms"),
+            ),
+            json!({"step": index, "duration_ms": swipe.duration_ms}),
+        ));
+    }
+    Ok(super::model::ClickPlan {
+        record_id: recording.record_id.clone(),
+        step: index,
+        rect: from,
+        point: swipe.from,
+        point_rule: "explicit".to_string(),
+        source: SWIPE_SOURCE.to_string(),
+        declares_click: true,
+        gesture: Some(ClickGesture::Drag {
+            to,
+            duration_ms: swipe.duration_ms,
+        }),
+        to_point: Some(swipe.to),
+        sampling: None,
+    })
+}
+
+/// Workflow #449 REC-ARCH: the `source` of a click a recorded swipe declared.
+const SWIPE_SOURCE: &str = "swipe";
 
 /// Workflow #406 T4: a recorded click's rectangle as a drawn box.
 fn pack_rect(rect: RecordRect) -> PackRect {
@@ -3076,7 +3137,8 @@ pub(crate) fn commit_click(
             source: plan.source.clone(),
             from: None,
             follow: None,
-            gesture: None,
+            // Workflow #449 REC-ARCH: a recorded swipe declares its drag; `--tap-rect` a tap.
+            gesture: plan.gesture,
             retry: None,
             declared_at_unix_ms: now,
             execution: None,

@@ -31,6 +31,20 @@ actingcommand_contract::outcome_codes! {
         /// vertical brake; nothing was captured, pressed or recorded (exit 3; actinglab details
         /// `step`, `gesture`).
         RecordGestureExecutionUnsupported => "record_gesture_execution_unsupported": error / none,
+        /// Error. Workflow #449 REC-ARCH: `record archive --copy-to` names a directory that exists
+        /// and is not empty, or a path that is no directory; nothing was written and the recording
+        /// is as it was (exit 3; actinglab details `path`, `reason`).
+        RecordArchiveTargetNotEmpty => "record_archive_target_not_empty": error / none,
+        /// Error. Workflow #449 REC-ARCH: a file an archive's manifest lists does not hold the
+        /// sha256 the manifest gives, or cannot be read: a copy `record archive --copy-to` made, or
+        /// a file of the recording's own directory when an archived recording is named again
+        /// (exit 5; actinglab details `file`, `path`, `checked`, `reason`, `failures`). Nothing is
+        /// deleted and the recording stays archived.
+        RecordArchiveVerifyFailed => "record_archive_verify_failed": error / none,
+        /// Error. Workflow #449 REC-ARCH: the recording `record archive --record-id` or `record
+        /// reopen` names is not an archived recording of the instance; nothing was written (exit 3;
+        /// actinglab details `record_id`, `state`).
+        RecordNotArchived => "record_not_archived": error / none,
     }
 }
 

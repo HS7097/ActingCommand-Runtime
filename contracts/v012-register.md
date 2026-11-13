@@ -19879,6 +19879,135 @@ Adapted for the build only, no assertion changed: the test literals of `TaskProg
 `gate_428_s168_4.rs`'s `list_reading_miss_publishes_nothing` gains an empty `frame_indices`. The
 architecture pin `the_runtime_declares_each_v0120_interface_revision_once` holds `package` [3, 11].
 
+### 1.344 Slice REC-ARCH (0.12.59): a recording can be ended as material only, reopened later, and a swipe becomes a step (Workflow #449; the owner approved the feature on 2026-11-13; the rules are the coordinator's, not the owner's words; coordinator work orders `rd-1113/brief-449-record-archive.md`, read on main `98924e28`, `rd-1113/brief-1675-fix1.md` and `rd-1113/brief-1675-fix2.md`)
+
+1.342 was the next free number on main `10f538ea`; until fix 2 the entry stood in §1.287 after
+slice LAB-5G4c's, which added `record draft`. The integration train 0.12.59b renumbered it 1.344,
+after §1.342 (MAPP-2a) and §1.343 (FL-1).
+
+Coordinator work order `rd-1113/brief-449-record-archive.md`, on main `98924e28`; board issue
+#449 (the owner approved the feature on 2026-11-13; the rules below are the coordinator's, not the
+owner's words). The contract is [lab-recording.md](lab-recording.md), "Archiving" and "`--record`
+on device commands"; the rows are `record archive` and `record reopen` of
+[lab-operations.json](lab-operations.json).
+
+**What it is.** Two operations of the authoring module, commands of actinglab (also as `session
+record archive|reopen`), calls of `serve --stdio` and tools of the Lab's MCP server
+(`ac_record_archive`, `ac_record_reopen`, through a `serve` child): `record archive` ends the
+instance's active recording whatever its steps, writing a manifest of its step table beside its
+frames and keeping every file, optionally copying them; `record reopen` makes an archived recording
+the active one again. A swipe sent with `--record` on a step without a declared effect becomes that
+step's effect, and every answer of a `--record` action names the recording and the step it entered.
+
+**Why.** People also record only to keep material, the frames and where they tapped, while they
+operate by hand. `record stop` exists to build a package of linear steps, so it refuses such a
+recording (`record_step_without_recognition`, `record_final_step_has_click`); the session stayed
+active, the instance could start another recording only with `record start --force` (which
+abandons the old directory), and a recording left active collects every later `--record` action
+on the instance, whoever sends it (one grew from 51 to 91 steps on a production root). A swipe sent
+with `--record` was not entered in the step table.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RA-1 | `record archive [--record-id <id>] [--copy-to <dir>]` | behaviour, operation table row | REC-ARCH | — | the instance's active recording (or an archived one named by its id; fix 1: or one `record start --force` left behind, RA-11); requires nothing of the steps; refuses with no active recording (`record_session_not_active`), an id that names no archived recording of the instance (`record_not_archived`, `state`), another instance's (`record_instance_mismatch`), a step table missing or unreadable (`record_lab_unavailable`); global `--dry-run` refused `dry_run_unsupported` (alternative `record status`) |
+| RA-2 | `archive-manifest-<n>.json`, schema `actingcommand.lab-recording-archive.v1` | a file of the Lab recording's directory (no ledger shape) | REC-ARCH | `record archive` | header `record_id`, `instance`, `task_id` and `started_at_unix_ms` (the session header's, read from the step table, which carries the same four: fix 1), `application{game, server}` (the step table's: the session header names no application), `archived_at_unix_ms`, `step_count`, `written_by` (actinglab's commit), `step_table{file, sha256}`; one row per step `{step, kind, frames[{frame_id, role, file, sha256}], before, after, page, package, tap, swipe, at_unix_ms, request_id}`, `kind` `tap`, `swipe`, `none` or the step table's word for another effect; `n` one above the highest there, never a file replaced; written only from the step table and the session header, no Runtime request, no frame's pixels read |
+| RA-3 | the session header's `status` `archived` | the `record` command file's word (no ledger shape) | REC-ARCH | `record archive` | written by actinglab after the manifest, before any copy; the step table is not rewritten (it still says `active`); `record status` shows `record.status` and `lab.status` `archived`; `record start` needs no `--force`; `record mark`, `record step`, `record amend` and the `--record` device commands answer `record_session_not_active` as for any session not active; `record stop` answers `record_session_not_active` with `details{reason: "recording_archived", record_id}` before anything is read or written |
+| RA-4 | `--copy-to <dir>` | behaviour | REC-ARCH | — | fix 1: an absolute path, else (empty, white space only, relative) `validation_failed` with `details{path, reason}` (`empty`, `not_absolute`) before the session is read or anything is written, on the command line and in `serve --stdio` (the Lab's MCP server refuses it itself, `arguments_invalid` `not_absolute`, as every path parameter); a directory that does not exist (created) or is empty, else `record_archive_target_not_empty` before anything is written; `recording.json`, the manifest and every frame file copied, then each copy hashed against the manifest; a file not copied `record_state_io_failed`, a copy that does not verify `record_archive_verify_failed`, both naming the file and the reason with `record_id`, `archived: true` and `manifest`; nothing deleted, the recording stays archived |
+| RA-5 | an archived recording named again (`--record-id`) | behaviour | REC-ARCH | — | no second manifest: the latest one read and every file it lists hashed in the recording's directory (`record_archive_verify_failed`, `checked: "recording"`), then the copy; the retry after a failed copy; `status: "already_archived"`, `manifest.written: false` |
+| RA-6 | `record reopen [--record-id <id>]` | behaviour, operation table row | REC-ARCH | — | the session header only: its `status` `active` when it names the recording, else a header of the recording in place of the one there (as `record start` replaces one: `holder` and `lease_id` null, no `steps`); refused while another recording is active (`record_session_active`, reused) and on a recording that is not archived (`record_not_archived`); every manifest stays, a later archive writes the next one; then `record mark` and `record stop` build the package the recording would have built had it never been archived |
+| RA-7 | a recorded swipe | behaviour, Lab file members unchanged | REC-ARCH | `do --capture --record --swipe` | on the open step that declares no effect: the step's click a drag from `{x1, y1, 1, 1}` to `{x2, y2, 1, 1}` over the duration, `source: "swipe"`, executed as one swipe (rule `explicit`) and recorded as any execution; points inside the frame and 1..=60000 ms, else `validation_failed`; `--tap`, `--tap-rect`, `--seed` with it `validation_failed`. Before: `record_step_click_missing`. `record stop` generates it as the standard `drag` click of the task schema as it is (a box of one pixel presses its point): no refusal and no code added; a recording without swipe steps generates the same bytes |
+| RA-8 | `record_started_at_unix_ms` in the `record` member of `capture --record`, `observe --capture --record`, `do --capture --record` and `session app … --record` | answer member, additive | REC-ARCH | — | with `record_id` and `step`, which they had, the answer names the recording it entered and the step it became; nothing is refused because another process started the recording |
+| RA-9 | `record_archive_target_not_empty`, `record_archive_verify_failed`, `record_not_archived` | new codes of the owner `lab` (error, `none`, pending, since 0.12.59) | REC-ARCH | the Lab | registered beside the recording's other registered codes (`crates/lab/src/codes.rs`, `contracts/outcome-codes/lab.json`); the index regenerated and current. Reused: `record_session_not_active` (no active recording; an archived one stopped), `record_session_active` (another recording active, as `record start` uses it), `record_instance_mismatch`, `record_lab_unavailable`, `record_state_io_failed` |
+| RA-10 | the rows offered | contract table, behaviour | REC-ARCH | — | slice `REC-ARCH` in actinglab's `BUILT_SLICES` and the new MCP server's `ACTINGLAB_SLICES` (held equal by its test), as R-6 and R-8 offered theirs; both rows in `own_flags::READ_LIST_ROWS` with their read lists (`RECORD_ARCHIVE_READS`, `RECORD_REOPEN_READS`), `engine::COMMANDS` (`record archive`, `record reopen`, `AsWritten`), `capabilities` and the dry-run declaration (`dry_run_unsupported`, also `session record archive|reopen`); `help`, completion and `serve --stdio` read the table |
+| RA-11 | a recording `record start --force` left behind (fix 1) | behaviour, answer member additive | REC-ARCH | `record archive --record-id` | its directory and step table (`active`) intact, the session header another recording's: `record archive --record-id <id>` writes its manifest from that step table and copies with `--copy-to` as any recording; it writes no session header (the header belongs to the other recording): `record` `null`, `lab.session_header{record_id, status, changed: false}` (also for an archived recording whose header a later `record start` replaced); once it has a manifest, named again as any archived one, and `record reopen --record-id` makes it active under RA-6 (refused while another is active). Nothing guessed: the replaced header's `holder`, `lease_id` and `record step` entries are not restored, and `record stop` reads none of them. Before: `record_not_archived`, `state: "unarchived"` |
+| RA-12 | a session header that fails after the manifest (fix 1) | behaviour, error details additive | REC-ARCH | — | when actinglab cannot read or write the session header once the manifest is there, its failure adds `record_id` and `manifest{file, path, sha256, steps, written}` to its details, so that the manifest's path is known; before, the failure named the header only |
+
+**Traces.** `record stop` leaves no client-action record and no other trace when it ends a session
+(the new MCP server records a client action after `observe` and `do` with `capture` only, and
+actinglab records none for `record`): `record archive` and `record reopen` leave none either.
+Each takes the recording lock, whose holder file names the command, as every state-writing record
+command does.
+
+**Tests.** New, the gate "#449 REC-ARCH" of `contracts/test-gates/apps.toml`.
+`crates/lab/src/gate_449_rec_arch.rs` (temporary roots, 16x9 frames, no Runtime):
+`rec_arch_a_swipe_is_a_step_and_record_stop_generates_it_as_a_drag`,
+`rec_arch_steps_of_several_callers_archive_and_the_rows_equal_the_step_table`,
+`rec_arch_a_step_table_written_by_0_12_54_archives`,
+`rec_arch_a_recorded_frame_tap_and_swipe_name_their_recording_and_step`,
+`rec_arch_without_an_active_recording_or_with_an_unknown_id_nothing_is_archived`;
+`apps/actinglab/src/tests/gate_449_rec_arch.rs` (actinglab's command line, the steps recorded
+through the Lab's recording API as the `--record` commands record them):
+`rec_arch_record_archive_ends_a_recording_that_record_stop_refuses`,
+`rec_arch_the_copy_goes_only_into_a_new_or_an_empty_directory`,
+`rec_arch_a_copy_that_does_not_verify_names_the_file_and_the_retry_by_id_copies` (the copy's
+check fails through the module's tests' seam, a stored file of the temporary root edited; no
+production branch for the test), `rec_arch_reopen_builds_the_package_the_recording_would_have_built`
+(the built files of a twin never archived compared but the provenance's `generated_at_unix_ms`,
+the step table's last write time). The three gates that hold the operation table to the code
+cover the rows without a change of theirs: `gate_434_lab5b2::every_debugging_and_authoring_row_has_one_kind`,
+`gate_434_lab5b3::lenient_rows_match_their_reads` and the MCP server's
+`gate_434_lab5g2a::mcp_tools_from_op_table`. **Adapted**, where the requirement moves what they
+pin: `gate_390_lab2::lab2_do_capture_record_holds_a_long_press_and_swipes_only_a_declared_drag`,
+whose last part pinned the refusal of a swipe on a step without a declared click
+(`record_step_click_missing`), now the swipe step it declares (item 6); and
+`gate_434_lab5b4::every_own_command_refuses_a_flag_it_does_not_read`, whose list of the
+register's read-list commands pins `READ_LIST_ROWS`: 29 commands become 31, the two rows by their
+words. No other existing test changes. Fix 1 (work order `rd-1113/brief-1675-fix1.md`, after the
+independent review) adds three to the same gate, in `apps/actinglab/src/tests/gate_449_rec_arch.rs`:
+`rec_arch_a_copy_target_that_is_no_absolute_path_is_refused` (`--copy-to` empty, of white space
+only and relative, on the command line and through `serve --stdio`: each `validation_failed` with
+its reason and path, the session directory as it was but the recording lock's own files, nothing at
+the target or in the current directory, the recording still active),
+`rec_arch_an_archived_recording_refuses_stop_and_reopens_by_its_header` (`record stop` on an
+archived recording `record_session_not_active`, `reason: "recording_archived"`, its id, nothing
+written; `record reopen` without an id reopens the recording the header names, the header kept but
+for its status; an archive after the reopen writes `archive-manifest-2.json`, the first unchanged)
+and `rec_arch_a_recording_record_start_force_left_behind_is_archived_by_its_id` (RA-11: archived by
+id and copied, the manifest's header and rows from its step table, `record` `null` and
+`lab.session_header` the other recording's, `record status` as before; named again no second
+manifest; reopen refused while the other is active, then a header of it in place of the other's;
+its step table keeps its bytes). RA-12 has no test: no seam of the module's tests makes the header
+fail after the manifest without a production branch for the test. No existing test changes.
+
+Fix 2 (work order `rd-1113/brief-1675-fix2.md`, after the pull request's CI): no test is added
+and none asserts anything else. In `crates/lab/src/gate_449_rec_arch.rs` the step table of
+`rec_arch_a_step_table_written_by_0_12_54_archives` is built from its parts, each its own `json!`
+(the one literal exceeded the macro's recursion limit, and the crate's tests did not build), and
+the bench's helpers that record a tap and a swipe through `record_plan_click` and
+`record_commit_click` are `commit_tap` and `commit_swipe`: the guard
+`lab_input_face_is_semantic_input_executor` reads every method call named like a `LabInputPort`
+write as one, and the tests call no input port.
+
+**Interface.** None raised, following the precedent of slice LAB-5G4c (a row offered, "Interface.
+None raised") and §9.4 of [lab-two-entries.md](lab-two-entries.md) ("the schema string changes only
+when a member's meaning changes"): nothing on the wire, in the ledger or in a file a released peer
+reads changes; the table's schema string stays; the manifest is a new Lab file no other program
+reads; the answer members are additive.
+
+**Where REC-ARCH differs from its work order's letter.**
+
+- (a) The manifest header also carries `task_id` (the session header's) and `step_table{file,
+  sha256}` (the step table file's hash, against which a copy is checked), and `application` is the
+  step table's game and server, since the session header names no application.
+- (b) A row's `kind` names the step table's word for effects other than a tap, a swipe or none
+  (`long_press`, the two segmented drags, `application`), so that a recording with them still
+  archives whole; `tap` and `swipe` are filled for those two kinds only.
+- (c) Superseded by fix 1 (RA-11, the coordinator's ruling on the independent review): a recording
+  left behind by `record start --force` is archived by its id from its own step table, its session
+  header left as it is. Before fix 1 it was refused (`record_not_archived`, `state:
+  "unarchived"`).
+
+**At deploy.** `record archive` and `record reopen` exist once the Tools of this release are in
+place: on actinglab's command line, in `serve --stdio` and, through its `serve` children, in the
+Lab's MCP server (`ac_record_archive`, `ac_record_reopen`). Today's MCP server (`actingctl
+mcp-serve`) does not gain them. A recording left active by an earlier release (its step table is in
+the 0.12.47 format this release reads) can be archived by the new command line, and so (fix 1) can
+one `record start --force` left behind, by its id. Nothing is migrated.
+
+**Rollback** (to the release before it). An archived session header (`status: "archived"`) reads
+as a session that is not active: the earlier `record start` starts the next one without `--force`,
+and the manifests stay as files nothing reads.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
