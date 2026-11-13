@@ -21,7 +21,7 @@
 //! instance's and the test-only switch's, which compare two hosts started alike by values and by
 //! payloads with every id and time normalised, never by an identity. Neutral names only.
 //!
-//! Workflow #437 MAPP-2d (register §1.357; `contracts/device-group.md`, "The key's time"): the
+//! Workflow #437 MAPP-2d (register §1.360; `contracts/device-group.md`, "The key's time"): the
 //! lease across a switch, on the same fixture. A member's dispatch is granted the lease of an
 //! instance alone; the switch runs inside it, its startup run taking what is left of the key;
 //! once the startup run has handed the key back the run renews its lease to its own deadline

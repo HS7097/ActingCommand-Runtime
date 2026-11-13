@@ -26,7 +26,7 @@
 //! begins from a member of a device group of several ([`HostShared::switch_applies`]), and the
 //! assembly refuses every such group, so an instance alone on its device never reaches this code.
 //!
-//! Workflow #437 MAPP-2d (register §1.357): the lease across a switch. A member's dispatch is
+//! Workflow #437 MAPP-2d (register §1.360): the lease across a switch. A member's dispatch is
 //! granted the lease of an instance alone (its run's response deadline and the heartbeat
 //! reserve), and the switch runs inside it: its startup run takes what is left of the key
 //! ([`RunNeed::Renews`]). Once the startup run has handed the key back, the run renews its lease

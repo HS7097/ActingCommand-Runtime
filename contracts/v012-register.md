@@ -18028,7 +18028,7 @@ The coordinator cut MAPP-1 in two on 11-12. "MAPP-1" elsewhere in this section a
   `actingd-config`.
 - *History.* MAPP-2b (§1.353, point 8) added here that main must end **the member that cannot
   fit** before the load accepts a group of several (with the request deadlines a configuration
-  gives, its lease bound refused every run of every member). MAPP-2d (§1.357) ended it: a
+  gives, its lease bound refused every run of every member). MAPP-2d (§1.360) ended it: a
   member's dispatch is granted an instance alone's lease and its run renews it after the switch,
   so no member is refused for its deadlines (device-group.md, "The key's time").
 - The slice "device-level actions by device" comes before the first real use of a group of
@@ -21315,7 +21315,7 @@ instance alone on its device keeps its path unchanged because the run path's exi
 ED-2 gate among them) pass unchanged and because the slice's only entry is that group-of-several
 check; the gate test `mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it`
 pins that the entry is never taken and that the records are equal (below, "Tests"). The slice
-ships in 0.12.60 (release 0.12.59 is cut without it). MAPP-2d (§1.357) replaced the lease, the
+ships in 0.12.60 (release 0.12.59 is cut without it). MAPP-2d (§1.360) replaced the lease, the
 bound and its refusal, the run's need on the borrowed key (rows "the lease" and "the run's need",
 points 1, 2, 7 and 8) and the known gap; what follows is what MAPP-2b built.
 
@@ -22361,15 +22361,16 @@ refactorings it runs rest on reading (Tests, above).
 **Rollback** (below 0.12.60). Nothing is persisted by MAPP-1d; the build before it reads every
 record this one writes.
 
-### 1.357 Slice MAPP-2d (0.12.60): the lease across a switch: the run renews its lease after the switch, and the bound goes (Workflow #437; [device-group.md](device-group.md), "The switch before a run", step 4 and "The key's time"; the coordinator's ruling of 11-14 on board #437 and its ruling of 11-14 on the renewed token after the work order's "verify first" report, not the owner's words; the owner's rulings on board #437 it respects: a running task is never interrupted, the time a switch takes is counted nowhere, an application is launched only through an application launch over ADB; coordinator work order `rd-1114/brief-437-mapp2d.md`, read on main `691c20f5`; fix 1, after an independent review, coordinator work order `rd-1114/brief-1703-fix1.md`, main `1ffb6c7f` merged)
+### 1.360 Slice MAPP-2d (0.12.60): the lease across a switch: the run renews its lease after the switch, and the bound goes (Workflow #437; [device-group.md](device-group.md), "The switch before a run", step 4 and "The key's time"; the coordinator's ruling of 11-14 on board #437 and its ruling of 11-14 on the renewed token after the work order's "verify first" report, not the owner's words; the owner's rulings on board #437 it respects: a running task is never interrupted, the time a switch takes is counted nowhere, an application is launched only through an application launch over ADB; coordinator work order `rd-1114/brief-437-mapp2d.md`, read on main `691c20f5`; fix 1, after an independent review, coordinator work order `rd-1114/brief-1703-fix1.md`, main `1ffb6c7f` merged)
 
 The slice took 1.354, the next free number on its base (main `691c20f5`, whose last section is
 §1.353); main then gave 1.354 to 1.356 to FL-2, S8 and S7, and G-R1 (the integration train
-0.12.60b, main `1ffb6c7f`), and fix round 1, which merged that main, renumbered this section 1.357,
-the next free number. MAPP-2b (§1.353) granted a
-member's dispatch `D_s + D_run + R` and refused a member whose `D_s + D_run` exceeded 1 800 000
-ms; with the request deadlines a configuration gives (1 800 000 ms for every startup package,
-configured procedure and composed pack request, 60 000 ms for a fact refresh) that refused every
+0.12.60b, main `1ffb6c7f`), and the integration train 0.12.60c gave this section 1.360, the number
+after main's §1.356 and the sections of the rows merged before it in that train (#453 S1's §1.357,
+S11's §1.358, MAPP-1d's §1.359). MAPP-2b (§1.353) granted a member's dispatch `D_s + D_run + R`
+and refused a member whose `D_s + D_run` exceeded 1 800 000 ms; with the request deadlines a
+configuration gives (1 800 000 ms for every startup package, configured procedure and composed
+pack request, 60 000 ms for a fact refresh) that refused every
 run of every member (its point 8). MAPP-2d replaces that lease: a dispatch's lease is the same for
 every instance, the switch runs inside it, and the run renews its lease after the switch's
 startup run. A build still refuses every group of several at load (`several_members_unsupported`,

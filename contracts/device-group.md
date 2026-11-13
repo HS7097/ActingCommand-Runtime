@@ -3,7 +3,7 @@
 Workflow #437 MAPP-C (contracts only; [v012-register.md](v012-register.md) §1.323). **Every rule of
 this file is (MAPP, not built yet)** unless its section names MAPP-1 ([v012-register.md](v012-register.md)
 §1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57), MAPP-2a (§1.342, Runtime 0.12.59),
-MAPP-2b (§1.353, Runtime 0.12.60) or MAPP-2d (§1.357, Runtime 0.12.60):
+MAPP-2b (§1.353, Runtime 0.12.60) or MAPP-2d (§1.360, Runtime 0.12.60):
 no code, key, code, value key or word named here exists until the code slices of §1.323 build it,
 and every code, value key and vocabulary word below is proposed but those MAPP-1 registers:
 `device_group`, `instance.<instance id>.device_group`, `device_group_config_invalid` with the
@@ -25,7 +25,7 @@ startup run on the borrowed key, the stopped member's page forgotten), their one
 code, with no caller in the Runtime; MAPP-2b (§1.353, built in Runtime 0.12.60) calls the switch
 from the run paths, takes its time out of the run's clock, settles a run with its failure, adds
 the member's switch cooldown and its key, and sized a member's dispatch lease for the switch and
-the run ("The switch before a run"); MAPP-2d (§1.357, built in Runtime 0.12.60) replaces that
+the run ("The switch before a run"); MAPP-2d (§1.360, built in Runtime 0.12.60) replaces that
 lease: a member's dispatch is granted an instance alone's lease, the switch runs inside it, and
 the run renews its lease after the switch's startup run ("The key's time"). The load still
 refuses every group of several, so no root reaches any of it. The other contracts point here
@@ -411,7 +411,7 @@ the calls from the run paths named below (`HostShared::switch_before_run` and
 clock ("The run's clock"), a member's dispatch lease sized for the startup run and the run
 (replaced by MAPP-2d), a run's failed settlement with `application_switch_failed` ("When the
 switch fails"), and the member's switch cooldown and its key ("The member's switch cooldown").
-**What MAPP-2d builds (Runtime 0.12.60, register §1.357):** the lease across the switch ("The
+**What MAPP-2d builds (Runtime 0.12.60, register §1.360):** the lease across the switch ("The
 key's time"): a member's dispatch is granted the lease of an instance alone, the startup run of
 step 3 takes what is left of it, and the run renews its lease after it (step 4,
 `HostShared::renew_after_switch`) and takes the renewed token at every later step
@@ -558,7 +558,7 @@ on which the entry is switched off.
      each check for the run's own share of that lease (`RunNeed::OwnTime`), and refused a member
      whose `D_s + D_run` exceeded 1 800 000 ms at its admission and before a direct run's claim
      (`contained_task_deadline_unavailable`). With the deadlines a configuration gives that refused
-     every run of every member, a known gap the list "Release." carried. MAPP-2d (§1.357) replaced
+     every run of every member, a known gap the list "Release." carried. MAPP-2d (§1.360) replaced
      that lease, its check and its refusal by the rules above and step 4.
 4. **Renew** (MAPP-2d). Once the startup run has handed the key back, the run renews its lease to
    its own response deadline and the reserve, `D_run + R`, counted from that moment, before its
@@ -1096,7 +1096,7 @@ of a device group of several:
   leaves the switch out, a member's lease sized for the startup run and the run, the failure's
   settlement and the member's switch cooldown with its key, in `actingd-config` revision 30; the
   load still refuses every group of several, so no installation reaches any of it.
-- MAPP-2d is built in Runtime 0.12.60 (register §1.357): the lease across a switch (a member's
+- MAPP-2d is built in Runtime 0.12.60 (register §1.360): the lease across a switch (a member's
   dispatch granted an instance alone's lease, the startup run taking what is left of it, the
   run's renewal after it with the token the renewal returns, and the step `lease_renewal`); the
   load still refuses every group of several, so no installation reaches any of it, and nothing is
@@ -1109,7 +1109,7 @@ of a device group of several:
   every task.
 - *History.* MAPP-2b (§1.353) added to this list "the member that cannot fit": with the request
   deadlines a configuration gives, its lease bound refused every run of every member, and main
-  had to end that before the load accepts a group of several. MAPP-2d (§1.357) ended it (no
+  had to end that before the load accepts a group of several. MAPP-2d (§1.360) ended it (no
   member is refused for its deadlines, "The key's time"), and the gate test that pinned the
   refusal (`mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round`) is
   replaced by `mapp2d_the_member_that_could_not_fit_is_dispatched_and_runs`.
