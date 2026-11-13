@@ -63,11 +63,34 @@
 //   compared by its form (the issuer's prefix and 32 lowercase hex digits, the one `added` records,
 //   none the live file holds) and then replaced by the fixture's. actingd's
 //   `config::gate_452_inst5` has the real configuration assembly judge the same candidate.
+// Workflow #453 S1 (register §1.353; coordinator work order `rd-1114/brief-453-s1-first-row.md`;
+// the design survey `rd-1113/fresh-root-design.md` §1(c) "1a. The first row"): `instance add` on a
+// configuration whose `policy.facts.instances` is empty composes a first row from the
+// configuration alone.
+// - `inst5_453_s1_a_first_row_takes_the_one_host_and_the_standard_pack_operation`: `compose` on the
+//   inputs of the checked-in fixture `tests/fixtures/inst5-first-row.json` (composer mode, no row,
+//   one host) yields its candidate, the minted id compared by its form; the one row is the asked
+//   alias, game and server with the declared host and exactly the policy crate's
+//   `STANDARD_PACK_OPERATION_ID`, and `added` records `capabilities_from` as `null`. actingd's
+//   `config::gate_452_inst5::inst5_453_s1_the_real_assembly_takes_a_first_rows_candidate` has the
+//   real configuration assembly judge the same candidate;
+// - `inst5_453_s1_no_host_or_several_hosts_are_refused_with_the_hosts_key`: no row and an empty
+//   host list, two hosts, or no host list are each refused `instance_invalid` with `config_key`
+//   `policy.resources.hosts`, nothing written and nothing asked;
+// - `inst5_453_s1_catalog_mode_with_no_row_is_refused_with_the_rows_key`: no row and a policy that
+//   names a catalog is refused `instance_invalid` with `config_key` `policy.facts.instances`, as
+//   before, though one host is declared;
+// - `inst5_453_s1_no_policy_is_refused_with_the_policy_key`: a configuration without `policy`, and
+//   one whose `policy` is `null`, are refused `instance_invalid` with `config_key` `policy`;
+// - `inst5_453_s1_a_configuration_with_rows_composes_the_bytes_of_before`: on the inputs of the
+//   checked-in fixture of Workflow #452 (one row), the candidate's bytes, with the minted id put
+//   back to the fixture's, are exactly the fixture's candidate as pretty JSON with a final line end,
+//   with the live file's `\n` and with its `\r\n`, and `added` names the row it copied.
 // The machine is the fake host of `fixture.rs` with its fake Runtime, fake watchdog and fake
 // clock: no device, no emulator, no sleep; every root is a temporary folder with neutral files.
 
 use super::fixture::{BuildSpec, C1, FakeHost, code, live_root, run, tree, word, write_json};
-use super::instance_add::{Asked, compose};
+use super::instance_add::{Asked, Composed, compose};
 use super::plan::Loaded;
 use super::state::{InstallState, Paths};
 use crate::agent_channel::Answer as Answered;
@@ -1165,4 +1188,310 @@ fn inst5_452_compose_yields_the_fixtures_candidate() {
         serde_json::to_string(&candidate).expect("JSON"),
         serde_json::to_string(&fixture["candidate"]).expect("JSON"),
     );
+}
+
+/// Workflow #453 S1: the checked-in fixture of a first row: a live configuration in composer mode
+/// (no `policy.catalog`) with no row and one declared host, the game root's files, the parameters
+/// asked and the candidate `instance add` composes from them. apps/actingd
+/// (`config::gate_452_inst5`) reads it by its path relative to the workspace and has the real
+/// configuration assembly judge the candidate.
+const FIRST_ROW_FIXTURE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/inst5-first-row.json"
+));
+
+/// `bytes` with every `\n` written `\r\n`, as a file with Windows line ends holds them.
+fn with_crlf(bytes: &[u8]) -> Vec<u8> {
+    let mut converted = Vec::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        if byte == b'\n' {
+            converted.push(b'\r');
+        }
+        converted.push(byte);
+    }
+    converted
+}
+
+/// Workflow #453 S1: `compose` on the inputs of the checked-in `fixture` on a root `name` below
+/// `base`, as `inst5_452_compose_yields_the_fixtures_candidate` runs it: the live configuration
+/// (pretty JSON, with `\r\n` line ends when `crlf`), under its relative standard-pack root the game
+/// root's `bundle.json` and `applications.json`, and the parameters asked, read by the row.
+fn compose_fixture(base: &Path, name: &str, fixture: &Value, crlf: bool) -> Composed {
+    let host = FakeHost::new(&base.join(format!("{name}-work")));
+    let root = base.join(name);
+    let packs = fixture
+        .pointer("/live/standard_packs/root")
+        .and_then(Value::as_str)
+        .expect("the fixture's standard-pack root");
+    let game = fixture["game"].as_str().expect("the fixture's game");
+    let game_root = root.join(packs).join(game);
+    fs::create_dir_all(&game_root).expect("the game root");
+    for file in ["bundle.json", "applications.json"] {
+        write_json(&game_root.join(file), &fixture["game_root"][file]);
+    }
+    let live = fixture["live"].clone();
+    let mut bytes = serde_json::to_vec_pretty(&live).expect("the configuration's JSON");
+    if crlf {
+        bytes = with_crlf(&bytes);
+    }
+    fs::write(root.join("actingd.config.json"), bytes).expect("the configuration");
+    let paths = Paths::resolve(&root).expect("the root's paths");
+    let loaded = Loaded {
+        state: InstallState::default(),
+        settings: actingcommand_runtime_config::install::settings(&live)
+            .expect("the install settings"),
+        config_sha256: String::new(),
+        state_root: root.join("state"),
+        config: live,
+    };
+    let Value::Object(asked) = fixture["asked"].clone() else {
+        panic!("the fixture's parameters are an object");
+    };
+    let params = rescue_reads::read_here("instance add", &asked).expect("the row is read here");
+    let asked = Asked::of(params).unwrap_or_else(|outcome| panic!("the parameters: {outcome}"));
+    compose(&host, &paths, &loaded, &asked)
+        .unwrap_or_else(|outcome| panic!("instance add composes: {outcome}"))
+}
+
+/// Workflow #453 S1: a policy with no row and the declared hosts `hosts`, each of 1000 milli.
+fn first_policy(hosts: &[&str]) -> Value {
+    json!({
+        "facts": {
+            "ledger_position": 0,
+            "fact_snapshot_id": "neutral",
+            "facts": [],
+            "outcomes": [],
+            "tasks": [],
+            "instances": [],
+        },
+        "resources": {
+            "pools": [],
+            "hosts": hosts
+                .iter()
+                .map(|host_id| json!({
+                    "host_id": host_id,
+                    "cpu_available_milli": 1000,
+                    "gpu_available_milli": 1000,
+                    "io_available_milli": 1000,
+                }))
+                .collect::<Vec<_>>(),
+        },
+    })
+}
+
+/// Workflow #453 S1: a root as [`installed`] makes it (its game root binding [`GAME`] on
+/// [`SERVER`] and declaring [`DECLARED`]), then its configuration with no instance in either
+/// place and `policy` as given (removed when none); the Runtime running with no instance.
+fn first_root(base: &Path, name: &str, host: &FakeHost, policy: Option<Value>) -> PathBuf {
+    let root = installed(base, name, host);
+    let mut config = config_of(&root);
+    config["instances"] = json!([]);
+    match policy {
+        Some(policy) => config["policy"] = policy,
+        None => {
+            let removed = config
+                .as_object_mut()
+                .and_then(|members| members.remove("policy"));
+            assert!(removed.is_some(), "the configuration had a policy");
+        }
+    }
+    write_json(&root.join("actingd.config.json"), &config);
+    host.runtime.boot(&[]);
+    root
+}
+
+/// Workflow #453 S1: `instance add` of [`ADDED`] at index 0 on `root` is refused `instance_invalid`
+/// with `config_key` `key` before anything is written: the root byte for byte as it was, no
+/// journal, nothing asked of the Runtime.
+fn refused_with_key(host: &FakeHost, root: &Path, key: &str, case: &str) {
+    let before = tree(root);
+    let journals_before = journals(root);
+    let (refused, exit) = add(host, root, ADDED, 0);
+    assert_eq!(exit, 1, "{case}: {refused}");
+    assert_eq!(
+        top_code(&refused),
+        "install_command_refused",
+        "{case}: {refused}"
+    );
+    assert_eq!(
+        top_value(&refused, "operation"),
+        "install_instance_add",
+        "{case}: {refused}"
+    );
+    assert_eq!(
+        top_value(&refused, "install_refusal"),
+        "instance_invalid",
+        "{case}: {refused}"
+    );
+    assert_eq!(top_value(&refused, "config_key"), key, "{case}: {refused}");
+    assert_eq!(tree(root), before, "{case}");
+    assert!(new_journals(root, &journals_before).is_empty(), "{case}");
+    assert!(calls(host).is_empty(), "{case}: {:?}", calls(host));
+}
+
+// Workflow #453 S1, the work order's "Tests": empty rows and one host give the row with that host
+// and the standard-pack operation, and `capabilities_from` null (build point 1).
+#[test]
+fn inst5_453_s1_a_first_row_takes_the_one_host_and_the_standard_pack_operation() {
+    let fixture: Value = serde_json::from_str(FIRST_ROW_FIXTURE).expect("the fixture's JSON");
+    // The fixture's live configuration: no instance in either place, no catalog, one host.
+    let live = &fixture["live"];
+    assert_eq!(live["instances"], json!([]), "{live}");
+    assert_eq!(
+        live.pointer("/policy/facts/instances"),
+        Some(&json!([])),
+        "{live}"
+    );
+    assert!(live.pointer("/policy/catalog").is_none(), "{live}");
+    let hosts = live
+        .pointer("/policy/resources/hosts")
+        .and_then(Value::as_array)
+        .expect("the declared hosts");
+    assert_eq!(hosts.len(), 1, "{live}");
+    let declared_host = &hosts[0]["host_id"];
+
+    let temp = TempDir::new().expect("tempdir");
+    let composed = compose_fixture(temp.path(), "first", &fixture, false);
+
+    // What was added: no row gave the host and the capabilities.
+    let added = composed.added.value();
+    assert!(
+        added.get("capabilities_from").is_some_and(Value::is_null),
+        "{added}"
+    );
+    assert_eq!(added["application_id_from"], "declared", "{added}");
+
+    // The one row: the asked alias, game and server, the declared host, exactly the composer's one
+    // operation.
+    let mut candidate: Value =
+        serde_json::from_slice(&composed.bytes).expect("the candidate's JSON");
+    let asked = &fixture["asked"];
+    let rows = candidate
+        .pointer("/policy/facts/instances")
+        .and_then(Value::as_array)
+        .expect("the candidate's rows");
+    assert_eq!(rows.len(), 1, "{candidate}");
+    assert_eq!(rows[0]["instance_id"], asked["alias"], "{candidate}");
+    assert_eq!(rows[0]["game_id"], asked["game"], "{candidate}");
+    assert_eq!(rows[0]["server_id"], asked["server"], "{candidate}");
+    assert_eq!(&rows[0]["host_id"], declared_host, "{candidate}");
+    assert_eq!(
+        rows[0]["capability_operation_ids"],
+        json!([actingcommand_policy::STANDARD_PACK_OPERATION_ID]),
+        "{candidate}"
+    );
+
+    // The minted id, by its form; then every other member exactly, order included.
+    let at = fixture["minted"].as_str().expect("the minted id's place");
+    let minted = candidate
+        .pointer(at)
+        .and_then(Value::as_str)
+        .expect("the minted id")
+        .to_owned();
+    assert!(minted_form(&minted), "{minted}");
+    assert_eq!(minted, composed.added.instance_id);
+    let fixed = fixture
+        .pointer(&format!("/candidate{at}"))
+        .cloned()
+        .expect("the fixture's id");
+    *candidate.pointer_mut(at).expect("the minted id's place") = fixed;
+    assert_eq!(
+        serde_json::to_string(&candidate).expect("JSON"),
+        serde_json::to_string(&fixture["candidate"]).expect("JSON"),
+    );
+}
+
+// Workflow #453 S1, the work order's "Tests": zero hosts and two hosts are each refused with the
+// key (build point 1).
+#[test]
+fn inst5_453_s1_no_host_or_several_hosts_are_refused_with_the_hosts_key() {
+    let mut no_list = first_policy(&[]);
+    let removed = no_list["resources"]
+        .as_object_mut()
+        .and_then(|resources| resources.remove("hosts"));
+    assert!(removed.is_some(), "the policy had a host list");
+    let cases = [
+        ("no-host", first_policy(&[])),
+        ("two-hosts", first_policy(&[HOST_ID, "neutral.host.b"])),
+        ("no-host-list", no_list),
+    ];
+    for (name, policy) in cases {
+        let temp = TempDir::new().expect("tempdir");
+        let host = FakeHost::new(&temp.path().join("work"));
+        let root = first_root(temp.path(), name, &host, Some(policy));
+        refused_with_key(&host, &root, "policy.resources.hosts", name);
+    }
+}
+
+// Workflow #453 S1, the work order's "Tests": catalog mode with empty rows is refused with its key
+// (build point 1).
+#[test]
+fn inst5_453_s1_catalog_mode_with_no_row_is_refused_with_the_rows_key() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let mut policy = first_policy(&[HOST_ID]);
+    policy["catalog"] = json!({
+        "tasks": "catalog/tasks.json",
+        "pools": "catalog/pools.json",
+        "activity": "catalog/activity.json",
+        "timeline": "catalog/timeline.json",
+    });
+    let root = first_root(temp.path(), "catalog", &host, Some(policy));
+    refused_with_key(&host, &root, "policy.facts.instances", "catalog mode");
+}
+
+// Workflow #453 S1, the work order's "Tests": no `policy` is refused with `config_key` `policy`
+// (build point 2).
+#[test]
+fn inst5_453_s1_no_policy_is_refused_with_the_policy_key() {
+    for (name, policy) in [("no-policy", None), ("null-policy", Some(Value::Null))] {
+        let temp = TempDir::new().expect("tempdir");
+        let host = FakeHost::new(&temp.path().join("work"));
+        let root = first_root(temp.path(), name, &host, policy);
+        refused_with_key(&host, &root, "policy", name);
+    }
+}
+
+// Workflow #453 S1, the work order's "Tests": a configuration with rows composes the same candidate
+// bytes as before, pinned by the fixture of Workflow #452 that exists on the base (build point 3).
+#[test]
+fn inst5_453_s1_a_configuration_with_rows_composes_the_bytes_of_before() {
+    let fixture: Value = serde_json::from_str(COMPOSED_FIXTURE).expect("the fixture's JSON");
+    let copied = fixture
+        .pointer("/live/policy/facts/instances/0/instance_id")
+        .and_then(Value::as_str)
+        .expect("the fixture's live configuration has a row");
+    let at = fixture["minted"].as_str().expect("the minted id's place");
+    let fixed = fixture
+        .pointer(&format!("/candidate{at}"))
+        .and_then(Value::as_str)
+        .expect("the fixture's id");
+    // The candidate the fixture pins, in the form the module writes a candidate: pretty JSON and a
+    // final line end.
+    let mut pinned = serde_json::to_vec_pretty(&fixture["candidate"]).expect("JSON");
+    pinned.push(b'\n');
+    let temp = TempDir::new().expect("tempdir");
+    for (name, crlf) in [("lf", false), ("crlf", true)] {
+        let composed = compose_fixture(temp.path(), name, &fixture, crlf);
+        let minted = composed.added.instance_id.clone();
+        assert!(minted_form(&minted), "{name}: {minted}");
+        let text = String::from_utf8(composed.bytes).expect("the candidate's UTF-8");
+        assert_eq!(text.matches(minted.as_str()).count(), 1, "{name}: {text}");
+        let expected = if crlf {
+            with_crlf(&pinned)
+        } else {
+            pinned.clone()
+        };
+        assert_eq!(
+            text.replace(minted.as_str(), fixed),
+            String::from_utf8(expected).expect("the pinned UTF-8"),
+            "{name}"
+        );
+        // `added` names the row it copied, as before.
+        assert_eq!(
+            composed.added.value()["capabilities_from"],
+            copied,
+            "{name}"
+        );
+    }
 }

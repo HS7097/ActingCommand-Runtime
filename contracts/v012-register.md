@@ -21296,6 +21296,75 @@ A wait clock must tell such rows from waiting contenders by the presence of `lim
 **At deploy (ORD-1b).** Nothing: no Runtime build passes the order inputs, and every group of
 several is refused at load; a device of one never reads them.
 
+### 1.353 Slice #453 S1 (0.12.60): `instance add` gives a configuration its first policy row (Workflow #453, approved by the owner on 11-13; the design survey `rd-1113/fresh-root-design.md` §0, §1(a), §1(c) "1a. The first row" and the row S1 of §1(d), read on main `98924e28`, every place it names found again on main `95525c98`; the coordinator's rulings of 11-13 on board #453, items 5 and 8, not the owner's words; coordinator work order `rd-1114/brief-453-s1-first-row.md`, read on main `95525c98`)
+
+1.353 was the next free number on main `95525c98` (after §1.352); an integration train renumbers it
+if open pull requests take it first. [install-cli.md](install-cli.md), "Instances, the first
+slice" ("Refused before anything is written", "The candidate", "A first row" and "The commit"),
+and its list of codes and words ("Workflow #453 S1") are the contract. The row `instance add` of
+[lab-operations.json](lab-operations.json) is unchanged: its parameters, its `help` and its
+`output` still say what it does. No outcome code, value key, vocabulary word, configuration key,
+step kind, journal kind, wire shape, record or interface revision is added or moved, and no
+outcome code fragment changes, so the index is not regenerated. A rescue row only: `actingctl`
+gains nothing (ruling 5).
+
+**What was missing.** `instance add` (crate `lab-rescue`, `src/install/instance_add.rs`, `compose`)
+copied the new row's `host_id` and `capability_operation_ids` from a row of
+`policy.facts.instances` (same game and server, else same game, else the first row) and refused
+`instance_invalid` with `config_key` `policy.facts.instances` when there was none, so a
+configuration with no instance yet, as on a fresh root, could not get its first one. Nothing else
+came from a sibling: the entry's `application_id` comes from the parameter or from the game
+root's `applications.json`, never from a sibling (Workflow #452), so a first row gets it the same
+way, and the row's other members are the asked alias, game and server and the constants
+`available: true` and `preferred_task_ids: []`.
+
+**The rule** (`compose`, `first_row_source`, `sibling_source`). With rows, exactly as before (the
+code moved into `sibling_source`, unchanged). With `policy.facts.instances` empty: in catalog mode
+(`policy.catalog` present and not `null`) refused as before, `config_key`
+`policy.facts.instances`; in composer mode the host is the one `policy.resources.hosts[].host_id`
+(no list, none, several, or one without a `host_id` text: `config_key` `policy.resources.hosts`),
+the capabilities `[STANDARD_PACK_OPERATION_ID]` (the policy crate's constant, `crates/policy`;
+`lab-rescue` now depends on `actingcommand-policy` for it, one line in `Cargo.toml` and in
+`Cargo.lock`), and `capabilities_from` `null`. These refusals stand where the copied row's
+refusal stood, after the alias, the index, the game and the application id. A configuration
+without `policy` (absent, or `null` as actingd's assembly reads it) is refused right after the
+`instances` list, as it was, now with `config_key` `policy` instead of `policy.facts.instances`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S1-1 | a first row of `policy.facts.instances`: the asked alias, game and server, the one declared host, `[STANDARD_PACK_OPERATION_ID]` | installer behaviour (the candidate) | #453 S1 | `install::instance_add::compose` | composer mode only; the candidate passes the assembly's `validate_instance_identities` by construction |
+| S1-2 | `capabilities_from` `null` in the journal input `instance_add` and the answer's `added` | journal input member value (free `inputs`; INST5-3) | #453 S1 | `install::instance_add::Added::value` | the member is always present; with rows it names the copied row's alias as before; the readers of the input read only `instance_id` |
+| S1-3 | `config_key` `policy` (no `policy`) and `policy.resources.hosts` on `instance_invalid` of `install_instance_add` | refusal values (existing key `config_key`, a token) | #453 S1 | `install::instance_add::compose` | catalog mode with no row keeps `policy.facts.instances` |
+
+Tests (apps gate row "#453 S1"), on the fake host and Runtime of `fixture.rs` and the module's
+temporary roots, no sleep: `gate_421_inst5::inst5_453_s1_a_first_row_takes_the_one_host_and_the_standard_pack_operation`
+(`compose` on the new checked-in fixture `crates/lab-rescue/tests/fixtures/inst5-first-row.json`,
+composer mode, no row, one host: the one row has the asked alias, game and server, the declared
+host and exactly `[STANDARD_PACK_OPERATION_ID]`, `added` records `capabilities_from` `null`, and
+the candidate is the fixture's, every member in its order, the minted id compared by its form),
+`inst5_453_s1_no_host_or_several_hosts_are_refused_with_the_hosts_key` (an empty host list, two
+hosts, no host list), `inst5_453_s1_catalog_mode_with_no_row_is_refused_with_the_rows_key`,
+`inst5_453_s1_no_policy_is_refused_with_the_policy_key` (absent and `null`), each through the row
+on an adopted root with a running Runtime that has no instance: `instance_invalid` with the key,
+the root byte for byte as it was, no journal, nothing asked of the Runtime; and
+`inst5_453_s1_a_configuration_with_rows_composes_the_bytes_of_before` (`compose` on the inputs of
+#452's checked-in fixture `inst5-application-id.json`, one row: the candidate's bytes, the minted
+id put back to the fixture's, are exactly the fixture's candidate as pretty JSON with a final line
+end, with the live file's `\n` and with its `\r\n`, and `added` names the copied row). The real
+judge, actingd's `config::gate_452_inst5::inst5_453_s1_the_real_assembly_takes_a_first_rows_candidate`:
+`load` and `assemble_or_refusal`, whose `PolicyAssembly::validate_instance_identities`
+(`apps/actingd/src/config.rs`) holds the policy's instance set equal to the configured aliases and
+every row's host declared, take the first row's candidate; the same document with the row's host
+undeclared is refused `policy_instance_host_unknown`, without the row `policy_instance_set_mismatch`.
+No existing test changes; every INST-5, INST-5b and #452 test stays as it is.
+
+**At deploy.** Nothing changes for an installation whose configuration has rows: the candidate
+`instance add` composes is the same, byte for byte, and so are its file, its commit and its
+refusals. A configuration without `policy` is refused with `config_key` `policy` where it named
+`policy.facts.instances`. The production root is not touched: the rescue module's composite
+operations are not used on it before LAB-7 (ruling 8; install-cli.md, "Journals across
+versions"), and production adds instances as before.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

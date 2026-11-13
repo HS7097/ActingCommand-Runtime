@@ -14,6 +14,18 @@
 //   (`load`, then `assemble_or_refusal`): it passes; the same document with the added entry's
 //   `application_id` removed, as `instance add` composed it before Workflow #452, is refused at
 //   the assembly with `application_identity_missing`.
+// Workflow #453 S1 (register §1.353; contracts/install-cli.md, "Instances, the first slice" ("A
+// first row")): the same judge for the candidate of a first row, the checked-in fixture
+// `crates/lab-rescue/tests/fixtures/inst5-first-row.json`, which the rescue module's INST-5 gate
+// (`install::gate_421_inst5::inst5_453_s1_a_first_row_takes_the_one_host_and_the_standard_pack_operation`)
+// holds `compose` to.
+// - `inst5_453_s1_the_real_assembly_takes_a_first_rows_candidate`: the candidate (composer mode,
+//   one entry, one row on the one declared host with the standard-pack operation) passes `load`
+//   and `assemble_or_refusal`, whose policy check (`PolicyAssembly::validate_instance_identities`)
+//   holds the set of `policy.facts.instances[].instance_id` equal to the configured aliases and
+//   every row's `host_id` a declared host; the same document with the row's host undeclared is
+//   refused there with `policy_instance_host_unknown`, and without the row with
+//   `policy_instance_set_mismatch`.
 // No device, no Runtime, no clock: the assembly only reads the file.
 
 use super::*;
@@ -91,6 +103,45 @@ fn inst5_452_the_real_assembly_takes_the_composed_candidate() {
         start_refusal(&fixture, &before),
         Some((
             "application_identity_missing",
+            ActingdLocation::ConfigAssemble
+        ))
+    );
+}
+
+/// Workflow #453 S1: the candidate `instance add` composes for a first row, with its inputs
+/// (crates/lab-rescue's fixture).
+const FIRST_ROW_FIXTURE: &str =
+    include_str!("../../../../crates/lab-rescue/tests/fixtures/inst5-first-row.json");
+
+// Workflow #453 S1, the work order's "Tests": the first row's candidate passes the configuration
+// assembly's own rule on the policy's instances and hosts.
+#[test]
+fn inst5_453_s1_the_real_assembly_takes_a_first_rows_candidate() {
+    let fixture: Value = serde_json::from_str(FIRST_ROW_FIXTURE).expect("the fixture's JSON");
+    let candidate = &fixture["candidate"];
+    assert!(
+        candidate.pointer("/policy/catalog").is_none(),
+        "composer mode"
+    );
+    assert_eq!(start_refusal(&fixture, candidate), None);
+
+    // The rule is in force on this document: the row's host undeclared, and the row gone.
+    let mut undeclared = candidate.clone();
+    undeclared["policy"]["facts"]["instances"][0]["host_id"] =
+        Value::from("neutral.host.undeclared");
+    assert_eq!(
+        start_refusal(&fixture, &undeclared),
+        Some((
+            "policy_instance_host_unknown",
+            ActingdLocation::ConfigAssemble
+        ))
+    );
+    let mut rowless = candidate.clone();
+    rowless["policy"]["facts"]["instances"] = Value::Array(Vec::new());
+    assert_eq!(
+        start_refusal(&fixture, &rowless),
+        Some((
+            "policy_instance_set_mismatch",
             ActingdLocation::ConfigAssemble
         ))
     );
