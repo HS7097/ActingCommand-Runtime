@@ -47,9 +47,15 @@
 //!   `cold`, and only the items that change (`pack_item`, none waiting for idle instances) and the
 //!   checks after the placement (`post_check`): no `pause` and no `release_hold`. The checks are
 //!   the plan again and `standard-pack check` as above, the live build's check-config of the live
-//!   configuration (`check_config`), and the composition `not_evaluated` (no Runtime to ask); a
-//!   failed check ends the command `post_check_failed` with the items placed and `next` naming
-//!   `undo`, no hold kept.
+//!   configuration (`check_config`: its result, and, fix 1, its notes that name the bundle's game;
+//!   with no instance the configuration binds to the game, the input `bound` empty, it says that
+//!   the game's composition was not previewed), and the composition `not_evaluated` (no Runtime to
+//!   ask); a failed check ends the command `post_check_failed` with the items placed and `next`
+//!   naming `undo`, no hold kept. Its `undo` and its `resume` apply the stopped rule again under
+//!   the writer lock (`super::undo`, `super::update::resume`).
+//! - **A failed check** (fix 1, as Workflow #454 closes the post-start checks), with a Runtime or
+//!   without one, closes its `post_check` step `done` with what it read (`game`, `checks`,
+//!   `failed`) in the write that ends the operation.
 //!
 //! Nothing is deleted: every replaced item is kept beside its place, and `undo` puts them back.
 
@@ -63,7 +69,7 @@ use super::programs::{self, Deadline};
 use super::state::{KindLocation, OperationKind, Paths};
 use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{IoOp, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
     BundleIndex, LOADING_PREFIX, LoadingTarget, MAX_NOTICE_FILE_BYTES, NOTICES_PACKAGE_REVISION,
     NoticeBound, NoticeEntry, NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE,
@@ -1067,8 +1073,9 @@ const COLD_INPUT: &str = "cold";
 
 /// Workflow #453 S6: opens the placement's operation (`pack_place`) while no Runtime runs, the
 /// caller having applied the stopped rule under the writer lock: the same plan and plan id, the
-/// inputs of a placement without its hold (no `hold`, `known_pauses`, `instances` or `bound`) and
-/// [`COLD_INPUT`], no S0, no guards, and the steps [`cold_steps`].
+/// inputs of a placement without its hold (no `hold`, `known_pauses` or `instances`),
+/// [`COLD_INPUT`] and (fix 1) [`BOUND_INPUT`], the instances the configuration binds to the
+/// bundle's game ([`configured_bound`]), no S0, no guards, and the steps [`cold_steps`].
 pub(crate) fn open_cold<'h>(
     host: &'h dyn Host,
     paths: &Paths,
@@ -1084,6 +1091,7 @@ pub(crate) fn open_cold<'h>(
         "config_sha256": loaded.config_sha256,
     });
     inputs[COLD_INPUT] = Value::Bool(true);
+    inputs[BOUND_INPUT] = json!(configured_bound(&loaded.config, &placement.game));
     let opening = Opening {
         kind: OperationKind::PackPlace,
         initiator,
@@ -1101,9 +1109,28 @@ pub(crate) fn open_cold<'h>(
     Operation::open(host, paths, opening, |ms| cold_steps(placement, ms))
 }
 
+/// Workflow #453 S6 fix 1: the instances the configuration `config` binds to `game`, in its
+/// order: the `instance_id` of each row of `policy.facts.instances` whose `game_id` is the game.
+/// Those rows are the games in use that check-config previews the composition for and the
+/// Runtime's scheduler workbench reads; none without a `policy`.
+fn configured_bound(config: &Value, game: &str) -> Vec<String> {
+    config
+        .pointer("/policy/facts/instances")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| row.get("game_id").and_then(Value::as_str) == Some(game))
+                .filter_map(|row| row.get("instance_id").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Workflow #453 S6: whether the operation was begun while no Runtime ran (its input
-/// [`COLD_INPUT`]).
-fn is_cold(operation: &Operation<'_>) -> bool {
+/// [`COLD_INPUT`]). Fix 1: its `undo` and its `resume` read it too, to apply the stopped rule
+/// again under the writer lock.
+pub(crate) fn is_cold(operation: &Operation<'_>) -> bool {
     operation
         .journal()
         .inputs
@@ -1352,12 +1379,32 @@ pub(crate) fn check_step(
         ));
     }
     // 3. Workflow #453 S6: an operation begun while no Runtime ran checks the live configuration
-    // with the live build's check-config, which previews the composition for the configured
-    // instances offline, and leaves the composition itself not evaluated; any other checks the
-    // new composition ([`composition_row`]).
+    // with the live build's check-config ([`check_config_row`]: its result, and its notes that
+    // name the game) and leaves the composition itself not evaluated; any other checks the new
+    // composition ([`composition_row`]).
     let cold = is_cold(operation);
     let composition = if cold {
-        rows.push(check_config_row(host, &paths, loaded, command));
+        let bound = operation
+            .journal()
+            .inputs
+            .get(BOUND_INPUT)
+            .and_then(Value::as_array)
+            .map(|bound| {
+                bound
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        rows.push(check_config_row(
+            host,
+            &paths,
+            loaded,
+            command,
+            &intent.game,
+            &bound,
+        ));
         row(
             "composition",
             "not_evaluated",
@@ -1376,6 +1423,10 @@ pub(crate) fn check_step(
     if failed.is_empty() {
         return Ok(StepEnd::Done(Some(evidence)));
     }
+    // Workflow #453 S6 fix 1 (as Workflow #454 closes the post-start checks): the step is closed
+    // with what it read, the evidence a passed check records, in the write that ends the
+    // operation, with a Runtime and without one.
+    operation.close_with_end(n, evidence.clone());
     let (reason, _) = held_of(operation);
     let mut members = hold_kept(&paths, reason.as_ref(), false);
     members.insert("checks".to_owned(), evidence);
@@ -1466,12 +1517,18 @@ fn composition_row(
 /// Runtime ran: the live build's check-config of the live configuration with `--install-root
 /// <root>`, as `config replace` checks a file (`super::config_swap::candidate`). A configuration
 /// it refuses fails with its answer; one it does not answer fails with
-/// `check_config_unanswered`.
+/// `check_config_unanswered`. Fix 1: check-config answers `check_config_passed` with a problem of
+/// a game's root or of its composition as a note, so the row also fails when a note names the
+/// placed `game` (its value `game`), those notes in `game_notes`; and with no instance bound to
+/// the game (`bound` empty) check-config did not preview its composition, which the row says as
+/// `composition` `not_previewed` beside check-config's result for the rest of the configuration.
 fn check_config_row(
     host: &dyn Host,
     paths: &Paths,
     loaded: &Loaded,
     command: InstallLocation,
+    game: &str,
+    bound: &[String],
 ) -> Value {
     match programs::check_config(
         host,
@@ -1480,15 +1537,29 @@ fn check_config_row(
         Some(&paths.root),
         Deadline::check_config(&loaded.settings),
     ) {
-        Ok(checked) => row(
-            "check_config",
-            if checked.passed() { "pass" } else { "fail" },
-            json!({
+        Ok(checked) => {
+            let game_notes = checked
+                .received
+                .causes()
+                .iter()
+                .filter(|link| *link.relation() == CauseRelation::Note)
+                .map(|link| link.outcome())
+                .filter(|note| note.value("game").and_then(Value::as_str) == Some(game))
+                .map(crate::cli_line::warning)
+                .collect::<Vec<_>>();
+            let passed = checked.passed() && game_notes.is_empty();
+            let mut values = json!({
                 "install_root": checked.install_root,
                 "answer": crate::cli_line::warning(&checked.received),
                 "packs": checked.summary.packs,
-            }),
-        ),
+                "game_notes": game_notes,
+                "bound": bound,
+            });
+            if bound.is_empty() {
+                values["composition"] = json!("not_previewed");
+            }
+            row("check_config", if passed { "pass" } else { "fail" }, values)
+        }
         Err(failure) => row(
             "check_config",
             "fail",

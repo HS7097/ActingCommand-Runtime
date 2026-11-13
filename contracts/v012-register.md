@@ -19714,7 +19714,7 @@ changes, and `install start` before it spawns, which the update plan refuses by 
 cannot decide `processes_unreadable`; judged under the lock, so no watchdog tick starts a Runtime
 between the judgement and the operation). It then opens `pack_place` (`open_cold`) with the same
 plan and plan id, the inputs `commit`, `game`, `zip`, `zip_sha256`, `config_sha256` and `cold:
-true`, no S0 and no guards, and the steps `pack_item` per changed item, none marked `first` (so none
+true` (fix 1: and `bound`, below), no S0 and no guards, and the steps `pack_item` per changed item, none marked `first` (so none
 waits for idle instances), and `post_check`; no `pause`, no `release_hold`. The items are placed as
 before (`.new-<ms>.part`, the replaced item renamed `.old-<ms>` and kept, the part renamed in, its
 digest checked). `check_step` reads the input `cold`: the rows `rerun` and `standard_pack_check` as
@@ -19748,7 +19748,8 @@ named): `s6_cold_place_places_the_items_and_keeps_the_replaced_ones` (a game roo
 `bundle.json` of before, a bundle that replaces both and adds the table and `schedule.json`: the
 answer's steps `plan` and `place`; every item on disk the zip's bytes, the replaced pack and
 `bundle.json` kept as `.old-<ms>`; the journal with the initiator, the answer's plan id, no S0, the
-six inputs with `cold`, four `pack_item` steps without `first` and `post_check`; the rows `rerun`
+six inputs with `cold` (fix 1: seven, with `bound` `[]`), four `pack_item` steps without `first`
+and `post_check`; the rows `rerun`
 pass, `standard_pack_check` `not_evaluated`, `check_config` pass with `install_root`, run once by the
 live build with `--install-root`, `composition` `not_evaluated` with `runtime` `stopped`; no call to
 the fake Runtime; after each of the five steps the watchdog's reader of `current.json` names the
@@ -19764,6 +19765,88 @@ four placed items kept beside it as `.rolledback-<ms2>`) and
 one plan id with the Runtime stopped and running, and both journals, placed hot on one root and
 cold on the other, carry it and the same plan document). No existing test changes: every earlier
 gate that places boots its fake Runtime first, so it takes the path of before.
+
+**S6 fix 1** (coordinator work order `rd-1113/brief-1680-fix1.md`, after the independent review
+of the pull request; the coordinator's rulings, not the owner's words). Six points, each read
+against the code first.
+
+1. *The row `check_config` passed for every bundle.* It judged only the category of
+   check-config's top outcome, and check-config answers `check_config_passed` with a broken game
+   root (`inspect_standard_packs`, every game folder below `standard_packs.root`) and a refused
+   composition (`preview_standard_pack_schedule`, only the games of `policy.facts.instances`) as
+   notes (`apps/actingd/src/check_config.rs`, the notes folded under the passed outcome). Now
+   (`place::check_config_row`) the row also fails when a note's `game` is the placed game, those
+   notes in its new value `game_notes`; `open_cold` records the input `bound` on a cold journal
+   too (`configured_bound`: the `instance_id` of each `policy.facts.instances` row whose `game_id`
+   is the game), the row carries it as `bound`, and with `bound` empty it says `composition`
+   `not_previewed`, its result then check-config's own and the game's root notes. The contract
+   sentence that said the row previews the composition now says what it judges, and the done
+   answer's `next` names `composition_at_start` (the module's `up`). What the start does, read
+   from the code: `register_standard_packs_on_start` reads and records every game root and a
+   broken one never stops the start (`crates/runtime-host/src/host.rs`); the workbench's check
+   (`standard_pack_schedule.rs`, `refresh_standard_pack_rules`) reads the games in use only,
+   records a refused `schedule.json` once as `standard_pack_root_invalid` and gives that game the
+   rules of its last good file from the active generation, or none when it never had one, the
+   other games composed; a broken game root returns before composing and keeps the active
+   generation as it is (`adopt_active_generation`: none on a new root, so no rules).
+2. *`undo` of a cold placement* took no writer lock and no stopped check (`undo.rs` took the lock
+   only for an update or rollback). Now an operation whose input `cold` is `true` takes the lock
+   and then `launch::refuse_running` with `install_undo` before `begin_undo`, so nothing is moved
+   or journalled before both; every other `undo` is unchanged.
+3. *`resume` of a cold placement* (`update::resume`) took the lock but no stopped check. Now it
+   applies `launch::refuse_running` with `install_resume` under the lock before any step runs;
+   every other `resume` is unchanged.
+4. *A failed check left its step `started` with no evidence.* `check_step` now closes it with
+   `Operation::close_with_end` (main, Workflow #454) with `{game, checks, failed}` before it
+   builds `post_check_failed`, with a Runtime and without one, as `deploy::post_check` does. The
+   register entry of Workflow #454 (§1.341) lists the operations its fix covers and does not name
+   `place` as left out, so it is not corrected; this sentence records that `place`'s checks close
+   the same way from this fix.
+5. *A check-config that does not answer:* the test was missing; added.
+6. *The contract on `owner_lock_held`.* The machine's status read (`install::runtime`, `status`)
+   answers "no Runtime" only while the owner lock is not held, and `place` answers a failed read
+   `processes_unreadable` before it takes this path, so on a real installation `owner_lock_held`
+   comes only from a Runtime that took the lock after that read; the contract says so, and the
+   test's comment says that it pins that window (the fake Runtime's status answers "none runs"
+   without reading the lock). `undo` and `resume` read no status first: there a running Runtime
+   is `owner_lock_held`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S6-5 | the cold `pack_place` journal's input `bound` (from the configuration) | journal input member (free `inputs`) | #453 S6 fix 1 | `install::place::open_cold` | S5-1's name, another source: the hot journal's comes from the status |
+| S6-6 | the row `check_config`: `fail` on a note naming the placed game, the values `game_notes`, `bound` and, with `bound` empty, `composition` `not_previewed` | installer behaviour, row values | #453 S6 fix 1 | `install::place::check_step` | |
+| S6-7 | the cold done answer's `next` `composition_at_start` (`up`) | answer member | #453 S6 fix 1 | `rescue::place_cold` | |
+| S6-8 | a failed check's `post_check` step `done` with `{game, checks, failed}` | journal behaviour (no shape change) | #453 S6 fix 1 | `install::place::check_step` | also with a Runtime; as PC-1 |
+| S6-9 | `undo` and `resume` of a cold `pack_place`: the writer lock, then the stopped rule | installer behaviour | #453 S6 fix 1 | `install::undo::undo`, `install::update::resume` | the refusals of `install undo` and `install resume` |
+
+Tests (apps gate row "#453 S6 fix 1", the same file; the fixture's check-config can now give
+notes, `Programs::check_config_notes`, none by default):
+`s6_fix1_a_note_naming_the_placed_game_fails_check_config` (an instance bound to the game, notes
+naming another game and the game: the row fails, check-config's answer `check_config_passed`,
+`game_notes` the one note of the game, `bound` the instance, no `composition`;
+`post_check_failed`, `count` 1, `next` exactly `undo <operation>`),
+`s6_fix1_no_bound_instance_says_the_composition_was_not_previewed` (the one instance bound to
+another game: `bound` `[]`, the row passes with `composition` `not_previewed`; `next`
+`composition_at_start` `up`), `s6_fix1_a_bound_instance_and_no_note_passes_check_config` (`bound`
+the game's instance alone, the row passes with exactly `answer`, `bound`, `game_notes`,
+`install_root`, `packs`), `s6_fix1_a_check_config_that_does_not_answer_fails_its_row` (the child
+left running: the row fails with `check_config_unanswered`, its `pid` and `config_key`;
+`post_check_failed`, `next` `undo`), `s6_fix1_undo_of_a_stopped_placement_refuses_a_running_runtime`
+(after a failed cold check: an actingd under the root `runtime_running` with its `pid`, the owner
+lock held `owner_lock_held`, both `install_undo`, the game root and the journal byte for byte as
+they were; then done, the game root of before),
+`s6_fix1_resume_of_a_stopped_placement_refuses_a_running_runtime` (a cold placement stopped after
+its first item: `owner_lock_held` and `runtime_running` of `install_resume`, nothing moved,
+`current.json` kept; then done, every item placed, `check_config` passed),
+`s6_fix1_undo_and_resume_of_a_running_placement_are_unchanged` (a hot placement stopped after its
+first item: `op resume` and then `undo` done while the fake Runtime's actingd runs under the
+root), `s6_fix1_a_failed_check_closes_its_step_with_what_it_read` (hot, `rerun` failed by a file
+changed after the last item; cold, `check_config` refused: each `post_check` step `done` with
+exactly `checks`, `failed`, `game`, `failed` the failed row, the evidence the answer's `checks`)
+and `s6_fix1_a_passed_check_keeps_its_record` (hot and cold: the step `done` with the same three
+members, `failed` empty, the evidence the answer's `place` step's `checks`). One existing test of
+this slice is adapted: `s6_cold_place_places_the_items_and_keeps_the_replaced_ones` pinned the
+cold inputs without `bound`, which the ruling on point 1 adds (the list `[]` there).
 
 **At deploy.** Nothing to do: production places packs with the coordinator's own kit, not with
 this row. **Rollback** to a build before 0.12.59: its installer reads a journal with `bound` (its

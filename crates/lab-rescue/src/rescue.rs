@@ -1826,14 +1826,16 @@ fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
 /// (`crate::install::place::open_cold`): the items placed and the checks after the placement; no
 /// pause, no release and no schedule read after it. While it is unfinished the watchdog stands
 /// aside (`pack_place` is off row 7a″'s pass list), so no Runtime starts on a half-placed game
-/// root.
+/// root. Fix 1: its `next` names the start (`composition_at_start`, the module's `up`): the
+/// composition the placed game root gives is judged only by the Runtime's workbench, never by the
+/// checks of a placement with no Runtime.
 fn place_cold(
     context: &Context<'_>,
     paths: &Paths,
     loaded: &Loaded,
     placement: &place::Placement,
     mut steps: Vec<Value>,
-    members: Map<String, Value>,
+    mut members: Map<String, Value>,
 ) -> Result<Exit, Outcome> {
     const PLACE: InstallLocation = InstallLocation::PackPlace;
     let _lock = WriterLock::take(paths, loaded.settings.lock_wait_ms, PLACE)?;
@@ -1852,6 +1854,11 @@ fn place_cold(
         return Ok(stopped(context, steps, placed));
     }
     steps.push(answer_step(context, "place", &placed));
+    add_next(
+        &mut members,
+        "composition_at_start",
+        json!(["install", "start", "--root", paths.plain]),
+    );
     let done = install::done(PLACE)
         .install_operation_id(operation_id)
         .game(placement.game.clone())

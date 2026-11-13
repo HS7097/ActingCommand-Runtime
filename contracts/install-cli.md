@@ -987,31 +987,72 @@ the rescue face:
   (an operation an earlier build began, resumed by this one) keeps the wait. A catalog that cannot
   be read is `not_evaluated`, as before.
 - **`place` while the Runtime is stopped** (Workflow #453 S6, since 0.12.59; register §1.342; the
-  coordinator's rulings of 11-13 on board #453, not the owner's words). With no Runtime answering,
-  `place` no longer refuses `runtime_not_running`. After its plan, which holds no running state
-  (the same plan and `plan_id` as with a Runtime; `--plan` answers it as before), it takes the
-  writer lock, refuses an unfinished operation, and applies the stopped rule the update applies
-  after its close, before any file changes, and `install start` before it spawns (the update plan
-  refuses by the same two tests): the state root's owner lock held refuses `owner_lock_held`
-  (`path`), an `actingcommand-actingd.exe` running under the root `runtime_running` (`path`,
-  `pid`), a probe that cannot decide `processes_unreadable`; each before anything is written,
-  judged under the lock, so no watchdog tick starts a Runtime in between. It then opens one
-  `pack_place` operation whose inputs say `cold: true` (no `hold`, `known_pauses`, `instances` or
-  `bound`), without S0 or guards, with one `pack_item` step per item that changes and one
-  `post_check`: no `pause`, no `release_hold`, and no item waits for idle instances (there is no
-  Runtime to ask). Each item is placed as with a Runtime: `<dst>.new-<ms>.part`, the item in place
-  renamed `<dst>.old-<ms>` and kept, the part renamed in, its content checked; nothing is deleted.
-  The checks after the placement are `rerun` and `standard_pack_check` as with a Runtime,
-  `check_config` (the live build's check-config of the live configuration with
-  `--install-root <root>`, as `config replace` checks a file; it previews the composition for the
-  configured instances offline: a configuration it refuses `fail` with its answer, one it does not
-  answer `fail` with `check_config_unanswered`), and `composition` `not_evaluated` with `runtime`
-  `stopped`. A failed row ends the command `post_check_failed` (`count`, `game`), the items placed
-  and the operation ended; no hold is kept, and `next` names `undo <operation>`, which reverses the
-  items as for a placement with a Runtime (each placed item set aside as `.rolledback-<ms2>`, each
-  kept one put back). The answer's steps are `plan` and `place`, with no `schedule`. While the
-  operation is unfinished the watchdog stands aside (`pack_place` is off row 7a″'s pass list), so
-  no Runtime starts on a half-placed game root; the next start reads the placed game root.
+  coordinator's rulings of 11-13 on board #453, not the owner's words; fix 1 after the
+  independent review). With no Runtime answering, `place` no longer refuses
+  `runtime_not_running`. The status read after its plan chooses this path: it answers "no
+  Runtime" only while the state root's owner lock is not held, and a held lock whose Runtime does
+  not answer (one starting, or one that does not answer) is `processes_unreadable` at that read,
+  caused by the failed read, before anything is written. After its plan, which holds no running
+  state (the same plan and `plan_id` as with a Runtime; `--plan` answers it as before), it takes
+  the writer lock, refuses an unfinished operation, and applies the stopped rule the update
+  applies after its close, before any file changes, and `install start` before it spawns (the
+  update plan refuses by the same two tests): the state root's owner lock held refuses
+  `owner_lock_held` (`path`), an `actingcommand-actingd.exe` running under the root
+  `runtime_running` (`path`, `pid`), a probe that cannot decide `processes_unreadable`; each
+  before anything is written, judged under the lock, so no watchdog tick starts a Runtime in
+  between. After the status read, `owner_lock_held` here is a Runtime that took the lock since
+  that read, and `runtime_running` an actingd under the root that holds no lock yet. It then
+  opens one `pack_place` operation whose inputs say
+  `cold: true` and `bound`, the instances the configuration binds to the bundle's game (the
+  `instance_id` of each row of `policy.facts.instances` whose `game_id` is the game; none without
+  a `policy`), and no `hold`, `known_pauses` or `instances`, without S0 or guards, with one
+  `pack_item` step per item that changes and one `post_check`: no `pause`, no `release_hold`, and
+  no item waits for idle instances (there is no Runtime to ask). Each item is placed as with a
+  Runtime: `<dst>.new-<ms>.part`, the item in place renamed `<dst>.old-<ms>` and kept, the part
+  renamed in, its content checked; nothing is deleted. The checks after the placement are `rerun`
+  and `standard_pack_check` as with a Runtime, `check_config`, and `composition` `not_evaluated`
+  with `runtime` `stopped`.
+  - **`check_config`** runs the live build's check-config of the live configuration with
+    `--install-root <root>`, as `config replace` checks a file, and judges two things. First,
+    check-config's own result for the whole configuration: a configuration it refuses `fail` with
+    its `answer`; one it does not answer within `install.child.check_config_timeout_ms` `fail`
+    with `check_config_unanswered` (the child's `pid`, the key as `config_key`). Second, the
+    placed game: check-config answers a problem of a game's root and a problem of a composition
+    as a note beside `check_config_passed`, never as its result, so a note whose `game` is the
+    placed game fails the row, those notes in `game_notes`. Such a note is a problem of that
+    game's root or its tables, which check-config reads below `standard_packs.root` whatever
+    binds the game, or of its composition, which check-config previews only for the games of
+    `policy.facts.instances`. With `bound` empty it did not preview that composition: the row
+    says `composition` `not_previewed` beside `bound` `[]`, and its result is then check-config's
+    result and the game's root notes only. The row never judges the composition the Runtime will
+    make.
+  - **The composition is judged at the next start**, by the Runtime's scheduler workbench, for
+    the games of the configured instances only: a game no instance binds is not read until an
+    instance bound to it is configured. So the answer's `next` names `composition_at_start`
+    (`up`). A bundle that does not compose does not stop that start: the start reads and records
+    every game root, a broken one never stopping it. At its check the workbench records a
+    `schedule.json` the composer refuses once as `standard_pack_root_invalid`, and that game
+    keeps the rules of its last good file in the catalog the Runtime had, or has no rules when it
+    never had one (on a new root, none), the other games composed as they are; a broken game root
+    (its `bundle.json` or another root file) keeps the catalog the Runtime had as it is until it
+    is fixed, and on a new root, with no catalog yet, the Runtime runs with none.
+  - **A failed row** ends the command `post_check_failed` (`count`, `game`), the items placed and
+    the operation ended, its `post_check` step closed `done` with what it read (`game`, `checks`,
+    `failed`) in the write that records the result, as Workflow #454 closes the post-start
+    checks (from fix 1 also with a Runtime; before, the step stayed `started` with no evidence);
+    no hold is kept, and `next` names `undo <operation>`, which reverses the items as for a
+    placement with a Runtime (each placed item set aside as `.rolledback-<ms2>`, each kept one put
+    back).
+  - **Its `undo` and its `resume`** (an operation whose input `cold` is `true`) take the writer
+    lock and then apply the same stopped rule before anything is moved, refusing as the placement
+    does, as `install undo` or `install resume` (`owner_lock_held`, `runtime_running`,
+    `processes_unreadable`); no status read comes first there, so a running Runtime is
+    `owner_lock_held`. The `undo` and the `resume` of a placement begun with a Runtime are
+    unchanged.
+
+  The answer's steps are `plan` and `place`, with no `schedule`. While the operation is unfinished
+  the watchdog stands aside (`pack_place` is off row 7a″'s pass list), so no Runtime starts on a
+  half-placed game root; the next start reads the placed game root.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no

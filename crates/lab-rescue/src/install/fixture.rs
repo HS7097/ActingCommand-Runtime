@@ -338,6 +338,10 @@ pub(super) struct Programs {
     /// The builds whose check-config refuses `--install-root` as a build before
     /// `actingd-config` revision 17 does: `check_config_usage_invalid`, no value, no report.
     pub(super) refuse_install_root: RefCell<Vec<String>>,
+    /// Workflow #453 S6 fix 1: the notes every check-config that passes gives with its
+    /// `check_config_passed`, as wire links (`code`, `category`, `relation` `note`, `values`), as
+    /// the real one joins a problem of a game root or of its composition (none by default).
+    pub(super) check_config_notes: RefCell<Vec<Value>>,
     /// The ledger head the head read and `events` read.
     pub(super) ledger_head: Cell<u64>,
     /// A build whose reader refuses a read that reaches this sequence (every read also reads
@@ -378,6 +382,7 @@ impl FakeHost {
             programs: Programs {
                 refuse_check_config: RefCell::new(Vec::new()),
                 refuse_install_root: RefCell::new(Vec::new()),
+                check_config_notes: RefCell::new(Vec::new()),
                 ledger_head: Cell::new(100),
                 unreadable: RefCell::new(None),
                 verify_exit: Cell::new(0),
@@ -544,12 +549,17 @@ impl Host for FakeHost {
                         }),
                     )
                 } else {
+                    let mut outcome = json!({"schema_version": "actingcommand.outcome.v1",
+                        "code": "check_config_passed", "category": "success", "values": {}});
+                    let notes = self.programs.check_config_notes.borrow().clone();
+                    if !notes.is_empty() {
+                        outcome["causes"] = Value::Array(notes);
+                    }
                     ran(
                         0,
                         json!({
                             "schema_version": "actingcommand.actingd.check-config.v2",
-                            "outcome": {"schema_version": "actingcommand.outcome.v1",
-                                "code": "check_config_passed", "category": "success", "values": {}},
+                            "outcome": outcome,
                             "report": {"policy_plan": {"plan": null, "approvals": null},
                                 "standard_packs": {"games": []}},
                         }),

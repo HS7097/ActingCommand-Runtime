@@ -32,12 +32,32 @@
 //   `undo` alone; that `undo` restores the game root, the placed items kept beside it;
 // - `s6_the_same_bundle_has_the_same_plan_id_hot_and_cold`: planned and placed with the Runtime
 //   running and stopped, the same plan and plan id.
+// S6 fix 1 (coordinator work order `rd-1113/brief-1680-fix1.md`, after the independent review):
+// - `s6_fix1_a_note_naming_the_placed_game_fails_check_config`: check-config passes with a note
+//   that names the placed game: the row `check_config` fails with that note in `game_notes`, the
+//   operation ends `post_check_failed` with `undo` as its next step;
+// - `s6_fix1_no_bound_instance_says_the_composition_was_not_previewed`: no instance the
+//   configuration binds to the game: the input `bound` empty, the row says `composition`
+//   `not_previewed`, and the answer's `next` names the start;
+// - `s6_fix1_a_bound_instance_and_no_note_passes_check_config`: an instance bound to the game and
+//   no note: the row passes without that member;
+// - `s6_fix1_a_check_config_that_does_not_answer_fails_its_row`: check-config still running at
+//   its deadline: the row fails with `check_config_unanswered`, the operation `post_check_failed`;
+// - `s6_fix1_undo_of_a_stopped_placement_refuses_a_running_runtime` and
+//   `s6_fix1_resume_of_a_stopped_placement_refuses_a_running_runtime`: under the writer lock the
+//   stopped rule again (`runtime_running`, `owner_lock_held`), nothing moved, then done once the
+//   Runtime is stopped;
+// - `s6_fix1_undo_and_resume_of_a_running_placement_are_unchanged`: with a Runtime, both go on
+//   while an actingd runs under the root, as before;
+// - `s6_fix1_a_failed_check_closes_its_step_with_what_it_read` and
+//   `s6_fix1_a_passed_check_keeps_its_record`: as Workflow #454 closes the post-start checks, with
+//   a Runtime and without one.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
 // sleep; every root is a temporary folder with neutral files (a schedule here is placeholder
 // bytes: `place` reads no rule of it, and the fixture's root carries no `standard-pack check`).
 
 use super::fixture::{
-    BuildSpec, C1, FakeHost, code, live_root, run, speaks, tree, word, write_json,
+    BuildSpec, C1, FakeHost, STALLED_PID, code, live_root, run, speaks, tree, word, write_json,
 };
 use super::host::RunningImage;
 use crate::agent_channel::Answer as Answered;
@@ -663,9 +683,11 @@ fn s6_cold_place_places_the_items_and_keeps_the_replaced_ones() {
     assert_eq!(journal["initiator"], WORD.as_str());
     assert_eq!(journal["plan_id"], placed["plan"]["plan_id"]);
     assert_eq!(journal["s0"], Value::Null, "{journal}");
+    // Fix 1: and `bound`, the instances the configuration binds to the game (none here).
     assert_eq!(
         keys(&journal["inputs"]),
         [
+            "bound",
             "cold",
             "commit",
             "config_sha256",
@@ -675,6 +697,7 @@ fn s6_cold_place_places_the_items_and_keeps_the_replaced_ones() {
         ]
     );
     assert_eq!(journal["inputs"]["cold"], json!(true));
+    assert_eq!(journal["inputs"]["bound"], json!([]));
     assert_eq!(
         step_kinds(&journal),
         [
@@ -745,7 +768,12 @@ fn s6_cold_place_places_the_items_and_keeps_the_replaced_ones() {
 // S6: no Runtime answers. An actingd under the root (a Runtime starting, say) refuses
 // `runtime_running` with its `pid`; the state root's owner lock held refuses `owner_lock_held`.
 // Each refusal comes before anything is written: the game root as it was, no journal, no
-// `current.json`.
+// `current.json`. Fix 1: the second case pins a window. The machine's status read answers "no
+// Runtime" only while the owner lock is not held; a held lock whose Runtime does not answer is
+// `processes_unreadable` at that read, before this path is chosen. So on a real installation
+// `owner_lock_held` comes only from a Runtime that took the lock between the status read and the
+// check under the writer lock; the fake Runtime's status answers "none runs" without reading the
+// lock, which is how this test reaches that window.
 #[test]
 fn s6_cold_place_refuses_a_running_actingd_or_a_held_owner_lock() {
     let temp = TempDir::new().expect("tempdir");
@@ -924,4 +952,606 @@ fn s6_the_same_bundle_has_the_same_plan_id_hot_and_cold() {
     assert_eq!(cold_journal["plan"], hot_journal["plan"]);
     assert_eq!(step_kinds(&hot_journal)[0], "pause");
     assert_eq!(step_kinds(&cold_journal)[0], "pack_item");
+}
+
+/// Fix 1: the configuration of `root` binds each `(alias, game)` of `instances`, as rows of its
+/// `policy.facts.instances` (placeholder server and host): the rows check-config and the Runtime's
+/// scheduler workbench read the games in use from.
+fn bind_in_configuration(root: &Path, instances: &[(&str, &str)]) {
+    let config_path = root.join("actingd.config.json");
+    let mut config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("the configuration")).expect("JSON");
+    let rows = instances
+        .iter()
+        .map(|(alias, game)| {
+            json!({
+                "instance_id": alias,
+                "game_id": game,
+                "server_id": "neutral-server",
+                "host_id": "neutral-host",
+            })
+        })
+        .collect::<Vec<_>>();
+    config["policy"] = json!({"facts": {"instances": rows}});
+    write_json(&config_path, &config);
+}
+
+/// Fix 1: a note as check-config joins it to its `check_config_passed`, in the wire form: a
+/// problem of the root of `game` (`standard_pack_root_invalid`, as check-config notes a broken
+/// game root or a `schedule.json` the composition refuses).
+fn note_naming(game: &str) -> Value {
+    json!({
+        "code": "standard_pack_root_invalid",
+        "category": "error",
+        "relation": "note",
+        "values": {"operation": "standard_pack_read", "game": game},
+    })
+}
+
+/// An actingd running under `root` with `pid` (a Runtime starting, before it holds its owner
+/// lock).
+fn actingd_image(root: &Path, pid: u32) -> RunningImage {
+    RunningImage {
+        pid,
+        path: format!(
+            "{}\\runtime\\actingcommand-actingd.exe",
+            super::files::plain(root)
+        ),
+        mcp_serve: false,
+        parent_pid: None,
+    }
+}
+
+/// The owner journal of the state root `state` locked as a running Runtime locks it, until the
+/// file returned is dropped.
+fn hold_owner_lock(state: &Path) -> fs::File {
+    let mut owner = fs::File::create(state.join("owner.lock")).expect("the owner journal");
+    owner
+        .write_all(format!("{}\n", owner_record()).as_bytes())
+        .expect("write the owner journal");
+    owner.lock().expect("hold the owner lock");
+    owner
+}
+
+/// The journal's `post_check` step.
+fn check_step_of(journal: &Value) -> Value {
+    journal["steps"]
+        .as_array()
+        .expect("the steps")
+        .iter()
+        .find(|step| step["kind"] == "post_check")
+        .cloned()
+        .unwrap_or_else(|| panic!("no post_check step: {journal}"))
+}
+
+/// Fix 1, as Workflow #454 closes the post-start checks: the `post_check` step of an operation
+/// that ended `post_check_failed` is `done` with the evidence a passed check records (`game`,
+/// `checks`, `failed`), exactly the answer's `checks`, its `failed` the rows `failed`.
+fn assert_closed(journal: &Value, refused: &Value, failed: &[&str]) {
+    let step = check_step_of(journal);
+    assert_eq!(step["state"], "done", "{step}");
+    assert_eq!(
+        keys(&step["evidence"]),
+        ["checks", "failed", "game"],
+        "{step}"
+    );
+    assert_eq!(step["evidence"]["game"], GAME, "{step}");
+    assert_eq!(step["evidence"]["failed"], json!(failed), "{step}");
+    assert_eq!(step["evidence"], refused["checks"], "{step}");
+}
+
+/// The files of `game_root` but those an `undo` set aside (`.rolledback-<ms2>`).
+fn restored(game_root: &Path) -> BTreeMap<String, Vec<u8>> {
+    tree(game_root)
+        .into_iter()
+        .filter(|(path, _)| !path.contains(".rolledback-"))
+        .collect()
+}
+
+// S6 fix 1, point 1: no Runtime runs; the configuration binds an instance to the game, and the
+// live build's check-config passes with two notes, one naming another game and one naming the
+// placed game. The row `check_config` fails: check-config's answer is `check_config_passed`, and
+// `game_notes` holds the note of the placed game alone; `bound` names the instance and there is
+// no `composition` member. The operation ends `post_check_failed` (`count` 1, the failed row
+// `check_config`) with the items placed and `next` naming `undo` of the operation alone.
+#[test]
+fn s6_fix1_a_note_naming_the_placed_game_fails_check_config() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, game_root) = prepared(temp.path(), "noted", &host);
+    bind_in_configuration(&root, &[("neutral.a", GAME)]);
+    host.programs
+        .check_config_notes
+        .borrow_mut()
+        .extend([note_naming(OTHER_GAME), note_naming(GAME)]);
+    let zip = temp.path().join("neutral-noted.zip");
+    let new_control = br#"{"neutral": 2}"#;
+    write_bundle(&zip, new_control, Some(SCHEDULE));
+
+    let before = journals(&root);
+    let (refused, exit) = place(&host, &root, &zip);
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(top_code(&refused), "install_command_refused", "{refused}");
+    assert_eq!(
+        top_value(&refused, "install_refusal"),
+        "post_check_failed",
+        "{refused}"
+    );
+    assert_eq!(top_value(&refused, "count"), &json!(1), "{refused}");
+    assert_eq!(
+        refused["checks"]["failed"],
+        json!(["check_config"]),
+        "{refused}"
+    );
+    let (operation_id, journal) = new_journal(&root, &before);
+    assert_eq!(
+        journal["inputs"]["bound"],
+        json!(["neutral.a"]),
+        "{journal}"
+    );
+    let checked = check_row(&journal, "check_config");
+    assert_eq!(checked["result"], "fail", "{checked}");
+    assert_eq!(
+        checked["values"]["answer"]["outcome"]["code"], "check_config_passed",
+        "{checked}"
+    );
+    let noted = checked["values"]["game_notes"]
+        .as_array()
+        .expect("the notes naming the game");
+    assert_eq!(noted.len(), 1, "{checked}");
+    assert_eq!(
+        noted[0]["outcome"]["code"], "standard_pack_root_invalid",
+        "{checked}"
+    );
+    assert_eq!(noted[0]["outcome"]["values"]["game"], GAME, "{checked}");
+    assert_eq!(
+        checked["values"]["bound"],
+        json!(["neutral.a"]),
+        "{checked}"
+    );
+    assert!(checked["values"].get("composition").is_none(), "{checked}");
+    assert_eq!(
+        refused["next"],
+        json!({"undo": ["undo", operation_id]}),
+        "{refused}"
+    );
+    assert_eq!(
+        fs::read(game_root.join(PACK).join("control.json")).expect("the placed pack"),
+        new_control
+    );
+}
+
+// S6 fix 1, point 1: no Runtime runs, and the configuration binds its one instance to another
+// game. The input `bound` is empty; the row `check_config` passes with check-config's answer,
+// no note of the game, `bound` `[]` and `composition` `not_previewed` (check-config did not
+// preview the game's composition); the answer's `next` names the start, where the composition is
+// judged (`composition_at_start`, the module's `up`).
+#[test]
+fn s6_fix1_no_bound_instance_says_the_composition_was_not_previewed() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, _) = prepared(temp.path(), "unbound-cold", &host);
+    bind_in_configuration(&root, &[("neutral.c", OTHER_GAME)]);
+    let zip = temp.path().join("neutral-unbound-cold.zip");
+    write_bundle(&zip, CONTROL, Some(SCHEDULE));
+
+    let before = journals(&root);
+    let (placed, exit) = place(&host, &root, &zip);
+    assert_eq!(exit, 0, "{placed}");
+    assert_eq!(top_code(&placed), "install_command_done", "{placed}");
+    assert_eq!(
+        placed["next"],
+        json!({"composition_at_start": ["up"]}),
+        "{placed}"
+    );
+    let (_, journal) = new_journal(&root, &before);
+    assert_eq!(journal["inputs"]["bound"], json!([]), "{journal}");
+    let checked = check_row(&journal, "check_config");
+    assert_eq!(checked["result"], "pass", "{checked}");
+    assert_eq!(
+        checked["values"]["composition"], "not_previewed",
+        "{checked}"
+    );
+    assert_eq!(checked["values"]["bound"], json!([]), "{checked}");
+    assert_eq!(checked["values"]["game_notes"], json!([]), "{checked}");
+    assert_eq!(
+        checked["values"]["answer"]["outcome"]["code"], "check_config_passed",
+        "{checked}"
+    );
+}
+
+// S6 fix 1, point 1: no Runtime runs, the configuration binds an instance to the game (and one to
+// another game), and check-config passes with no note. The input `bound` names the game's
+// instance alone; the row `check_config` passes with the members `answer`, `bound`, `game_notes`
+// (empty), `install_root` and `packs`, and no `composition`; the operation is done.
+#[test]
+fn s6_fix1_a_bound_instance_and_no_note_passes_check_config() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, _) = prepared(temp.path(), "bound-cold", &host);
+    bind_in_configuration(&root, &[("neutral.a", GAME), ("neutral.c", OTHER_GAME)]);
+    let zip = temp.path().join("neutral-bound-cold.zip");
+    write_bundle(&zip, CONTROL, Some(SCHEDULE));
+
+    let before = journals(&root);
+    let (placed, exit) = place(&host, &root, &zip);
+    assert_eq!(exit, 0, "{placed}");
+    assert_eq!(top_code(&placed), "install_command_done", "{placed}");
+    let (_, journal) = new_journal(&root, &before);
+    assert_eq!(
+        journal["inputs"]["bound"],
+        json!(["neutral.a"]),
+        "{journal}"
+    );
+    let checked = check_row(&journal, "check_config");
+    assert_eq!(checked["result"], "pass", "{checked}");
+    assert_eq!(
+        keys(&checked["values"]),
+        ["answer", "bound", "game_notes", "install_root", "packs"],
+        "{checked}"
+    );
+    assert_eq!(
+        checked["values"]["bound"],
+        json!(["neutral.a"]),
+        "{checked}"
+    );
+    assert_eq!(checked["values"]["game_notes"], json!([]), "{checked}");
+}
+
+// S6 fix 1, point 5: no Runtime runs, and the live build's check-config is still running at its
+// deadline (the fake leaves it running, pid 4242). The row `check_config` fails with
+// `check_config_unanswered` (`install_command_refused` of the placement, the child's `pid` and the
+// deadline's key); the operation ends `post_check_failed` (`count` 1) and `next` names `undo`.
+#[test]
+fn s6_fix1_a_check_config_that_does_not_answer_fails_its_row() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, _) = prepared(temp.path(), "stalled", &host);
+    let zip = temp.path().join("neutral-stalled.zip");
+    write_bundle(&zip, CONTROL, Some(SCHEDULE));
+    host.programs.stall.borrow_mut().push("check-config");
+
+    let before = journals(&root);
+    let (refused, exit) = place(&host, &root, &zip);
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(
+        top_value(&refused, "install_refusal"),
+        "post_check_failed",
+        "{refused}"
+    );
+    assert_eq!(top_value(&refused, "count"), &json!(1), "{refused}");
+    assert_eq!(
+        refused["checks"]["failed"],
+        json!(["check_config"]),
+        "{refused}"
+    );
+    let (operation_id, journal) = new_journal(&root, &before);
+    let checked = check_row(&journal, "check_config");
+    assert_eq!(checked["result"], "fail", "{checked}");
+    let failure = &checked["values"]["failure"]["outcome"];
+    assert_eq!(failure["code"], "install_command_refused", "{checked}");
+    assert_eq!(
+        failure["values"]["install_refusal"], "check_config_unanswered",
+        "{checked}"
+    );
+    assert_eq!(
+        failure["values"]["operation"], "install_pack_place",
+        "{checked}"
+    );
+    assert_eq!(failure["values"]["pid"], json!(STALLED_PID), "{checked}");
+    assert_eq!(
+        failure["values"]["config_key"], "install.child.check_config_timeout_ms",
+        "{checked}"
+    );
+    assert_eq!(
+        refused["next"],
+        json!({"undo": ["undo", operation_id]}),
+        "{refused}"
+    );
+    assert!(journal["finished_at_unix_ms"].is_u64(), "{journal}");
+}
+
+// S6 fix 1, point 2: a placement begun while no Runtime ran ended `post_check_failed` (the live
+// build's check-config refusing). Its `undo` takes the writer lock and applies the stopped rule
+// again before it moves anything: an actingd under the root refuses `runtime_running` (`install
+// undo`, its `pid`), the state root's owner lock held `owner_lock_held`; each leaves the game root
+// and the journal as the placement left them. With the Runtime stopped again the `undo` is done
+// and the game root is the one of before, the placed items set aside beside it.
+#[test]
+fn s6_fix1_undo_of_a_stopped_placement_refuses_a_running_runtime() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, game_root) = prepared(temp.path(), "undone", &host);
+    old_game_root(&game_root);
+    let unchanged = tree(&game_root);
+    let zip = temp.path().join("neutral-undone.zip");
+    write_bundle(&zip, br#"{"neutral": 2}"#, Some(SCHEDULE));
+    host.programs
+        .refuse_check_config
+        .borrow_mut()
+        .push("live".to_owned());
+    let before = journals(&root);
+    let (refused, exit) = place(&host, &root, &zip);
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(
+        top_value(&refused, "install_refusal"),
+        "post_check_failed",
+        "{refused}"
+    );
+    let (operation_id, _) = new_journal(&root, &before);
+    let placed = tree(&game_root);
+    let recorded = fs::read(journal_path(&root, &operation_id)).expect("the journal");
+    let nothing_moved = || {
+        assert_eq!(tree(&game_root), placed);
+        assert_eq!(
+            fs::read(journal_path(&root, &operation_id)).expect("the journal"),
+            recorded
+        );
+    };
+    let undo = json!({"op": operation_id});
+
+    host.processes.replace(vec![actingd_image(&root, 41)]);
+    let (undo_refused, exit) = rescue_line(&host, &root, "undo", undo.clone());
+    assert_eq!(exit, 1, "{undo_refused}");
+    assert_eq!(
+        top_code(&undo_refused),
+        "install_command_refused",
+        "{undo_refused}"
+    );
+    assert_eq!(
+        top_value(&undo_refused, "operation"),
+        "install_undo",
+        "{undo_refused}"
+    );
+    assert_eq!(
+        top_value(&undo_refused, "install_refusal"),
+        "runtime_running",
+        "{undo_refused}"
+    );
+    assert_eq!(
+        top_value(&undo_refused, "pid"),
+        &json!(41),
+        "{undo_refused}"
+    );
+    nothing_moved();
+    host.processes.replace(Vec::new());
+
+    let owner = hold_owner_lock(&temp.path().join("undone-state"));
+    let (undo_refused, exit) = rescue_line(&host, &root, "undo", undo.clone());
+    assert_eq!(exit, 1, "{undo_refused}");
+    assert_eq!(
+        top_value(&undo_refused, "install_refusal"),
+        "owner_lock_held",
+        "{undo_refused}"
+    );
+    drop(owner);
+    nothing_moved();
+
+    let (undone, exit) = rescue_line(&host, &root, "undo", undo);
+    assert_eq!(exit, 0, "{undone}");
+    assert_eq!(top_code(&undone), "install_command_done", "{undone}");
+    assert_eq!(restored(&game_root), unchanged);
+    assert!(host.runtime.calls.borrow().is_empty());
+}
+
+// S6 fix 1, point 3: a placement begun while no Runtime ran stopped after its first item (the
+// fake host's crash), `current.json` naming it. Its `op resume` takes the writer lock and applies
+// the stopped rule again before any step runs: the state root's owner lock held refuses
+// `owner_lock_held` (`install resume`), an actingd under the root `runtime_running` (its `pid`);
+// each leaves the game root and the journal as the crash left them. With the Runtime stopped
+// again the operation goes on and is done: every item placed, the checks passed, `current.json`
+// retired.
+#[test]
+fn s6_fix1_resume_of_a_stopped_placement_refuses_a_running_runtime() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, game_root) = prepared(temp.path(), "resumed", &host);
+    old_game_root(&game_root);
+    let zip = temp.path().join("neutral-resumed.zip");
+    let new_control = br#"{"neutral": 2}"#;
+    let new_bundle = write_bundle(&zip, new_control, Some(SCHEDULE));
+    // The first item is step 1.
+    host.crash_after.set(Some(1));
+    let before = journals(&root);
+    let (stopped, exit) = place(&host, &root, &zip);
+    assert_ne!(exit, 0, "{stopped}");
+    assert_eq!(
+        top_code(&stopped),
+        "install_operation_interrupted",
+        "{stopped}"
+    );
+    let (operation_id, _) = new_journal(&root, &before);
+    let halfway = tree(&game_root);
+    let recorded = fs::read(journal_path(&root, &operation_id)).expect("the journal");
+    let nothing_moved = || {
+        assert_eq!(tree(&game_root), halfway);
+        assert_eq!(
+            fs::read(journal_path(&root, &operation_id)).expect("the journal"),
+            recorded
+        );
+        assert!(root.join("install").join("current.json").exists());
+    };
+    let resume = json!({"op": operation_id});
+
+    let owner = hold_owner_lock(&temp.path().join("resumed-state"));
+    let (refused, exit) = rescue_line(&host, &root, "op resume", resume.clone());
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(top_code(&refused), "install_command_refused", "{refused}");
+    assert_eq!(
+        top_value(&refused, "operation"),
+        "install_resume",
+        "{refused}"
+    );
+    assert_eq!(
+        top_value(&refused, "install_refusal"),
+        "owner_lock_held",
+        "{refused}"
+    );
+    drop(owner);
+    nothing_moved();
+
+    host.processes.replace(vec![actingd_image(&root, 41)]);
+    let (refused, exit) = rescue_line(&host, &root, "op resume", resume.clone());
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(
+        top_value(&refused, "install_refusal"),
+        "runtime_running",
+        "{refused}"
+    );
+    assert_eq!(top_value(&refused, "pid"), &json!(41), "{refused}");
+    nothing_moved();
+    host.processes.replace(Vec::new());
+
+    let (resumed, exit) = rescue_line(&host, &root, "op resume", resume);
+    assert_eq!(exit, 0, "{resumed}");
+    assert_eq!(
+        fs::read(game_root.join(PACK).join("control.json")).expect("the placed pack"),
+        new_control
+    );
+    assert_eq!(
+        fs::read(game_root.join("bundle.json")).expect("the placed bundle.json"),
+        new_bundle
+    );
+    assert_eq!(
+        fs::read(game_root.join("schedule.json")).expect("the placed schedule.json"),
+        SCHEDULE
+    );
+    assert!(!root.join("install").join("current.json").exists());
+    let journal: Value =
+        serde_json::from_slice(&fs::read(journal_path(&root, &operation_id)).expect("the journal"))
+            .expect("journal JSON");
+    assert_eq!(check_row(&journal, "check_config")["result"], "pass");
+    assert!(host.runtime.calls.borrow().is_empty());
+}
+
+// S6 fix 1, points 2 and 3, the path that does not change: a placement begun with the Runtime
+// running (the fake Runtime, whose actingd runs under the root) stopped after its first item; its
+// `op resume` goes on while that actingd runs and is done, and its `undo` is done while it runs
+// too, the game root again the one of before beside the placed items set aside.
+#[test]
+fn s6_fix1_undo_and_resume_of_a_running_placement_are_unchanged() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, game_root) = prepared(temp.path(), "running", &host);
+    old_game_root(&game_root);
+    let unchanged = tree(&game_root);
+    boot(&host, &[("neutral.a", GAME)]);
+    let zip = temp.path().join("neutral-running.zip");
+    write_bundle(&zip, br#"{"neutral": 2}"#, None);
+    // The hold is step 1, the first item step 2.
+    host.crash_after.set(Some(2));
+    let before = journals(&root);
+    let (stopped, exit) = place(&host, &root, &zip);
+    assert_ne!(exit, 0, "{stopped}");
+    assert_eq!(
+        top_code(&stopped),
+        "install_operation_interrupted",
+        "{stopped}"
+    );
+    let (operation_id, journal) = new_journal(&root, &before);
+    assert!(journal["inputs"].get("cold").is_none(), "{journal}");
+    assert_eq!(step_kinds(&journal)[0], "pause");
+
+    let (resumed, exit) = rescue_line(&host, &root, "op resume", json!({"op": operation_id}));
+    assert_eq!(exit, 0, "{resumed}");
+    assert_eq!(top_code(&resumed), "install_command_done", "{resumed}");
+    let (undone, exit) = rescue_line(&host, &root, "undo", json!({"op": operation_id}));
+    assert_eq!(exit, 0, "{undone}");
+    assert_eq!(top_code(&undone), "install_command_done", "{undone}");
+    assert_eq!(restored(&game_root), unchanged);
+}
+
+// S6 fix 1, point 4 (as Workflow #454 closes the post-start checks, `gate_454_postcheck`): a
+// failed check closes its `post_check` step `done` with what it read, in the write that ends the
+// operation. With the Runtime running, a placed file changed after the last item fails `rerun`;
+// with it stopped, the live build's check-config refusing fails `check_config`. Each operation
+// ends `post_check_failed`, and its step is `done` with `game`, `checks` and `failed` (the failed
+// row alone), exactly the answer's `checks`.
+#[test]
+fn s6_fix1_a_failed_check_closes_its_step_with_what_it_read() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (hot_root, hot_game_root) = prepared(temp.path(), "hot-failed", &host);
+    let (cold_root, _) = prepared(temp.path(), "cold-failed", &host);
+    let zip = temp.path().join("neutral-failed-check.zip");
+    write_bundle(&zip, CONTROL, None);
+
+    boot(&host, &[("neutral.a", GAME)]);
+    let changed = hot_game_root.join(PACK).join("control.json");
+    host.on_step.replace(Some(Box::new(move |step: usize| {
+        // The hold is step 1, the three items steps 2 to 4.
+        if step == 4 {
+            fs::write(&changed, b"changed after the placement").expect("change a placed file");
+        }
+    })));
+    let hot_before = journals(&hot_root);
+    let (hot_refused, exit) = place(&host, &hot_root, &zip);
+    host.on_step.replace(None);
+    assert_eq!(exit, 1, "{hot_refused}");
+    assert_eq!(
+        top_value(&hot_refused, "install_refusal"),
+        "post_check_failed",
+        "{hot_refused}"
+    );
+    let (_, hot_journal) = new_journal(&hot_root, &hot_before);
+    assert_eq!(step_kinds(&hot_journal)[0], "pause");
+    assert_closed(&hot_journal, &hot_refused, &["rerun"]);
+
+    host.runtime.running.set(false);
+    host.programs
+        .refuse_check_config
+        .borrow_mut()
+        .push("live".to_owned());
+    let cold_before = journals(&cold_root);
+    let (cold_refused, exit) = place(&host, &cold_root, &zip);
+    assert_eq!(exit, 1, "{cold_refused}");
+    assert_eq!(
+        top_value(&cold_refused, "install_refusal"),
+        "post_check_failed",
+        "{cold_refused}"
+    );
+    let (_, cold_journal) = new_journal(&cold_root, &cold_before);
+    assert_eq!(step_kinds(&cold_journal)[0], "pack_item");
+    assert_closed(&cold_journal, &cold_refused, &["check_config"]);
+}
+
+// S6 fix 1, point 4: a check that passes keeps its record, with the Runtime running and with it
+// stopped: the `post_check` step `done` with `game`, `checks` and `failed` (empty), the evidence
+// the answer's `place` step carries as its `checks`.
+#[test]
+fn s6_fix1_a_passed_check_keeps_its_record() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (hot_root, _) = prepared(temp.path(), "hot-passed", &host);
+    let (cold_root, _) = prepared(temp.path(), "cold-passed", &host);
+    let zip = temp.path().join("neutral-passed-check.zip");
+    write_bundle(&zip, CONTROL, None);
+
+    boot(&host, &[("neutral.a", GAME)]);
+    let hot_before = journals(&hot_root);
+    let (hot_placed, exit) = place(&host, &hot_root, &zip);
+    assert_eq!(exit, 0, "{hot_placed}");
+    let (_, hot_journal) = new_journal(&hot_root, &hot_before);
+    host.runtime.running.set(false);
+    let cold_before = journals(&cold_root);
+    let (cold_placed, exit) = place(&host, &cold_root, &zip);
+    assert_eq!(exit, 0, "{cold_placed}");
+    let (_, cold_journal) = new_journal(&cold_root, &cold_before);
+
+    for (placed, journal) in [(&hot_placed, &hot_journal), (&cold_placed, &cold_journal)] {
+        let step = check_step_of(journal);
+        assert_eq!(step["state"], "done", "{step}");
+        assert_eq!(
+            keys(&step["evidence"]),
+            ["checks", "failed", "game"],
+            "{step}"
+        );
+        assert_eq!(step["evidence"]["failed"], json!([]), "{step}");
+        assert_eq!(step["evidence"]["game"], GAME, "{step}");
+        assert_eq!(placed["steps"][1]["step"], "place", "{placed}");
+        assert_eq!(
+            placed["steps"][1]["result"]["checks"], step["evidence"],
+            "{placed}"
+        );
+    }
 }

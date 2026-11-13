@@ -197,13 +197,19 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
             notes.extend(refuse_by_gate(host, &paths, operation.journal())?);
         }
     }
-    let _lock = if changes_program {
+    // Workflow #453 S6 fix 1: a placement begun while no Runtime ran moved a game root's files
+    // with no hold, so its undo takes the writer lock and then applies the stopped rule the
+    // placement applied (`launch::refuse_running`: `owner_lock_held`, `runtime_running`,
+    // `processes_unreadable`), before anything is moved; the undo of any other operation is
+    // unchanged.
+    let cold = kind == OperationKind::PackPlace && super::place::is_cold(&operation);
+    let _lock = if changes_program || cold {
         let loaded = plan::load(&paths, UNDO)?;
-        Some(WriterLock::take(
-            &paths,
-            loaded.settings.lock_wait_ms,
-            UNDO,
-        )?)
+        let lock = WriterLock::take(&paths, loaded.settings.lock_wait_ms, UNDO)?;
+        if cold {
+            super::launch::refuse_running(host, &paths, &loaded.state_root, UNDO)?;
+        }
+        Some(lock)
     } else {
         None
     };
