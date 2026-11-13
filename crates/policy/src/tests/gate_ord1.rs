@@ -13,11 +13,12 @@
 //   in front while one of its contenders, in its own order, ends by the binding waiter's deadline
 //   (the earliest deadline among the other members' contenders, then the allocation order), and
 //   otherwise the binding waiter goes. A pick its admission defers gives way and the selection
-//   runs again; the device's chain successor of the front goes first whether or not it fits, a
-//   promoted request of the front only when it fits. Held members have no waiting task, and a
-//   waiting member's fact refresh waits with the default limit. Every contender that does not run
-//   carries the order's values on `instance_already_selected` or `device_group_waiting`
-//   `selected`. An instance alone on its device never reads a declared limit.
+//   runs again; the device's chain successor goes first whether or not it fits, whoever is in
+//   front or none, a promoted request of the front only when it fits. Held members have no waiting
+//   task, and a waiting member's fact refresh waits with the default limit. Every contender that
+//   does not run carries the order's values on `instance_already_selected` or
+//   `device_group_waiting` `selected`. An instance alone on its device never reads a declared
+//   limit.
 //
 // Every catalog is neutral; nothing reads a clock. Members A, B and C share the device `DEVICE`;
 // times are minutes around the fixture's NOW; every task is hourly and due at NOW.
@@ -613,20 +614,19 @@ fn ord1b_t8_a_held_member_has_no_waiting_task() {
     }
 }
 
-// ORD-1b test 9. B's task READ reads a reading of B that is missing, so it is no candidate and B's
-// recognition package (the fact refresh) is asked for it; the refresh declares no limit and takes
-// the order's default. A is in front with a1 (five minutes); the refresh waited 20 minutes. With
-// the default of 30 a1 ends before its ten minutes left and goes, and the refresh waits with the
-// default and its time left; with a default of 60 likewise, with 40 left. READ, given a start 40
-// minutes ago, is no waiting task: it waits for the refresh (`fact_refresh_pending`, gate
-// `device_group_waiting`) and carries none of the order's values.
+// ORD-1b test 9. B's task READ reads a reading of B that is missing, so B's recognition package
+// (the fact refresh) is asked for it; the refresh declares no limit and takes the order's default.
+// A is in front with a1 (five minutes); the refresh waited 20 minutes. With the default of 30 a1
+// ends before its ten minutes left and goes, and the refresh waits with the default and its time
+// left; with a default of 60 likewise, with 40 left. READ waits for the refresh
+// (`fact_refresh_pending`), which names the refresh's gate, `device_group_waiting`.
 #[test]
-fn ord1b_t9_a_waiting_members_fact_refresh_takes_the_default_and_its_candidates_do_not_wait() {
+fn ord1b_t9_a_waiting_members_fact_refresh_takes_the_default() {
     for (default_ms, left_ms) in [(None, minutes(10)), (Some(minutes(60)), minutes(40))] {
-        let mut order = DeviceOrder::default()
-            .front(A)
-            .wait_start(FACT_REFRESH_TASK_ID, B, NOW - minutes(20))
-            .wait_start(READ, B, NOW - minutes(40));
+        let mut order =
+            DeviceOrder::default()
+                .front(A)
+                .wait_start(FACT_REFRESH_TASK_ID, B, NOW - minutes(20));
         if let Some(default_ms) = default_ms {
             order = order.default_max_queue_wait_ms(default_ms);
         }
@@ -664,25 +664,27 @@ fn ord1b_t9_a_waiting_members_fact_refresh_takes_the_default_and_its_candidates_
             last.value("gate_code"),
             Some(&json!(PolicyCode::DeviceGroupWaiting.code().as_str()))
         );
-        assert!(
-            read.reasons
-                .iter()
-                .all(|reason| reason.outcome.value("limit_ms").is_none()),
-            "{:?}",
-            read.reasons
-        );
     }
 }
 
-// ORD-1b test 10, amendment 1. A is in front: its chain step CLOSE (ten minutes) follows LEAD's run
-// on the page A rests on, and SHORT (two minutes) ranks before CLOSE; B's OTHER has five minutes
-// left. CLOSE hands over: as A's first contender it goes though it does not end in time, OTHER
-// waits with its limit, and SHORT waits for the chain step. Without the handover, an owed rerun
-// that promotes CLOSE puts it first in A's own order, but a promoted request goes first only when
-// it fits: it is passed over with its ten minutes and OTHER's five, and SHORT goes.
+// ORD-1b test 10, amendment 1 and the coordinator's ruling of fix round 1. A's chain step CLOSE
+// (ten minutes) follows LEAD's run on the page A rests on and ranks with LEAD's priority (SS-2's
+// chain inheritance), and SHORT (two minutes) ranks before it. With A in front and B's OTHER five
+// minutes from its limit, CLOSE hands over: it goes though it does not end in time, OTHER waits
+// with its limit, and SHORT waits for the chain step. With no member in front and OTHER declaring
+// ten minutes, whose limit ends before CLOSE's, CLOSE still goes, and OTHER waits with its limit
+// and its ten minutes. Without the handover, an owed rerun that promotes CLOSE puts it first in
+// A's own order, but a promoted request goes first only when it fits: it is passed over with its
+// ten minutes and OTHER's five, and SHORT goes.
 #[test]
 fn ord1b_t10_a_chain_successor_goes_first_whether_or_not_it_fits() {
-    let world = |page_id: &str| {
+    let in_front = || {
+        DeviceOrder::default()
+            .front(A)
+            .wait_start(OTHER, B, NOW - minutes(25))
+    };
+    let other = || task(OTHER, B, 500, MINUTE_MS);
+    let world = |page_id: &str, waiting: Value, order: DeviceOrder| {
         let mut world = World::new(
             vec![
                 with(
@@ -699,16 +701,11 @@ fn ord1b_t10_a_chain_successor_goes_first_whether_or_not_it_fits() {
                         "terminal_states": ["succeeded"]
                     }),
                 ),
-                task(SHORT, A, 100, minutes(2)),
-                task(OTHER, B, 500, MINUTE_MS),
+                task(SHORT, A, 300, minutes(2)),
+                waiting,
             ],
             &[A, B],
-            ordered(
-                &[A, B],
-                DeviceOrder::default()
-                    .front(A)
-                    .wait_start(OTHER, B, NOW - minutes(25)),
-            ),
+            ordered(&[A, B], order),
         );
         world.snapshots = vec![lead_state()];
         world.chain = ChainHandoverInputs {
@@ -723,26 +720,35 @@ fn ord1b_t10_a_chain_successor_goes_first_whether_or_not_it_fits() {
         };
         world
     };
-    let handover = world(RESULT).round().0;
-    assert_eq!(dispatched(&handover), [(CLOSE, A)]);
-    assert_waits(
-        &handover,
-        OTHER,
-        B,
-        (A, CLOSE),
-        limit(minutes(30), minutes(5)),
-    );
-    let short = decision(&handover, SHORT, A);
-    assert!(
-        short
-            .reasons
-            .last()
-            .is_some_and(|reason| reason.outcome.is(PolicyCode::PolicyChainHandoverWaiting)),
-        "{:?}",
-        short.reasons
-    );
+    for (case, waiting, order, left) in [
+        (
+            "A in front",
+            other(),
+            in_front(),
+            limit(minutes(30), minutes(5)),
+        ),
+        (
+            "none in front",
+            limited(other(), minutes(10)),
+            DeviceOrder::default(),
+            limit(minutes(10), minutes(10)),
+        ),
+    ] {
+        let handover = world(RESULT, waiting, order).round().0;
+        assert_eq!(dispatched(&handover), [(CLOSE, A)], "{case}");
+        assert_waits(&handover, OTHER, B, (A, CLOSE), left);
+        let short = decision(&handover, SHORT, A);
+        assert!(
+            short
+                .reasons
+                .last()
+                .is_some_and(|reason| reason.outcome.is(PolicyCode::PolicyChainHandoverWaiting)),
+            "{case}: {:?}",
+            short.reasons
+        );
+    }
 
-    let mut promoted = world(HOME);
+    let mut promoted = world(HOME, other(), in_front());
     promoted.owed = OwedReruns {
         pairs: BTreeMap::from([(
             (CLOSE.to_owned(), A.to_owned()),
@@ -791,11 +797,13 @@ fn ord1b_t11_a_declared_limit_replaces_the_default() {
     assert_waits(&declared, B1, B, (A, A1), limit(minutes(60), minutes(40)));
 }
 
-// ORD-1b, a lone instance. L is alone on its device; its tasks Z1 (20 minutes) and Z2 declare the
-// smallest and the largest limit, with starts long past. With no map, with a map that names L
+// ORD-1b, a lone instance. L is alone on its device and no input names it in front; its tasks Z1
+// (20 minutes), first of L in the allocation order, and Z2 declare the largest and the smallest
+// limit, with starts long past, so Z2's limit ends first. With no map, with a map that names L
 // alone and with a device of several beside it, each with the order inputs where there is a map,
-// the evaluation is the same in every decision as the one of the catalog without the member: the
-// member is read only on a device of several.
+// L's first in the allocation order, Z1, goes, and the evaluation is the same in every decision
+// as the one of the catalog without the member: the member is read only on a device of several.
+// An evaluation that took L for a device of several would pick Z2, the earliest limit.
 #[test]
 fn ord1b_without_a_device_of_several_a_declared_limit_changes_no_decision() {
     let tasks = |declared: bool| {
@@ -809,13 +817,12 @@ fn ord1b_without_a_device_of_several_a_declared_limit_changes_no_decision() {
         vec![
             task(A1, A, 900, minutes(20)),
             task(B1, B, 500, MINUTE_MS),
-            lone(task(Z1, L, 300, minutes(20)), MINUTE_MS),
-            lone(task(Z2, L, 200, MINUTE_MS), DAY_MS),
+            lone(task(Z1, L, 300, minutes(20)), DAY_MS),
+            lone(task(Z2, L, 200, MINUTE_MS), MINUTE_MS),
         ]
     };
     let order = || {
         DeviceOrder::default()
-            .front(L)
             .wait_start(Z1, L, NOW - minutes(40))
             .wait_start(Z2, L, NOW - minutes(40))
     };
@@ -835,6 +842,11 @@ fn ord1b_without_a_device_of_several_a_declared_limit_changes_no_decision() {
             .round()
             .0;
         let undeclared = World::new(tasks(false), &[A, B, L], groups).round().0;
+        assert!(
+            dispatched(&declared).contains(&(Z1, L)),
+            "{case}: {:?}",
+            dispatched(&declared)
+        );
         assert_eq!(declared.decisions, undeclared.decisions, "{case}");
     }
 }

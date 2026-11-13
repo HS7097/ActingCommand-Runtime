@@ -18,9 +18,10 @@
 //! - **The binding waiter** is, of the contenders of every member but the one in front (all
 //!   contenders when none is in front), the one with the earliest deadline, then the earlier in
 //!   the allocation order.
-//! - **The pick.** The front member's first contender when it is the device's chain successor,
-//!   or when no other member has a contender; else its first contender, in its own order, that
-//!   ends by the binding waiter's deadline (`now + E ≤ deadline`); else the binding waiter.
+//! - **The pick.** The device's chain successor when it contends, whether or not it fits and
+//!   whoever is in front or none; else the front member's first contender when no other member
+//!   has a contender; else its first contender, in its own order, that ends by the binding
+//!   waiter's deadline (`now + E ≤ deadline`); else the binding waiter.
 //! - **Tried** with the steps of any candidate. Selected, it wins the device and every other
 //!   contender waits for it; deferred, it keeps its own deferral and the device picks again from
 //!   the contenders left.
@@ -250,8 +251,15 @@ impl DeviceRound {
             .min_by_key(|(_, seat)| (seat.deadline, seat.place))
             .map(|(index, _)| index);
         let mut walked = BTreeSet::new();
-        let mut pick = None;
-        if let Some(front) = front.as_deref() {
+        // Amendment 1 and the coordinator's ruling of fix round 1: the device's chain successor,
+        // when it contends, goes first whether or not it fits, whoever is in front or none.
+        let mut pick = seats
+            .iter()
+            .find(|seat| contenders.is_successor(&self.device, seat.work_index))
+            .map(|seat| seat.place);
+        if pick.is_none()
+            && let Some(front) = front.as_deref()
+        {
             let own = seats
                 .iter()
                 .filter(|seat| seat.instance_id == front)
@@ -259,12 +267,6 @@ impl DeviceRound {
             match (own.first(), binding) {
                 (None, _) => {}
                 (Some(first), None) => pick = Some(first.place),
-                // Amendment 1: the device's chain successor goes first whether or not it fits.
-                (Some(first), Some(_))
-                    if contenders.is_successor(&self.device, first.work_index) =>
-                {
-                    pick = Some(first.place);
-                }
                 (Some(_), Some(index)) => {
                     let deadline = seats[index].deadline;
                     for seat in &own {

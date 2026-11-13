@@ -1461,24 +1461,33 @@ exactly as one that does not.
 - **The selection** runs at the place of the device's first contender in the allocation order, over
   that order; nothing is sorted anew:
   1. No contender left: the device is not selected.
-  2. **The binding waiter**: of the contenders of every member but the one in front (of all of them
+  2. **The chain successor**: when the device's chain successor ("Chain Handover") is a contender,
+     it is the pick, whether or not it fits, whichever member is in front and when none is
+     ([device-group.md](../device-group.md), "Never interrupted").
+  3. **The binding waiter**: of the contenders of every member but the one in front (of all of them
      when none is in front), the one whose deadline is the earliest; at equal deadlines the earlier
      in the allocation order.
-  3. **Stay with the front**: the member in front's first contender, in that member's own order,
+  4. **Stay with the front**: the member in front's first contender, in that member's own order,
      that ends by the binding waiter's deadline (`now + E ≤ deadline`: a run that ends exactly at
-     the limit has not passed it); its first contender when no other member has one. The device's
-     chain successor, when it is the front member's first contender, is the pick whether or not it
-     fits. A remedy request, an owed rerun or an immediate retry is first in its member's own order
-     as before, but goes first on the device only when it fits, and of a waiting member it gains no
-     precedence.
-  4. **Switch**: when step 3 picks none, the binding waiter; its run switches the application
+     the limit has not passed it); its first contender when no other member has one. A remedy
+     request, an owed rerun or an immediate retry is first in its member's own order as before, but
+     goes first on the device only when it fits, and of a waiting member it gains no precedence.
+  5. **Switch**: when steps 2 and 4 pick none, the binding waiter; its run switches the application
      ([device-group.md](../device-group.md), "The switch before a run").
-  5. The pick is tried as any candidate (the shared run limits, the admission, the remedy plan).
+  6. The pick is tried as any candidate (the shared run limits, the admission, the remedy plan).
      Selected, it wins the device. Deferred, it keeps its own deferral and the selection runs again
      from step 1 without it.
 
   A running task is never interrupted: a waiting task past its limit goes first at the device's
   next free round. The time a switch takes counts in no order.
+
+  **The shared run limits across devices.** The device takes its turn at the shared run limits
+  ("Shared Run Limits") at the place of its first contender in the allocation order, and when its
+  pick is deferred the selection runs again at once from that same place, before any candidate
+  later in the allocation order is tried. So on a host that has a device of several, which
+  candidate of an instance alone on another device gets a shared run limit's slot can differ from
+  a host without it: the one way a device of several reaches an instance alone on its device. This
+  is the design.
 - **What a contender that does not run shows**, each with the state, the eligibility and the wake
   (none of its own) of a candidate behind its own instance's winner:
   - of the pick's own member, `instance_already_selected`; one of the member in front passed over

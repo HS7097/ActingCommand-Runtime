@@ -669,9 +669,10 @@ them, and it comes before the first real use of a group of several.
 
 ## Later slices (named, not written here)
 
-- **Order within one device.** The order of the members of one device is written by the slice
-  ORD-1; its rules are not written here. The time a switch takes counts in no order and not in a
-  run's own duration (board #437, 2026-11-13).
+- **Order within one device.** Its rules are written by ORD-1b ("Ranking across members" above;
+  [scheduling/README.md](scheduling/README.md), "Order within one device"); what is still to come
+  is the host's slice of the order, which passes the order's inputs. The time a switch takes counts
+  in no order and not in a run's own duration (board #437, 2026-11-13).
 - **The normalized weight.** Superseded by the order within one device (ORD-1b, "Ranking across
   members" above): no weight is compared across the members of one device.
 - **Device-level actions by device.** It lifts the limits of slice 1 ("Device-level actions") and
