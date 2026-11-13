@@ -953,11 +953,13 @@ the rescue face:
   file itself as a root file's, and a pack named `loading` in any ASCII case beside the directory
   `loading_pack_name` (`path` `<zip>\bundle.json`, `package_id`), all before the hold; an installer
   before it refuses such a zip at its layout check, naming the first `loading/` member, before
-  anything is paused or written), holds
+  anything is paused or written), then, while a Runtime runs (without one: "`place` while the
+  Runtime is stopped", below), holds
   the instances bound to the bundle's game (the game comes from the bundle), waits until they are
   idle, places each item `.part` → `.old-<ms>` → in place (step `pack_item`), checks the bundle
-  again and runs `<root>\tools\actinglab.exe standard-pack check` on the placed game root,
-  releases and reads the schedule; the notices directory is one item (kind `notices`, Workflow
+  again, runs `<root>\tools\actinglab.exe standard-pack check` on the placed game root and checks
+  the composition ("The composition after a placement", below), releases and reads the schedule;
+  the notices directory is one item (kind `notices`, Workflow
   #444 NOTICES-2), placed first and, when the zip no longer carries it, set aside as a root file
   is; the loading templates directory is one item (kind `loading`, `<game root>\loading`, Workflow
   #451 LOAD-P), placed after the packs and before the root files, so the templates are in place
@@ -970,6 +972,111 @@ the rescue face:
   start (step `pause_added`) before the release, and its hold's global pause kept across the
   restart until that release (INST-5b). `--detach` runs the module's own command again
   through the WMI start with the same initiator. The download stays outside.
+- **The composition after a placement** (Workflow #453 S5, since 0.12.59; register §1.345; the
+  coordinator's rulings of 11-13 on board #453, not the owner's words). The journal of `place`
+  records, as the input `bound`, the instances the running Runtime's status binds to the bundle's
+  game, paused or not (those its hold is chosen from). The row `composition` of its `post_check`
+  reads the catalog the Runtime's latest evaluation ran under. When the game's `schedule.json`
+  changes (placed, replaced or set aside) and `bound` is not empty, it waits, reading again every
+  500 ms, for a catalog other than the one read before the hold, within
+  `standard_packs.check_interval_ms` plus `install.hot.idle_wait_ms`: `pass` with `expected`
+  `new`, else `fail` with `waited_ms`. With `bound` empty it passes at its first read, `expected`
+  `unchanged` and `bound` `[]`: the workbench reads only the games of configured instances (a game
+  root no instance binds is never read), so no new composition comes. When the file does not
+  change it passes at its first read, `expected` `unchanged`, as before. A journal without `bound`
+  (an operation an earlier build began, resumed by this one) keeps the wait. A catalog that cannot
+  be read is `not_evaluated`, as before.
+- **`place` while the Runtime is stopped** (Workflow #453 S6, since 0.12.59; register §1.345; the
+  coordinator's rulings of 11-13 on board #453, not the owner's words; fix 1 after the
+  independent review). With no Runtime answering, `place` no longer refuses
+  `runtime_not_running`. The status read after its plan chooses this path: it answers "no
+  Runtime" only while the state root's owner lock is not held, and a held lock whose Runtime does
+  not answer (one starting, or one that does not answer) is `processes_unreadable` at that read,
+  caused by the failed read, before anything is written. After its plan, which holds no running
+  state (the same plan and `plan_id` as with a Runtime; `--plan` answers it as before), it takes
+  the writer lock, refuses an unfinished operation, and applies the stopped rule the update
+  applies after its close, before any file changes, and `install start` before it spawns (the
+  update plan refuses by the same two tests): the state root's owner lock held refuses
+  `owner_lock_held` (`path`), an `actingcommand-actingd.exe` running under the root
+  `runtime_running` (`path`, `pid`), a probe that cannot decide `processes_unreadable`; each
+  before anything is written, judged under the lock, so no watchdog tick starts a Runtime in
+  between. After the status read, `owner_lock_held` here is a Runtime that took the lock since
+  that read, and `runtime_running` an actingd under the root that holds no lock yet. It then
+  opens one `pack_place` operation whose inputs say
+  `cold: true` and `bound`, the instances the configuration binds to the bundle's game (the
+  `instance_id` of each row of `policy.facts.instances` whose `game_id` is the game; none without
+  a `policy`), and no `hold`, `known_pauses` or `instances`, without S0 or guards, with one
+  `pack_item` step per item that changes and one `post_check`: no `pause`, no `release_hold`, and
+  no item waits for idle instances (there is no Runtime to ask). Each item is placed as with a
+  Runtime: `<dst>.new-<ms>.part`, the item in place renamed `<dst>.old-<ms>` and kept, the part
+  renamed in, its content checked; nothing is deleted. The checks after the placement are `rerun`
+  and `standard_pack_check` as with a Runtime, `check_config`, and `composition` `not_evaluated`
+  with `runtime` `stopped`.
+  - **`check_config`** runs the live build's check-config of the live configuration with
+    `--install-root <root>`, as `config replace` checks a file, and judges two things. First,
+    check-config's own result for the whole configuration: a configuration it refuses `fail` with
+    its `answer`; one it does not answer within `install.child.check_config_timeout_ms` `fail`
+    with `check_config_unanswered` (the child's `pid`, the key as `config_key`). Second, the
+    placed game: check-config answers a problem of a game's root and a problem of a composition
+    as a note beside `check_config_passed`, never as its result. Its outcome keeps at most 32
+    links within 32 KiB and joins the composition's problems last, so those are cut first; its
+    `report` beside the outcome is not cut. So the row judges the game from the report (fix 2)
+    and from the outcome's notes, and fails on each of these, each in its own member:
+    - the game's entry of `standard_packs.games` records a problem: its root's `problem`, or a
+      table's `problem` or `expired_columns` (the entry, `game_root`);
+    - a problem of `standard_pack_schedule.problems` names the game (`composition_problems`);
+    - a problem of `standard_pack_schedule.problems` names no game: the composition is refused
+      as a whole, which fails every placement whatever binds the game (`composition_refused`);
+    - a `rule_id_conflict` of `standard_pack_schedule.problems` names another game: a collision
+      across the games in use is recorded on the game whose name sorts later and names that game
+      alone, so it cannot tell whether the placed bundle caused it (`collisions`, with
+      `collision_cause` `not_told`); a file's own repeated id gives the same problem and fails
+      the row alike;
+    - a note of the outcome names the game (`game_notes`, fix 1), which also carries the one
+      problem of the game the report does not: a `tables/` check-config could not list (the
+      entry's `tables` then empty);
+    - the outcome says its links were cut (`notes` `cut`, with `causes_total`) and the game's
+      entry lists no table, so that one problem cannot be ruled out (`game_tables`
+      `not_judged`). A cut outcome whose report lists a table of the game is judged from the
+      report, and still says `notes` `cut`.
+
+    Such a problem is of that game's root or its tables, which check-config reads below
+    `standard_packs.root` whatever binds the game, or of a composition, which check-config
+    previews only for the games of `policy.facts.instances`. With `bound` empty it did not
+    preview the game's composition: the row says `composition` `not_previewed` beside `bound`
+    `[]`, and its result is then check-config's result, the game's root and its tables, a
+    composition refused as a whole and a collision. The row never judges the composition the
+    Runtime will make.
+  - **The composition is judged at a start**, by the Runtime's scheduler workbench, for the
+    games of the configured instances only: a game no instance binds is not read until an
+    instance bound to it is configured. So the answer's `next` names `composition_at_start`
+    (`up`) when an instance is bound to the game (`bound` not empty), and
+    `composition_at_start_once_bound` (`up`) when none is (fix 2): that game's composition is
+    first judged at the first start after an instance is bound to it, not at the next start.
+    A bundle that does not compose does not stop that start: the start reads and records
+    every game root, a broken one never stopping it. At its check the workbench records a
+    `schedule.json` the composer refuses once as `standard_pack_root_invalid`, and that game
+    keeps the rules of its last good file in the catalog the Runtime had, or has no rules when it
+    never had one (on a new root, none), the other games composed as they are; a broken game root
+    (its `bundle.json` or another root file) keeps the catalog the Runtime had as it is until it
+    is fixed, and on a new root, with no catalog yet, the Runtime runs with none.
+  - **A failed row** ends the command `post_check_failed` (`count`, `game`), the items placed and
+    the operation ended, its `post_check` step closed `done` with what it read (`game`, `checks`,
+    `failed`) in the write that records the result, as Workflow #454 closes the post-start
+    checks (from fix 1 also with a Runtime; before, the step stayed `started` with no evidence);
+    no hold is kept, and `next` names `undo <operation>`, which reverses the items as for a
+    placement with a Runtime (each placed item set aside as `.rolledback-<ms2>`, each kept one put
+    back).
+  - **Its `undo` and its `resume`** (an operation whose input `cold` is `true`) take the writer
+    lock and then apply the same stopped rule before anything is moved, refusing as the placement
+    does, as `install undo` or `install resume` (`owner_lock_held`, `runtime_running`,
+    `processes_unreadable`); no status read comes first there, so a running Runtime is
+    `owner_lock_held`. The `undo` and the `resume` of a placement begun with a Runtime are
+    unchanged.
+
+  The answer's steps are `plan` and `place`, with no `schedule`. While the operation is unfinished
+  the watchdog stands aside (`pack_place` is off row 7a″'s pass list), so no Runtime starts on a
+  half-placed game root; the next start reads the placed game root.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
@@ -2530,6 +2637,10 @@ the fragment registers, names the command.
   answers; `install_caveat` `mcp_entry_not_placed` (`path`). `mcp plan` and `mcp entries` answer
   with the existing locations `install_mcp_entry_plan` and `install_mcp_entry_list`; no code or key
   is new.
+- **Workflow #453 S5 and S6** (since 0.12.59; "The composition after a placement", "`place` while
+  the Runtime is stopped"): with no Runtime answering, `install_pack_place` refuses with the
+  existing `runtime_running` (`path`, `pid`), `owner_lock_held` (`path`) and
+  `processes_unreadable`, no longer `runtime_not_running`; no code, location, key or word is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

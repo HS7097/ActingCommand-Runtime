@@ -470,7 +470,11 @@ Alice's answer 4. From LAB-3, in the rescue module:
   alive, release; never prints the file); `place <bundle.zip>` (plan, pause the instances bound to
   the bundle's games, wait until idle, place, re-run, `standard-pack check`, wait for the new
   composition, resume, check the schedule; the games come from the bundle, no game is named in
-  code); `alive [--wait]`; and (Workflow #421 INST-5, first slice) `instance add <alias>` (compose
+  code; since 0.12.59, Workflow #453 S5, the composition is waited for only when an instance binds
+  the game, and, S6, with the Runtime stopped: plan, the stopped rule under the writer lock, place,
+  re-run, `standard-pack check` and the live build's check-config, with no hold;
+  [install-cli.md](install-cli.md), "The Lab's rescue module"); `alive [--wait]`; and (Workflow
+  #421 INST-5, first slice) `instance add <alias>` (compose
   the candidate, then `config replace`'s steps with the new instance paused after the start,
   before the release). The download stays outside the Lab.
 - **Without `--root` and `--state-root`:** every rescue operation acts on the root of the

@@ -132,6 +132,10 @@ mod gate_451_place_pkg;
 // keeps the CLI's envelope.
 #[cfg(test)]
 mod gate_434_lab6s2b1;
+// Test-only: Workflow #453 S5 and S6, the rescue module's `place` with no instance bound to the
+// bundle's game, and while the Runtime is stopped.
+#[cfg(test)]
+mod gate_453_cold_place;
 // Test-only: Workflow #454, a post-start check that fails closes its step with what it read.
 #[cfg(test)]
 mod gate_454_postcheck;

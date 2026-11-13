@@ -3,7 +3,8 @@
 //! The rescue module's `place` (Workflow #434 LAB-3; `contracts/lab-two-entries.md` §7;
 //! `contracts/install-cli.md`, "The Lab's rescue module", `place`): one game's standard-package
 //! bundle zip placed into the configuration's standard-pack root, `<standard_packs.root>\<game>`,
-//! while the Runtime runs. The game comes from the bundle's `bundle.json`; no game is named here.
+//! while the Runtime runs or (Workflow #453 S6) while it is stopped. The game comes from the
+//! bundle's `bundle.json`; no game is named here.
 //!
 //! - **The plan** (read-only): the zip's SHA-256 (against `SHA256SUMS` when given),
 //!   `bundle.json` as the contract crate validates it, the package interface the bundle declares
@@ -21,8 +22,9 @@
 //!   of kind `notices`, placed first; the loading templates directory one item of kind `loading`,
 //!   placed after the packs and before the root files. The plan id is `plan-` and the first 16
 //!   hex digits of the SHA-256 of the canonical plan document.
-//! - **The operation** (`kind` `pack_place`, journalled): the hold of the instances bound to the
-//!   bundle's game (`pause`), then each item that changes (`pack_item`: written to
+//! - **The operation** (`kind` `pack_place`, journalled) while a Runtime runs: the hold of the
+//!   instances bound to the bundle's game (`pause`), then each item that changes (`pack_item`:
+//!   written to
 //!   `<dst>.new-<ms>.part`, the item in place renamed `<dst>.old-<ms>` and kept, the part renamed
 //!   in, the content checked; a root file, the notices directory or the loading templates
 //!   directory the zip no longer carries renamed `<dst>.old-<ms>`), the first item waiting until
@@ -33,10 +35,29 @@
 //!   plan of the same bundle again, every item now unchanged; the Tools' `actinglab.exe
 //!   standard-pack check` of the game root; the new composition, the catalog the Runtime's
 //!   latest evaluation ran under changed within `standard_packs.check_interval_ms` plus
-//!   `install.hot.idle_wait_ms` when the game's `schedule.json` changed), a failed check ending
+//!   `install.hot.idle_wait_ms` when the game's `schedule.json` changed and, Workflow #453 S5, an
+//!   instance was bound to the game when the operation began, the input `bound`; with none bound
+//!   the workbench never reads the game root, so the catalog is expected unchanged; a journal
+//!   without `bound`, which an earlier build began, keeps the wait), a failed check ending
 //!   the command `post_check_failed` with the instances staying paused (the items are placed:
 //!   `undo`, then `release-hold`); then the release of the hold (`release_hold`: only the
 //!   instances the pause step paused, each while it shows the revision recorded).
+//! - **The operation while the Runtime is stopped** (Workflow #453 S6; the caller applies the
+//!   stopped rule under the writer lock, `crate::rescue`): the same plan and plan id, the input
+//!   `cold`, and only the items that change (`pack_item`, none waiting for idle instances) and the
+//!   checks after the placement (`post_check`): no `pause` and no `release_hold`. The checks are
+//!   the plan again and `standard-pack check` as above, the live build's check-config of the live
+//!   configuration (`check_config`: its result, and, fix 1, its notes that name the bundle's game;
+//!   with no instance the configuration binds to the game, the input `bound` empty, it says that
+//!   the game's composition was not previewed; fix 2, the game judged from check-config's report,
+//!   which the outcome's bounds do not cut, a composition refused as a whole and a collision
+//!   across games failing it too), and the composition `not_evaluated` (no Runtime to
+//!   ask); a failed check ends the command `post_check_failed` with the items placed and `next`
+//!   naming `undo`, no hold kept. Its `undo` and its `resume` apply the stopped rule again under
+//!   the writer lock (`super::undo`, `super::update::resume`).
+//! - **A failed check** (fix 1, as Workflow #454 closes the post-start checks), with a Runtime or
+//!   without one, closes its `post_check` step `done` with what it read (`game`, `checks`,
+//!   `failed`) in the write that ends the operation.
 //!
 //! Nothing is deleted: every replaced item is kept beside its place, and `undo` puts them back.
 
@@ -50,7 +71,7 @@ use super::programs::{self, Deadline};
 use super::state::{KindLocation, OperationKind, Paths};
 use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{IoOp, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
     BundleIndex, LOADING_PREFIX, LoadingTarget, MAX_NOTICE_FILE_BYTES, NOTICES_PACKAGE_REVISION,
     NoticeBound, NoticeEntry, NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE,
@@ -913,23 +934,54 @@ pub(crate) fn steps(
     ms: u64,
 ) -> Vec<PlannedStep> {
     let mut steps: Vec<PlannedStep> = vec![(StepKind::Pause, "runtime".to_owned(), pause_intent)];
-    for (index, item) in placement.changes().enumerate() {
-        let dst = PathBuf::from(&item.dst);
-        let placed = item.state != ItemState::Retire;
-        let mut intent = item.clone();
-        intent.zip = placed.then(|| files::plain(&placement.zip));
-        intent.part =
-            placed.then(|| files::plain(&files::with_suffix(&dst, &format!(".new-{ms}.part"))));
-        intent.old = (item.state != ItemState::New)
-            .then(|| files::plain(&files::with_suffix(&dst, &format!(".old-{ms}"))));
-        intent.first = index == 0;
-        steps.push((
-            StepKind::PackItem,
-            item.dst.clone(),
-            serde_json::to_value(&intent).unwrap_or(Value::Null),
-        ));
-    }
+    steps.extend(item_steps(placement, true, ms));
+    steps.push(check_planned(placement, catalog_before));
     steps.push((
+        StepKind::ReleaseHold,
+        "runtime".to_owned(),
+        super::hold::ReleaseIntent::value(reason, false),
+    ));
+    steps
+}
+
+/// Workflow #453 S6: the steps of a placement while no Runtime runs: each item that changes and
+/// the checks after the placement; no hold, so no `pause` and no `release_hold`, and no item
+/// waits for idle instances.
+fn cold_steps(placement: &Placement, ms: u64) -> Vec<PlannedStep> {
+    let mut steps = item_steps(placement, false, ms);
+    steps.push(check_planned(placement, None));
+    steps
+}
+
+/// One `pack_item` step per item that changes, in the plan's order; with `wait_first` the first
+/// waits until the held instances are idle.
+fn item_steps(placement: &Placement, wait_first: bool, ms: u64) -> Vec<PlannedStep> {
+    placement
+        .changes()
+        .enumerate()
+        .map(|(index, item)| {
+            let dst = PathBuf::from(&item.dst);
+            let placed = item.state != ItemState::Retire;
+            let mut intent = item.clone();
+            intent.zip = placed.then(|| files::plain(&placement.zip));
+            intent.part =
+                placed.then(|| files::plain(&files::with_suffix(&dst, &format!(".new-{ms}.part"))));
+            intent.old = (item.state != ItemState::New)
+                .then(|| files::plain(&files::with_suffix(&dst, &format!(".old-{ms}"))));
+            intent.first = wait_first && index == 0;
+            (
+                StepKind::PackItem,
+                item.dst.clone(),
+                serde_json::to_value(&intent).unwrap_or(Value::Null),
+            )
+        })
+        .collect()
+}
+
+/// The `post_check` step of a placement; its intent records `catalog_before`, the catalog read
+/// before the hold (none while no Runtime runs).
+fn check_planned(placement: &Placement, catalog_before: Option<String>) -> PlannedStep {
+    (
         StepKind::PostCheck,
         "runtime".to_owned(),
         serde_json::to_value(CheckIntent {
@@ -940,13 +992,7 @@ pub(crate) fn steps(
             catalog_before,
         })
         .unwrap_or(Value::Null),
-    ));
-    steps.push((
-        StepKind::ReleaseHold,
-        "runtime".to_owned(),
-        super::hold::ReleaseIntent::value(reason, false),
-    ));
-    steps
+    )
 }
 
 /// What a placement records before its first step.
@@ -955,7 +1001,15 @@ pub(crate) struct Begun<'a> {
     pub(crate) hold: &'a super::deploy::HoldStart,
     pub(crate) catalog_before: Option<String>,
     pub(crate) initiator: Option<actingcommand_lab_ops::initiator::Initiator>,
+    /// Workflow #453 S5: the instances the running Runtime binds to the bundle's game, as the
+    /// status read before the hold showed them (paused or not), journalled as the input
+    /// [`BOUND_INPUT`].
+    pub(crate) bound: &'a [String],
 }
+
+/// Workflow #453 S5: the input of a `pack_place` journal that lists the instances bound to the
+/// bundle's game when the operation began. A journal an earlier build began has none.
+const BOUND_INPUT: &str = "bound";
 
 /// Opens the placement's operation (`pack_place`): S0 and the hold's reads journalled, the guards
 /// recorded, the deferred record in the pause step's evidence.
@@ -972,20 +1026,22 @@ pub(crate) fn open<'h>(
         &begun.hold.held,
         loaded.settings.stop_drain_timeout_ms,
     );
+    let mut inputs = json!({
+        "commit": loaded.state.live.as_ref().map(|live| live.commit.clone()),
+        "game": placement.game,
+        "zip": files::plain(&placement.zip),
+        "zip_sha256": placement.zip_sha256,
+        "hold": hold.reason,
+        "known_pauses": hold.known,
+        "instances": begun.hold.held,
+        "config_sha256": loaded.config_sha256,
+    });
+    inputs[BOUND_INPUT] = json!(begun.bound);
     let opening = Opening {
         kind: OperationKind::PackPlace,
         initiator: begun.initiator,
         one_way: false,
-        inputs: json!({
-            "commit": loaded.state.live.as_ref().map(|live| live.commit.clone()),
-            "game": placement.game,
-            "zip": files::plain(&placement.zip),
-            "zip_sha256": placement.zip_sha256,
-            "hold": hold.reason,
-            "known_pauses": hold.known,
-            "instances": begun.hold.held,
-            "config_sha256": loaded.config_sha256,
-        }),
+        inputs,
         plan_id: Some(placement.id.clone()),
         plan: Some(placement.document.clone()),
         acknowledged: Vec::new(),
@@ -1012,6 +1068,78 @@ pub(crate) fn open<'h>(
         .progress(1, json!({"deferred": begun.hold.deferred}))
         .map_err(|cause| operation.interrupted(cause))?;
     Ok(operation)
+}
+
+/// Workflow #453 S6: the input of a `pack_place` journal begun while no Runtime ran (`true`).
+const COLD_INPUT: &str = "cold";
+
+/// Workflow #453 S6: opens the placement's operation (`pack_place`) while no Runtime runs, the
+/// caller having applied the stopped rule under the writer lock: the same plan and plan id, the
+/// inputs of a placement without its hold (no `hold`, `known_pauses` or `instances`),
+/// [`COLD_INPUT`] and (fix 1) [`BOUND_INPUT`], the instances the configuration binds to the
+/// bundle's game ([`configured_bound`]), no S0, no guards, and the steps [`cold_steps`].
+pub(crate) fn open_cold<'h>(
+    host: &'h dyn Host,
+    paths: &Paths,
+    loaded: &Loaded,
+    placement: &Placement,
+    initiator: Option<actingcommand_lab_ops::initiator::Initiator>,
+) -> Result<Operation<'h>, Outcome> {
+    let mut inputs = json!({
+        "commit": loaded.state.live.as_ref().map(|live| live.commit.clone()),
+        "game": placement.game,
+        "zip": files::plain(&placement.zip),
+        "zip_sha256": placement.zip_sha256,
+        "config_sha256": loaded.config_sha256,
+    });
+    inputs[COLD_INPUT] = Value::Bool(true);
+    inputs[BOUND_INPUT] = json!(configured_bound(&loaded.config, &placement.game));
+    let opening = Opening {
+        kind: OperationKind::PackPlace,
+        initiator,
+        one_way: false,
+        inputs,
+        plan_id: Some(placement.id.clone()),
+        plan: Some(placement.document.clone()),
+        acknowledged: Vec::new(),
+        s0: None,
+        previous: Previous {
+            live: loaded.state.live.as_ref().map(|live| live.commit.clone()),
+            state: None,
+        },
+    };
+    Operation::open(host, paths, opening, |ms| cold_steps(placement, ms))
+}
+
+/// Workflow #453 S6 fix 1: the instances the configuration `config` binds to `game`, in its
+/// order: the `instance_id` of each row of `policy.facts.instances` whose `game_id` is the game.
+/// Those rows are the games in use that check-config previews the composition for and the
+/// Runtime's scheduler workbench reads; none without a `policy`. Fix 2: the cold done answer's
+/// `next` reads it too (`crate::rescue`).
+pub(crate) fn configured_bound(config: &Value, game: &str) -> Vec<String> {
+    config
+        .pointer("/policy/facts/instances")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| row.get("game_id").and_then(Value::as_str) == Some(game))
+                .filter_map(|row| row.get("instance_id").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Workflow #453 S6: whether the operation was begun while no Runtime ran (its input
+/// [`COLD_INPUT`]). Fix 1: its `undo` and its `resume` read it too, to apply the stopped rule
+/// again under the writer lock.
+pub(crate) fn is_cold(operation: &Operation<'_>) -> bool {
+    operation
+        .journal()
+        .inputs
+        .get(COLD_INPUT)
+        .and_then(Value::as_bool)
+        == Some(true)
 }
 
 /// The instances the operation's hold took (its pause step's intent).
@@ -1172,6 +1300,15 @@ pub(crate) fn check_step(
 ) -> Result<StepEnd, Outcome> {
     let intent: CheckIntent = operation.intent(n)?;
     let command = operation.journal().kind.location();
+    // Workflow #453 S5: no instance bound to the game when the operation began (its input
+    // [`BOUND_INPUT`] empty). The workbench reads only the games of configured instances, so no
+    // new composition comes; a journal without the input keeps the rule below.
+    let unbound = operation
+        .journal()
+        .inputs
+        .get(BOUND_INPUT)
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty);
     operation.start(n)?;
     let host = operation.host();
     let paths = operation.paths().clone();
@@ -1244,8 +1381,84 @@ pub(crate) fn check_step(
             json!({"path": files::plain(&lab)}),
         ));
     }
-    // 3. The new composition: the catalog of the latest evaluation changed, within the
-    // workbench's check interval and the hot idle wait, when the game's rules changed.
+    // 3. Workflow #453 S6: an operation begun while no Runtime ran checks the live configuration
+    // with the live build's check-config ([`check_config_row`]: its result, and its notes that
+    // name the game) and leaves the composition itself not evaluated; any other checks the new
+    // composition ([`composition_row`]).
+    let cold = is_cold(operation);
+    let composition = if cold {
+        let bound = operation
+            .journal()
+            .inputs
+            .get(BOUND_INPUT)
+            .and_then(Value::as_array)
+            .map(|bound| {
+                bound
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        rows.push(check_config_row(
+            host,
+            &paths,
+            loaded,
+            command,
+            &intent.game,
+            &bound,
+        ));
+        row(
+            "composition",
+            "not_evaluated",
+            json!({"runtime": "stopped"}),
+        )
+    } else {
+        composition_row(host, &paths, loaded, &intent, unbound)
+    };
+    rows.push(composition);
+    let failed = rows
+        .iter()
+        .filter(|row| row["result"] == "fail")
+        .filter_map(|row| row["id"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    let evidence = json!({"game": intent.game, "checks": rows, "failed": failed});
+    if failed.is_empty() {
+        return Ok(StepEnd::Done(Some(evidence)));
+    }
+    // Workflow #453 S6 fix 1 (as Workflow #454 closes the post-start checks): the step is closed
+    // with what it read, the evidence a passed check records, in the write that ends the
+    // operation, with a Runtime and without one.
+    operation.close_with_end(n, evidence.clone());
+    let (reason, _) = held_of(operation);
+    let mut members = hold_kept(&paths, reason.as_ref(), false);
+    members.insert("checks".to_owned(), evidence);
+    // Workflow #453 S6: no hold to keep; the items stay placed, and `next` names their `undo`.
+    if cold {
+        members.insert(
+            "next".to_owned(),
+            json!({"undo": ["install", "undo", "--root", paths.plain, "--operation", operation.id()]}),
+        );
+    }
+    Ok(StepEnd::Ends(
+        super::refusal(command, InstallRefusal::PostCheckFailed)
+            .count(failed.len())
+            .game(intent.game),
+        members,
+    ))
+}
+
+/// The row `composition` of the checks after a placement while a Runtime runs: the catalog of the
+/// latest evaluation changed, within the workbench's check interval and the hot idle wait, when
+/// the game's rules changed and (Workflow #453 S5) an instance was bound to the game (`unbound`
+/// false); with none bound, the catalog read once and expected unchanged.
+fn composition_row(
+    host: &dyn Host,
+    paths: &Paths,
+    loaded: &Loaded,
+    intent: &CheckIntent,
+    unbound: bool,
+) -> Value {
     let interval = actingcommand_runtime_config::member(&loaded.config, CHECK_INTERVAL_KEY)
         .and_then(Value::as_u64)
         .or_else(|| {
@@ -1258,7 +1471,7 @@ pub(crate) fn check_step(
         .unwrap_or(0);
     let runtime = host.runtime();
     let since = host.now_unix_ms();
-    let composition = loop {
+    loop {
         let read = runtime.catalog_hash(&loaded.state_root);
         let now = match &read {
             Ok(hash) => hash.clone(),
@@ -1277,6 +1490,13 @@ pub(crate) fn check_step(
                 json!({"catalog_hash": now, "catalog_before": intent.catalog_before, "expected": "unchanged"}),
             );
         }
+        if unbound {
+            break row(
+                "composition",
+                "pass",
+                json!({"catalog_hash": now, "catalog_before": intent.catalog_before, "expected": "unchanged", "bound": []}),
+            );
+        }
         if now != intent.catalog_before {
             break row(
                 "composition",
@@ -1293,26 +1513,188 @@ pub(crate) fn check_step(
             );
         }
         host.pause_ms(POLL_MS);
-    };
-    rows.push(composition);
-    let failed = rows
-        .iter()
-        .filter(|row| row["result"] == "fail")
-        .filter_map(|row| row["id"].as_str().map(str::to_owned))
-        .collect::<Vec<_>>();
-    let evidence = json!({"game": intent.game, "checks": rows, "failed": failed});
-    if failed.is_empty() {
-        return Ok(StepEnd::Done(Some(evidence)));
     }
-    let (reason, _) = held_of(operation);
-    let mut members = hold_kept(&paths, reason.as_ref(), false);
-    members.insert("checks".to_owned(), evidence);
-    Ok(StepEnd::Ends(
-        super::refusal(command, InstallRefusal::PostCheckFailed)
-            .count(failed.len())
-            .game(intent.game),
-        members,
-    ))
+}
+
+/// Workflow #453 S6: the row `check_config` of the checks after a placement begun while no
+/// Runtime ran: the live build's check-config of the live configuration with `--install-root
+/// <root>`, as `config replace` checks a file (`super::config_swap::candidate`). A configuration
+/// it refuses fails with its answer; one it does not answer fails with
+/// `check_config_unanswered`. Fix 1: check-config answers `check_config_passed` with a problem of
+/// a game's root or of its composition as a note, so the row also fails when a note names the
+/// placed `game` (its value `game`), those notes in `game_notes`; and with no instance bound to
+/// the game (`bound` empty) check-config did not preview its composition, which the row says as
+/// `composition` `not_previewed` beside check-config's result for the rest of the configuration.
+/// Fix 2: the outcome keeps at most [`actingcommand_contract::outcome::CAUSES_MAX_LINKS`] links
+/// within its byte bound and check-config joins the composition's problems last, so they are cut
+/// first; the row judges the game from the report, which nothing cuts ([`GameReport`]). An outcome
+/// whose links were cut (`causes_total`) says so (`notes` `cut`, `causes_total`), and fails the
+/// row when the report cannot rule out the one note of the game it does not carry (`game_tables`
+/// `not_judged`).
+fn check_config_row(
+    host: &dyn Host,
+    paths: &Paths,
+    loaded: &Loaded,
+    command: InstallLocation,
+    game: &str,
+    bound: &[String],
+) -> Value {
+    match programs::check_config(
+        host,
+        &paths.root.join(manifest::Half::Runtime.dir()),
+        &paths.config(),
+        Some(&paths.root),
+        Deadline::check_config(&loaded.settings),
+    ) {
+        Ok(checked) => {
+            let game_notes = checked
+                .received
+                .causes()
+                .iter()
+                .filter(|link| *link.relation() == CauseRelation::Note)
+                .map(|link| link.outcome())
+                .filter(|note| note.value("game").and_then(Value::as_str) == Some(game))
+                .map(crate::cli_line::warning)
+                .collect::<Vec<_>>();
+            // Fix 2: the game as the report, whole, says it; and an outcome whose links were cut
+            // may lack the one note of the game the report does not carry, which only an entry
+            // that lists a table rules out.
+            let whole = GameReport::of(&checked.report, game);
+            let cut = checked.received.causes_total();
+            let tables_not_judged = cut.is_some() && !whole.tables_listed;
+            let passed =
+                checked.passed() && game_notes.is_empty() && whole.passes() && !tables_not_judged;
+            let mut values = json!({
+                "install_root": checked.install_root,
+                "answer": crate::cli_line::warning(&checked.received),
+                "packs": checked.summary.packs,
+                "game_notes": game_notes,
+                "bound": bound,
+            });
+            if bound.is_empty() {
+                values["composition"] = json!("not_previewed");
+            }
+            whole.record(&mut values);
+            if let Some(total) = cut {
+                values["notes"] = json!("cut");
+                values["causes_total"] = json!(total);
+            }
+            if tables_not_judged {
+                values["game_tables"] = json!("not_judged");
+            }
+            row("check_config", if passed { "pass" } else { "fail" }, values)
+        }
+        Err(failure) => row(
+            "check_config",
+            "fail",
+            json!({"failure": crate::cli_line::warning(
+                &failure.onto(super::refusal(command, InstallRefusal::CheckConfigUnanswered))
+            )}),
+        ),
+    }
+}
+
+/// Workflow #453 S6 fix 2: the problem a collision across the games in use records (two composed
+/// rules, pools, profiles or events with one id, or two games' rules naming one package), on the
+/// game whose name sorts later; a file's own repeated id records the same token.
+const COLLISION: StandardPackProblem = StandardPackProblem::RuleIdConflict;
+
+/// Workflow #453 S6 fix 2: what check-config's report says of the placed game. The report is
+/// printed beside the outcome and no bound of the outcome applies to it
+/// ([`programs::Checked::report`]), so its members are whole: the game's entry of
+/// `standard_packs.games` (every game root below `standard_packs.root`, read whatever binds it)
+/// and the composition's problems (`standard_pack_schedule.problems`, the games of
+/// `policy.facts.instances` only).
+struct GameReport {
+    /// The game's entry when it records a problem: its root's `problem`, or a table's `problem`
+    /// or `expired_columns` (each a note of check-config naming the game).
+    root: Option<Value>,
+    /// Whether the entry lists a table, so that check-config listed the game's `tables/`: a
+    /// `tables/` it cannot list is the one problem of the game the report does not carry (a note
+    /// only, the entry's `tables` then empty).
+    tables_listed: bool,
+    /// The composition's problems that name the game.
+    named: Vec<Value>,
+    /// The composition's problems that name no game: the composition refused as a whole, which
+    /// fails every placement.
+    refused: Vec<Value>,
+    /// Each [`COLLISION`] the composition records on another game: it names the game it is
+    /// recorded on and not the other one, so whether the placed bundle caused it cannot be told.
+    collisions: Vec<Value>,
+}
+
+impl GameReport {
+    /// What `report` (check-config's `report`, `null` without one) says of `game`.
+    fn of(report: &Value, game: &str) -> Self {
+        let entry = report
+            .pointer("/standard_packs/games")
+            .and_then(Value::as_array)
+            .and_then(|games| games.iter().find(|entry| entry["game"] == game));
+        let tables = entry
+            .and_then(|entry| entry["tables"].as_array())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let troubled = entry.is_some_and(|entry| !entry["problem"].is_null())
+            || tables.iter().any(|table| {
+                !table["problem"].is_null()
+                    || table["expired_columns"]
+                        .as_array()
+                        .is_some_and(|columns| !columns.is_empty())
+            });
+        let mut found = Self {
+            root: entry.filter(|_| troubled).cloned(),
+            tables_listed: !tables.is_empty(),
+            named: Vec::new(),
+            refused: Vec::new(),
+            collisions: Vec::new(),
+        };
+        let problems = report
+            .pointer("/standard_pack_schedule/problems")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for problem in problems {
+            let kind = problem
+                .pointer("/values/standard_pack_problem")
+                .and_then(Value::as_str);
+            match problem.pointer("/values/game").and_then(Value::as_str) {
+                Some(on) if on == game => found.named.push(problem.clone()),
+                None => found.refused.push(problem.clone()),
+                Some(_) if kind == Some(COLLISION.as_str()) => {
+                    found.collisions.push(problem.clone());
+                }
+                Some(_) => {}
+            }
+        }
+        found
+    }
+
+    /// Whether nothing here fails the row.
+    fn passes(&self) -> bool {
+        self.root.is_none()
+            && self.named.is_empty()
+            && self.refused.is_empty()
+            && self.collisions.is_empty()
+    }
+
+    /// Its members in the row's `values`, each only when it holds something: `game_root`,
+    /// `composition_problems`, `composition_refused`, and `collisions` with `collision_cause`
+    /// `not_told`.
+    fn record(self, values: &mut Value) {
+        if let Some(root) = self.root {
+            values["game_root"] = root;
+        }
+        if !self.named.is_empty() {
+            values["composition_problems"] = Value::Array(self.named);
+        }
+        if !self.refused.is_empty() {
+            values["composition_refused"] = Value::Array(self.refused);
+        }
+        if !self.collisions.is_empty() {
+            values["collisions"] = Value::Array(self.collisions);
+            values["collision_cause"] = json!("not_told");
+        }
+    }
 }
 
 /// `undo` of one `pack_item` step: the placed item set aside as `.rolledback-<ms2>` and the kept

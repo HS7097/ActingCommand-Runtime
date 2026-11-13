@@ -1679,7 +1679,8 @@ fn add_next(members: &mut Map<String, Value>, name: &str, form: Value) {
 
 /// `place <bundle.zip> [--sums <file>] [--facts <file>] [--plan]` (`crate::install::place`): the
 /// plan, the hold of the instances bound to the bundle's game, the placement, the checks, the
-/// release, and the schedule read after it.
+/// release, and the schedule read after it; with no Runtime answering (Workflow #453 S6), the
+/// plan and [`place_cold`].
 fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
     const PLACE: InstallLocation = InstallLocation::PackPlace;
     let bundle = text(params, "bundle")
@@ -1733,17 +1734,16 @@ fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
                 .installation_changed(false);
             return Ok(composite_exit(context, steps, done, members));
         }
+        // Workflow #453 S6: with no Runtime answering, the placement without a hold.
         if seen.is_none() {
-            return Err(
-                install::refusal(PLACE, InstallRefusal::RuntimeNotRunning).path(&loaded.state_root)
-            );
+            return place_cold(context, &paths, &loaded, &placement, steps, members);
         }
         let _lock = WriterLock::take(&paths, loaded.settings.lock_wait_ms, PLACE)?;
         journal::refuse_unfinished(PLACE, &paths)?;
         let hold = HoldInputs {
             reason: hold_reason(context, "place")?,
             known: std::collections::BTreeMap::new(),
-            only: Some(bound),
+            only: Some(bound.clone()),
             global: false,
         };
         let begun: HoldStart = match deploy::hold_start(
@@ -1779,6 +1779,7 @@ fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
                 hold: &begun,
                 catalog_before,
                 initiator: Some(context.initiator),
+                bound: &bound,
             },
         )?;
         let operation_id = operation.id().to_owned();
@@ -1815,6 +1816,66 @@ fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
         Ok(composite_exit(context, steps, done, members))
     };
     run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
+}
+
+/// Workflow #453 S6: `place` while no Runtime answers. Under the writer lock, with no operation
+/// unfinished, the stopped rule the update applies after its close and the installer's start
+/// before it spawns (`launch::refuse_running`: the state root's owner lock held refuses
+/// `owner_lock_held`, an actingd running under the root `runtime_running`, a probe that cannot
+/// decide `processes_unreadable`), then one `pack_place` operation without a hold
+/// (`crate::install::place::open_cold`): the items placed and the checks after the placement; no
+/// pause, no release and no schedule read after it. While it is unfinished the watchdog stands
+/// aside (`pack_place` is off row 7a″'s pass list), so no Runtime starts on a half-placed game
+/// root. Fix 1: its `next` names the start (`composition_at_start`, the module's `up`): the
+/// composition the placed game root gives is judged only by the Runtime's workbench, never by the
+/// checks of a placement with no Runtime. Fix 2: the workbench composes the games of the
+/// configured instances only, so with none the configuration binds to the game
+/// (`place::configured_bound`, the journal's `bound`) the hint is
+/// `composition_at_start_once_bound`: the composition is first judged at the first start after an
+/// instance is bound to the game.
+fn place_cold(
+    context: &Context<'_>,
+    paths: &Paths,
+    loaded: &Loaded,
+    placement: &place::Placement,
+    mut steps: Vec<Value>,
+    mut members: Map<String, Value>,
+) -> Result<Exit, Outcome> {
+    const PLACE: InstallLocation = InstallLocation::PackPlace;
+    let _lock = WriterLock::take(paths, loaded.settings.lock_wait_ms, PLACE)?;
+    journal::refuse_unfinished(PLACE, paths)?;
+    crate::install::launch::refuse_running(context.host, paths, &loaded.state_root, PLACE)?;
+    let operation = place::open_cold(
+        context.host,
+        paths,
+        loaded,
+        placement,
+        Some(context.initiator),
+    )?;
+    let operation_id = operation.id().to_owned();
+    let placed = crate::install::update::run(operation, loaded)?;
+    if stops(&placed) {
+        return Ok(stopped(context, steps, placed));
+    }
+    steps.push(answer_step(context, "place", &placed));
+    // Fix 2: a start composes only the games of the configured instances, so with none bound to
+    // the game the hint waits for one.
+    let hint = if place::configured_bound(&loaded.config, &placement.game).is_empty() {
+        "composition_at_start_once_bound"
+    } else {
+        "composition_at_start"
+    };
+    add_next(
+        &mut members,
+        hint,
+        json!(["install", "start", "--root", paths.plain]),
+    );
+    let done = install::done(PLACE)
+        .install_operation_id(operation_id)
+        .game(placement.game.clone())
+        .installation_changed(true)
+        .link(CauseRelation::Related, placed.outcome);
+    Ok(composite_exit(context, steps, done, members))
 }
 
 /// The configuration of the root, read, with its `install` section.
