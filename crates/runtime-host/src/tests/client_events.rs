@@ -189,8 +189,12 @@ fn runtime_is_the_single_writer_for_one_correlated_resource_authoring_sequence()
     host.close().expect("close host");
 }
 
+// Workflow #434 LAB-6S1b: the authoring kinds' Lab-only origin gate is gone, so a (Cli, Cli)
+// authoring event is taken as the Lab's is (the contract's `gate_434_lab6s1b`). What this test
+// keeps is the envelope's own rule at the host: an authoring event whose envelope lies outside
+// the client set is refused, and nothing of it reaches the ledger.
 #[test]
-fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effect() {
+fn runtime_rejects_an_authoring_event_from_outside_the_client_set_without_ledger_effect() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host_with_state(&root, "node.a", state);
@@ -218,8 +222,8 @@ fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effe
     )
     .expect("Lab request");
     let mut forged = serde_json::to_value(valid).expect("request JSON");
-    forged["actor"] = serde_json::json!("cli");
-    forged["source"] = serde_json::json!("cli");
+    forged["actor"] = serde_json::json!("system");
+    forged["source"] = serde_json::json!("system");
     let forged: RuntimeRequest = serde_json::from_value(forged).expect("wire request");
     let connection = ConnectionId::new(122).expect("connection");
     let denied = host
