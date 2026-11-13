@@ -22,7 +22,7 @@ use actingcommand_contract::{
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -42,7 +42,7 @@ const INSTALL_FOLDER: &str = "install";
 const INSTALLER_STATE_FILE: &str = "state.json";
 /// The installation's identity file, in [`INSTALL_FOLDER`].
 const IDENTITY_FILE: &str = "identity.json";
-/// The suffix of the file a write lands in before it is renamed into place.
+/// The suffix of the file a write lands in before it is linked into place.
 const PART_SUFFIX: &str = ".part";
 /// The largest identity file or record this reads.
 const MAX_FILE_BYTES: u64 = 64 * 1024;
@@ -116,7 +116,8 @@ struct ClaimedBy {
     build_commit: Option<String>,
 }
 
-/// What a start's claim wrote: the values of the runtime fact
+/// What a start's claim found or placed under the owner lock: the state root's record of this
+/// installation as read back from the disk. Its values are the runtime fact
 /// [`STATE_ROOT_INSTALLATION_FACT_KEY`], recorded once the ledger is open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StateRootClaim {
@@ -124,6 +125,35 @@ pub(crate) struct StateRootClaim {
     pub(crate) pid: u32,
     pub(crate) owner_epoch: OwnerEpoch,
     pub(crate) build_commit: Option<String>,
+    /// This start placed the record (its daemon line `state_root_claimed` is this start's
+    /// alone); `false` when the record was this installation's already.
+    pub(crate) placed: bool,
+}
+
+impl StateRootClaim {
+    fn of_record(record: StateRootRecord, placed: bool) -> Self {
+        Self {
+            claimed_at_unix_ms: record.claimed_at_unix_ms,
+            pid: record.claimed_by.pid,
+            owner_epoch: record.claimed_by.owner_epoch,
+            build_commit: record.claimed_by.build_commit,
+            placed,
+        }
+    }
+}
+
+/// What a start's claim works on: the installation and state roots, the start's owner epoch, the
+/// claim's time and the commit the build was made from.
+pub(crate) struct ClaimRequest<'a> {
+    pub(crate) installation_root: &'a Path,
+    pub(crate) state_root: &'a Path,
+    pub(crate) owner_epoch: OwnerEpoch,
+    pub(crate) at_unix_ms: u64,
+    pub(crate) build_commit: Option<&'a str>,
+    /// Test only: bytes written as the installation's identity file between the mint and its
+    /// placement, as another configuration of the same installation minting first would.
+    #[cfg(test)]
+    pub(crate) identity_before_placement: Option<&'a [u8]>,
 }
 
 /// Ruling 2 of #453 S11: the installation root of a writer that is not told one, the directory
@@ -193,57 +223,58 @@ pub(crate) fn check(
 /// The claim of a start, under the owner lock: the record is read again; one of this
 /// installation passes and writes nothing; one of another installation (written since the
 /// check: two starts raced) refuses as the check does. Without a record, the installation's
-/// identity is minted when it has none, then the record is written. `Some` when this start
-/// wrote the record.
-pub(crate) fn claim(
-    installation_root: &Path,
-    state_root: &Path,
-    owner_epoch: OwnerEpoch,
-    at_unix_ms: u64,
-    build_commit: Option<&str>,
-) -> RuntimeHostResult<Option<StateRootClaim>> {
+/// identity is minted and placed when it has none, then read back from the disk (a file another
+/// configuration of the installation placed first is kept and used), and the record is placed
+/// with that number and read back as well. Either way the answer is this installation's record
+/// as the disk holds it, `placed` when this start placed it.
+pub(crate) fn claim(request: &ClaimRequest<'_>) -> RuntimeHostResult<StateRootClaim> {
     const LOCATION: HostLocation = HostLocation::RecordStateRootInstallation;
-    let identity = read_identity(installation_root, LOCATION)?;
-    if let Some(record) = read_record(state_root, LOCATION)? {
-        judge(identity.as_ref(), &record, state_root, LOCATION)?;
-        return Ok(None);
+    let identity = read_identity(request.installation_root, LOCATION)?;
+    if let Some(record) = read_record(request.state_root, LOCATION)? {
+        judge(identity.as_ref(), &record, request.state_root, LOCATION)?;
+        return Ok(StateRootClaim::of_record(record, false));
     }
     let pid = std::process::id();
-    let build_commit = build_commit.map(str::to_owned);
-    let installation_id = match identity {
-        Some(identity) => identity.installation_id,
+    let build_commit = request.build_commit.map(str::to_owned);
+    let identity = match identity {
+        Some(identity) => identity,
         None => {
-            let path = identity_path(installation_root);
-            let identity = InstallationIdentity {
+            let path = identity_path(request.installation_root);
+            let minted = InstallationIdentity {
                 schema_version: INSTALLATION_IDENTITY_SCHEMA.to_owned(),
                 installation_id: mint_installation_id(&path)?,
-                minted_at_unix_ms: at_unix_ms,
+                minted_at_unix_ms: request.at_unix_ms,
                 minted_by: MintedBy {
                     pid,
                     build_commit: build_commit.clone(),
                 },
             };
-            write_once(&path, &identity)?;
-            identity.installation_id
+            #[cfg(test)]
+            if let Some(bytes) = request.identity_before_placement {
+                fs::write(&path, bytes).expect("the test's identity before the placement");
+            }
+            place_once(&path, &minted)?;
+            // Placed or found: the identity the disk holds is the installation's.
+            read_identity(request.installation_root, LOCATION)?.ok_or_else(|| vanished(&path))?
         }
     };
     let record = StateRootRecord {
         schema_version: STATE_ROOT_INSTALLATION_SCHEMA.to_owned(),
-        installation_id,
-        claimed_at_unix_ms: at_unix_ms,
+        installation_id: identity.installation_id.clone(),
+        claimed_at_unix_ms: request.at_unix_ms,
         claimed_by: ClaimedBy {
             pid,
-            owner_epoch,
-            build_commit: build_commit.clone(),
+            owner_epoch: request.owner_epoch,
+            build_commit,
         },
     };
-    write_once(&state_root.join(STATE_ROOT_INSTALLATION_FILE), &record)?;
-    Ok(Some(StateRootClaim {
-        claimed_at_unix_ms: at_unix_ms,
-        pid,
-        owner_epoch,
-        build_commit,
-    }))
+    let record_path = request.state_root.join(STATE_ROOT_INSTALLATION_FILE);
+    let placed = place_once(&record_path, &record)?;
+    // Placed or found: the record the disk holds is judged as the check judges it.
+    let record =
+        read_record(request.state_root, LOCATION)?.ok_or_else(|| vanished(&record_path))?;
+    judge(Some(&identity), &record, request.state_root, LOCATION)?;
+    Ok(StateRootClaim::of_record(record, placed))
 }
 
 /// The runtime fact [`STATE_ROOT_INSTALLATION_FACT_KEY`] of a claim: runtime scope, one row
@@ -414,10 +445,15 @@ fn mint_installation_id(identity_path: &Path) -> RuntimeHostResult<String> {
     Ok(text)
 }
 
-/// Writes `document` to `path` once: to `<path>.part`, flushed to disk, then renamed into place.
-/// The caller wrote nothing there before: the record is read absent under the owner lock, the
-/// identity file absent just before. A failed step is `state_root_claim_failed`.
-fn write_once(path: &Path, document: &impl Serialize) -> RuntimeHostResult<()> {
+/// Places `document` at `path` only when no file is there. The bytes go to `<path>.part`,
+/// created anew (a part an earlier crash left is removed first: its name is reused, and a file it
+/// may still name as a second link is never written through), and are flushed to disk; the part
+/// is then hard-linked to `path`. The hard link is the placement: it adds the one directory entry
+/// `path` for the complete, flushed file in a single file-system operation (`CreateHardLinkW` on
+/// Windows, `link` elsewhere) and fails when `path` exists, never replacing it, so a file another
+/// writer placed first is kept as it is. The part's name is removed afterwards. `true` when this
+/// call placed the file, `false` when one was there. A failed step is `state_root_claim_failed`.
+fn place_once(path: &Path, document: &impl Serialize) -> RuntimeHostResult<bool> {
     let mut bytes = serde_json::to_vec(document).map_err(|_| {
         RuntimeHostError::fatal(
             HostCode::StateRootClaimFailed,
@@ -430,14 +466,34 @@ fn write_once(path: &Path, document: &impl Serialize) -> RuntimeHostResult<()> {
     let mut part_name = path.file_name().unwrap_or_default().to_os_string();
     part_name.push(PART_SUFFIX);
     let part = path.with_file_name(part_name);
-    let mut file =
-        File::create(&part).map_err(|error| claim_failed(&part, &error, IoOp::Create))?;
+    match fs::remove_file(&part) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(claim_failed(&part, &error, IoOp::Remove)),
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&part)
+        .map_err(|error| claim_failed(&part, &error, IoOp::Create))?;
     file.write_all(&bytes)
         .map_err(|error| claim_failed(&part, &error, IoOp::Write))?;
     file.sync_all()
         .map_err(|error| claim_failed(&part, &error, IoOp::Sync))?;
     drop(file);
-    fs::rename(&part, path).map_err(|error| claim_failed(path, &error, IoOp::Rename))
+    let placed = match fs::hard_link(&part, path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => false,
+        Err(error) => return Err(claim_failed(path, &error, IoOp::Create)),
+    };
+    fs::remove_file(&part).map_err(|error| claim_failed(&part, &error, IoOp::Remove))?;
+    Ok(placed)
+}
+
+/// `state_root_claim_failed` for a file the claim placed or found that is gone when it is read
+/// back (`path` the file, `not_found` as its cause).
+fn vanished(path: &Path) -> RuntimeHostError {
+    claim_failed(path, &std::io::Error::from(ErrorKind::NotFound), IoOp::Read)
 }
 
 /// `state_root_installation_record_invalid` (`path` the file, `cause` the read failure).

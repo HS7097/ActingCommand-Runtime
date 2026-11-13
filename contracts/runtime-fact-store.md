@@ -710,12 +710,14 @@ the backend self-check facts (source `device-proxy` or `capture`).
   time: the claim of the state root by the installation the Runtime runs from,
   mirrored once from the state root's record `installation.json` for the audit
   trail: `claimed_at_unix_ms`, `claimed_by_pid`, `claimed_by_owner_epoch` (as the
-  status spells it) and, for a build that knows its commit,
-  `claimed_by_build_commit`; never the installation's number. Recorded once, by
-  the start that wrote the record, once the ledger is open; a start that finds
-  its installation's record records nothing. A Runtime not started from an
-  installation root never records it. Tagged (`tag.workbench_patterns`), so a
-  start loads it.
+  status spells it) and, when the record names the build's commit,
+  `claimed_by_build_commit`; never the installation's number. The fact follows
+  the record: recorded once the ledger is open by the start that placed the
+  record, or, from the record, by a start that finds its installation's record
+  while the store holds no such fact (an earlier start placed the record and
+  failed before the fact); any other start records nothing. A Runtime not
+  started from an installation root never records it. Tagged
+  (`tag.workbench_patterns`), so a start loads it.
 
 `contracts/actingd-check-config.md` lists the subsystems and parameters
 `actingd` reports; `actingctl facts --program` returns both records as part of

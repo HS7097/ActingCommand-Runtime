@@ -66,8 +66,9 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         actingcommand_contract::InstallConfigPurpose::Running
     };
     // Workflow #453 S11: run from an installation root (the directory of `--config` holding the
-    // installer's `install\state.json`), a pass that takes the owner checks the state root's
-    // installation record before it does; nothing is minted or claimed.
+    // installer's `install\state.json`), every pass, `verify` without flags included, takes the
+    // owner and so checks the state root's installation record before it does; nothing is minted
+    // or claimed.
     let installation_root = actingcommand_runtime_host::installation_root_of_config(&config)
         .map_err(|error| {
             ActingdError::runtime(error).with_report("activated", serde_json::Value::Bool(false))

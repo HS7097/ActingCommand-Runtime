@@ -16,15 +16,25 @@
 //! - a corrupt record and a corrupt identity file each refuse with
 //!   `state_root_installation_record_invalid`, the file as `path`, the read failure as the link;
 //! - a record that appears between the check and the claim refuses after the owner lock was
-//!   taken, and the owner epoch the start opened is closed;
+//!   taken, and the owner epoch the start opened is closed; so does one that appears while the
+//!   installation has no identity file, and nothing is minted;
 //! - a moved installation root (the same identity file at another path) passes;
-//! - a Runtime not started from an installation root writes the files and the start records it
-//!   wrote before, and nothing of this slice;
+//! - a Runtime not started from an installation root writes what a start of main `691c20f5`
+//!   writes (the state root's entries and the start's runtime facts, written out from that
+//!   build's code), and nothing of this slice;
 //! - `unlock-owner` and a maintenance pass that takes the owner refuse a mismatch with nothing
-//!   written, and neither mints nor claims.
+//!   written, and neither mints nor claims; a bare `verify` takes the owner too and is refused
+//!   the same way, the owner journal byte for byte as before.
+//!
+//! Fix round 1 (coordinator brief `rd-1114/brief-1700-fix1.md`, items 1 to 3 and 5):
+//! - the fact follows the record: a start that failed between the record and the fact leaves
+//!   the fact to the next start, which writes it from the record once, without the daemon line;
+//! - an identity file another configuration of the installation placed between the mint and the
+//!   placement is kept byte for byte, and the record carries its number.
 
 use super::instance_workers::closed_ledger_events;
 use super::*;
+use crate::codes::test_spellings::TestCode;
 use crate::{LedgerMaintenanceOperation, LedgerMaintenanceRequest};
 use actingcommand_contract::outcome::{Category, Outcome};
 use actingcommand_contract::{
@@ -93,20 +103,36 @@ fn host_config(state: &TempDir, installation: Option<&Path>) -> RuntimeHostConfi
     }
 }
 
-/// The start fixture on `state`, from `installation` when given, with the instance `instance`.
-fn start(
-    state: &TempDir,
-    installation: Option<&Path>,
-    instance: InstanceId,
-) -> RuntimeHostResult<RuntimeHost> {
+/// The start fixture with `config` and the instance `instance`.
+fn start_with(config: RuntimeHostConfig, instance: InstanceId) -> RuntimeHostResult<RuntimeHost> {
     RuntimeHost::start(
-        host_config(state, installation),
+        config,
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
             instance,
             Arc::new(FakeState::default()),
         )),
     )
+}
+
+/// The start fixture on `state`, from `installation` when given, with the instance `instance`.
+fn start(
+    state: &TempDir,
+    installation: Option<&Path>,
+    instance: InstanceId,
+) -> RuntimeHostResult<RuntimeHost> {
+    start_with(host_config(state, installation), instance)
+}
+
+/// A start with `config` that must fail.
+fn failed(config: RuntimeHostConfig) -> RuntimeHostError {
+    match start_with(config, instance_id()) {
+        Ok(host) => {
+            host.close().expect("close the host");
+            panic!("the start must fail");
+        }
+        Err(error) => error,
+    }
 }
 
 /// A start that passes, closed at once.
@@ -197,27 +223,34 @@ fn claim_facts(state: &Path) -> Vec<RuntimeFactRecord> {
         .collect()
 }
 
-/// The records of a root's first start, through its start record, each as its type and, for a
-/// runtime fact, its key.
-fn first_start_records(state: &Path) -> Vec<String> {
-    let mut records = Vec::new();
+/// The keys of the runtime facts a root's first start recorded before its start record
+/// (`runtime.started`), in ledger order.
+fn facts_before_the_start_record(state: &Path) -> Vec<String> {
+    let mut keys = Vec::new();
     for event in closed_ledger_events(state) {
-        let key = match event.payload() {
-            EventPayload::Runtime(RuntimePayload::FactRecorded(recorded)) => {
-                recorded.record().key.clone()
-            }
-            _ => String::new(),
-        };
-        records.push(
-            format!("{:?} {key}", event.event_type())
-                .trim_end()
-                .to_owned(),
-        );
         if event.event_type() == EventType::RuntimeStarted {
-            return records;
+            return keys;
+        }
+        if let EventPayload::Runtime(RuntimePayload::FactRecorded(recorded)) = event.payload() {
+            keys.push(recorded.record().key.clone());
         }
     }
-    panic!("the root holds no start record: {records:?}");
+    panic!("the root holds no start record: {keys:?}");
+}
+
+/// The start records (`runtime.started`, `runtime.takeover`) of the closed ledger of `state`, by
+/// type.
+fn start_records(state: &Path) -> Vec<EventType> {
+    closed_ledger_events(state)
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type(),
+                EventType::RuntimeStarted | EventType::RuntimeTakeover
+            )
+        })
+        .map(PersistedEvent::event_type)
+        .collect()
 }
 
 /// The owner journal's records, oldest first.
@@ -598,53 +631,57 @@ fn s11_a_moved_installation_root_passes() {
     assert_eq!(claim_facts(state.path()).len(), 1);
 }
 
-// Ruling 2: a Runtime not started from an installation root (the start fixture as it is today)
-// writes the files and the start records it wrote before this slice: the same fixture started
-// from an installation root on a state root of its own writes exactly the record and the fact
-// more, and nothing else. (Two roots: the comparison is of names and record kinds, never of
-// identities or times.)
+// Ruling 2 (fix round 1, item 5: pinned against main `691c20f5`, not against this build with a
+// root): a Runtime not started from an installation root writes what a start of main writes.
+// The expectations are written out from main's start and close of this fixture on a new state
+// root, which leave, besides SQLite's own `-wal` and `-shm`, exactly: `owner.lock`
+// (`OwnerGuard::acquire`), `runtime-state.sqlite` and `runtime-state.key`
+// (`RuntimeDatabase::open`), `release-blobs` (its root preparation,
+// `prepare_release_blob_store`), `ledger` (`LedgerMaintenance::acquire` of a new root) and
+// `policy` (`CatalogStore::open` in `PolicyHost::open`); the runtime information file is removed
+// by the close, and `artifacts` is made only by the first artifact written (`ArtifactStore::open`
+// creates the state root alone). Before its start record main's start of a new root records no
+// runtime fact: its runtime facts come from `seed_policy_instance_facts`, `record_config_start`
+// and the steps after them, which follow `append_runtime_start_event`, and this slice's fact is
+// the one runtime fact a start records before it. A new root's start writes one
+// `runtime.started` and no `runtime.takeover`. An installation folder beside it that the start
+// is not told of gets no identity; the state root gets no record, the ledger no fact and actingd
+// no daemon line.
 #[test]
 fn s11_a_runtime_not_started_from_an_installation_root_writes_what_it_wrote_before() {
-    let plain = TempDir::new().expect("tempdir");
-    started_and_closed(&plain, None, instance_id());
     let installation = installation_root();
-    let installed = TempDir::new().expect("tempdir");
-    started_and_closed(&installed, Some(installation.path()), instance_id());
+    let state = TempDir::new().expect("tempdir");
+    let host = start(&state, None, instance_id()).expect("the start");
+    assert!(host.state_root_claimed().is_none(), "no daemon line");
+    host.close().expect("close the host");
 
-    assert!(!plain.path().join(RECORD).exists());
-    assert!(claim_facts(plain.path()).is_empty());
-    let mut expected = names(plain.path());
-    expected.insert(RECORD.to_owned());
-    assert_eq!(names(installed.path()), expected);
-
-    let plain_records = first_start_records(plain.path());
-    let claim = format!("{:?} {FACT}", EventType::RuntimeFactRecorded);
-    let installed_records = first_start_records(installed.path());
     assert_eq!(
-        installed_records
-            .iter()
-            .filter(|record| **record == claim)
-            .count(),
-        1,
-        "{installed_records:?}"
+        names(state.path()),
+        BTreeSet::from(
+            [
+                "ledger",
+                "owner.lock",
+                "policy",
+                "release-blobs",
+                "runtime-state.key",
+                "runtime-state.sqlite",
+            ]
+            .map(str::to_owned)
+        ),
+        "the state root's entries as main's start and close leave them"
     );
-    let without_claim = installed_records
-        .into_iter()
-        .filter(|record| *record != claim)
-        .collect::<Vec<_>>();
-    let differing = plain_records
-        .iter()
-        .zip(&without_claim)
-        .enumerate()
-        .filter(|(_, (plain, installed))| plain != installed)
-        .map(|(index, (plain, installed))| format!("#{index}: {plain} / {installed}"))
-        .collect::<Vec<_>>();
-    assert!(
-        differing.is_empty() && plain_records.len() == without_claim.len(),
-        "records that differ: {differing:?}; {} and {} records",
-        plain_records.len(),
-        without_claim.len()
+    assert_eq!(
+        names(&install_folder(&installation)),
+        BTreeSet::from(["state.json".to_owned()]),
+        "no identity"
     );
+    assert_eq!(
+        facts_before_the_start_record(state.path()),
+        Vec::<String>::new(),
+        "main's start records no runtime fact before its start record"
+    );
+    assert_eq!(start_records(state.path()), vec![EventType::RuntimeStarted]);
+    assert!(claim_facts(state.path()).is_empty(), "no fact");
 }
 
 // Ruling 6: `unlock-owner` and a ledger maintenance pass that takes the owner make the start's
@@ -726,4 +763,217 @@ fn s11_unlock_owner_and_a_maintenance_pass_refuse_a_mismatch_and_never_mint_or_c
         BTreeSet::from(["state.json".to_owned()]),
         "nothing minted"
     );
+}
+
+// Fix round 1, item 1: a bare `verify` takes the owner too (its pass appends an open and a close
+// record to the owner journal), so it makes the check: on a state root another installation
+// recorded it is refused before the owner is taken, the owner journal and every file byte for
+// byte as before, nothing minted.
+#[test]
+fn s11_a_bare_verify_on_another_installations_state_root_is_refused_with_the_journal_untouched() {
+    let installation = installation_root();
+    let install = install_folder(&installation);
+    fs::write(install.join(IDENTITY), identity(THIS_ID)).expect("this installation's identity");
+    let state = TempDir::new().expect("tempdir");
+    let other = installation_root();
+    started_and_closed(&state, Some(other.path()), instance_id());
+    let journal_before = fs::read(state.path().join("owner.lock")).expect("the owner journal");
+    let state_before = files(state.path());
+    let install_before = files(&install);
+
+    let refused = RuntimeHost::maintain_ledger(
+        config(&state).with_installation_root(installation.path()),
+        LedgerMaintenanceRequest {
+            operation: LedgerMaintenanceOperation::Verify,
+            backup: None,
+            target: None,
+            artifact_root: None,
+            limits: MaintenanceLimits::default(),
+            frame_query: false,
+            full: false,
+        },
+    )
+    .expect_err("a bare verify refuses another installation's state root");
+    assert_eq!(refused.outcome().code().as_str(), MISMATCH, "{refused}");
+    assert_eq!(
+        fs::read(state.path().join("owner.lock")).ok(),
+        Some(journal_before),
+        "the owner journal byte for byte"
+    );
+    assert_eq!(files(state.path()), state_before, "nothing written");
+    assert_eq!(files(&install), install_before, "nothing minted");
+}
+
+// Ruling 5 (fix round 1, item 5): a record found under the owner lock while this installation
+// has no identity file (it appeared after the check read none) refuses the start after the
+// acquire, `state_root_installation_mismatch` naming the missing identity file; nothing is
+// minted, the owner epoch the start opened is closed, and the record stays as it was written.
+#[test]
+fn s11_a_record_found_under_the_lock_without_an_identity_is_refused_and_nothing_is_minted() {
+    let installation = installation_root();
+    let install = install_folder(&installation);
+    let state = TempDir::new().expect("tempdir");
+    let raced = record(OTHER_ID);
+
+    let error = failed(
+        config(&state)
+            .with_installation_root(installation.path())
+            .with_state_root_record_after_check_for_test(raced.clone()),
+    );
+    assert_eq!(error.code(), MISMATCH, "{error}");
+    assert_eq!(error.operation(), "record_state_root_installation");
+    assert!(
+        error
+            .native_detail()
+            .is_some_and(|text| text.contains("no identity file")),
+        "{:?}",
+        error.native_detail()
+    );
+    assert_eq!(
+        names(&install),
+        BTreeSet::from(["state.json".to_owned()]),
+        "nothing minted"
+    );
+    let records = journal(state.path());
+    let [opened, closed] = records.as_slice() else {
+        panic!("the start's two records: {records:?}");
+    };
+    assert_eq!(opened["owner_epoch"], closed["owner_epoch"]);
+    assert_eq!(closed["active"], json!(false));
+    assert_eq!(
+        names(state.path()),
+        BTreeSet::from(["owner.lock".to_owned(), RECORD.to_owned()]),
+        "nothing more written"
+    );
+    assert_eq!(fs::read(state.path().join(RECORD)).ok(), Some(raced));
+}
+
+// Fix round 1, item 2: the fact follows the record. A start that placed the record and failed
+// before the ledger opened (here right after its claim, as a start that then stops at a ledger
+// migration requirement) left no fact; the next start finds this installation's record and no
+// fact, and writes the fact from the record once (the record's time and who claimed), without
+// the daemon line, which stays the claim's own; a third start writes nothing.
+#[test]
+fn s11_the_fact_follows_the_record_after_a_start_that_failed_between_them() {
+    let installation = installation_root();
+    let state = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+
+    let error = failed(
+        config(&state)
+            .with_installation_root(installation.path())
+            .with_start_failure_after_claim_for_test(),
+    );
+    assert_eq!(
+        error.code(),
+        TestCode::StartFailedAfterClaimForTest.as_str(),
+        "{error}"
+    );
+    assert!(install_folder(&installation).join(IDENTITY).is_file());
+    assert_eq!(
+        names(state.path()),
+        BTreeSet::from(["owner.lock".to_owned(), RECORD.to_owned()]),
+        "the record, and no ledger yet"
+    );
+    let record_bytes = fs::read(state.path().join(RECORD)).expect("the record");
+    let record: Value = serde_json::from_slice(&record_bytes).expect("a JSON record");
+    let claimed_at = record["claimed_at_unix_ms"]
+        .as_u64()
+        .expect("the claim's time");
+    let owner_epoch = record["claimed_by"]["owner_epoch"]
+        .as_str()
+        .expect("the claim's owner epoch")
+        .to_owned();
+
+    let host = start(&state, Some(installation.path()), instance).expect("the next start");
+    assert!(
+        host.state_root_claimed().is_none(),
+        "the daemon line is the claim's own"
+    );
+    host.close().expect("close the host");
+    let facts = claim_facts(state.path());
+    let [fact] = facts.as_slice() else {
+        panic!("the fact once: {facts:?}");
+    };
+    assert_eq!(fact.scope, RuntimeFactScope::Runtime);
+    assert_eq!(fact.observed_at_unix_ms, claimed_at);
+    let ContractFactValue::RecordList(rows) = &fact.value else {
+        panic!("one row: {fact:?}");
+    };
+    assert_eq!(
+        rows.as_slice(),
+        [BTreeMap::from([
+            (
+                "claimed_at_unix_ms".to_owned(),
+                FactScalar::Integer(i64::try_from(claimed_at).expect("a time")),
+            ),
+            (
+                "claimed_by_pid".to_owned(),
+                FactScalar::Integer(i64::from(std::process::id())),
+            ),
+            (
+                "claimed_by_owner_epoch".to_owned(),
+                FactScalar::String(owner_epoch),
+            ),
+        ])],
+        "the record's values"
+    );
+    assert_eq!(
+        fs::read(state.path().join(RECORD)).ok(),
+        Some(record_bytes.clone()),
+        "the record as it was"
+    );
+
+    started_and_closed(&state, Some(installation.path()), instance);
+    assert_eq!(
+        claim_facts(state.path()).len(),
+        1,
+        "a third start writes nothing"
+    );
+    assert_eq!(
+        fs::read(state.path().join(RECORD)).ok(),
+        Some(record_bytes),
+        "the record as it was"
+    );
+}
+
+// Fix round 1, item 3: the identity file is placed only when absent. Another configuration of
+// the installation placed its identity between this claim's mint and its placement: the file is
+// kept byte for byte as that one placed it, no part file is left, and the record carries its
+// number, read back from the disk.
+#[test]
+fn s11_an_identity_placed_between_the_mint_and_the_placement_is_kept_and_used() {
+    let installation = installation_root();
+    let install = install_folder(&installation);
+    let state = TempDir::new().expect("tempdir");
+    let placed_first = identity(THIS_ID);
+
+    let host = start_with(
+        config(&state)
+            .with_installation_root(installation.path())
+            .with_identity_before_placement_for_test(placed_first.clone()),
+        instance_id(),
+    )
+    .expect("the start passes");
+    let claimed = host.state_root_claimed().cloned();
+    host.close().expect("close the host");
+
+    assert_eq!(
+        fs::read(install.join(IDENTITY)).ok(),
+        Some(placed_first),
+        "the identity the other placed, byte for byte"
+    );
+    assert_eq!(
+        names(&install),
+        BTreeSet::from(["state.json".to_owned(), IDENTITY.to_owned()]),
+        "no part file left"
+    );
+    let record = json_file(&state.path().join(RECORD));
+    assert_eq!(record["installation_id"], json!(THIS_ID));
+    assert!(
+        claimed.is_some(),
+        "this start placed the record and writes the line"
+    );
+    assert!(!names(state.path()).contains("installation.json.part"));
+    assert_eq!(claim_facts(state.path()).len(), 1);
 }

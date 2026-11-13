@@ -2659,6 +2659,9 @@ pub(crate) mod test_spellings {
             ScheduledPolicyCheckpointMarkerWriteFailed => "scheduled_policy_checkpoint_marker_write_failed": error / none,
             ScheduledPolicyCheckpointTestHookAlreadyInstalled => "scheduled_policy_checkpoint_test_hook_already_installed": error / none,
             SchedulingTerminalAppendInjectedFailure => "scheduling_terminal_append_injected_failure": error / none,
+            // Workflow #453 S11 fix round 1: a start made to fail right after its claim of the
+            // state root, before the ledger is opened.
+            StartFailedAfterClaimForTest => "start_failed_after_claim_for_test": error / none,
             // #411 A65: a start made to fail right after it appended its start event.
             StartFailedAfterStartEventForTest => "start_failed_after_start_event_for_test": error / none,
             TestClaimNotGranted => "test_claim_not_granted": error / none,
@@ -2702,6 +2705,7 @@ pub(crate) mod test_spellings {
             ExpireDueLeasesForTest => "expire_due_leases_for_test",
             ExpireLeaseOnceForTest => "expire_lease_once_for_test",
             FailScheduledHostClaimForTest => "fail_scheduled_host_claim_for_test",
+            FailStartAfterClaimForTest => "fail_start_after_claim_for_test",
             FailStartAfterStartEventForTest => "fail_start_after_start_event_for_test",
             InjectInstanceWorkerPanicForTest => "inject_instance_worker_panic_for_test",
             InjectTestContainedTaskOcrFailurePersistence => "inject_test_contained_task_ocr_failure_persistence",

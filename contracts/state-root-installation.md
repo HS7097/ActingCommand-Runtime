@@ -23,9 +23,12 @@ start on another installation's state root.
   `secret_fingerprint_salt`) copies no identity, which is exactly the case the record catches.
 - `minted_at_unix_ms`, `minted_by.pid`: the start that minted it; `minted_by.build_commit`: the
   commit its build was made from, `null` for a build that does not know it.
-- Minted once, by the first start of the installation that finds none (see "The claim"):
-  written to `identity.json.part`, flushed, renamed into place. Nothing else writes, moves or
-  renames it; the installer leaves it as it is ("The installer" below).
+- Minted once, by the first start of the installation that finds none (see "The claim"), and
+  **placed only when absent** ("Placing a file once" below): two configurations of one
+  installation root that start for the first time at the same moment each mint a number, and the
+  file the first of them places is the installation's; the other start keeps it and records its
+  number. Nothing else writes, moves or renames it; the installer leaves it as it is ("The
+  installer" below).
 - What one installation is: whatever carries the same file. A moved installation folder, a
   restored backup of it and two builds of one installation carry the same file and are one
   installation. A copy of a whole installation root carries it too and is the same installation:
@@ -34,7 +37,7 @@ start on another installation's state root.
 ## Which root is the installation root
 
 The **installation root** of a program that writes the state root (a start, `actingd
-unlock-owner`, an `actingd ledger-maintenance` pass that takes the owner) is the directory of its
+unlock-owner`, every `actingd ledger-maintenance` pass) is the directory of its
 `--config` file **when that directory holds the installer's own `install\state.json`**
 ([install-cli.md](install-cli.md), "Layout"). No program is given a new flag: the installer's
 start and the watchdog start `<root>\runtime\actingcommand-actingd.exe --config
@@ -45,9 +48,17 @@ directory of `--config`, each only when it holds `install\state.json`.
 A program not started from an installation root (CI's start from the example configuration, a
 developer's run, a configuration in any folder without the installer's state file) **mints
 nothing, records nothing and checks nothing**: it reads neither file and writes not one byte more
-than a build before this slice. `install\state.json` that cannot be inspected for another reason
-than its absence is refused as `state_root_installation_record_invalid` (its path): whether the
-program belongs to an installation is then unknown.
+than a build before this slice. What it does more is one read of file metadata, the look for
+`install\state.json` beside its configuration. A failure of that read other than "not found"
+refuses the start, `actingd unlock-owner`, every `actingd ledger-maintenance` pass and
+`actingd check-config` with `state_root_installation_record_invalid` (`path` that
+`install\state.json`, the operating system's failure as its `caused_by` link): whether the
+program belongs to an installation is then unknown, and the check is not skipped silently.
+
+**Not protected by this slice:** an A/B root of the older installer whose configuration is given
+from `install\generations\…` has no `install\state.json` beside that configuration, so a program
+started with it is `not_installed` and checks nothing. The installer's contract says that no A/B
+root is in use ([install-cli.md](install-cli.md), the paragraph on `tools\actingwatch.exe`).
 
 ## The state root's record
 
@@ -60,8 +71,8 @@ program belongs to an installation is then unknown.
 - `installation_id`: the claiming installation's number; `claimed_at_unix_ms`, `claimed_by.pid`,
   `claimed_by.owner_epoch` (the claiming start's, as its owner journal record spells it) and
   `claimed_by.build_commit` (`null` for a build that does not know it): the start that claimed it.
-- Written once: `installation.json.part`, flushed, renamed into place, and only when absent (it
-  is read absent under the owner lock just before). No Runtime writes it again, renames it or
+- Written once, **placed only when absent** as the identity is ("Placing a file once" below);
+  it is read absent under the owner lock just before. No Runtime writes it again, renames it or
   deletes it. A later slice brings the command that hands a state root over to another
   installation (it keeps the old record); this slice has none.
 - **A registered exception to "program state lives in tagged ledger records"** (iron rule 13), as
@@ -71,10 +82,15 @@ program belongs to an installation is then unknown.
 - **Mirrored once into the ledger** as the tagged runtime fact `host.state_root_installation`
   ([runtime-fact-store.md](runtime-fact-store.md), "Producers"), for the audit trail: runtime
   scope, `record_list` of one row `{claimed_at_unix_ms, claimed_by_pid, claimed_by_owner_epoch,
-  claimed_by_build_commit?}` (`claimed_by_build_commit` absent for a build that does not know its
-  commit), observed at the claim's time, source `runtime`, no lifetime. The installation's number
-  is not in it. It joins the default of `ledger_observer.tag.workbench_patterns`
-  ([ledger-observer.md](ledger-observer.md) §15), so a start loads it and never records it again.
+  claimed_by_build_commit?}` taken from the record (`claimed_by_build_commit` absent when the
+  record's `build_commit` is `null`), observed at the record's claim time, source `runtime`, no
+  lifetime. The installation's number is not in it. It joins the default of
+  `ledger_observer.tag.workbench_patterns` ([ledger-observer.md](ledger-observer.md) §15), so a
+  start loads it. **The fact follows the record**: the start that placed the record records the
+  fact once the ledger is open; a start that finds this installation's record while the fact
+  store holds no `host.state_root_installation` (an earlier start placed the record and failed
+  before the fact, for example at a ledger migration requirement) records the fact from the
+  record, once; any other start records nothing.
 
 ## The check
 
@@ -107,30 +123,61 @@ Only a start claims, **under the owner lock**, right after it took it
    another installation, or a record while this installation has no identity file (a record that
    appeared since the check: two starts raced): the same refusal as the check's, after the
    acquire, and the start closes the owner epoch it opened as any failed start does.
-2. No record: when the installation has no identity file, it is minted; then the record is
-   written with this start's owner epoch.
-3. Once the ledger is open, the fact `host.state_root_installation` is recorded once, and actingd
-   writes one daemon line `state_root_claimed` (info, `path` the state root).
+2. No record: when the installation has no identity file, a number is minted and the identity
+   file placed; the identity is then **read back from the disk** and its number is the one used
+   (a file another configuration of the installation placed first is kept and its number taken).
+   The record is placed with that number and this start's owner epoch, and read back and judged
+   as the check judges it.
+3. Once the ledger is open, the fact `host.state_root_installation` is recorded from the record
+   ("The state root's record": the fact follows the record), and actingd writes one daemon line
+   `state_root_claimed` (info, `path` the state root) for the start that placed the record only;
+   a later start that records a missing fact from the record writes no line.
 
-A step that cannot be done (the random source fails, a `.part` cannot be created, written or
-flushed, the rename fails) is fatal `state_root_claim_failed` (`path` the file, the operating
-system's failure as its `caused_by` link); the start fails and closes its epoch, and the next
-start claims again. A `.part` file such a failure leaves is overwritten by that next claim.
+A step that cannot be done (the random source fails; a `.part` cannot be removed, created,
+written or flushed; the placement fails other than because the file is there; the part's name
+cannot be removed afterwards; a placed or found file is gone when it is read back) is fatal
+`state_root_claim_failed` (`path` the file, the operating system's failure as its `caused_by`
+link); the start fails and closes its epoch, and the next start claims again.
 
 So an existing installation is recorded by its first start of this release, with that one line,
 and a restart reads its own record and writes nothing more.
+
+### Placing a file once
+
+The identity file and the record are each placed with a primitive that fails when the target
+exists: the bytes are written to `<file>.part`, flushed to disk, and the part is then
+**hard-linked** to the target (`std::fs::hard_link`: `CreateHardLinkW` on Windows, `link`
+elsewhere), after which the part's name is removed. Creating a hard link adds one directory
+entry for an existing, complete and flushed file in a single file-system operation, and it fails
+with "already exists" when the target name is taken: it never replaces a file, unlike a rename,
+which the operating system lets replace its target. So on Windows (NTFS) the target appears
+complete, or not at all, and a file another writer placed first is kept as it is; the claim then
+reads back what the disk holds. A rename is not used. A file system without hard links (FAT32,
+exFAT) cannot take the placement: the claim fails `state_root_claim_failed` and the start is
+refused, never placed another way.
+
+A crash between these steps can leave `identity.json.part` (or `installation.json.part`), which
+the installer's `install leftovers` lists as a `.part` file. The next mint reuses that name: it
+removes the stale part first and creates it anew (removing the name, never writing through it,
+so a file it may still name as a second link, such as a file a person set aside, keeps its
+bytes).
 
 ## Who checks and who does not
 
 - **A start** checks and claims (above).
 - **`actingd unlock-owner`** ([actingd-unlock-owner.md](actingd-unlock-owner.md)) and **every
-  `actingd ledger-maintenance` pass that takes the owner** (`dry-run`, `import`, `backup`,
-  `restore`, and `verify` with `--full` or `--frame-query`;
-  [ledger-maintenance.md](ledger-maintenance.md)) make the same read-only check before they take
-  the owner lock, with the same codes (`check_state_root_installation` their operation), and
-  **never mint and never claim**. Their installation root is found by the same rule.
-- **Read-only readers do not check**: `ledger-maintenance verify` without flags (the installer's
-  verification), the forensic readers (`actingledger`), the watchdog.
+  `actingd ledger-maintenance` pass** (`dry-run`, `import`, `backup`, `restore` and `verify`,
+  with or without `--full` and `--frame-query`; [ledger-maintenance.md](ledger-maintenance.md))
+  make the same read-only check before they take the owner lock, with the same codes
+  (`check_state_root_installation` their operation), and **never mint and never claim**. Every
+  maintenance pass takes the owner and so writes to the state root (the owner journal's open and
+  close records), `verify` without flags included: a program that writes anything to a state
+  root, the owner journal included, checks first. So the installer's ledger verify, which runs
+  the target build's `verify` without flags with the root's configuration, refuses another
+  installation's state root as well when that build is of this release or later. Their
+  installation root is found by the same rule.
+- **Readers that take no owner do not check**: the forensic readers (`actingledger`) and the
+  watchdog.
 - **`actingd check-config`** ([actingd-check-config.md](actingd-check-config.md)) makes the check
   read only and reports `state_root_installation`: `claimed_by_this`, `unclaimed` or
   `not_installed` (no installation root: nothing read). The other two states refuse with the
@@ -168,6 +215,16 @@ the record's installation claimed it.
 - **The record or the identity file cannot be read**: read the `caused_by` link; free the file
   when another program holds it, or put it back from a backup of the same installation or the same
   state root. A damaged `installation.json` can also be renamed aside by hand as above.
+- **The identity file is corrupt and there is no backup of it**: until the hand-over command of
+  the next slice exists, the only way out is a hand-over done by hand. With no Runtime running,
+  set both files aside: rename the corrupt `install\identity.json` and the state root's
+  `installation.json` (rename them, never delete them). The next start then mints a new number
+  and claims the state root with it, with its daemon line and a new fact. This is a hand-over
+  done by hand, and what it gives up is the old number: the installation is a new one from then
+  on, so another state root that recorded the old number refuses it as another installation's
+  and needs the same by hand, and the two set-aside files are what is left of the old identity
+  and the old claim. Nothing of the ledger is lost: its records (the old claim's fact
+  included), the owner journal and the integrity key are not touched.
 
 ## Codes
 
