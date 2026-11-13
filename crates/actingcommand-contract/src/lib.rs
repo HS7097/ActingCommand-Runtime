@@ -46,6 +46,8 @@ pub mod standard_pack;
 pub mod standard_pack_display;
 // Workflow #407 LOAD-1 (since 0.12.37): a game's `loading.json` and a pack's loading copy.
 pub mod standard_pack_loading;
+// Workflow #444 NOTICES-1 (since 0.12.58): the rules of a bundle's notices directory `notices/`.
+pub mod standard_pack_notices;
 // ROUT-L RL-1a: a game root's `schedule.json`, the schedule rules of the standard package.
 pub mod standard_pack_schedule;
 // Workflow #357 DB-1: the shared tables of a standard-pack game root (M-357a v1.1 §2).
@@ -88,6 +90,7 @@ pub use runtime_observation::*;
 pub use standard_pack::*;
 pub use standard_pack_display::*;
 pub use standard_pack_loading::*;
+pub use standard_pack_notices::*;
 pub use standard_pack_schedule::*;
 pub use standard_pack_table::*;
 pub use standard_pack_ui::*;

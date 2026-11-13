@@ -17999,6 +17999,120 @@ package of `gate_308_l4b_admission.rs` (10 000 ms to 32 000 ms), whose
 `l4b_admission_refuses_on_empty_where_the_step_cannot_end_the_run_normally` admits a single-frame
 select over the card list (32 000 ms) without `on_empty`.
 
+### 1.334 Slice NOTICES-1 (0.12.58): the rules of a bundle's notices directory, in the contract crate (Workflow #444; the design note `rd-1113/design-notices-in-archive.md`, read on main `29a65e2d`, adopted as design (a) with every recommended answer of its section 8 by the coordinator's rulings of 11-13 on board #444, not the owner's words, the three slices one after another; coordinator work order `rd-1113/brief-444-notices-1.md`, read on main `29a65e2d`)
+
+1.334 is the coordinator's number. [package-reference.md](package-reference.md), "Notices" (in
+"Standard package root"), is the contract. One module of the contract crate, seven words of the
+vocabulary `standard_pack_problem` and four optional values of `standard_pack_root_invalid` are
+added. No outcome code, value key, configuration key, persisted shape, wire shape or record is
+added, no program calls the module, and **no program's behaviour changes**. The outcome code index
+is regenerated and comes out unchanged: it lists codes, not vocabularies, and the first sentence of
+`standard_pack_root_invalid` stays.
+
+**What the directory is for.** A package may come with texts its author must ship with it. A
+standard-package bundle zip will carry them in one directory `notices/` at its root, beside
+`packs/`, not listed in `bundle.json`; the installer will place it in the game root as it is, as
+one item, and no reader of the Runtime opens it. So no pack's `file_count`, `byte_count`, listing or
+content hash, no catalog version and no composed generation moves with a text (design §2, §3.4).
+
+**The rules** (`crates/actingcommand-contract/src/standard_pack_notices.rs`, exported as the other
+standard-pack readers are; pure functions and constants, no file system, no zip):
+
+- the directory `notices` (`STANDARD_PACK_NOTICES_DIRECTORY`), in exact lower case;
+  `notice_relative_path` takes a zip member's or root-relative name apart (`Notices/…` is not of
+  it);
+- the path rule (`check_notice_path`): at most 2 segments below the directory (`notice_depth`);
+  each segment 1 to 64 bytes of `[A-Za-z0-9._-]`, its first byte a letter or a digit, and a segment
+  `safe_source_path` accepts (no trailing dot, no device name) (`notice_name`); a file name with no
+  dot, or ending after its last dot in `md`, `txt`, `tsv` or `csv` in any ASCII case (`notice_name`);
+- the size rule (`check_notice_size`): a file of 1 to 2,097,152 bytes (`notice_bytes`);
+- the set rule (`check_notice_listing`), over a listing of `NoticeEntry {path, bytes}`: at most 64
+  files (`notice_count`), each path by the path rule and each size by the size rule, at most
+  8,388,608 bytes together (`notice_total_bytes`), no two paths equal under ASCII case folding and no
+  file whose path, in any ASCII case, is another path's directory (`notice_name`); judged in the
+  byte order of the paths, so a zip's member order and a directory walk's give the same answer;
+- the pack rule (`check_notice_pack_ids`): a bundle that carries the directory lists no pack whose
+  `package_id` is `notices` in any ASCII case (`notice_name`); `reserved_package_id` is unchanged
+  (design Q4), since reserving the name would narrow what a reader of `package` revisions 3 to 9
+  accepts;
+- the text rule (`check_notice_text`): strict UTF-8, none of U+0000 to U+0008, U+000B, U+000E to
+  U+001F and U+007F (`notice_not_text`); TAB, LF, FF, CR and any line ending allowed; the bytes
+  judged, never changed;
+- the bounds as constants (`MAX_NOTICE_DEPTH`, `MAX_NOTICE_SEGMENT_BYTES`, `NOTICE_FILE_SUFFIXES`,
+  `MAX_NOTICE_FILES`, `MAX_NOTICE_FILE_BYTES`, `MAX_NOTICE_TOTAL_BYTES`): format bounds a writer and
+  every reader share, as `MAX_BUNDLE_TABLES` is, not configuration keys (design Q5).
+
+**The answer.** Each rule answers the first thing it finds broken as
+`NoticeIssue {problem, subject, bound}`: `problem` the `notice_*` word; `subject` the directory as a
+whole (`Directory`, for the count and the total), a path below it (`Path`), or a pack (`Package`,
+its id); `bound` `Count {limit, found}` or `Bytes {limit, found}`, the bound broken (the least or
+the most) and the value found, which `standard_pack_root_invalid` carries as `limit_count` and
+`count` or `limit_bytes` and `actual_bytes`. `NoticeIssue::member` names the path relative to the
+root that holds the directory (`notices/<path>`, `notices`, or `bundle.json` for a pack, whose id
+`NoticeIssue::package_id` gives). The shape serves the three later callers without one of them
+restating a rule: each lists the files it found (a zip's member table with its declared sizes for
+`place`; a directory on disk for `package bundle --notices`; a placed game root for `standard-pack
+check` and `place`'s `post_check`), reads each file through the size and text rules, and prefixes
+its own root (`<zip>\`, the game root) to `member()` to name the member in its outcome, with
+`json_pointer` empty. One issue, the first, as the root-file checks answer: a bundle is refused
+for one cause.
+
+**Two cases the work order asked to decide.** `a.tar.md` is accepted: a file name's suffix is what
+follows its last dot, `md` (and `a.md.html`, of the suffix `html`, is refused). A trailing dot
+(`NOTICE.`, `NOTICE.md.`) is refused, by `safe_source_path` (and its suffix would be empty). A
+byte-order mark at the start is accepted, and a U+FEFF after it is an ordinary character: the text
+rule's refused set is closed and does not hold it.
+
+**Why one place.** Three programs will judge the directory in three forms: the installer in a zip
+before it places it, `package bundle` in a source directory before it lays it, `standard-pack
+check` in a placed root. A rule each states itself drifts, and one root accepted by one tool and
+refused by another is what the shared root-file checks exist to prevent ("One check, three readers"
+in [package-reference.md](package-reference.md)).
+
+**The three slices**, one after another (the coordinator's order of 11-13):
+
+| Slice | What it turns on |
+|---|---|
+| NOTICES-1 (this) | the rules, the seven words, the optional values, the contract text; nothing reads the directory |
+| NOTICES-2 | the installer's `place` (crate `lab-rescue`): the `package` edge checked before the layout, the directory as one item of kind `notices` placed first and set aside when a later bundle carries none, `notice_undeclared`, reads through each file's bound; the raise of `package` to revision 10, the Runtime declaring [3, 10] |
+| NOTICES-3 | `package bundle --notices`, `standard-pack check` (the directory checked and counted when the root holds one) and `resource verify`'s bundle step |
+
+**Interfaces.** None raised ([component-interfaces.md](component-interfaces.md), "Bump rule"): no
+program writes or reads anything new. The seven words and the four optional values are added
+within `runtime-outcomes` 1, values a reader only spells, as `argument_problem`'s `not_absolute`
+(L5G2b-10) and the optional `count` of S168C-3 were; `standard_pack_root_invalid` is `review:
+pending`, so it may gain optional values (the outcome-code writing spec v2.2, §11; §2 rule 5 forbids
+only a required key on a settled entry). `package` stays at 9: NOTICES-2 raises it with its first
+reader. `BundleIndex`, `reserved_package_id`, `actingd-config`, `ledger`, `runtime-client`,
+`install-*`, `player-hold` and `tools-layout`: untouched.
+
+**At deploy.** Nothing changes: no program calls the module. **Rollback:** nothing to undo.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NT1-1 | the module `standard_pack_notices`: the directory's name, the bounds, the path, size, set, pack and text rules, `NoticeIssue`, `NoticeSubject`, `NoticeBound`, `NoticeEntry` | contract rules (no shape) | NOTICES-1 | — | first callers NOTICES-2 and NOTICES-3; no file system, no zip |
+| NT1-2 | `standard_pack_problem` + `notice_count`, `notice_bytes`, `notice_total_bytes`, `notice_depth`, `notice_name`, `notice_not_text`, `notice_undeclared` | outcome vocabulary | NOTICES-1 | NOTICES-2, NOTICES-3 | in `StandardPackProblem` and the catalog's vocabulary; `notice_undeclared` (a bundle that carries the directory and declares a `package` maximum below 10) is registered now so that the vocabulary moves once, NOTICES-2 its first user |
+| NT1-3 | `standard_pack_root_invalid` + optional `limit_count`, `count`, `limit_bytes`, `actual_bytes` (existing keys) | optional values of a pending entry (no shape) | NOTICES-1 | NOTICES-2, NOTICES-3 | its description names the notices refusal's `path`, `json_pointer`, `package_id` and bound |
+| NT1-4 | [package-reference.md](package-reference.md), "Notices" | contract text | NOTICES-1 | — | the layout lines of `package bundle` and of the standard package root, the `package` row of [component-interfaces.md](component-interfaces.md), [install-cli.md](install-cli.md), `lab-operations.json` and [resource-verify.md](resource-verify.md) come with NOTICES-2 and NOTICES-3 |
+
+Tests (contract gate row "#444 NOTICES-1", the module's own tests, placeholder names, a notice file
+`NOTICE.md`): `standard_pack_notices::tests::notices_path_rule_holds_each_bound_at_its_edge`
+(`notices/` in exact lower case; depth 2 kept and 3 refused with the bound; segments of 64 bytes
+kept and 65 refused, a file name and a directory's name, and an empty segment, with the bound
+broken; a first byte that is a dot, a dash or an underscore; a byte outside the alphabet; a device
+name in any case and a trailing dot; every accepted suffix in lower and upper case and none; other
+suffixes refused; `a.tar.md` kept and `a.md.html` refused; a dot in a directory's name),
+`notices_set_rule_holds_each_bound_at_its_edge` (64 files kept and 65 refused; a file of 0 bytes,
+1 byte, the bound and the bound plus one, through the listing and the size rule; the total at the
+bound and one byte past it; two paths equal under ASCII case folding and a file and a directory of
+one name, in any case, each refused at its path; the first path in byte order decides whatever the
+listing's order), `notices_pack_rule_refuses_a_pack_named_like_the_directory_only_beside_it`
+(`notices`, `Notices` and `NOTICES` refused beside the directory and free without it; other ids
+free) and `notices_text_rule_accepts_text_and_refuses_the_control_characters` (ASCII, UTF-8 with
+and without a byte-order mark and one after the start, CRLF, CR and mixed line ends, TAB and FF
+kept; each of the 29 refused characters refused at the start, the middle and the end, every other
+ASCII byte kept there; six invalid UTF-8 sequences refused). No existing test changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
