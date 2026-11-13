@@ -1812,3 +1812,14 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_451_place_pkg::place_pkg_notices_bundle_declaring_package_alone",
 ]
 incident = ["#451 PLACE-PKG"]
+
+# Workflow #453 S5 (0.12.59; register §1.340; brief rd-1113/brief-453-s5s6-cold-place.md; design note rd-1113/fresh-root-design.md §2(c) 2a; contracts/install-cli.md, "The Lab's rescue module", place): on fake roots and seams with an installer that declares package [3, 10], the Lab rescue module's place journals the instances the running Runtime binds to the bundle's game as the input bound, and its composition check waits for a new catalog only when the game's schedule.json changes and bound is not empty: with the one instance of the Runtime bound to another game and a bundle that changes schedule.json, bound is [] and the composition row passes with expected unchanged and bound [] after one read of the catalog by the check (three reads in all, no wait), the other game's instance not paused; with an instance bound to the game the row waits 500 ms on the fake clock and reads again, and passes with expected new once the catalog changed (four reads); an operation stopped after its last item whose journal then has no bound, as an earlier build writes it, resumed with op resume and no instance bound to the game, waits as before and passes with expected new (two reads); a placement with an instance bound to the game and no schedule.json journals the steps pause, three pack_item, post_check and release_hold, the inputs of before (commit, config_sha256, game, hold, instances, known_pauses, zip, zip_sha256) and bound, the rows rerun, standard_pack_check and composition with the composition values of before (no bound), pauses and resumes the bound instance, and answers the members facts, instances, outcome, plan and steps, the steps plan, place and schedule, and the place step's members checks, game, hold (kept false), operation_id and placed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_453_cold_place::s5_unbound_composition_passes_at_once",
+    "actingcommand-lab-rescue::lib::install::gate_453_cold_place::s5_a_bound_instance_waits_for_a_new_composition",
+    "actingcommand-lab-rescue::lib::install::gate_453_cold_place::s5_a_journal_without_bound_keeps_the_wait",
+    "actingcommand-lab-rescue::lib::install::gate_453_cold_place::s5_a_hot_placement_with_a_bound_instance_answers_as_before",
+]
+incident = ["#453 S5"]

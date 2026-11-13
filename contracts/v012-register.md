@@ -19300,6 +19300,65 @@ with the item `notices` `new` first, placed, the journalled plan document's `pac
 file on disk the zip's bytes). No existing test changes: the earlier gates' bundles keep their
 six-interface declarations, which the new reader reads by their `package` pair.
 
+### 1.340 Slices #453 S5 and S6 (0.12.59): the installer's `place` with no instance bound to the bundle's game, and while the Runtime is stopped (Workflow #453, approved by the owner on 11-13; the design note `rd-1113/fresh-root-design.md` §0 and §2, read on main `98924e28`; the coordinator's rulings of 11-13 on board #453, not the owner's words; coordinator work order `rd-1113/brief-453-s5s6-cold-place.md`, read on main `98924e28`)
+
+1.340 is the next free number on main `98924e28`; a slice of this release merged before this one
+may take it, and this section then moves to the next. [install-cli.md](install-cli.md), "The
+Lab's rescue module" ("The composition after a placement"), and the row `place` of
+[lab-operations.json](lab-operations.json) are the contract. No outcome code, value key, vocabulary
+word, configuration key, step kind, intent member, wire shape, record or interface revision is
+added or moved, and no outcome code fragment changes, so the index is not regenerated. These are
+rescue rows only: `actingctl` gains nothing.
+
+**S5, what was wrong.** The checks after a placement (`post_check`, crate `lab-rescue`,
+`src/install/place.rs`, `check_step`) end with the row `composition`: when the bundle changes the
+game's `schedule.json`, it waits for the catalog of the Runtime's latest evaluation to change,
+within `standard_packs.check_interval_ms` plus `install.hot.idle_wait_ms`. The scheduler workbench
+reads only the games of configured instances (`crates/runtime-host/src/host/standard_pack_schedule.rs`:
+a game root installed without a bound instance is never read), so on a root whose instances do not
+bind the bundle's game the catalog never changes: the row waited, with the defaults 60000 and
+600000 ms, eleven minutes, and failed, `post_check_failed` with the hold kept, after a placement
+that had done nothing wrong. Read from the code; production never met it (it places its bundles
+with the coordinator's placement kit, not with this row).
+
+**S5, the rule** (`src/rescue.rs`, `place`; `src/install/place.rs`, `open` and `check_step`).
+`place` records the instances the running Runtime's status binds to the bundle's game (those it
+already computed for its hold, paused or not) in the journal's free `inputs` as `bound`, before
+the first step. The row waits for a new catalog only when `schedule.json` changes **and** `bound`
+is not empty; with `bound` empty it reads the catalog once and passes, its values
+`{catalog_hash, catalog_before, expected: "unchanged", bound: []}`. A journal without `bound` (an
+operation an earlier build began, resumed by this one) keeps the wait. `CheckIntent` denies unknown
+members, so the new value lives in `inputs`, not in the step's intent; the rows and values of every
+other case are those of before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S5-1 | the `pack_place` journal's input `bound` (the aliases the status binds to the game) | journal input member (free `inputs`) | #453 S5 | `install::place::open` | written before the first step; an earlier build's journal has none |
+| S5-2 | the row `composition` with `bound` empty and `schedule.json` changed: `pass` at its first read, `expected` `unchanged`, `bound` `[]` | installer behaviour, a row value member | #453 S5 | `install::place::check_step` | a journal without `bound` keeps the wait |
+
+Tests (apps gate row "#453 S5", `crates/lab-rescue/src/install/gate_453_cold_place.rs`, on the
+fake host with placeholder names, the installer declaring `package` [3, 10], every bundle [3, 5],
+a schedule placeholder bytes, the fake clock moved only by calls):
+`s5_unbound_composition_passes_at_once` (the Runtime's one instance bound to another game, a
+bundle that changes `schedule.json`: `bound` `[]`, the row `pass` with `expected` `unchanged` and
+`bound` `[]`, the catalog read three times in all, before the hold, by the check and for the
+schedule, so the check never waited; the other game's instance not paused),
+`s5_a_bound_instance_waits_for_a_new_composition` (an instance bound to the game: `bound` names it,
+the check reads the catalog of before, waits 500 ms, reads the new one and passes with `expected`
+`new`, four reads), `s5_a_journal_without_bound_keeps_the_wait` (no instance bound, the operation
+stopped by the fake host after its last item, `bound` removed from its journal as an earlier
+build writes it, `op resume`: the row waits and passes with `expected` `new`, two reads) and
+`s5_a_hot_placement_with_a_bound_instance_answers_as_before` (the work order's added test: an
+instance bound to the game and no `schedule.json`: the steps `pause`, three `pack_item`,
+`post_check`, `release_hold`, the inputs of before and `bound`, the rows `rerun`,
+`standard_pack_check` and `composition` with the composition values of before, the hold of the
+bound instance paused and resumed, the answer's members, steps and `place` step members of before,
+all literals of `gate_434_lab3` and `gate_451_loadp`). No existing test changes.
+
+**At deploy.** Nothing to do: production places packs with the coordinator's own kit, not with
+this row. **Rollback** to a build before 0.12.59: its installer reads a journal with `bound` (its
+`inputs` are free JSON), ignores it and resumes such an operation with the wait.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

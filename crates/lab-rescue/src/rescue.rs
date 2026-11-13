@@ -1727,7 +1727,7 @@ fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
         let hold = HoldInputs {
             reason: hold_reason(context, "place")?,
             known: std::collections::BTreeMap::new(),
-            only: Some(bound),
+            only: Some(bound.clone()),
             global: false,
         };
         let begun: HoldStart = match deploy::hold_start(
@@ -1763,6 +1763,7 @@ fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
                 hold: &begun,
                 catalog_before,
                 initiator: Some(context.initiator),
+                bound: &bound,
             },
         )?;
         let operation_id = operation.id().to_owned();

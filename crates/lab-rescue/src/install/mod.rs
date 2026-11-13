@@ -128,6 +128,10 @@ mod gate_451_loadp;
 // the bundle's own rule.
 #[cfg(test)]
 mod gate_451_place_pkg;
+// Test-only: Workflow #453 S5 and S6, the rescue module's `place` with no instance bound to the
+// bundle's game, and while the Runtime is stopped.
+#[cfg(test)]
+mod gate_453_cold_place;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.

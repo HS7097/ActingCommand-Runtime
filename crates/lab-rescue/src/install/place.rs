@@ -33,7 +33,10 @@
 //!   plan of the same bundle again, every item now unchanged; the Tools' `actinglab.exe
 //!   standard-pack check` of the game root; the new composition, the catalog the Runtime's
 //!   latest evaluation ran under changed within `standard_packs.check_interval_ms` plus
-//!   `install.hot.idle_wait_ms` when the game's `schedule.json` changed), a failed check ending
+//!   `install.hot.idle_wait_ms` when the game's `schedule.json` changed and, Workflow #453 S5, an
+//!   instance was bound to the game when the operation began, the input `bound`; with none bound
+//!   the workbench never reads the game root, so the catalog is expected unchanged; a journal
+//!   without `bound`, which an earlier build began, keeps the wait), a failed check ending
 //!   the command `post_check_failed` with the instances staying paused (the items are placed:
 //!   `undo`, then `release-hold`); then the release of the hold (`release_hold`: only the
 //!   instances the pause step paused, each while it shows the revision recorded).
@@ -955,7 +958,15 @@ pub(crate) struct Begun<'a> {
     pub(crate) hold: &'a super::deploy::HoldStart,
     pub(crate) catalog_before: Option<String>,
     pub(crate) initiator: Option<actingcommand_lab_ops::initiator::Initiator>,
+    /// Workflow #453 S5: the instances the running Runtime binds to the bundle's game, as the
+    /// status read before the hold showed them (paused or not), journalled as the input
+    /// [`BOUND_INPUT`].
+    pub(crate) bound: &'a [String],
 }
+
+/// Workflow #453 S5: the input of a `pack_place` journal that lists the instances bound to the
+/// bundle's game when the operation began. A journal an earlier build began has none.
+const BOUND_INPUT: &str = "bound";
 
 /// Opens the placement's operation (`pack_place`): S0 and the hold's reads journalled, the guards
 /// recorded, the deferred record in the pause step's evidence.
@@ -972,20 +983,22 @@ pub(crate) fn open<'h>(
         &begun.hold.held,
         loaded.settings.stop_drain_timeout_ms,
     );
+    let mut inputs = json!({
+        "commit": loaded.state.live.as_ref().map(|live| live.commit.clone()),
+        "game": placement.game,
+        "zip": files::plain(&placement.zip),
+        "zip_sha256": placement.zip_sha256,
+        "hold": hold.reason,
+        "known_pauses": hold.known,
+        "instances": begun.hold.held,
+        "config_sha256": loaded.config_sha256,
+    });
+    inputs[BOUND_INPUT] = json!(begun.bound);
     let opening = Opening {
         kind: OperationKind::PackPlace,
         initiator: begun.initiator,
         one_way: false,
-        inputs: json!({
-            "commit": loaded.state.live.as_ref().map(|live| live.commit.clone()),
-            "game": placement.game,
-            "zip": files::plain(&placement.zip),
-            "zip_sha256": placement.zip_sha256,
-            "hold": hold.reason,
-            "known_pauses": hold.known,
-            "instances": begun.hold.held,
-            "config_sha256": loaded.config_sha256,
-        }),
+        inputs,
         plan_id: Some(placement.id.clone()),
         plan: Some(placement.document.clone()),
         acknowledged: Vec::new(),
@@ -1172,6 +1185,15 @@ pub(crate) fn check_step(
 ) -> Result<StepEnd, Outcome> {
     let intent: CheckIntent = operation.intent(n)?;
     let command = operation.journal().kind.location();
+    // Workflow #453 S5: no instance bound to the game when the operation began (its input
+    // [`BOUND_INPUT`] empty). The workbench reads only the games of configured instances, so no
+    // new composition comes; a journal without the input keeps the rule below.
+    let unbound = operation
+        .journal()
+        .inputs
+        .get(BOUND_INPUT)
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty);
     operation.start(n)?;
     let host = operation.host();
     let paths = operation.paths().clone();
@@ -1245,7 +1267,9 @@ pub(crate) fn check_step(
         ));
     }
     // 3. The new composition: the catalog of the latest evaluation changed, within the
-    // workbench's check interval and the hot idle wait, when the game's rules changed.
+    // workbench's check interval and the hot idle wait, when the game's rules changed and
+    // (Workflow #453 S5) an instance was bound to the game; with none bound, the catalog read once
+    // and expected unchanged.
     let interval = actingcommand_runtime_config::member(&loaded.config, CHECK_INTERVAL_KEY)
         .and_then(Value::as_u64)
         .or_else(|| {
@@ -1275,6 +1299,13 @@ pub(crate) fn check_step(
                 "composition",
                 "pass",
                 json!({"catalog_hash": now, "catalog_before": intent.catalog_before, "expected": "unchanged"}),
+            );
+        }
+        if unbound {
+            break row(
+                "composition",
+                "pass",
+                json!({"catalog_hash": now, "catalog_before": intent.catalog_before, "expected": "unchanged", "bound": []}),
             );
         }
         if now != intent.catalog_before {

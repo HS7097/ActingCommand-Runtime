@@ -924,8 +924,9 @@ the rescue face:
   anything is paused or written), holds
   the instances bound to the bundle's game (the game comes from the bundle), waits until they are
   idle, places each item `.part` → `.old-<ms>` → in place (step `pack_item`), checks the bundle
-  again and runs `<root>\tools\actinglab.exe standard-pack check` on the placed game root,
-  releases and reads the schedule; the notices directory is one item (kind `notices`, Workflow
+  again, runs `<root>\tools\actinglab.exe standard-pack check` on the placed game root and checks
+  the composition ("The composition after a placement", below), releases and reads the schedule;
+  the notices directory is one item (kind `notices`, Workflow
   #444 NOTICES-2), placed first and, when the zip no longer carries it, set aside as a root file
   is; the loading templates directory is one item (kind `loading`, `<game root>\loading`, Workflow
   #451 LOAD-P), placed after the packs and before the root files, so the templates are in place
@@ -938,6 +939,20 @@ the rescue face:
   start (step `pause_added`) before the release, and its hold's global pause kept across the
   restart until that release (INST-5b). `--detach` runs the module's own command again
   through the WMI start with the same initiator. The download stays outside.
+- **The composition after a placement** (Workflow #453 S5, since 0.12.59; register §1.340; the
+  coordinator's rulings of 11-13 on board #453, not the owner's words). The journal of `place`
+  records, as the input `bound`, the instances the running Runtime's status binds to the bundle's
+  game, paused or not (those its hold is chosen from). The row `composition` of its `post_check`
+  reads the catalog the Runtime's latest evaluation ran under. When the game's `schedule.json`
+  changes (placed, replaced or set aside) and `bound` is not empty, it waits, reading again every
+  500 ms, for a catalog other than the one read before the hold, within
+  `standard_packs.check_interval_ms` plus `install.hot.idle_wait_ms`: `pass` with `expected`
+  `new`, else `fail` with `waited_ms`. With `bound` empty it passes at its first read, `expected`
+  `unchanged` and `bound` `[]`: the workbench reads only the games of configured instances (a game
+  root no instance binds is never read), so no new composition comes. When the file does not
+  change it passes at its first read, `expected` `unchanged`, as before. A journal without `bound`
+  (an operation an earlier build began, resumed by this one) keeps the wait. A catalog that cannot
+  be read is `not_evaluated`, as before.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
