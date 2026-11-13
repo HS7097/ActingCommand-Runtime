@@ -20708,17 +20708,25 @@ device; every id made up):
   but the five members above; the key's instance record, and loaded again after a restart.
 - `field_list_miss_keeps_record`: an item out of the dictionary (`list_position_unread`, 1, [1]),
   a name read under the list's floor (`list_position_unread`, 1, [2]), a repeated key
-  (`list_duplicate_key`, 1, [0, 2]), the start unseen (`list_start_unseen`, 3, [0]) and the end
-  unseen (`list_end_unseen`, 2, [1]) each succeed as a `read_list` miss does, publish nothing, keep
-  the key's earlier record byte for byte and write exactly one warning row
-  `contained_task_resource_reading_unresolved` with `reading_problem`, `count` and `frame_indices`
-  (an unread position's values are the `read_list` miss's plus `frame_indices`); 65 unresolved
-  items name 64 frames and `frame_indices_total` 65.
-- `field_list_failed_or_cancelled_run_publishes_nothing`: a run stopped at its first tap
-  (`StopInstanceRun`) ends cancelled by its client, and a run that collects a frame of the list
-  after the list was decided whole fails `contained_task_state_invalid`; neither publishes, the
-  earlier record stays byte for byte, and neither writes a miss row, as a `read_list` run stopped
-  after its list step writes none.
+  (`list_duplicate_key`, 1, [0, 2]), the start unseen (`list_start_unseen`, 3, [0]), the end
+  unseen (`list_end_unseen`, 2, [1]) and, in a list with a column, an item whose key resolves but
+  whose column is read under its target's own minimum (`list_position_unread`, 1, [1]) each
+  succeed as a `read_list` miss does, publish nothing, keep the key's earlier record byte for byte
+  and write exactly one warning row `contained_task_resource_reading_unresolved` with
+  `reading_problem`, `count` and `frame_indices` (an unread position's values are the `read_list`
+  miss's plus `frame_indices`); each frame a row names is a frame of the run's fields report (the
+  column's frame is the one whose column the report gives `low_confidence`); 65 unresolved items
+  name 64 frames and `frame_indices_total` 65.
+- `field_list_failed_or_cancelled_run_publishes_nothing`: on a field list whose end needs a mark on
+  its last item's page and whose target page follows that page by a step, a run that decided its
+  one-item list whole on its first frame is stopped (`StopInstanceRun`) at that step and ends
+  cancelled by its client while the host holds the whole list (the same run shown the target after
+  the step publishes the list); a run that decided its list and then collects the next item after
+  the list's end fails `contained_task_state_invalid` with `state_problem` `runtime_invariant` and
+  no page named, its fields having collected that item as their third frame (the host keeps no
+  kernel detail of this failure). Neither publishes, the earlier record stays byte for byte, and
+  neither writes a miss row, as a `read_list` run stopped at its step after its list step read the
+  list whole writes none.
 - `field_list_full_store_refused`: the byte bound (lowered for each producer's own key) gives each
   producer one `list_bytes_exceeded` row with the same values, the field list's naming no frame; on
   a full store each producer's new key is refused, the run fails

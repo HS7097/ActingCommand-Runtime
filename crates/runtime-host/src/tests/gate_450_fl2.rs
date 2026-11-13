@@ -16,7 +16,8 @@
 //   integer) of the group `row` are read on both pages; the step `next` taps from `item` to the
 //   next item or to `last`. Its field list `list_a` is keyed by the name (`id`), with the column
 //   `count` of the amount or without columns, a floor of 900, starts where the previous arrow does
-//   not show and ends on `last`.
+//   not show and ends on `last`. A variant's target is the page `done` (x 0, nothing else shown),
+//   after the step `back` from `last`.
 // - `neutral.list.task` is the `read_list` package of the S168-4 host gate (`gate_428_s168_4`): a
 //   one-screen list of cards whose names the scripted provider reads from their patches, read by
 //   the step `read_members` into keys only, then the tap `leave` to the detail page.
@@ -28,6 +29,7 @@
 
 use super::gate_308_l4b::{ALIAS, CardNames, HEIGHT, WIDTH, member, single_frame_select_package};
 use super::*;
+use actingcommand_contract::outcome::StateProblem;
 use actingcommand_contract::{
     ArtifactRedactionState, ContainedTaskCancellationReason, FactScalar, FrameId,
     MAX_TASK_DIAGNOSTIC_PAGE_RECORDS, RequestId, TaskDiagnosticCursor, TaskDiagnosticErrorData,
@@ -46,6 +48,9 @@ use serde_json::{Value, json};
 const LIST_KEY: &str = "inventory.list.example_kind_a";
 const OTHER_KEY: &str = "inventory.list.example_kind_b";
 const UNRESOLVED: &str = "contained_task_resource_reading_unresolved";
+// The documents of the fields collector's evidence: one per collected frame, and the fields report.
+const OBSERVATION_SCHEMA: &str = "actingcommand.runtime.post-admission-ocr-observation.v1";
+const REPORT_SCHEMA: &str = "actingcommand.runtime.post-admission-ocr-comparison-envelope.v1";
 const VALID_FOR_MS: u64 = 86_400_000;
 // The field list's id and the `read_list` step's.
 const LIST_ID: &str = "list_a";
@@ -107,6 +112,8 @@ const SHOWN: Item = Item {
 #[derive(Debug, Clone)]
 enum Screen {
     Item(Item),
+    // The field list's package's page `done`.
+    Done,
     // The `read_list` package's list page, its end showing, with one card per patch.
     Cards(Vec<[u8; 3]>),
     // The `read_list` package's detail page.
@@ -213,6 +220,8 @@ fn item_pixel(item: &Item, x: u32, y: u32) -> [u8; 3] {
 fn pixel(screen: &Screen, x: u32, y: u32) -> [u8; 3] {
     match screen {
         Screen::Item(item) => item_pixel(item, x, y),
+        Screen::Done if (x, y) == (0, 0) => DONE,
+        Screen::Done => BACKGROUND,
         Screen::Cards(patches) => card_pixel(RED, true, patches, x, y),
         Screen::Detail => card_pixel(BLUE, false, &[], x, y),
     }
@@ -539,9 +548,9 @@ struct Fields {
     count: bool,
     // The fields' `max_frames`.
     max_frames: u32,
-    // The list ends on `last` only with the final mark, the task's target is `done`, which no
-    // screen shows, and the step `back` taps from `last` to an item: the run collects a frame of
-    // the list after its end.
+    // The list ends on `last` only with the final mark, the task's target is `done`, and the step
+    // `back` taps from `last` to an item or to `done`: a run shown an item after `last` collects a
+    // frame of the list after its end; one shown `done` ends there.
     back_after_end: bool,
 }
 
@@ -600,15 +609,19 @@ fn fields_package(fields: Fields) -> Vec<u8> {
         "id": "next", "from": "item", "to": ["item", "last"],
         "click": {"kind": "point", "x": 40, "y": 50}, "unguarded_trusted_coordinate": true
     })];
-    let mut target = "last";
-    if fields.back_after_end {
+    // The fields' outcome is mapped on every page a run may end on (admission's coverage of the
+    // target), and the list's `end` page is one of its terminal pages (the list's rule): `last`,
+    // and with `back` also the target `done`.
+    let (target, terminals) = if fields.back_after_end {
         list["end"] = json!({"page_ids": ["last"], "required": ["mark/final"]});
         operations.push(json!({
-            "id": "back", "from": "last", "to": "item",
+            "id": "back", "from": "last", "to": ["item", "done"],
             "click": {"kind": "point", "x": 40, "y": 60}, "unguarded_trusted_coordinate": true
         }));
-        target = "done";
-    }
+        ("done", json!(["last", "done"]))
+    } else {
+        ("last", json!(["last"]))
+    };
     let control = json!({
         "schema_version": "Lab-1y.control.v2",
         "package_id": "neutral.list.fields",
@@ -643,7 +656,7 @@ fn fields_package(fields: Fields) -> Vec<u8> {
         },
         "scheduling_outcome": {"mappings": [
             {"outcome_key": "fields_recorded", "effect": "no_designated_effect",
-             "terminal_pages": ["last"]}
+             "terminal_pages": terminals}
         ]},
         "operations": operations,
         "field_lists": [list]
@@ -1077,6 +1090,81 @@ fn values_without(row: &Value, keys: &[&str]) -> serde_json::Map<String, Value> 
     values
 }
 
+// The documents the fields collector's evidence was stored in for the run `correlation_id`, in
+// ledger order: one per collected frame (`post-admission-ocr-observation.v1`, with its fields
+// report `frame_index`) and, at a successful end, the fields report on the final frame
+// (`post-admission-ocr-comparison-envelope.v1`, its `report`).
+fn capture_documents(
+    root: &TempDir,
+    host: &RuntimeHost,
+    correlation_id: CorrelationId,
+) -> Vec<Value> {
+    let mut documents = Vec::new();
+    for event in run_records(host, correlation_id) {
+        if event.event_type() != EventType::ArtifactVerified {
+            continue;
+        }
+        for artifact in event.artifacts() {
+            let projected = artifact.project(true);
+            if projected.kind != ArtifactKind::DiagnosticJson
+                || projected.producer != ArtifactProducer::CapturePipeline
+            {
+                continue;
+            }
+            documents.push(
+                serde_json::from_slice(
+                    &read_projected_verified(root.path(), &projected)
+                        .expect("verified document bytes"),
+                )
+                .expect("diagnostic JSON"),
+            );
+        }
+    }
+    documents
+}
+
+// The fields report frame indices of the frames the run `correlation_id` collected, in order.
+fn collected_frames(root: &TempDir, host: &RuntimeHost, correlation_id: CorrelationId) -> Vec<u64> {
+    capture_documents(root, host, correlation_id)
+        .iter()
+        .filter(|document| document["schema_version"] == OBSERVATION_SCHEMA)
+        .map(|document| document["frame_index"].as_u64().expect("a frame index"))
+        .collect()
+}
+
+// The fields report of the run `correlation_id`, as the host stored it at its successful end.
+fn fields_report(root: &TempDir, host: &RuntimeHost, correlation_id: CorrelationId) -> Value {
+    let reports = capture_documents(root, host, correlation_id)
+        .into_iter()
+        .filter(|document| document["schema_version"] == REPORT_SCHEMA)
+        .map(|document| document["report"].clone())
+        .collect::<Vec<_>>();
+    let [report] = reports.as_slice() else {
+        panic!("exactly one fields report: {reports:?}");
+    };
+    report.clone()
+}
+
+// The fields report's records of the group `row` on the frame `frame_index`.
+fn report_rows(report: &Value, frame_index: u32) -> Vec<&Value> {
+    report["records"]
+        .as_array()
+        .expect("the report's records")
+        .iter()
+        .filter(|record| record["frame_index"] == frame_index && record["group"] == "row")
+        .collect()
+}
+
+// The reason the fields report gives the field `field` on the frame `frame_index`.
+fn field_reason(report: &Value, frame_index: u32, field: &str) -> Value {
+    report_rows(report, frame_index)
+        .into_iter()
+        .flat_map(|record| record["fields"].as_array().expect("the record's fields"))
+        .find(|result| result["field_id"] == field)
+        .map(|result| result["reason"].clone())
+        .unwrap_or_else(|| panic!("no field {field} on frame {frame_index}: {report}"))
+}
+
 // A warning row of the field list `list_a` of `LIST_KEY`: the error row of the post-admission phase
 // without a target, the warning with `problem`, `count` and `frame_indices`.
 fn assert_field_list_miss(row: &Value, problem: &str, count: u32, frame_indices: &[u32]) {
@@ -1225,9 +1313,13 @@ fn field_list_published_like_a_list() {
 // dictionary (`list_position_unread`, 1, [1]; its values are the `read_list` miss's plus
 // `frame_indices`), a name read at 0.85, under the list's floor of 900 though over its target's
 // own (`list_position_unread`, 1, [2]), a key read twice (`list_duplicate_key`, 1, [0, 2]), a first
-// item that shows the previous arrow (`list_start_unseen`, 3, [0]), and a package whose fields stop
-// at two frames before the last item (`list_end_unseen`, 2, [1]). Sixty-five unresolved items name
-// the first 64 frames and `frame_indices_total` 65.
+// item that shows the previous arrow (`list_start_unseen`, 3, [0]), a package whose fields stop at
+// two frames before the last item (`list_end_unseen`, 2, [1]), and, in a list with the column
+// `count`, an item whose name resolves but whose amount is read at 0.05, under its target's own
+// minimum (`list_position_unread`, 1, [1]). Every frame a row names is a frame of the run's fields
+// report, and the column's frame is the one whose `amount` the report gives `low_confidence` and
+// whose `name` it resolved. Sixty-five unresolved items name the first 64 frames and
+// `frame_indices_total` 65.
 #[test]
 fn field_list_miss_keeps_record() {
     let root = TempDir::new().expect("tempdir");
@@ -1237,6 +1329,14 @@ fn field_list_miss_keeps_record() {
         "fields-short.zip",
         fields_package(Fields {
             max_frames: 2,
+            ..Fields::list(LIST_KEY)
+        }),
+    );
+    let counted = write_package(
+        &root,
+        "fields-count.zip",
+        fields_package(Fields {
+            count: true,
             ..Fields::list(LIST_KEY)
         }),
     );
@@ -1262,7 +1362,7 @@ fn field_list_miss_keeps_record() {
     );
     assert!(publications(&host, OTHER_KEY).is_empty());
 
-    let cases: [(&Path, Vec<Screen>, &str, u32, Vec<u32>); 5] = [
+    let cases: [(&Path, Vec<Screen>, &str, u32, Vec<u32>); 6] = [
         (
             list.as_path(),
             changed(three_items(), 1, |item| item.name = UNLISTED),
@@ -1298,6 +1398,13 @@ fn field_list_miss_keeps_record() {
             2,
             vec![1],
         ),
+        (
+            counted.as_path(),
+            changed(three_items(), 1, |item| item.confidence = [99, 5]),
+            "list_position_unread",
+            1,
+            vec![1],
+        ),
     ];
     for (package, screens, problem, count, frame_indices) in cases {
         device.shows(screens);
@@ -1325,6 +1432,19 @@ fn field_list_miss_keeps_record() {
                 "{problem}: the read_list miss's values"
             );
         }
+        // Each frame the row names is a frame of the run's fields report.
+        let report = fields_report(&root, &host, miss.correlation_id);
+        for &frame in &frame_indices {
+            assert_eq!(
+                report_rows(&report, frame).len(),
+                1,
+                "{problem}: frame {frame} of {report}"
+            );
+        }
+        if package == counted.as_path() {
+            assert_eq!(field_reason(&report, 1, "amount"), "low_confidence");
+            assert_eq!(field_reason(&report, 1, "name"), "resolved");
+        }
     }
 
     // Sixty-five items, none in the dictionary.
@@ -1351,17 +1471,27 @@ fn field_list_miss_keeps_record() {
     host.close().expect("close the host");
 }
 
-// FL-2 test 3: after a run published the list, a run stopped at its first tap (after its first
-// item, `StopInstanceRun` answered at once) is cancelled by its client, and a run whose list was
-// decided whole on `last` and which then collects a frame of the list after its end fails
-// `contained_task_state_invalid`: neither publishes, the key's record stays byte for byte, and
-// neither writes a miss row. A `read_list` run stopped at its one input, after its list step,
-// publishes nothing and writes no miss row either.
+// FL-2 test 3: after a run published the list, runs of a field list whose `end` needs the final
+// mark on `last` and whose target `done` comes after `last` by the step `back`.
+// - Shown one item on `last` with the mark, a run decides the list whole on its first and only
+//   frame and taps `back`; a stop of the run (`StopInstanceRun`, answered at once) on that tap
+//   cancels it by its client while the host holds the whole list. The same run shown `done` after
+//   the tap ends there and publishes that list: the stopped run's list could have been published.
+// - Shown an item, `last` with the mark and an item, a run decides the list on `last`, taps `back`
+//   and collects the next item after the list's end: it fails `contained_task_state_invalid`, a
+//   Runtime invariant (`state_problem` `runtime_invariant`, no page named, as a refusal of the run's
+//   state machine names one), its fields having collected that item as their third frame. The host
+//   keeps no detail of this failure (`failure_detail_for_test` is `None`: it keeps the kernel's
+//   detail of a `linear_steps` package's failure and of a few codes only), so the frames the run
+//   collected stand for it.
+// Neither the stopped nor the failed run publishes, the key's record stays byte for byte and
+// neither writes a miss row, as a `read_list` run stopped at its one tap, after its list step read
+// its list whole, publishes nothing and writes none.
 #[test]
 fn field_list_failed_or_cancelled_run_publishes_nothing() {
     let root = TempDir::new().expect("tempdir");
     let list = write_package(&root, "fields.zip", fields_package(Fields::list(LIST_KEY)));
-    let failing = write_package(
+    let back = write_package(
         &root,
         "fields-back.zip",
         fields_package(Fields {
@@ -1376,15 +1506,31 @@ fn field_list_failed_or_cancelled_run_publishes_nothing() {
     let whole = run(&host, &list);
     completed(&host, &whole.receipt);
     let before = record(&host, LIST_KEY).expect("the list's record");
+    // One item on `last` with the final mark: the list's first frame is its end, so the list is
+    // whole before the run's one tap, `back`.
+    let one_item = || {
+        Screen::Item(Item {
+            last: true,
+            name: 3,
+            amount: 5,
+            final_mark: true,
+            ..SHOWN
+        })
+    };
 
-    // Stopped in mid-list.
-    device.shows(three_items());
-    let (cancelled, answer) = run_stopped_at_first_input(&host, &device, &list);
+    // Stopped at `back`, the list whole. After the tap the screen is no page of the package.
+    device.shows(vec![one_item(), Screen::Detail]);
+    let (cancelled, answer) = run_stopped_at_first_input(&host, &device, &back);
     assert_eq!(answer.state(), RuntimeReceiptState::Completed, "{answer:?}");
     assert!(
         cancelled_by_its_client(&cancelled.receipt),
         "{:?}",
         cancelled.receipt
+    );
+    assert_eq!(
+        collected_frames(&root, &host, cancelled.correlation_id),
+        [0_u64],
+        "the list's one frame, collected before the tap"
     );
     assert_kept(&host, LIST_KEY, &before);
     assert_eq!(publications(&host, LIST_KEY).len(), 1);
@@ -1430,23 +1576,43 @@ fn field_list_failed_or_cancelled_run_publishes_nothing() {
             ..SHOWN
         }),
     ]);
-    let failed = run(&host, &failing);
+    let failed = run(&host, &back);
+    let outcome = failed.receipt.outcome();
     assert_eq!(
         failed.receipt.state(),
         RuntimeReceiptState::Failed,
-        "{:?}",
-        failed.receipt.outcome()
+        "{outcome:?}"
     );
     assert_eq!(
-        failed.receipt.outcome().code().as_str(),
+        outcome.code().as_str(),
         "contained_task_state_invalid",
-        "{:?}",
-        failed.receipt.outcome()
+        "{outcome:?}"
+    );
+    assert_eq!(
+        outcome.value("state_problem"),
+        Some(&json!(StateProblem::RuntimeInvariant.as_str())),
+        "{outcome:?}"
+    );
+    assert!(outcome.value("page_id").is_none(), "{outcome:?}");
+    assert_eq!(
+        collected_frames(&root, &host, failed.correlation_id),
+        [0_u64, 1, 2],
+        "the item after `last` is the third frame collected"
     );
     assert_kept(&host, LIST_KEY, &before);
     assert_eq!(publications(&host, LIST_KEY).len(), 1);
     let failed_rows = miss_rows(&root, &host, failed.correlation_id);
     assert!(failed_rows.is_empty(), "{failed_rows:?}");
+
+    // The stopped run's package and first screen, shown `done` after the tap: it ends there and
+    // publishes the list it held at the tap.
+    device.shows(vec![one_item(), Screen::Done]);
+    let ended = run(&host, &back);
+    completed(&host, &ended.receipt);
+    assert!(ended_on_success(&ended.receipt), "{:?}", ended.receipt);
+    let published = publications(&host, LIST_KEY);
+    assert_eq!(published.len(), 2, "{published:#?}");
+    assert_eq!(rows_of(&published[1]), vec![key_row(3)]);
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the host");
 }
