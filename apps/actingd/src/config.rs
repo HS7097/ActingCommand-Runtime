@@ -813,39 +813,7 @@ impl ConfiguredVision {
     /// `onnxruntime_providers_shared.dll`, both hashed), and `ort\DirectML.dll` is hashed
     /// against the pin and reported, never refused.
     pub(super) fn inspect(&self) -> Result<VisionInventory, VisionRefusal> {
-        let configured = if self.configured.is_absolute() {
-            self.configured.clone()
-        } else {
-            self.base.join(&self.configured)
-        };
-        let root = fs::canonicalize(&configured).map_err(|error| VisionRefusal {
-            code: VisionListingCode::VisionRootUnavailable.code(),
-            message: format!(
-                "vision root {} is unavailable: {error}",
-                configured.display()
-            ),
-            cause: Some(Outcome::from_io_error(
-                &error,
-                actingcommand_contract::outcome::IoOp::Canonicalize,
-            )),
-            path: None,
-        })?;
-        if let Some(install_root) = &self.install_root
-            && ["A", "B"]
-                .into_iter()
-                .any(|slot| root.starts_with(install_root.join(slot)))
-        {
-            return Err(VisionRefusal {
-                code: ActingdCode::VisionRootInProgramSlot.code(),
-                message: format!(
-                    "vision root {} lies inside a program slot of the install root {}; keep it outside A and B",
-                    root.display(),
-                    install_root.display()
-                ),
-                cause: None,
-                path: None,
-            });
-        }
+        let root = self.resolve_root()?;
         let models_dir = root.join(VISION_MODELS_DIRECTORY);
         let listing = list_vision_models(&models_dir).map_err(|error| VisionRefusal {
             code: VisionListingCode::VisionRootUnavailable.code(),
@@ -899,6 +867,48 @@ impl ConfiguredVision {
             listing,
             directml_library,
         })
+    }
+
+    /// Workflow #453 S7: the vision root as startup resolves it, the first part of
+    /// [`Self::inspect`]: the configured root (or `vision`) against its base, canonical; one that
+    /// does not resolve is `vision_root_unavailable` with the OS failure as its link, one inside a
+    /// program slot of the install root `vision_root_in_program_slot`. `actingd vision check`
+    /// resolves the root it compares with this.
+    pub(super) fn resolve_root(&self) -> Result<PathBuf, VisionRefusal> {
+        let configured = if self.configured.is_absolute() {
+            self.configured.clone()
+        } else {
+            self.base.join(&self.configured)
+        };
+        let root = fs::canonicalize(&configured).map_err(|error| VisionRefusal {
+            code: VisionListingCode::VisionRootUnavailable.code(),
+            message: format!(
+                "vision root {} is unavailable: {error}",
+                configured.display()
+            ),
+            cause: Some(Outcome::from_io_error(
+                &error,
+                actingcommand_contract::outcome::IoOp::Canonicalize,
+            )),
+            path: None,
+        })?;
+        if let Some(install_root) = &self.install_root
+            && ["A", "B"]
+                .into_iter()
+                .any(|slot| root.starts_with(install_root.join(slot)))
+        {
+            return Err(VisionRefusal {
+                code: ActingdCode::VisionRootInProgramSlot.code(),
+                message: format!(
+                    "vision root {} lies inside a program slot of the install root {}; keep it outside A and B",
+                    root.display(),
+                    install_root.display()
+                ),
+                cause: None,
+                path: None,
+            });
+        }
+        Ok(root)
     }
 }
 
@@ -2310,6 +2320,23 @@ impl ActingdConfigFile {
             env_nemu_folder: env_overrides.nemu_folder,
             bindings,
         })
+    }
+
+    /// Workflow #453 S7: the `vision` section as `assemble` assembles it (`vision_config_invalid`
+    /// for a section that breaks its rules), against the configuration's folder and the install
+    /// root (`--install-root` once [`Self::with_install_root`] gave it), without assembling
+    /// anything else: no other file is read and nothing under the state root. `None` without a
+    /// section. `actingd vision check` resolves its vision root from it.
+    pub(super) fn vision_section(self) -> Result<Option<ConfiguredVision>, Code> {
+        let Self {
+            vision,
+            source_root,
+            install_root,
+            ..
+        } = self;
+        vision
+            .map(|vision| vision.assemble(&source_root, install_root.as_deref()))
+            .transpose()
     }
 }
 

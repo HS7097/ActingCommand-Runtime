@@ -99,6 +99,9 @@ mod field_list;
 // Workflow #450 FL-1a and FL-1b: the field list's named tests, the kernel's halves.
 #[cfg(test)]
 mod gate_450_fl1;
+// Workflow #453 S8: the models a package's recognition pack names, its OCR and NN targets'.
+#[cfg(test)]
+mod gate_453_s8;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.
@@ -4717,6 +4720,26 @@ impl PreparedContainedTask {
             .map(|(layout, target_id)| {
                 (target_id, format!("/candidate_layouts/{layout}/shared_ocr"))
             })
+            .collect()
+    }
+
+    /// Workflow #453 S8: the models this package's recognition pack names, the `(model_ref,
+    /// model_sha256)` of each OCR and NN target once, in byte order of the reference, then of the
+    /// identity. A layout's shared OCR read names no other model: the pack's own check holds that
+    /// it serves at least one OCR target of its model.
+    pub fn recognition_models(&self) -> Vec<(String, String)> {
+        self.evaluator
+            .pack()
+            .targets
+            .iter()
+            .filter_map(|target| match target {
+                RecognitionTarget::Ocr(target) => Some((&target.model_ref, &target.model_sha256)),
+                RecognitionTarget::Nn(target) => Some((&target.model_ref, &target.model_sha256)),
+                _ => None,
+            })
+            .map(|(model_ref, model_sha256)| (model_ref.clone(), model_sha256.clone()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect()
     }
 

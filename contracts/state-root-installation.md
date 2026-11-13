@@ -1,6 +1,6 @@
 # State root installation record
 
-Workflow #453 S11 (Runtime 0.12.60; register [v012-register.md](v012-register.md) §1.354). The
+Workflow #453 S11 (Runtime 0.12.60; register [v012-register.md](v012-register.md) §1.357). The
 owner approved board #453; the coordinator's rulings on the board replace the design survey's
 identity by the configuration's salt. Before this slice nothing in a state root said which
 installation it belongs to, so a configuration that names another installation's state root

@@ -17,6 +17,9 @@ mod process_priority;
 // WD-MT (Workflow #421): the daemon's own stdout and stderr, made not inheritable at its start.
 mod standard_handles;
 mod suspended;
+// Workflow #453 S7: `actingd vision manifest|check`, what a vision root must hold and whether it
+// does, read only.
+mod vision_report;
 
 // Test-only: the shared sealed C4 fixture support, reused for its 16x9 fake-device fixtures.
 #[cfg(test)]
@@ -78,6 +81,10 @@ mod gate_453_s10;
 // Test-only: Workflow #453 S11, check-config's `state_root_installation`.
 #[cfg(test)]
 mod gate_453_s11;
+// Test-only: Workflow #453 S7, `actingd vision manifest|check` on an injected pin table and
+// temporary vision roots.
+#[cfg(test)]
+mod gate_453_s7;
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{
@@ -171,6 +178,21 @@ fn main() -> ExitCode {
                 discover::SCHEMA_VERSION,
                 SharedCode::SerializationFailed,
                 installed(candidate).and_then(|()| discover::run(arguments)),
+            )
+        }
+        // Workflow #453 S7: read only, the vision root judged as a start judges it. It starts no
+        // program; its own stdout and stderr are made not inheritable all the same, as
+        // `discover`'s are, so that nothing it ever starts keeps open the pipe of the rescue row
+        // that reads its report. A failure is one warning line on stderr and the command goes on.
+        Some("vision") => {
+            if let Some(warning) = standard_handles::apply(&standard_handles::SystemStandardHandles)
+            {
+                write_stderr(&developer_line(&warning, None));
+            }
+            subcommand_report(
+                vision_report::SCHEMA_VERSION,
+                SharedCode::SerializationFailed,
+                installed(candidate).and_then(|()| vision_report::run(arguments)),
             )
         }
         _ => run_daemon(arguments),

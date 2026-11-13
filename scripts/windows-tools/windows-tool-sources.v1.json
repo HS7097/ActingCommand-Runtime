@@ -218,6 +218,29 @@
           "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"
         }
       ],
+      "pinned_license_files": [
+        {
+          "path": "LICENSE.txt",
+          "vision_root_path": "ort/licenses/directml/LICENSE.txt",
+          "size": 10439,
+          "sha256": "a05138e3a085ff60a44881eedfa58dccb03ecc1d7b1f6ae888418e8c2fec4b8d",
+          "hash_provenance": "Workflow #453 S7: size and SHA-256 of this entry of the package pinned above, read on 2026-11-14 from a copy of that package whose size, sha256 and NuGet's base64 SHA-512 equal archive.size, archive.sha256 and archive.official_sha512_base64 (the package's own listing gives the size; the entry was read whole with its CRC checked and hashed); the same reading of the onnxruntime-directml-1.24.4 package gives that entry's pinned_license_files exactly; the size equals the one design rd-1031/perf-407/design-gpu1.md section 5 records"
+        },
+        {
+          "path": "LICENSE-CODE.txt",
+          "vision_root_path": "ort/licenses/directml/LICENSE-CODE.txt",
+          "size": 1093,
+          "sha256": "903df5512f7d02609fed0c780a9b704f5a3eeb6e4d84ebe42a29845c81899a3c",
+          "hash_provenance": "Workflow #453 S7: size and SHA-256 of this entry of the package pinned above, read on 2026-11-14 from a copy of that package whose size, sha256 and NuGet's base64 SHA-512 equal archive.size, archive.sha256 and archive.official_sha512_base64 (the package's own listing gives the size; the entry was read whole with its CRC checked and hashed); the same reading of the onnxruntime-directml-1.24.4 package gives that entry's pinned_license_files exactly; the size equals the one design rd-1031/perf-407/design-gpu1.md section 5 records"
+        },
+        {
+          "path": "ThirdPartyNotices.txt",
+          "vision_root_path": "ort/licenses/directml/ThirdPartyNotices.txt",
+          "size": 4577,
+          "sha256": "2c95795c13ff48a58b6ed916f37901c23d964b5d9d601af422f17ad2172e7950",
+          "hash_provenance": "Workflow #453 S7: size and SHA-256 of this entry of the package pinned above, read on 2026-11-14 from a copy of that package whose size, sha256 and NuGet's base64 SHA-512 equal archive.size, archive.sha256 and archive.official_sha512_base64 (the package's own listing gives the size; the entry was read whole with its CRC checked and hashed); the same reading of the onnxruntime-directml-1.24.4 package gives that entry's pinned_license_files exactly; the size equals the one design rd-1031/perf-407/design-gpu1.md section 5 records"
+        }
+      ],
       "placement_note": "Workflow #407 GPU-1 (design rd-1031/perf-407/design-gpu1.md section 5): DirectML 1.15.4 for a vision root's DirectML runtime, placed beside the onnxruntime-directml-1.24.4 files. The Runtime package and the Tools package do not carry it; the Windows installation package does, by the owner's decision (Workflow #441, license.redistribution_note); whoever places it copies the pinned_files to their vision_root_path and LICENSE.txt, LICENSE-CODE.txt and ThirdPartyNotices.txt to ort/licenses/directml/, under the license terms in LICENSE.txt. crates/vision-ffi/src/runtime_pin.rs pins the same size and SHA-256 (a logic test holds them equal)."
     },
     "ppocrv6-medium-source": {
@@ -253,6 +276,8 @@
     "ppocrv6-medium-onnx": {
       "kind": "download_files",
       "version": "PaddleOCR-v3.7.0",
+      "model_ref": "PP-OCRv6_medium",
+      "family": "ppocr-ctc",
       "license": {
         "id": "Apache-2.0",
         "url": "https://github.com/PaddlePaddle/PaddleOCR/blob/v3.7.0/LICENSE",
@@ -269,6 +294,7 @@
           "revision": "61323801669c338b7891481ec7bac61ce31b576a",
           "url": "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx/resolve/61323801669c338b7891481ec7bac61ce31b576a/inference.onnx",
           "relative_path": "ppocrv6-medium/onnx/detector.onnx",
+          "vision_root_path": "models/PP-OCRv6_medium/det.onnx",
           "size": 62032837,
           "sha256": "eb13b44b25bb36f89528b68720af8a61d9cf381176107f465db1757b65d086e1",
           "hash_provenance": "official Hugging Face LFS SHA-256"
@@ -278,6 +304,7 @@
           "revision": "50c7eacafc52fa7bcf4194e8cd08e46f8558504b",
           "url": "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/resolve/50c7eacafc52fa7bcf4194e8cd08e46f8558504b/inference.onnx",
           "relative_path": "ppocrv6-medium/onnx/recognizer.onnx",
+          "vision_root_path": "models/PP-OCRv6_medium/rec.onnx",
           "size": 76554979,
           "sha256": "9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba",
           "hash_provenance": "official Hugging Face LFS SHA-256"
@@ -287,6 +314,7 @@
           "revision": "b03f46425e8ff4442b268ce449e3eef758146cd4",
           "url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v3.7.0/ppocr/utils/dict/ppocrv6_dict.txt",
           "relative_path": "ppocrv6-medium/ppocrv6_dict.txt",
+          "vision_root_path": "models/PP-OCRv6_medium/keys.txt",
           "size": 74947,
           "sha256": "b5f2bfe2bdd9448429e3e82b51c789775d9b42f2403d082b00662eb77e401c5d",
           "official_git_blob_sha1": "270082aa29aec1ff3ac74d0d575c90399216f74d",

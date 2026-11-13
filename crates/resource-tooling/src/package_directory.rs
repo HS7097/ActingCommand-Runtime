@@ -17,7 +17,10 @@
 //! `--notices <directory>`, the directory is held to the contract crate's notices rules before
 //! anything is written (`notices_directory`), and its files are laid byte for byte into
 //! `notices/` beside `bundle.json`, last; it is not listed in `bundle.json`, and no
-//! `interfaces.json` is written either way.
+//! `interfaces.json` is written either way. Workflow #455 G-R1: with `--goals`, `goals.json` is
+//! read after the composition and its references held to the bundle's root (`standard_pack_goals`,
+//! no table: the bundle holds none); a refused file refuses the bundle, and an accepted one is laid
+//! beside `bundle.json` byte for byte with the other root files.
 
 use crate::codes::ResourceToolingCode;
 use crate::notices_directory::{NoticesDirectory, bundle_source};
@@ -25,6 +28,7 @@ use crate::package_loading::{LoadingRoot, check_loading, named_packs, stale_copi
 use crate::standard_pack_check::{
     RootFileInputs, cross_check, probe_keys_marked, store_update_cooldowns,
 };
+use crate::standard_pack_goals::{goal_issues, refuse_goals};
 use crate::standard_pack_schedule::{ScheduleReport, report_schedule};
 use crate::{PackageBundleRequest, PackageBundleResponse};
 use actingcommand_contract::outcome::{Detail, Outcome};
@@ -356,6 +360,27 @@ fn write_bundle(
                 &schedule.path,
                 &|directory: &str| packs_dir.join(directory),
             )?;
+        }
+        // Workflow #455 G-R1 (register §1.356): `--goals`, after the composition; a refused file
+        // refuses the bundle as a refused root file does. The bundle holds no table, so no
+        // table reference is judged here.
+        if let Some(goals) = root_files.goals() {
+            let issues = goal_issues(
+                &applications.game,
+                &root,
+                root_files
+                    .schedule()
+                    .map(|schedule| (schedule.bytes.as_slice(), schedule.path.as_path())),
+                // G-R1 fix round 2: the chain followers the composition above listed.
+                schedule_report
+                    .as_ref()
+                    .map(|report| report.benefit_followers.as_slice())
+                    .unwrap_or_default(),
+                &goals.bytes,
+                &|directory: &str| packs_dir.join(directory),
+                None,
+            )?;
+            refuse_goals(&applications.game, &goals.path, &issues)?;
         }
     }
     write_new(&staging.join("applications.json"), applications_bytes)?;

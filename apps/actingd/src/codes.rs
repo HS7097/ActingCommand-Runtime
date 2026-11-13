@@ -220,6 +220,15 @@ actingcommand_contract::outcome_codes! {
         /// instances without a Runtime; the report holds them. Fix 2: `actingd_`, the prefix only
         /// actingd owns (`discover_` is other components').
         DiscoverCompleted => "actingd_discover_completed": success / none,
+        /// Success. Workflow #453 S7: `actingd vision manifest` answered what a vision root of the
+        /// provider must hold (`report`), from the registry and the runtime pin this build
+        /// carries; nothing else was read. `vision_`, a prefix actingd owns with vision-ffi and
+        /// vision-provider-check.
+        VisionManifestReported => "vision_manifest_reported": success / none,
+        /// Success. Workflow #453 S7: `actingd vision check` compared the configured vision root
+        /// with the manifest and listed its model folders (`report`); whether it is complete is
+        /// the report's to say, never the code's.
+        VisionCheckCompleted => "vision_check_completed": success / none,
     }
 }
 

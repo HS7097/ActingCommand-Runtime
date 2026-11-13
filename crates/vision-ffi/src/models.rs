@@ -599,14 +599,21 @@ pub fn list_vision_models(models_dir: &Path) -> VisionFfiResult<VisionModelListi
     Ok(listing)
 }
 
-fn classify_folder(name: &str, folder: &Path) -> Result<FolderModel, String> {
-    if name.trim().is_empty()
+/// Whether `name` breaks the rule for a model folder's name, a `model_ref`: blank, over
+/// `MAX_MODEL_NAME_BYTES` bytes, `.` or `..`, or with a path separator, a colon or a control
+/// character. Listing applies it to each folder of `models\`; Workflow #453 S7 fix 2: `actingd
+/// vision check` applies it to each `--model` (the rule moved here unchanged).
+pub fn invalid_model_folder_name(name: &str) -> bool {
+    name.trim().is_empty()
         || name.len() > MAX_MODEL_NAME_BYTES
         || name == "."
         || name == ".."
         || name.contains(['/', '\\', ':'])
         || name.chars().any(char::is_control)
-    {
+}
+
+fn classify_folder(name: &str, folder: &Path) -> Result<FolderModel, String> {
+    if invalid_model_folder_name(name) {
         return Err(format!(
             "the folder name is not a valid model_ref (at most {MAX_MODEL_NAME_BYTES} bytes, no path separators, colons or control characters)"
         ));
