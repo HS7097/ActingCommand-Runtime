@@ -88,30 +88,71 @@ vision_manifest_reported, report}`, `report` `{provider, files, models}`:
 defect of the build.
 
 **What `check` compares.** `actingd vision check --config <file>
-[--install-root <root>]` resolves the configured vision root as a start does
-("Vision root" above: the configured or default root, canonical; a root that does
-not resolve is `vision_root_unavailable`, one inside a program slot
-`vision_root_in_program_slot`, at stage `config_vision`, the start's own
-refusals), takes the manifest of the section's `execution_provider`, and answers
-`vision_check_completed` with `report` `{provider, vision_root, files, folders,
-models}`:
+[--install-root <root>] [--model <model_ref>]...` resolves the configured vision
+root as a start does ("Vision root" above: the configured or default root,
+canonical; a root that does not resolve is `vision_root_unavailable`, one inside
+a program slot `vision_root_in_program_slot`, at stage `config_vision`, the
+start's own refusals), takes the manifest of the section's `execution_provider`,
+and answers `vision_check_completed` with `report` `{provider, vision_root,
+files, folders, models}`. Each `--model` (any number; Workflow #453 S7 fix 1)
+names a model folder whose identity it computes besides the manifest's: the
+rescue row `vision check` names the models the installed packs need.
 
 - `files`: each manifest file with its `state`, compared first by its size and
   then by its SHA-256 read in 64 KiB chunks: `ok`, `missing`, `sha256_mismatch`
   (another size, another digest, or no regular file) or `unreadable` (with the OS
-  failure as `cause`), the states of the DirectML runtime check;
+  failure as `cause`), the states of the DirectML runtime check. A file of
+  another size than its pin is `sha256_mismatch` and is not opened, and no file
+  is read past its pinned size: one that shrinks or grows while it is read is
+  `sha256_mismatch`;
 - `folders`: `models\` listed as a start lists it ("Invalid folders" below; none
   when it does not exist), each model folder `{model_ref, family, layout?,
-  identity}` with its identity computed from its files' bytes (`identity` `null`
-  and the OS failure as `cause` when a file cannot be read), each folder that
-  breaks the rule `{model_ref, invalid}` with the reason;
+  asked, identity?}`. `asked` is true for a folder the manifest or a `--model`
+  names, and only such a folder is read: its `identity` is computed from its
+  files' bytes (`null`, with the OS failure as `cause` when a file cannot be
+  read, or with `over_bound` `{path, size, bound, bound_bytes}` for a file over a
+  bound, which is not read). Every other model folder is `asked` false, listed by
+  name with no `identity`, and nothing of it is read. Each folder that breaks the
+  rule is `{model_ref, invalid}` with the reason;
 - `models`: each manifest model with `present` (a folder of its name is listed),
   that folder's `identity` and `identity_matches`.
 
-Each file is read at most once. Whether the root is complete is the report's to
-say; the code is a success either way. A configuration without a `vision`
-section, or of `cuda`, is `vision_config_invalid` at stage `config_vision`; one
-the start refuses is refused with the start's code at its stage.
+**Bounds** (fix 1; of what the check reads, not tunables). A file of an asked
+folder is hashed only when it holds at most 256 MiB (else `bound` `file`,
+`bound_bytes` 268435456), and the check hashes at most 512 MiB in all, the
+manifest's files included (a folder's file larger than what is left is `bound`
+`total`, `bound_bytes` 536870912). The manifest's files are read at most to their
+pins, about 175 MB for `directml` and 156 MB for `cpu` with this build's
+registry; a build whose manifest's files hold more than 512 MiB is refused as a
+defect of the build, `serialization_failed`. Each file is read at most once, and
+at most to the length it had when it was opened. The rescue row's bound for this
+child, 160 s, is 512 MiB at 4 MiB/s and 32 s for the process
+([install-cli.md](install-cli.md), "The Lab's rescue module").
+
+Whether the root is complete is the report's to say; the code is a success
+either way. The configuration file is loaded as `check-config` loads it (a file
+it cannot load is refused at stage `config_load`), and of it only the `vision`
+section is assembled, by the rules a start assembles it with (a section that
+breaks them is `vision_config_invalid` at stage `config_assemble`); a
+configuration without a `vision` section, or of `cuda`, is `vision_config_invalid`
+at stage `config_vision`. Nothing else of the configuration is assembled or
+judged, so a configuration a start refuses for another part of it can still be
+checked: the check answers for the vision root, not for the configuration.
+
+**Where it differs from a start.** Two differences, on purpose, so that nobody
+reads "check failed" as "the Runtime would not start":
+
+- The `cpu` manifest lists the runtime library and the providers library of the
+  pinned build (`ort/onnxruntime.dll`, `ort/onnxruntime_providers_shared.dll`),
+  and `vision check` holds a CPU root to them, although a start with the CPU
+  provider does not check those two files against the pin (only a start with the
+  DirectML provider does, `check_runtime_pin` in `apps/actingd/src/config.rs`):
+  the check is stricter than a start on purpose, because an installation set
+  carries exactly the pinned files. The license files it holds a root to are read
+  by no start either.
+- A missing or empty `models\` answers an empty `folders` list in the check, and
+  refuses a start (`vision_root_unavailable` for a missing one,
+  `vision_models_empty` for an empty one).
 
 **What it never does.** It writes nothing (not the vision root, not a state
 root, not a journal), takes no owner lock, opens no ledger, binds no socket,

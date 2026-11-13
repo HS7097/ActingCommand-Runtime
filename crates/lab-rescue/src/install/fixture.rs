@@ -374,6 +374,10 @@ pub(super) struct Programs {
     /// Workflow #453 S7: the exit code and the line of the Tools' `standard-pack check --root
     /// <game root>`, by the game root as the command line names it (none set: a panic).
     pub(super) standard_pack_checks: RefCell<BTreeMap<String, (i32, Value)>>,
+    /// Workflow #453 S7 fix 1: how long each program run to be ended at its deadline
+    /// (`run_program_ending`) that exits takes on the fake clock (none by default); one that never
+    /// exits takes its deadline.
+    pub(super) run_ms: Cell<u64>,
 }
 
 /// The process id of a fake program left running at its deadline.
@@ -414,6 +418,7 @@ impl FakeHost {
                 ended: RefCell::new(Vec::new()),
                 vision: RefCell::new(BTreeMap::new()),
                 standard_pack_checks: RefCell::new(BTreeMap::new()),
+                run_ms: Cell::new(0),
             },
             on_step: RefCell::new(None),
             log: RefCell::new(Vec::new()),
@@ -684,6 +689,8 @@ impl Host for FakeHost {
     /// Workflow #453 S10 fix 1: a program whose word is in `stall` never exits; it is ended at its
     /// deadline, kept in `ended`, and left among no processes (unlike [`Self::run_program`]'s, which
     /// is left running with `STALLED_PID`). Any other program answers as `run_program` does.
+    /// Workflow #453 S7 fix 1: the fake clock moves by `run_ms` for a program that exits, by the
+    /// deadline for one that never does.
     fn run_program_ending(
         &self,
         program: &Path,
@@ -701,6 +708,8 @@ impl Host for FakeHost {
             .iter()
             .any(|stalled| *stalled == doing)
         {
+            self.clock
+                .set(self.clock.get() + self.programs.run_ms.get());
             return self.run_program(program, arguments, timeout_ms).map_err(
                 |not_ran| match not_ran {
                     NotRan::Failed(cause) => NotFinished::Failed(cause),
@@ -723,6 +732,7 @@ impl Host for FakeHost {
             .borrow_mut()
             .push((doing.clone(), timeout_ms));
         // It runs on to its deadline; there it is ended and reaped.
+        self.clock.set(self.clock.get() + timeout_ms);
         self.programs.ended.borrow_mut().push((doing, timeout_ms));
         Err(NotFinished::Ended)
     }

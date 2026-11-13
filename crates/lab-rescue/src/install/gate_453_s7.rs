@@ -8,19 +8,30 @@
 // - `vision_manifest_answers_the_live_builds_manifest`: `install_command_done` of
 //   `install_vision_manifest` with actingd's manifest as `report` and its outcome as the link;
 // - `vision_manifest_refuses_with_actingds_outcome_as_its_cause`: `install_command_refused`,
-//   `install_refusal` `vision_root_unresolved`, actingd's outcome its `caused_by` link, no report;
+//   `install_refusal` `vision_report_unanswered` (fix 1: the row resolves no root), actingd's
+//   outcome its `caused_by` link, no report;
 // - `vision_manifest_a_child_that_never_ends_is_ended_at_its_bound`: ended once at 30 000 ms,
-//   the refusal with `timeout_ms` the bound and no cause;
+//   `vision_report_unanswered` with `timeout_ms` the bound and no cause;
 // - `vision_check_answers_a_complete_root`: `install_command_done` of `install_vision_check`
 //   with actingd's report, no standard-pack root and no required model;
 // - `vision_check_refuses_with_actingds_outcome_as_its_cause`: `vision_root_unresolved` caused by
 //   actingd's `vision_root_unavailable`, no report, no standard-pack check run;
-// - `vision_check_a_child_that_never_ends_is_ended_at_its_bound`: ended once at 120 000 ms;
-// - `vision_check_joins_the_required_models_of_two_game_roots`: two game roots' models joined,
-//   a model both name once with both games, a model no folder holds counted in
-//   `install_caveat_noted` `vision_incomplete`.
+// - `vision_check_a_child_that_never_ends_is_ended_at_its_bound`: ended once at 160 000 ms (fix
+//   1), `vision_report_unanswered` with `timeout_ms` the bound;
+// - `vision_check_joins_the_required_models_of_two_game_roots`: each game root's check first, in
+//   name order, then actingd with `--model` for each model they need; two game roots' models
+//   joined, a model both name once with both games, a model no folder holds counted in
+//   `install_caveat_noted` `vision_incomplete`; the folder without `bundle.json` and the file
+//   named in `skipped` (fix 1).
+// Fix 1 (review; coordinator work order rd-1114/brief-1693-fix1.md):
+// - `vision_check_refuses_when_the_rows_limit_runs_out`: three game roots whose checks take
+//   290 s each leave actingd less than its own bound; it is ended there and the refusal
+//   (`vision_report_unanswered`) has `timeout_ms` the row's limit, 900 000;
+// - `vision_check_names_a_game_root_it_skips_and_why` (Windows): a game root that is a junction
+//   is not checked and is named in `skipped` as `link`.
 // The machine is the fake host of `fixture.rs`: its actingd and its Tools' Lab program print the
-// lines the test sets; no program is spawned and no file of a vision root exists.
+// lines the test sets; no program is spawned (but `mklink` to make the junction) and no file of a
+// vision root exists.
 
 use super::fixture::{BuildSpec, C1, FakeHost, live_root, tree, write_json};
 use crate::agent_channel::Answer as Answered;
@@ -78,13 +89,43 @@ fn vision_line(code: &str, category: &str, report: Option<Value>) -> Value {
     line
 }
 
-/// The command line of the live build's `actingd vision check` of `root`.
-fn check_command(root: &Path) -> String {
-    format!(
+/// The command line of the live build's `actingd vision check` of `root`, asked about `models`.
+fn check_command(root: &Path, models: &[&str]) -> String {
+    let mut line = format!(
         "live actingcommand-actingd.exe vision check --config {} --install-root {}",
         root.join("actingd.config.json").to_string_lossy(),
         root.to_string_lossy()
-    )
+    );
+    for model in models {
+        line.push_str(" --model ");
+        line.push_str(model);
+    }
+    line
+}
+
+/// The line of the Tools' `standard-pack check` that passed with `models`.
+fn pack_checked(models: Value) -> Value {
+    json!({"status": "checked", "pack_count": 2, "models": models,
+           "outcome": {"schema_version": "actingcommand.outcome.v1",
+               "code": "lab_operation_completed", "category": "success", "values": {}}})
+}
+
+/// Names `packs` as the root's `standard_packs.root`.
+fn configure_packs(root: &Path, packs: &Path) {
+    let config_path = root.join("actingd.config.json");
+    let mut config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("the configuration"))
+            .expect("the configuration JSON");
+    config["standard_packs"] = json!({"root": packs});
+    write_json(&config_path, &config);
+}
+
+/// A game root `game` below `packs`, with its bundle index.
+fn game_root(packs: &Path, game: &str) -> PathBuf {
+    let root = packs.join(game);
+    fs::create_dir_all(&root).expect("a game root");
+    fs::write(root.join("bundle.json"), b"{}").expect("its bundle index");
+    root
 }
 
 /// A report of `actingd vision check` whose files are all `ok`, with `folders` and its one
@@ -218,8 +259,8 @@ fn vision_manifest_refuses_with_actingds_outcome_as_its_cause() {
         "{line}"
     );
     assert_eq!(
-        line["outcome"]["values"]["install_refusal"], "vision_root_unresolved",
-        "{line}"
+        line["outcome"]["values"]["install_refusal"], "vision_report_unanswered",
+        "the row resolves no root, so its failure names none: {line}"
     );
     assert_eq!(
         links(&line),
@@ -256,7 +297,7 @@ fn vision_manifest_a_child_that_never_ends_is_ended_at_its_bound() {
     let outcome = &line["outcome"];
     assert_eq!(outcome["code"], "install_command_refused", "{line}");
     assert_eq!(
-        outcome["values"]["install_refusal"], "vision_root_unresolved",
+        outcome["values"]["install_refusal"], "vision_report_unanswered",
         "{line}"
     );
     assert_eq!(
@@ -312,7 +353,7 @@ fn vision_check_answers_a_complete_root() {
     assert_eq!(line["report"], report, "actingd's report is the answer's");
     assert_eq!(
         line["standard_packs"],
-        json!({"root": null, "games": []}),
+        json!({"root": null, "games": [], "skipped": []}),
         "{line}"
     );
     assert_eq!(line["required_models"], json!([]), "{line}");
@@ -323,7 +364,7 @@ fn vision_check_answers_a_complete_root() {
     );
     assert_eq!(
         *host.log.borrow(),
-        [check_command(&root)],
+        [check_command(&root, &[])],
         "no standard-pack root: actingd vision check alone"
     );
     assert_eq!(tree(&root), root_before, "nothing written in the root");
@@ -366,7 +407,7 @@ fn vision_check_refuses_with_actingds_outcome_as_its_cause() {
         line.get("report").is_none(),
         "a refusal carries no report: {line}"
     );
-    assert_eq!(*host.log.borrow(), [check_command(&root)]);
+    assert_eq!(*host.log.borrow(), [check_command(&root, &[])]);
     assert_eq!(tree(&root), root_before, "nothing written in the root");
     assert_eq!(tree(&state_root), state_before, "the state root untouched");
 }
@@ -392,11 +433,11 @@ fn vision_check_a_child_that_never_ends_is_ended_at_its_bound() {
         "{line}"
     );
     assert_eq!(
-        outcome["values"]["install_refusal"], "vision_root_unresolved",
-        "{line}"
+        outcome["values"]["install_refusal"], "vision_report_unanswered",
+        "an ended child says nothing of the root: {line}"
     );
     assert_eq!(
-        outcome["values"]["timeout_ms"], 120_000,
+        outcome["values"]["timeout_ms"], 160_000,
         "the child ran out its bound: {line}"
     );
     assert!(
@@ -409,7 +450,7 @@ fn vision_check_a_child_that_never_ends_is_ended_at_its_bound() {
     );
     assert_eq!(
         *host.programs.ended.borrow(),
-        [("vision".to_owned(), 120_000)],
+        [("vision".to_owned(), 160_000)],
         "the child is ended at the bound, once"
     );
     assert_eq!(tree(&root), root_before, "nothing written in the root");
@@ -425,23 +466,16 @@ fn vision_check_joins_the_required_models_of_two_game_roots() {
         state_root,
     } = prepared();
     // The standard-pack root: two game roots, a folder without bundle.json and a plain file,
-    // which hold no game.
+    // which hold no game and are named as skipped (fix 1).
     let packs = _temp.path().join("packs");
-    for game in ["neutral.alpha", "neutral.beta"] {
-        fs::create_dir_all(packs.join(game)).expect("a game root");
-        fs::write(packs.join(game).join("bundle.json"), b"{}").expect("its bundle index");
-    }
+    let alpha = game_root(&packs, "neutral.alpha");
+    let beta = game_root(&packs, "neutral.beta");
     fs::create_dir_all(packs.join("neutral.loose")).expect("a folder without a bundle");
     fs::write(packs.join("notes.txt"), b"neutral").expect("a plain file");
-    let config_path = root.join("actingd.config.json");
-    let mut config: Value =
-        serde_json::from_slice(&fs::read(&config_path).expect("the configuration"))
-            .expect("the configuration JSON");
-    config["standard_packs"] = json!({"root": packs});
-    write_json(&config_path, &config);
+    configure_packs(&root, &packs);
     // The OCR model's folder is there with its identity; the classifier's is not.
     let report = check_report(json!([{"model_ref": OCR.0, "family": "ppocr-ctc",
-                                      "layout": "flat", "identity": OCR.1}]));
+                                      "layout": "flat", "asked": true, "identity": OCR.1}]));
     host.programs.vision.borrow_mut().insert(
         "check".to_owned(),
         (
@@ -449,18 +483,11 @@ fn vision_check_joins_the_required_models_of_two_game_roots() {
             vision_line("vision_check_completed", "success", Some(report.clone())),
         ),
     );
-    let checked = |models: Value| {
-        json!({"status": "checked", "pack_count": 2, "models": models,
-               "outcome": {"schema_version": "actingcommand.outcome.v1",
-                   "code": "lab_operation_completed", "category": "success", "values": {}}})
-    };
-    let alpha = packs.join("neutral.alpha");
-    let beta = packs.join("neutral.beta");
     host.programs.standard_pack_checks.borrow_mut().insert(
         alpha.to_string_lossy().into_owned(),
         (
             0,
-            checked(json!([
+            pack_checked(json!([
                 {"model_ref": CLASSIFIER.0, "model_sha256": CLASSIFIER.1,
                  "packages": ["neutral.alpha.two"]},
                 {"model_ref": OCR.0, "model_sha256": OCR.1, "packages": ["neutral.alpha.one"]}
@@ -471,7 +498,7 @@ fn vision_check_joins_the_required_models_of_two_game_roots() {
         beta.to_string_lossy().into_owned(),
         (
             0,
-            checked(json!([
+            pack_checked(json!([
                 {"model_ref": OCR.0, "model_sha256": OCR.1,
                  "packages": ["neutral.beta.one", "neutral.beta.two"]}
             ])),
@@ -501,8 +528,10 @@ fn vision_check_joins_the_required_models_of_two_game_roots() {
     assert_eq!(
         line["standard_packs"],
         json!({"root": super::files::plain(&packs),
-               "games": ["neutral.alpha", "neutral.beta"]}),
-        "{line}"
+               "games": ["neutral.alpha", "neutral.beta"],
+               "skipped": [{"name": "neutral.loose", "why": "no_bundle"},
+                           {"name": "notes.txt", "why": "not_a_folder"}]}),
+        "nothing below the standard-pack root is skipped silently: {line}"
     );
     assert_eq!(
         line["required_models"],
@@ -522,7 +551,6 @@ fn vision_check_joins_the_required_models_of_two_game_roots() {
     assert_eq!(
         *host.log.borrow(),
         [
-            check_command(&root),
             format!(
                 "live actinglab.exe --json standard-pack check --root {}",
                 alpha.to_string_lossy()
@@ -531,8 +559,10 @@ fn vision_check_joins_the_required_models_of_two_game_roots() {
                 "live actinglab.exe --json standard-pack check --root {}",
                 beta.to_string_lossy()
             ),
+            check_command(&root, &[CLASSIFIER.0, OCR.0]),
         ],
-        "actingd once, then each game root's check once, in name order"
+        "each game root's check once, in name order, then actingd once, asked about each model \
+         the packs need"
     );
     assert_eq!(
         host.programs
@@ -541,10 +571,152 @@ fn vision_check_joins_the_required_models_of_two_game_roots() {
             .iter()
             .map(|(_, ms)| *ms)
             .collect::<Vec<_>>(),
-        [120_000, 300_000, 300_000],
-        "each child within its bound"
+        [300_000, 300_000, 160_000],
+        "each child within its own bound, the row's limit far off"
     );
     assert_eq!(tree(&root), root_before, "nothing written in the root");
     assert_eq!(tree(&state_root), state_before, "the state root untouched");
     assert_eq!(tree(&packs), packs_before, "nothing written in the packs");
+}
+
+#[test]
+fn vision_check_refuses_when_the_rows_limit_runs_out() {
+    let Prepared {
+        _temp,
+        host,
+        root,
+        state_root,
+    } = prepared();
+    // Three game roots whose checks pass after 290 s each, within their own 300 s: 870 s of the
+    // row's 900 s are gone when actingd starts, which never ends.
+    let packs = _temp.path().join("packs");
+    let games =
+        ["neutral.alpha", "neutral.beta", "neutral.gamma"].map(|game| game_root(&packs, game));
+    configure_packs(&root, &packs);
+    for game in &games {
+        host.programs.standard_pack_checks.borrow_mut().insert(
+            game.to_string_lossy().into_owned(),
+            (0, pack_checked(json!([]))),
+        );
+    }
+    host.programs.run_ms.set(290_000);
+    host.programs.stall.borrow_mut().push("vision");
+    let root_before = tree(&root);
+    let state_before = tree(&state_root);
+    let packs_before = tree(&packs);
+
+    let (line, exit) = row_line(&host, &root, "vision check", &Map::new());
+
+    assert_eq!(exit, 1, "{line}");
+    let outcome = &line["outcome"];
+    assert_eq!(outcome["code"], "install_command_refused", "{line}");
+    assert_eq!(
+        outcome["values"]["operation"], "install_vision_check",
+        "{line}"
+    );
+    assert_eq!(
+        outcome["values"]["install_refusal"], "vision_report_unanswered",
+        "{line}"
+    );
+    assert_eq!(
+        outcome["values"]["timeout_ms"], 900_000,
+        "the row's limit ran out, not actingd's own 160 s: {line}"
+    );
+    assert!(
+        links(&line).is_empty(),
+        "an ended child is no cause: {line}"
+    );
+    assert!(line.get("report").is_none(), "{line}");
+    let deadlines = host
+        .programs
+        .deadlines
+        .borrow()
+        .iter()
+        .map(|(_, ms)| *ms)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        deadlines[..3],
+        [300_000, 300_000, 300_000],
+        "each game root's check within its own bound"
+    );
+    let ended = host.programs.ended.borrow().clone();
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert_eq!(ended[0].0, "vision", "{ended:?}");
+    assert!(
+        (29_000..=30_000).contains(&ended[0].1),
+        "actingd ended at what the row's limit left, about 30 s: {ended:?}"
+    );
+    assert_eq!(deadlines.len(), 4, "{deadlines:?}");
+    assert_eq!(tree(&root), root_before, "nothing written in the root");
+    assert_eq!(tree(&state_root), state_before, "the state root untouched");
+    assert_eq!(tree(&packs), packs_before, "nothing written in the packs");
+}
+
+#[cfg(windows)]
+#[test]
+fn vision_check_names_a_game_root_it_skips_and_why() {
+    let Prepared {
+        _temp,
+        host,
+        root,
+        state_root,
+    } = prepared();
+    // A game root, and one more that is a junction to a folder elsewhere that holds bundle.json:
+    // the Runtime lists no game root through a junction, so the check does not check it either,
+    // and says so.
+    let packs = _temp.path().join("packs");
+    let alpha = game_root(&packs, "neutral.alpha");
+    let elsewhere = game_root(&_temp.path().join("elsewhere"), "neutral.linked");
+    // mklink takes plain paths, not the canonical `\\?\` form.
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(packs.join("neutral.linked"))
+        .arg(&elsewhere)
+        .output()
+        .expect("run mklink");
+    assert!(
+        made.status.success(),
+        "make the junction: {}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    configure_packs(&root, &packs);
+    host.programs.standard_pack_checks.borrow_mut().insert(
+        alpha.to_string_lossy().into_owned(),
+        (0, pack_checked(json!([]))),
+    );
+    let report = check_report(json!([{"model_ref": OCR.0, "family": "ppocr-ctc",
+                                      "layout": "flat", "asked": true, "identity": OCR.1}]));
+    host.programs.vision.borrow_mut().insert(
+        "check".to_owned(),
+        (
+            0,
+            vision_line("vision_check_completed", "success", Some(report)),
+        ),
+    );
+    let root_before = tree(&root);
+    let state_before = tree(&state_root);
+
+    let (line, exit) = row_line(&host, &root, "vision check", &Map::new());
+
+    assert_eq!(exit, 0, "{line}");
+    assert_eq!(line["outcome"]["code"], "install_command_done", "{line}");
+    assert_eq!(
+        line["standard_packs"],
+        json!({"root": super::files::plain(&packs), "games": ["neutral.alpha"],
+               "skipped": [{"name": "neutral.linked", "why": "link"}]}),
+        "the junction is named, with why it is not checked: {line}"
+    );
+    assert_eq!(
+        *host.log.borrow(),
+        [
+            format!(
+                "live actinglab.exe --json standard-pack check --root {}",
+                alpha.to_string_lossy()
+            ),
+            check_command(&root, &[]),
+        ],
+        "only the game root that is no junction is checked"
+    );
+    assert_eq!(tree(&root), root_before, "nothing written in the root");
+    assert_eq!(tree(&state_root), state_before, "the state root untouched");
 }

@@ -1138,26 +1138,48 @@ the rescue face:
   `offline`, `writes` false; no `actingctl install` command. `vision manifest` runs the live
   build's `actingd vision manifest --provider <p>` and answers its manifest as `report`
   (`install_command_done`, operation `install_vision_manifest`). `vision check` reads the root's
-  configuration as every row does, runs the live build's `actingd vision check --config <the
-  root's configuration> --install-root <root>`, then, for each game root below the configured
-  `standard_packs.root` (a relative one against the configuration's folder; each folder there
-  that holds `bundle.json`, by name; none when the root names none or it does not exist), the
-  Tools' `<root>\tools\actinglab.exe --json standard-pack check --root <game root>`, as `place`
-  runs it, and joins their `models`: `required_models`, each `{model_ref, model_sha256, games:
-  [{game, packages}], present, identity_matches}`, by `model_ref` then `model_sha256`, judged
-  against the folders actingd listed. The answer holds actingd's `report`, `standard_packs
-  {root, games}` and `required_models`; it is `install_command_done` (operation
-  `install_vision_check`) when every manifest file is `ok` and every model matches, else
-  `install_caveat_noted` with `install_caveat` `vision_incomplete` and `count`. Every child runs
-  within a bound of what it does and is ended there, never left running, as the row `emulators`
-  ends its child: `actingd vision manifest` 30 s (it reads only what is compiled into it),
-  `actingd vision check` 120 s (it hashes a few hundred megabytes at most), each `standard-pack
-  check` 300 s (it admits every package of one game root, each within 60 s); a refusal then has
-  `timeout_ms` and no cause. Refusals: `vision_root_unresolved` when actingd gives no vision
-  report (its outcome, for example `vision_root_unavailable`, or the child's failure as the
-  cause), `config_unreadable` for a `standard_packs.root` that cannot be listed, `pack_invalid`
-  (`game`, `path`) for a game root whose check gives no models. Nothing is written, downloaded or
-  placed; placing the files is a later slice's.
+  configuration as every row does; then (fix 1, in this order), for each game root below the
+  configured `standard_packs.root` (a relative one against the configuration's folder; each
+  folder there that is no junction or link, whose name is UTF-8 and that holds `bundle.json`, by
+  name; none when the root names none or it does not exist), the Tools' `<root>\tools\actinglab.exe
+  --json standard-pack check --root <game root>`, as `place` runs it; then the live build's
+  `actingd vision check --config <the root's configuration> --install-root <root>` with
+  `--model <model_ref>` for each model those checks name, so that actingd computes the identity
+  of their folders too. It joins the checks' `models`: `required_models`, each `{model_ref,
+  model_sha256, games: [{game, packages}], present, identity_matches}`, by `model_ref` then
+  `model_sha256`, judged against the folders actingd listed. The answer holds actingd's
+  `report`, `standard_packs {root, games, skipped}` and `required_models`; it is
+  `install_command_done` (operation `install_vision_check`) when every manifest file is `ok` and
+  every model matches, else `install_caveat_noted` with `install_caveat` `vision_incomplete` and
+  `count`. **Nothing below the standard-pack root is skipped silently** (fix 1): every entry
+  there that is not checked is named in `skipped`, `{name, why}` by name, `why` one of `link`
+  (a junction or a symbolic link: the Runtime lists no game root through one, so the check does
+  not check it either), `name_not_utf8` (a folder whose name is not UTF-8, named lossily: the
+  Runtime lists none), `no_bundle` (a folder without `bundle.json`: it holds no pack a Runtime
+  runs) and `not_a_folder` (a file). A game root whose `standard-pack check` fails keeps
+  refusing the row, and the refusal names that root (`pack_invalid` with `game` and `path`).
+  Every child runs within a bound of what it does and is ended there, never left running, as the
+  row `emulators` ends its child: `actingd vision manifest` 30 s (it reads only what is compiled
+  into it); each `standard-pack check` 300 s (it admits every package of one game root, each
+  within 60 s); `actingd vision check` 160 s (fix 1: it hashes at most 512 MiB in all, the
+  manifest's files included, each folder's file at most 256 MiB; 512 MiB at 4 MiB/s is 128 s,
+  and 32 s is the process's start and its listing). The row `vision check` also has a limit in
+  all (fix 1): its children's bounds add up to 160 s and 300 s per game root, and the row runs at
+  most 900 s, the default of `install.child.check_config_timeout_ms`, the longest `place` waits
+  for one such check: a row that only reads does not keep a person or an installer waiting longer
+  in all than the installer waits for one check of one game root. Each child runs within its own
+  bound or what is left of the 900 s, whichever is less. A refusal for a child ended at a bound
+  has `timeout_ms` and no cause: the child's own bound, or 900000 when the row's limit ran out
+  first; a child that would start with nothing of the limit left is not started and refused the
+  same way. Refusals: `vision_report_unanswered` (fix 1) when actingd gives no usable report
+  (`vision manifest`: every failure of the row, which resolves no root; `vision check`: actingd
+  printed no report, refused its command line or its own registry, printed one without its lists,
+  did not run, or was ended), its outcome or the child's failure as the cause;
+  `vision_root_unresolved` (only `vision check`) when actingd refused the configuration or the
+  vision root it names (its outcome, for example `vision_root_unavailable`, as the cause);
+  `config_unreadable` for a `standard_packs.root` that cannot be listed or a `bundle.json` whose
+  kind cannot be read; `pack_invalid` (`game`, `path`) for a game root whose check gives no
+  models. Nothing is written, downloaded or placed; placing the files is a later slice's.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
@@ -2733,11 +2755,14 @@ the fragment registers, names the command.
   `processes_unreadable`, no longer `runtime_not_running`; no code, location, key or word is new.
 - **Workflow #453 S7** (since 0.12.60; "The Lab's rescue module", `vision manifest` and `vision
   check`): the locations `install_vision_manifest` and `install_vision_check`; `install_refusal`
-  `vision_root_unresolved` (actingd's outcome or the child's failure as the cause, `timeout_ms`
-  for a child ended at its bound) and `install_caveat` `vision_incomplete` (`count`), which only
-  these rows answer; the existing `config_unreadable` and `pack_invalid` (`game`, `path`,
-  `timeout_ms`) for the standard-pack root and a game root's check; no code or key is new here
-  (actingd's `vision_manifest_reported` and `vision_check_completed` are actingd's own).
+  `vision_report_unanswered` (fix 1: either row; actingd gave no usable report: its outcome or
+  the child's failure as the cause, or `timeout_ms` for a child ended at its bound or at the
+  `vision check` row's limit) and `vision_root_unresolved` (only `vision check`: actingd refused
+  the configuration or the vision root it names, its outcome as the cause), and `install_caveat`
+  `vision_incomplete` (`count`), which only these rows answer; the existing `config_unreadable`
+  and `pack_invalid` (`game`, `path`, `timeout_ms`) for the standard-pack root and a game root's
+  check; no code or key is new here (actingd's `vision_manifest_reported` and
+  `vision_check_completed` are actingd's own).
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

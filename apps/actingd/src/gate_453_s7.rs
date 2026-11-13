@@ -18,12 +18,21 @@
 //   `unreadable` with the OS failure, every other file `ok`;
 // - `s7_check_a_model_folder_of_another_identity_does_not_match`: a dictionary of other bytes
 //   gives the folder another identity (`identity_matches` false), and the folders are listed as a
-//   start lists them, a classifier folder with its identity and a folder that breaks the rule;
+//   start lists them, a classifier folder the manifest does not name (fix 1: listed by name, not
+//   asked about, no identity) and a folder that breaks the rule;
 // - `s7_check_a_vision_root_that_cannot_be_resolved_relays_the_existing_cause`: a configured
 //   root that does not exist is `vision_root_unavailable` at stage `config_vision`, the OS
 //   failure its link, as a start refuses it.
+// Fix 1 (review; coordinator work order rd-1114/brief-1693-fix1.md):
+// - `s7_check_compares_the_size_first_and_reads_no_manifest_file_past_its_pin`: the reader hashes
+//   no byte past its limit; a manifest file one byte longer than its pin is `sha256_mismatch` with
+//   no cause, never opened (on Windows another handle holds it without sharing);
+// - `s7_check_hashes_only_the_folders_it_is_asked_about_within_its_bounds`: with `--model`, the
+//   named classifier folder's identity and another folder listed `asked` false with none; a file
+//   over the file bound, and one over what the total bound leaves after the manifest's files,
+//   each named in `over_bound` and not read, the manifest's folder still identified.
 
-use super::vision_report::{Manifest, PinTable};
+use super::vision_report::{Bounds, Manifest, PinTable};
 use super::*;
 use actingcommand_vision_ffi::{
     DIRECTML_LIBRARY, DIRECTML_RUNTIME_PIN, DirectmlRuntimePin, ONNXRUNTIME_LIBRARY,
@@ -219,16 +228,21 @@ fn config(base: &Path, vision: &Value) -> PathBuf {
 
 /// `actingd vision check --config <config>` on the made-up table, as its report line.
 fn check_line(config: &Path) -> Value {
-    let reported = vision_report::run_with(
-        &arguments(&[
-            "vision",
-            "check",
-            "--config",
-            config.to_str().expect("a UTF-8 path"),
-        ]),
-        table(),
-    )
-    .unwrap_or_else(|error| panic!("vision check answers: {}", error.outcome()));
+    check_line_with(config, &[], vision_report::BOUNDS)
+}
+
+/// `actingd vision check --config <config> <more>` on the made-up table within `bounds`, as its
+/// report line.
+fn check_line_with(config: &Path, more: &[&str], bounds: Bounds) -> Value {
+    let mut words = vec![
+        "vision",
+        "check",
+        "--config",
+        config.to_str().expect("a UTF-8 path"),
+    ];
+    words.extend_from_slice(more);
+    let reported = vision_report::run_with(&arguments(&words), table(), bounds)
+        .unwrap_or_else(|error| panic!("vision check answers: {}", error.outcome()));
     let (outcome, developer, line) = report_line(
         vision_report::SCHEMA_VERSION,
         SharedCode::SerializationFailed,
@@ -345,6 +359,7 @@ fn s7_manifest_directml_lists_the_library_with_the_code_pin_and_cpu_does_not() {
     let reported = vision_report::run_with(
         &arguments(&["vision", "manifest", "--provider", "directml"]),
         table,
+        vision_report::BOUNDS,
     )
     .unwrap_or_else(|error| panic!("vision manifest answers: {}", error.outcome()));
     let (outcome, developer, line) = report_line(
@@ -447,7 +462,7 @@ fn s7_check_a_complete_vision_root_answers_every_file_ok_and_equal_identities() 
     let identity = model_identity(&content(DICTIONARY));
     assert_eq!(
         report["folders"],
-        json!([{"model_ref": MODEL, "family": "ppocr-ctc", "layout": "flat",
+        json!([{"model_ref": MODEL, "family": "ppocr-ctc", "layout": "flat", "asked": true,
                 "identity": identity}]),
         "{report}"
     );
@@ -551,17 +566,17 @@ fn s7_check_a_model_folder_of_another_identity_does_not_match() {
     assert_ne!(manifest_identity, folder_identity, "setup");
     let folders = report["folders"].as_array().expect("the folders");
     assert_eq!(folders.len(), 3, "{report}");
+    // Fix 1: a folder neither the manifest nor a `--model` names is listed, not read.
     assert_eq!(
         folders[0],
-        json!({"model_ref": "neutral.classifier", "family": "onnx-classify",
-               "identity": sha256_hex(b"neutral classifier")}),
+        json!({"model_ref": "neutral.classifier", "family": "onnx-classify", "asked": false}),
         "{report}"
     );
     assert_eq!(folders[1]["model_ref"], "neutral.empty", "{report}");
     assert!(folders[1]["invalid"].is_string(), "{report}");
     assert_eq!(
         folders[2],
-        json!({"model_ref": MODEL, "family": "ppocr-ctc", "layout": "flat",
+        json!({"model_ref": MODEL, "family": "ppocr-ctc", "layout": "flat", "asked": true,
                "identity": folder_identity}),
         "{report}"
     );
@@ -590,6 +605,7 @@ fn s7_check_a_vision_root_that_cannot_be_resolved_relays_the_existing_cause() {
             config.to_str().expect("a UTF-8 path"),
         ]),
         table(),
+        vision_report::BOUNDS,
     )
     .expect_err("a root that does not exist is refused");
 
@@ -612,4 +628,143 @@ fn s7_check_a_vision_root_that_cannot_be_resolved_relays_the_existing_cause() {
     );
     assert!(!absent.exists(), "nothing made");
     assert!(!temp.path().join("state").exists(), "no state root made");
+}
+
+#[test]
+fn s7_check_compares_the_size_first_and_reads_no_manifest_file_past_its_pin() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    // The reader hashes no byte past its limit: of ten bytes, a limit of four hashes four.
+    let longer = temp.path().join("ten-bytes.bin");
+    fs::write(&longer, b"0123456789").expect("a file of ten bytes");
+    let mut file = fs::File::open(&longer).expect("open it");
+    let hashed = vision_report::hash_at_most(&mut file, 4).expect("hash it");
+    assert_eq!(hashed, (sha256_hex(b"0123"), 4), "four bytes, no more");
+
+    // A manifest file one byte longer than its pin is a mismatch and is never opened: on Windows
+    // another handle holds it open without sharing, so opening it would answer `unreadable`.
+    let root = temp.path().join("vision");
+    for place in CPU_PLACES {
+        write(&root, place, &content(place));
+    }
+    let library = "ort/onnxruntime.dll";
+    let mut grown = content(library);
+    grown.push(b'!');
+    write(&root, library, &grown);
+    #[cfg(windows)]
+    let _held = {
+        use std::os::windows::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(at(&root, library))
+            .expect("the library held open")
+    };
+    let config = config(
+        temp.path(),
+        &json!({"execution_provider": "cpu", "root": root}),
+    );
+
+    let line = check_line(&config);
+
+    let report = &line["report"];
+    let states = states(report);
+    assert_eq!(states[library].0, "sha256_mismatch", "{report}");
+    assert!(
+        states[library].1.is_null(),
+        "not opened, no cause: {report}"
+    );
+    assert_eq!(report["models"][0]["identity_matches"], true, "{report}");
+}
+
+#[test]
+fn s7_check_hashes_only_the_folders_it_is_asked_about_within_its_bounds() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let root = temp.path().join("vision");
+    for place in CPU_PLACES {
+        write(&root, place, &content(place));
+    }
+    // Two classifier folders the manifest does not name; the rescue row asks about the first.
+    let classifier = vec![b'c'; 100];
+    write(&root, "models/neutral.classifier/model.onnx", &classifier);
+    write(
+        &root,
+        "models/neutral.unasked/model.onnx",
+        b"neutral unasked classifier",
+    );
+    let config = config(
+        temp.path(),
+        &json!({"execution_provider": "cpu", "root": root}),
+    );
+    let canonical = fs::canonicalize(&root).expect("the canonical root");
+    let classifier_path = at(&canonical, "models/neutral.classifier/model.onnx")
+        .to_string_lossy()
+        .into_owned();
+    let pinned = CPU_PLACES.into_iter().map(length_of).sum::<u64>();
+    let identity = model_identity(&content(DICTIONARY));
+    let folder = |line: &Value, model_ref: &str| {
+        line["report"]["folders"]
+            .as_array()
+            .expect("the folders")
+            .iter()
+            .find(|folder| folder["model_ref"] == model_ref)
+            .cloned()
+            .unwrap_or_else(|| panic!("the folder {model_ref}: {line}"))
+    };
+    let asked = ["--model", "neutral.classifier"];
+
+    // Within the bounds: the asked folder's identity; the other listed by name, not read.
+    let line = check_line_with(&config, &asked, vision_report::BOUNDS);
+    assert_eq!(
+        folder(&line, "neutral.classifier"),
+        json!({"model_ref": "neutral.classifier", "family": "onnx-classify", "asked": true,
+               "identity": sha256_hex(&classifier)}),
+        "{line}"
+    );
+    assert_eq!(
+        folder(&line, "neutral.unasked"),
+        json!({"model_ref": "neutral.unasked", "family": "onnx-classify", "asked": false}),
+        "{line}"
+    );
+    assert_eq!(folder(&line, MODEL)["identity"], identity, "{line}");
+
+    // A file over the file bound is named and not read.
+    let line = check_line_with(
+        &config,
+        &asked,
+        Bounds {
+            file_bytes: 99,
+            total_bytes: vision_report::BOUNDS.total_bytes,
+        },
+    );
+    assert_eq!(
+        folder(&line, "neutral.classifier"),
+        json!({"model_ref": "neutral.classifier", "family": "onnx-classify", "asked": true,
+               "identity": null, "over_bound": {"path": classifier_path, "size": 100,
+               "bound": "file", "bound_bytes": 99}}),
+        "{line}"
+    );
+    assert_eq!(folder(&line, MODEL)["identity"], identity, "{line}");
+
+    // A file over what the total bound leaves after the manifest's files is named and not read.
+    let total = pinned + 99;
+    let line = check_line_with(
+        &config,
+        &asked,
+        Bounds {
+            file_bytes: vision_report::BOUNDS.file_bytes,
+            total_bytes: total,
+        },
+    );
+    assert_eq!(
+        folder(&line, "neutral.classifier"),
+        json!({"model_ref": "neutral.classifier", "family": "onnx-classify", "asked": true,
+               "identity": null, "over_bound": {"path": classifier_path, "size": 100,
+               "bound": "total", "bound_bytes": total}}),
+        "{line}"
+    );
+    assert_eq!(
+        folder(&line, MODEL)["identity"],
+        identity,
+        "the manifest's files, read once within the total, give the model's identity: {line}"
+    );
 }

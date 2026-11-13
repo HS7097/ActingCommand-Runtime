@@ -400,12 +400,14 @@ pub(crate) const LAB_PROGRAM: &str = "actinglab.exe";
 pub(crate) const VISION_MANIFEST_TIMEOUT_MS: u64 = 30_000;
 
 /// Workflow #453 S7: the bound of `actingd vision check` in the rescue row `vision check`, at
-/// which the child is ended. The child reads each file of the manifest once, in 64 KiB chunks
-/// (about 175 MB for a `directml` root of this build: the runtime's three libraries, the OCR
-/// model's three files and the license files; about 156 MB for `cpu`), and each model folder's
-/// files it has not read yet: a few hundred megabytes at most, seconds on a local disk. 120 s is
-/// such a read at about 4 MB/s. Not a tunable.
-pub(crate) const VISION_CHECK_TIMEOUT_MS: u64 = 120_000;
+/// which the child is ended. Fix 1 (review): the bound of the worst case the child's own bounds
+/// allow (`contracts/vision-model-folders.md`, "The manifest"): it hashes at most 512 MiB in all,
+/// the manifest's files (each read at most to its pinned size; about 175 MB for `directml` with
+/// this build's pins) and the files of the model folders it is asked about (each at most
+/// 256 MiB). 512 MiB at 4 MiB/s, a slow disk under load, is 128 s; 32 s more is the process's
+/// start and the listing of `models\`, about the 30 s of `actingd vision manifest`: 160 s. A
+/// bound of what the child does, not a tunable.
+pub(crate) const VISION_CHECK_TIMEOUT_MS: u64 = 160_000;
 
 /// Workflow #453 S7: the bound of each Tools `standard-pack check` the row `vision check` runs,
 /// at which the child is ended. The check admits every package of one game root once, in memory
@@ -413,6 +415,17 @@ pub(crate) const VISION_CHECK_TIMEOUT_MS: u64 = 120_000;
 /// root takes seconds. 300 s is five whole package deadlines. `place` runs the same command under
 /// `install.child.check_config_timeout_ms` and leaves it running; this read-only row ends it.
 pub(crate) const STANDARD_PACK_CHECK_TIMEOUT_MS: u64 = 300_000;
+
+/// Workflow #453 S7 fix 1 (review): the limit of the row `vision check` in all: its children's
+/// bounds add up to [`VISION_CHECK_TIMEOUT_MS`] and [`STANDARD_PACK_CHECK_TIMEOUT_MS`] per game
+/// root, and the row runs no longer than this however many game roots there are. 900 s is the
+/// default of `install.child.check_config_timeout_ms`, the longest `place` waits for one check
+/// (it runs the same `standard-pack check` under it): a row that only reads should not keep a
+/// person or an installer waiting longer in all than the installer waits for one check of one
+/// game root. Each child runs within its own bound or what is left of this, whichever is less; a
+/// child ended because this ran out, or not started because none was left, is refused with
+/// `timeout_ms` this limit. Not a tunable.
+pub(crate) const VISION_CHECK_ROW_LIMIT_MS: u64 = 900_000;
 
 /// Workflow #453 S7: what `actingd vision manifest` or `vision check` answered with its report:
 /// its outcome as received, its `report` (`null` when it carries none, as a refusal does) and
@@ -468,28 +481,32 @@ pub(crate) fn vision_manifest(
 
 /// Workflow #453 S7: `<runtime>\actingcommand-actingd.exe vision check --config <config>
 /// --install-root <root>`, the live build's check of the root's configured vision root, within
-/// [`VISION_CHECK_TIMEOUT_MS`] and ended there.
+/// `timeout_ms` ([`VISION_CHECK_TIMEOUT_MS`], or less when the row's limit leaves less) and ended
+/// there. Fix 1 (review): with `--model <model_ref>` for each of `models`, in their order, the
+/// models the installed packs need, whose folders' identities it computes besides the
+/// manifest's.
 pub(crate) fn vision_check(
     host: &dyn Host,
     runtime: &Path,
     config: &Path,
     install_root: &Path,
+    models: &[&str],
+    timeout_ms: u64,
 ) -> Result<VisionReported, Unanswered> {
     let config_word = config.to_string_lossy().into_owned();
     let root_word = install_root.to_string_lossy().into_owned();
-    vision(
-        host,
-        runtime,
-        &[
-            "vision",
-            "check",
-            "--config",
-            config_word.as_str(),
-            "--install-root",
-            root_word.as_str(),
-        ],
-        VISION_CHECK_TIMEOUT_MS,
-    )
+    let mut arguments = vec![
+        "vision",
+        "check",
+        "--config",
+        config_word.as_str(),
+        "--install-root",
+        root_word.as_str(),
+    ];
+    for &model in models {
+        arguments.extend(["--model", model]);
+    }
+    vision(host, runtime, &arguments, timeout_ms)
 }
 
 /// Runs actingd's `vision` with `arguments` within `timeout_ms`, ending it there. Its report line
@@ -533,14 +550,16 @@ pub(crate) struct PackModel {
 }
 
 /// Workflow #453 S7: `<tools>\actinglab.exe --json standard-pack check --root <game root>`, as
-/// `place` runs it, within [`STANDARD_PACK_CHECK_TIMEOUT_MS`] and ended there: the models the
-/// game root's packs need (its line's member `models`). A check that does not pass is its line's
-/// outcome, or its exit's failure when it printed no line; a passed line without a readable
-/// `models` is `foreign_data_error` with the decoder's text.
+/// `place` runs it, within `timeout_ms` ([`STANDARD_PACK_CHECK_TIMEOUT_MS`], or less when the
+/// row's limit leaves less) and ended there: the models the game root's packs need (its line's
+/// member `models`). A check that does not pass is its line's outcome, or its exit's failure
+/// when it printed no line; a passed line without a readable `models` is `foreign_data_error`
+/// with the decoder's text.
 pub(crate) fn standard_pack_models(
     host: &dyn Host,
     tools: &Path,
     game_root: &Path,
+    timeout_ms: u64,
 ) -> Result<Vec<PackModel>, Unanswered> {
     let program = tools.join(LAB_PROGRAM);
     let root_word = game_root.to_string_lossy().into_owned();
@@ -552,7 +571,7 @@ pub(crate) fn standard_pack_models(
         root_word.as_str(),
     ]
     .map(OsString::from);
-    let ran = host.run_program_ending(&program, &arguments, STANDARD_PACK_CHECK_TIMEOUT_MS)?;
+    let ran = host.run_program_ending(&program, &arguments, timeout_ms)?;
     let line = serde_json::from_slice::<Value>(files::without_bom(&ran.stdout)).ok();
     let received = line.as_ref().and_then(|line| {
         serde_json::from_value::<OutcomeEnvelope>(line["outcome"].clone())

@@ -20,9 +20,17 @@
 //! `vision_root_in_program_slot`, at stage `config_vision`), compares every manifest file by its
 //! size and then by its SHA-256 read in bounded chunks (the states of `PinnedFileCheck`: `ok`,
 //! `missing`, `sha256_mismatch`, `unreadable`), lists `models\` as a start lists it (none when the
-//! folder does not exist), and computes each model folder's identity from its files, each file
-//! read once. A configuration without a `vision` section, or whose `execution_provider` is
-//! `cuda`, has no manifest: `vision_config_invalid` at stage `config_vision`.
+//! folder does not exist), and computes the identity of the model folders the manifest or a
+//! `--model` names from their files, each file read once. A configuration without a `vision`
+//! section, or whose `execution_provider` is `cuda`, has no manifest: `vision_config_invalid` at
+//! stage `config_vision`.
+//!
+//! Fix 1 (review): what the check reads is bounded. A manifest file of another size than its pin
+//! is a mismatch and is not read, and none is read past its pinned size. Only the folders the
+//! manifest or a `--model` names are hashed; every other folder is listed by name, unread. A model
+//! folder file is hashed only within `FILE_BOUND_BYTES` (256 MiB), and the check hashes no more
+//! than `TOTAL_BOUND_BYTES` (512 MiB) in all, the manifest's files included; a file over either
+//! bound is reported as such (`over_bound`) and not read.
 
 use super::*;
 use actingcommand_contract::codes::ContractCode;
@@ -44,12 +52,37 @@ use std::io::{ErrorKind, Read};
 pub(super) const SCHEMA_VERSION: &str = "actingcommand.actingd.vision.v1";
 /// The developer text of a command line this subcommand does not take.
 const USAGE: &str = "actingd vision takes manifest --provider cpu|directml, or check --config \
-     <file> [--install-root <root>], each option once with a value";
+     <file> [--install-root <root>] [--model <model_ref>]..., --config and --install-root once, \
+     each option with a value";
 /// The providers a manifest is built for; a vision root of `cuda` has none.
 const MANIFEST_PROVIDERS: [OnnxExecutionProvider; 2] =
     [OnnxExecutionProvider::Cpu, OnnxExecutionProvider::Directml];
 /// The chunk a file is hashed in.
 const CHUNK_BYTES: usize = 64 * 1024;
+/// Workflow #453 S7 fix 1 (review): the most of one model folder file the check hashes; a larger
+/// one is reported over the bound and not read. 256 MiB, more than three times the largest model
+/// file this build's registry pins (the OCR model's recognizer, about 77 MB). A bound of what the
+/// check reads, not a tunable.
+const FILE_BOUND_BYTES: u64 = 256 * 1024 * 1024;
+/// Workflow #453 S7 fix 1 (review): the most the check hashes in all, the manifest's files
+/// included (their pins add up to about 175 MB for `directml` with this build's registry, 156 MB
+/// for `cpu`); a model folder file that would pass it is reported over the bound and not read.
+/// 512 MiB; the rescue row's bound of `actingd vision check` is this read at 4 MiB/s. Not a
+/// tunable.
+const TOTAL_BOUND_BYTES: u64 = 512 * 1024 * 1024;
+
+/// What the check hashes at most: of one model folder file, and in all. A test gives its own.
+#[derive(Clone, Copy)]
+pub(super) struct Bounds {
+    pub(super) file_bytes: u64,
+    pub(super) total_bytes: u64,
+}
+
+/// The bounds this build checks within.
+pub(super) const BOUNDS: Bounds = Bounds {
+    file_bytes: FILE_BOUND_BYTES,
+    total_bytes: TOTAL_BOUND_BYTES,
+};
 /// An OCR model's files in its folder, flat and nested (`contracts/vision-model-folders.md`,
 /// "Folder layouts").
 const OCR_DETECTOR: [&str; 2] = ["det.onnx", "det/inference.onnx"];
@@ -145,20 +178,21 @@ struct RegistryPinnedFile {
     sha256: String,
 }
 
-/// `actingd vision manifest|check` on the pin table this build carries.
+/// `actingd vision manifest|check` on the pin table this build carries, within its bounds.
 pub(super) fn run(arguments: Vec<OsString>) -> Result<Reported, ActingdError> {
-    run_with(&arguments, EMBEDDED)
+    run_with(&arguments, EMBEDDED, BOUNDS)
 }
 
-/// `actingd vision manifest|check` on `table`; a command line it does not take is
-/// `invalid_arguments`.
+/// `actingd vision manifest|check` on `table`, `check` hashing within `bounds`; a command line it
+/// does not take is `invalid_arguments`.
 pub(super) fn run_with(
     arguments: &[OsString],
     table: PinTable<'_>,
+    bounds: Bounds,
 ) -> Result<Reported, ActingdError> {
     match arguments.get(1).and_then(|word| word.to_str()) {
         Some("manifest") => manifest_report(arguments, table),
-        Some("check") => check_report(arguments, table),
+        Some("check") => check_report(arguments, table, bounds),
         _ => Err(invalid()),
     }
 }
@@ -176,16 +210,16 @@ fn encode_failed() -> ActingdError {
     ActingdError::process(SharedCode::SerializationFailed)
 }
 
-/// A registry this build cannot read as a manifest: `serialization_failed`, the reason its
-/// `foreign_data_error` link.
-fn defect(reason: String) -> ActingdError {
+/// A registry this build cannot read as a manifest: `serialization_failed`, `detail` (what is
+/// wrong with it) its `foreign_data_error` link.
+fn defect(detail: String) -> ActingdError {
     let code = SharedCode::SerializationFailed;
     ActingdError::refused(
         code,
         Outcome::new(code).caused_by(
             Outcome::new(ContractCode::ForeignDataError)
                 .raw_source(RawSource::Json)
-                .raw_text(reason),
+                .raw_text(detail),
         ),
     )
 }
@@ -369,10 +403,19 @@ fn pick<'a>(named: &BTreeMap<&str, &'a str>, names: [&str; 2]) -> Option<&'a str
     names.into_iter().find_map(|name| named.get(name).copied())
 }
 
-/// `vision check --config <file> [--install-root <root>]`: `vision_check_completed` with the
-/// comparison as `report` `{provider, vision_root, files, folders, models}`.
-fn check_report(arguments: &[OsString], table: PinTable<'_>) -> Result<Reported, ActingdError> {
-    let (config_path, install_root) = parse_check(arguments)?;
+/// `vision check --config <file> [--install-root <root>] [--model <model_ref>]...`:
+/// `vision_check_completed` with the comparison as `report` `{provider, vision_root, files,
+/// folders, models}`, hashing within `bounds`.
+fn check_report(
+    arguments: &[OsString],
+    table: PinTable<'_>,
+    bounds: Bounds,
+) -> Result<Reported, ActingdError> {
+    let CheckLine {
+        config: config_path,
+        install_root,
+        models: mut asked,
+    } = parse_check(arguments)?;
     let install_root = install_root
         .as_deref()
         .map(check_config::install_root_of)
@@ -402,13 +445,27 @@ fn check_report(arguments: &[OsString], table: PinTable<'_>) -> Result<Reported,
         )
     })?;
     let manifest = manifest(table, provider)?;
-    let mut digests = Digests::default();
+    // The manifest's files are read within the total bound; a build whose pins do not fit it is
+    // a defect of the build.
+    let pinned_bytes = manifest
+        .files
+        .iter()
+        .fold(0_u64, |bytes, file| bytes.saturating_add(file.size));
+    if pinned_bytes > bounds.total_bytes {
+        return Err(defect(format!(
+            "the manifest's files hold {pinned_bytes} bytes, more than the {} bytes vision check \
+             hashes in all",
+            bounds.total_bytes
+        )));
+    }
+    let mut reader = Reader::new(bounds);
     let files = manifest
         .files
         .iter()
-        .map(|file| checked_file(&root, file, &mut digests))
+        .map(|file| checked_file(&root, file, &mut reader))
         .collect::<Result<Vec<_>, _>>()?;
-    let folders = model_folders(&root, &mut digests)?;
+    asked.extend(manifest.models.iter().map(|model| model.model_ref.clone()));
+    let folders = model_folders(&root, &asked, &mut reader)?;
     let models = manifest
         .models
         .iter()
@@ -424,16 +481,34 @@ fn check_report(arguments: &[OsString], table: PinTable<'_>) -> Result<Reported,
     Ok(Reported::new(Outcome::new(ActingdCode::VisionCheckCompleted)).with("report", report))
 }
 
-/// The command line after `vision check`: `--config` once and `--install-root` at most once,
-/// each with a non-empty value.
-fn parse_check(arguments: &[OsString]) -> Result<(PathBuf, Option<PathBuf>), ActingdError> {
+/// The command line of `vision check`.
+struct CheckLine {
+    config: PathBuf,
+    install_root: Option<PathBuf>,
+    /// Workflow #453 S7 fix 1: the model folders whose identity is computed besides the
+    /// manifest's (the models the installed packs need, as the rescue row names them).
+    models: BTreeSet<String>,
+}
+
+/// The command line after `vision check`: `--config` once, `--install-root` at most once and
+/// (fix 1) `--model` any number of times with a UTF-8 value, each with a non-empty value.
+fn parse_check(arguments: &[OsString]) -> Result<CheckLine, ActingdError> {
     let (pairs, remaining) = arguments.get(2..).unwrap_or_default().as_chunks::<2>();
     if !remaining.is_empty() {
         return Err(invalid());
     }
     let mut config = None;
     let mut install_root = None;
+    let mut models = BTreeSet::new();
     for pair in pairs {
+        if pair[1].is_empty() {
+            return Err(invalid());
+        }
+        if pair[0] == "--model" {
+            let model = pair[1].to_str().ok_or_else(invalid)?;
+            models.insert(model.to_owned());
+            continue;
+        }
         let slot = if pair[0] == "--config" {
             &mut config
         } else if pair[0] == "--install-root" {
@@ -441,12 +516,16 @@ fn parse_check(arguments: &[OsString]) -> Result<(PathBuf, Option<PathBuf>), Act
         } else {
             return Err(invalid());
         };
-        if slot.is_some() || pair[1].is_empty() {
+        if slot.is_some() {
             return Err(invalid());
         }
         *slot = Some(PathBuf::from(&pair[1]));
     }
-    Ok((config.ok_or_else(invalid)?, install_root))
+    Ok(CheckLine {
+        config: config.ok_or_else(invalid)?,
+        install_root,
+        models,
+    })
 }
 
 /// A configuration whose vision root has no manifest: no `vision` section, or `cuda`.
@@ -461,48 +540,147 @@ fn unmanifested() -> ActingdError {
     )
 }
 
-/// The SHA-256 of each file read whole, by its path, so that no file is read twice.
-#[derive(Default)]
-struct Digests(BTreeMap<PathBuf, String>);
+/// Workflow #453 S7 fix 1 (review): the SHA-256 of `file` over at most `limit` bytes, read in
+/// bounded chunks from where it stands, and how many bytes that was. Nothing past `limit` is
+/// read.
+pub(super) fn hash_at_most(file: &mut fs::File, limit: u64) -> std::io::Result<(String, u64)> {
+    let mut bounded = file.take(limit);
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; CHUNK_BYTES];
+    let mut hashed = 0_u64;
+    loop {
+        match bounded.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                hasher.update(&buffer[..read]);
+                hashed = hashed.saturating_add(read as u64);
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok((format!("{:x}", hasher.finalize()), hashed))
+}
 
-impl Digests {
-    /// The SHA-256 of the file at `path`, read in bounded chunks once; the OS failure, with the
-    /// path, when it cannot be read.
-    fn of(&mut self, path: &Path) -> Result<String, Outcome> {
-        if let Some(digest) = self.0.get(path) {
+/// Which bound a model folder file is over.
+#[derive(Debug, Clone, Copy)]
+enum Bound {
+    /// [`Bounds::file_bytes`].
+    File,
+    /// What [`Bounds::total_bytes`] left after the files hashed before it.
+    Total,
+}
+
+impl Bound {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Total => "total",
+        }
+    }
+}
+
+/// Why a model folder the check was asked about has no identity in the report.
+enum Unidentified {
+    /// A file of it could not be read (the OS failure, with the path), or the engine's rule
+    /// refused its files' digests.
+    Failed(Outcome),
+    /// A file of it is over a bound and was not read.
+    OverBound {
+        path: PathBuf,
+        size: u64,
+        bound: Bound,
+        bound_bytes: u64,
+    },
+}
+
+/// The files the check hashed, by path, so that none is read twice, and the bytes it hashed in
+/// all, within its [`Bounds`].
+struct Reader {
+    bounds: Bounds,
+    digests: BTreeMap<PathBuf, String>,
+    hashed_bytes: u64,
+}
+
+impl Reader {
+    fn new(bounds: Bounds) -> Self {
+        Self {
+            bounds,
+            digests: BTreeMap::new(),
+            hashed_bytes: 0,
+        }
+    }
+
+    /// The SHA-256 of the manifest file at `path`, whose metadata gave it its pin's `size`, read
+    /// at most `size` bytes: `None` when it did not hold `size` bytes while it was read (it shrank,
+    /// or grew past its pin); the OS failure, with the path, when it cannot be read.
+    fn pinned(&mut self, path: &Path, size: u64) -> Result<Option<String>, Outcome> {
+        if let Some(digest) = self.digests.get(path) {
+            return Ok(Some(digest.clone()));
+        }
+        let failed =
+            |error: std::io::Error, op: IoOp| Outcome::from_io_error(&error, op).path(path);
+        let mut file = fs::File::open(path).map_err(|error| failed(error, IoOp::Open))?;
+        let (digest, hashed) =
+            hash_at_most(&mut file, size).map_err(|error| failed(error, IoOp::Read))?;
+        self.hashed_bytes = self.hashed_bytes.saturating_add(hashed);
+        let length = file
+            .metadata()
+            .map_err(|error| failed(error, IoOp::Metadata))?
+            .len();
+        if hashed != size || length != size {
+            return Ok(None);
+        }
+        self.digests.insert(path.to_path_buf(), digest.clone());
+        Ok(Some(digest))
+    }
+
+    /// The SHA-256 of the model folder file at `path`, read at most to its length when it was
+    /// opened; a file larger than the file bound, or than what the total bound leaves, is
+    /// [`Unidentified::OverBound`] and is not read; the OS failure, with the path, when it cannot
+    /// be read.
+    fn digest(&mut self, path: &Path) -> Result<String, Unidentified> {
+        if let Some(digest) = self.digests.get(path) {
             return Ok(digest.clone());
         }
-        let digest = read_digest(path)
-            .map_err(|(error, op)| Outcome::from_io_error(&error, op).path(path))?;
-        self.0.insert(path.to_path_buf(), digest.clone());
+        let failed = |error: std::io::Error, op: IoOp| {
+            Unidentified::Failed(Outcome::from_io_error(&error, op).path(path))
+        };
+        let mut file = fs::File::open(path).map_err(|error| failed(error, IoOp::Open))?;
+        let size = file
+            .metadata()
+            .map_err(|error| failed(error, IoOp::Metadata))?
+            .len();
+        let left = self.bounds.total_bytes.saturating_sub(self.hashed_bytes);
+        let over = if size > self.bounds.file_bytes {
+            Some((Bound::File, self.bounds.file_bytes))
+        } else if size > left {
+            Some((Bound::Total, self.bounds.total_bytes))
+        } else {
+            None
+        };
+        if let Some((bound, bound_bytes)) = over {
+            return Err(Unidentified::OverBound {
+                path: path.to_path_buf(),
+                size,
+                bound,
+                bound_bytes,
+            });
+        }
+        let (digest, hashed) =
+            hash_at_most(&mut file, size).map_err(|error| failed(error, IoOp::Read))?;
+        self.hashed_bytes = self.hashed_bytes.saturating_add(hashed);
+        self.digests.insert(path.to_path_buf(), digest.clone());
         Ok(digest)
     }
 }
 
-fn read_digest(path: &Path) -> Result<String, (std::io::Error, IoOp)> {
-    let mut file = fs::File::open(path).map_err(|error| (error, IoOp::Open))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0_u8; CHUNK_BYTES];
-    loop {
-        match file.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(read) => hasher.update(&buffer[..read]),
-            Err(error) if error.kind() == ErrorKind::Interrupted => {}
-            Err(error) => return Err((error, IoOp::Read)),
-        }
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
 /// How the file at `path` compares with `file`'s pin, as `PinnedRuntimeFile::check` compares: no
 /// file is `missing`; one whose metadata cannot be read `unreadable`; no regular file or another
-/// size `sha256_mismatch` without reading it; then its SHA-256, `ok` or `sha256_mismatch`, or
-/// `unreadable` when it cannot be read. The OS failure goes with `unreadable`.
-fn compare(
-    path: &Path,
-    file: &ManifestFile,
-    digests: &mut Digests,
-) -> (FileState, Option<Outcome>) {
+/// size `sha256_mismatch` without reading it; then its SHA-256 over at most its pinned size, `ok`
+/// or `sha256_mismatch` (also when it changed its size while read), or `unreadable` when it cannot
+/// be read. The OS failure goes with `unreadable`.
+fn compare(path: &Path, file: &ManifestFile, reader: &mut Reader) -> (FileState, Option<Outcome>) {
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return (FileState::Missing, None),
@@ -516,8 +694,8 @@ fn compare(
     if !metadata.is_file() || metadata.len() != file.size {
         return (FileState::Sha256Mismatch, None);
     }
-    match digests.of(path) {
-        Ok(digest) if digest == file.sha256 => (FileState::Ok, None),
+    match reader.pinned(path, file.size) {
+        Ok(Some(digest)) if digest == file.sha256 => (FileState::Ok, None),
         Ok(_) => (FileState::Sha256Mismatch, None),
         Err(cause) => (FileState::Unreadable, Some(cause)),
     }
@@ -533,13 +711,13 @@ fn envelope(outcome: &Outcome) -> Result<Value, ActingdError> {
 fn checked_file(
     root: &Path,
     file: &ManifestFile,
-    digests: &mut Digests,
+    reader: &mut Reader,
 ) -> Result<Value, ActingdError> {
     let path = file
         .vision_root_path
         .split('/')
         .fold(root.to_path_buf(), |path, part| path.join(part));
-    let (state, cause) = compare(&path, file, digests);
+    let (state, cause) = compare(&path, file, reader);
     let mut entry = serde_json::to_value(file).map_err(|_| encode_failed())?;
     entry["state"] = Value::from(state.token());
     if let Some(cause) = cause {
@@ -549,11 +727,18 @@ fn checked_file(
 }
 
 /// The folders of `<root>\models` as a start lists them, by name: a model folder
-/// `{model_ref, family, layout?, identity}` (`identity` `null` with the OS failure as `cause`
-/// when a file cannot be read), a folder that breaks the folder rule `{model_ref, invalid}` with
-/// its reason. None when `models\` does not exist; one that cannot be listed is the start's
+/// `{model_ref, family, layout?, asked, identity?}`, a folder that breaks the folder rule
+/// `{model_ref, invalid}` with its reason. Fix 1 (review): only a model folder `asked` names (the
+/// manifest's models and each `--model`) is read, `asked` true with its `identity` (`null` with
+/// the OS failure as `cause` when a file cannot be read, or with `over_bound` for a file over a
+/// bound, which is not read); every other one is `asked` false, with no identity, and nothing of
+/// it is read. None when `models\` does not exist; one that cannot be listed is the start's
 /// refusal, `vision_root_unavailable` at stage `config_vision`.
-fn model_folders(root: &Path, digests: &mut Digests) -> Result<Vec<Value>, ActingdError> {
+fn model_folders(
+    root: &Path,
+    asked: &BTreeSet<String>,
+    reader: &mut Reader,
+) -> Result<Vec<Value>, ActingdError> {
     let models_dir = root.join(VISION_MODELS_DIRECTORY);
     if matches!(fs::symlink_metadata(&models_dir), Err(error) if error.kind() == ErrorKind::NotFound)
     {
@@ -572,7 +757,9 @@ fn model_folders(root: &Path, digests: &mut Digests) -> Result<Vec<Value>, Actin
     })?;
     let mut folders = BTreeMap::new();
     for spec in &listing.ocr {
-        let identity = ocr_identity(spec, digests);
+        let identity = asked
+            .contains(&spec.model_ref)
+            .then(|| ocr_identity(spec, reader));
         let entry = folder(
             &spec.model_ref,
             VisionModelFamily::PpocrCtc,
@@ -582,7 +769,9 @@ fn model_folders(root: &Path, digests: &mut Digests) -> Result<Vec<Value>, Actin
         folders.insert(spec.model_ref.clone(), entry);
     }
     for spec in &listing.nn {
-        let identity = digests.of(&spec.model_path);
+        let identity = asked
+            .contains(&spec.model_ref)
+            .then(|| reader.digest(&spec.model_path));
         let entry = folder(
             &spec.model_ref,
             VisionModelFamily::OnnxClassify,
@@ -600,37 +789,57 @@ fn model_folders(root: &Path, digests: &mut Digests) -> Result<Vec<Value>, Actin
     Ok(folders.into_values().collect())
 }
 
-/// The identity of an OCR folder from the bytes of its files, as the engine computes it.
-fn ocr_identity(spec: &OcrModelSpec, digests: &mut Digests) -> Result<String, Outcome> {
+/// The identity of an OCR folder from the bytes of its files, as the engine computes it; the
+/// first file that cannot be read or is over a bound stops it.
+fn ocr_identity(spec: &OcrModelSpec, reader: &mut Reader) -> Result<String, Unidentified> {
     let detector = match &spec.detector_path {
-        Some(path) => Some(digests.of(path)?),
+        Some(path) => Some(reader.digest(path)?),
         None => None,
     };
-    let recognizer = digests.of(&spec.recognizer_path)?;
-    let dictionary = digests.of(&spec.dictionary_path)?;
+    let recognizer = reader.digest(&spec.recognizer_path)?;
+    let dictionary = reader.digest(&spec.dictionary_path)?;
     ppocr_model_set_sha256(detector.as_deref(), &recognizer, &dictionary, None).map_err(|error| {
-        Outcome::new(ContractCode::ForeignDataError)
-            .raw_source(RawSource::Vision)
-            .raw_text(error.message().to_owned())
+        Unidentified::Failed(
+            Outcome::new(ContractCode::ForeignDataError)
+                .raw_source(RawSource::Vision)
+                .raw_text(error.message()),
+        )
     })
 }
 
-/// One model folder's report entry.
+/// One model folder's report entry; `identity` is `None` for a folder the check was not asked
+/// about.
 fn folder(
     model_ref: &str,
     family: VisionModelFamily,
     layout: Option<&str>,
-    identity: Result<String, Outcome>,
+    identity: Option<Result<String, Unidentified>>,
 ) -> Result<Value, ActingdError> {
     let mut entry = json!({"model_ref": model_ref, "family": family.as_str()});
     if let Some(layout) = layout {
         entry["layout"] = Value::from(layout);
     }
+    entry["asked"] = Value::from(identity.is_some());
     match identity {
-        Ok(identity) => entry["identity"] = Value::from(identity),
-        Err(cause) => {
+        None => {}
+        Some(Ok(identity)) => entry["identity"] = Value::from(identity),
+        Some(Err(Unidentified::Failed(cause))) => {
             entry["identity"] = Value::Null;
             entry["cause"] = envelope(&cause)?;
+        }
+        Some(Err(Unidentified::OverBound {
+            path,
+            size,
+            bound,
+            bound_bytes,
+        })) => {
+            entry["identity"] = Value::Null;
+            entry["over_bound"] = json!({
+                "path": path.to_string_lossy(),
+                "size": size,
+                "bound": bound.as_str(),
+                "bound_bytes": bound_bytes,
+            });
         }
     }
     Ok(entry)

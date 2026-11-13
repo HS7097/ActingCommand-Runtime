@@ -599,10 +599,15 @@ actingcommand_contract::outcome_vocabulary! {
         // discovery from the live build's `actingd discover` (its outcome, or the child's failure,
         // is the cause; fix 1: a child ended at the row's bound has `timeout_ms` and no cause).
         EmulatorDiscoveryFailed => "emulator_discovery_failed",
-        // Workflow #453 S7 (since 0.12.60): the rescue module's `vision manifest` or `vision
-        // check` got no report from the live build's `actingd vision` (its outcome, or the child's
-        // failure, is the cause; a child ended at the row's bound has `timeout_ms` and no cause).
+        // Workflow #453 S7 (since 0.12.60; fix 1: only where a root really is not resolved): the
+        // rescue module's `vision check` got the live build's `actingd vision check` refusal of
+        // the configuration or of the vision root it names (actingd's outcome is the cause).
         VisionRootUnresolved => "vision_root_unresolved",
+        // Workflow #453 S7 fix 1 (since 0.12.60): the rescue module's `vision manifest` or
+        // `vision check` got no usable report from the live build's `actingd vision`: it did not
+        // run, printed none (a build without the subcommand), refused its command line, could not
+        // read its own registry, or was ended at the row's bound (`timeout_ms`, no cause).
+        VisionReportUnanswered => "vision_report_unanswered",
     }
 }
 

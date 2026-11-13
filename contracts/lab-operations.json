@@ -3446,14 +3446,14 @@
       "new": "#453 S7 (what a fresh root's vision root must hold, for an installer that places it)",
       "slice": "S7",
       "status": "planned",
-      "notes": "#453 S7: the live build's actingd vision manifest --provider <provider>, within 30 s, at which the child is ended (the refusal then has timeout_ms); read only: no state root, no owner lock, no ledger, nothing written, nothing downloaded (contracts/vision-model-folders.md, The manifest); a refusal is install_command_refused with install_refusal vision_root_unresolved and actingd's outcome (or the child's failure) as its cause; another provider is actingctl_usage_invalid"
+      "notes": "#453 S7: the live build's actingd vision manifest --provider <provider>, within 30 s, at which the child is ended (the refusal then has timeout_ms); read only: no state root, no owner lock, no ledger, nothing written, nothing downloaded (contracts/vision-model-folders.md, The manifest); a refusal is install_command_refused with install_refusal vision_report_unanswered (fix 1: the row resolves no root) and actingd's outcome (or the child's failure) as its cause; another provider is actingctl_usage_invalid"
     },
     {
       "name": "vision check",
       "module": "rescue",
       "params": [],
       "help": "Checks this root's vision root against the installed build's manifest, file by file, and the models the installed packs need, without a Runtime.",
-      "output": "actingd vision check's report (provider, vision_root, files with each state, folders with each identity, models), standard_packs {root, games} and required_models, each {model_ref, model_sha256, games, present, identity_matches}",
+      "output": "actingd vision check's report (provider, vision_root, files with each state, folders with asked and the identity of each asked one, models), standard_packs {root, games, skipped} and required_models, each {model_ref, model_sha256, games, present, identity_matches}",
       "writes": false,
       "irreversible": false,
       "runtime": "offline",
@@ -3463,7 +3463,7 @@
       "new": "#453 S7 (whether a fresh root's vision root holds what it must, before the Runtime first runs)",
       "slice": "S7",
       "status": "planned",
-      "notes": "#453 S7: the live build's actingd vision check --config <this root's configuration> --install-root <root> within 120 s, then the Tools' standard-pack check of each game root below standard_packs.root within 300 s each, every child ended at its bound (the refusal then has timeout_ms); read only: no state root, no owner lock, no ledger, nothing written, nothing downloaded (contracts/vision-model-folders.md, The manifest); install_command_done when every file and model matches, else install_caveat_noted with install_caveat vision_incomplete and count; a refusal is install_command_refused with vision_root_unresolved (actingd), config_unreadable (the standard-pack root) or pack_invalid (a game root's check), the child's outcome or failure as its cause"
+      "notes": "#453 S7 fix 1: the Tools' standard-pack check of each game root below standard_packs.root within 300 s each, then the live build's actingd vision check --config <this root's configuration> --install-root <root> --model <each model they need> within 160 s (it hashes at most 512 MiB), every child ended at its bound, the row within 900 s in all (the refusal then has timeout_ms: the child's bound, or 900000); every entry below standard_packs.root not checked is named in standard_packs.skipped with why (link, name_not_utf8, no_bundle, not_a_folder); read only: no state root, no owner lock, no ledger, nothing written, nothing downloaded (contracts/vision-model-folders.md, The manifest); install_command_done when every file and model matches, else install_caveat_noted with install_caveat vision_incomplete and count; a refusal is install_command_refused with vision_root_unresolved (actingd refused the configuration or its vision root), vision_report_unanswered (actingd gave no usable report), config_unreadable (the standard-pack root) or pack_invalid (a game root's check, naming the root), the child's outcome or failure as its cause"
     },
     {
       "name": "watchdog install",

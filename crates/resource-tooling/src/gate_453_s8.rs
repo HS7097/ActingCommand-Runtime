@@ -120,9 +120,12 @@ fn write_pack(directory: &Path, package_id: &str, ocr: &[(&str, Value)]) {
     }
 }
 
+/// One pack of a game root: its package id and what writes it in its directory.
+type PackWriter<'a> = (&'a str, &'a dyn Fn(&Path));
+
 /// An installed game root in `installed`: each pack `writer` writes in its directory, listed in
 /// `bundle.json` in the order given.
-fn game_root(installed: &TempDir, packs: &[(&str, &dyn Fn(&Path))]) -> PathBuf {
+fn game_root(installed: &TempDir, packs: &[PackWriter<'_>]) -> PathBuf {
     let game_root = installed.path().join("packages").join(GAME);
     fs::create_dir_all(&game_root).expect("game root");
     for (package_id, writer) in packs {
@@ -176,7 +179,7 @@ fn s8_two_packs_that_share_a_model_list_it_once_with_both_packages_in_order() {
         );
     };
     let plain = |directory: &Path| write_pack(directory, PLAIN, &[]);
-    let packs: [(&str, &dyn Fn(&Path)); 3] = [(ALPHA, &alpha), (BETA, &beta), (PLAIN, &plain)];
+    let packs: [PackWriter<'_>; 3] = [(ALPHA, &alpha), (BETA, &beta), (PLAIN, &plain)];
     let game_root = game_root(&installed, &packs);
 
     let checked = check(&game_root);
@@ -199,7 +202,7 @@ fn s8_two_packs_that_share_a_model_list_it_once_with_both_packages_in_order() {
 fn s8_a_root_without_recognition_targets_answers_no_models() {
     let installed = TempDir::new().expect("temporary directory");
     let plain = |directory: &Path| write_pack(directory, PLAIN, &[]);
-    let packs: [(&str, &dyn Fn(&Path)); 1] = [(PLAIN, &plain)];
+    let packs: [PackWriter<'_>; 1] = [(PLAIN, &plain)];
     let game_root = game_root(&installed, &packs);
 
     let checked = check(&game_root);
@@ -219,7 +222,7 @@ fn s8_the_other_members_are_as_before_on_an_existing_fixture() {
     use super::gate_428_cfl2 as fixture;
     let installed = TempDir::new().expect("temporary directory");
     let slots = |directory: &Path| fixture::write_pack(directory, fixture::SLOTS);
-    let packs: [(&str, &dyn Fn(&Path)); 1] = [(fixture::SLOTS, &slots)];
+    let packs: [PackWriter<'_>; 1] = [(fixture::SLOTS, &slots)];
     let game_root = game_root(&installed, &packs);
     assert_eq!((GAME, SERVER), (fixture::GAME, fixture::SERVER), "setup");
 

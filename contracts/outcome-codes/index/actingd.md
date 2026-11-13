@@ -153,7 +153,7 @@ column means. 155 codes.
 | `unlock_owner_report_encode_failed` | error | none | 0.12.0 | active | pending | TBD | actingd unlock-owner could not encode its report. |
 | `unlock_owner_usage_invalid` | error | none | 0.12.0 | active | pending | TBD | actingd unlock-owner was given too many arguments. |
 | `usage_invalid` | error | none | 0.12.0 | active | settled | written | actingd was started without exactly --config \<path> (or --config \<path> --install-held \<json>). |
-| `vision_check_completed` | success | none | 0.12.60 | active | pending | written | actingd vision check --config \<file> [--install-root \<root>] compared the configured vision root with the manifest of its execution provider (Workflow #453 S7,… |
+| `vision_check_completed` | success | none | 0.12.60 | active | pending | written | actingd vision check --config \<file> [--install-root \<root>] [--model \<model_ref>]... |
 | `vision_config_invalid` | error | none | 0.12.0 | active | settled | written | The vision section breaks its rules: execution_provider cuda without a valid cuda_device, cpu with a cuda_device, or an empty root. |
 | `vision_manifest_reported` | success | none | 0.12.60 | active | pending | written | actingd vision manifest --provider cpu\|directml answered what a vision root of that provider must hold (Workflow #453 S7, contracts/vision-model-folders.md,… |
 | `vision_provider_manifest_retired` | error | none | 0.12.0 | active | settled | written | actingd's configuration names the retired vision provider manifest, which the vision root replaced (Workflow #360). |

@@ -20983,29 +20983,49 @@ missing file showed only at a model's first use. The contract is
 | S7-1 | `windows-tool-sources.v1.json`: `ppocrv6-medium-onnx` gains `model_ref` `PP-OCRv6_medium` and `family` `ppocr-ctc`, each of its three artifacts `vision_root_path` (`models/PP-OCRv6_medium/det.onnx`, `rec.onnx`, `keys.txt`) | new members of a tool source | S7 | — | `Test-WindowsRemoteBuildTools.ps1` freezes them; `Materialize-VisionRoot.ps1` keeps its constants (unchanged); `Materialize-TaskToolCache.ps1`, the workflow's platform-tools read, `crates/device/build.rs` and actingd's adb pin reader read no new member and ignore unknown ones |
 | S7-2 | `directml-1.15.4` `pinned_license_files[]` `{path, vision_root_path, size, sha256, hash_provenance}`: `LICENSE.txt` 10,439 B `a05138e3…4b8d`, `LICENSE-CODE.txt` 1,093 B `903df551…9a3c`, `ThirdPartyNotices.txt` 4,577 B `2c95795c…7950`, at `ort/licenses/directml/` | new member of a tool source (the coordinator's ruling on board #453) | S7 | — | read from the pinned package itself, a copy whose size, SHA-256 and NuGet's SHA-512 equal the entry's `archive`: each entry read whole, its CRC checked, then hashed; the same reading of `onnxruntime-directml-1.24.4`'s package gives that entry's two license pins exactly; the sizes equal those design rd-1031 §5 records; frozen by `Test-WindowsRemoteBuildTools.ps1`. #441 (§1.340) recorded the redistribution and added none |
 | S7-3 | `actingd vision manifest --provider <cpu or directml>` (`apps/actingd/src/vision_report.rs`) | new actingd subcommand, read only | S7 | an installer, a person, the row `vision manifest` | report `actingcommand.actingd.vision.v1` `{schema_version, outcome, report}`; `report` `{provider, files, models}` as the contract writes; from the embedded registry (`ac_adb::TOOL_SOURCES_PIN`, now visible to the crate) and `DIRECTML_RUNTIME_PIN`; no address; `invalid_arguments` for another command line; a registry it cannot read so `serialization_failed` caused by `foreign_data_error` |
-| S7-4 | `actingd vision check --config <file> [--install-root <root>]` | new actingd subcommand, read only | S7 | an installer, a person, the row `vision check` | the file loaded as check-config loads it (stage `config_load`), `--install-root` by check-config's rule, the `vision` section assembled alone (`ActingdConfigFile::vision_section`, stage `config_assemble`), the root resolved as a start resolves it (`ConfiguredVision::resolve_root`, the first part of `inspect`, which now calls it; stage `config_vision`), no section or `cuda` `vision_config_invalid` at `config_vision`; `report` `{provider, vision_root, files, folders, models}`; each file read at most once, in 64 KiB chunks; no state root, no owner lock, no ledger, no socket, no program, nothing written |
-| S7-5 | the rows `vision manifest` (parameter `provider`, required) and `vision check` (none) (module `rescue`, slice S7, planned; read only, offline; `new` #453 S7) | operation table rows added | S7 | the Lab's command line, `serve --stdio`, the Lab's MCP server | `rescue::SERVED` holds them (36 rows) and `rescue_reads::READ_HERE` their lists (19 rows); the children through `Host::run_program_ending`, each ended at its bound: `programs::VISION_MANIFEST_TIMEOUT_MS` 30 s, `VISION_CHECK_TIMEOUT_MS` 120 s, `STANDARD_PACK_CHECK_TIMEOUT_MS` 300 s per game root (the reasons below); `vision check` joins the `models` of each game root's Tools `standard-pack check` (S8) |
-| S7-6 | `vision_manifest_reported`, `vision_check_completed` (actingd, success, no value); the locations `install_vision_manifest`, `install_vision_check` (owner `actingctl`); `install_refusal` `vision_root_unresolved`; `install_caveat` `vision_incomplete` (all `since` 0.12.60, pending) | outcome catalog | S7 | S7-3 to S7-5 | the names 3a gives. G8: `vision_` is a domain of actingd (with vision-ffi and vision-provider-check), `install_` of actingctl (with others), so each prefix belongs to its emitter, unlike S10's first `discover_completed`; vocabulary tokens are not under G8. Reused: `vision_root_unavailable`, `vision_root_in_program_slot`, `vision_config_invalid` (descriptions now name `vision check`), `invalid_arguments`, `serialization_failed`, `foreign_data_error`, `foreign_os_error`, `config_unreadable`, `pack_invalid` (its description names `vision check`), `install_command_refused`'s `timeout_ms`, `install_caveat_noted`'s `count`; the index is regenerated |
+| S7-4 | `actingd vision check --config <file> [--install-root <root>] [--model <model_ref>]...` | new actingd subcommand, read only | S7 | an installer, a person, the row `vision check` | the file loaded as check-config loads it (stage `config_load`), `--install-root` by check-config's rule, the `vision` section assembled alone (`ActingdConfigFile::vision_section`, stage `config_assemble`; nothing else of the configuration is assembled), the root resolved as a start resolves it (`ConfiguredVision::resolve_root`, the first part of `inspect`, which now calls it; stage `config_vision`), no section or `cuda` `vision_config_invalid` at `config_vision`; `report` `{provider, vision_root, files, folders, models}`; each file read at most once, in 64 KiB chunks; fix 1: a manifest file's size compared first (another size `sha256_mismatch`, not opened), none read past its pinned size; only the folders the manifest or a `--model` names hashed (`asked`), every other listed by name, unread; a folder's file hashed within 256 MiB, everything within 512 MiB in all, the manifest's files included, a file over either `over_bound` and not read; no state root, no owner lock, no ledger, no socket, no program, nothing written |
+| S7-5 | the rows `vision manifest` (parameter `provider`, required) and `vision check` (none) (module `rescue`, slice S7, planned; read only, offline; `new` #453 S7) | operation table rows added | S7 | the Lab's command line, `serve --stdio`, the Lab's MCP server | `rescue::SERVED` holds them (36 rows) and `rescue_reads::READ_HERE` their lists (19 rows); the children through `Host::run_program_ending`, each ended at its bound: `programs::VISION_MANIFEST_TIMEOUT_MS` 30 s, `VISION_CHECK_TIMEOUT_MS` 160 s (fix 1; 120 s before), `STANDARD_PACK_CHECK_TIMEOUT_MS` 300 s per game root, and (fix 1) the row `vision check` within `VISION_CHECK_ROW_LIMIT_MS` 900 s in all (the reasons below); `vision check` runs each game root's Tools `standard-pack check` first, then actingd with `--model` for each model their `models` (S8) name, and joins them; fix 1: every entry below the standard-pack root it does not check is named in `standard_packs.skipped` `{name, why}` (`link`, `name_not_utf8`, `no_bundle`, `not_a_folder`) |
+| S7-6 | `vision_manifest_reported`, `vision_check_completed` (actingd, success, no value); the locations `install_vision_manifest`, `install_vision_check` (owner `actingctl`); `install_refusal` `vision_root_unresolved` and (fix 1) `vision_report_unanswered`; `install_caveat` `vision_incomplete` (all `since` 0.12.60, pending) | outcome catalog | S7 | S7-3 to S7-5 | the names 3a gives. G8: `vision_` is a domain of actingd (with vision-ffi and vision-provider-check), `install_` of actingctl (with others), so each prefix belongs to its emitter, unlike S10's first `discover_completed`; vocabulary tokens are not under G8. Fix 1 (review): `vision_root_unresolved` is answered only by `vision check`, only where actingd refused the configuration or the vision root it names; `vision_report_unanswered` is the neutral word for every other failure of `actingd vision` in either row (no report, a refused command line, its own registry unreadable, a report without its lists, not run, ended at a bound): the row `vision manifest` resolves no root, so its failure names none. `vision_report_unanswered` is no registered code or location (G5 holds), and no source outside a test spells it but its vocabulary. Reused: `vision_root_unavailable`, `vision_root_in_program_slot`, `vision_config_invalid` (descriptions now name `vision check`), `invalid_arguments`, `serialization_failed`, `foreign_data_error`, `foreign_os_error`, `config_unreadable`, `pack_invalid` (its description names `vision check` and the row's limit), `install_command_refused`'s `timeout_ms`, `install_caveat_noted`'s `count`; the index is regenerated |
 
-**The bounds** (the coordinator's ruling: from what each child does). `actingd vision manifest`
-reads only what is compiled into it and waits on nothing: 30 s is a process start with a wide
-margin. `actingd vision check` reads each manifest file once (about 156 MB for `cpu`, 175 MB for
-`directml` with this build's pins) and each model folder's files it has not read: a few hundred
-megabytes at most, seconds on a local disk; 120 s is that at about 4 MB/s. The Tools'
-`standard-pack check` admits every package of one game root once in memory, each within its own
-60 s deadline, and touches no device: 300 s is five whole package deadlines, where `place` runs
-it under `install.child.check_config_timeout_ms` (900 s by default) and leaves it running. Each
-child is ended at its bound by its handle and reaped (S10 fix 1's `run_captured_ending`), so none
-can stay behind where an installer's plan or the watchdog would see it; actingd's `vision`
-makes its own stdout and stderr not inheritable first, as `discover` does, though it starts no
-program; a refusal then carries `timeout_ms` and no cause.
+**The bounds** (the coordinator's ruling: from what each child does; fix 1 after the
+independent review). `actingd vision manifest` reads only what is compiled into it and waits on
+nothing: 30 s is a process start with a wide margin. `actingd vision check` reads within bounds of
+its own (`vision_report.rs`, `FILE_BOUND_BYTES`, `TOTAL_BOUND_BYTES`): a manifest file's size is
+compared first, and one of another size is a mismatch and is not opened; none is read past its
+pinned size (about 156 MB for `cpu`, 175 MB for `directml` with this build's pins); only the model
+folders the manifest or a `--model` names are hashed, each file of them within 256 MiB (more than
+three times the largest model file pinned today, the recognizer's 76.6 MB), and the check hashes
+512 MiB at most in all, the manifest's files included; a file over either bound is reported in
+`over_bound` and not read, and a build whose manifest's files hold more than 512 MiB is refused as
+its own defect. Its worst case is therefore 512 MiB read, and the row's bound matches it:
+512 MiB at 4 MiB/s (a slow disk under load) is 128 s, and 32 s more is the process's start and
+the listing of `models\`, about `vision manifest`'s 30 s: **160 s** = 128 s + 32 s (120 s
+before, which covered about 480 MB). The Tools' `standard-pack check` admits every package of one
+game root once in memory, each within its own 60 s deadline, and touches no device: 300 s is five
+whole package deadlines, where `place` runs it under `install.child.check_config_timeout_ms`
+(900 s by default) and leaves it running. **The row's limit in all** (fix 1): its children's
+bounds add up to 160 s + 300 s × the game roots, and the row runs at most **900 s** however many
+there are: 900 s is that same key's default, the longest `place` waits for one such check, and a
+row that only reads should not keep a person or an installer waiting longer in all than the
+installer waits for one check of one game root (one game root: 460 s; two: 760 s; from three on,
+900 s). Each child runs within its own bound or what is left of the 900 s, whichever is less
+(`rescue::child_bound`, on the host's clock); a child ended because the 900 s ran out, or not
+started because none was left, is refused with `timeout_ms` 900000, one ended at its own bound with
+that bound. Each child is ended at its bound by its handle and reaped (S10 fix 1's
+`run_captured_ending`), so none can stay behind where an installer's plan or the watchdog would see
+it; actingd's `vision` makes its own stdout and stderr not inheritable first, as `discover` does,
+though it starts no program; a refusal then carries `timeout_ms` and no cause.
 
 **What it can run.** `actingd vision manifest|check`: nothing. The row `vision manifest`:
 `<root>\runtime\actingcommand-actingd.exe vision manifest --provider <p>`. The row `vision
-check`: `<root>\runtime\actingcommand-actingd.exe vision check --config <config> --install-root
-<root>`, then `<root>\tools\actinglab.exe --json standard-pack check --root <game root>` once per
-game root below `standard_packs.root` that holds `bundle.json`, by name. Nothing is downloaded,
-placed, started, stopped or written; no state root is touched.
+check` (fix 1, in this order): `<root>\tools\actinglab.exe --json standard-pack check --root
+<game root>` once per game root below `standard_packs.root` (a folder that is no junction or link,
+whose name is UTF-8 and that holds `bundle.json`), by name; then
+`<root>\runtime\actingcommand-actingd.exe vision check --config <config> --install-root <root>`
+with `--model <model_ref>` for each model those checks name, in byte order. Every other entry
+below `standard_packs.root` is named in the answer's `standard_packs.skipped` with why: nothing is
+skipped silently. Nothing is downloaded, placed, started, stopped or written; no state root is
+touched.
 
 **S7 tests** (apps gate row "#453 S7"; an injected pin table and temporary vision roots of
 made-up bytes; the rescue module's children are the fake host's). In `apps/actingd`
@@ -21032,6 +21052,48 @@ rescue module on Windows). Adapted: `gate_inst1`'s
 pin's reader decodes the registry with its new members; before, its one assertion (the path)
 held either way. `Test-WindowsRemoteBuildTools.ps1` freezes S7-1 and S7-2.
 
+**Fix 1 after the independent review** (coordinator work order `rd-1114/brief-1693-fix1.md`;
+the reviewer found the slice read-only and offline, the identity the loader's own function's,
+S10's bounded child reused and S8 additive). Changed: `vision_report::defect`'s parameter is
+`detail`, no longer `reason` (the outcome guard's G2 finding on a string parameter of that name;
+every signature, getter, field, `json!` key and literal the pull request adds was read against
+the guard's rules once more, and none other is a finding); the row `vision manifest` refuses with
+the new neutral `vision_report_unanswered`, and `vision_root_unresolved` is kept for the row
+`vision check` where actingd really refused the configuration or its vision root (S7-6); the
+check's reads are bounded and the row's bound follows them (S7-4, "The bounds"); the row
+`vision check` has a limit in all and names every entry below the standard-pack root it does not
+check (S7-5); `contracts/vision-model-folders.md` says what the check assembles of a
+configuration (the `vision` section alone, not what a start would refuse) and states its two
+differences from a start (a `cpu` root held to the pinned runtime libraries, which a CPU start
+does not check against the pin, stricter on purpose because an installation set carries exactly
+the pinned files; a missing or empty `models\` an empty list in the check, a refusal of a start).
+Two lints of the first round's CI are fixed with it: `vision_report.rs`'s needless `to_owned`
+and the complex pack-writer type of `resource-tooling`'s `gate_453_s8.rs` (a type alias, no
+assertion changed). New tests, apps gate row "#453 S7": in `apps/actingd`
+`s7_check_compares_the_size_first_and_reads_no_manifest_file_past_its_pin` (of ten bytes, a limit
+of four hashes four; a manifest file one byte longer than its pin `sha256_mismatch` with no cause,
+on Windows held open by another handle without sharing, so never opened) and
+`s7_check_hashes_only_the_folders_it_is_asked_about_within_its_bounds` (a `--model` folder's
+identity, another folder `asked` false with none; a file over the file bound and one over what the
+total bound leaves after the manifest's files, each `over_bound` and unread, the manifest's model
+still identified); in `crates/lab-rescue` `vision_check_refuses_when_the_rows_limit_runs_out`
+(three game roots of 290 s each on the fake clock leave actingd about 30 s, at which it is ended:
+`vision_report_unanswered` with `timeout_ms` 900000) and, on Windows,
+`vision_check_names_a_game_root_it_skips_and_why` (a game root that is a junction is not checked
+and is named in `skipped` as `link`). Adapted, each because its requirement changed: actingd's
+`s7_check_a_complete_vision_root_answers_every_file_ok_and_equal_identities` and
+`s7_check_a_model_folder_of_another_identity_does_not_match` (folders carry `asked`; the
+classifier folder the manifest does not name is listed unread, with no identity); lab-rescue's
+`vision_manifest_refuses_with_actingds_outcome_as_its_cause` and
+`vision_manifest_a_child_that_never_ends_is_ended_at_its_bound` (`vision_report_unanswered`),
+`vision_check_a_child_that_never_ends_is_ended_at_its_bound` (160 000 ms,
+`vision_report_unanswered`), `vision_check_answers_a_complete_root` (`skipped` `[]`) and
+`vision_check_joins_the_required_models_of_two_game_roots` (the checks first, then actingd with
+`--model` for both models, bounds 300 000, 300 000 and 160 000 ms; the folder without
+`bundle.json` and the file named in `skipped`). The fake host's clock now moves by a program's run
+time (`run_ms`, none by default) or, for one that never ends, by its deadline. No test is removed
+or renamed.
+
 **At deploy.** Nothing to do: an added member of a read-only answer, two new read-only
 subcommands and two new read-only rows; nothing persisted, no key, no revision. An installation
 in use changes nothing: actingd's adb pin reader ignores the registry's new members (the test
@@ -21041,7 +21103,7 @@ These rows fall under the standing operating rule until LAB-7 ([install-cli.md](
 "Journals across versions": the rescue module's composites are not used on the production root);
 they are no composite and write nothing, so they are harmless there. A build before this release
 has no `vision`: its actingd refuses the words as a start refuses unknown arguments, and the
-rows of a later Tools beside it answer `vision_root_unresolved` with that child's exit and
+rows of a later Tools beside it answer `vision_report_unanswered` with that child's exit and
 stderr as the cause.
 
 **Rollback.** Nothing persisted: code, two table rows, registry members, catalog entries,
