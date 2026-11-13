@@ -14,8 +14,9 @@
 //!   under `speaks` a pair and `speaks.package` named), its layout (the root files,
 //!   `packs/<listed id>/…`, `tables/<listed id>.json`, the notices directory `notices/…`, held to
 //!   the contract crate's notices rules, and, Workflow #451 LOAD-P, the loading templates
-//!   directory `loading/<file>`, exactly the templates the zip's own `loading.json` declares), the
-//!   root files as every reader checks them
+//!   directory `loading/<file>`, exactly the templates the zip's own `loading.json` declares;
+//!   Workflow #455 G-R1 fix round 1: a zip that carries `goals.json` declares `package` 12 at
+//!   least, `goal_undeclared` otherwise), the root files as every reader checks them
 //!   ([`read_standard_pack_root`]), each pack's file count and size, and per item `new`,
 //!   `replace`, `unchanged` or, for a reader's root file, the notices directory or the loading
 //!   templates directory the zip no longer carries, `retire`. The notices directory is one item
@@ -73,14 +74,14 @@ use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
-    BundleIndex, LOADING_PREFIX, LoadingTarget, MAX_NOTICE_FILE_BYTES, NOTICES_PACKAGE_REVISION,
-    NoticeBound, NoticeEntry, NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
-    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRootBytes, StandardPackRootIssue,
-    check_notice_listing, check_notice_pack_ids, check_notice_size, check_notice_text,
-    notice_relative_path, parse_standard_pack_loading, read_standard_pack_root,
+    BundleIndex, GOALS_PACKAGE_REVISION, LOADING_PREFIX, LoadingTarget, MAX_NOTICE_FILE_BYTES,
+    NOTICES_PACKAGE_REVISION, NoticeBound, NoticeEntry, NoticeIssue, RESERVED_TABLES_DIRECTORY,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRootBytes,
+    StandardPackRootIssue, check_notice_listing, check_notice_pack_ids, check_notice_size,
+    check_notice_text, notice_relative_path, parse_standard_pack_loading, read_standard_pack_root,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -536,6 +537,24 @@ fn check_notices<'a>(
     Ok(())
 }
 
+/// Workflow #455 G-R1 fix round 1: a bundle zip of `game` that carries `goals.json` declares a
+/// `package` maximum (`package[1]`) of [`GOALS_PACKAGE_REVISION`] at least, as one that carries the
+/// notices directory declares [`NOTICES_PACKAGE_REVISION`] ([`check_notices`]): otherwise
+/// `pack_invalid` caused by `standard_pack_root_invalid` with `goal_undeclared` at
+/// `<zip>\interfaces.json`, the pointer empty, before anything is held or written.
+fn check_goals_declared(zip: &Path, game: &str, package: [u64; 2]) -> Result<(), Outcome> {
+    if package[1] < GOALS_PACKAGE_REVISION {
+        return Err(invalid(zip).caused_by(
+            Outcome::new(SharedCode::StandardPackRootInvalid)
+                .game(game)
+                .path(zip.join(INTERFACES_FILE))
+                .standard_pack_problem(StandardPackProblem::GoalUndeclared)
+                .json_pointer(String::new()),
+        ));
+    }
+    Ok(())
+}
+
 /// `pack_invalid` of the bundle `zip` of `game` for a root file's problem `issue`, caused by
 /// `standard_pack_root_invalid` with `path` the file below the zip, its problem and its pointer.
 fn root_refusal(zip: &Path, game: &str, issue: &StandardPackRootIssue) -> Outcome {
@@ -734,6 +753,10 @@ pub(crate) fn plan(
             &notice_members,
             bundle.packs.iter().map(|pack| pack.package_id.as_str()),
         )?;
+    }
+    // Workflow #455 G-R1 fix round 1: `goals.json` with the revision that brings it.
+    if roots.contains(STANDARD_PACK_GOALS_FILE) {
+        check_goals_declared(&zip, &game, package)?;
     }
     // Workflow #451 LOAD-P: the loading templates directory, held to the zip's own
     // `loading.json`; neither is read when the zip carries neither.

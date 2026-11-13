@@ -1341,12 +1341,13 @@ tests = [
 ]
 incident = ["#451 LOAD-P"]
 
-# Workflow #455 G-R1 (0.12.60; register §1.350; brief rd-1114/brief-455-gr1.md; contracts/standard-pack-goals.md, "Who reads it"; contracts/component-interfaces.md, the package row 12): on fake roots and seams, the Lab rescue module's place takes a bundle zip's root file goals.json. On an installer that declares package [3, 12], a bundle that carries it and declares [12, 12] is planned with goals.json root new after bundle.json, placed with its pack_item step the last, the file on disk the zip's bytes and the journal's plan declaring [12, 12]; a later bundle without it plans goals.json root retire before the root files it places, sets it aside as goals.json.old-<ms> and keeps its bytes, and undo puts it back. On an installer that declares [3, 11], the same bundle is refused interface_edge at its interfaces.json, with no pause, no journal and nothing in the game root
+# Workflow #455 G-R1 (0.12.60; register §1.350; brief rd-1114/brief-455-gr1.md; contracts/standard-pack-goals.md, "Who reads it"; contracts/component-interfaces.md, the package row 12): on fake roots and seams, the Lab rescue module's place takes a bundle zip's root file goals.json. On an installer that declares package [3, 12], a bundle that carries it and declares [12, 12] is planned with goals.json root new after bundle.json, placed with its pack_item step the last, the file on disk the zip's bytes and the journal's plan declaring [12, 12]; a later bundle without it plans goals.json root retire before the root files it places, sets it aside as goals.json.old-<ms> and keeps its bytes, and undo puts it back. On an installer that declares [3, 11], the same bundle is refused interface_edge at its interfaces.json, with no pause, no journal and nothing in the game root. Fix round 1 (brief rd-1114/brief-1694-fix1.md, item 6): on the installer that declares [3, 12], a bundle that carries goals.json and declares [3, 11] is refused pack_invalid caused by standard_pack_root_invalid with goal_undeclared at its interfaces.json and an empty pointer, as notice_undeclared is, with no pause, no journal and nothing in the game root
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-lab-rescue::lib::install::gate_455_gr1::goals_file_is_placed_last_and_retired_when_a_later_bundle_carries_none",
     "actingcommand-lab-rescue::lib::install::gate_455_gr1::goals_bundle_is_refused_by_an_installer_before_revision_12",
+    "actingcommand-lab-rescue::lib::install::gate_455_gr1::goals_bundle_that_does_not_declare_revision_12_is_refused_goal_undeclared",
 ]
 incident = ["#455 G-R1"]
 

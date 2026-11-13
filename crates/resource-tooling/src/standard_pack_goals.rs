@@ -5,11 +5,13 @@
 //! --goals` read it after the composition they already run, with the contract crate's reader
 //! (`parse_standard_pack_goals`), and hold an accepted file's references to the game root
 //! (`check_standard_pack_goal_references`): the pools and rules of `schedule.json`, which the
-//! composition has accepted; the packages of `bundle.json`, and of those the file governs, the ones
-//! whose control declaration has a `provides[]` entry with `irreversible: true`, read by the
-//! Runtime's metadata reader; and, for `standard-pack check` only, the tables of the game root an
-//! `ordered` entry takes its values from (`package bundle` holds no table, so it judges no table
-//! reference). Nothing here reads or writes a value.
+//! composition has accepted, each rule with the package it runs; every package of `bundle.json`
+//! with the capabilities its control declaration provides and their `irreversible` marks, read by
+//! the Runtime's metadata reader (G-R1 fix round 1: the whole root, so that a capability any
+//! package marks irreversible makes every package that provides it irreversible); and, for
+//! `standard-pack check` only, the tables of the game root an `ordered` entry takes its values from
+//! (`package bundle` holds no table, so it judges no table reference). Nothing here reads or writes
+//! a value.
 //!
 //! `standard-pack check` reports each problem as a `standard_pack_root_invalid` warning and never
 //! fails the root for it ([`goal_warnings`]); `package bundle` refuses a refused file as it
@@ -19,10 +21,10 @@ use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{CHECK_LABEL, root_invalid, root_issue_outcome};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    GoalReferences, LabError, LabResult, MAX_STANDARD_PACK_GOALS_BYTES, ProvidedCapability,
-    StandardPackRoot, StandardPackRootIssue, StandardPackTable, StandardPackTableCell,
-    StandardPackTableReadFailure, check_standard_pack_goal_references, parse_standard_pack_goals,
-    parse_standard_pack_schedule, read_standard_pack_table,
+    GoalReferences, GoalRule, LabError, LabResult, MAX_STANDARD_PACK_GOALS_BYTES, StandardPackRoot,
+    StandardPackRootIssue, StandardPackTable, StandardPackTableCell, StandardPackTableReadFailure,
+    check_standard_pack_goal_references, parse_standard_pack_goals, parse_standard_pack_schedule,
+    read_standard_pack_table,
 };
 use actingcommand_execution_kernel::PreparedContainedTask;
 use serde_json::Value;
@@ -33,8 +35,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// The bytes of the game root's `goals.json` at `path`, `None` when the root holds none, read
-/// through the file's bound plus one byte: a file of any size is then the reader's `malformed`,
-/// never an error of `standard-pack check`. A file that cannot be read is a usage error naming it.
+/// through the file's bound plus one byte: a file of any size is then the reader's
+/// `goal_out_of_limits` (G-R1 fix round 1), never an error of `standard-pack check`. A file that
+/// cannot be read is a usage error naming it.
 pub(crate) fn read_goals_file(path: &Path) -> LabResult<Option<Vec<u8>>> {
     let unreadable = |error: io::Error| LabError::usage(format!("{}: {error}", path.display()));
     let file = match fs::File::open(path) {
@@ -68,10 +71,30 @@ pub(crate) fn goal_issues(
         Ok(declared) => declared,
         Err(issues) => return Ok(issues),
     };
-    let mut references = GoalReferences {
-        packages: root.registry.package_ids().map(str::to_owned).collect(),
-        ..GoalReferences::default()
-    };
+    // G-R1 fix round 1: what every package of the root provides, each capability with its
+    // `irreversible` mark, in registry order as the remedy report reads them. The references
+    // judge irreversibility per capability across the whole root (contracts/remedies.md §2.3).
+    let mut provides = BTreeMap::new();
+    for package_id in root.registry.package_ids() {
+        let entry = root.registry.get(package_id).ok_or_else(|| {
+            LabError::package_invalid(format!("{package_id} is no package of the bundle"))
+        })?;
+        let path = pack_directory(&entry.directory);
+        let declarations = PreparedContainedTask::read_remedy_declarations(
+            CHECK_LABEL,
+            &path,
+            Instant::now() + PACK_DEADLINE,
+        )
+        .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))?;
+        let mut capabilities = BTreeMap::new();
+        for provided in &declarations.provides {
+            *capabilities
+                .entry(provided.capability().to_owned())
+                .or_insert(false) |= provided.irreversible();
+        }
+        provides.insert(package_id.to_owned(), capabilities);
+    }
+    let mut references = GoalReferences::new(provides);
     if let Some((bytes, path)) = schedule {
         let schedule = parse_standard_pack_schedule(bytes)
             .map_err(|issue| root_invalid(game, path, &issue))?;
@@ -85,28 +108,14 @@ pub(crate) fn goal_issues(
             references.pools.insert(pool.id.clone(), valued);
         }
         for rule in &schedule.rules {
-            references
-                .rules
-                .insert(rule.id.clone(), rule.fixed_value_milli.is_some());
-        }
-    }
-    for package_id in declared.governed_packages() {
-        let Some(entry) = root.registry.get(package_id) else {
-            continue;
-        };
-        let path = pack_directory(&entry.directory);
-        let declarations = PreparedContainedTask::read_remedy_declarations(
-            CHECK_LABEL,
-            &path,
-            Instant::now() + PACK_DEADLINE,
-        )
-        .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))?;
-        if declarations
-            .provides
-            .iter()
-            .any(ProvidedCapability::irreversible)
-        {
-            references.irreversible.insert(package_id.to_owned());
+            // G-R1 fix round 1: with the package it runs, which a `tier` entry is held to.
+            references.rules.insert(
+                rule.id.clone(),
+                GoalRule {
+                    package_id: rule.package_id.clone(),
+                    fixed_value: rule.fixed_value_milli.is_some(),
+                },
+            );
         }
     }
     if let Some(game_root) = game_root {

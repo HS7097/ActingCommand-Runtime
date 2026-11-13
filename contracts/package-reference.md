@@ -976,7 +976,8 @@ data files beside its package directories, one directory per game below the conf
   refused file as a `standard_pack_root_invalid` warning and never fails the root for it, and the
   bundle refuses a refused file. The installer's `place` places it as the last root file and sets it
   aside when a later bundle carries none; a bundle that carries it declares `package` [12, 12]
-  ([component-interfaces.md](component-interfaces.md), row 12). The Runtime's root reader, its
+  ([component-interfaces.md](component-interfaces.md), row 12), and `place` refuses one that declares
+  a maximum below 12 (`goal_undeclared`, G-R1 fix round 1). The Runtime's root reader, its
   startup, a run's preparation, the policy crate and check-config never read it in G-R1, so the
   file changes no run yet.
 - **`loading.json`** (Workflow #407 LOAD-1, since 0.12.37; [resource-declarations.md](resource-declarations.md),

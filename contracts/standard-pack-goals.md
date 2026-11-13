@@ -126,8 +126,15 @@ Not in version 1: a slider, multiple choice and a table (later types or blocks),
 
 ## Texts and limits
 
-Texts are as `ui.json`'s ([package-reference.md](package-reference.md), `ui.json`, "Limits"):
-each text has 1 to 16 locales, each locale name 1 to 35 bytes. Bounds of the shape, not tunables:
+Texts have the shape and the bounds of `ui.json`'s ([package-reference.md](package-reference.md),
+`ui.json`, "Limits"): each text has 1 to 16 locales, each locale name 1 to 35 bytes. The words are
+this file's own: a list, a map or a text's locales of a count outside its limit, and a name, an
+option value, an id, a key, a locale or a text of a length outside its limit, are
+`goal_out_of_limits` at what exceeds, as `ui.json` has `ui_out_of_limits` for its own (G-R1 fix
+round 1; before it this file said `malformed`). An integer outside the safe integers is not of its
+type (`malformed`), and a `max_count` or a `scale_milli` outside its range, or a table of more than
+1024 keys, is what the entry declares as its values (`goal_range_invalid`; "The checks"). Bounds of
+the shape, not tunables:
 
 | What | Limit |
 |---|---|
@@ -151,25 +158,28 @@ the reader, `parse_standard_pack_goals`, reads the file strictly into typed entr
 the reader accepts, `check_standard_pack_goal_references` holds the entries to what the game root
 offers. Every problem is `standard_pack_root_invalid` with `game`, `path` (the file),
 `standard_pack_problem` and `json_pointer` (empty for the whole document), every problem reported,
-at most 64, in the file's order: the reader's in document order, the references' entry by entry.
-A file the reader refuses is not judged against the root.
+at most 64, in the file's order: first every member repeated in one object (the reader meets them
+while it reads the document, before it judges any member), then the reader's other problems in
+document order, then the references' entry by entry. A file the reader refuses is not judged
+against the root.
 
 | `standard_pack_problem` | When | `json_pointer` |
 |---|---|---|
-| `malformed` | the file is larger than 1 MiB, no JSON or no object; a member repeated in one object, unknown, missing or not of its type (an integer outside the safe integers too); another `schema_version`; a name, an option value, an id, a key, a locale, a text, a list or a map outside its form or its limits (the "Limits" table); an `ordered` entry with both `options` and `from_table` (at `from_table`) or with neither (at `options`); a `governs` id named twice | the member (empty for the whole document) |
+| `malformed` | the file is no JSON or no object (a file that begins with a byte-order mark too: the reader takes the bytes as they are); a member repeated in one object, unknown, missing or not of its type (an integer outside the safe integers too, an `integer` entry's `default` excepted, which is `goal_default_invalid`); another `schema_version`; a name, an option value, an id, a key, a table id or a unit word outside its form; an `ordered` entry with both `options` and `from_table` (at `from_table`) or with neither (at `options`); a `governs` id named twice | the member (empty for the whole document) |
+| `goal_out_of_limits` | the file is larger than 1 MiB; a list, a map or a text's locales of a count outside its limit; a name, an option value, an id, a key, a locale or a text of a length outside its limit (the "Limits" table; an empty one too). G-R1 fix round 1 | what exceeds: the list, the map, the text or the member (empty for the whole file) |
 | `game_mismatch` | `game` is not the directory's | `/game` |
 | `goal_name_duplicate` | a name an earlier entry has | `/entries/<i>/name`, the later |
 | `goal_type_unknown` | `type` is none of the eight, a later version's type included; the entry is read no further | `/entries/<i>/type` |
 | `goal_block_mismatch` | `block` is not the type's base block | `/entries/<i>/block` |
-| `goal_range_invalid` | what the entry declares as its values cannot hold one: an `integer`'s `min` above its `max` (at `min`) or a `step` below 1 (at `step`); an option value written twice (at the later `value`); an `ordered` entry's `max_count` of 0 or above 32 (at `max_count`), its `min_count` above its `max_count` or above the number of its values (at `min_count`), a table of more than 1024 keys (at `from_table/table`); a tier's `scale_milli` outside 1 to 1,000,000 (at it) | the member named |
-| `goal_default_invalid` | `default` is not a value of the declaration: an `integer`'s not a whole number in its range on its step, a `choice`'s or `tier`'s not one of its option values, a `switch`'s not a boolean, an `ordered` entry's not a list (at `default`), a value not one of its values or written twice (at `default/<j>`), or a count outside `min_count..=max_count` (at `default`). A default is judged once the range or the options it is judged against hold | `/entries/<i>/default`, or `.../default/<j>` |
+| `goal_range_invalid` | what the entry declares as its values cannot hold one: an `integer`'s `min` above its `max` (at `min`) or a `step` below 1 (at `step`); an option value written twice (at the later `value`); an `ordered` entry's `max_count` of 0 or above 32 (at `max_count`), its `min_count` above its `max_count` or above the number of its values (at `min_count`), a table of more than 1024 keys (at `from_table/table`); a tier's `scale_milli` outside 1 to 1,000,000 (at it; one that is no safe integer is `malformed`, as every integer member of the file) | the member named |
+| `goal_default_invalid` | `default` is not a value of the declaration: an `integer`'s not a whole number in its range on its step (whatever it is: a string, a fraction or a number beyond the safe integers too), a `choice`'s or `tier`'s not one of its option values, a `switch`'s not a boolean, an `ordered` entry's not a list (at `default`), a value not one of its values or written twice (at `default/<j>`), or a count outside `min_count..=max_count` (at `default`). A default is judged once the range or the options it is judged against hold | `/entries/<i>/default`, or `.../default/<j>` |
 | `goal_rate_invalid` | a `rate` whose `ceiling_milli_per_day` is below its `floor_milli_per_day` | `/entries/<i>/rate/ceiling_milli_per_day` |
 | `goal_pool_unknown` | a `resource` entry's pool is not a pool of the composed schedule (no pool without `schedule.json`) | `/entries/<i>/governs/pool` |
 | `goal_pool_unvalued` | that pool's `valuation` lacks `scale` or `gap` (a pending or absent valuation too) | `/entries/<i>/governs/pool` |
-| `goal_package_unknown` | a governed package is not a package of `bundle.json` | `/entries/<i>/governs/packages/<j>` |
-| `goal_governs_irreversible` | a governed package's `control.json` has a `provides[]` entry with `irreversible: true` ([resource-declarations.md](resource-declarations.md), the `control.json` members) | `/entries/<i>/governs/packages/<j>` |
+| `goal_package_unknown` | a governed package is not a package of `bundle.json`; or (G-R1 fix round 1) the package a `tier` entry's rule runs is not, which the composition has refused before (`rule_package_unregistered`), so that the check never passes a rule whose package it was not told of | `/entries/<i>/governs/packages/<j>`, or `.../governs/rules/<j>` |
+| `goal_governs_irreversible` | a governed package, or (G-R1 fix round 1) the package a `tier` entry's rule runs (`package_id` of the rule), can do something irreversible: it provides a capability that a package of the game root marks irreversible, a `provides[]` entry of that package's `control.json` with the capability and `irreversible: true` ([resource-declarations.md](resource-declarations.md), the `control.json` members). A capability is irreversible when any provider declares it so ([remedies.md](remedies.md) §2.3), so the check first collects the capabilities every package of the root marks, then judges each governed package and each governed rule's package against them, whether it marks the capability itself or not | `/entries/<i>/governs/packages/<j>`, or `.../governs/rules/<j>` |
 | `goal_rule_unknown` | a `tier` entry's rule is not a rule of `schedule.json` | `/entries/<i>/governs/rules/<j>` |
-| `goal_tier_without_fixed_value` | that rule writes no `fixed_value_milli` | `/entries/<i>/governs/rules/<j>` |
+| `goal_tier_without_fixed_value` | that rule, its package passed, writes no `fixed_value_milli` | `/entries/<i>/governs/rules/<j>` |
 | `goal_table_unknown` | an `ordered` entry's table is no table of the game root (absent, or refused by its own check) (at `from_table/table`), or a key under its `names` is no key of that table (at `from_table/names/<key>`) | the member named |
 
 The references against the table (`goal_table_unknown`, a table of more than 1024 keys or fewer keys
@@ -177,7 +187,10 @@ than `min_count`, and an `ordered` default value that is no key of the table, `g
 at `default/<j>`) are judged only by a reader that holds the game root's tables.
 
 **`goal_governs_irreversible` is not optional.** It is one of the three places that keep the
-safety lines out ("What is not this file's").
+safety lines out ("What is not this file's"). The references it judges are made only from what
+every package of the root provides (the contract crate's `GoalReferences::new`, G-R1 fix round 1):
+there is no default that says no package is irreversible, and a package the references were not
+told of is never passed.
 
 **A refused file never fails its game root.** The game runs as without the file: no entry applies
 for that game, and a reader of the declaration says why.
@@ -187,12 +200,14 @@ for that game, and a reader of the declaration says why.
 - **`actinglab standard-pack check --root <game root>`** reads the file beside the other root files
   and lists it in `root_files` (after `display-layout.json`, before `loading.json`). After the
   composition of `schedule.json` it already runs, it reads the file and holds an accepted file to
-  the root: the pools and rules of `schedule.json`, the packages of `bundle.json` and, of those the
-  file governs, the ones whose `control.json` provides an irreversible capability (read by the
-  Runtime's metadata reader), and the root's tables. Each problem is one `standard_pack_root_invalid`
+  the root: the pools of `schedule.json` and its rules with the packages they run, every package of
+  `bundle.json` with the capabilities its `control.json` provides and their `irreversible` marks
+  (read by the Runtime's metadata reader, as the remedy report reads them), and the root's tables.
+  Each problem is one `standard_pack_root_invalid`
   warning, after the other warnings, in file order; the root is checked as without the file, and
   the answer is otherwise what it is without the file. The file is read through its bound plus one
-  byte, so a file of any size is `malformed`, never the check's error; a `goals.json`, a package's
+  byte, so a file of any size is a problem of the file (`goal_out_of_limits` above the bound; before
+  fix round 1 `malformed`), never the check's error; a `goals.json`, a package's
   declaration or a table that exists and cannot be read is the check's error (an OS failure is no
   problem of the file).
 - **`actinglab package bundle --goals <goals.json>`** reads the file after the composition it already
@@ -204,11 +219,17 @@ for that game, and a reader of the declaration says why.
   operation table's row `package bundle` has the parameter `goals`; the MCP server serves it as the
   row says. `package bundle` writes no `interfaces.json`, and `resource verify`'s `bundle` step does
   not pass the file in G-R1: a bundle that carries it is declared `package` [12, 12] by its packer.
+  `resource verify` passes over a `goals.json` in a repository without a word: a warning would need
+  an outcome code, which G-R1 does not add ("Before any pack carries the file").
 - **The installer's `place`** (the Lab's rescue module) takes `goals.json` from a bundle zip as a root
   file, placed last among them (after `schedule.json`, whose pools and rules its entries name), and
   sets it aside as `goals.json.old-<ms>` when the game root holds one and a later zip carries none;
-  `undo` puts it back. It reads the file's name only; its `post_check` runs `standard-pack check`,
-  which reports a refused file without failing.
+  `undo` puts it back. A zip that carries the file declares a `package` maximum of 12 at least
+  (G-R1 fix round 1, as a zip that carries the notices directory declares 10): otherwise its plan
+  refuses it `pack_invalid` caused by `standard_pack_root_invalid` with `goal_undeclared` at
+  `<zip>\interfaces.json`, the pointer empty, before the hold and any write. It reads the file's
+  name only; its `post_check` runs `standard-pack check`, which reports a refused file without
+  failing.
 - **The Runtime** opens no `goals.json` in G-R1: its root reader, its startup and run preparation,
   the policy crate and check-config read named files only. A later slice's scheduler workbench reads
   it with `schedule.json`.
@@ -217,13 +238,17 @@ for that game, and a reader of the declaration says why.
 
 `package` revision 12 ([component-interfaces.md](component-interfaces.md)): a bundle that carries
 `goals.json` declares `package` [12, 12] (the contract crate's `GOALS_PACKAGE_REVISION`); a bundle
-without it keeps its revision, and the Runtime declares [3, 12]. An installer before 0.12.60 refuses
-such a zip in the plan, before the hold and any write: through its `package` edge
-(`interface_edge`) when the zip declares 12, at its layout check (`pack_invalid` naming
-`goals.json`) when it declares less. A Runtime before 0.12.60 reads a game root that holds the file
-as one without it. `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` do not move:
-the thirteen words are words of the existing vocabulary `standard_pack_problem` under the existing
-code `standard_pack_root_invalid`.
+without it keeps its revision, and the Runtime declares [3, 12]. This release's installer refuses a
+zip that carries the file and declares a maximum below 12 (`goal_undeclared`, "Who reads it"). An
+installer before 0.12.60 refuses such a zip in the plan, before the hold and any write: through its
+`package` edge (`interface_edge`) when the zip declares 12, at its layout check (`pack_invalid`
+naming `goals.json`) when it declares less. A Runtime before 0.12.60 reads a game root that holds
+the file as one without it. **A rollback is not refused**: a Runtime before this slice treats the
+file as absent; an installer before this slice refuses a bundle that carries the file, and when it
+places a bundle without it, it leaves an existing `goals.json` where it is. `ledger`,
+`runtime-client`, `actingd-config` and `runtime-outcomes` do not move: the fifteen words (the
+fourteen of the file and `goal_undeclared`) are words of the existing vocabulary
+`standard_pack_problem` under the existing code `standard_pack_root_invalid`.
 
 ## What is not this file's
 
@@ -237,10 +262,26 @@ code `standard_pack_root_invalid`.
   1. **The check refuses** any entry that governs a package with an irreversible capability
      (`goal_governs_irreversible`): retire and purchase packages that declare it cannot read a
      goal; a package that does something irreversible without declaring it is caught only by the
-     third place.
+     third place. Since G-R1 fix round 1 the check follows a `tier` entry's rules to the packages
+     they run, and judges a capability across the whole root: a package that provides a capability
+     another package marks irreversible is refused as that package is.
+     A `resource` entry can still push such a package indirectly: its pool may be produced by a
+     rule of that package, and a goal's shortfall raises the weight of what produces the pool. The
+     check does not refuse such an entry (it would forbid goals on ordinary pools); the rule
+     belongs to the scheduler, and this check leaves it to the evaluator: **a goal's shortfall
+     never raises the weight of a rule whose package can do something irreversible**, and the slice
+     that makes the evaluator read goal entries must build it.
   2. **No entry kind writes anything else**: not a remedy choice (those stay in the remedy layer),
      not a run parameter, not a configuration key, not a pack switch. Packages keep their own
      refusals of premium-currency and real-money buttons, and no package reads a goal for them.
   3. **Resource-side review**: the Runtime is game-neutral and cannot know which pool is a premium
      currency, so no `goals.json` of version 1 declares a premium-currency pool or an entry about
      spending premium currency, real money, retiring or scrapping.
+
+## Before any pack carries the file
+
+What a later slice owes before any standard pack carries `goals.json` (G-R1 fix round 1):
+
+- `resource verify` checks a repository's `goals.json` and the packer declares the revision. Today
+  its `bundle` step neither passes the file nor declares `package` 12, and it says nothing of a
+  `goals.json` it finds.

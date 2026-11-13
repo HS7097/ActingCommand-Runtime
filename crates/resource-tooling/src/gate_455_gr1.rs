@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #455 G-R1 (register §1.350; contracts/standard-pack-goals.md; coordinator work order
-// `rd-1114/brief-455-gr1.md`): the Tools read a game root's goal declaration `goals.json` after
-// the composition they already run.
-// - `standard-pack check` reports each of the thirteen refusals at its pointer, one fixture each,
+// Workflow #455 G-R1 (register §1.350; contracts/standard-pack-goals.md; coordinator work orders
+// `rd-1114/brief-455-gr1.md` and `rd-1114/brief-1694-fix1.md`): the Tools read a game root's goal
+// declaration `goals.json` after the composition they already run.
+// - `standard-pack check` reports each of the fourteen refusals at its pointer, one fixture each,
 //   as a `standard_pack_root_invalid` warning naming `goals.json`, and the root is checked: a
 //   refused file never fails it;
 // - a root with a valid file answers as the same root without it in every member but
@@ -15,7 +15,11 @@
 //   package whose capability is not irreversible may be governed;
 // - `package bundle --goals` lays an accepted file beside `bundle.json` byte for byte, the rest of
 //   its output as without the flag, judging no table (the bundle holds none), and refuses a
-//   refused file as a refused root file, with `--out` not written.
+//   refused file as a refused root file, with `--out` not written;
+// - fix round 1 (the independent review's two ways around the safety line): a `tier` entry over a
+//   rule whose package provides the irreversible capability, and an entry that governs a package
+//   providing unmarked a capability another package marks irreversible, are each
+//   `goal_governs_irreversible` at their pointer and nothing else, for the check and the bundle.
 // A made-up game `neutral`, server `test`, 16x9; every package, pool, rule, table and text is a
 // placeholder.
 
@@ -207,6 +211,32 @@ fn schedule() -> Value {
     })
 }
 
+/// G-R1 fix round 1: [`schedule`] with a rule of [`DISCARD`], the package that provides the
+/// irreversible capability, writing a fixed value; [`DISCARD`] no longer held.
+fn schedule_running_discard() -> Value {
+    let mut value = schedule();
+    let mut discard = rule(DISCARD);
+    discard["fixed_value_milli"] = json!(12_000);
+    value["rules"]
+        .as_array_mut()
+        .expect("the rules")
+        .push(discard);
+    value["held"]
+        .as_array_mut()
+        .expect("the held packages")
+        .retain(|held| held["package_id"] != DISCARD);
+    value
+}
+
+/// G-R1 fix round 1: [`packs`] with [`KEEP`] providing, without the mark, the capability
+/// [`DISCARD`] marks irreversible, with the same parameter.
+fn packs_sharing_the_irreversible_capability() -> [(&'static str, Option<Value>); 4] {
+    let mut packs = packs();
+    packs[3].1 = Some(json!([{"capability": "cap_discard", "parameters": [
+        {"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_1"}]}]));
+    packs
+}
+
 /// The table [`TABLE`]: the keys `m01`, `m02`, `m03`.
 fn table() -> Value {
     json!({
@@ -264,11 +294,19 @@ fn write_json(path: &Path, value: &Value) {
 /// An installed game root `<temporary>/packages/neutral/`: `bundle.json` listing the four packages,
 /// each in its directory, `schedule.json` and the table; no `goals.json`.
 fn installed() -> (TempDir, PathBuf) {
+    installed_with(packs(), &schedule())
+}
+
+/// [`installed`] of the packages `packs` and the schedule `schedule`.
+fn installed_with(
+    packs: [(&'static str, Option<Value>); 4],
+    schedule: &Value,
+) -> (TempDir, PathBuf) {
     let temp = TempDir::new().expect("temporary directory");
     let game_root = temp.path().join("packages").join(GAME);
     fs::create_dir_all(&game_root).expect("game root");
     let mut listed = Vec::new();
-    for (package_id, provides) in packs() {
+    for (package_id, provides) in packs {
         write_pack(&game_root.join(package_id), package_id, provides);
         listed.push(json!({
             "package_id": package_id, "server": SERVER, "entry_task_id": "task",
@@ -279,7 +317,7 @@ fn installed() -> (TempDir, PathBuf) {
         &game_root.join("bundle.json"),
         &json!({"schema_version": "actingcommand.bundle.v4", "game": GAME, "packs": listed}),
     );
-    write_json(&game_root.join("schedule.json"), &schedule());
+    write_json(&game_root.join("schedule.json"), schedule);
     write_json(
         &game_root.join("tables").join(format!("{TABLE}.json")),
         &table(),
@@ -338,13 +376,14 @@ fn goals_with(change: impl Fn(&mut Value)) -> Value {
     value
 }
 
-// Each refusal of the check, one fixture each: the valid file changed at one entry is refused with
-// exactly one `standard_pack_root_invalid` warning naming `goals.json`, its word and its pointer,
-// and the root is checked, `goals.json` among its root files.
+// Each refusal of the check, one fixture each (fix round 1: and the fourteenth word,
+// `goal_out_of_limits`): the valid file changed at one entry is refused with exactly one
+// `standard_pack_root_invalid` warning naming `goals.json`, its word and its pointer, and the root
+// is checked, `goals.json` among its root files.
 #[test]
 fn gr1_check_reports_each_refusal_at_its_pointer() {
     let (_temp, game_root) = installed();
-    let cases: [(&str, Value, &str); 13] = [
+    let cases: [(&str, Value, &str); 14] = [
         (
             "goal_name_duplicate",
             goals_with(|value| value["entries"][1]["name"] = json!("stock")),
@@ -415,6 +454,12 @@ fn gr1_check_reports_each_refusal_at_its_pointer() {
                 value["entries"][2]["rate"]["ceiling_milli_per_day"] = json!(100000);
             }),
             "/entries/2/rate/ceiling_milli_per_day",
+        ),
+        // Fix round 1: a title of 129 bytes, one above its limit.
+        (
+            "goal_out_of_limits",
+            goals_with(|value| value["entries"][0]["title"]["en"] = json!("a".repeat(129))),
+            "/entries/0/title/en",
         ),
     ];
     for (problem, file, pointer) in cases {
@@ -521,6 +566,14 @@ fn gr1_check_reports_a_refused_file_in_file_order_and_never_fails_the_root() {
 /// directory per package below `<temporary>/sources`, `schedule.json` and `--out`
 /// `<temporary>/bundle`; no `--goals`.
 fn bundle_inputs() -> (TempDir, PackageBundleRequest) {
+    bundle_inputs_with(packs(), &schedule())
+}
+
+/// [`bundle_inputs`] of the packages `packs` and the schedule `schedule`.
+fn bundle_inputs_with(
+    packs: [(&'static str, Option<Value>); 4],
+    schedule: &Value,
+) -> (TempDir, PackageBundleRequest) {
     let temp = TempDir::new().expect("temporary directory");
     let applications = temp.path().join("applications.json");
     write_json(
@@ -532,11 +585,11 @@ fn bundle_inputs() -> (TempDir, PackageBundleRequest) {
         }),
     );
     let packs_root = temp.path().join("sources");
-    for (package_id, provides) in packs() {
+    for (package_id, provides) in packs {
         write_pack(&packs_root.join(package_id), package_id, provides);
     }
     let schedule_file = temp.path().join("schedule.json");
-    write_json(&schedule_file, &schedule());
+    write_json(&schedule_file, schedule);
     let request = PackageBundleRequest {
         applications,
         packs_root,
@@ -721,4 +774,123 @@ fn gr1_package_bundle_lays_the_file_and_refuses_a_refused_one() {
         })
     );
     assert!(!request.out.exists(), "--out was written");
+}
+
+/// [`goals`] with its `tier` entry governing `rules`.
+fn tier_over(rules: &[&str]) -> Value {
+    let rules = json!(rules);
+    goals_with(move |value| value["entries"][7]["governs"]["rules"] = rules.clone())
+}
+
+/// `package bundle --goals` of `goals` on the packages `packs` and the schedule `schedule`, which
+/// must refuse it: the refusal is `standard_pack_root_invalid` with `goal_governs_irreversible` at
+/// `pointer`, at the source file, and `--out` is not written.
+fn assert_bundle_refuses_irreversible(
+    packs: [(&'static str, Option<Value>); 4],
+    schedule: &Value,
+    goals: &Value,
+    pointer: &str,
+) {
+    let (temp, request) = bundle_inputs_with(packs, schedule);
+    let (source, refused) = bundle_with_goals(&temp, &request, goals);
+    let error = refused.expect_err("the bundle is refused");
+    let (code, values) = refusal(&error);
+    assert_eq!(code, ROOT_INVALID, "{}", error.message);
+    assert_eq!(
+        values,
+        json!({
+            "game": GAME,
+            "path": source.to_string_lossy(),
+            "standard_pack_problem": "goal_governs_irreversible",
+            "json_pointer": pointer
+        })
+    );
+    assert!(!request.out.exists(), "--out was written");
+}
+
+// G-R1 fix round 1, item 1 (the review's first way around the safety line): a `tier` entry is
+// held to the package each rule it governs runs. On a root where the package that provides the
+// irreversible capability runs a rule that writes a fixed value, the tier over that rule beside
+// the rule of `neutral.collect` is `goal_governs_irreversible` at `/entries/7/governs/rules/1` and
+// nothing else, for the check (a warning, the root checked) and for `package bundle --goals` (the
+// bundle refused, `--out` not written); the same tier over the rule of `neutral.collect` alone
+// passes both.
+#[test]
+fn gr1_a_tier_over_a_rule_of_an_irreversible_package_is_refused() {
+    let (_temp, game_root) = installed_with(packs(), &schedule_running_discard());
+    write_json(&game_root.join("goals.json"), &tier_over(&[COLLECT]));
+    let accepted = check(&game_root);
+    assert!(
+        root_invalid_warnings(&accepted.warnings).is_empty(),
+        "{:?}",
+        accepted.warnings
+    );
+    write_json(
+        &game_root.join("goals.json"),
+        &tier_over(&[COLLECT, DISCARD]),
+    );
+    let refused = check(&game_root);
+    assert_eq!(refused.status, "checked");
+    assert_eq!(
+        root_invalid_warnings(&refused.warnings),
+        [goal_warning(
+            &game_root,
+            "goal_governs_irreversible",
+            "/entries/7/governs/rules/1"
+        )]
+    );
+
+    let (temp, request) = bundle_inputs_with(packs(), &schedule_running_discard());
+    let (_, accepted) = bundle_with_goals(&temp, &request, &tier_over(&[COLLECT]));
+    accepted.unwrap_or_else(|error| {
+        panic!(
+            "a rule of a reversible package: {}: {}",
+            error.code, error.message
+        )
+    });
+    assert_bundle_refuses_irreversible(
+        packs(),
+        &schedule_running_discard(),
+        &tier_over(&[COLLECT, DISCARD]),
+        "/entries/7/governs/rules/1",
+    );
+}
+
+// G-R1 fix round 1, item 2 (the review's second way around): a capability is irreversible when
+// any package of the root marks it so. The valid file's `choice` entry governs `neutral.keep`;
+// when `neutral.keep` provides, without the mark, the capability `neutral.discard` marks
+// irreversible, that entry is `goal_governs_irreversible` at `/entries/4/governs/packages/1` and
+// nothing else, for the check (a warning, the root checked) and for `package bundle --goals` (the
+// bundle refused, `--out` not written); with a capability of its own the same file passes the
+// check (and the bundle, `gr1_package_bundle_lays_the_file_and_refuses_a_refused_one`).
+#[test]
+fn gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused() {
+    let (_plain, plain_root) = installed();
+    write_json(&plain_root.join("goals.json"), &goals());
+    let accepted = check(&plain_root);
+    assert!(
+        root_invalid_warnings(&accepted.warnings).is_empty(),
+        "{:?}",
+        accepted.warnings
+    );
+
+    let (_temp, game_root) =
+        installed_with(packs_sharing_the_irreversible_capability(), &schedule());
+    write_json(&game_root.join("goals.json"), &goals());
+    let refused = check(&game_root);
+    assert_eq!(refused.status, "checked");
+    assert_eq!(
+        root_invalid_warnings(&refused.warnings),
+        [goal_warning(
+            &game_root,
+            "goal_governs_irreversible",
+            "/entries/4/governs/packages/1"
+        )]
+    );
+    assert_bundle_refuses_irreversible(
+        packs_sharing_the_irreversible_capability(),
+        &schedule(),
+        &goals(),
+        "/entries/4/governs/packages/1",
+    );
 }

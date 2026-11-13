@@ -10,10 +10,18 @@
 //! shape and limits, the names, the eight types of version 1 and their members, the blocks, the
 //! ranges, the defaults and the rates. [`check_standard_pack_goal_references`] then holds the typed
 //! entries to what the game root offers ([`GoalReferences`]: the composed schedule's pools and
-//! rules, the bundle's packages and which of them declare an irreversible capability, the root's
-//! tables). Every violation is one [`StandardPackRootIssue`] of [`STANDARD_PACK_GOALS_FILE`] at its
-//! JSON pointer, in document order, at most [`MAX_STANDARD_PACK_GOALS_ISSUES`]; the references are
-//! judged only for a file the reader accepts.
+//! rules, each rule with the package it runs, the bundle's packages, each with what its control
+//! declaration provides, and the root's tables). Every violation is one [`StandardPackRootIssue`]
+//! of [`STANDARD_PACK_GOALS_FILE`] at its JSON pointer, in document order (a member repeated in one
+//! object first), at most [`MAX_STANDARD_PACK_GOALS_ISSUES`]; the references are judged only for a
+//! file the reader accepts.
+//!
+//! G-R1 fix round 1 (the independent review): a package can do something irreversible when it
+//! provides a capability that any package of the game root marks irreversible
+//! (contracts/remedies.md §2.3), whether it marks it itself or not; a `tier` entry is held to the
+//! package each rule it governs runs; and [`GoalReferences`] is made only by
+//! [`GoalReferences::new`], from what every package of the root provides, so no reader can leave
+//! that answer empty by omission.
 //!
 //! The file stores no value: a value is the installation's, set by a person or an agent in a later
 //! slice. The Runtime interprets no text here: titles, help texts, unit texts, option titles,
@@ -419,35 +427,90 @@ pub enum GoalValues {
     },
 }
 
+/// A rule of `schedule.json` as the references hold it (G-R1 fix round 1): the package it runs,
+/// which a `tier` entry that governs the rule is held to, and whether it writes
+/// `fixed_value_milli`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalRule {
+    /// The rule's `package_id`.
+    pub package_id: String,
+    /// The rule writes `fixed_value_milli`.
+    pub fixed_value: bool,
+}
+
 /// What the references of a declaration are held to (`check_standard_pack_goal_references`): what
-/// the game root offers.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// the game root offers. G-R1 fix round 1: made only by [`GoalReferences::new`], from what every
+/// package of the root provides; there is no default, so a reader cannot leave the answer to
+/// which packages can do something irreversible empty by omission.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalReferences {
     /// The pools of the composed schedule by id, each `true` when its `valuation` holds both
     /// `scale` and `gap`; none without `schedule.json`.
     pub pools: BTreeMap<String, bool>,
-    /// The rules of `schedule.json` by id, each `true` when it writes `fixed_value_milli`.
-    pub rules: BTreeMap<String, bool>,
-    /// The packages of the game root's `bundle.json`.
-    pub packages: BTreeSet<String>,
-    /// Of the governed packages, those whose control declaration has a `provides[]` entry with
-    /// `irreversible: true`.
-    pub irreversible: BTreeSet<String>,
+    /// The rules of `schedule.json` by id; none without `schedule.json`.
+    pub rules: BTreeMap<String, GoalRule>,
     /// The tables of the game root by id, each with its distinct keys in row order. `None` when
     /// the reader holds no tables (`package bundle`): then no table reference is judged.
     pub tables: Option<BTreeMap<String, Vec<String>>>,
+    /// The packages of the game root's `bundle.json` by id, each `true` when it can do something
+    /// irreversible ([`GoalReferences::new`]).
+    packages: BTreeMap<String, bool>,
+}
+
+impl GoalReferences {
+    /// The references of a game root whose `bundle.json` lists exactly the packages of
+    /// `provides`, each with the capabilities its control declaration provides (`provides[]`),
+    /// every one `true` when its entry writes `irreversible: true`. A capability is irreversible
+    /// when any package of the root marks it so (contracts/remedies.md §2.3, "any provider"), and
+    /// a package can do something irreversible when it provides such a capability, marked by
+    /// itself or not. A package `provides` does not name is no package of the root: an entry that
+    /// governs it, or a rule that runs it, is never passed. The pools and the rules start empty,
+    /// the tables `None`.
+    pub fn new(provides: BTreeMap<String, BTreeMap<String, bool>>) -> Self {
+        let irreversible = provides
+            .values()
+            .flatten()
+            .filter(|(_, marked)| **marked)
+            .map(|(capability, _)| capability.clone())
+            .collect::<BTreeSet<_>>();
+        let packages = provides
+            .into_iter()
+            .map(|(package_id, capabilities)| {
+                let can = capabilities
+                    .keys()
+                    .any(|capability| irreversible.contains(capability));
+                (package_id, can)
+            })
+            .collect();
+        Self {
+            pools: BTreeMap::new(),
+            rules: BTreeMap::new(),
+            tables: None,
+            packages,
+        }
+    }
+
+    /// Whether the package `package_id` can do something irreversible; `None` when it is no
+    /// package of the root.
+    fn irreversible(&self, package_id: &str) -> Option<bool> {
+        self.packages.get(package_id).copied()
+    }
 }
 
 /// `goals.json`'s bytes, read for the game directory `game` (contract "The checks", the reader's
-/// rows). Every violation is one issue at its JSON pointer, in document order, at most
-/// [`MAX_STANDARD_PACK_GOALS_ISSUES`]:
+/// rows). Every violation is one issue at its JSON pointer, at most
+/// [`MAX_STANDARD_PACK_GOALS_ISSUES`]: every member repeated in one object first, then the others
+/// in document order:
 ///
-/// - `malformed`: the file is larger than [`MAX_STANDARD_PACK_GOALS_BYTES`], no JSON or no object
-///   (the whole document); a member repeated in one object, unknown, missing or not of its type
-///   (an integer outside the safe integers too), a `schema_version` other than
-///   [`STANDARD_PACK_GOALS_SCHEMA_VERSION`], a name, an option value, an id, a word, a list, a map
-///   or a text outside its form or its limits, an `ordered` entry with both `options` and
-///   `from_table` (at `from_table`) or with neither (at `options`);
+/// - `goal_out_of_limits` (fix round 1): the file is larger than [`MAX_STANDARD_PACK_GOALS_BYTES`]
+///   (the whole document); a list, a map, a text's locales, or the bytes of a name, an option
+///   value, an id, a key, a locale or a text outside its limit (at what exceeds);
+/// - `malformed`: no JSON or no object (the whole document; a byte-order mark too); a member
+///   repeated in one object, unknown, missing or not of its type (an integer outside the safe
+///   integers too, but for an `integer` entry's `default`), a `schema_version` other than
+///   [`STANDARD_PACK_GOALS_SCHEMA_VERSION`], a name, an option value, an id, a key or a word
+///   outside its form, an `ordered` entry with both `options` and `from_table` (at `from_table`)
+///   or with neither (at `options`);
 /// - `game_mismatch`: `game` is not the directory's;
 /// - `goal_name_duplicate`: a name an earlier entry has (at the later `name`);
 /// - `goal_type_unknown`: a `type` that is none of the eight of version 1;
@@ -457,7 +520,8 @@ pub struct GoalReferences {
 ///   `max_count` of 0 or above [`MAX_GOAL_ORDERED_COUNT`], its `min_count` above its `max_count`
 ///   or above the number of its options, a tier's `scale_milli` outside 1 to
 ///   [`MAX_GOAL_SCALE_MILLI`]);
-/// - `goal_default_invalid`: a `default` that is not a value of the declaration;
+/// - `goal_default_invalid`: a `default` that is not a value of the declaration (an `integer`
+///   entry's that is no whole number in its range on its step, whatever its type or size);
 /// - `goal_rate_invalid`: a `rate` whose ceiling is below its floor.
 pub fn parse_standard_pack_goals(
     bytes: &[u8],
@@ -465,7 +529,7 @@ pub fn parse_standard_pack_goals(
 ) -> Result<StandardPackGoals, Vec<StandardPackRootIssue>> {
     let mut check = Check::default();
     if bytes.len() > MAX_STANDARD_PACK_GOALS_BYTES {
-        check.malformed("");
+        check.out_of_limits("");
         return Err(check.issues);
     }
     let mut repeated = Vec::new();
@@ -473,6 +537,8 @@ pub fn parse_standard_pack_goals(
         check.malformed("");
         return Err(check.issues);
     };
+    // The reader meets a repeated member while it reads the document, before any member is
+    // judged: these come first (contract "The checks").
     for pointer in repeated {
         check.malformed(pointer);
     }
@@ -493,10 +559,13 @@ pub fn parse_standard_pack_goals(
 ///
 /// - `goal_pool_unknown`: a `resource` entry's pool is not a pool of the composed schedule;
 /// - `goal_pool_unvalued`: its pool's `valuation` lacks `scale` or `gap`;
-/// - `goal_package_unknown`: a governed package is not a package of `bundle.json`;
-/// - `goal_governs_irreversible`: a governed package declares an irreversible capability;
+/// - `goal_package_unknown`: a governed package, or (fix round 1) the package a governed rule
+///   runs, is not a package of `bundle.json`;
+/// - `goal_governs_irreversible`: a governed package, or (fix round 1) the package a governed rule
+///   runs, can do something irreversible ([`GoalReferences::new`]);
 /// - `goal_rule_unknown`: a `tier` entry's rule is not a rule of `schedule.json`;
-/// - `goal_tier_without_fixed_value`: that rule writes no `fixed_value_milli`;
+/// - `goal_tier_without_fixed_value`: that rule, its package passed, writes no
+///   `fixed_value_milli`;
 /// - with the root's tables: `goal_table_unknown` (an `ordered` entry's table is no table of the
 ///   root, or a key under its `names` no key of that table), `goal_range_invalid` (the table holds
 ///   more than [`MAX_GOAL_LIST_VALUES`] keys, or fewer than the entry's `min_count`) and
@@ -521,14 +590,24 @@ pub fn check_standard_pack_goal_references(
             }
             DeclaredGoalKind::Tier { rules, .. } => {
                 let at_rules = at(&governs, "rules");
-                for (position, rule) in rules.iter().enumerate() {
+                for (position, rule_id) in rules.iter().enumerate() {
                     let at_rule = format!("{at_rules}/{position}");
-                    match references.rules.get(rule) {
-                        None => check.issue(StandardPackProblem::GoalRuleUnknown, at_rule),
-                        Some(false) => {
+                    let Some(rule) = references.rules.get(rule_id) else {
+                        check.issue(StandardPackProblem::GoalRuleUnknown, at_rule);
+                        continue;
+                    };
+                    // Fix round 1: a rule names the package it runs, and a tier that governs the
+                    // rule scales that package's weight; the rule is held to its package as a
+                    // governed package is.
+                    match references.irreversible(&rule.package_id) {
+                        None => check.issue(StandardPackProblem::GoalPackageUnknown, at_rule),
+                        Some(true) => {
+                            check.issue(StandardPackProblem::GoalGovernsIrreversible, at_rule);
+                        }
+                        Some(false) if !rule.fixed_value => {
                             check.issue(StandardPackProblem::GoalTierWithoutFixedValue, at_rule);
                         }
-                        Some(true) => {}
+                        Some(false) => {}
                     }
                 }
             }
@@ -539,10 +618,12 @@ pub fn check_standard_pack_goal_references(
                 let at_packages = at(&governs, "packages");
                 for (position, package_id) in packages.iter().enumerate() {
                     let at_package = format!("{at_packages}/{position}");
-                    if !references.packages.contains(package_id) {
-                        check.issue(StandardPackProblem::GoalPackageUnknown, at_package);
-                    } else if references.irreversible.contains(package_id) {
-                        check.issue(StandardPackProblem::GoalGovernsIrreversible, at_package);
+                    match references.irreversible(package_id) {
+                        None => check.issue(StandardPackProblem::GoalPackageUnknown, at_package),
+                        Some(true) => {
+                            check.issue(StandardPackProblem::GoalGovernsIrreversible, at_package);
+                        }
+                        Some(false) => {}
                     }
                 }
                 if let (
@@ -591,6 +672,19 @@ fn opaque_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= MAX_GOAL_REFERENCE_BYTES && !id.chars().any(char::is_control)
 }
 
+/// Fix round 1: what is wrong with `text`, a name, an option value, an id or a key of the form
+/// `form`: `goal_out_of_limits` when it is empty or longer than `max` bytes, else `malformed`
+/// when it breaks its form; `None` when it keeps both.
+fn bounded(text: &str, max: usize, form: fn(&str) -> bool) -> Option<StandardPackProblem> {
+    if text.is_empty() || text.len() > max {
+        Some(StandardPackProblem::GoalOutOfLimits)
+    } else if form(text) {
+        None
+    } else {
+        Some(StandardPackProblem::Malformed)
+    }
+}
+
 /// The checks of one document: the issues found so far.
 #[derive(Default)]
 struct Check {
@@ -610,6 +704,11 @@ impl Check {
 
     fn malformed(&mut self, pointer: impl Into<String>) {
         self.issue(StandardPackProblem::Malformed, pointer);
+    }
+
+    /// Fix round 1: a bound of the shape broken, at what exceeds it.
+    fn out_of_limits(&mut self, pointer: impl Into<String>) {
+        self.issue(StandardPackProblem::GoalOutOfLimits, pointer);
     }
 
     /// An object of the members `required` and `optional`: an unknown member and a missing one
@@ -648,7 +747,7 @@ impl Check {
         }
     }
 
-    /// A list of `min..=max` items; a count outside is `malformed` at the list.
+    /// A list of `min..=max` items; a count outside is `goal_out_of_limits` at the list.
     fn list<'v>(
         &mut self,
         value: &'v Value,
@@ -660,23 +759,29 @@ impl Check {
             return None;
         };
         if !(min..=max).contains(&items.len()) {
-            self.malformed(pointer);
+            self.out_of_limits(pointer);
         }
         Some(items.as_slice())
     }
 
-    /// A string of 1 to `max` bytes, never read further.
+    /// A string of 1 to `max` bytes, never read further: no string is `malformed`, one of another
+    /// length `goal_out_of_limits`.
     fn string(&mut self, value: &Value, pointer: &str, max: usize) -> Option<String> {
         match value.as_str() {
             Some(text) if !text.is_empty() && text.len() <= max => Some(text.to_owned()),
-            _ => {
+            Some(_) => {
+                self.out_of_limits(pointer);
+                None
+            }
+            None => {
                 self.malformed(pointer);
                 None
             }
         }
     }
 
-    /// A text: 1 to 16 locales of 1 to 35 bytes each, each text 1 to `max` bytes, as `ui.json`'s.
+    /// A text: 1 to 16 locales of 1 to 35 bytes each, each text 1 to `max` bytes, as `ui.json`'s;
+    /// a count or a length outside is `goal_out_of_limits` at what exceeds.
     fn text(&mut self, value: &Value, pointer: &str, max: usize) -> Option<GoalText> {
         let Some(locales) = value.as_object() else {
             self.malformed(pointer);
@@ -684,13 +789,13 @@ impl Check {
         };
         let mut complete = (1..=MAX_PACK_UI_LOCALES).contains(&locales.len());
         if !complete {
-            self.malformed(pointer);
+            self.out_of_limits(pointer);
         }
         let mut text = Vec::new();
         for (locale, value) in locales {
             let at_locale = at(pointer, locale);
             if locale.is_empty() || locale.len() > MAX_PACK_UI_LOCALE_BYTES {
-                self.malformed(at_locale);
+                self.out_of_limits(at_locale);
                 complete = false;
                 continue;
             }
@@ -728,12 +833,16 @@ impl Check {
         }
     }
 
-    /// An id an entry names ([`opaque_id`]).
+    /// An id an entry names ([`opaque_id`]; its length [`bounded`]).
     fn reference(&mut self, value: &Value, pointer: &str) -> Option<String> {
-        match value.as_str() {
-            Some(id) if opaque_id(id) => Some(id.to_owned()),
-            _ => {
-                self.malformed(pointer);
+        let Some(id) = value.as_str() else {
+            self.malformed(pointer);
+            return None;
+        };
+        match bounded(id, MAX_GOAL_REFERENCE_BYTES, opaque_id) {
+            None => Some(id.to_owned()),
+            Some(problem) => {
+                self.issue(problem, pointer);
                 None
             }
         }
@@ -837,8 +946,8 @@ impl Check {
         })
     }
 
-    /// The entry's name ([`goal_name`]), once in the file. A missing name is reported with the
-    /// entry's members.
+    /// The entry's name ([`goal_name`]; its length [`bounded`]), once in the file. A missing name
+    /// is reported with the entry's members.
     fn name(
         &mut self,
         value: Option<&Value>,
@@ -846,19 +955,19 @@ impl Check {
         names: &mut BTreeSet<String>,
     ) -> Option<String> {
         let at_name = at(pointer, "name");
-        match value? {
-            Value::String(name) if goal_name(name) => {
-                if names.insert(name.clone()) {
-                    Some(name.clone())
-                } else {
-                    self.issue(StandardPackProblem::GoalNameDuplicate, at_name);
-                    None
-                }
-            }
-            _ => {
-                self.malformed(at_name);
-                None
-            }
+        let Value::String(name) = value? else {
+            self.malformed(at_name);
+            return None;
+        };
+        if let Some(problem) = bounded(name, MAX_GOAL_NAME_BYTES, goal_name) {
+            self.issue(problem, at_name);
+            return None;
+        }
+        if names.insert(name.clone()) {
+            Some(name.clone())
+        } else {
+            self.issue(StandardPackProblem::GoalNameDuplicate, at_name);
+            None
         }
     }
 
@@ -1160,41 +1269,40 @@ impl Check {
         complete.then_some(options)
     }
 
-    /// An option value ([`option_value`]) not written before in its list (`goal_range_invalid`).
+    /// An option value ([`option_value`]; its length [`bounded`]) not written before in its list
+    /// (`goal_range_invalid`).
     fn option_value(
         &mut self,
         value: &Value,
         pointer: &str,
         seen: &mut BTreeSet<String>,
     ) -> Option<String> {
-        match value.as_str() {
-            Some(word) if option_value(word) => {
-                if seen.insert(word.to_owned()) {
-                    Some(word.to_owned())
-                } else {
-                    self.issue(StandardPackProblem::GoalRangeInvalid, pointer);
-                    None
-                }
-            }
-            _ => {
-                self.malformed(pointer);
-                None
-            }
+        let Some(word) = value.as_str() else {
+            self.malformed(pointer);
+            return None;
+        };
+        if let Some(problem) = bounded(word, MAX_GOAL_VALUE_BYTES, option_value) {
+            self.issue(problem, pointer);
+            return None;
+        }
+        if seen.insert(word.to_owned()) {
+            Some(word.to_owned())
+        } else {
+            self.issue(StandardPackProblem::GoalRangeInvalid, pointer);
+            None
         }
     }
 
-    /// A tier's `scale_milli`: an integer from 1 to [`MAX_GOAL_SCALE_MILLI`].
+    /// A tier's `scale_milli`: a safe integer ([`Check::integer`]: `malformed` otherwise, fix
+    /// round 1, as every integer member of the file) from 1 to [`MAX_GOAL_SCALE_MILLI`]
+    /// (`goal_range_invalid` otherwise).
     fn scale(&mut self, value: &Value, pointer: &str) -> Option<i64> {
-        match value.as_i64() {
-            Some(scale) if (1..=MAX_GOAL_SCALE_MILLI).contains(&scale) => Some(scale),
-            Some(_) => {
-                self.issue(StandardPackProblem::GoalRangeInvalid, pointer);
-                None
-            }
-            None => {
-                self.malformed(pointer);
-                None
-            }
+        let scale = self.integer(value, pointer)?;
+        if (1..=MAX_GOAL_SCALE_MILLI).contains(&scale) {
+            Some(scale)
+        } else {
+            self.issue(StandardPackProblem::GoalRangeInvalid, pointer);
+            None
         }
     }
 
@@ -1318,13 +1426,13 @@ impl Check {
         };
         let mut complete = members.len() <= MAX_GOAL_LIST_VALUES;
         if !complete {
-            self.malformed(pointer);
+            self.out_of_limits(pointer);
         }
         let mut names = Vec::new();
         for (key, text) in members {
             let at_key = at(pointer, key);
-            if !opaque_id(key) {
-                self.malformed(at_key);
+            if let Some(problem) = bounded(key, MAX_GOAL_REFERENCE_BYTES, opaque_id) {
+                self.issue(problem, at_key);
                 complete = false;
                 continue;
             }

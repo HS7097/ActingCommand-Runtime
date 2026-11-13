@@ -13,7 +13,12 @@
 //   sets it aside as `goals.json.old-<ms>` and keeps it; `undo` puts it back;
 // - `goals_bundle_is_refused_by_an_installer_before_revision_12`: on an installer whose `package`
 //   range is [3, 11], the same bundle is refused `interface_edge` at its `interfaces.json` before
-//   the hold: no pause, no journal, nothing in the game root.
+//   the hold: no pause, no journal, nothing in the game root;
+// - fix round 1 (`rd-1114/brief-1694-fix1.md`, item 6),
+//   `goals_bundle_that_does_not_declare_revision_12_is_refused_goal_undeclared`: on this build's
+//   installer, a bundle that carries `goals.json` and declares [3, 11] is refused `pack_invalid`
+//   caused by `goal_undeclared` at its `interfaces.json` before the hold, as a bundle that carries
+//   the notices directory and declares less than 10 is refused `notice_undeclared`.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
 // sleep; every root is a temporary folder with neutral files. `place` reads the file's name only;
 // what it declares is `standard-pack check`'s, which the fixture's root does not carry (its row is
@@ -43,6 +48,9 @@ const EARLIER_INSTALLER_PACKAGE: [u64; 2] = [3, 11];
 const GOALS_BUNDLE_PACKAGE: [u64; 2] = [GOALS_PACKAGE_REVISION, GOALS_PACKAGE_REVISION];
 /// What a bundle without it declares: [`speaks`]'s.
 const PLAIN_BUNDLE_PACKAGE: [u64; 2] = [3, 5];
+/// Fix round 1: what a bundle that carries `goals.json` and does not declare its revision
+/// declares, within this build's installer's range.
+const UNDECLARED_BUNDLE_PACKAGE: [u64; 2] = [3, 11];
 const CONTROL: &[u8] = br#"{"neutral": 1}"#;
 
 /// The bytes of a `goals.json` of [`GAME`]: one made-up heading.
@@ -170,6 +178,21 @@ fn top_code(line: &Value) -> &str {
 
 fn top_value<'a>(line: &'a Value, key: &str) -> &'a Value {
     &line["outcome"]["values"][key]
+}
+
+/// The values of the first outcome with `code` anywhere in `line` (an outcome or one of its
+/// causes).
+fn values_of<'a>(line: &'a Value, code: &str) -> Option<&'a Value> {
+    match line {
+        Value::Object(members) => {
+            if members.get("code").and_then(Value::as_str) == Some(code) {
+                return members.get("values");
+            }
+            members.values().find_map(|inner| values_of(inner, code))
+        }
+        Value::Array(items) => items.iter().find_map(|inner| values_of(inner, code)),
+        _ => None,
+    }
 }
 
 /// The items of a `place` line's plan, each `<item> <kind> <state>`, in the plan's order.
@@ -388,6 +411,55 @@ fn goals_bundle_is_refused_by_an_installer_before_revision_12() {
         top_value(&refused, "path"),
         &json!(canonical.join("interfaces.json").to_string_lossy())
     );
+
+    assert!(
+        calls_of(&host, "pause ").is_empty(),
+        "{:?}",
+        host.runtime.calls.borrow()
+    );
+    assert_eq!(journals(&root).len(), before.len());
+    assert!(
+        fs::read_dir(&game_root)
+            .expect("the game root")
+            .next()
+            .is_none(),
+        "the game root holds nothing"
+    );
+}
+
+// Fix round 1, as `notices_refusals_come_before_the_hold` holds `notice_undeclared`: on this
+// build's installer ([3, 12]) a bundle that carries `goals.json` and declares [3, 11], within the
+// installer's range, is refused `pack_invalid` caused by `standard_pack_root_invalid` with
+// `goal_undeclared` at its `interfaces.json`, the pointer empty, in the plan: no pause, no journal,
+// nothing in the game root.
+#[test]
+fn goals_bundle_that_does_not_declare_revision_12_is_refused_goal_undeclared() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, game_root) = prepared(temp.path(), &host, INSTALLER_PACKAGE);
+    let before = journals(&root);
+
+    let zip = temp.path().join("neutral-undeclared.zip");
+    Bundle {
+        goals: Some(goals_bytes()),
+        package: UNDECLARED_BUNDLE_PACKAGE,
+    }
+    .write(&zip);
+    let (refused, exit) = place(&host, &root, &zip, false);
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(top_code(&refused), "install_command_refused", "{refused}");
+    assert_eq!(top_value(&refused, "install_refusal"), "pack_invalid");
+    let cause = values_of(&refused, "standard_pack_root_invalid")
+        .unwrap_or_else(|| panic!("no standard_pack_root_invalid in {refused}"));
+    let canonical = fs::canonicalize(&zip).expect("the canonical bundle");
+    assert_eq!(cause["standard_pack_problem"], "goal_undeclared", "{cause}");
+    assert_eq!(
+        cause["path"],
+        json!(canonical.join("interfaces.json").to_string_lossy()),
+        "{cause}"
+    );
+    assert_eq!(cause["json_pointer"], "", "{cause}");
+    assert_eq!(cause["game"], GAME, "{cause}");
 
     assert!(
         calls_of(&host, "pause ").is_empty(),

@@ -6677,7 +6677,7 @@
           "description": "An entry of goals.json governs a package that is not a package of bundle.json (Workflow #455 G-R1, since 0.12.60)."
         },
         "goal_governs_irreversible": {
-          "description": "An entry of goals.json governs a package whose control declaration has a provides entry with irreversible true; no goal entry governs such a package (Workflow #455 G-R1, since 0.12.60)."
+          "description": "An entry of goals.json governs a package, or a tier entry a rule whose package, provides a capability that a package of the game root marks irreversible true in its control declaration's provides; no goal entry governs such a package or rule (Workflow #455 G-R1, since 0.12.60; rules and capabilities across the root since its fix round 1)."
         },
         "goal_rule_unknown": {
           "description": "A tier entry of goals.json governs a rule that is not a rule of schedule.json (Workflow #455 G-R1, since 0.12.60)."
@@ -6696,6 +6696,12 @@
         },
         "goal_rate_invalid": {
           "description": "A resource entry's rate in goals.json has its ceiling below its floor (Workflow #455 G-R1, since 0.12.60)."
+        },
+        "goal_out_of_limits": {
+          "description": "goals.json is larger than 1 MiB, or one of its lists, maps, names, option values, ids, keys, locales or texts is outside its limit, at the pointer of what exceeds (Workflow #455 G-R1 fix round 1, since 0.12.60)."
+        },
+        "goal_undeclared": {
+          "description": "A bundle zip carries goals.json and declares a package interface maximum below 12. Refused by the installer's place at interfaces.json (Workflow #455 G-R1 fix round 1, since 0.12.60)."
         }
       }
     },

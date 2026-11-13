@@ -4,7 +4,10 @@
 //! root's `goals.json`: the design's neutral example reads to its typed entries in file order;
 //! one entry of each of the eight types reads with every member its type has; and the reader is
 //! strict: an unknown member, an unknown type and a type of a later version are refused, each at
-//! its pointer. A made-up game `neutral`; every id, name and text is a placeholder.
+//! its pointer, and (fix round 1) a bound of the shape broken is `goal_out_of_limits`. Fix round
+//! 1: the references are made only from what every package of the root provides, and judge a
+//! governed package, and the package a governed rule runs, by the capabilities the whole root
+//! marks irreversible. A made-up game `neutral`; every id, name and text is a placeholder.
 
 use super::*;
 use serde_json::{Value, json};
@@ -121,13 +124,14 @@ fn goals_neutral_example_reads_to_typed_entries() {
         Some(GoalType::Choice)
     );
     // A root that offers the valued pool and the package holds every reference.
-    let references = GoalReferences {
-        pools: BTreeMap::from([("pool.neutral.points".to_owned(), true)]),
-        rules: BTreeMap::new(),
-        packages: BTreeSet::from(["neutral.collect".to_owned()]),
-        irreversible: BTreeSet::new(),
-        tables: Some(BTreeMap::new()),
-    };
+    let mut references = GoalReferences::new(BTreeMap::from([(
+        "neutral.collect".to_owned(),
+        BTreeMap::new(),
+    )]));
+    references
+        .pools
+        .insert("pool.neutral.points".to_owned(), true);
+    references.tables = Some(BTreeMap::new());
     let issues = check_standard_pack_goal_references(&goals, &references);
     assert!(issues.is_empty(), "{issues:?}");
 }
@@ -329,16 +333,24 @@ fn goals_each_type_reads_its_members() {
     );
     assert_eq!(goals.tables(), BTreeSet::from(["neutral_members"]));
     // A root that offers every reference holds them all.
-    let references = GoalReferences {
-        pools: BTreeMap::from([("pool.neutral.points".to_owned(), true)]),
-        rules: BTreeMap::from([("neutral.spend".to_owned(), true)]),
-        packages: BTreeSet::from(["neutral.collect".to_owned(), "neutral.spend".to_owned()]),
-        irreversible: BTreeSet::new(),
-        tables: Some(BTreeMap::from([(
-            "neutral_members".to_owned(),
-            owned(&["m01", "m02", "m03"]),
-        )])),
-    };
+    let mut references = GoalReferences::new(BTreeMap::from([
+        ("neutral.collect".to_owned(), BTreeMap::new()),
+        ("neutral.spend".to_owned(), BTreeMap::new()),
+    ]));
+    references
+        .pools
+        .insert("pool.neutral.points".to_owned(), true);
+    references.rules.insert(
+        "neutral.spend".to_owned(),
+        GoalRule {
+            package_id: "neutral.spend".to_owned(),
+            fixed_value: true,
+        },
+    );
+    references.tables = Some(BTreeMap::from([(
+        "neutral_members".to_owned(),
+        owned(&["m01", "m02", "m03"]),
+    )]));
     let issues = check_standard_pack_goal_references(&goals, &references);
     assert!(issues.is_empty(), "{issues:?}");
 }
@@ -428,7 +440,7 @@ fn goals_reader_is_strict() {
                     })
                     .collect();
             }),
-            issue(Problem::Malformed, "/entries"),
+            issue(Problem::GoalOutOfLimits, "/entries"),
         ),
     ];
     for (case, value, expected) in cases {
@@ -446,7 +458,11 @@ fn goals_reader_is_strict() {
             issue(Problem::Malformed, "/entries/0/name"),
         ),
         ("no JSON", &b"{"[..], issue(Problem::Malformed, "")),
-        ("over 1 MiB", &large[..], issue(Problem::Malformed, "")),
+        (
+            "over 1 MiB",
+            &large[..],
+            issue(Problem::GoalOutOfLimits, ""),
+        ),
     ] {
         assert_eq!(
             parse_standard_pack_goals(bytes, GAME).map(|_| ()),
@@ -454,4 +470,105 @@ fn goals_reader_is_strict() {
             "{case}"
         );
     }
+}
+
+/// G-R1 fix round 1 (items 1 to 3), with made-up packages: `neutral.discard` marks the capability
+/// `cap_discard` irreversible, `neutral.reuse` provides it without the mark (and one of its own),
+/// `neutral.collect` provides nothing, and `neutral.unlisted` is a package the references were not
+/// told of; each runs a rule that writes a fixed value. A `switch` entry that governs the four
+/// packages and a `tier` entry that governs their four rules are each `goal_governs_irreversible`
+/// for the package that marks the capability and for the one that provides it unmarked,
+/// `goal_package_unknown` for the package the references say nothing of, each at its pointer, and
+/// pass `neutral.collect`. References made from no package pass no package and no rule.
+#[test]
+fn goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root() {
+    use StandardPackProblem as Problem;
+    const PACKAGES: [&str; 4] = [
+        "neutral.collect",
+        "neutral.discard",
+        "neutral.reuse",
+        "neutral.unlisted",
+    ];
+    let rule_of = |package_id: &str| format!("rule.{package_id}");
+    let rules = PACKAGES.map(rule_of);
+    let goals = read(&json!({
+        "schema_version": "actingcommand.goals.v1",
+        "game": GAME,
+        "entries": [
+            {"name": "enabled", "type": "switch", "governs": {"packages": PACKAGES},
+             "title": {"en": "Enabled"}, "default": true},
+            {"name": "weight", "type": "tier", "governs": {"rules": rules},
+             "title": {"en": "Weight"}, "default": "normal",
+             "options": [{"value": "normal", "title": {"en": "Normal"}, "scale_milli": 1000},
+                         {"value": "more", "title": {"en": "More"}, "scale_milli": 2000}]}
+        ]
+    }))
+    .unwrap_or_else(|issues| panic!("the declaration reads: {issues:?}"));
+    let mut references = GoalReferences::new(BTreeMap::from([
+        ("neutral.collect".to_owned(), BTreeMap::new()),
+        (
+            "neutral.discard".to_owned(),
+            BTreeMap::from([("cap_discard".to_owned(), true)]),
+        ),
+        (
+            "neutral.reuse".to_owned(),
+            BTreeMap::from([
+                ("cap_discard".to_owned(), false),
+                ("cap_reuse".to_owned(), false),
+            ]),
+        ),
+    ]));
+    for package_id in PACKAGES {
+        references.rules.insert(
+            rule_of(package_id),
+            GoalRule {
+                package_id: package_id.to_owned(),
+                fixed_value: true,
+            },
+        );
+    }
+    assert_eq!(
+        check_standard_pack_goal_references(&goals, &references),
+        [
+            issue(
+                Problem::GoalGovernsIrreversible,
+                "/entries/0/governs/packages/1"
+            ),
+            issue(
+                Problem::GoalGovernsIrreversible,
+                "/entries/0/governs/packages/2"
+            ),
+            issue(Problem::GoalPackageUnknown, "/entries/0/governs/packages/3"),
+            issue(
+                Problem::GoalGovernsIrreversible,
+                "/entries/1/governs/rules/1"
+            ),
+            issue(
+                Problem::GoalGovernsIrreversible,
+                "/entries/1/governs/rules/2"
+            ),
+            issue(Problem::GoalPackageUnknown, "/entries/1/governs/rules/3"),
+        ]
+    );
+
+    // The only way to make references takes what the packages provide: made from none, they know
+    // no package and no rule, and nothing is passed.
+    let unknown = (0..PACKAGES.len())
+        .map(|j| {
+            issue(
+                Problem::GoalPackageUnknown,
+                &format!("/entries/0/governs/packages/{j}"),
+            )
+        })
+        .chain((0..PACKAGES.len()).map(|j| {
+            issue(
+                Problem::GoalRuleUnknown,
+                &format!("/entries/1/governs/rules/{j}"),
+            )
+        }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        check_standard_pack_goal_references(&goals, &GoalReferences::new(BTreeMap::new())),
+        unknown
+    );
 }

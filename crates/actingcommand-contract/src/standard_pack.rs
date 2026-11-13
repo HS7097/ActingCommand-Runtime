@@ -72,7 +72,9 @@ crate::outcome_vocabulary! {
     /// (M-357a v1.1 §6.2), or, since Workflow #407 LOAD-1, a pack's loading copy, or, since
     /// Workflow #444 NOTICES-1, a bundle's notices directory ([`crate::standard_pack_notices`]),
     /// or, since Workflow #451 LOAD-P, a bundle zip's loading templates directory. Since Workflow
-    /// #455 G-R1 the root file `goals.json` has the thirteen `goal_*` words of its own.
+    /// #455 G-R1 the root file `goals.json` has the fourteen `goal_*` words of its own (the
+    /// fourteenth, `goal_out_of_limits`, since its fix round 1), and a bundle zip that carries it
+    /// `goal_undeclared`.
     pub enum StandardPackProblem: "standard_pack_problem" {
         /// The file is not JSON of the file's shape and version (for a table: not canonical
         /// JSON either, that is with a floating point number, an unsafe integer or a duplicate
@@ -234,8 +236,9 @@ crate::outcome_vocabulary! {
         GoalPoolUnvalued => "goal_pool_unvalued",
         /// G-R1: a governed package is not a package of `bundle.json`.
         GoalPackageUnknown => "goal_package_unknown",
-        /// G-R1: a governed package's control declaration has a `provides[]` entry with
-        /// `irreversible: true`; no goal entry governs such a package.
+        /// G-R1: a governed package, or (fix round 1) the package a governed rule runs, provides a
+        /// capability that a package of the game root marks `irreversible: true` in its control
+        /// declaration's `provides[]`; no goal entry governs such a package or rule.
         GoalGovernsIrreversible => "goal_governs_irreversible",
         /// G-R1: a `tier` entry's rule is not a rule of `schedule.json`.
         GoalRuleUnknown => "goal_rule_unknown",
@@ -251,6 +254,13 @@ crate::outcome_vocabulary! {
         GoalTableUnknown => "goal_table_unknown",
         /// G-R1: a `resource` entry's `rate` has its ceiling below its floor.
         GoalRateInvalid => "goal_rate_invalid",
+        /// G-R1 fix round 1: `goals.json` is larger than 1 MiB, or one of its lists, maps, names,
+        /// option values, ids, keys, locales or texts is outside its limit.
+        GoalOutOfLimits => "goal_out_of_limits",
+        /// G-R1 fix round 1: a bundle zip carries `goals.json` and declares a `package` maximum
+        /// below 12. Refused by the installer's `place` at `interfaces.json`, as
+        /// `notice_undeclared` is.
+        GoalUndeclared => "goal_undeclared",
     }
 }
 
