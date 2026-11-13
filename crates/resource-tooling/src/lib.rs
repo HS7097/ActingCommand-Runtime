@@ -105,6 +105,11 @@ mod gate_load1;
 #[cfg(test)]
 mod gate_444_notices3;
 
+// Workflow #455 G-R1 (register §1.350): standard-pack check and package bundle --goals of a game
+// root's goal declaration `goals.json`.
+#[cfg(test)]
+mod gate_455_gr1;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;
@@ -117,6 +122,8 @@ mod package_validate;
 mod resource_convert;
 mod resource_restore;
 mod standard_pack_check;
+// Workflow #455 G-R1: `goals.json` in `package bundle --goals` and `standard-pack check`.
+mod standard_pack_goals;
 // ROUT-L RL-1a: `schedule.json` in `package bundle`, `standard-pack check` and `compose`.
 mod standard_pack_schedule;
 

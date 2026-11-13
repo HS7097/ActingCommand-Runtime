@@ -965,6 +965,9 @@ the rescue face:
   #451 LOAD-P), placed after the packs and before the root files, so the templates are in place
   before the `loading.json` that declares them, and, when the zip no longer carries it, set aside
   as `loading.old-<ms>` as `loading.json` is (not when a pack of the bundle is named `loading`);
+  from 0.12.60 (Workflow #455 G-R1, `package` 12) the goal declaration `goals.json` is a root file
+  of the layout, placed last among the root files and, when the zip no longer carries it, set
+  aside as `goals.json.old-<ms>` as the other root files the readers open are;
   `alive [--wait]`
   is the watchdog's status of the root; `instance add <alias> …` (Workflow #421 INST-5, first
   slice; "Configuration, instances, packs and a fresh root", "Instances, the first slice") composes

@@ -2993,3 +2993,15 @@ tests = [
     "actingcommand-pack-containment::lib::source::declarations::tests::field_list_gate_and_admission_refusals",
 ]
 incident = ["#450 FL-1"]
+
+# Workflow #455 G-R1 (0.12.60; register §1.350; brief rd-1114/brief-455-gr1.md; contracts/standard-pack-goals.md, "The checks" and "Who reads it"): the Tools read a game root's goals.json after the composition they already run. On an installed root of four made-up packages (one whose control provides an irreversible capability, one a capability that is not), a schedule.json with a rule with a fixed value and one without, a valued pool and one without a gap weight, and a table: standard-pack check reports each of the thirteen refusals, one fixture each (goal_name_duplicate, goal_type_unknown, goal_block_mismatch, goal_pool_unknown, goal_pool_unvalued, goal_package_unknown, goal_governs_irreversible, goal_rule_unknown, goal_tier_without_fixed_value, goal_range_invalid, goal_default_invalid, goal_table_unknown, goal_rate_invalid), as exactly one standard_pack_root_invalid warning with the game, the path of goals.json, the word and the pointer, the root checked and goals.json among its root files; the root with a valid file of the eight types answers as without it in every member but root_files, which lists goals.json; a refused file's problems, the reader's and the references', come in file order and last, and the answer is otherwise the one without the file; an entry that governs the package with the irreversible capability is goal_governs_irreversible at that package, for the check (a warning, the root checked) and for package bundle --goals (the bundle refused at the source file, --out not written), the package whose capability is not irreversible governed without a problem; package bundle --goals lays an accepted file byte for byte beside bundle.json, the rest of the output and the index as without the flag, the table of an ordered entry not judged, and refuses a refused file at the source file with --out not written
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_455_gr1::gr1_check_reports_each_refusal_at_its_pointer",
+    "actingcommand-resource-tooling::lib::gate_455_gr1::gr1_check_answers_alike_with_and_without_a_valid_file",
+    "actingcommand-resource-tooling::lib::gate_455_gr1::gr1_check_reports_a_refused_file_in_file_order_and_never_fails_the_root",
+    "actingcommand-resource-tooling::lib::gate_455_gr1::gr1_governs_irreversible_is_refused_by_the_check_and_the_bundle",
+    "actingcommand-resource-tooling::lib::gate_455_gr1::gr1_package_bundle_lays_the_file_and_refuses_a_refused_one",
+]
+incident = ["#455 G-R1"]

@@ -1341,6 +1341,15 @@ tests = [
 ]
 incident = ["#451 LOAD-P"]
 
+# Workflow #455 G-R1 (0.12.60; register §1.350; brief rd-1114/brief-455-gr1.md; contracts/standard-pack-goals.md, "Who reads it"; contracts/component-interfaces.md, the package row 12): on fake roots and seams, the Lab rescue module's place takes a bundle zip's root file goals.json. On an installer that declares package [3, 12], a bundle that carries it and declares [12, 12] is planned with goals.json root new after bundle.json, placed with its pack_item step the last, the file on disk the zip's bytes and the journal's plan declaring [12, 12]; a later bundle without it plans goals.json root retire before the root files it places, sets it aside as goals.json.old-<ms> and keeps its bytes, and undo puts it back. On an installer that declares [3, 11], the same bundle is refused interface_edge at its interfaces.json, with no pause, no journal and nothing in the game root
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_455_gr1::goals_file_is_placed_last_and_retired_when_a_later_bundle_carries_none",
+    "actingcommand-lab-rescue::lib::install::gate_455_gr1::goals_bundle_is_refused_by_an_installer_before_revision_12",
+]
+incident = ["#455 G-R1"]
+
 # Workflow #421 INST-5, first slice (0.12.52; register §1.300; brief rd-1111/brief-inst5.md; contracts/install-cli.md, "Instances, the first slice", and lab-two-entries.md §5 and §7): on fake roots and seams, the Lab's rescue module's instance add puts one emulator instance into both places of the configuration (an entry with a minted instance_id that neither the file nor a journal holds, its index and backends; a policy row of its game and server with the host and capabilities of a row of that game) and commits the candidate by config replace's path: check-config, the hold of the unpaused instances, the close, the swap with actingd.config.json.prev-<ms> kept byte for byte as the old file and no part left, the start; after the start and before the release the status shows the added instance registered and paused with its own reason instance.added, which the release leaves, while the instance the hold took is resumed and another party's pause stays with its reason and revision; the calls come in the order hold, close, start, the added instance's pause, release; the journals (config_replace with the input instance_add and the minted id, and the release's) carry the initiator; an alias the configuration has, and an emulator index an instance binds, are refused instance_invalid (alias; instance_index and the holder's alias as aliases) with the root byte for byte as it was, no journal and no call to the Runtime; a candidate the live build's check-config refuses ends config_refused_by_target with check-config's own outcome as its cause, the configuration, journals and Runtime unchanged and the candidate kept beside the live file as its one new file
 [[gate]]
 coverage = "Y"

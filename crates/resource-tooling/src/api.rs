@@ -47,6 +47,11 @@ pub struct StandardPackRootFiles {
     /// anything is written, then laid byte for byte into `<out>/notices/`. Without it nothing of
     /// the output changes.
     pub notices: Option<PathBuf>,
+    /// Workflow #455 G-R1 (`--goals`): the goal entries the game offers, `goals.json`
+    /// (contracts/standard-pack-goals.md): read after the composition and its references held to
+    /// the bundle's root, then laid beside `bundle.json` byte for byte; a refused file refuses the
+    /// bundle. Without it nothing of the output changes.
+    pub goals: Option<PathBuf>,
 }
 
 /// Workflow #407 LOAD-1: `actinglab package loading --root-file <loading.json> --packs-root
@@ -122,8 +127,8 @@ pub struct StandardPackCheckResponse {
     pub status: String,
     pub root: String,
     pub game: String,
-    /// The root files the game root holds; (Workflow #407 LOAD-1) `loading.json` among them, last,
-    /// when it holds one.
+    /// The root files the game root holds; (Workflow #455 G-R1) `goals.json` among them, after
+    /// `display-layout.json`, and (Workflow #407 LOAD-1) `loading.json`, last, when it holds one.
     pub root_files: Vec<&'static str>,
     pub pack_count: usize,
     /// The report "entry page not in the list": one `package_bundle_entry_page_unlisted` per
@@ -136,7 +141,9 @@ pub struct StandardPackCheckResponse {
     /// `package_bundle_remedy_invalid` per remedy finding. With `schedule.json`, the
     /// composition's warnings follow, then (SS-2b) one `standard_pack_benefit_undeclared` per
     /// judged rule that declares no value, then (SS-2c) one `standard_pack_priority_tier_mismatch`
-    /// per rule whose maintenance declaration disagrees with its tier.
+    /// per rule whose maintenance declaration disagrees with its tier. Workflow #455 G-R1: last,
+    /// with `goals.json`, one `standard_pack_root_invalid` per problem of a refused file, in file
+    /// order; the root is checked as without the file.
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
     /// SS-2b (register §1.225): with `schedule.json`, how many of the game's judged rules (their
     /// package is not maintenance-role and, SS-2c, they do not declare themselves maintenance)

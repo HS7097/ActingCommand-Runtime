@@ -75,7 +75,7 @@ use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
     BundleIndex, LOADING_PREFIX, LoadingTarget, MAX_NOTICE_FILE_BYTES, NOTICES_PACKAGE_REVISION,
     NoticeBound, NoticeEntry, NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
     STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
     STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRootBytes, StandardPackRootIssue,
@@ -108,9 +108,11 @@ const POLL_MS: u64 = 500;
 /// The Tools' Lab program, which runs `standard-pack check`.
 const LAB_PROGRAM: &str = "actinglab.exe";
 /// The root files a bundle zip may carry, in the order they are placed: `bundle.json` first (the
-/// others name its packs), the files the Runtime's readers open, `applications.json`, and
-/// `schedule.json` last (its rules name packs the placed `bundle.json` lists).
-const ROOT_FILES: [&str; 9] = [
+/// others name its packs), the files the Runtime's readers open, `applications.json`,
+/// `schedule.json` (its rules name packs the placed `bundle.json` lists) and (Workflow #455 G-R1,
+/// `package` 12) `goals.json` last (its entries name the schedule's pools and rules and the
+/// bundle's packs).
+const ROOT_FILES: [&str; 10] = [
     STANDARD_PACK_BUNDLE_FILE,
     STANDARD_PACK_PAGES_FILE,
     STANDARD_PACK_INTERRUPTS_FILE,
@@ -120,10 +122,13 @@ const ROOT_FILES: [&str; 9] = [
     STANDARD_PACK_UI_FILE,
     APPLICATIONS_FILE,
     STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_GOALS_FILE,
 ];
 /// The root files the Runtime's readers open, set aside when the new zip no longer carries them
-/// (the Runtime would read them against the new registry), in this order.
-const RETIRED_WHEN_ABSENT: [&str; 7] = [
+/// (the Runtime would read them against the new registry), in this order; (Workflow #455 G-R1)
+/// `goals.json` first, whose entries the Tools' check holds to the placed root.
+const RETIRED_WHEN_ABSENT: [&str; 8] = [
+    STANDARD_PACK_GOALS_FILE,
     STANDARD_PACK_SCHEDULE_FILE,
     STANDARD_PACK_UI_FILE,
     STANDARD_PACK_LOADING_FILE,
