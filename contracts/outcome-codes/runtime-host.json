@@ -9385,7 +9385,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.50",
-      "description": "Workflow #428 S168-4 (contracts/instance-fact-store.md, List reading facts): a publication named a key under inventory.list. (fact_key), the prefix that holds list readings only, which only the Runtime writes at a run's successful end. A client's PublishFact or PublishFacts, from every origin that may publish facts (the agent dispatcher's, Agent and Adapter), and any other publication path of the Runtime is refused before the fact write gate and nothing is appended; a CLI or UI origin of its own is refused earlier, when the request is formed (invalid_agent_dispatcher_origin). Not fatal.",
+      "description": "Workflow #428 S168-4 (contracts/instance-fact-store.md, List reading facts): a publication named a key under inventory.list. (fact_key), the prefix that holds list readings only, which only the Runtime writes at a run's successful end. A client's PublishFact or PublishFacts, from every client envelope (since Workflow #434 LAB-6S1b every one may publish facts; before it a CLI or UI origin of its own was refused when the request was formed, invalid_agent_dispatcher_origin), and any other publication path of the Runtime is refused before the fact write gate and nothing is appended. Not fatal.",
       "common_causes": "A script that copies or restores an instance's facts, list readings included, or a client that tries to write a list by hand.",
       "handling": "Leave the key out: a list under inventory.list. comes only from a package's read_list step, read whole on the device."
     },

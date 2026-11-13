@@ -186,10 +186,12 @@ scheduling.
 
 `RuntimeOperation::ApplyResourceTargets { document_json }` (wire operation
 `apply_resource_targets`). Request validation refuses an empty or over-64-KiB document as
-`resource_targets_document_invalid` and any origin other than `(agent, adapter)` as
-`invalid_agent_dispatcher_origin`; both are Denied with the validation code on top of the
-receipt's `outcome` and `invalid_request` as its `runtime_code` (receipt v2, Workflow #378 A4), as
-for every request that fails validation. The request schema is
+`resource_targets_document_invalid`, Denied with the validation code on top of the receipt's
+`outcome` and `invalid_request` as its `runtime_code` (receipt v2, Workflow #378 A4), as for every
+request that fails validation. Until Workflow #434 LAB-6S1b it also refused any origin other than
+`(agent, adapter)` as `invalid_agent_dispatcher_origin` (retired); since then every client
+envelope may send the document, the Lab's `targets set` included
+([lab-two-entries.md](lab-two-entries.md) §2.4). The request schema is
 `actingcommand.runtime.request.v4`.
 
 A refused document answers Denied + `InvalidRequest` with host code `resource_targets_rejected`

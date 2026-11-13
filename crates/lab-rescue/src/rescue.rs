@@ -43,10 +43,10 @@
 //!   (unless a global pause is in effect), which the Runtime restores at its start, so the new
 //!   instance is never unpaused; the release hands it back after the new instance's pause.
 //! - **Until LAB-6** a request the module sends to a running Runtime goes as `actingctl install`'s
-//!   do, on the CLI channel with the CLI envelope (`crate::install::runtime`): the Runtime refuses
-//!   a pause, a resume and a shutdown from a Lab envelope until LAB-6 deletes those origin gates
-//!   (§2.4), and `BindChannel` takes no initiator before `runtime-client` 7. The journal records
-//!   the initiator now; the binding carries it from LAB-6.
+//!   do, on the CLI channel with the CLI envelope (`crate::install::runtime`). The Runtime refused
+//!   a pause, a resume and a shutdown from a Lab envelope until LAB-6S1b deleted those origin gates
+//!   (§2.4); the module moves to the Lab channel with its word in LAB-6S2. The journal records the
+//!   initiator now; the binding carries it from LAB-6S2.
 //! - **The MCP rows** (Workflow #434 LAB-5G5b; register §1.287, "Slice LAB-5G5b";
 //!   `contracts/install-cli.md`, "The MCP entry"), read only, on the module's own root: `mcp plan`
 //!   (the plan the entry's second generation asks, `entry_protocol` 2,
@@ -464,8 +464,9 @@ fn ownership_unconfirmed(reason: Option<&SchedulingPauseReason>, cause: Outcome)
 /// resumes the instances paused with exactly that reason, the module's own); and
 /// `actingctl_resume`, for each instance the hold's pause step paused that the running Runtime
 /// shows paused with the reason now, the core `resume` as actingctl runs it (`actingctl resume
-/// --state-root <s> --instance <alias>`, on the CLI channel: the Lab's own `resume` goes on the Lab
-/// channel, whose resume the Runtime refuses until LAB-6). No form names another reason or an
+/// --state-root <s> --instance <alias>`, on the CLI channel; since LAB-6S1b the Runtime also takes
+/// the Lab's own `resume <alias>` on the Lab channel, which this list does not name). No form
+/// names another reason or an
 /// instance whose pause shows one; without a status read there is no `actingctl_resume`. Workflow
 /// #421 INST-5b: `actingctl_resume_global`, the core global resume as actingctl runs it
 /// (`actingctl resume --state-root <s>`), when the running Runtime shows the hold's own global
@@ -1634,9 +1635,9 @@ fn pause_added(context: &Context<'_>, loaded: &Loaded, alias: &str) -> PausedAdd
     }
 }
 
-/// Workflow #421 INST-5: the way to pause the added instance by hand that works today: the core
-/// `pause` as actingctl runs it, on the CLI channel (the Lab's own `pause` goes on the Lab channel,
-/// whose pause the Runtime refuses until LAB-6), with the instance's own reason.
+/// Workflow #421 INST-5: a way to pause the added instance by hand: the core `pause` as actingctl
+/// runs it, on the CLI channel, with the instance's own reason (since LAB-6S1b the Runtime also
+/// takes the Lab's own `pause` on the Lab channel, which this form does not name).
 fn pause_form(context: &Context<'_>, alias: &str) -> Value {
     json!([
         "actingctl",

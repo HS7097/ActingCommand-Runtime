@@ -878,12 +878,10 @@ fn list_reading_failed_scan_fails_run() {
 // S168-4 test 6: a `PublishFact` and a `PublishFacts` of `inventory.list.example_kind_a` from
 // every origin that may publish facts are refused `list_reading_key_reserved` with the key, a
 // denied request, and so is the Runtime's own ordinary publication path, non-fatal; nothing is
-// appended. A client publishes an ordinary fact from the agent dispatcher's origin (Agent,
-// Adapter), as every host test that publishes a fact as a client does: the agent, and the CLI,
-// whose `facts publish` sends that origin (lab-ops, `fact_publish`). A CLI or UI origin of its own,
-// (Cli, Cli) or (User, Ui), publishes only the families with the origin exception, so either
-// request of the key from it is refused earlier, when it is formed
-// (`invalid_agent_dispatcher_origin`), as for any publication, and nothing is appended either.
+// appended. Since Workflow #434 LAB-6S1b every client envelope may publish facts: the agent
+// dispatcher's (Agent, Adapter), the CLI's (Cli, Cli), the console's (User, Ui) and the Lab's
+// (Lab, Lab) each reach the Runtime (before it, all but the first were refused when the request
+// was formed, `invalid_agent_dispatcher_origin`), and each is refused the same way.
 #[test]
 fn list_reading_key_reserved() {
     let root = TempDir::new().expect("tempdir");
@@ -943,8 +941,9 @@ fn list_reading_key_reserved() {
         for (origin, actor, source) in [
             ("cli", EventActor::Cli, EventSource::Cli),
             ("ui", EventActor::User, EventSource::Ui),
+            ("lab", EventActor::Lab, EventSource::Lab),
         ] {
-            let formed = RuntimeRequest::new(
+            let request = RuntimeRequest::new(
                 client.ids.mint_request_id().expect("request id"),
                 client.ids.mint_correlation_id().expect("correlation id"),
                 None,
@@ -952,15 +951,24 @@ fn list_reading_key_reserved() {
                 source,
                 unix_ms_now().expect("wall clock"),
                 publication(batch),
-            );
-            let refused = match formed {
-                Ok(_) => panic!("{origin}, batch {batch}: a person's origin cannot publish it"),
-                Err(refused) => refused,
-            };
+            )
+            .unwrap_or_else(|error| panic!("{origin}, batch {batch}: {error}"))
+            .with_detail(actingcommand_contract::outcome::Detail::Full);
+            let receipt = client.send(&request);
             assert_eq!(
-                refused.code().as_str(),
-                "invalid_agent_dispatcher_origin",
-                "{origin}, batch {batch}"
+                receipt.state(),
+                RuntimeReceiptState::Denied,
+                "{origin}, batch {batch}: {receipt:?}"
+            );
+            assert_eq!(
+                receipt.outcome().code().as_str(),
+                RESERVED,
+                "{origin}, batch {batch}: {receipt:?}"
+            );
+            assert_eq!(
+                receipt.outcome().value("fact_key"),
+                Some(&serde_json::json!(LIST_KEY)),
+                "{origin}, batch {batch}: {receipt:?}"
             );
         }
     }

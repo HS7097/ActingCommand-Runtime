@@ -980,3 +980,61 @@ test = "actingcommand-runtime-host::lib::tests::gate_429_r6::r6_a_host_run_and_a
 ruling = "Workflow #429 R-6b (register §1.314, the coordinator's answers of 2026-11-11 to its eight questions; the coordinator's work order rd-1111/brief-r6b2-stop-settle.md)"
 reason = "The test pinned that StopInstanceRun refuses a policy run with run_origin policy and asks nothing of it, which was to hold only until R-6b with ledger 8 (its row said: until R-6b). R-6b2 stops a policy run, so its name's sentence no longer holds; its host half (a host run refused with run_origin host, nothing asked of it) is unchanged."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_429_r6::r6_a_host_run_is_refused_with_its_origin_and_a_policy_run_is_asked_to_stop, in the same host.toml row: the host run is still refused with run_origin host and its request, recorded, nothing asked of it; the policy run is asked to stop. The stop of a real policy run end to end is gate_429_r6b2's."
+
+# Workflow #434 LAB-6S1b: the origin gates of RuntimeRequest::validate are deleted
+# (contracts/lab-two-entries.md §2.4). A test whose whole point was a deleted gate leaves; a test
+# that asserted something else beside it keeps that, renamed where its name stated the gate.
+
+# contract.toml, row K6 ("Origin authority of lab, agent-adapter and person/operator operations"),
+# which leaves whole: its feature retired.
+[[retired]]
+fragment = "contract"
+key = "K6"
+ruling = "Workflow #434 LAB-6S1b (contracts/lab-two-entries.md §2.4; the coordinator's work order rd-1113/brief-lab6s1b.md, board #434)"
+reason = "The row pinned the origin authority of RuntimeRequest::validate: Lab-only debugging kinds, Agent/Adapter-only dispatcher kinds, person-or-operator governance cards. LAB-6S1b deletes every one of those gates, so the row's feature retires."
+covered_by = "The contract row of #434 LAB-6S1b: gate_434_lab6s1b asserts that a request of every family of deleted gate validates from every client envelope, that an envelope outside the client set is still invalid_client_origin and a mixed fact observation still fact_origin_mixed; it also holds the two tests below that keep the row's other assertions under new names."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::runtime::tests::runtime_debug_events_are_strict_and_require_lab_origin"
+ruling = "Workflow #434 LAB-6S1b (contracts/lab-two-entries.md §2.4; the coordinator's work order rd-1113/brief-lab6s1b.md, board #434)"
+reason = "Renamed: its Lab-only half (a CLI debug event and a CLI or UI pin release refused invalid_runtime_debug_origin) went with the gate, so its name's sentence no longer holds; its strictness half is unchanged."
+covered_by = "actingcommand-contract::lib::runtime::tests::runtime_debug_events_and_pin_releases_are_strict, in the contract row of #434 LAB-6S1b: a progress of another operation than a Lab run and a requested event that claims an effect are invalid_runtime_debug_event, a Lab pin release round-trips and validates, and a pin of sequence 0 is refused."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::runtime::tests::agent_dispatcher_operations_require_agent_adapter_origin"
+ruling = "Workflow #434 LAB-6S1b (contracts/lab-two-entries.md §2.4; the coordinator's work order rd-1113/brief-lab6s1b.md, board #434)"
+reason = "Removed: its whole point was the agent dispatcher's origin gate (a CLI StartAgentSession refused invalid_agent_dispatcher_origin), which LAB-6S1b deletes."
+covered_by = "actingcommand-contract::lib::runtime::gate_434_lab6s1b::lab6s1b_every_family_of_a_deleted_origin_gate_takes_every_client_envelope: a StartAgentSession, a ProjectPolicyInputIdentity and an ApplyResourceTargets now validate from every client envelope."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::runtime::tests::governance_identity_cards_require_person_or_operator_origin_and_a_valid_card"
+ruling = "Workflow #434 LAB-6S1b (contracts/lab-two-entries.md §2.4; the coordinator's work order rd-1113/brief-lab6s1b.md, board #434)"
+reason = "Renamed: its origin half (an agent's card and an agent's approval refused invalid_governance_origin by validate) went with the gate; its card half is unchanged."
+covered_by = "actingcommand-contract::lib::runtime::tests::governance_identity_cards_require_a_valid_card, in the contract row of #434 LAB-6S1b (a person's and an operator's card validate, a card of a bad client, version or instance is refused with its code); the host's own origin check of the card and of an approval, which stays until LAB-6S4a deletes both kinds, is actingcommand-runtime-host::lib::tests::gate_434_lab6s1b::lab6s1b_the_hosts_own_checks_of_the_governance_and_install_kinds_still_refuse and the architecture guard b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection."
+
+# contract.toml, the row of Workflow #429 R-7a.
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::runtime::player_hold::tests::r7a_the_source_gate_takes_the_three_envelopes_for_both_requests"
+ruling = "Workflow #434 LAB-6S1b (contracts/lab-two-entries.md §2.4; the coordinator's work order rd-1113/brief-lab6s1b.md, board #434)"
+reason = "Removed: its whole point was the player hold's source gate ((User, Ui), (Cli, Cli), (Lab, Lab) taken, every other client envelope refused invalid_player_hold_origin), which LAB-6S1b deletes; the two kinds still answer not_implemented in the host until R-7b."
+covered_by = "actingcommand-contract::lib::runtime::gate_434_lab6s1b::lab6s1b_every_family_of_a_deleted_origin_gate_takes_every_client_envelope: an AcquirePlayerHold and a ReleasePlayerHold validate from every client envelope; the shapes stay R-7a's other tests'."
+
+# host.toml, row 88 (Workflow #390 DRILL-1), which keeps the renamed test.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_drill_is_refused_when_stuck_recovery_is_off_or_it_comes_from_an_agent"
+ruling = "Workflow #434 LAB-6S1b (contracts/lab-two-entries.md §2.4; the coordinator's work order rd-1113/brief-lab6s1b.md, board #434)"
+reason = "Renamed: its agent half (an agent's drill refused invalid_emulator_control_origin when the request was formed) went with the emulator control origin gate; its host half is unchanged."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_drill_is_refused_when_stuck_recovery_is_off, in the same host.toml row: a drill of an instance whose stuck recovery is off is refused recovery_ladder_drill_disabled, recorded command.rejected, with no ladder record and no emulator action."
+
+# host.toml, the row of Workflow #432 AGT-1b, which keeps the renamed test.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_agt_1b::agent_wake_test_takes_only_person_origins"
+ruling = "Workflow #434 LAB-6S1b (contracts/lab-two-entries.md §2.4; the coordinator's work order rd-1113/brief-lab6s1b.md, board #434)"
+reason = "Renamed: its origin half (an agent's and the Lab's test refused, the Lab's invalid_agent_wake_test_origin) went with the gate; its other assertion, that the test is an instruction of no instance, is unchanged."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_agt_1b::agent_wake_test_is_an_instruction_of_no_instance, in the same host.toml row; the test from every client envelope is actingcommand-contract::lib::runtime::gate_434_lab6s1b::lab6s1b_every_family_of_a_deleted_origin_gate_takes_every_client_envelope."

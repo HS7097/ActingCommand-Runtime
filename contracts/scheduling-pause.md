@@ -17,10 +17,12 @@ scope = { "kind": "global" } | { "kind": "instance", "instance_alias": "<alias>"
 expected = { "owner_epoch": "<epoch>", "revision": <u64 >= 1> }
 ```
 
-- `RuntimeRequest::validate` admits both only when `(actor, source)` is `(User, Ui)` or
-  `(Cli, Cli)`; every other origin is `invalid_scheduling_pause_origin`. No scheduler,
-  agent or Lab path can pause or resume dispatch. A `Ui` request needs no governance
-  identity card.
+- `RuntimeRequest::validate` admits both from every envelope of the client set since Workflow
+  #434 LAB-6S1b (0.12.58; [lab-two-entries.md](lab-two-entries.md) §2.4), the Lab's
+  `(Lab, Lab)` included. Before it, it admitted them only when `(actor, source)` was
+  `(User, Ui)` or `(Cli, Cli)`, every other origin being `invalid_scheduling_pause_origin`
+  (retired). The scheduler and the Runtime's own work send no request. No request needs a
+  governance identity card.
 - `pause_reason` is a name (outcome key `pause_reason`, type `name`; Workflow #378 A2a): 1..=64
   bytes of `[a-z0-9_.-]` (`invalid_scheduling_pause_reason`).
 - `drain_timeout_ms` is bounded to `1_000..=600_000`

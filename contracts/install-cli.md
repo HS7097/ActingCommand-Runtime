@@ -719,8 +719,9 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     after the start, before `alive` and the release of the hold, it is paused with its own reason
     `instance.added`, a pause reason name ([scheduling-pause.md](scheduling-pause.md):
     `[a-z0-9_.-]`, 1 to 64 bytes), drained as every pause is; the release hands back only the
-    hold's own pauses, so it stays paused until a person lifts it (the console's resume, or
-    `actingctl resume --state-root <s> --instance <alias>`) when the account is ready. Not
+    hold's own pauses, so it stays paused until a person lifts it (the console's resume,
+    `actingctl resume --state-root <s> --instance <alias>`, or since LAB-6S1b the Lab's
+    `resume <alias>`) when the account is ready. Not
     registered by the started Runtime, or its pause refused: `post_check_failed` (`alias`,
     `count` 1), the hold kept, and `next` names `pause_added`, the core pause as actingctl runs
     it (`actingctl pause --state-root <s> --instance <alias> --reason instance.added`). An
@@ -869,12 +870,13 @@ the rescue face:
   paused that the running Runtime shows paused with the reason now (none when no status can be
   read), and (Workflow #421 INST-5b) `actingctl_resume_global`, `actingctl resume --state-root
   <state root>`, the core global resume, when the running Runtime shows the hold's own global
-  pause (`actingctl install release-hold` leaves a global pause). The core `resume` goes through
-  actingctl until then because the Lab's own `resume <instance>` binds the Lab channel, whose
-  resume the Runtime refuses until LAB-6 deletes the origin gates (lab-two-entries.md §2.4).
-  **After LAB-7** deletes actingctl, what stays is the
-  module's own `release-hold <reason>` and the Lab's core `resume <instance>` (on the Lab channel,
-  which LAB-6 opens for a resume); LAB-7 drops the `actingctl_*` forms.
+  pause (`actingctl install release-hold` leaves a global pause). The core `resume` is named as
+  actingctl runs it until then. Since LAB-6S1b (0.12.58) the Lab's own `resume <instance>` (and
+  `resume` for the global pause), which binds the Lab channel, is a way out too: the Runtime no
+  longer refuses a resume from the Lab's envelope (lab-two-entries.md §2.4); `next` does not name
+  it. **After LAB-7** deletes actingctl, what stays is the
+  module's own `release-hold <reason>` and the Lab's core `resume <instance>` (on the Lab channel);
+  LAB-7 drops the `actingctl_*` forms.
 - **Its own running image.** The module runs from `<root>\tools\actinglab.exe`, which an update
   replaces: the image of the process that plans (matched by its process id) is renamed aside as
   `actingctl.exe` is and runs on (`running.renamed_own` in the plan); any other running

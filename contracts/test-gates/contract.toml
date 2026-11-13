@@ -51,17 +51,6 @@ tests = [
 ]
 incident = []
 
-# Origin authority of lab, agent-adapter and person/operator operations
-[[gate]]
-key = "K6"
-coverage = "Y"
-tests = [
-    "actingcommand-contract::lib::runtime::tests::runtime_debug_events_are_strict_and_require_lab_origin",
-    "actingcommand-contract::lib::runtime::tests::agent_dispatcher_operations_require_agent_adapter_origin",
-    "actingcommand-contract::lib::runtime::tests::governance_identity_cards_require_person_or_operator_origin_and_a_valid_card",
-]
-incident = []
-
 # Install-control inputs: selection slot, generation and provider; admission per phase; the 600 s bound
 [[gate]]
 key = "K8"
@@ -233,7 +222,7 @@ tests = [
 ]
 incident = ["#429 R-0d"]
 
-# Workflow #429 R-7a (0.12.35; register §1.233; contracts/player-hold.md; design R-7a §7.1): the player hold's frozen shapes (the two requests, PlayerHoldAcquired and PlayerHoldReleased inline beside kind, the status members player_hold, player_hold_operation and control, the three StartReport members, PlayerHoldAttempt) round-trip, refuse an unknown member and leave no key when empty, and a report without the three members reads; the shapes ruling 134 removed (cancel_player_hold_acquire, cancelling, cancel) do not decode; drain 1000..=600000, revision 0 and a malformed hold_id refused; the record's and the hold's self-checks and the next / pauses_at_end group on the answer (invalid_player_hold_receipt) and on the record (invalid_player_hold_state); every channel and via, and a missing channel does not decode; the source gate takes (User, Ui), (Cli, Cli), (Lab, Lab) for both and refuses the rest invalid_player_hold_origin; ControlGates::evaluate over all 16 inputs; O-7 refuses a control read in that differs from the members, the global pause included, and accepts none; with_derived_control in either order of the calls, idempotent; instance_gates reads the members; hold_ended_with_pause's cases; settle_player_hold's every row (P1, P2, A1-A13, R1-R11) with each trigger it names, first-match pairs, final, settling again, Current; the two receipt waits and deadlines
+# Workflow #429 R-7a (0.12.35; register §1.233; contracts/player-hold.md; design R-7a §7.1): the player hold's frozen shapes (the two requests, PlayerHoldAcquired and PlayerHoldReleased inline beside kind, the status members player_hold, player_hold_operation and control, the three StartReport members, PlayerHoldAttempt) round-trip, refuse an unknown member and leave no key when empty, and a report without the three members reads; the shapes ruling 134 removed (cancel_player_hold_acquire, cancelling, cancel) do not decode; drain 1000..=600000, revision 0 and a malformed hold_id refused; the record's and the hold's self-checks and the next / pauses_at_end group on the answer (invalid_player_hold_receipt) and on the record (invalid_player_hold_state); every channel and via, and a missing channel does not decode; (until Workflow #434 LAB-6S1b deleted the source gate and retired its test: the source gate takes (User, Ui), (Cli, Cli), (Lab, Lab) for both and refuses the rest invalid_player_hold_origin;) ControlGates::evaluate over all 16 inputs; O-7 refuses a control read in that differs from the members, the global pause included, and accepts none; with_derived_control in either order of the calls, idempotent; instance_gates reads the members; hold_ended_with_pause's cases; settle_player_hold's every row (P1, P2, A1-A13, R1-R11) with each trigger it names, first-match pairs, final, settling again, Current; the two receipt waits and deadlines
 [[gate]]
 coverage = "Y"
 tests = [
@@ -247,7 +236,6 @@ tests = [
     "actingcommand-contract::lib::runtime::player_hold::tests::r7a_the_hold_keeps_its_own_shape",
     "actingcommand-contract::lib::runtime::player_hold::tests::r7a_every_channel_and_via_round_trips_and_a_missing_channel_does_not_decode",
     "actingcommand-contract::lib::runtime::player_hold::tests::r7a_a_receipt_carries_a_hold_result_only_completed",
-    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_the_source_gate_takes_the_three_envelopes_for_both_requests",
     "actingcommand-contract::lib::runtime::player_hold::tests::r7a_control_gates_evaluate_every_combination_in_one_order",
     "actingcommand-contract::lib::runtime::player_hold::tests::r7a_validate_checks_a_control_read_in_against_the_members",
     "actingcommand-contract::lib::runtime::player_hold::tests::r7a_with_derived_control_derives_from_the_members_in_any_order_of_the_calls",
@@ -880,3 +868,15 @@ tests = [
     "actingcommand-lab-ops::lib::gate_434_lab6s1a::lab_ops_initiator_words_are_the_contracts",
 ]
 incident = ["#434 LAB-6S1a"]
+
+# Workflow #434 LAB-6S1b (0.12.58; register §1.287, "Slice LAB-6S1b"; brief rd-1113/brief-lab6s1b.md; contracts/lab-two-entries.md §2.4): RuntimeRequest::validate judges no request by its origin. A request of each family of deleted origin gate (shutdown, install transition, authoring, signatures, debugging, governance, emulator control, discovery, self-check, drill, pause and resume, the agent wake test, fact publication of a family with and without the origin exception, the agent dispatcher's kinds, the player hold) is built and validated from each envelope of the client set, the ones its gate refused included, and validates again read back off the wire; an envelope outside the client set is still invalid_client_origin and an observation that mixes two key families still fact_origin_mixed, from every client envelope. What the retired row K6 held beside its origin gates stays here: a debug event and a pin release are strict and round-trip, and a governance identity card is refused by its own rules. The architecture guard (row A3) holds that no branch of validate() names an actor or a source and the one origin predicate it reads is valid_client_origin
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::gate_434_lab6s1b::lab6s1b_every_family_of_a_deleted_origin_gate_takes_every_client_envelope",
+    "actingcommand-contract::lib::runtime::gate_434_lab6s1b::lab6s1b_an_envelope_outside_the_client_set_is_still_refused",
+    "actingcommand-contract::lib::runtime::gate_434_lab6s1b::lab6s1b_a_fact_observation_that_mixes_two_families_is_still_refused",
+    "actingcommand-contract::lib::runtime::tests::runtime_debug_events_and_pin_releases_are_strict",
+    "actingcommand-contract::lib::runtime::tests::governance_identity_cards_require_a_valid_card",
+]
+incident = ["#434 LAB-6S1b"]

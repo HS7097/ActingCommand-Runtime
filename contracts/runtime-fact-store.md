@@ -772,8 +772,9 @@ is returned as an error; every other failure leaves the instance unavailable.
   preparation phase on its reconnect claim's key, granted before the gate is
   lifted (`scheduling-pause.md`, "Resume").
 - **`SelfCheckInstance { instance_alias }`** — the operator's manual reconnect
-  and self-check of one physical instance (`actingctl selfcheck <alias>`,
-  origin gate User+Ui or Cli+Cli, `invalid_emulator_control_origin` otherwise),
+  and self-check of one physical instance (`actingctl selfcheck <alias>`, the
+  Lab's `emu selfcheck`; until Workflow #434 LAB-6S1b origin gate User+Ui or
+  Cli+Cli, `invalid_emulator_control_origin` otherwise, since then none),
   on its own `SelfCheck` claim's key (a claim not granted within 3 s refuses it
   `lease_queue_expired`), answered with `RuntimeResult::InstanceSelfChecked {
   instance_alias, selfcheck }`.

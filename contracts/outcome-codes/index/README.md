@@ -22,8 +22,8 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3906 |
-| retired | 18 |
+| active | 3896 |
+| retired | 28 |
 | all | 3924 |
 
 ## Active codes by category
@@ -33,19 +33,19 @@ here.
 | success | 126 |
 | info | 209 |
 | warning | 148 |
-| error | 3409 |
+| error | 3399 |
 | fatal | 14 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 712 |
+| `common_causes` and `handling` both written | 709 |
 | one of the two written, the other `TBD` or empty | 3 |
-| neither written (`TBD` or empty) | 3191 |
-| `settled` | 171 |
-| `pending` | 3735 |
-| all active codes | 3906 |
+| neither written (`TBD` or empty) | 3184 |
+| `settled` | 170 |
+| `pending` | 3726 |
+| all active codes | 3896 |
 
 ## By owner
 
@@ -58,7 +58,7 @@ here.
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 3 | 3 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
-| [contract](contract.md) | 915 | 911 | 160 | 39 |
+| [contract](contract.md) | 915 | 901 | 157 | 38 |
 | [device](device.md) | 33 | 33 | 27 | 23 |
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
 | [execution-kernel](execution-kernel.md) | 203 | 200 | 29 | 0 |
@@ -82,4 +82,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3924 | 3906 | 712 | 171 |
+| all | 3924 | 3896 | 709 | 170 |

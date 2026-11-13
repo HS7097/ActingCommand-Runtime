@@ -21,7 +21,7 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
 | U-3 | v0.12.x | Lab commands and the clean mapping; pack load and unload; MCP tiers retired |
 | U-4 | v0.12.x, same Runtime release as U-3 | the upgrade state; the watchdog row; install-control 2 |
 | U-5 | next UI release | the installer's Lab page and its transaction; acsetup speaks install-control 2 |
-| U-6 | first paired Runtime and UI release, after #383 AO-4 | the gate closes: refusals by channel and by option; the origin gates leave the contract |
+| U-6 | first paired Runtime and UI release, after #383 AO-4 | the gate closes: refusals by channel and by option; the origin gates leave the contract (they left with Workflow #434 LAB-6S1b, 0.12.58) |
 
 ## Words
 
@@ -56,8 +56,9 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
 - The channel decision is made at the gate only, never in `RuntimeRequest::validate()`.
   The host builds `(Agent, Adapter)` lease requests itself and validates them
   (`policy_dispatch.rs`, `events.rs`); internal requests do not pass the gate.
-  `validate()` keeps the shape and content checks only; the origin gates now in it are
-  deleted at U-6.
+  `validate()` keeps the shape and content checks only: Workflow #434 LAB-6S1b (0.12.58;
+  [lab-two-entries.md](lab-two-entries.md) §2.4) deleted the origin gates that were in it, and
+  the one envelope rule left is `valid_client_origin` (section Outcome codes, "Retired later").
 - Everything behind the gate stays as it is, including the C4 source check and frame
   pinning.
 - Not requests, never at the gate, whether or not the Lab is installed: the Runtime's
@@ -273,14 +274,18 @@ subscription.
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
 | ApplicationLifecycle | general (Workflow #429 R-0; option two before) | instruction (the assigned application's start and stop) | ui (the workbench's "restart the game"); the senders of today (actinglab `session app`, mcp `ac_app`) keep sending it | yes |
-| ControlEmulatorInstance | general (Workflow #429 R-0; option two before) | instruction (emulator start, stop, restart) | ui (the workbench); the senders of today (actingctl's emulator subcommands, mcp `ac_emulator`, actinglab) keep sending it. Its origin gate (User+Ui, Cli+Cli) stays until U-6 | yes |
-| SelfCheckInstance | general (Workflow #429 R-0; option two before) | instruction (self-check) | ui (the workbench's check); the senders of today (`actingctl selfcheck`, actinglab) keep sending it. Its origin gate (User+Ui, Cli+Cli) stays until U-6 | yes |
+| ControlEmulatorInstance | general (Workflow #429 R-0; option two before) | instruction (emulator start, stop, restart) | ui (the workbench); the senders of today (actingctl's emulator subcommands, mcp `ac_emulator`, actinglab) keep sending it. Its origin gate (User+Ui, Cli+Cli) stayed until Workflow #434 LAB-6S1b deleted it | yes |
+| SelfCheckInstance | general (Workflow #429 R-0; option two before) | instruction (self-check) | ui (the workbench's check); the senders of today (`actingctl selfcheck`, actinglab) keep sending it. Its origin gate (User+Ui, Cli+Cli) stayed until Workflow #434 LAB-6S1b deleted it | yes |
 | PauseScheduling, ResumeScheduling | general | instruction | cli `pause`, `resume`; mcp `ac_pause`, `ac_resume`; ui later | yes |
 | ConfigureMonitor, ClearMonitor | general | instruction (monitor settings, `recovery_enabled` included) | cli `monitor-set`, `monitor-clear`; mcp `ac_monitor_set`, `ac_monitor_clear` (new). actinglab `session monitor-policy` retires | yes |
 | RequestShutdown | general | instruction (the Runtime closes itself) | cli `request-shutdown` (stays); ui "request shutdown", sent directly as today; mcp `ac_request_shutdown` (new) | yes |
 | RecordClientAction | general | instruction (trace of an action outside the Runtime) | ui (for example starting the daemon) | yes |
 | ApplyResourceTargets | general (§14.2) | instruction (write resource targets) | cli `agent-apply-resource-targets` (stays); mcp `ac_targets_set` (general tool) | yes |
 | AcquirePlayerHold, ReleasePlayerHold | general (Workflow #429 R-7a, register §1.233) | instruction (a person takes the instance from the Runtime, and gives it back; section Player hold request kinds) | ui (UI-3d); cli `hold`, `hold-release` and mcp `ac_hold`, `ac_hold_release` (R-7b); the Lab channel too (Alice's ruling 135). Source gate (User, Ui), (Cli, Cli), (Lab, Lab) | yes |
+
+The origin gates this table names (the emulator control's, the player hold's source gate)
+stood until Workflow #434 LAB-6S1b (0.12.58) deleted them with every origin gate of
+`RuntimeRequest::validate()`.
 
 **General by key family (2)**
 
@@ -333,8 +338,9 @@ Two consequences of §14.2 for U-3 (the model's body predates it): `actingctl
 agent-apply-resource-targets` and `agent-publish-facts` stay in actingctl and do not
 move to actinglab (no actinglab `targets set`, `targets apply` or `facts publish`), and
 the contract's source gates need no widening for ApplyResourceTargets or for instance
-facts: they keep reaching the Runtime from the counters with today's envelopes until
-U-6 deletes the source gates.
+facts: they kept reaching the Runtime from the counters with their envelopes until
+Workflow #434 LAB-6S1b deleted the source gates (0.12.58); since then every client
+envelope sends them, the Lab's `targets set` and `facts publish` included.
 
 ### New request kinds
 
@@ -344,9 +350,9 @@ U-6 deletes the source gates.
 | `UpgradeState{target, action}` (`enter`, `cancel`, `leave`) | general | instruction (upgrades only) | cli: `actingctl upgrade-state`, used by acsetup. The gate takes it from mcp and ui too, but neither frontend maps it | yes |
 | `UpgradeStateStatus{transition_id}` | general | read | cli | no |
 | `InstanceFactSnapshot{instance, key_prefix?}` (#389 MCP-4; `key_prefix` and the answer's `records_total` #428 S168-LB1a, since 0.12.55, `runtime-client` 7: the prefix's records kept before the view is built and measured against the frame, `records_total` the instance's records before the filter, both absent unless a prefix is sent) | general | read (one instance's facts, from memory) | cli `facts --instance [--key-prefix]`; mcp `ac_facts` (scope instance, `key_prefix`) | no |
-| `DrillRecoveryLadder{instance_alias, mode}` (#390 DRILL-1; `mode` `plan` or `device`) | option two | operation (a drill of one physical instance's stuck-recovery ladder, recorded like a real one and tagged `drill`; [emulator-control.md](emulator-control.md), "Drills") | cli `ladder-drill`; mcp `ac_ladder_drill` (operator before U-3); the emulator control origin gate (User+Ui, Cli+Cli) | yes |
+| `DrillRecoveryLadder{instance_alias, mode}` (#390 DRILL-1; `mode` `plan` or `device`) | option two | operation (a drill of one physical instance's stuck-recovery ladder, recorded like a real one and tagged `drill`; [emulator-control.md](emulator-control.md), "Drills") | cli `ladder-drill`; mcp `ac_ladder_drill` (operator before U-3); the emulator control origin gate (User+Ui, Cli+Cli) until Workflow #434 LAB-6S1b deleted it | yes |
 | `LoadPack`, `UnloadPack` | option two | operation (pack load and unload) | actinglab `pack load`, `pack unload` (new) | yes |
-| `AgentWakeTest{to, instance_alias?}` (#432 AGT-1b; `runtime-client` 5; [agent-wake.md](agent-wake.md)) | general | instruction (a person's test of the delivery to a registered channel, origins User+Ui and Cli+Cli only, `invalid_agent_wake_test_origin`) | cli `agent-wake-test`; **no MCP tool** | yes |
+| `AgentWakeTest{to, instance_alias?}` (#432 AGT-1b; `runtime-client` 5; [agent-wake.md](agent-wake.md)) | general | instruction (a person's test of the delivery to a registered channel; origins User+Ui and Cli+Cli only, `invalid_agent_wake_test_origin`, until Workflow #434 LAB-6S1b deleted the gate) | cli `agent-wake-test`; the Lab's `wake-test`; **no tool of `actingctl mcp-serve`** | yes |
 | `ClearKeptFolder` (#375 R5e, planned) | option two | operation (clear kept frames) | actinglab `clear-kept` (moved from the planned actingctl command) | yes |
 | `FactRefreshStatus` (#384 D2-S5, the D2 S5 transition query; register §1.68) | general | read (what the fact refresh waits for, from the transition recorder's memory; nothing read from or written to the ledger) | cli `fact-refresh`; mcp `ac_overview` (block `fact_refresh`) | no |
 | `PerformanceStatus` (#385 P-m; register §1.61 W15) | general | read (the shadow measurement's status, from memory; nothing read from or written to the ledger); #422 W1-8 (register W20, since 0.12.25): `ledger_read_pages {pages, total_ms, longest_ms, last_ms}`, the view pages the ledger's reader pool read since the start and their times, from the ledger's memory, absent without a pool; #407 PERF-READ (register §1.280, W23, since 0.12.41; `runtime-client` 6): `memory {process?, frame_stores, vision_models, ledger_capture, packages, facts}`, the process's counters and the parts its owners hold (the parts' bytes never above the private bytes; `process` absent, never zero, with `perf_memory_unavailable`), and `vision [{model_ref, kind, requests, inferences, lock_wait_total_us, lock_wait_longest_us, inference_total_us, inference_longest_us}]`, each vision model's lock waits and inference times since the start, both from memory ([performance-control.md](performance-control.md)) | cli `perf-status`; mcp `ac_overview` (block `performance`) | no |
@@ -355,8 +361,9 @@ U-6 deletes the source gates.
 | `QueryRuns{instance_id?, since_unix_ms, until_unix_ms?, cursor?, limit, states?, dispatch?, task_prefix?}` (#422 P32 B-1; the request `QueryRunsRequest` and the result `QueryRunsPage` are defined in 0.12.27 and served from the release that carries P32 B-3, which adds the operation and its runtime interface revision row; in 0.12.27 no client sends it and no Runtime answers it) | general | read (the window's runs newest first from the ledger's in-memory run summary at one snapshot, P32 B-2, no SQLite statement: each row a run's brief status as the contract's `RunFold` folds it, its order sequence, first fact and terminal times, policy task id, `settled` and `opened_in_window`; the page's snapshot, `next` cursor `{snapshot_ledger_position, before_sequence}` and coverage `{from_unix_ms, state: complete, building or unavailable}`; a wrong request or page `invalid_query_runs`, naming the member) | none in 0.12.27; from P32 B-4: cli `overview`, `runs`, `diagnose`; mcp `ac_overview`, `ac_runs`, `ac_diagnose` | no |
 | a later #369 same-queue request, if any | option two | operation (lease family) | actinglab | yes |
 
-Until U-6 the new option-two kinds `LoadPack` and `UnloadPack` accept only a
-`(Lab, Lab)` envelope, like today's Lab-only kinds.
+The new option-two kinds `LoadPack` and `UnloadPack` were to accept only a `(Lab, Lab)`
+envelope until U-6, like the Lab-only kinds of then; no such gate was built, and Workflow #434
+LAB-6S1b deleted the Lab-only origin gates.
 
 ### Workbench request kinds
 
@@ -485,8 +492,8 @@ the two reads report a Runtime that drops the connection on them as
 The kinds `ControlEmulatorInstance`, `SelfCheckInstance` and `ApplicationLifecycle` move
 to the general instructions in the same slice: each acts only on what is bound to the
 instance, so the workbench sends them without the Lab. The move changes no behaviour
-before U-6 (the gate marks and never refuses; the origin gates of `validate()` stay until
-U-6). They stay on the counters: the clean mapping below neither moves them to actinglab
+before U-6 (the gate marks and never refuses; the origin gates of `validate()` stayed until
+Workflow #434 LAB-6S1b deleted them). They stay on the counters: the clean mapping below neither moves them to actinglab
 nor retires actingctl's emulator and self-check subcommands, and where any wording still
 read so, this section would supersede it.
 `RunContainedTask` (a package by its path), `CancelContainedTask` with the client's own
@@ -500,12 +507,13 @@ Workflow #429 R-7a (register §1.233, since 0.12.35; `runtime-client` revision 4
 it back. Like R-0's kinds this is the wire shape first: Runtime 0.12.35 refuses both kinds
 `not_implemented` (Denied, recording nothing, `operation` `acquire_player_hold` or
 `release_player_hold`) on all four channels, after the contract's checks only (the instance
-alias, the drain bounds or the expectation, the source gate); R-7b adds the behaviour. Shapes:
+alias, the drain bounds or the expectation, and until Workflow #434 LAB-6S1b the source gate);
+R-7b adds the behaviour. Shapes:
 `crates/actingcommand-contract`, `runtime/player_hold.rs`.
 
 | Kind or member | Block | Class | Shape | Answer | Behaviour | G14 |
 |---|---|---|---|---|---|---|
-| `AcquirePlayerHold` | general | instruction (close the instance's gate, drain its runs, hand the device back) | `{instance_alias, drain_timeout_ms}`, `1_000..=600_000` (`invalid_player_hold_drain_timeout`); source gate `(User, Ui)`, `(Cli, Cli)`, `(Lab, Lab)` (`invalid_player_hold_origin`) | `PlayerHoldAcquired {hold, drained}`, inline beside `kind`, once the hold is `held`; success `request_acquire_player_hold_completed` | R-7b | yes |
+| `AcquirePlayerHold` | general | instruction (close the instance's gate, drain its runs, hand the device back) | `{instance_alias, drain_timeout_ms}`, `1_000..=600_000` (`invalid_player_hold_drain_timeout`); source gate `(User, Ui)`, `(Cli, Cli)`, `(Lab, Lab)` (`invalid_player_hold_origin`) until Workflow #434 LAB-6S1b deleted it | `PlayerHoldAcquired {hold, drained}`, inline beside `kind`, once the hold is `held`; success `request_acquire_player_hold_completed` | R-7b | yes |
 | `ReleasePlayerHold` | general | instruction (give the instance back; reconnect it when no pause holds it) | `{instance_alias, expected: {owner_epoch, hold_id, revision}, startup_package?: run \| skip}` (revision 0: `invalid_player_hold_expectation`); the same source gate; no channel limit (Alice's ruling 135) | `PlayerHoldReleased {instance_alias, hold_id, revision, next, selfcheck?, startup_package, startup_package_withheld?, pauses_at_end?}`, inline beside `kind`; success `request_release_player_hold_completed` | R-7b | yes |
 | `RuntimeInstanceStatus.player_hold?`, `.player_hold_operation?`, `.control?` | — | — | the hold, the last accepted operation of the epoch, and the control gates `{code, dispatch, device}` that only `RuntimeControlPlaneStatus::with_derived_control()` fills from the same status's members; `validate` refuses a `control` that disagrees (`invalid_runtime_instance_control`) | absent in every answer of 0.12.35 | R-7b fills them and raises `runtime-client` `min` to 4 | — |
 | `RuntimeStartReport.player_holds_restored?`, `.player_holds_dropped?`, `.player_hold_not_durable?` | — | — | the aliases restored and dropped at the start, and whether the tag patterns keep `host.player_hold`; absent when empty or `false` | absent in every answer of 0.12.35 | R-7b | — |
@@ -545,15 +553,17 @@ of five families:
   theirs. `validate()` therefore guarantees one family per request.
 - The two #386 families have no code yet: SR-11 and SR-5a add them to the function.
   Until then the function knows offset and the rest, as the contract does today.
-- U-6 deletes only the by-origin half of today's rule (agent versus person); the
-  content rules (offset checks, `session_pack_schedule_invalid` and the like) stay.
+- Workflow #434 LAB-6S1b (0.12.58) deleted only the by-origin half of the rule (agent
+  versus person), as U-6 planned; the content rules (offset checks,
+  `session_pack_schedule_invalid` and the like) stay.
 - The remedy choices family (Workflow #411 B15, [remedies.md](remedies.md)) is built (slice
   R6): `fact_key_family` returns it for `session.remedy.choices`, with the content rule
   `session_remedy_choices_invalid` ([instance-fact-store.md](instance-fact-store.md), "Remedy
   choice facts"). `validate()` refuses any observation whose keys belong to two families as
-  `fact_origin_mixed`; until U-6 a family with the origin exception (offsets, remedy choices)
-  is taken from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`, and its `fact.published`
-  event keeps the writer's origin. Its writers are actingctl `remedy set|get|lift` and the MCP
+  `fact_origin_mixed`; until Workflow #434 LAB-6S1b a family with the origin exception
+  (offsets, remedy choices) was taken from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`
+  only, and since then from every client envelope; its `fact.published` event keeps the
+  writer's origin. Its writers are actingctl `remedy set|get|lift` and the MCP
   general tools `ac_remedy_set` and `ac_remedy_get`. A record is written at instance or game
   scope only: the store's `server` scope names a server without its game, so a server record
   would apply to every game whose instances share that server id. `remedy set` takes
@@ -1303,21 +1313,24 @@ hold yet are registered as retired then):
 
 | Code | Retires at | `replaced_by` |
 |---|---|---|
-| `invalid_shutdown_origin` | U-6 | `channel_request_refused` |
-| `invalid_resource_authoring_origin`, `invalid_signature_origin`, `invalid_runtime_debug_origin` | U-6 | `channel_request_refused` |
-| `invalid_emulator_control_origin` | U-6 | `channel_request_refused` (emulator, self-check; discovery has no gate) |
-| `invalid_scheduling_pause_origin` | U-6 | none |
-| `invalid_install_transition_origin` | with InstallTransition | none |
-| `invalid_governance_origin` | U-6 | `channel_request_refused` |
-| `invalid_agent_dispatcher_origin` | U-6 | `channel_request_refused` |
-| `governance_authority_required` | U-6 | none |
+| `invalid_shutdown_origin` | retired by Workflow #434 LAB-6S1b (`retired_in` 0.12.58; U-6 planned it) | none: the Runtime takes the request (U-6 planned `channel_request_refused`, which LAB-6S3 emits by channel, not in place of this code) |
+| `invalid_resource_authoring_origin`, `invalid_signature_origin`, `invalid_runtime_debug_origin` | retired by LAB-6S1b (0.12.58) | none, as above |
+| `invalid_emulator_control_origin` | retired by LAB-6S1b (0.12.58) | none, as above (discovery, the self-check and the drill had the same gate) |
+| `invalid_scheduling_pause_origin` | retired by LAB-6S1b (0.12.58) | none |
+| `invalid_install_transition_origin` | retired by LAB-6S1b (0.12.58), before its kind | none; the host's `install_identity_required` stays with the kind |
+| `invalid_agent_wake_test_origin` (Workflow #432 AGT-1b), `invalid_player_hold_origin` (Workflow #429 R-7a) | retired by LAB-6S1b (0.12.58) | none |
+| `invalid_governance_origin` | with `DeclareGovernanceIdentity` (LAB-6S4a): since LAB-6S1b only the host's own check of the card emits it | none |
+| `invalid_agent_dispatcher_origin` | retired by LAB-6S1b (0.12.58) | none, as above |
+| `governance_authority_required` | with `RecordApprovalDecision` (LAB-6S4a) | none |
 | `install_identity_required` | U-4 | none |
 | `runtime_debug_origin_invalid`, `runtime_authoring_origin_invalid` | U-6 | `client_channel_refused` |
 | `tier_not_enabled` | U-3 | `lab_tool_option_disabled` |
 | `invalid_governance_identity_card` and the identity card's refusals | U-6 | none |
 
 Kept: `invalid_client_origin` (the envelope's own check), `fact_origin_mixed` (a content
-rule), `c4_client_source_unsupported` (C4).
+rule), `c4_client_source_unsupported` (C4). Since Workflow #434 LAB-6S1b
+(contracts/lab-two-entries.md §2.4) `invalid_client_origin` is the one refusal of
+`RuntimeRequest::validate()` that reads the envelope.
 
 **Keys and vocabularies**: U-3, in the PR that deletes the MCP `Tier` enum, deletes the
 key `required_tier` and the vocabulary `mcp_tier` (whose source is that enum), removes

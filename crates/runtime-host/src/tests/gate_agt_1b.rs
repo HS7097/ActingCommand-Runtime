@@ -1120,33 +1120,12 @@ fn a_rule_naming_an_unknown_alias_is_refused_while_running() {
     assert_eq!(taken.state(), RuntimeReceiptState::Completed, "{taken:?}");
 }
 
+// Workflow #434 LAB-6S1b: the test of the delivery takes every client envelope (the contract's
+// `gate_434_lab6s1b`); what stays of AGT-1b's origin test is that it is an instruction of no
+// instance.
 #[test]
-fn agent_wake_test_takes_only_person_origins() {
-    let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let refused = |actor: EventActor, source: EventSource| {
-        let request = RuntimeRequest::new(
-            ids.mint_request_id().expect("request id"),
-            ids.mint_correlation_id().expect("correlation id"),
-            None,
-            actor,
-            source,
-            NOW,
-            RuntimeOperation::AgentWakeTest {
-                to: CHANNEL.to_owned(),
-                instance_alias: None,
-            },
-        );
-        match request {
-            Ok(request) => request.validate().err().map(|error| error.to_string()),
-            Err(error) => Some(error.to_string()),
-        }
-    };
-    assert_eq!(refused(EventActor::User, EventSource::Ui), None);
-    assert_eq!(refused(EventActor::Cli, EventSource::Cli), None);
-    assert!(refused(EventActor::Agent, EventSource::Adapter).is_some());
-    let lab = refused(EventActor::Lab, EventSource::Lab).expect("the Lab is refused");
-    assert!(lab.contains("invalid_agent_wake_test_origin"), "{lab}");
-    // It is an instruction of no instance: its failures can fence nothing.
+fn agent_wake_test_is_an_instruction_of_no_instance() {
+    // Its failures can fence nothing.
     let operation = RuntimeOperation::AgentWakeTest {
         to: CHANNEL.to_owned(),
         instance_alias: Some("node.a".to_owned()),
