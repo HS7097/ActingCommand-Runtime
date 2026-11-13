@@ -77,25 +77,37 @@
 //! of the registry is named like it in any ASCII case (such a folder is that pack's), and the
 //! answer gains `notices` `{files, bytes}`; a root without it answers as before. Nothing beside it
 //! (`notices.old-<ms>`, `notices.rolledback-<ms>`, a `.part`) is looked at.
+//!
+//! Workflow #453 S8 (register §1.355): last, the answer's `models`, the models the root's packages
+//! need, read from the packages the cross-check admitted (each package's recognition pack, its OCR
+//! and NN targets' `model_ref` and `model_sha256`; `required_models`). `package bundle` runs the
+//! same cross-check and answers no models.
+//!
+//! Workflow #455 G-R1 (register §1.356; contracts/standard-pack-goals.md): a game root that holds
+//! `goals.json` lists it in `root_files`, and after the composition the file is read and its
+//! references held to the root (`standard_pack_goals`). Each problem of a refused file is one
+//! `standard_pack_root_invalid` warning, in file order, after the other warnings: the root is
+//! checked as without the file, and the answer is otherwise what it is without it.
 
 use crate::codes::ResourceToolingCode;
 use crate::notices_directory::game_root_notices;
 use crate::package_directory::{PACK_DEADLINE, packs_empty};
 use crate::package_loading::{check_loading, stale_copies};
+use crate::standard_pack_goals::{goal_issues, goal_warnings, read_goals_file};
 use crate::standard_pack_schedule::report_schedule;
 use crate::{
     DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, StandardPackCheckRequest, StandardPackCheckResponse,
-    StandardPackRootFiles,
+    StandardPackModel, StandardPackRootFiles,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Detail, Outcome, RemedyProblem};
 use actingcommand_contract::{
     BundleIndex, InterruptThen, LabError, LabErrorClass, LabResult, NavigationProblem,
     NavigationRole, ProvidedCapability, RuntimeErrorCode, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    StandardPackProblem, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
-    parse_standard_pack_schedule, read_standard_pack_root,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRoot, StandardPackRootBytes,
+    StandardPackRootIssue, parse_standard_pack_schedule, read_standard_pack_root,
 };
 use actingcommand_execution_kernel::{
     ContainedTaskError, NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
@@ -111,7 +123,7 @@ use std::time::Instant;
 /// The execution mode of a feature package (M-373 §3.4).
 const RECOGNIZE_ONLY: &str = "recognize_only";
 /// The instance label the cross-check admits packages under.
-const CHECK_LABEL: &str = "standard-pack-check";
+pub(crate) const CHECK_LABEL: &str = "standard-pack-check";
 /// The pack table of `bundle.json` (Workflow #411 A40).
 const PACKS_POINTER: &str = "/packs";
 
@@ -134,6 +146,9 @@ pub(crate) struct RootFileInputs {
     /// Workflow #407 LOAD-1: `loading.json`, which no root reader reads: `package_loading` reads
     /// and checks it with its templates, and every pack's copy against it.
     loading: Option<PathBuf>,
+    /// Workflow #455 G-R1: `goals.json`, which no root reader reads: checked after the composition
+    /// (`standard_pack_goals`) and laid beside `bundle.json`.
+    goals: Option<RootFile>,
 }
 
 impl RootFileInputs {
@@ -161,6 +176,7 @@ impl RootFileInputs {
             schedule: read(files.schedule.as_ref())?,
             display_layout: read(files.display_layout.as_ref())?,
             loading: files.loading.clone(),
+            goals: read(files.goals.as_ref())?,
         })
     }
 
@@ -176,11 +192,17 @@ impl RootFileInputs {
             && self.navigation.is_none()
             && self.schedule.is_none()
             && self.display_layout.is_none()
+            && self.goals.is_none()
     }
 
     /// ROUT-L RL-1a: the `schedule.json` given, if any.
     pub(crate) fn schedule(&self) -> Option<&RootFile> {
         self.schedule.as_ref()
+    }
+
+    /// Workflow #455 G-R1: the `goals.json` given, if any.
+    pub(crate) fn goals(&self) -> Option<&RootFile> {
+        self.goals.as_ref()
     }
 
     /// Each given file under its root file name, in the order a game root lists them.
@@ -191,6 +213,8 @@ impl RootFileInputs {
             (STANDARD_PACK_NAVIGATION_FILE, &self.navigation),
             (STANDARD_PACK_SCHEDULE_FILE, &self.schedule),
             (STANDARD_PACK_DISPLAY_LAYOUT_FILE, &self.display_layout),
+            // Workflow #455 G-R1.
+            (STANDARD_PACK_GOALS_FILE, &self.goals),
         ]
         .into_iter()
         .filter_map(|(name, file)| file.as_ref().map(|file| (name, file)))
@@ -267,6 +291,12 @@ pub fn check_standard_pack_root(
             files.insert(name, bytes);
         }
     }
+    // Workflow #455 G-R1: read beside the others through its own bound, and checked after the
+    // composition.
+    let goals = read_goals_file(&root.join(STANDARD_PACK_GOALS_FILE))?;
+    if goals.is_some() {
+        present.push(STANDARD_PACK_GOALS_FILE);
+    }
     let bytes = |name: &str| files.get(name).map(Vec::as_slice);
     let checked = read_standard_pack_root(
         StandardPackRootBytes {
@@ -325,12 +355,15 @@ pub fn check_standard_pack_root(
     } else {
         stale_copies(&game, &packages)?;
     }
-    let mut warnings = cross_check(
+    let (mut warnings, admitted) = cross_check_admitted(
         &game,
         &checked,
         &|directory: &str| root.join(directory),
         BTreeMap::new(),
     )?;
+    // Workflow #453 S8: the models the root's packs need, read from the packages the cross-check
+    // admitted; nothing is admitted again.
+    let models = required_models(&checked, &admitted)?;
     // ROUT-L RL-1a: the schedule rules, composed as the Runtime composes them; SS-2b: with the
     // judged rules' coverage and one warning per judged rule that declares no value; SCHED-C1a:
     // and who wrote their fixed values and the pools' valuation blocks.
@@ -374,6 +407,27 @@ pub fn check_standard_pack_root(
             &|directory: &str| root.join(directory),
         )?;
     }
+    // Workflow #455 G-R1 (register §1.356): the goal declaration, after the composition. Each
+    // problem of a refused file is one `standard_pack_root_invalid` warning, in file order; the
+    // root stays as valid as it is without the file.
+    if let Some(goals) = &goals {
+        let schedule_path = root.join(STANDARD_PACK_SCHEDULE_FILE);
+        let issues = goal_issues(
+            &game,
+            &checked,
+            bytes(STANDARD_PACK_SCHEDULE_FILE).map(|schedule| (schedule, schedule_path.as_path())),
+            // G-R1 fix round 2: the chain followers the composition above listed.
+            &benefit_followers,
+            goals,
+            &|directory: &str| root.join(directory),
+            Some(root.as_path()),
+        )?;
+        warnings.extend(goal_warnings(
+            &game,
+            &root.join(STANDARD_PACK_GOALS_FILE),
+            &issues,
+        ));
+    }
     if fs::symlink_metadata(&loading).is_ok() {
         present.push(STANDARD_PACK_LOADING_FILE);
     }
@@ -389,6 +443,7 @@ pub fn check_standard_pack_root(
         benefit_followers,
         consumption_facts,
         notices,
+        models,
     })
 }
 
@@ -402,21 +457,67 @@ pub(crate) fn cross_check(
     pack_directory: &dyn Fn(&str) -> PathBuf,
     admitted: BTreeMap<String, NavigationPackageDescriptor>,
 ) -> LabResult<Vec<Outcome>> {
-    let mut warnings = navigation_check(game, root, pack_directory, admitted)?;
+    cross_check_admitted(game, root, pack_directory, admitted).map(|(warnings, _)| warnings)
+}
+
+/// Workflow #453 S8: the packages a cross-check admitted, by package id.
+type Admitted = BTreeMap<String, NavigationPackageDescriptor>;
+
+/// Workflow #453 S8: [`cross_check`], and the packages it admitted by package id (every package
+/// of the registry, each once, with those the caller gave), which [`required_models`] reads.
+fn cross_check_admitted(
+    game: &str,
+    root: &StandardPackRoot,
+    pack_directory: &dyn Fn(&str) -> PathBuf,
+    admitted: Admitted,
+) -> LabResult<(Vec<Outcome>, Admitted)> {
+    let (mut warnings, admitted) = navigation_check(game, root, pack_directory, admitted)?;
     warnings.extend(remedy_report(root, pack_directory)?);
-    Ok(warnings)
+    Ok((warnings, admitted))
+}
+
+/// Workflow #453 S8 (register §1.355): the models the packages of `root` need, the union of the
+/// models each package's recognition pack names (its OCR and NN targets,
+/// [`NavigationPackageDescriptor::recognition_models`]), read from `admitted`, the packages the
+/// cross-check admitted: each model once with every package that names it, in byte order of
+/// `model_ref`, then of `model_sha256`, its `packages` in byte order of `package_id`. Every
+/// package of the registry is admitted before this runs; one that is not is `package_invalid`.
+fn required_models(
+    root: &StandardPackRoot,
+    admitted: &Admitted,
+) -> LabResult<Vec<StandardPackModel>> {
+    let mut models = BTreeMap::<(String, String), BTreeSet<String>>::new();
+    for package_id in root.registry.package_ids() {
+        let package = admitted
+            .get(package_id)
+            .ok_or_else(|| LabError::package_invalid(format!("{package_id} was not admitted")))?;
+        for (model_ref, model_sha256) in package.recognition_models() {
+            models
+                .entry((model_ref.clone(), model_sha256.clone()))
+                .or_default()
+                .insert(package_id.to_owned());
+        }
+    }
+    Ok(models
+        .into_iter()
+        .map(|((model_ref, model_sha256), packages)| StandardPackModel {
+            model_ref,
+            model_sha256,
+            packages: packages.into_iter().collect(),
+        })
+        .collect())
 }
 
 /// The cross-check of the parts `pages.json`, `navigation.json` and `interrupts.json` name and
 /// the report "entry page not in the list". Workflow #411 A25: with or without these files, every
 /// package of the registry is admitted, once; without `pages.json` (which the other two need)
-/// that is all, and nothing is reported.
+/// that is all, and nothing is reported. Workflow #453 S8: with the packages it admitted.
 fn navigation_check(
     game: &str,
     root: &StandardPackRoot,
     pack_directory: &dyn Fn(&str) -> PathBuf,
-    admitted: BTreeMap<String, NavigationPackageDescriptor>,
-) -> LabResult<Vec<Outcome>> {
+    admitted: Admitted,
+) -> LabResult<(Vec<Outcome>, Admitted)> {
     let mut packages = Packages {
         game,
         root,
@@ -432,7 +533,7 @@ fn navigation_check(
         let mut warnings = unlocated_store_taps(root, &mut packages)?;
         // Workflow #428 CFL-2: with or without `pages.json`.
         warnings.extend(preprocess_divergences(root, &mut packages)?);
-        return Ok(warnings);
+        return Ok((warnings, packages.admitted));
     };
     let listed = pages
         .pages
@@ -543,7 +644,7 @@ fn navigation_check(
     warnings.extend(unlocated_store_taps(root, &mut packages)?);
     // Workflow #428 CFL-2.
     warnings.extend(preprocess_divergences(root, &mut packages)?);
-    Ok(warnings)
+    Ok((warnings, packages.admitted))
 }
 
 /// STORE-FG-1 (design-store-fg §8.1; contracts/package-reference.md, the cross-check): a store's
@@ -1078,15 +1179,25 @@ fn lists_no_pack(issue: &StandardPackRootIssue, bundle: Option<&[u8]>) -> bool {
             .is_some_and(|index| index.packs.is_empty())
 }
 
+/// The outcome `standard_pack_root_invalid` of `issue` in the root file at `path`: its game, its
+/// path, its problem and its pointer.
+pub(crate) fn root_issue_outcome(
+    game: &str,
+    path: &Path,
+    issue: &StandardPackRootIssue,
+) -> Outcome {
+    Outcome::new(SharedCode::StandardPackRootInvalid)
+        .game(game)
+        .path(path)
+        .standard_pack_problem(issue.problem)
+        .json_pointer(issue.pointer.clone())
+}
+
 /// `standard_pack_root_invalid`: the root file at `path` breaks its shape, a limit or a
 /// reference.
 pub(crate) fn root_invalid(game: &str, path: &Path, issue: &StandardPackRootIssue) -> LabError {
     let code = SharedCode::StandardPackRootInvalid;
-    let outcome = Outcome::new(code)
-        .game(game)
-        .path(path)
-        .standard_pack_problem(issue.problem)
-        .json_pointer(issue.pointer.clone());
+    let outcome = root_issue_outcome(game, path, issue);
     LabError::new(
         LabErrorClass::UsageValidation,
         code.as_str(),

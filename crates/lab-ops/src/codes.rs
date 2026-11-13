@@ -502,6 +502,10 @@ actingcommand_contract::outcome_locations! {
         // Workflow #453 S10 (since 0.12.59): the rescue module's `emulators`, the live build's
         // `actingd discover` of the root's configuration, read only.
         Emulators => "install_emulators",
+        // Workflow #453 S7 (since 0.12.60): the rescue module's `vision manifest` and `vision
+        // check`, the live build's `actingd vision manifest|check`, read only.
+        VisionManifest => "install_vision_manifest",
+        VisionCheck => "install_vision_check",
     }
 }
 
@@ -595,6 +599,15 @@ actingcommand_contract::outcome_vocabulary! {
         // discovery from the live build's `actingd discover` (its outcome, or the child's failure,
         // is the cause; fix 1: a child ended at the row's bound has `timeout_ms` and no cause).
         EmulatorDiscoveryFailed => "emulator_discovery_failed",
+        // Workflow #453 S7 (since 0.12.60; fix 1: only where a root really is not resolved): the
+        // rescue module's `vision check` got the live build's `actingd vision check` refusal of
+        // the configuration or of the vision root it names (actingd's outcome is the cause).
+        VisionRootUnresolved => "vision_root_unresolved",
+        // Workflow #453 S7 fix 1 (since 0.12.60): the rescue module's `vision manifest` or
+        // `vision check` got no usable report from the live build's `actingd vision`: it did not
+        // run, printed none (a build without the subcommand), refused its command line, could not
+        // read its own registry, or was ended at the row's bound (`timeout_ms`, no cause).
+        VisionReportUnanswered => "vision_report_unanswered",
     }
 }
 
@@ -665,6 +678,9 @@ actingcommand_contract::outcome_vocabulary! {
         // Workflow #434 LAB-5G5b (since 0.12.57): the rescue module's `mcp config` gave the
         // snippet of an entry program that is not placed in `mcp-entry\g2\` (`path`).
         McpEntryNotPlaced => "mcp_entry_not_placed",
+        // Workflow #453 S7 (since 0.12.60): the rescue module's `vision check` found files of the
+        // manifest or models that do not match (`count`).
+        VisionIncomplete => "vision_incomplete",
     }
 }
 
