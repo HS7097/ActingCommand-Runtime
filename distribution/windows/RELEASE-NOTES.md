@@ -12,7 +12,7 @@ and artifact names bind the complete source SHA.
 ## v0.12.59
 
 本版是 v0.12.58 之后 main 上的 16 张 PR：7 个直接合并（#1672、#1669、#1671、#1674、#1673、#1678、#1679）和 3 趟并车（#1684 带 #1676、#1677、#1675；#1686 带 #1680、#1681、
-#1682、#1683；#1688 带 #1685、#1687；车上除了各张的头只有合并和登记册节号的调整）。按单子分：#434 LAB-6S2 的三片（LAB-6S2-M #1671、LAB-6S2-B1 #1673、LAB-6S2-B2 #1683），#451 的两片
+#1682、#1683；#1688 带 #1685、#1687；车上除了各张的头，只有合并、登记册节号的调整，和两张在车上补的第三轮修正（#1676、#1685，各自并进了车））。按单子分：#434 LAB-6S2 的三片（LAB-6S2-M #1671、LAB-6S2-B1 #1673、LAB-6S2-B2 #1683），#451 的两片
 （PLACE-PKG #1672、LOAD-P #1669），#453 的两张（S5 和 S6 #1680、S10 #1681），#454 的两张（#1679、#1685），#392 的两片（DA-3 #1682、DA-3b #1687），#437 MAPP-2a（#1676），#450 FL-1
 （#1677），#449 REC-ARCH（#1675），#452（#1674），#441（#1678）。先说部署：**生产上跑的是 v0.12.54，11-14 上午换成 v0.12.56（跨过 v0.12.55 的单向一步，见 v0.12.56 一节）；v0.12.57、
 v0.12.58 发布了、都没有部署；计划是从 v0.12.56 装 v0.12.58，再从 v0.12.58 装本版。** 从 v0.12.58 装本版：**能装，不用任何标志，计划里没有 `ledger_verify`，`defaults_diff` 是空的，装上以后能
@@ -30,7 +30,7 @@ v0.12.58 发布了、都没有部署；计划是从 v0.12.56 装 v0.12.58，再�
   - **为什么记录不变（映射 M 和回执规则 R）**：主机在门口把「词 + 信封来源」映射回那个程序在 0.12.58 上的通道（`crates/actingcommand-contract/src/runtime/interface.rs` 222–250
     `ChannelBinding::recorded`，门里只用一处，`crates/runtime-host/src/host/requests.rs` 41–62）：`Lab-MCP` 下 Lab 信封记 `lab` 带 `via` `mcp`、别的信封记 `mcp`；另四个词下 Lab 信封记
     `lab`、别的信封记 `cli`；不带词的绑定原样记，映射永远得不出 `ui`，所以 UI 清单那道闸只判绑在 `ui` 上的连接。回执：信封来源是 Lab 的请求带连接的绑定和词，别的信封带映射后的通道、
-    不带 `initiator`，`BindChannel` 自己的应答照旧。于是信封、记录和 `actingctl`、今天的 MCP 服务器拿到的回执都和 0.12.58 逐字节相同（门测试拿 0.12.58 的字面值守着）。**唯一变了的
+    不带 `initiator`，`BindChannel` 自己的应答照旧。于是信封、记录和 `actingctl`、今天的 MCP 服务器拿到的回执都和 0.12.58 逐字节相同（`BindChannel` 那一帧和它的应答除外，那一帧多了词；门测试拿 0.12.58 的字面值守着）。**唯一变了的
     一条记录**：人手在 `serve --stdio --front mcp` 的输入里发核心行，0.12.58 记 `lab`，本版记 `lab` 带 `via` `mcp`；没有已发布的程序这样发。回执里变的只在 Lab 自家的程序：Lab 信封的
     回执多 `initiator`，MCP 子进程的回执不再带 `via` `mcp`、改带 `Lab-MCP`，`Lab-MCP` 下救急模块的回执写 `mcp`（原来 `cli`）；没有已发布的程序严格解码它们（见下面「控制台」）。
     没有接口修订、没有新码。
@@ -42,13 +42,15 @@ v0.12.58 发布了、都没有部署；计划是从 v0.12.56 装 v0.12.58，再�
     握手之后才发，**没有任何请求被执行两次**。客户端在同一属主纪元里重连一次，这个客户端以后不再发 `BindChannel`、以未绑定的连接继续（`client.rs` 1033–1035、1059–1066、
     2007–2018）；旧 Runtime 按第一条请求的信封归通道，`(Cli, Cli)` 和 `(Agent, Adapter)` 都归 `cli`（v0.12.57 `requests.rs` 56–84），于是今天的 MCP 服务器的请求在那边记成命令行；
     回答照那个 Runtime 自己的规则（包括它的来源门），信封没变，所以照旧收。每个进程往标准错误写一行 `client_channel_unsupported` 警告（`client.rs` 6965–6973；actingctl 的报告器
-    `main.rs` 171–173 → `cli_line.rs` 21–23），退出码不受影响。**每建一条新连接，旧 Runtime 的账本多一条**：一次 `actingctl overview`（带安装根）2 条（它的连接和 `watchdog` 一块的
+    `main.rs` 171–173 → `cli_line.rs` 21–23），退出码不受影响；看门狗的那一行写进 `watchdog.log`，不写标准错误（`apps/actingwatch/src/main.rs` 207、231–235）。**每建一条新连接，旧 Runtime 的账本多一条**：一次 `actingctl overview`（带安装根）2 条（它的连接和 `watchdog` 一块的
     探测），本版看门狗每次 tick 在属主锁被持有时 1 条，安装模块每次读写 1 条（`crates/lab-rescue/src/install/runtime.rs` 286–579，每个方法各连一次）。**看得到它们的**只有不带实例的
     `diagnose` 的失败分组、`events` 和控制台按级别的计数；没有守卫、启动后检查的哪一行、看门狗的关注或总览的警告读它们，什么都不会因此停下、拒绝或告警。0.12.58 的 Runtime 接受这个
     绑定，不产生这些记录（它没有映射 M：这些程序的请求都记 `lab`、回执带词，actingctl 和今天的 MCP 服务器设的设置行在控制台上显示成「经 Lab」）。
   - **在部署、退回、总览和看门狗的哪一步碰上**：部署由当时装着的那一版的安装工具跑，`--detach` 的分离运行重起的也是被调用的那个程序（本版
-    `crates/lab-rescue/src/install/host.rs` 350–352、389–393）。所以照现在的部署工具包（它用在线那一版的 `actingctl`）从 v0.12.58 或 v0.12.56 装本版，部署本身和部署失败时的自动回退
-    都由不报词的旧安装工具做，**一条这种记录都不产生**；部署以后程序和 Runtime 同一版。要是改用本版的 `actingctl install` 对着 0.12.57 或更早的 Runtime 跑
+    `crates/lab-rescue/src/install/host.rs` 350–352、389–393；这两处只说明分离运行重起的是被调用的那个程序，用哪一版去调用由部署的人定）。所以**只要部署的每一步（连同
+    `--detach` 的分离运行）用的都是在线那一版的 `actingctl install`**，从 v0.12.58 或 v0.12.56 装本版时，部署本身和部署失败时的自动回退都由不报词的旧安装工具做，它们
+    **一条这种记录都不产生**；部署以后程序和 Runtime 同一版。这段时间里别的本版程序连到 0.12.57 或更早的 Runtime 照样每条连接记一条，比如 MCP 入口已经把子进程换成本版、
+    而部署又自动退回了旧版的时候。要是改用本版的 `actingctl install` 对着 0.12.57 或更早的 Runtime 跑
     `update apply --stop --hold … --start`，旧 Runtime 关掉之前会记下 N + 9 条（N 是被挂暂停的实例数，登记 §1.287「Slice LAB-6S2-B2」逐条数过）。真正会碰上的是**从本版退回
     v0.12.56**（只有从 v0.12.56 直接装本版的那条路能退到它）：本版的安装工具在 v0.12.56 起来以后的就绪探测、启动后检查（`Status`、`RuntimeFactSnapshot`、`StartReport`）和交还暂停
     （`Status`、每台的 `ResumeScheduling`、`ScheduleExplanation`，`install/deploy.rs` 1237–1331）每条连接各记一条，那个进程写一行警告；退回以后、MCP 入口把子进程换回旧版本之前，
@@ -210,7 +212,7 @@ v0.12.58 发布了、都没有部署；计划是从 v0.12.56 装 v0.12.58，再�
 
 升级与退回（部署由当时装着的那一版的安装工具做。安装工具的 `plan.rs`、`release.rs`、`adopt.rs`、`hold.rs` 自 v0.12.57 没改，所以 v0.12.58 一节写「本版和 v0.12.57 相同的 `plan.rs`」
 的行号对 v0.12.58 和本版的安装工具都对；本版的安装工具改了 `deploy.rs`、`postcheck.rs`、`runtime.rs`、`place.rs`、`undo.rs`、`update.rs`（只在 735 以后，冷放置的续跑）、`programs.rs`、
-`manifest.rs`、`journal.rs`、`host.rs`、`instance_add.rs`。v0.12.56 的 `plan.rs` 就是 v0.12.54 的那份，下面写「v0.12.56 的」行号对 v0.12.54 的安装工具也对）：
+`manifest.rs`、`journal.rs`、`host.rs`、`instance_add.rs`、`mod.rs`（`dispatch` 改成收发起者的词）。v0.12.56 的 `plan.rs` 就是 v0.12.54 的那份，下面写「v0.12.56 的」行号对 v0.12.54 的安装工具也对）：
 
 - **v0.12.58 的安装工具装本版（计划的那条路）：能装，不用任何标志。** 安装工具的声明是它自己构建里的 `component-interfaces.json`（`host.rs` 23–25）：v0.12.58 的是 `ledger` [3, 8]、
   `runtime-client` [3, 8]、`package` [3, 10]。计划的边逐条（v0.12.58 的 `plan.rs`，和本版相同）：
@@ -222,7 +224,7 @@ v0.12.58 发布了、都没有部署；计划是从 v0.12.56 装 v0.12.58，再�
     检查的 `new_keys` 没有要核的键。Tools 文件两边清单相同，没有 `new`。
   - **启动后检查的 `no_seeding` 是 v0.12.58 那一版的**（跑检查的是跑部署的安装工具，v0.12.58 的 `postcheck.rs` 292–310）：有 S0 就要求 `load`；它从本版 Runtime 读的是 `StartReport`
     的 `tagged_state`（形状不变），生产的根早过了第一段，答 `load`，过。它不读 `config.start`，关停那一步的证据里也不记 `first_epoch`。
-  - **次序**：v0.12.58 的安装工具不报词，部署前连的是 v0.12.58 的 Runtime、部署后连的是本版的，都不掉线。能退回的是 v0.12.58。
+  - **次序**：v0.12.58 的安装工具不报词，部署前连的是 v0.12.58 的 Runtime、部署后连的是本版的，都不掉线；v0.12.58 的 Runtime 本来就收带词的绑定，所以这条路上用哪一版的安装工具都不产生那种记录。能退回的是 v0.12.58。
 - **v0.12.56 的安装工具直接装本版（跳过 v0.12.57、v0.12.58）：能装，不用任何标志。** v0.12.56 声明 `ledger` [3, 8]、`runtime-client` [3, 7]、`package` [3, 9]。边（v0.12.56 的 `plan.rs`）：
   `ledger` `previous_max_in_next`（288–294）过、`one_way`（295–301）不触发、`ledger_verify` false（915）；`runtime-client` 的 `installer_meets_previous`、`installer_meets_next`（315–331）
   只看区间有没有交集（`meet`，241–243）：[3, 7] 和 Rp [3, 7]、R\* [3, 8] 都相交，过；`package`（332–355）照旧是警告；`runtime_equals_tools`（756–763）过；`installer_knows_keys`（359–376）
@@ -230,7 +232,7 @@ v0.12.58 发布了、都没有部署；计划是从 v0.12.56 装 v0.12.58，再�
   （574–598）是空的，`new_keys` 没有要核的键。v0.12.57 的两个 Tools 文件（`actinglab-mcp.exe`、`actingcommand-mcp-entry-g2.exe`）在计划里是 `new`（815–819），和 v0.12.58 一节写的
   一样。工具包要是照 v0.12.56 那次还带着 `--accept-ledger-one-way` 也能过，但计划号会变、日志的 `acknowledged` 会记下它，去掉。`no_seeding` 是 v0.12.56 那一版的（同一段代码，
   `postcheck.rs` 292–310），生产根答 `load`，过。
-  - **跳过 v0.12.58（和 v0.12.57）付的**：部署本身不掉线（v0.12.56 的安装工具不报词，部署失败时的自动回退也由它做）。v0.12.57、v0.12.58 的改动和本版一起到：SBUD-1 的准入检查（部署前照
+  - **跳过 v0.12.58（和 v0.12.57）付的**：每一步都用 v0.12.56 的安装工具跑时，部署本身不掉线（它不报词，部署失败时的自动回退也由它做）；用本版的安装工具对着 v0.12.56 的 Runtime 跑，则每条连接各掉一次、各记一条（见上面「次序」）。v0.12.57、v0.12.58 的改动和本版一起到：SBUD-1 的准入检查（部署前照
     v0.12.57 一节用本版的 `standard-pack check` 查遍包根）、IDLE-3（临时设成 `none` 的 `idle.action` 部署以后可以撤回）、LAB-6S1b 拿掉来源门、LAB-6S3 的 `ui` 闸（控制台 v0.12.16 发的都在清单上，
     见 v0.12.58 一节）、notices 目录。**代价在退回那一头**：这样装上的只能退回 v0.12.56，而 v0.12.56 是 0.12.57 之前的 Runtime：退回以后本版的安装工具对它的就绪探测、启动后检查和交还
     暂停，以及换回旧子进程之前本版的 MCP 服务器，每建一条连接在它的账本里记一条 error 级的 `runtime_protocol_invalid`，每个进程往标准错误写一行警告，什么都不拒、不重做（见上面「次序」）。
@@ -271,7 +273,7 @@ v0.12.58 发布了、都没有部署；计划是从 v0.12.56 装 v0.12.58，再�
   - **已装的包**：本版对不声明 `field_lists` 的包不改准入（FL-1 的门只认这个成员；内核对不带它的包在运行路径上只多几处判空；SBUD-1 是 v0.12.57 的）。`package` 的修订只在包自己声明 11
     时起作用，今天没有这样的包。本版的 `standard-pack check` 对今天的根答法和 v0.12.58 逐字节相同（`crates/resource-tooling` 自 v0.12.58 没改；契约 crate 只多了放包时才用的
     `loading_pack_name` 一个词）。
-  - **控制台 UI**（最新发版 UI v0.12.17 是 UI 的 `ab31c42c`，UI main 现在就在这里；前一版 UI v0.12.16 是 `6c2e30f2`）：
+  - **控制台 UI**（最新发版 UI v0.12.17 是 UI 的 `ab31c42c`；UI main 在它之后只改了安装向导核安装集的那一处，和下面核的范围、请求无关；前一版 UI v0.12.16 是 `6c2e30f2`）：
     - **声明的范围**：v0.12.17 声明 `actingd-config` [5, 29]、`ledger` [3, 8]、`runtime-client` [3, 8]、`runtime-outcomes` [1, 1]（`crates/acui-setup/component-interfaces.json`），和本版
       逐项相合；v0.12.16 声明 [5, 28]、[3, 8]、[3, 7]、[1, 1]，安装器取共有的最高修订 28 和 7，和 v0.12.58 时一样。两版都声明 `package` [1, 2]，控制台和 Runtime 之间没有这条边
       （v0.12.17 的 `crates/acui-wizard/src/manifest.rs` 200–213 只核那四条）。
@@ -285,7 +287,7 @@ v0.12.58 发布了、都没有部署；计划是从 v0.12.56 装 v0.12.58，再�
       （经 MCP），actinglab 的是 `lab`（MCP 子进程的带 `via` `mcp`）。
     - v0.12.17 的安装向导自己核包的 `package` 边（`manifest.rs` 192–198），配本版的 [3, 11] 也收声明 11 的包。它在 0.12.58 上绕开的那个问题（新根上运行中 `config replace` 被
       `no_seeding` 判失败，`runtime.rs` 35–52）本版修了（见上，#454），它先关停再换的做法照旧能用。
-  - **部署工具包的命令行**：它用在线那一版的 `actingctl install` 跑每一步：`release stage --root --dir --facts --expect-tag --expect-commit`、`guards --root --for stop --hold --known-pause …`、
+  - **部署工具包的命令行**：照现在的做法，它用在线那一版的 `actingctl install` 跑每一步（上面「次序」里「一条都不产生」的结论以此为前提）：`release stage --root --dir --facts --expect-tag --expect-commit`、`guards --root --for stop --hold --known-pause …`、
     `status --root [--operation]`、`update plan --root --build [--preview]`、`update apply --root --build --plan --stop --hold --known-pause … --start --detach`、`release-hold --root --reason`；
     另用目标构建的 `install status` 轮询是否上线，用目标构建的 actinglab 跑 `--json standard-pack check --root <游戏根>` 预查包根。从 v0.12.58 或 v0.12.56 装本版时，回答部署这几步的都是
     在线安装工具自己的代码，**没有一条被拒、没有一条换了答法**；目标构建的 `install status` 不连 Runtime（`install/status.rs` 216 起只读文件），`standard-pack check` 对今天的根答法和
