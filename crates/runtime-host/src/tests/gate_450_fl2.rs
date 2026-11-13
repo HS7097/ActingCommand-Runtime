@@ -43,6 +43,7 @@ use actingcommand_recognition_pack::{
     OcrExecutionProviderKind, OcrProviderExecutionEvidence, OcrProviderObservation,
     OcrProviderTextBlock,
 };
+use actingcommand_scheduler::ClaimKind;
 use serde_json::{Value, json};
 
 const LIST_KEY: &str = "inventory.list.example_kind_a";
@@ -472,6 +473,27 @@ fn run(host: &RuntimeHost, package: &Path) -> ListRun {
         correlation_id,
         request_id: request.request_id(),
     }
+}
+
+// One manual run of `package` on the device, sent on a client connection of its own as actingctl
+// sends one (the S168-4 host gate's `run`), and that client, whose connection closes when the
+// caller drops it. A run the fact store refused at its publication answers before its lease ends:
+// the refusal returns from its terminal before the release a completed run makes. The host ends
+// that lease when the run's client disconnects, and hands the key to a run waiting in the device's
+// queue meanwhile.
+fn run_on_client(host: &RuntimeHost, package: &Path) -> (ListRun, TestClient) {
+    let mut client = TestClient::connect(host);
+    client.set_receipt_read_timeout();
+    let (request, correlation_id) = run_request(package);
+    let receipt = client.send(&request);
+    (
+        ListRun {
+            receipt,
+            correlation_id,
+            request_id: request.request_id(),
+        },
+        client,
+    )
 }
 
 // One manual run of `package` whose first input carries a stop of the run (`StopInstanceRun`,
@@ -1305,6 +1327,16 @@ fn field_list_published_like_a_list() {
     host.close().expect("close the host");
 }
 
+// One way a list is not whole in FL-2 test 2: the package run and the screens it is shown, then
+// the warning row it writes (its `reading_problem`, `count` and `frame_indices`).
+struct MissCase<'a> {
+    package: &'a Path,
+    screens: Vec<Screen>,
+    problem: &'static str,
+    count: u32,
+    frame_indices: Vec<u32>,
+}
+
 // FL-2 test 2: after a run published the list, each way a list is not whole succeeds as a
 // `read_list` miss does (in the same host, a `read_list` step whose card reads as nothing), publishes
 // nothing, keeps the key's record byte for byte and writes exactly one warning row,
@@ -1362,51 +1394,58 @@ fn field_list_miss_keeps_record() {
     );
     assert!(publications(&host, OTHER_KEY).is_empty());
 
-    let cases: [(&Path, Vec<Screen>, &str, u32, Vec<u32>); 6] = [
-        (
-            list.as_path(),
-            changed(three_items(), 1, |item| item.name = UNLISTED),
-            "list_position_unread",
-            1,
-            vec![1],
-        ),
-        (
-            list.as_path(),
-            changed(three_items(), 2, |item| item.confidence = [85, 99]),
-            "list_position_unread",
-            1,
-            vec![2],
-        ),
-        (
-            list.as_path(),
-            items(&[(0, 5), (1, 7), (0, 9)]),
-            "list_duplicate_key",
-            1,
-            vec![0, 2],
-        ),
-        (
-            list.as_path(),
-            changed(three_items(), 0, |item| item.previous = true),
-            "list_start_unseen",
-            3,
-            vec![0],
-        ),
-        (
-            short.as_path(),
-            three_items(),
-            "list_end_unseen",
-            2,
-            vec![1],
-        ),
-        (
-            counted.as_path(),
-            changed(three_items(), 1, |item| item.confidence = [99, 5]),
-            "list_position_unread",
-            1,
-            vec![1],
-        ),
+    let cases = [
+        MissCase {
+            package: list.as_path(),
+            screens: changed(three_items(), 1, |item| item.name = UNLISTED),
+            problem: "list_position_unread",
+            count: 1,
+            frame_indices: vec![1],
+        },
+        MissCase {
+            package: list.as_path(),
+            screens: changed(three_items(), 2, |item| item.confidence = [85, 99]),
+            problem: "list_position_unread",
+            count: 1,
+            frame_indices: vec![2],
+        },
+        MissCase {
+            package: list.as_path(),
+            screens: items(&[(0, 5), (1, 7), (0, 9)]),
+            problem: "list_duplicate_key",
+            count: 1,
+            frame_indices: vec![0, 2],
+        },
+        MissCase {
+            package: list.as_path(),
+            screens: changed(three_items(), 0, |item| item.previous = true),
+            problem: "list_start_unseen",
+            count: 3,
+            frame_indices: vec![0],
+        },
+        MissCase {
+            package: short.as_path(),
+            screens: three_items(),
+            problem: "list_end_unseen",
+            count: 2,
+            frame_indices: vec![1],
+        },
+        MissCase {
+            package: counted.as_path(),
+            screens: changed(three_items(), 1, |item| item.confidence = [99, 5]),
+            problem: "list_position_unread",
+            count: 1,
+            frame_indices: vec![1],
+        },
     ];
-    for (package, screens, problem, count, frame_indices) in cases {
+    for MissCase {
+        package,
+        screens,
+        problem,
+        count,
+        frame_indices,
+    } in cases
+    {
         device.shows(screens);
         let miss = run(&host, package);
         completed(&host, &miss.receipt);
@@ -1625,7 +1664,10 @@ fn field_list_failed_or_cancelled_run_publishes_nothing() {
 // store: each producer's list under a new key is refused at its publication, the run fails
 // `contained_task_resource_reading_rejected`, the reason is the failure's native detail
 // `<list id>:fact_store_capacity_exceeded` (as the contract keeps it), nothing is published or
-// evicted, and the two receipts' outcomes carry the same values (no value is added). The row bound
+// evicted, and the two receipts' outcomes carry the same values (no value is added). Each refused
+// run is sent on a client connection of its own and, a `read_list`'s as a field list's, still
+// holds the device's key, nothing waiting, when its answer comes; its client then disconnects,
+// which ends that lease, and the next run waits for that end in the device's queue. The row bound
 // of a record list (1024) cannot be reached by a field list, whose rows are at most its 256 frames.
 #[test]
 fn field_list_full_store_refused() {
@@ -1737,7 +1779,7 @@ fn field_list_full_store_refused() {
         (&read_new, six_cards(), THIRD_KEY, READ_ID),
     ] {
         device.shows(screens);
-        let refused = run(&host, package);
+        let (refused, client) = run_on_client(&host, package);
         assert_eq!(
             refused.receipt.state(),
             RuntimeReceiptState::Failed,
@@ -1760,6 +1802,14 @@ fn field_list_full_store_refused() {
         assert!(host.fatal_error().expect("runtime health").is_none());
         let outcome = serde_json::to_value(refused.receipt.outcome()).expect("outcome JSON");
         refusals.push(outcome["values"].clone());
+        // The refused run answered before its lease ended: it holds the device's key until its
+        // client disconnects, which hands the key to the next run.
+        assert_eq!(
+            host.instance_claims_for_test(ALIAS).expect("claims"),
+            (Some(ClaimKind::DirectTaskRun), vec![]),
+            "{key}: the refused run holds the device until its client disconnects"
+        );
+        drop(client);
     }
     assert_eq!(refusals[0], refusals[1], "no value is added");
     assert!(refusals[0].get("frame_indices").is_none());

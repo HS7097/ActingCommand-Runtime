@@ -20979,7 +20979,10 @@ device; every id made up):
   a full store each producer's new key is refused, the run fails
   `contained_task_resource_reading_rejected` with the native detail
   `<list id>:fact_store_capacity_exceeded`, nothing is published or evicted, and the two receipts'
-  outcomes carry the same values.
+  outcomes carry the same values. Each refused run, a `read_list`'s as a field list's, answers
+  before its lease ends (the refusal returns from its terminal before the release a completed run
+  makes): it still holds the device's key, nothing waiting, until its client's connection closes,
+  and the next run on the device waits for that end in the device's queue.
 - `field_list_row_read_by_ledger_8`: the ledger reader of this build (`ledger` 8, `actingledger`'s
   task evidence) reads the `list_start_unseen` and `list_end_unseen` rows with `frame_indices` and
   relays their outcome's values unchanged.
