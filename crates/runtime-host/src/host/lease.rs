@@ -3756,12 +3756,15 @@ impl HostShared {
     /// serves (read with it, `first_eligible_claim`) in the candidate's performance check, its
     /// ladder judgement and its `lease.granted`; always in a product build. A test turns it off
     /// (`mapp1d_off_for_test`): the member whose queue was pumped is named, as before the slice.
+    #[cfg(not(test))]
     fn pump_names_claims_member(&self) -> bool {
-        #[cfg(test)]
-        if self.mapp1d_off_for_test.load(Ordering::Acquire) {
-            return false;
-        }
         true
+    }
+
+    /// [`Self::pump_names_claims_member`] of a test build: false while a test turned the slice off.
+    #[cfg(test)]
+    fn pump_names_claims_member(&self) -> bool {
+        !self.mapp1d_off_for_test.load(Ordering::Acquire)
     }
 
     /// Workflow #387 D1c (M387 §3.7): whether the ladder claim of `request_id`, whose work is
