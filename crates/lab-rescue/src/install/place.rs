@@ -5,20 +5,24 @@
 //! bundle zip placed into the configuration's standard-pack root, `<standard_packs.root>\<game>`,
 //! while the Runtime runs. The game comes from the bundle's `bundle.json`; no game is named here.
 //!
-//! - **The plan** (read-only): the zip's SHA-256 (against `SHA256SUMS` when given), its layout
-//!   (the root files, `packs/<listed id>/…`, `tables/<listed id>.json`), `bundle.json` as the
-//!   contract crate validates it, the root files as every reader checks them
-//!   ([`read_standard_pack_root`]), each pack's file count and size, the package interface the
-//!   bundle declares (`interfaces.json`, its maximum within the running installer's `package`
-//!   range), and per item `new`, `replace`, `unchanged` or, for a reader's root file the zip no
-//!   longer carries, `retire`. The plan id is `plan-` and the first 16 hex digits of the SHA-256
+//! - **The plan** (read-only): the zip's SHA-256 (against `SHA256SUMS` when given),
+//!   `bundle.json` as the contract crate validates it, the package interface the bundle declares
+//!   (`interfaces.json`, its maximum within the running installer's `package` range; Workflow
+//!   #444 NOTICES-2: checked before the layout, so a bundle of a later revision is refused through
+//!   `package`), its layout (the root files, `packs/<listed id>/…`, `tables/<listed id>.json` and
+//!   the notices directory `notices/…`, held to the contract crate's notices rules), the root
+//!   files as every reader checks them ([`read_standard_pack_root`]), each pack's file count and
+//!   size, and per item `new`, `replace`, `unchanged` or, for a reader's root file or the notices
+//!   directory the zip no longer carries, `retire`. The notices directory is one item of kind
+//!   `notices`, placed first. The plan id is `plan-` and the first 16 hex digits of the SHA-256
 //!   of the canonical plan document.
 //! - **The operation** (`kind` `pack_place`, journalled): the hold of the instances bound to the
 //!   bundle's game (`pause`), then each item that changes (`pack_item`: written to
 //!   `<dst>.new-<ms>.part`, the item in place renamed `<dst>.old-<ms>` and kept, the part renamed
-//!   in, the content checked; a root file the zip no longer carries renamed `<dst>.old-<ms>`),
-//!   the first item waiting until those instances are idle within `install.hot.idle_wait_ms`
-//!   (`instances_not_idle` otherwise; nothing changed yet, so the operation's own pauses are
+//!   in, the content checked; a root file or the notices directory the zip no longer carries
+//!   renamed `<dst>.old-<ms>`), the first item waiting until those instances are idle within
+//!   `install.hot.idle_wait_ms` (`instances_not_idle` otherwise; nothing changed yet, so the
+//!   operation's own pauses are
 //!   handed back at once, LAB-3 fix 1); then the checks after the placement (`post_check`: the
 //!   plan of the same bundle again, every item now unchanged; the Tools' `actinglab.exe
 //!   standard-pack check` of the game root; the new composition, the catalog the Runtime's
@@ -42,10 +46,13 @@ use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
-    BundleIndex, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_UI_FILE, StandardPackRootBytes, read_standard_pack_root,
+    BundleIndex, MAX_NOTICE_FILE_BYTES, NoticeBound, NoticeEntry, NoticeIssue,
+    RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
+    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRootBytes, check_notice_listing,
+    check_notice_pack_ids, check_notice_size, check_notice_text, notice_relative_path,
+    read_standard_pack_root,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -97,6 +104,10 @@ const RETIRED_WHEN_ABSENT: [&str; 7] = [
     STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_PAGES_FILE,
 ];
+/// Workflow #444 NOTICES-2: the `package` revision that admits a bundle's notices directory; a
+/// bundle that carries it declares a `package` maximum of this at least (`notice_undeclared`;
+/// `contracts/package-reference.md`, "Notices", the row "revision").
+const NOTICES_PACKAGE_REVISION: u64 = 10;
 
 /// What an item is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +119,9 @@ pub(crate) enum ItemKind {
     Pack,
     /// A root file of the game root.
     Root,
+    /// Workflow #444 NOTICES-2: `notices\`, the bundle's notices directory, a folder digested as
+    /// a pack's is.
+    Notices,
 }
 
 /// What the placement does to an item.
@@ -117,7 +131,8 @@ pub(crate) enum ItemState {
     New,
     Replace,
     Unchanged,
-    /// A reader's root file the zip no longer carries: set aside.
+    /// A reader's root file, or (Workflow #444 NOTICES-2) the notices directory, the zip no
+    /// longer carries: set aside.
     Retire,
 }
 
@@ -252,6 +267,30 @@ impl Archive {
             .map_err(|error| files::os_failure(&self.path, &error, IoOp::Read))?;
         Ok(bytes)
     }
+
+    /// Workflow #444 NOTICES-2: the bytes of the member `name`, at most `limit` of them, whatever
+    /// size the zip declares for it.
+    fn read_at_most(&mut self, name: &str, limit: u64) -> Result<Vec<u8>, Outcome> {
+        let entry = self.zip.by_name(name).map_err(|error| {
+            invalid(&self.path).caused_by(files::zip_failure(&error).path(&self.path))
+        })?;
+        let mut bytes = Vec::new();
+        entry
+            .take(limit)
+            .read_to_end(&mut bytes)
+            .map_err(|error| files::os_failure(&self.path, &error, IoOp::Read))?;
+        Ok(bytes)
+    }
+
+    /// The bytes of the member `name` of an item of `kind`: a file of the notices directory
+    /// through its bound plus one byte (Workflow #444 NOTICES-2), any other member whole.
+    fn read_of(&mut self, kind: ItemKind, name: &str) -> Result<Vec<u8>, Outcome> {
+        if kind == ItemKind::Notices {
+            self.read_at_most(name, MAX_NOTICE_FILE_BYTES + 1)
+        } else {
+            self.read(name)
+        }
+    }
 }
 
 /// The digest of a folder's listing: the SHA-256 of each `<path>\n<sha256>\n`, in path order.
@@ -278,7 +317,7 @@ fn disk_digest(kind: ItemKind, dst: &Path) -> Result<Option<String>, Outcome> {
             .map_err(|error| files::os_failure(path, &error, IoOp::Read))
     };
     match kind {
-        ItemKind::Pack if dst.is_dir() => {
+        ItemKind::Pack | ItemKind::Notices if dst.is_dir() => {
             let mut listing = BTreeMap::new();
             for relative in files::list_files(dst)? {
                 let path = files::join_relative(dst, &relative);
@@ -298,12 +337,12 @@ fn zip_digest(
     members: &BTreeMap<String, String>,
 ) -> Result<String, Outcome> {
     match kind {
-        ItemKind::Pack => {
+        ItemKind::Pack | ItemKind::Notices => {
             let mut listing = BTreeMap::new();
             for (relative, member) in members {
                 listing.insert(
                     relative.clone(),
-                    files::sha256_bytes(&archive.read(member)?),
+                    files::sha256_bytes(&archive.read_of(kind, member)?),
                 );
             }
             Ok(listing_digest(&listing))
@@ -381,6 +420,88 @@ fn planned_item(
     })
 }
 
+/// An item the zip no longer carries, set aside: a reader's root file or (Workflow #444
+/// NOTICES-2) the notices directory.
+fn retired_item(item: &str, kind: ItemKind, dst: &Path) -> Item {
+    Item {
+        item: item.to_owned(),
+        kind,
+        state: ItemState::Retire,
+        dst: files::plain(dst),
+        digest: None,
+        members: BTreeMap::new(),
+        zip: None,
+        part: None,
+        old: None,
+        first: false,
+    }
+}
+
+/// Workflow #444 NOTICES-2: `pack_invalid` of the bundle `zip` of `game` for a broken notices
+/// rule, caused by `standard_pack_root_invalid` as a root file's problem is: `path` the member the
+/// issue names below the zip (`<zip>\notices\…`, `<zip>\notices` for the count or the total,
+/// `<zip>\bundle.json` with `package_id` for a pack), `json_pointer` empty, and the bound with the
+/// value found where the rule has one.
+fn notice_refusal(zip: &Path, game: &str, issue: &NoticeIssue) -> Outcome {
+    let mut cause = Outcome::new(SharedCode::StandardPackRootInvalid)
+        .game(game)
+        .path(files::join_relative(zip, &issue.member()))
+        .standard_pack_problem(issue.problem)
+        .json_pointer(String::new());
+    if let Some(package_id) = issue.package_id() {
+        cause = cause.package_id(package_id);
+    }
+    cause = match issue.bound {
+        Some(NoticeBound::Count { limit, found }) => cause.limit_count(limit).count(found),
+        Some(NoticeBound::Bytes { limit, found }) => cause.limit_bytes(limit).actual_bytes(found),
+        None => cause,
+    };
+    invalid(zip).caused_by(cause)
+}
+
+/// Workflow #444 NOTICES-2: the notices directory of the bundle `zip` of `game`, `notices` (each
+/// file's path below the directory and its member), held to the contract crate's rules before
+/// anything is held or written: a bundle that carries it declares a `package` maximum
+/// (`package[1]`) of [`NOTICES_PACKAGE_REVISION`] at least (`notice_undeclared`, at
+/// `<zip>\interfaces.json`); the listing with the sizes the zip declares (`sizes`, by member)
+/// keeps the set rule; no pack of `package_ids` is named like the directory; and each file, read
+/// through its bound plus one byte, keeps the size and text rules with what was read.
+fn check_notices<'a>(
+    archive: &mut Archive,
+    zip: &Path,
+    game: &str,
+    package: [u64; 2],
+    sizes: &BTreeMap<String, u64>,
+    notices: &BTreeMap<String, String>,
+    package_ids: impl IntoIterator<Item = &'a str>,
+) -> Result<(), Outcome> {
+    if package[1] < NOTICES_PACKAGE_REVISION {
+        return Err(invalid(zip).caused_by(
+            Outcome::new(SharedCode::StandardPackRootInvalid)
+                .game(game)
+                .path(zip.join(INTERFACES_FILE))
+                .standard_pack_problem(StandardPackProblem::NoticeUndeclared)
+                .json_pointer(String::new()),
+        ));
+    }
+    let listing = notices
+        .iter()
+        .map(|(path, member)| NoticeEntry {
+            path,
+            bytes: sizes.get(member).copied().unwrap_or(0),
+        })
+        .collect::<Vec<_>>();
+    check_notice_listing(&listing).map_err(|issue| notice_refusal(zip, game, &issue))?;
+    check_notice_pack_ids(true, package_ids).map_err(|issue| notice_refusal(zip, game, &issue))?;
+    for (path, member) in notices {
+        let bytes = archive.read_of(ItemKind::Notices, member)?;
+        check_notice_size(path, bytes.len() as u64)
+            .and_then(|()| check_notice_text(path, &bytes))
+            .map_err(|issue| notice_refusal(zip, game, &issue))?;
+    }
+    Ok(())
+}
+
 /// The plan of placing the bundle `zip` (see the module's description). `sums` is the
 /// `SHA256SUMS` the zip is checked against, when given.
 pub(crate) fn plan(
@@ -408,16 +529,42 @@ pub(crate) fn plan(
         .validate()
         .map_err(|error| invalid(&zip).caused_by(Outcome::new(error.code())))?;
     let game = bundle.game.clone();
+    // The package interface the bundle declares: its maximum within this installer's range.
+    // Workflow #444 NOTICES-2: checked before the layout, so that a bundle of a later revision is
+    // refused through `package` and not through a member this installer does not know.
+    let declared = archive
+        .read(INTERFACES_FILE)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(files::without_bom(&bytes)).ok())
+        .and_then(|value| manifest::parse_declaration(&value))
+        .and_then(|speaks| speaks.get("package").copied());
+    let own = host
+        .installer_speaks()
+        .and_then(|speaks| speaks.get("package").copied());
+    let package = match (declared, own) {
+        (Some(declared), Some(own)) if own[0] <= declared[1] && declared[1] <= own[1] => declared,
+        _ => {
+            return Err(super::refusal(PLACE, InstallRefusal::InterfaceEdge)
+                .path(zip.join(INTERFACES_FILE))
+                .game(game.clone()));
+        }
+    };
     let pack_ids = bundle
         .packs
         .iter()
         .map(|pack| pack.package_id.clone())
         .collect::<BTreeSet<_>>();
     let tables = bundle.tables.clone().unwrap_or_default();
-    // The layout: the root files, `packs/<listed id>/…` and `tables/<listed id>.json`.
+    // The layout: the root files, `packs/<listed id>/…`, `tables/<listed id>.json` and (Workflow
+    // #444 NOTICES-2) the notices directory's files `notices/<path>`, by their path below it.
     let mut roots = BTreeSet::new();
     let mut pack_members: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    let mut notice_members: BTreeMap<String, String> = BTreeMap::new();
     for name in members.keys() {
+        if let Some(path) = notice_relative_path(name) {
+            notice_members.insert(path.to_owned(), name.clone());
+            continue;
+        }
         let parts = name.split('/').collect::<Vec<_>>();
         match parts.as_slice() {
             [file] if ROOT_FILES.contains(file) => {
@@ -440,24 +587,18 @@ pub(crate) fn plan(
             _ => return Err(invalid(&zip.join(name))),
         }
     }
-    // The package interface the bundle declares: its maximum within this installer's range.
-    let declared = archive
-        .read(INTERFACES_FILE)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(files::without_bom(&bytes)).ok())
-        .and_then(|value| manifest::parse_declaration(&value))
-        .and_then(|speaks| speaks.get("package").copied());
-    let own = host
-        .installer_speaks()
-        .and_then(|speaks| speaks.get("package").copied());
-    let package = match (declared, own) {
-        (Some(declared), Some(own)) if own[0] <= declared[1] && declared[1] <= own[1] => declared,
-        _ => {
-            return Err(super::refusal(PLACE, InstallRefusal::InterfaceEdge)
-                .path(zip.join(INTERFACES_FILE))
-                .game(game.clone()));
-        }
-    };
+    // Workflow #444 NOTICES-2: the notices directory, by the contract crate's rules.
+    if !notice_members.is_empty() {
+        check_notices(
+            &mut archive,
+            &zip,
+            &game,
+            package,
+            &members,
+            &notice_members,
+            bundle.packs.iter().map(|pack| pack.package_id.as_str()),
+        )?;
+    }
     // The root files as every reader checks them.
     let mut root_bytes = BTreeMap::new();
     for file in &roots {
@@ -517,6 +658,29 @@ pub(crate) fn plan(
         }
     }
     let mut items = Vec::new();
+    // Workflow #444 NOTICES-2: the notices directory first, so that the texts are in place before
+    // the material they accompany; set aside, as a reader's root file is, when the game root holds
+    // one and the zip carries none (unless a pack of the bundle takes that folder's name).
+    let notices = game_root.join(STANDARD_PACK_NOTICES_DIRECTORY);
+    if !notice_members.is_empty() {
+        items.push(planned_item(
+            &mut archive,
+            STANDARD_PACK_NOTICES_DIRECTORY.to_owned(),
+            ItemKind::Notices,
+            &notices,
+            notice_members,
+        )?);
+    } else if notices.exists()
+        && !pack_ids
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case(STANDARD_PACK_NOTICES_DIRECTORY))
+    {
+        items.push(retired_item(
+            STANDARD_PACK_NOTICES_DIRECTORY,
+            ItemKind::Notices,
+            &notices,
+        ));
+    }
     for table in &tables {
         let file = format!("{table}.json");
         let member = format!("{RESERVED_TABLES_DIRECTORY}/{file}");
@@ -543,18 +707,7 @@ pub(crate) fn plan(
     for file in RETIRED_WHEN_ABSENT {
         let dst = game_root.join(file);
         if !roots.contains(file) && dst.exists() {
-            items.push(Item {
-                item: file.to_owned(),
-                kind: ItemKind::Root,
-                state: ItemState::Retire,
-                dst: files::plain(&dst),
-                digest: None,
-                members: BTreeMap::new(),
-                zip: None,
-                part: None,
-                old: None,
-                first: false,
-            });
+            items.push(retired_item(file, ItemKind::Root, &dst));
         }
     }
     for file in ROOT_FILES {
@@ -792,7 +945,7 @@ fn write_part(item: &Item, part: &Path) -> Result<(), Outcome> {
     let zip = item.zip.as_deref().map(PathBuf::from).unwrap_or_default();
     let mut archive = Archive::open(&zip)?;
     for (relative, member) in &item.members {
-        let bytes = archive.read(member)?;
+        let bytes = archive.read_of(item.kind, member)?;
         let target = if relative.is_empty() {
             part.to_path_buf()
         } else {
@@ -1021,8 +1174,8 @@ pub(crate) fn check_step(
 }
 
 /// `undo` of one `pack_item` step: the placed item set aside as `.rolledback-<ms2>` and the kept
-/// one put back; a root file set aside put back; a part left behind set aside as
-/// `.abandoned-<ms2>`. The paths it set aside.
+/// one put back; a root file or the notices directory set aside put back; a part left behind set
+/// aside as `.abandoned-<ms2>`. The paths it set aside.
 pub(crate) fn reverse_item(
     _operation: &Operation<'_>,
     step: &Step,

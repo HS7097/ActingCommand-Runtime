@@ -95,7 +95,7 @@ fn lab5g1b_front_mcp_connects_as_todays_mcp_server() {
         operations,
         [json!("health"), json!("bind_channel"), json!("status")]
     );
-    let RuntimeOperation::BindChannel { channel, via } = server.requests[1].operation() else {
+    let RuntimeOperation::BindChannel { channel, via, .. } = server.requests[1].operation() else {
         panic!("the second request is no BindChannel");
     };
     assert_eq!((*channel, *via), (RuntimeChannel::Mcp, None));

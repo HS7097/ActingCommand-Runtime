@@ -732,6 +732,7 @@ data files beside its package directories, one directory per game below the conf
   ui.json            actingcommand.ui.v1, optional: display metadata for clients (#429 R-11)
   loading.json       actingcommand.loading.v1, optional: the game's loading pages, for audit (#407 LOAD-1)
   loading/           the templates loading.json declares (#407 LOAD-1)
+  notices/           the package author's notice texts; no reader of the Runtime opens them (#444)
   <directory>/       one package directory per bundle pack
 ```
 
@@ -977,7 +978,7 @@ data files beside its package directories, one directory per game below the conf
   | depth | at most 2 segments below it, `notices/<name>` or `notices/<directory>/<name>` (`notice_depth`) |
   | segment | 1 to 64 bytes of `[A-Za-z0-9._-]`, the first a letter or a digit, and a segment `safe_source_path` accepts: no trailing dot, no device name (`CON`, `NUL`, `COM1` and the others, before the first dot, in any case) (`notice_name`) |
   | a file name's suffix | none (no dot), or after the last dot `md`, `txt`, `tsv` or `csv`, in any ASCII case; any other is refused (`notice_name`). The last suffix decides: `a.tar.md` is accepted, `a.md.html` refused, and a trailing dot (`NOTICE.`) refused; a dot in a directory's name is no suffix |
-  | uniqueness | no two paths equal under ASCII case folding; no file whose path, in any ASCII case, is another path's directory (`notice_name`) |
+  | uniqueness | no two paths equal under ASCII case folding; no file whose path, in any ASCII case, is another path's directory; no two directories whose names are equal under ASCII case folding and not byte for byte, `A/x.md` beside `a/y.md`, refused at the later path (NOTICES-2: a file system that folds case holds them in one directory, which then no longer lists as the zip does); one directory named alike by several paths is kept (`notice_name`) |
   | pack | a bundle that carries the directory lists no pack whose `package_id` is `notices` in any ASCII case (`notice_name`). The bundle index does not reserve the name (`reserved_package_id` is unchanged, so a reader of an earlier `package` revision accepts what it accepted), and a bundle without the directory may still name a pack so |
   | count | at most 64 files (`notice_count`) |
   | one file | 1 to 2,097,152 bytes, 2 MiB (`notice_bytes`) |
@@ -988,21 +989,31 @@ data files beside its package directories, one directory per game below the conf
   The bounds are format bounds that every writer and reader share, constants of the module, not
   configuration keys. A listing of the directory (each file's path with its size: a zip's
   declared sizes, a directory's lengths on disk) is judged in the byte order of its paths, in this
-  order: the count, each path and its size, the total, the two collisions; so the first rule
+  order: the count, each path and its size, the total, the three collisions; so the first rule
   broken is the same whatever order the listing comes in. A broken rule is
   `standard_pack_root_invalid` with `standard_pack_problem` its word, `path` the member it names
   (`notices/<path>`, the directory `notices` for the count and the total, `bundle.json` with
   `package_id` for a pack), `json_pointer` empty, and where the rule has a bound the bound broken
   and the value found: `limit_count` and `count` for the count and the depth, `limit_bytes` and
   `actual_bytes` for a segment's length (1 or 64), a file's size (1 or 2,097,152) and the total.
-  **Readers.** `package bundle` (`--notices`), `actinglab standard-pack check` (a game root that
-  holds the directory) and the installer's `place` will read the directory, each through these
-  rules. The Runtime's root reader, its startup, a run, the policy crate and check-config never
-  read it. **This slice states the rules and nothing reads the directory yet:** the installer's
-  `place` reads it from NOTICES-2, which raises the `package` interface to revision 10, and
-  `package bundle --notices`, `standard-pack check` and `resource verify` from NOTICES-3. Until
-  then no program checks, lays or places the directory, and `place` refuses a zip that carries
-  one at its layout check, as any unknown member (`pack_invalid` naming the member).
+  **Readers.** The installer's `place`, `package bundle` (`--notices`) and `actinglab
+  standard-pack check` (a game root that holds the directory), each through these rules. The
+  Runtime's root reader, its startup, a run, the policy crate and check-config never read it.
+  **The installer's `place` reads it from NOTICES-2** (since 0.12.58; `v012-register.md` §1.335;
+  [install-cli.md](install-cli.md), "The Lab's rescue module"), which raises the `package`
+  interface to revision 10. It checks the `package` edge first, then the directory in the zip's
+  member table (the listing with the declared sizes, the pack rule, each file read through its
+  bound plus one byte and held to the size and text rules), in the plan, before the hold and
+  before any write; a broken rule refuses the bundle `pack_invalid` caused by
+  `standard_pack_root_invalid` as above, `path` below the zip (`<zip>\notices\…`, `<zip>\notices`,
+  `<zip>\bundle.json`, and `<zip>\interfaces.json` for `notice_undeclared`). It places the
+  directory as one item of kind `notices`, first among the items, `new`, `replace` or
+  `unchanged`, and sets it aside as `notices.old-<ms>` (`retire`) when the game root holds one and
+  the zip carries none (unless a pack of the bundle is named like it); `undo` puts back what was
+  there. An installer before NOTICES-2 refuses a zip that carries the directory at its layout
+  check, as any unknown member (`pack_invalid` naming the member). **Still to come with
+  NOTICES-3:** `package bundle --notices`, `standard-pack check` and `resource verify`; until
+  then no program lays the directory, and `standard-pack check` ignores a placed one.
 - **One check, three readers.** The contract crate's checks (`parse_standard_pack_pages`,
   `parse_standard_pack_interrupts`, `parse_standard_pack_navigation`, (Workflow #392 DA-4)
   `parse_standard_pack_display_layout`,

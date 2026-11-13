@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::codes::{HostCode, HostLocation};
-use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::codes::{ContractLocation, RuntimeContractCode, SharedCode};
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     ChannelBinding, GovernanceIdentityCard, GovernanceIdentityRefusal, GovernanceIdentityVerdict,
@@ -206,11 +206,27 @@ impl HostShared {
     /// Workflow #389 U-2 (model section 3.2): binds the connection to `binding`, once. A second
     /// `BindChannel` on the connection is refused with `channel_binding_exists`, naming the
     /// channel it keeps; nothing is recorded either way (the handshake is not copied by G14).
+    /// Workflow #434 LAB-6S1a: the binding keeps the initiator a `lab` connection declared, the
+    /// answer echoes it, and the entry leaves with its connection; nothing reads it but the
+    /// receipts of the connection. `None` is a request the shape check refused before any handler
+    /// runs (`invalid_bind_channel`), refused the same way here and leaving the connection
+    /// unbound.
     pub(super) fn bind_channel(
         &self,
         connection_id: ConnectionId,
-        binding: ChannelBinding,
+        binding: Option<ChannelBinding>,
     ) -> Result<OperationSuccess, RequestFailure> {
+        let Some(binding) = binding else {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    RuntimeContractCode::InvalidBindChannel,
+                    HostLocation::BindChannel,
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        };
         let mut channels = lock(&self.connection_channels, HostLocation::BindChannel)?;
         if let Some(bound) = channels.get(&connection_id) {
             let kept = bound.channel;
@@ -232,6 +248,7 @@ impl HostShared {
             result: RuntimeResult::ChannelBound {
                 channel: binding.channel,
                 via: binding.via,
+                initiator: binding.initiator,
             },
             failure_outcome: None,
         })

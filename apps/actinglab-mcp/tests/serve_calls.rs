@@ -720,7 +720,8 @@ fn mcp_write_provenance_as_todays_server() {
             "pause_scheduling",
         ]
     );
-    let RuntimeOperation::BindChannel { channel, via } = connection.requests[1].operation() else {
+    let RuntimeOperation::BindChannel { channel, via, .. } = connection.requests[1].operation()
+    else {
         panic!("the second request is no BindChannel");
     };
     assert_eq!((*channel, *via), (RuntimeChannel::Mcp, None));

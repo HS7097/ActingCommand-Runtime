@@ -16,9 +16,10 @@
 use crate::ipc::DEFAULT_RUNTIME_MAX_FRAME_BYTES;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    EventQuery, IdentifierIssuer, OwnerEpoch, ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE,
-    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeInfo,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    DeclaredInitiator, EventQuery, IdentifierIssuer, OwnerEpoch, ProjectedEvent, ProjectionProfile,
+    RUNTIME_INFO_FILE, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, RuntimeInfo, RuntimeOperation, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
@@ -440,15 +441,22 @@ impl Connection {
         let request = self
             .next_request()
             .unwrap_or_else(|| panic!("the client closed before BindChannel"));
-        let RuntimeOperation::BindChannel { channel, via } = request.operation() else {
+        let RuntimeOperation::BindChannel {
+            channel,
+            via,
+            initiator,
+        } = request.operation()
+        else {
             panic!(
                 "BindChannel follows Health in a handshake, got {:?}",
                 request.operation()
             )
         };
+        // Workflow #434 LAB-6S1a: a declared initiator is echoed as the Runtime echoes it.
         let result = RuntimeResult::ChannelBound {
             channel: *channel,
             via: *via,
+            initiator: initiator.as_ref().and_then(DeclaredInitiator::initiator),
         };
         self.answer(ScriptedAnswer::completed(&request, result));
     }

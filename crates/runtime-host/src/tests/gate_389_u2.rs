@@ -79,7 +79,11 @@ fn bind(
     channel: RuntimeChannel,
     via: Option<ChannelVia>,
 ) -> RuntimeReceipt {
-    let request = client.request(RuntimeOperation::BindChannel { channel, via });
+    let request = client.request(RuntimeOperation::BindChannel {
+        channel,
+        via,
+        initiator: None,
+    });
     client.send(&request)
 }
 
@@ -153,6 +157,7 @@ fn u2_a_bound_connection_marks_its_requests_with_its_channel_whatever_their_enve
         Some(&RuntimeResult::ChannelBound {
             channel: RuntimeChannel::Cli,
             via: None,
+            initiator: None,
         })
     );
     assert_eq!(bound.channel(), Some(RuntimeChannel::Cli));
@@ -295,6 +300,7 @@ fn u2_a_lab_connection_forwarded_by_mcp_names_lab_and_mcp_on_its_records() {
     let lab_via_mcp = client.request(RuntimeOperation::BindChannel {
         channel: RuntimeChannel::Lab,
         via: Some(ChannelVia::Mcp),
+        initiator: None,
     });
     let mut wire = serde_json::to_value(&lab_via_mcp).expect("request JSON");
     wire["operation"]["channel"] = json!("cli");
@@ -311,6 +317,7 @@ fn u2_a_lab_connection_forwarded_by_mcp_names_lab_and_mcp_on_its_records() {
         Some(&RuntimeResult::ChannelBound {
             channel: RuntimeChannel::Lab,
             via: Some(ChannelVia::Mcp),
+            initiator: None,
         })
     );
     let configure = request_as(

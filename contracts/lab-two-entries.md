@@ -34,10 +34,22 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-3 | Runtime | the rescue and installation module (section 7): the journal's initiator, no confirmation parameters (section 5), guards that report (section 6) |
 | LAB-4 | Runtime | `crates/watchdog`; `actingwatch.exe` does its own tick |
 | LAB-5 | Runtime | `actinglab-mcp.exe`: tools from the table, no tiers; the MCP entry `g2`, a second program (section 8.1); both in the Tools archive inside `tools-layout` 3, and a running server never blocks a deploy (LAB-5G6, section 8.1) |
-| LAB-6 | Runtime | the door of section 2 and the UI list of section 3; the initiator in receipts, G14 and the `host.config_overrides` rows (section 4.3); `runtime-client` 7, `ledger` 8, `actingd-config` 28 |
-| UI-L1 | UI | the console on `runtime-client` 7: Lab children instead of actingctl, refusals shown, no second press (the stop note stays beside the button, section 6); the settings page shows a row's initiator, else its channel (section 4.3); the READMEs' install line names the rescue module's command |
+| LAB-6 | Runtime | the door of section 2 and the UI list of section 3; the initiator in receipts, G14 and the `host.config_overrides` rows (section 4.3). Not one step: cut into the slices LAB-6S0 to LAB-6S5 below, each of which leaves main deployable (board #434, 2026-11-13) |
+| LAB-6S0 | Runtime | `deploy` and `rollback` through the Lab's MCP server. Way back: yes |
+| LAB-6S1a | Runtime | the door also takes `BindChannel{channel: lab, initiator}` (section 2.2); `runtime-client` [3, 8]. Way back: yes |
+| LAB-6S1b | Runtime | the origin gates of `RuntimeRequest::validate()` go. Way back: yes |
+| LAB-6S2 | Runtime | every client of the Runtime repository binds `lab` with its word, `actingctl` included (after LAB-6S1a and LAB-6S1b have been deployed by themselves). Way back: yes |
+| LAB-6S3 | Runtime | the UI list on `ui`. Way back: yes |
+| LAB-6S4a | Runtime | the five kinds deleted; `install-control` [0, 0]. Way back: yes |
+| LAB-6S4b | Runtime | `cli`, `mcp` and a `lab` without a word refused; `via` off the wire; `runtime-client` [8, 8]; `actingd-config` 30. Way back: yes |
+| LAB-6S5 | Runtime | the initiator in the ledger and in the settings rows; `ledger` 9. Way back: **no** |
+| UI-L1 | UI | the console on `runtime-client` 8: Lab children instead of actingctl, refusals shown, no second press (the stop note stays beside the button, section 6); the settings page shows a row's initiator, else its channel (section 4.3); the READMEs' install line names the rescue module's command |
 | LAB-7 | Runtime | `apps/actingctl` deleted; `install-cli` 2 |
 | UI-L2 | UI | after UI-2a: acsetup as the graphical shell of the rescue module; its `status`, `discover`, `shutdown`, `check-config` and `ledger verify` through actinglab, and no `install-transition` |
+
+Where a later section says LAB-6 without a slice letter, it means the slice of LAB-6 in the table
+above that turns that behaviour on; until it is deployed, the text it replaces stays in force
+(section 11).
 
 ## 1 Words
 
@@ -66,23 +78,32 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 
 ### 2.2 The handshake
 
-1. `Health` (the owner epoch check), then `BindChannel` once:
-   - `BindChannel{channel: lab, initiator}`, `initiator` one of the Lab words of section 4;
-   - `BindChannel{channel: ui}`, without an initiator: the connection's initiator is `UI`.
+Each step names the slice of LAB-6 that turns it on.
 
-   An `initiator` missing on `lab`, present on `ui`, or not a word of section 4 is refused
-   `invalid_bind_channel`.
-2. The answer is `ChannelBound{channel, initiator}`.
-3. `cli` and `mcp` are no longer bound: `BindChannel` with either is Denied
+1. `Health` (the owner epoch check), then `BindChannel` once:
+   - `BindChannel{channel: lab, initiator}`, `initiator` one of the five Lab words of section 4
+     (from LAB-6S1a; until LAB-6S4b a `lab` binding without a word, with or without `via`, is
+     taken as before);
+   - `BindChannel{channel: ui}`, without an initiator: the connection's initiator is `UI`,
+     implied by its channel and never written on the wire.
+
+   From LAB-6S1a an `initiator` present on `ui`, `cli` or `mcp`, present together with `via`, the
+   word `UI`, or a word not of section 4 is refused `invalid_bind_channel`, and the connection
+   stays unbound. From LAB-6S4b an `initiator` missing on `lab` is refused the same way.
+2. The answer is `ChannelBound{channel, initiator?}` (from LAB-6S1a): it echoes the word of a
+   connection that declared one and carries no `initiator` otherwise, on `ui` included. A binding
+   without a word is answered byte for byte as before LAB-6S1a.
+3. From LAB-6S4b `cli` and `mcp` are no longer bound: `BindChannel` with either is Denied
    `channel_request_refused` (`channel` the value asked, `operation` `bind_channel`), and the
    connection stays unbound. Ledger records that carry `cli`, `mcp` or `via` stay readable
-   (section 10, `ledger` 8).
+   (section 10).
 4. A second `BindChannel` on one connection is `channel_binding_exists`, as today.
-5. `via` (`ChannelVia`) leaves the request, the answer and the connection table. The table keeps
-   each connection's channel and initiator in memory only; an entry leaves with its connection;
-   no status read reports it.
+5. From LAB-6S4b `via` (`ChannelVia`) leaves the request, the answer and the connection table.
+   From LAB-6S1a the table keeps each connection's channel and initiator in memory only; an entry
+   leaves with its connection; no status read reports it.
 6. The runtime client's three ways of opening a connection keep calling one handshake function,
-   so a reconnect keeps the channel and the initiator.
+   so a reconnect keeps the channel and, from LAB-6S1a, the initiator; the player hold's
+   temporary client binds both too.
 
 ### 2.3 The gate's decision
 
@@ -196,8 +217,11 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 - The word names where the request came from, not the module that serves the operation: an
   authoring or rescue operation typed at a command line is `Lab-CLI`, and through MCP `Lab-MCP`
   (open point 1).
-- From LAB-6 the six words are a closed vocabulary of `runtime-client` 7 and `ledger` 8; adding or
-  renaming one later raises both (open point 2).
+- From LAB-6S1a the six words are a closed vocabulary of `runtime-client` 8, written once, in the
+  contract crate (`Initiator`, which `crates/lab-ops` converts its own type to, so the recordings
+  and the installation journal write the same strings); from LAB-6S5 also of `ledger` 9. Adding or
+  renaming one later raises both (open point 2); until LAB-6S1a is released a rename changes one
+  line of that type, this text and the table.
 
 ### 4.2 How a process picks its word
 
@@ -229,11 +253,13 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 ### 4.3 Where it is recorded
 
 - **Online.** It is bound with the connection (section 2.2), and every request of the connection
-  carries it: the receipt gains `initiator` beside `channel`, in place of `via`; the G14 records
-  `command.received`, `command.validated` and `command.rejected` gain `initiator` beside `channel`,
-  in place of `via`; so does the player hold's source (`PlayerHoldSource` and its ledger copy).
-  Effect records gain no member: who sent a request is found through its request id in its G14
-  record, as today (LAB-6).
+  carries it: from LAB-6S1a the receipt gains `initiator` beside `channel` on a connection that
+  declared a word (a `ui` connection's `UI` is implied by its channel and not written, so the
+  console reads its receipts byte for byte as before), and `via` leaves the receipt with
+  LAB-6S4b; from LAB-6S5 the G14 records `command.received`, `command.validated` and
+  `command.rejected` gain `initiator` beside `channel`, in place of `via`; so does the player
+  hold's source (`PlayerHoldSource` and its ledger copy). Effect records gain no member: who sent
+  a request is found through its request id in its G14 record, as today (LAB-6).
   - **Settings overrides.** Each `host.config_overrides` row
     ([runtime-config.md](runtime-config.md), "Facts"; register G4 and U2-5) gains `initiator`,
     written beside `channel` by every `ConfigureSettings` (LAB-6). LAB-6 writes `channel` `lab` or
@@ -1127,9 +1153,14 @@ when a member's meaning changes.
 
 ## 10 Interfaces
 
-Planned, not in force: [component-interfaces.md](component-interfaces.md), "Planned: Workflow
-#434". LAB-6 raises `runtime-client` to 7, `ledger` to 8 and `actingd-config` to 28; LAB-7
-`install-cli` to 2. `install-control` retires, `tools-layout` becomes 5 as that section plans it,
+In force from LAB-6S1a (Runtime 0.12.58): `runtime-client` [3, 8], revision 8 being the
+initiator of section 2.2 on `BindChannel`, `ChannelBound` and the receipt
+([component-interfaces.md](component-interfaces.md), the revision table). Planned, not in force:
+the same file, "Planned: Workflow #434". The numbers this contract first planned for LAB-6
+(`runtime-client` 7, `ledger` 8, `actingd-config` 28) were taken by other slices: LAB-6S4a
+declares `install-control` [0, 0], LAB-6S4b raises `runtime-client`'s `min` to 8 and
+`actingd-config` to 30, LAB-6S5 `ledger` to 9; LAB-7 `install-cli` to 2. `install-control`
+retires, `tools-layout` becomes 5 as that section plans it,
 `install-selection` does not move, and the MCP entry's second generation, a program of its own
 (section 8.1), speaks `entry_protocol` 2 while the first keeps 1 (LAB-5). `actinglab-mcp.exe` and
 the second entry raise no layout: LAB-5G6 adds them inside `tools-layout` 3 (section 8.1). LAB-0

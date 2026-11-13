@@ -74,8 +74,8 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
    are four values: `cli`, `mcp`, `ui`, `lab`. Nothing records a person, an agent or a
    script, and there is no "undeclared" value.
 2. A connection binds once, at open: the handshake is `Health` (owner epoch check)
-   followed by `BindChannel{channel, via?}`. Every request on the connection then
-   carries that channel.
+   followed by `BindChannel{channel, via?, initiator?}` (`initiator` from Workflow #434
+   LAB-6S1a, rule 9). Every request on the connection then carries that channel.
    - The runtime client opens TCP connections in three places: `connect`,
      `reconnect_in_owner_epoch` (the fallback of `send_or_dropped`) and
      `recover_contained_task_timeout`. All three call one internal handshake function,
@@ -96,9 +96,20 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
 8. `BindChannel` is its own request kind, not a field of `Health`: `Health` is what the
    watchdog and every reconnect use to check the owner epoch, and a new client must
    still be able to check the epoch on an old actingd.
+9. From Workflow #434 LAB-6S1a (`runtime-client` 8; [lab-two-entries.md](lab-two-entries.md)
+   §2.2, §4.1) a `lab` connection may declare its initiator: `initiator`, one of the five Lab
+   words (`Lab-CLI`, `Lab-MCP`, `Lab-制包`, `Lab-救急`, `Lab-看门狗`), on the Lab channel only and
+   never with `via`. An initiator on another channel, with `via`, the word `UI` or a word
+   outside the list is refused `invalid_bind_channel` and the connection stays unbound. The
+   answer is `ChannelBound{channel, via?, initiator?}`, which echoes the word, and every receipt
+   of the connection carries `initiator` beside `channel`; the runtime client requires the echo
+   of both (`runtime_result_unexpected` otherwise). A connection that declares no word, the
+   console's `ui` among them, binds, is answered and reads its receipts byte for byte as before
+   (a `ui` connection's initiator `UI` is implied by its channel and never written). Nothing
+   records the word, and no status read reports it.
 
-The Runtime keeps a connection-to-channel (and `via`) table in memory only; an entry
-leaves when its connection closes. It replaces today's `governance_connections` set.
+The Runtime keeps a connection-to-channel (and `via`, and from LAB-6S1a the initiator) table in
+memory only; an entry leaves when its connection closes. It replaces today's `governance_connections` set.
 The table is not part of any status read and no connection count is reported:
 `RuntimeControlPlaneStatus` denies unknown fields, and which channel sent a request is
 visible in its receipt and its G14 record.
@@ -112,7 +123,10 @@ once, checks the owner epoch again, goes on unbound and reports one line
 `client_channel_unsupported` (stderr, or the MCP warnings). Later reconnects of that
 client process send no `BindChannel`. `runtime-info.json` carries no interface
 revision, so the client cannot ask first. This happens only when root Tools are newer
-than the slot's actingd, for example after a slot rollback.
+than the slot's actingd, for example after a slot rollback. In the same way an actingd before
+Workflow #434 LAB-6S1a cannot decode a `BindChannel` that names an initiator (the request
+denies unknown members) and drops the connection: such a client goes on unbound, and no client
+declares a word before a Runtime of LAB-6S1a is deployed.
 
 ### Transition: v0.12.0 to U-6
 
@@ -326,7 +340,7 @@ U-6 deletes the source gates.
 
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
-| `BindChannel{channel, via?}` | handshake | — | the runtime client's handshake, once on every new TCP connection | no |
+| `BindChannel{channel, via?, initiator?}` (`initiator` Workflow #434 LAB-6S1a, `runtime-client` 8: one of the five Lab words, on `lab` only, never with `via`; answered `ChannelBound{channel, via?, initiator?}`) | handshake | — | the runtime client's handshake, once on every new TCP connection | no |
 | `UpgradeState{target, action}` (`enter`, `cancel`, `leave`) | general | instruction (upgrades only) | cli: `actingctl upgrade-state`, used by acsetup. The gate takes it from mcp and ui too, but neither frontend maps it | yes |
 | `UpgradeStateStatus{transition_id}` | general | read | cli | no |
 | `InstanceFactSnapshot{instance, key_prefix?}` (#389 MCP-4; `key_prefix` and the answer's `records_total` #428 S168-LB1a, since 0.12.55, `runtime-client` 7: the prefix's records kept before the view is built and measured against the frame, `records_total` the instance's records before the filter, both absent unless a prefix is sent) | general | read (one instance's facts, from memory) | cli `facts --instance [--key-prefix]`; mcp `ac_facts` (scope instance, `key_prefix`) | no |

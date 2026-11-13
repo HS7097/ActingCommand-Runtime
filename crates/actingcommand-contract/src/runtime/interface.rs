@@ -14,7 +14,8 @@ use super::RuntimeOperation;
 use crate::codes::ReceiptCode;
 use crate::outcome::Code;
 use crate::{FactKeyFamily, FactObservation, fact_key_family};
-use serde::{Deserialize, Serialize};
+use serde::de::{self, Deserializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 /// The channel a connection is bound to (section 3.2): one of the three counters of the general
 /// interface, or the Lab channel. Each front end names its own channel when it connects;
@@ -62,25 +63,161 @@ impl RuntimeChannel {
     }
 }
 
+/// Where a request came from (Workflow #434; `contracts/lab-two-entries.md` §4.1): one word of a
+/// closed list of six, compared byte for byte (UTF-8) and written exactly as [`Self::as_str`]
+/// gives it. This is the one place the six words are written: `crates/lab-ops` converts its own
+/// type into this one, so the recordings and the installation journal write these strings. Since
+/// LAB-6S1a (`runtime-client` 8) a connection on the Lab channel may declare one of the five Lab
+/// words in `BindChannel`; `UI` is the console's, implied by the `ui` channel and never declared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Initiator {
+    /// `UI`: the console on the `ui` entry; implied by its channel, never declared.
+    Ui,
+    /// `Lab-CLI`: `actinglab.exe` started from a command line, by a person or a script.
+    LabCli,
+    /// `Lab-MCP`: `actinglab-mcp.exe`, for an MCP client.
+    LabMcp,
+    /// `Lab-制包`: the Lab process the UI starts for its authoring workbench.
+    LabAuthoring,
+    /// `Lab-救急`: a Lab process the UI starts outside its workbench.
+    LabRescue,
+    /// `Lab-看门狗`: `actingwatch.exe`.
+    LabWatchdog,
+}
+
+impl Initiator {
+    /// The six words, in the contract's order (§4.1).
+    pub const ALL: [Self; 6] = [
+        Self::Ui,
+        Self::LabCli,
+        Self::LabMcp,
+        Self::LabAuthoring,
+        Self::LabRescue,
+        Self::LabWatchdog,
+    ];
+
+    /// The word, exactly as the contract writes it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ui => "UI",
+            Self::LabCli => "Lab-CLI",
+            Self::LabMcp => "Lab-MCP",
+            Self::LabAuthoring => "Lab-制包",
+            Self::LabRescue => "Lab-救急",
+            Self::LabWatchdog => "Lab-看门狗",
+        }
+    }
+
+    /// Whether a `lab` connection may declare this word in `BindChannel` (LAB-6S1a): every word
+    /// but `UI`, which only the `ui` channel implies.
+    pub const fn is_lab_word(self) -> bool {
+        !matches!(self, Self::Ui)
+    }
+
+    /// The initiator `word` names, compared byte for byte: no trimming, no case folding.
+    pub fn from_word(word: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|initiator| initiator.as_str() == word)
+    }
+}
+
+impl Serialize for Initiator {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Initiator {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let word = String::deserialize(deserializer)?;
+        Self::from_word(&word).ok_or_else(|| de::Error::unknown_variant(&word, &INITIATOR_WORDS))
+    }
+}
+
+/// The six words, for a decoder's refusal.
+static INITIATOR_WORDS: [&str; 6] = [
+    Initiator::Ui.as_str(),
+    Initiator::LabCli.as_str(),
+    Initiator::LabMcp.as_str(),
+    Initiator::LabAuthoring.as_str(),
+    Initiator::LabRescue.as_str(),
+    Initiator::LabWatchdog.as_str(),
+];
+
+/// `BindChannel.initiator` as a client sent it (Workflow #434 LAB-6S1a). Any string decodes, so a
+/// word outside the six is refused `invalid_bind_channel` by the request's shape check, as the
+/// contract says, and the connection is not dropped for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DeclaredInitiator(String);
+
+impl DeclaredInitiator {
+    /// The initiator the declaration names, when it is one of the six words (byte for byte).
+    pub fn initiator(&self) -> Option<Initiator> {
+        Initiator::from_word(&self.0)
+    }
+}
+
+impl From<Initiator> for DeclaredInitiator {
+    fn from(initiator: Initiator) -> Self {
+        Self(initiator.as_str().to_owned())
+    }
+}
+
 /// What one connection is bound to (section 3.2; U-2): its channel and, on the Lab channel only,
-/// the counter that forwarded the work. The Runtime keeps it in memory for the connection's
-/// lifetime and tags every request of the connection with it.
+/// the counter that forwarded the work, or (Workflow #434 LAB-6S1a) the initiator it declared. The
+/// Runtime keeps it in memory for the connection's lifetime and tags every request of the
+/// connection with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChannelBinding {
     pub channel: RuntimeChannel,
     pub via: Option<ChannelVia>,
+    /// Workflow #434 LAB-6S1a: the word a `lab` connection declared, one of the five Lab words;
+    /// `None` on every other binding (the `ui` entry's `UI` is implied by its channel).
+    pub initiator: Option<Initiator>,
 }
 
 impl ChannelBinding {
-    /// A binding without `via`.
+    /// A binding without `via` and without an initiator.
     pub const fn new(channel: RuntimeChannel) -> Self {
-        Self { channel, via: None }
+        Self {
+            channel,
+            via: None,
+            initiator: None,
+        }
     }
 
     /// Whether `BindChannel` may carry this binding: `via` only on the Lab channel (section 3.2
-    /// rule 7).
+    /// rule 7); an initiator (Workflow #434 LAB-6S1a) only on the Lab channel, without `via`, and
+    /// only one of the five Lab words, never `UI`.
     pub const fn is_valid(self) -> bool {
-        self.via.is_none() || matches!(self.channel, RuntimeChannel::Lab)
+        let on_lab = matches!(self.channel, RuntimeChannel::Lab);
+        match self.initiator {
+            None => self.via.is_none() || on_lab,
+            Some(initiator) => on_lab && self.via.is_none() && initiator.is_lab_word(),
+        }
+    }
+
+    /// The binding a `BindChannel{channel, via?, initiator?}` asks for, when its initiator, if it
+    /// names one, is one of the six words and the binding [`Self::is_valid`]; `None` otherwise,
+    /// which is `invalid_bind_channel` (Workflow #434 LAB-6S1a).
+    pub fn requested(
+        channel: RuntimeChannel,
+        via: Option<ChannelVia>,
+        initiator: Option<&DeclaredInitiator>,
+    ) -> Option<Self> {
+        let initiator = match initiator.map(DeclaredInitiator::initiator) {
+            // A word outside the six.
+            Some(None) => return None,
+            named => named.flatten(),
+        };
+        let binding = Self {
+            channel,
+            via,
+            initiator,
+        };
+        binding.is_valid().then_some(binding)
     }
 }
 
@@ -814,6 +951,7 @@ mod tests {
                 RuntimeOperation::BindChannel {
                     channel: RuntimeChannel::Lab,
                     via: Some(ChannelVia::Mcp),
+                    initiator: None,
                 },
                 RuntimeOperationKind::BindChannel,
             ),

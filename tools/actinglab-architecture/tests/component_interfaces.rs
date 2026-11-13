@@ -119,7 +119,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `read_list` and a selection document's value source `table_max_over_list`; a pack without
 ///   them keeps its revision and a document without the source its bytes, so [3, 8]. Workflow
 ///   #428 S168-LB1b (0.12.55, register §1.312) raises it to 9: `table_max_over_list`'s optional
-///   member `lower_bound_column`; a document without it keeps its bytes, so [3, 9].
+///   member `lower_bound_column`; a document without it keeps its bytes, so [3, 9]. Workflow #444
+///   NOTICES-2 (0.12.58, register §1.335) raises it to 10: a bundle zip's notices directory
+///   `notices/`, placed by the installer and opened by no reader of the Runtime; a bundle without
+///   it keeps its revision, so [3, 10].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -136,15 +139,18 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   request is answered as before, so [3, 6]. Workflow #428 S168-LB1a (0.12.55, register §1.309,
 ///   §1.311) raises `max` to 7: an `InstanceFactSnapshot` view with a record list of 257 to 1024
 ///   rows, the request's optional `key_prefix` and the answer's optional `records_total`; a
-///   request without the member is answered as before, so [3, 7].
+///   request without the member is answered as before, so [3, 7]. Workflow #434 LAB-6S1a
+///   (0.12.58, register §1.287, "Slice LAB-6S1a") raises `max` to 8: the optional `initiator` of
+///   `BindChannel`, `ChannelBound` and the receipt; a client of 3 to 7 neither sends nor receives
+///   it, so [3, 8].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 29]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
-    ("package", [3, 9]),
-    ("runtime-client", [3, 7]),
+    ("package", [3, 10]),
+    ("runtime-client", [3, 8]),
     ("runtime-outcomes", [1, 1]),
 ];
 

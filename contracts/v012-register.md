@@ -11532,6 +11532,95 @@ which the build before reads.
   the server's detached run would start `actinglab-mcp.exe`.
 - (c) `mcp_operation_unsupported` stays active (above, "The code").
 
+#### Slice LAB-6S1a (0.12.58): the door also takes `BindChannel{channel: lab, initiator}`; `runtime-client` [3, 8]
+
+Coordinator work order `rd-1113/brief-lab6s1a.md`, after the read-only survey
+`rd-1113/lab6-step0-survey.md`; the coordinator's rulings of 2026-11-13 on board #434, not the
+owner's words; on main `29a65e2d`. The contracts are [lab-two-entries.md](lab-two-entries.md)
+(the slice table, §2.2, §4.1, §4.3, §10), [runtime-interface.md](runtime-interface.md)
+("Binding" rule 9, "Old Runtimes", "New request kinds") and
+[component-interfaces.md](component-interfaces.md) (`runtime-client` 8, "Planned: Workflow #434").
+
+**The staging, and why.** The contract described LAB-6 as one step: the door takes `lab` with an
+initiator and `ui`, and refuses `cli` and `mcp`. The survey showed that, done at once, it breaks
+every client of the door on the day of the deploy (actingctl and the kits' installer, the
+watchdog and today's MCP server bind `cli` or `mcp`; the installed console cannot decode a
+receipt with a member it does not know), and production deploys what is merged. So the
+coordinator cut LAB-6 into slices that each leave main deployable: LAB-6S0 (`deploy` and
+`rollback` through the Lab's MCP server), LAB-6S1a (this slice), LAB-6S1b (the origin gates of
+`RuntimeRequest::validate()` go), LAB-6S2 (every client of this repository binds `lab` with its
+word, after LAB-6S1a and LAB-6S1b have been deployed by themselves), LAB-6S3 (the UI list on
+`ui`), LAB-6S4a (the five kinds deleted; `install-control` [0, 0]), LAB-6S4b (`cli`, `mcp` and a
+`lab` without a word refused; `via` off the wire; `runtime-client` [8, 8]; `actingd-config` 30)
+and LAB-6S5 (the initiator in the ledger and the settings rows; `ledger` 9). Each has a way back
+but LAB-6S5. The contract's slice table carries the staging; the numbers LAB-0 planned for LAB-6
+(`runtime-client` 7, `ledger` 8, `actingd-config` 28) were taken by other slices, and are now 8
+(LAB-6S1a), 9 (LAB-6S5) and 30 (LAB-6S4b).
+
+**This slice is additive.** Every connection that binds today binds as today and reads the bytes
+it reads today; the only new thing is a connection that declares a word, and no program of this
+build declares one (that is LAB-6S2).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L6S1a-1 | `Initiator` (`UI`, `Lab-CLI`, `Lab-MCP`, `Lab-制包`, `Lab-救急`, `Lab-看门狗`): `ALL`, `as_str`, `is_lab_word`, `from_word`, `Serialize`, `Deserialize` | closed vocabulary of the contract crate | LAB-6S1a | — | the one place the six strings are written; a word outside them does not decode. `crates/lab-ops`' `initiator::Initiator` keeps its methods and converts (`word`), its `as_str` being the contract's, so the recordings and the installation journal write what they wrote. A rename before the release is one line of `as_str` |
+| L6S1a-2 | `BindChannel{channel, via?, initiator?}`, `initiator` the word as sent (`DeclaredInitiator`, any string) | wire, request | LAB-6S1a | — | taken only with `channel` `lab`, without `via`, and only as one of the five Lab words (`ChannelBinding::requested`, checked by `validate()`); a word on `ui`, `cli` or `mcp`, a word with `via`, `UI` and a word outside the list are `invalid_bind_channel`, and the connection stays unbound. Absent, the request is revision 7's |
+| L6S1a-3 | `ChannelBound{channel, via?, initiator?}` | wire, answer | LAB-6S1a | the host's `bind_channel` | echoes the word of a connection that declared one; absent otherwise, on `ui` included (its `UI` is implied by its channel) |
+| L6S1a-4 | the receipt's `initiator`, beside `channel` (`RuntimeReceipt::initiator`) | wire, answer | LAB-6S1a | the door (`with_channel`) | on every receipt of a connection that declared a word; absent otherwise |
+| L6S1a-5 | the connection table's `ChannelBinding.initiator` | in memory | LAB-6S1a | — | kept with the channel, gone with its connection, reported by no status read; the gate reads no word and refuses nothing by channel or by word; the binding a connection's first request makes has none |
+| L6S1a-6 | `RuntimeClientConfig::with_initiator`; the handshake's echo check | client | LAB-6S1a | — | the one handshake function sends the word and takes the answer only when it echoes channel, `via` and word (another echo is `runtime_result_unexpected`, as another channel is); `connect`, the reconnect in the owner's epoch, the contained-task timeout recovery and the player hold's temporary client carry it as they carry the channel; a word on another channel, with `via`, or `UI` is `runtime_client_config_invalid` at connect. No caller in product code sets it |
+
+**Byte for byte.** A binding without a word (`lab` alone, `lab` with `via`, `cli`, `mcp`, `ui`,
+and the binding a connection's first request makes) is answered and receipted exactly as on the
+base: each new member is optional and left out when absent, and nothing else of the three shapes
+changed. `gate_434_lab6s1a::lab6s1a_a_binding_without_a_word_answers_byte_for_byte_as_before`
+holds it: for each such binding the bytes of its `ChannelBound` receipt and of a later `Health`
+receipt, read off the connection, equal literal JSON written in the test.
+
+**Nothing persisted changes.** No persisted record embeds a receipt or a `ChannelBound` (read on
+the base: the ledger's command records take `channel` and `via` from the binding,
+`ObservationDraft::sanitize`; the `host.config_overrides` rows take its `channel`; the
+recordings and the installation journal take `crates/lab-ops`' type, whose strings do not
+change; the reports that print a receipt, `restart`'s and `request-shutdown --wait`'s, persist
+nothing). No ledger payload, override row, recording or journal gains or loses a member, and
+`ledger` does not move.
+
+**Interface.** `runtime-client` [3, 8] (component-interfaces.md, revision 8): revision 7 plus the
+initiator in `BindChannel`, `ChannelBound` and the receipt; a client of 3 to 7 neither sends nor
+receives it. Read before the code: the installer's edges (`crates/lab-rescue/src/install/plan.rs`,
+`interface_edges` and `meet`: `installer_meets_previous` and `installer_meets_next` intersect
+ranges) pass an update from a [3, 7] build to this one and the rollback from it to that build,
+whichever of the two is the installer; `ledger` is unchanged, so no one-way edge. The console of
+the UI's release v0.12.16 declares [3, 7]: its installer negotiates the highest common revision
+with the Runtime (`crates/acui-setup/src/interfaces.rs`, `negotiate` with `Range::common`; 7
+here), the console compares no range, and its pinned client binds `ui` without a word, which is
+answered byte for byte as before.
+
+**An earlier Runtime and a client that sends a word.** A Runtime before this slice cannot decode a
+`BindChannel` that names `initiator` (`RuntimeOperation` denies unknown members): it drops the
+connection without a receipt (`runtime_request_decode_failed`), and the client then reconnects
+once, goes on unbound and reports `client_channel_unsupported`, as for an actingd before U-2. So no
+client sends a word before this slice is deployed in production; LAB-6S2 waits for it.
+
+**Tests.** New: host row "#434 LAB-6S1a" (`gate_434_lab6s1a` of the host, the first part of the
+contract's `gate_two_entries`: `lab` with each Lab word bound, echoed and on its receipts, a
+second `BindChannel` `channel_binding_exists`; the byte-for-byte test above; every refused word
+`invalid_bind_channel` with the connection left unbound and bound afterwards; and of the runtime
+client: the handshake with a word, an echo that differs, the reconnect and the temporary client
+keeping the word) and contract row "#434 LAB-6S1a" (`BindChannel`, `ChannelBound` and the receipt
+round-trip with and without the member and read revision 7's shape; `crates/lab-ops`' words are
+the contract's, in its order). Adapted, each for the new member only: the declaration's pins
+(`component_interfaces::V0120`, `gate_429_r0b_pairing`'s two `[3, 7]`); the test fakes and tests
+that build or match `BindChannel`, `ChannelBound` or `ChannelBinding` (`initiator: None` or `..`;
+the shared scripted Runtime of `runtime-client`'s `test_support` echoes a declared word). The
+catalog text of `invalid_bind_channel` names the new refusals; no code is added.
+
+**What LAB-6S1a changes live.** Nothing for any client that exists: no program of this build
+declares a word, and every binding answers as before.
+
+**LAB-6S1a rollback** (to the release before it). Two-way: nothing persisted; the earlier build
+declares [3, 7], which every client of this build meets, and no client sent a word.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
@@ -18260,6 +18349,151 @@ free) and `notices_text_rule_accepts_text_and_refuses_the_control_characters` (A
 and without a byte-order mark and one after the start, CRLF, CR and mixed line ends, TAB and FF
 kept; each of the 29 refused characters refused at the start, the middle and the end, every other
 ASCII byte kept there; six invalid UTF-8 sequences refused). No existing test changes.
+
+### 1.335 Slice NOTICES-2 (0.12.58): the installer's `place` takes a bundle's notices directory; `package` revision 10 (Workflow #444; the design note `rd-1113/design-notices-in-archive.md`, read on main `29a65e2d`, design (a) with every recommended answer of its section 8 adopted by the coordinator's rulings of 11-13 on board #444, not the owner's words; coordinator work order `rd-1113/brief-444-notices-2.md`, read on main `734dd786`)
+
+1.335 is the coordinator's number. [install-cli.md](install-cli.md), "The Lab's rescue module"
+(`place`) and "Interface checks" (`pack place`), [package-reference.md](package-reference.md),
+"Notices" and "Standard package root", and the `package` row 10 of
+[component-interfaces.md](component-interfaces.md) are the contract. Added: one value of the
+`pack_item` intent's `kind` (`notices`), one rule of the notices set rule, and the `package` raise.
+No outcome code, value key, vocabulary word, configuration key, step kind, intent member, wire
+shape or record is added. **A bundle without the directory on a root without it plans, journals
+and places exactly as before.**
+
+**What `place` does with the directory** (crate `lab-rescue`, `src/install/place.rs`; design
+§3.2, §3.3, §3.6):
+
+- **The edge first.** The `package` edge (the maximum the bundle's `interfaces.json` declares lies
+  in this installer's `package` range) is checked right after `bundle.json` and before the layout,
+  so that a bundle of a later revision is refused through `package` and not through a member this
+  installer does not know. The one refusal that changes: a bundle that fails both the edge and the
+  layout is refused `interface_edge` where it was `pack_invalid` (design Q2, accepted; no released
+  bundle is in that class). Every other refusal and its order are as before.
+- **The layout** takes the members `notices/<path>` (exact lower case: a member `Notices/…` stays
+  unknown, `pack_invalid` naming it). When the zip carries one or more, in this order: a declared
+  `package` maximum below 10 is `notice_undeclared`; the listing (each file's path below the
+  directory with the size the zip declares) goes through `check_notice_listing`; the bundle's
+  listed packs through `check_notice_pack_ids`; each file is read through 2,097,153 bytes (its
+  bound plus one) and what was read goes through `check_notice_size` and `check_notice_text`, so a
+  member that holds more than the zip declares is still refused at its bound. All of it in the
+  plan, before the hold and before any write, as a root file's problem is refused: `pack_invalid`
+  (`path` the zip) caused by `standard_pack_root_invalid` with `game`, `standard_pack_problem` the
+  rule's word, `path` the member below the zip (`<zip>\notices\…`; `<zip>\notices` for the count
+  or the total; `<zip>\bundle.json` with `package_id` for a pack named like the directory;
+  `<zip>\interfaces.json` for `notice_undeclared`), `json_pointer` empty, and the bound with the
+  value found on `limit_count` / `count` or `limit_bytes` / `actual_bytes`. The rules are the
+  contract crate's (§1.334); `place` states none of them.
+- **The item.** One folder item of kind `notices` (`ItemKind::Notices`), `item` `notices`, `dst`
+  `<game root>\notices`, its members `<path>` → `notices/<path>`, digested as a pack's folder is
+  (the listing digest of each file's SHA-256), and **placed first** among the items, before the
+  tables, the packs and the root files, so the texts are in place before the material they
+  accompany. States `new`, `replace`, `unchanged`, and `retire` when the game root holds
+  `notices\` and the zip carries none (design Q3): set aside as `notices.old-<ms>` and kept, as a
+  reader's root file is; not when a pack of the bundle is named `notices` in any ASCII case (that
+  folder is the pack's, and two items would share one place). Its step is one more `pack_item`,
+  its part `notices.new-<ms>.part` in the game root, where the leftover check already looks; no
+  new step kind and no new intent member. The item's files are read through their bound also
+  when it is digested and when its part is written.
+- **`post_check`** covers the item through its rerun (its listing digest, or its absence after
+  `retire`). This release's `standard-pack check` ignores the directory (NOTICES-3 teaches it); a
+  change of the notices alone leaves `schedule_changes` false, so the composition row expects the
+  catalog unchanged. **`undo`** reverses the item by kind and digest: the placed directory set
+  aside as `notices.rolledback-<ms2>` and the kept one renamed back; a retired one renamed back.
+  Nothing is deleted.
+- **Fixed point 4.** A zip without `notices/` on a root without it gets no item: the same canonical
+  plan document and plan id, the same steps and the same journal.
+
+**The added set rule** (`crates/actingcommand-contract/src/standard_pack_notices.rs`,
+`check_notice_listing`, after its two collisions; the coordinator found it reading NOTICES-1):
+two paths whose directories' names are equal under ASCII case folding and not byte for byte
+(`A/x.md` beside `a/y.md`) are refused `notice_name` at the later path in byte order. Their whole
+paths differ, so the two earlier collisions passed them; on a file system that folds case they land
+in one directory, and the placed directory no longer lists as the zip does (the item's digest after
+the swap would not match). One directory spelled alike by several paths is kept; a file `A` beside
+a directory `a/…` stays the earlier rule's. The catalog's description of `notice_name` and the
+"uniqueness" row of package-reference.md say so; the vocabulary does not move.
+
+**The raise.** `package` [3, 9] → [3, 10]: `distribution/windows/component-interfaces.json`, the
+architecture pin (`tools/actinglab-architecture/tests/component_interfaces.rs`) and the row 10 of
+component-interfaces.md, which says that once an installation's register records a root's declared
+range, a rollback below 10 is refused by the `package` edge for a root placed from a notices bundle,
+and that placing a bundle without the directory first is the way (design Q6). A bundle declares
+[10, 10] only when it carries the directory; a bundle without it keeps its revision, so its zip,
+`SHA256SUMS`, plan and journal stay what they are. The packer writes the revision (the resource
+repositories' script and `resource verify`'s mirror, NOTICES-3 and later); `package bundle` writes
+no `interfaces.json`. **Every reader of the `package` range, checked before the raise:** the
+update's and the rollback's `package` edge (`plan.rs`, `interface_edges`: each registered bundle's
+maximum in R\*'s range) compares the register's range, which is unknown for every root
+(`adopt.rs`, `package_range: None`), so it is the warning `pack_declaration_unknown` for [3, 9] →
+[3, 10] and for [3, 10] → [3, 9] alike, and a register holding [3, 3] would pass both; `undo` of an
+update judges the same edges (`rollback_edges`); the update's other edges do not read `package`;
+`place` reads I's range, which now takes [3, 3] to [10, 10]; the Runtime reads no `interfaces.json`
+and no range (its root reader, the composer, check-config); `resource verify` writes [3, 3] and
+compares it with nothing of the Runtime's; `standard-pack check` reads no range; the exact-SHA build
+checks the declaration's form only, and the release reader that both halves declare alike. None of
+them refuses a bundle or a root that is accepted today.
+
+**What programs of an earlier release do** (design §3.2):
+
+| Program | A zip that carries `notices/` | A game root that holds `notices/` |
+|---|---|---|
+| rescue `place` before 0.12.58 | `pack_invalid` naming the first `notices/` member in name order (its layout check, which runs before its `package` edge), before the hold: nothing paused, nothing written | a bundle without the directory is placed and `notices\` is left as it is; a notices bundle is refused as on the left |
+| the coordinator's placement kit, until it learns the directory (design §5) | refused at its layout check, and its release facts check refuses `package` 10 | lists `notices` as an unlisted directory; nothing refused |
+| `standard-pack check` | reads no zip | ignores the directory; the root checks as before |
+| the Runtime (actingd), check-config, the composer | read no zip | ignore it: no catalog, no composed generation, no activation |
+| an earlier installer's `undo` of a `pack_place` journal with a `notices` item | — | cannot read the kind ([install-cli.md](install-cli.md), "Journals across versions": no old-version compatibility); undo with this build first, or leave the inert directory |
+
+`actingctl install` has no pack placement of its own (`actingctl install pack plan|place`, INST-4,
+is not built; the word `pack` is `actingctl_usage_invalid`, `unknown`), so it never opens such a
+zip.
+
+**At deploy.** The Runtime declares `package` [3, 10]; nothing changes for a bundle without the
+directory. A bundle that carries it is placed only by this release's `place`. The coordinator's
+placement kit and the resource repository's packer do not know the directory yet, so no bundle
+that carries it is released before they are changed (design §4, §5; slices 4 and 5). **Rollback**
+to a build before 0.12.58: the update's `package` edge stays the warning
+`pack_declaration_unknown`, and the earlier Runtime reads a root that holds `notices\` as one
+without it; an earlier installer cannot undo a `pack_place` that placed or retired the directory.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NT2-1 | `place`: the `package` edge before the layout | installer behaviour | NOTICES-2 | — | one refusal changes: a bundle that fails both is `interface_edge` (was `pack_invalid`) |
+| NT2-2 | `place`'s layout: `notices/<path>`, the notices rules, `notice_undeclared`, the bounded reads | installer behaviour | NOTICES-2 | — | in the plan, before the hold and any write; `pack_invalid` caused by `standard_pack_root_invalid` |
+| NT2-3 | the `pack_item` intent's and the plan document's `kind` + `notices` | journal value (no new member) | NOTICES-2 | NOTICES-2 | placed first; `retire` when a later bundle carries none; an installer before 0.12.58 cannot read it |
+| NT2-4 | `check_notice_listing` + the directory names' spelling | contract rule (no shape) | NOTICES-2 | — | `notice_name` at the later path; the catalog's description of the word |
+| NT2-5 | `package` [3, 10] | interface revision | NOTICES-2 | the packer (NOTICES-3, the resource repository) | component-interfaces.md row 10 |
+
+Tests (apps gate row "#444 NOTICES-2", `crates/lab-rescue/src/install/gate_444_notices2.rs`, on the
+fake host with placeholder names, a notice file `NOTICE.md`; the fake installer's `package` range is
+a field of `fixture.rs`'s `FakeHost`, by default the fixture's [3, 5]):
+`notices_are_placed_first_and_read_back_unchanged` (a bundle that carries the directory, declared
+10, planned with the item `notices` `new` and first; placed, its step the operation's first, the
+files on disk the zip's bytes; planned again with every item `unchanged`; `undo` sets the placed
+directory aside), `notices_replace_unchanged_retire_and_undo` (a changed text: `replace`, the
+replaced directory kept as `.old-<ms>`; the same texts while the pack changes: `unchanged`, no step
+touches the directory; a bundle without it: `retire`, shown by the plan, the directory kept as
+`.old-<ms>`; each `undo` puts back what was there), `notices_absent_bundle_plans_as_before` (a
+bundle without the directory on a root without it: the journalled plan document is exactly the
+earlier one, its members `game`, `zip_sha256`, `package` and `items` and each item's `item`,
+`kind`, `state` and `digest` as the earlier code computes them, the plan id `plan-` and 16 hex
+digits of the SHA-256 of its canonical form, the same six steps, and every `pack_item` intent with
+only the earlier members; the work order asked to pin the plan id main gave before the slice, which
+cannot be known here without a build, because it covers the zip's SHA-256 and the zip writer's
+bytes decide that, so the test holds the document and the formula instead),
+`notices_refusals_come_before_the_hold` (`notice_undeclared` at `<zip>\interfaces.json`; a refused
+suffix; a size the zip declares below what the member holds, refused at the bound with 2,097,153
+read; 65 files; 8 MiB and one byte; a control character; a pack named like the directory, at
+`<zip>\bundle.json` with `package_id`; one directory's name in two cases, at the later path; each
+`pack_invalid` caused by `standard_pack_root_invalid` with its word, member, empty pointer and
+bound, and no pause, no journal, nothing in the game root) and
+`notices_edge_is_checked_before_the_layout` (a bundle declared [11, 11] with an unknown member:
+`interface_edge`; the same bundle declared 10: `pack_invalid` at that member). Adapted, because the
+requirement changes what they pin: the contract gate row "#444 NOTICES-1"'s
+`notices_set_rule_holds_each_bound_at_its_edge` gains the added rule's edges (two cases of one
+directory, refused at the later path, in either order of case; one directory twice kept; a file
+beside a directory of its name in another case still the earlier rule's), and the architecture
+pin `the_runtime_declares_each_v0120_interface_revision_once` holds `package` [3, 10].
 
 ### 1.337 Slice RG-STOP (0.12.58): a planned stop is not a failure of the run-recovery grouping (Workflow #429; a real run of 11-13 stopped on request; the coordinator's ruling of 11-13 on board #429, not the owner's words; coordinator work order `rd-1113/brief-429-rg-stop.md`, read on main `ea8ef8ea`)
 

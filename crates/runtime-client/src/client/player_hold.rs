@@ -405,6 +405,7 @@ impl RuntimeClient {
                 state_root: self.shared.state_root.clone(),
                 channel: connection.channel.channel,
                 via: connection.channel.via,
+                initiator: connection.channel.initiator,
                 actor: connection.actor,
                 source: connection.source,
                 io_timeout: connection.io_timeout,

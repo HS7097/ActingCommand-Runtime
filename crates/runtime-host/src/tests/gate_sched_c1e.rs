@@ -281,6 +281,7 @@ fn sched_c1e_h1_an_instruction_sets_an_instances_lines_and_a_restart_keeps_them(
     let bind = client.request(RuntimeOperation::BindChannel {
         channel: RuntimeChannel::Cli,
         via: None,
+        initiator: None,
     });
     assert_eq!(client.send(&bind).state(), RuntimeReceiptState::Completed);
 
