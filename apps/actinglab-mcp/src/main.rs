@@ -25,7 +25,8 @@
 //!   server has them around its Lab child.
 //!
 //! It ships in the Tools archive since LAB-5G6 (0.12.57); nothing starts it until a client is
-//! registered with the MCP entry's second generation.
+//! registered with the MCP entry's second generation. Its manual, which its instructions name, is
+//! `apps/actinglab-mcp/MANUAL.md` (Workflow #434 LAB-5G7).
 //!
 //! The command line: `--list <module>[,<module>...]` names the modules whose tools `tools/list`
 //! lists (the ids of the table's module rows of role `operations`); without it every installed
@@ -70,6 +71,11 @@ mod gate_434_lab5g2b;
 // and the front's added members (`mcp_job_start_options`).
 #[cfg(test)]
 mod gate_434_lab5g3;
+// Test-only: Workflow #434 LAB-5G7, the slice's named tests of the tools the manual
+// (`apps/actinglab-mcp/MANUAL.md`) and the instructions name
+// (`mcp_manual_names_only_offered_tools`, `mcp_manual_exception_is_the_refused_rows`).
+#[cfg(test)]
+mod gate_434_lab5g7;
 
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};

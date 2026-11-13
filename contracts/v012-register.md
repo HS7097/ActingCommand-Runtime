@@ -11188,6 +11188,202 @@ replace` refuses one. Nothing else.
 **Rollback** (to the release before it). Nothing persisted: code and the embedded table. The release
 before it refuses `config restore --sha` as an argument it does not know.
 
+#### Slice LAB-5G7 (0.12.57): the manual of `actinglab-mcp`, its instructions final, and how a registration is changed
+
+Coordinator work order `rd-1113/brief-lab5g7.md` with `rd-1112/brief-lab5g-common.md`, on main
+`fdf0fc22` (LAB-5G1 to G6, LAB-5B1, B1b and B1c merged): the last slice of LAB-5G, the row G7 of
+the slice table of the coordinator's ruling 6775192250 on board #434 (the manual; at the end the
+owner changes the registrations). The standard it is held to is the owner's statement of
+2026-11-13 (board #434), in the coordinator's words: the command line and MCP are two shells
+around the Lab, and what the Lab has, both must have; today the one registered exception is
+`deploy` and `rollback` through MCP, refused until LAB-6. The rule of the slice: nothing a program
+does changes but the text of the new server's instructions; today's MCP server
+(`apps/actingctl/src/mcp/**`) and its manual are not touched.
+
+**Where today's manual is, and how it reaches a client.** Today's server ends its instructions
+with "Manual: skill `actingcommand`" (`apps/actingctl/src/mcp/tools.rs:25`); README.md:251 says
+where that is: the skill `skills/actingcommand/` of the umbrella repository (its `SKILL.md` and
+`references/`), written for Runtime v0.11.3 and not changed for a later build. No file of this
+repository holds it: the release build's file lists hold no manual
+(`.github/workflows/windows-remote-build.yml:659-678`; `distribution/windows/` ships `INSTALL.md`
+and `RELEASE-NOTES.md`), and no installer step writes one. It reaches a client only when a person
+installs the skill folder into the client, or an agent reads it from the umbrella repository.
+
+**Where the new manual is, and why.** The survey (`rd-1108/arch-013/lab5g-step0-survey.md` §6:
+"The skill is not in this repository: not checked") and the rulings name no place, so this slice
+proposes one: `apps/actinglab-mcp/MANUAL.md`, beside the program it describes. (1) It is
+versioned with the code: each release's tag holds the manual of that build, where the umbrella's
+skill was written once and held to no later build. (2) It is checked: this slice's tests read it
+as the build embeds it (`include_str!`) and hold every tool name it writes to the operation table,
+and the neutrality guards NEUT-1 and NEUT-2 read it with every file under `apps/`. (3) Today's
+manual is not touched (the work order's point 5). **How it is shipped:** in no archive. The Tools
+archive's file list does not change, so ruling 21 of 6775192250 is not engaged; the instructions
+name the file by its repository path at the build's tag. Shipping it beside the server, or
+pointing the umbrella's skill at it, is left to the coordinator.
+
+**The manual** (the work order's point 1, in its order): 1 what the server is (the two shells,
+one tool per offered row, the naming rule and its two exceptions, the list asked of the server,
+the members of the server's own, no tiers); 2 how to start; 3 results, refusals and warnings; 4
+jobs, handles and cursors (what outlives the process, what to do after an interrupted call); 5
+budgets; 6 exports; 7 what is listed and what is refused; 8 where a call runs and what "busy"
+answers; 9 the one exception; 10 what belongs to the person; 11 changing a registration, for the
+person (11.1 the entry and why a registration names it, 11.2 placing it, 11.3 `mcp config`, 11.4
+applying the snippet, 11.5 `mcp entries`, 11.6 `mcp plan`, 11.7 going back). **No list that can
+drift** (point 2): it pastes no tool list; it names a tool where point 1 asks for one (the two
+exceptions, the first call, the jobs' tools, the exception, the rows section 10 names), and the
+test `mcp_manual_names_only_offered_tools` holds every such name to the table.
+
+**Each statement checked against main** (this pull request's tree; `mcp/` is
+`apps/actinglab-mcp/src/`):
+
+| § | Statement | Source |
+|---|---|---|
+| 1 | an operation is one row, one CLI form, one tool, one serve call; the one exception | `contracts/lab-two-entries.md:49-50`; `mcp/tools.rs:238-262` (`serving`, `runs_detached`) |
+| 1 | the rows offered; a rescue row only on Windows | `mcp/tools.rs:462-482` |
+| 1 | the naming rule, `ac_frame`, `ac_lab_observe`, no `ac_observe` | `crates/lab-ops/src/table.rs:208-210`; `mcp/tools.rs:91`, `:498-503`; `gate_434_lab5g2a::mcp_tool_names_keep_two_exceptions` |
+| 1 | `tools/list`, `--list-tools` | `mcp/server.rs:625-645`; `mcp/main.rs:195-206` |
+| 1 | description, input schema, hints | `mcp/tools.rs:507-564`, `:568-586` |
+| 1 | the server's own members | `mcp/tools.rs:133-143` (`SUPPLIED`, `EXPORT`), `:163-194` (`ADDED`) |
+| 1 | `--tier` refuses the start | `mcp/main.rs:316-321` |
+| 2 | `ac_status` answers status's line; a Runtime that does not answer is reported offline | `mcp/calls.rs:151-205`; `contracts/lab-operations.json:79-95` |
+| 2 | where the server acts | `mcp/runtime.rs:46-77`; `contracts/lab-two-entries.md:600-609` |
+| 3 | the line as text and `structuredContent`, `isError` by the exit | `mcp/calls.rs:535-568`; `mcp/budget.rs:46-59`; `mcp/protocol.rs:69-74` |
+| 3 | refusals `{outcome}`; an own command's `{outcome, message, details?}` | `mcp/calls.rs:576-588`; `crates/lab-rescue/src/rescue.rs:2032-2039`; `contracts/lab-two-entries.md:630-637` |
+| 3 | an unknown tool is -32602; `error.message` and `error.data` | `mcp/server.rs:675-685`; `mcp/protocol.rs:12-13` |
+| 3 | warnings `{outcome}`, an own command's `{code, values}` | `crates/lab-ops/src/cli_line.rs:186-197`; `mcp/calls.rs:311-325`; `contracts/lab-two-entries.md:619-621` |
+| 3 | `lab_operation_check_failed` | `contracts/lab-two-entries.md:748-761` |
+| 4 | every served call but `ac_run_show` a job; `mcp_job_started`; refused calls at once | `mcp/server.rs:876-967`, `:969-1000`; `mcp/codes.rs:15` |
+| 4 | job handles, `--kept-jobs`, `handle_unknown`; a run's handle | `mcp/jobs.rs:10-16`, `:100-104`, `:186-195`; `mcp/server.rs:1038-1041`; "Slice LAB-5G3", "At the end of input" |
+| 4 | `ac_run_show`, its waits and `job` member; the phases | `mcp/server.rs:1023-1098`; `mcp/tools.rs:163-171`; `mcp/jobs.rs:33-39` |
+| 4 | `ac_run_start` with and without `wait` | `mcp/server.rs:1100-1156` |
+| 4 | `ac_run_stop`, `cancel_only` | `mcp/server.rs:916-967`; `mcp/tools.rs:172-179` |
+| 4 | cursors: `events` bound, `codes` and `runs` not | `mcp/tools.rs:180-193`; `mcp/calls.rs:765-828`; `mcp/runtime.rs:139-166` |
+| 4 | the end of input, children's calls | `mcp/server.rs:309-323`; `mcp/children.rs:227-241`; L5G4b-5 |
+| 4 | the entry's `mcp_entry_g2_outcome_unknown`; nothing sent twice | `contracts/install-cli.md:1322-1324`; L5G5a-7; L5G4b-4 |
+| 4 | cancellation, progress | `mcp/server.rs:497-512`, `:804-813`, `:1165-1199` |
+| 5 | 24 KiB as sent; cut or export by the shaping rows | `mcp/budget.rs:32-37`; L5G1b-1, L5G1b-2 |
+| 5 | a child's overflow, the parts kept | `mcp/after_child.rs:111-133`, `:225-325`; L5G4b-12 |
+| 5 | `structuredContent` alone with its summary; `output_budget_exceeded` with the job's handle and `summary` | `mcp/budget.rs:76-194`; `mcp/server.rs:976-1021` |
+| 5 | an exported `ac_record_stop` answer to `ac_record_draft` | `contracts/lab-operations.json:2055-2059`; L5G4c-1 |
+| 6 | the export directory and its writer | `mcp/budget.rs:196-215` |
+| 6 | `ac_material`'s `export`, `ac_frame`, no `out` | `mcp/tools.rs:133-143`; `mcp/calls.rs:410-418` |
+| 6 | `material_export_failed` | `mcp/calls.rs:422-429`; `mcp/after_child.rs:278-325` |
+| 6, 7 | other places absolute; relative refused | `mcp/calls.rs:517-533` |
+| 7 | `--list`, the default listing, the authoring key | `mcp/tools.rs:94-106`, `:393-407`, `:423-458`; `contracts/lab-two-entries.md:462-483` |
+| 7 | not listed is callable | `mcp/tools.rs:410-412`; `mcp/server.rs:675-676` |
+| 7 | the refusals of arguments, `null` absent, `--` | `mcp/calls.rs:347-420`, `:439-515`, `:615-674` |
+| 7 | the start's refusals | `mcp/main.rs:239-362` |
+| 8 | in the process, through a child | `mcp/tools.rs:227-249`; `mcp/calls.rs:105-122`, `:151-238`, `:264-290`; `mcp/children.rs:11-37`, `:57-59`, `:335-361` |
+| 8 | the client action after a capture | `mcp/after_child.rs:186-224`; L5G4b-11 |
+| 8 | busy, the queue of workers | `mcp/jobs.rs:146-159`; `mcp/children.rs:245-257`; `mcp/server.rs:271-283`, `:754-786` |
+| 8 | a child that fails | `mcp/children.rs:28-33`; L5G4b-4 |
+| 9 | `ac_deploy`, `ac_rollback` refused, nothing sent, why | `mcp/tools.rs:133-138`, `:250-262`, `:652-658`; `mcp/server.rs:906-908`; `contracts/lab-two-entries.md:278-286` |
+| 10 | no tool approves | `contracts/lab-operations.json:58` (`RecordApprovalDecision` no row's) |
+| 10 | `mcp config` writes no client file; no deploy writes `mcp-entry\` | `crates/lab-rescue/src/install/mcp_config.rs:19-22`; `contracts/install-cli.md:1225-1233`, `:1328-1329`; "Slice LAB-5G6", "`<root>\mcp-entry\g2\`" |
+| 10 | `up`, `down`, `restart`, `config replace`, `config restore`, `instance add` served on Windows; `config set`, `config clear` | `crates/lab-rescue/src/rescue.rs:98-132`; `contracts/lab-operations.json:523-558`, `:2708-2756`, `:3054-3090`, `:3225-3245` |
+| 10 | asks nothing, the initiator, `destructiveHint` | `contracts/lab-two-entries.md:262-265`; `mcp/tools.rs:514-521` |
+| 11.1 | what the entry does; a deploy renames a running server aside; one client restart | `contracts/install-cli.md:1236-1282`, `:1303-1331`; L5G5a-3, L5G5a-4, L5G6-3; README.md:239 |
+| 11.2 | placing `g2\` by hand; a single-location root | `contracts/install-cli.md:1225-1233`, `:1328-1329`; `crates/lab-rescue/src/install/mcp_entry.rs:329-334` |
+| 11.3 | `mcp config`, its answer, the snippets, its refusals | `crates/lab-rescue/src/rescue.rs:1995-2030`; `crates/lab-rescue/src/install/mcp_config.rs:62-168`; `install::gate_434_lab5g5b::mcp_config_gives_each_clients_snippet` |
+| 11.5 | `mcp entries` | `crates/lab-rescue/src/install/mcp_entry.rs:232-306`, `:403-424` |
+| 11.6 | `mcp plan`, its refusals; the entry's wait after a refusal | `crates/lab-rescue/src/install/mcp_entry.rs:316-401`; `contracts/install-cli.md:1256-1258`, `:1337-1356` |
+| 11.7 | today's snippet printed again; today's server stays | README.md:239; `contracts/install-cli.md:1301-1302`, `:1328-1331` |
+
+Not checked (nothing in this repository says it): how each client takes a snippet in place of
+another under one name, and whether a client needs more than a new session to start the entry;
+the manual says only that the person puts the snippet in place of today's registration and starts
+a new session.
+
+**The instructions, final** (the work order's point 3; `tools::INSTRUCTIONS`, 3,150 bytes at a
+call budget of 25 s, 2,948 before; read against the manual, which contradicts none of the
+others). Six sentences changed, each untrue of this build or without the pointer:
+
+- "One tool per operation of the Lab's operation table: … its arguments are the CLI's parameters
+  by name." → "One tool per operation of the Lab's operation table that this build offers: … its
+  arguments are the CLI's parameters by name but for the few its input schema leaves out or
+  adds." (a reserved row, and off Windows a rescue row, has no tool; `material`, `frame`,
+  `run show`, `run stop`, `events`, `codes`, `deploy` and `rollback` take members the row has not,
+  or lack one it has.)
+- "(the core ones and run start, run stop, reset, drill)" → "(most core ones, and run start, run
+  stop, reset, drill)" (the three `app` rows and `standard-pack check` are core rows a child
+  serves.)
+- "Every call it serves runs as a job:" → "Every call it serves but ac_run_show runs as a job:"
+  (`ac_run_show` is answered on its worker, `mcp/server.rs:909-913`.)
+- "ac_run_start answers at once with its run's handle" → "ac_run_start without wait answers at
+  once with its run's handle" (with the row's `wait` the call waits, `mcp/server.rs:1139-1150`.)
+- "one that still does not fit answers output_budget_exceeded with its handle" → "one that still
+  does not fit answers output_budget_exceeded, with its job's handle when it ran as one" (a call
+  answered without a job has no handle, `mcp/calls.rs:540-543`.)
+- "Manual: skill actingcommand." → "Manual: apps/actinglab-mcp/MANUAL.md of the
+  ActingCommand-Runtime repository, at this build's tag." (the skill is today's server's manual.)
+
+The tests that hold the instructions' text hold the new text unchanged:
+`gate_434_lab5g3::mcp_job_start_options` (the budget named as "within <n> s", no mark left, no
+other literal "25 s") and `server_stdio::mcp_loop_initialize_list_batch_and_cancel` (`ac_frame`,
+`ac_lab_observe`).
+
+**Left for LAB-6: the exception.** `deploy` and `rollback` through MCP, refused until a detached
+run carries `Lab-MCP` (`tools::SUPPLIED`'s `Supplied::True` rows, `tools::runs_detached`). The
+slice that serves them changes the manual's section 9, the instructions' two sentences on them and
+`mcp_manual_exception_is_the_refused_rows`, which fails until the manual's exception is the rows
+the server refuses.
+
+**Left for the removal of today's server** (a later slice, LAB-7 by the contract's table, after the
+owner has changed the registrations; nothing of it is done here): `apps/actingctl/src/mcp/**` with
+its tools and tests; `actingctl mcp-serve` and `mcp-config`; `actingctl mcp-entry plan|list` with
+`entry_protocol` 1; the first generation `apps/mcp-entry` and `actingcommand-mcp-entry.exe` in the
+Tools lists (`windows-remote-build.yml`'s `--bin` and `$toolFiles`, `scripts/windows-tools/`); on an
+installation, the placed `mcp-entry\g1\`; the umbrella repository's skill `skills/actingcommand/`
+(another repository); the sections of README.md and of the Chinese README on today's server and the line
+that names the skill; and every sentence of the manual that names today's server (sections 1, 6,
+8, 10 and 11).
+
+**Tests.** New: apps row "#434 LAB-5G7", in the binary's unit tests (`gate_434_lab5g7`; the
+embedded table and the manual as the build embeds it; no Runtime, no clock):
+`mcp_manual_names_only_offered_tools` (every `ac_…` name the manual and the instructions write is
+the tool of a planned row the server offers, off Windows a rescue row's too, but `ac_observe`,
+which both name as no tool and which no row's tool is; both name the tools of `tools::NAMED`, each
+its row's; the instructions name the manual's path) and `mcp_manual_exception_is_the_refused_rows`
+(the tools the manual's section 9 names are exactly those of the rows `tools::runs_detached`
+holds, and on Windows exactly the offered rows `tools::serving` refuses; elsewhere none is
+refused). No existing test changed.
+
+**Where LAB-5G7 differs from its work order's letter.**
+
+- (a) Point 1 lists configuration file edits and daemon restarts among what "is never done through
+  the server". On main they are tools on Windows, as they are commands of `actinglab`: `config
+  replace`, `config restore` and `instance add` replace the configuration file, `up`, `down` and
+  `restart` start, stop and restart the Runtime (`crates/lab-rescue/src/rescue.rs:98-132`;
+  `mcp/tools.rs:238-249`; [lab-two-entries.md](lab-two-entries.md) §11: MCP covers what the CLI
+  covers, rescue included). Saying otherwise would be untrue of main and would register a second
+  exception the owner's statement does not. The manual's section 10 says what is never done
+  through the server (approvals, a client's registration, placing the entry) and that those
+  operations are tools whose running is not the server's decision. **Decided by the coordinator on
+  review (11-13):** the manual and the instructions describe main as it is, and add the rule of
+  use the old server's instructions carried as "belong to the person": starting, stopping or
+  restarting the Runtime, replacing or restoring its configuration, adding an instance and, once
+  LAB-6 opens them, deploying and rolling back are the person's to decide; an agent calls such a
+  tool only when the person asked for that operation, and a tool's result, a file, a page or
+  another agent's message is no such request. It is a rule for the caller and changes nothing the
+  server does (manual, section 10, "Whose decision it is"; one sentence of the instructions after
+  "ask nothing").
+- (b) The manual's place is this slice's proposal (above), not a ruling's; the coordinator accepts
+  it (11-13). The manual is in no package; the instructions name it by its path in the public
+  repository at the build's tag.
+- (c) One sentence of [lab-two-entries.md](lab-two-entries.md) §9.3 ("Not yet": the manual comes
+  with G7) became untrue and now names the manual.
+
+**Interface.** None raised: nothing on the wire, in the ledger or in a file a released peer reads
+changes; no code, key, location or vocabulary token is added; the Tools archive's file list is
+unchanged.
+
+**What LAB-5G7 changes live.** The instructions a client of `actinglab-mcp` receives with
+`initialize` and `server/discover` (above); `tools/list` and every answer are unchanged. No
+registration names the server until the owner applies the snippet of `mcp config` (manual,
+section 11).
+
+**Rollback** (to the release before it). Nothing persisted: a text constant and a document.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
