@@ -657,9 +657,10 @@ read and no other connection). The close's evidence then carries:
   build before 0.12.59).
 - `first_epoch_guard`, only when the fact said the first epoch but the root's own journals say
   otherwise (the second guard): `{operation_id, owner_epoch}` of the first operation whose S0 names
-  another owner epoch, `{operation_id, code}` of a journal that could not be read, or `{code}`
-  when the journals could not be listed; `first_epoch` is then `false`. The guard sees only the
-  Runtimes an operation of this installer stopped.
+  another owner epoch, `{operation_id, journal_unread}` of a journal that could not be read, or
+  `{journals_unlisted}` when the journals could not be listed (as in `first_epoch_unread`, the
+  member names what could not be read and holds the failed read's code); `first_epoch` is then
+  `false`. The guard sees only the Runtimes an operation of this installer stopped.
 
 With `first_epoch` the root's next start seeds by design, and `no_seeding` passes it; in every
 other case (a later start, a fact of another epoch, which an older build leaves in place, no fact,
