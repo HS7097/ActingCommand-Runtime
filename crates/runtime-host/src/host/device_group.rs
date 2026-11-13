@@ -38,6 +38,24 @@ pub(super) struct DeviceOccupancy {
     holder: Option<DeviceHolder>,
 }
 
+/// Workflow #437 MAPP-1d (`contracts/device-group.md`, "One queue, one worker, one lease per
+/// device"): the routine gate of each member of a device, read now (`routine_gate`), so that
+/// every claim waiting in the device's one queue is judged by the gate of the member it serves.
+/// `own` is the gate of the member the caller asked for; an instance alone on its device has no
+/// other member, and every entry of its queue is judged by its own gate, as before.
+pub(super) struct DeviceGates {
+    own: ClaimGate,
+    others: BTreeMap<InstanceId, ClaimGate>,
+}
+
+impl DeviceGates {
+    /// The routine gate of `member`: its own when it is another member of the device, else the
+    /// asking member's.
+    pub(super) fn gate_of(&self, member: InstanceId) -> ClaimGate {
+        self.others.get(&member).copied().unwrap_or(self.own)
+    }
+}
+
 /// `device_group_action_refused` (register §1.330): a device-level action `operation` on the
 /// member `instance_alias` of a device group of several, refused before any device step.
 fn device_group_action_refused(
@@ -80,6 +98,24 @@ impl HostShared {
     /// Whether `instance_id` is a member of a device group of several.
     pub(super) fn in_group_of_several(&self, instance_id: InstanceId) -> bool {
         self.device_members(instance_id).len() > 1
+    }
+
+    /// Workflow #437 MAPP-1d: the routine gate of `instance_id` and of every other member of its
+    /// device ([`DeviceGates`]), each read before the scheduler's lock is taken, as the routine
+    /// gate is. For an instance alone on its device it is its one routine gate, read once.
+    pub(super) fn device_gates(&self, instance_id: InstanceId) -> RuntimeHostResult<DeviceGates> {
+        let own = self.routine_gate(instance_id)?;
+        let mut others = BTreeMap::new();
+        #[cfg(test)]
+        if self.mapp1d_off_for_test.load(Ordering::Acquire) {
+            return Ok(DeviceGates { own, others });
+        }
+        for member in self.device_members(instance_id) {
+            if member != instance_id {
+                others.insert(member, self.routine_gate(member)?);
+            }
+        }
+        Ok(DeviceGates { own, others })
     }
 
     /// The registered aliases of `members`, by id. A member the registry does not hold is not a
@@ -341,9 +377,34 @@ impl HostShared {
         ))
     }
 
+    /// `contracts/device-group.md`, "Device-level actions", row 15 (MAPP-1b; shared with the
+    /// monitor's probe by MAPP-1d): whether another member than `instance_id` holds its device,
+    /// read under the device's admission guard (`_admission`): a lease of the device whose token
+    /// names another member, lapsed or not, or the device held for the member by another member's
+    /// run or waiting claim, as its occupancy reads it. `false` for an instance alone on its
+    /// device, before any lock.
+    pub(super) fn device_held_by_another_member(
+        &self,
+        instance_id: InstanceId,
+        _admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<bool> {
+        if !self.in_group_of_several(instance_id) {
+            return Ok(false);
+        }
+        let lease_of_another = lock(&self.scheduler, HostLocation::ReadInstanceAdmission)?
+            .active_lease(instance_id)
+            .is_some_and(|lease| lease.token().instance_id() != instance_id);
+        let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
+        Ok(lease_of_another
+            || self
+                .device_occupancy(instance_id, now_unix_ms)?
+                .holder
+                .is_some_and(|holder| holder.member != instance_id))
+    }
+
     /// `contracts/device-group.md`, "Device-level actions", row 15: a keyless read-only
     /// observation of a member of a device group of several, under the device's admission guard
-    /// (`_admission`), is refused while another member holds the device (its lease, lapsed or
+    /// (`admission`), is refused while another member holds the device (its lease, lapsed or
     /// not, or the device held for the member by another member's run or waiting claim, as its
     /// occupancy reads it), because it would open a second member's session on the device:
     /// `scheduler.denied` and the failure's record under `links`, then a denied receipt,
@@ -355,21 +416,9 @@ impl HostShared {
         instance_alias: &str,
         instance_id: InstanceId,
         links: EventLinksDraft,
-        _admission: &MutexGuard<'_, ()>,
+        admission: &MutexGuard<'_, ()>,
     ) -> Result<(), RequestFailure> {
-        if !self.in_group_of_several(instance_id) {
-            return Ok(());
-        }
-        let lease_of_another = lock(&self.scheduler, HostLocation::ReadInstanceAdmission)?
-            .active_lease(instance_id)
-            .is_some_and(|lease| lease.token().instance_id() != instance_id);
-        let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
-        let held_by_another = lease_of_another
-            || self
-                .device_occupancy(instance_id, now_unix_ms)?
-                .holder
-                .is_some_and(|holder| holder.member != instance_id);
-        if !held_by_another {
+        if !self.device_held_by_another_member(instance_id, admission)? {
             return Ok(());
         }
         let error = device_group_action_refused(instance_alias, ContractLocation::ObserveReadonly);

@@ -502,6 +502,20 @@ impl HostShared {
         }
         let links = EventLinksDraft::default()
             .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
+        // Workflow #437 MAPP-1d (`contracts/device-group.md`, "Device-level actions", row 7): a
+        // member of a device group of several closes under a session close ahead, which no claim
+        // waiting in the device's queue refuses, so the session is closed before any other
+        // member's lease begins (the lapsed lease's end handed the device to no one,
+        // `cleanup_token_guarded`). A failed close is recorded, and an unconfirmed one settled
+        // (the member stays fenced, the close lease kept), by the close path.
+        let ahead = self.in_group_of_several(instance_id);
+        #[cfg(test)]
+        let ahead = ahead && !self.mapp1d_off_for_test.load(Ordering::Acquire);
+        if ahead {
+            return self
+                .close_session_ahead_while_guarded(instance_id, links, admission)
+                .map(|_| ());
+        }
         match self.close_retained_instance_while_guarded(
             instance_id,
             links.clone(),
@@ -523,6 +537,25 @@ impl HostShared {
             }
             Err(error) => Err(error),
         }
+    }
+
+    /// Workflow #437 MAPP-1d (`contracts/device-group.md`, "Device-level actions", row 7): whether
+    /// `token` is the lease of a run of a member of a device group of several whose close in its
+    /// end phase met the lapsed lease (`fence_lapsed_lease_close`) and is still owed. Such a lease
+    /// end hands the device to no one, and the member's session is closed under a session close
+    /// ahead before any other member's lease begins (`cleanup_token_guarded`). `false` for an
+    /// instance alone on its device, before any lock.
+    pub(super) fn lapsed_close_owed_in_group(&self, token: &LeaseToken) -> RuntimeHostResult<bool> {
+        #[cfg(test)]
+        if self.mapp1d_off_for_test.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        if !self.in_group_of_several(token.instance_id()) {
+            return Ok(false);
+        }
+        Ok(self
+            .run_end_control_of_lease(token.lease_id())?
+            .is_some_and(|control| control.lapsed_close_owed()))
     }
 
     /// Workflow #437 MAPP-1b, MAPP-1c (`contracts/device-group.md`, "Device-level actions", rows

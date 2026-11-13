@@ -189,6 +189,14 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeHalted,
             ));
         }
+        // Workflow #437 MAPP-1d (`contracts/device-group.md`, "The monitor's probe in a device
+        // group"): under the device's guard, a member of a device group of several whose device
+        // another member holds makes no probe this round: nothing is captured or recorded and its
+        // monitor state is left as it is, so the probe stays due and is taken again at the next
+        // tick, taking a place of the tick and this guard each time (a blackout's takes neither).
+        if self.monitor_probe_waits_for_device(instance.instance_id(), &admission)? {
+            return Ok(());
+        }
         let issued = self
             .events
             .issuer()
@@ -200,6 +208,27 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
+        self.probe_monitor_instance(probe, &instance, &issued, started_at_unix_ms, &admission)?;
+        // Workflow #437 MAPP-1d: a member of a device group of several keeps no session from its
+        // probe; it is closed before the guard frees the device, as a keyless observation's is.
+        self.close_monitor_session_of_group(
+            instance.instance_id(),
+            issued.event_links(),
+            &admission,
+        )
+    }
+
+    /// One monitor probe of `instance` (its records, its capture, its recognition and its
+    /// verdict), under the device's admission guard (`admission`), which the caller holds to the
+    /// end.
+    fn probe_monitor_instance(
+        &self,
+        probe: &DueMonitorProbe,
+        instance: &RegisteredInstance,
+        issued: &IssuedMonitorProbe,
+        started_at_unix_ms: u64,
+        admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<()> {
         let links = issued.event_links();
         self.append_event_raw(
             EventSeverity::Info,
@@ -217,7 +246,7 @@ impl HostShared {
         }
         // The probe would open the device session: a pending discovery binding refuses it
         // typed (`instance_not_running`) before any capture is requested.
-        if let Err(error) = instance_not_running(&instance) {
+        if let Err(error) = instance_not_running(instance) {
             return self.refuse_monitor_probe(probe, links, started_at_unix_ms, error);
         }
         self.append_event_raw(
@@ -286,7 +315,7 @@ impl HostShared {
                     OriginModule::Capture,
                 )?;
                 let error =
-                    self.finish_capture_failure_while_guarded(error, links.clone(), &admission)?;
+                    self.finish_capture_failure_while_guarded(error, links.clone(), admission)?;
                 let error = RuntimeHostError::execution(HostLocation::RunMonitorCapture, &error);
                 let error = match self.settle_unconfirmed_resources(
                     &error,
@@ -475,7 +504,7 @@ impl HostShared {
         registry.apply(&completed)?;
         drop(registry);
         if update.changed {
-            self.record_monitor_recovery_coordination(&instance, &issued, &decision)?;
+            self.record_monitor_recovery_coordination(instance, issued, &decision)?;
         }
         Ok(())
     }
@@ -711,6 +740,51 @@ impl HostShared {
         Ok(())
     }
 
+    /// Workflow #437 MAPP-1d (`contracts/device-group.md`, "The monitor's probe in a device
+    /// group"): whether this round of the monitor probe of `instance_id` is not made because
+    /// another member of its device group of several holds the device, by the judgement a keyless
+    /// observation of a member is refused by (`device_held_by_another_member`), under the device's
+    /// admission guard (`admission`). `false` for an instance alone on its device, before any
+    /// lock.
+    fn monitor_probe_waits_for_device(
+        &self,
+        instance_id: InstanceId,
+        admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<bool> {
+        #[cfg(test)]
+        if self.mapp1d_off_for_test.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        self.device_held_by_another_member(instance_id, admission)
+    }
+
+    /// Workflow #437 MAPP-1d: the close of the session the monitor probe of `instance_id`, a
+    /// member of a device group of several, opened on a free device, before the probe lets the
+    /// device's admission guard (`admission`) go, under a session close ahead
+    /// (`close_keyless_session_of_group`, as a keyless observation's). A device the member's own
+    /// lease holds leaves the session to that lease's end; an instance alone on its device keeps
+    /// its session, as before. A failed close is recorded by the close path, an unconfirmed one
+    /// fences the member there, and the probe ends with its own records; only a failure that
+    /// poisons the Runtime is returned.
+    fn close_monitor_session_of_group(
+        &self,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<()> {
+        #[cfg(test)]
+        if self.mapp1d_off_for_test.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        match self.close_keyless_session_of_group(instance_id, links, admission) {
+            Ok(()) => Ok(()),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                Err((*failure.error).into_fatal())
+            }
+            Err(_) => Ok(()),
+        }
+    }
+
     fn monitor_instance(&self, instance_alias: &str) -> RuntimeHostResult<RegisteredInstance> {
         // The identity check runs under the registry lock so an endpoint rebinding is never
         // observed half-applied.
@@ -773,6 +847,11 @@ pub(super) fn monitor_probe_loop(shared: Arc<HostShared>) -> RuntimeHostResult<(
             if shared.fatal.is_shutdown_requested() {
                 return Ok(());
             }
+            // Workflow #437 MAPP-1d, tests: a test that holds the loop runs each round itself.
+            #[cfg(test)]
+            if shared.monitor_loop_held_for_test.load(Ordering::Acquire) {
+                break;
+            }
             let Some(_work) = shared.begin_work()? else {
                 break;
             };
@@ -784,4 +863,49 @@ pub(super) fn monitor_probe_loop(shared: Arc<HostShared>) -> RuntimeHostResult<(
         thread::sleep(MONITOR_POLL_INTERVAL);
     }
     Ok(())
+}
+
+/// Workflow #437 MAPP-1d, tests: the resident monitor loop held, and one round of a due probe run
+/// by the test itself.
+#[cfg(test)]
+impl RuntimeHost {
+    /// The resident monitor loop takes no probe from now on; the test runs each round itself
+    /// ([`Self::run_due_monitor_probe_for_test`]). Called before any monitor is configured.
+    pub(crate) fn hold_monitor_loop_for_test(&self) -> RuntimeHostResult<()> {
+        let location = crate::codes::test_spellings::TestLocation::HoldMonitorLoopForTest;
+        self.shared_ref(location)?
+            .monitor_loop_held_for_test
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// One round of the monitor probe of `instance_alias`, as the resident loop runs it, when the
+    /// registry reports it due now; `false` (nothing run) when it is not due.
+    pub(crate) fn run_due_monitor_probe_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<bool> {
+        let location = crate::codes::test_spellings::TestLocation::RunDueMonitorProbeForTest;
+        let shared = self.shared_ref(location)?;
+        let due = lock(shared.monitor_registry()?, HostLocation::ReadDueMonitors)?
+            .due(unix_ms_now()?, usize::MAX)?;
+        let Some(probe) = due
+            .into_iter()
+            .find(|probe| probe.instance_alias == instance_alias)
+        else {
+            return Ok(false);
+        };
+        shared.run_monitor_probe(&probe)?;
+        Ok(true)
+    }
+
+    /// Turns MAPP-1d's branches off (`true`) or on again: while off, nothing of the slice applies
+    /// (`HostShared::mapp1d_off_for_test`), as before it.
+    pub(crate) fn mapp1d_off_for_test(&self, off: bool) -> RuntimeHostResult<()> {
+        let location = crate::codes::test_spellings::TestLocation::Mapp1dOffForTest;
+        self.shared_ref(location)?
+            .mapp1d_off_for_test
+            .store(off, Ordering::Release);
+        Ok(())
+    }
 }

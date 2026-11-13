@@ -2293,6 +2293,10 @@ impl RuntimeHost {
             performance_hold_for_test: AtomicBool::new(false),
             #[cfg(test)]
             mapp1c_off_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            mapp1d_off_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            monitor_loop_held_for_test: AtomicBool::new(false),
             fact_refresh_bindings,
             instance_facts_loaded_at_unix_ms,
             start_facts: Mutex::new(start_report_read::StartFacts::new(
@@ -3452,6 +3456,20 @@ impl RuntimeHost {
             crate::codes::test_spellings::TestLocation::ReadSchedulingPausesForTest,
         )?
         .set_instance_stage_for_test(instance_alias, stage))
+    }
+
+    /// Workflow #437 MAPP-1d: lifts the instance pause of `instance_alias` from the pause table,
+    /// as an instance resume lifts it, without the resume's reconnect claim; nothing is recorded
+    /// and nothing is pumped.
+    #[cfg(test)]
+    pub(crate) fn lift_instance_pause_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<()> {
+        let location = crate::codes::test_spellings::TestLocation::LiftInstancePauseForTest;
+        lock(&self.shared_ref(location)?.scheduling_pause, location)?
+            .lift_instance(instance_alias)
+            .map(|_| ())
     }
 
     #[cfg(test)]
@@ -6287,6 +6305,18 @@ struct HostShared {
     // slice.
     #[cfg(test)]
     mapp1c_off_for_test: AtomicBool,
+    // Workflow #437 MAPP-1d, test only: nothing of MAPP-1d applies while set (a member's monitor
+    // probe is made whoever holds the device and keeps its session; a lapsed run lease of a member
+    // hands the device on with the member's session open; every claim of a device's queue is
+    // judged by the gate of the member asked for; the queue's grant names the member whose queue
+    // was pumped in its candidate's performance check, ladder judgement and `lease.granted`), as
+    // before the slice.
+    #[cfg(test)]
+    mapp1d_off_for_test: AtomicBool,
+    // Workflow #437 MAPP-1d, test only: while set the resident monitor loop takes no probe, and a
+    // test runs each round itself (`RuntimeHost::run_due_monitor_probe_for_test`).
+    #[cfg(test)]
+    monitor_loop_held_for_test: AtomicBool,
     // Workflow #384 D2-S4: by instance alias, the recognition maintenance package the start kept
     // and the keys its marks write, read once at startup.
     fact_refresh_bindings: BTreeMap<String, crate::fact_refresh::FactRefreshBinding>,
