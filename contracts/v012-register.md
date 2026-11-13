@@ -18920,8 +18920,9 @@ no failure unless a failure kind knows it: it is not listed and causes no gap. T
 the outcome catalog this build embeds gives the record's code (`planned_stop` and `ladder_class` in
 `views.rs`, over `outcome::catalog_json` and `parse_ladder_class`), read as the recovery ladder's
 trigger matching reads it (`ladder_class_of`); a code the catalog does not list has no class. The
-rule names no code: today the class holds `contained_task_cancelled` and `contained_task_paused`
-(a pause's drain, a player hold's drain).
+rule names no code: today the class holds eighteen codes (the release notes of 0.12.58 list
+them), among them `contained_task_cancelled` and `contained_task_paused` (a pause's drain, a
+player hold's drain); this entry first named these two as if they were the whole class.
 
 **What stays.** A record a failure kind knows (`input.failed`, `recognition.failed`, a failed entry
 recovery) is a failure whatever its code; any other record of severity `warning` or above stays a

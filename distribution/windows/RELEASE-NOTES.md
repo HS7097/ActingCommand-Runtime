@@ -66,7 +66,7 @@ v0.12.57 的改动（SBUD-1、IDLE-3、新 MCP 服务器的两个 Tools 文件�
   - **它定下的次序（按代码核过）**：本版之前的 Runtime 解不了带 `initiator` 的 `BindChannel`：v0.12.57 的 `RuntimeOperation` 拒未知成员（v0.12.57 的 `runtime.rs` 3778），解码失败就以
     `runtime_request_decode_failed` 掐断连接、不给回执（v0.12.57 的 `crates/runtime-host/src/host/requests.rs` 1399–1410）。本版的客户端遇到这种掐断，在同一个属主纪元里重连一次，
     之后不再发 `BindChannel`、以未绑定的连接继续，每个进程报一次 `client_channel_unsupported`（`crates/runtime-client/src/client.rs` 1021–1069）；旧 Runtime 再按第一条请求的信封把它归到
-    `lab`（v0.12.57 的 `requests.rs` 56–84），照旧服务，词哪里都不留。所以声明词的版本（LAB-6S2）只能部署在本版之上；退回到本版之前也是一样的降级。
+    `lab`（v0.12.57 的 `requests.rs` 56–84），照旧服务，词哪里都不留。所以声明词的版本（LAB-6S2）应当部署在本版之上；部署在更早的 Runtime 上，或者退回到本版之前，都是上面这种降级：照旧服务，词不留。
 - **经 Lab 的 MCP 服务器部署和回滚**（#434 LAB-6S0，登记 §1.287「Slice LAB-6S0」；`apps/actinglab-mcp/MANUAL.md` 第 9、10 节）。
   - **变了的**：Windows 上 `ac_deploy`、`ac_rollback` 不再答 `mcp_operation_unsupported`，而是服务：服务器自己给这两行的 `detach` 填 true（`apps/actinglab-mcp/src/tools.rs` 136–141、
     245–256），救急模块起一个分离的 `actinglab.exe`（服务器旁边的那个；不在就当场拒、带路径，`crates/lab-rescue/src/install/host.rs` 293–317），带 `ACTINGCOMMAND_INITIATOR=Lab-MCP`
@@ -115,7 +115,7 @@ v0.12.57 的改动（SBUD-1、IDLE-3、新 MCP 服务器的两个 Tools 文件�
   - **原来显示的**：一次被请求停下的调度运行，账本视图的运行恢复分组把停下自己的三条记录（运行的收尾 `task.failed`、调度驱动的 `runtime.failed`、`policy.execution_recorded` 的 `stopped`
     结算，都带 `contained_task_cancelled`，这个码的类别是 error）列成「失败、未见恢复」，缺口 `missing_relation`，状态 `unknown`。
   - **规则**：推分组时，结果码的阶梯分类是 `planned_stop` 的记录不算失败、不列进证据、不引出缺口，除非某个失败种类认得它（`input.failed`、`recognition.failed`、入口恢复失败）
-    （`crates/ledger/src/global/projection/views.rs` 309–319、419–440）。分类从程序自带的码目录里读，规则不点名码。**这一类现在有 18 个码，不止 PR 和登记册说的两个**：error 的
+    （`crates/ledger/src/global/projection/views.rs` 309–319、419–440）。分类从程序自带的码目录里读，规则不点名码。**这一类现在有 18 个码，不止 #1665 当初说的两个（登记册和契约的那句已随本版改准）**：error 的
     `contained_task_cancelled`、`contained_task_paused`、`blackout_run_stopped`、`capture_pressure_pause_stopped`、`lab_arrival_shutdown`、`recovery_ladder_shutdown_requested`、
     `recovery_ladder_drain_requested`，warning 的 `contained_task_feature_locked`、`contained_task_entry_busy`、`recovery_ladder_interrupted`、`recovery_ladder_hold_exhausted`、
     `device_thermal_hold`、`device_battery_low`、`device_in_use`，另有 4 个 info 码本来就不算；挂在一次运行上、带这些码的记录都不再进它的分组。
@@ -223,7 +223,7 @@ v0.12.57 的改动（SBUD-1、IDLE-3、新 MCP 服务器的两个 Tools 文件�
 - 从 v0.12.56 部署：不用标志，没有 `ledger_verify`，`defaults_diff` 为空，能退回 v0.12.56；跳过 v0.12.57 不多付什么，部署前照 v0.12.57 一节用本版的 `standard-pack check` 查遍包根。
 - Runtime 不再按自称的来源拒请求：Lab 的 `pause`、`resume`、`shutdown`、`emu`、`drill`、`facts publish`、`targets set` 这些现在能用，十个来源码 `retired`；`evidence read` 照旧被拒。
 - `ui` 通道只收控制台清单上的 30 种请求和档位里能改的 11 个键，别的以 `channel_request_refused` 拒；装着的控制台 v0.12.16 一样都不发，别的通道照旧。
-- 声明发起者的客户端（LAB-6S2）只能部署在本版之上；Lab 的 MCP 服务器能部署和回滚了，但生产到 LAB-7 前照旧用 `actingctl install`。
+- 声明发起者的客户端（LAB-6S2）应当部署在本版之上（更早的 Runtime 会丢掉它的绑定，它退回不绑定、照旧工作）；Lab 的 MCP 服务器能部署和回滚了，但生产到 LAB-7 前照旧用 `actingctl install`。
 - 包可以带 `notices/`，`package` 升到 [3, 10]；放包工具和资源仓的打包脚本学会之前不发布这种包。停下或暂停的运行不再出现在运行恢复分组里。
 
 本版合并的 PR：
