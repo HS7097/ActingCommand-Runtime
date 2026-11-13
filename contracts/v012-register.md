@@ -11888,6 +11888,120 @@ the `command.rejected` records with a channel this build wrote (the member exist
   calls) and on requests for representative kinds: a valid request of each of the 79 kinds is not
   built.
 
+#### Slice LAB-6S2-M (0.12.59): the host records today's channel for a `lab` binding that declares a word
+
+Coordinator work order `rd-1113/brief-lab6s2m.md`, after two read-only surveys: the first,
+`rd-1113/lab6s2-design.md` (who binds what, and everything outside `validate()` that judges or
+records by the envelope or the channel), and the second, `rd-1113/lab6s2-mapping.md` (whether the
+host can map a declared word back to today's origin; its variant K, which the coordinator
+adopted); the coordinator's rulings of 2026-11-13 on board #434, not the owner's words; based on
+main `daac1ed4` (0.12.58). The contracts are [lab-two-entries.md](lab-two-entries.md) (the slice
+table, §2.4, §4.3), [runtime-interface.md](runtime-interface.md) ("Binding" rule 9) and
+[component-interfaces.md](component-interfaces.md) (`runtime-client` 8's row).
+
+**What.** LAB-6S2, every program of this repository on `lab` with its word, is cut into
+LAB-6S2-M (this slice, the host's half), LAB-6S2-B1 (the Lab's own programs bind `lab` with their
+word and keep the envelope they sent on 0.12.58), LAB-6S2-B2 (`actingctl` and today's MCP server
+the same) and LAB-6S2-E (the envelope becomes the channel's; the map and the receipt rule end).
+This slice gives the door the map M and the receipt rule R. It is dormant: no program of this
+build declares a word.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L6S2M-1 | `ChannelBinding::recorded(source)`, the map M (`crates/actingcommand-contract`, `runtime/interface.rs`) | pure function of the contract crate | LAB-6S2-M | — | the table below; every binding but `lab` with one of the five Lab words is returned as it is (`lab` without a word, with or without `via`, `cli`, `mcp`, `ui`, the binding an unbound connection's first request makes); the result names no initiator and is never `ui` |
+| L6S2M-2 | the door applies M once (`runtime-host` `requests.rs`, `process_request_observed`): the validated request carries M's binding | behaviour | LAB-6S2-M | the door | so the C4 `command.received`'s `channel` and `via`, the package debug record's and the `host.config_overrides` row's `channel` (the surveys' places B-3 and B-19) read it; the envelope, and everything judged by it, is untouched. The UI gate reads it too: M leaves `ui` as it is and never yields it, so the gate judges exactly the connections bound to `ui` |
+| L6S2M-3 | the receipt rule R (the door, `with_channel`) | wire, answer | LAB-6S2-M | the door | a request whose envelope's source is `Lab`: the connection's binding with its word, LAB-6S1a's receipt; a request with any other client envelope: M's binding, without `initiator`; `BindChannel`: the binding it made or kept, as before |
+
+**The table M**, by the word and the source of the request's envelope:
+
+| Word \ envelope source | `Lab` | `Cli`, `Adapter`, `Ui` |
+|---|---|---|
+| `Lab-MCP` | `lab`, `via` `mcp` | `mcp` |
+| `Lab-CLI`, `Lab-制包`, `Lab-救急`, `Lab-看门狗` | `lab` | `cli` |
+
+**R.** On a `lab` binding that declares a word, the receipt of a request whose envelope's source is
+not `Lab` carries M's binding (`channel` `cli`, or `mcp` under `Lab-MCP`), without `via` and
+without `initiator`; the receipt of a request from the Lab carries `channel` `lab` and the word, as
+from LAB-6S1a. The answer to `BindChannel` is not under R: the client requires its echo. A binding
+without a word is receipted as before.
+
+**Why.** The first survey found that moving every program onto `lab` with the Lab's envelope in one
+step breaks three things. The evidence-read confirmation counts only from an agent adapter, the CLI
+or a person, in the host and in the frame index, so the confirmations of `actingctl` and of both
+MCP servers would be refused. The identity card and the host's re-checks take only `(User, Ui)` and
+`(Cli, Cli)`, so `actingctl install-transition`, and with it acsetup's close, and both MCP servers'
+writes would fail their card. And every receipt on a word binding carries `initiator`, which the
+installed console's acsetup (v0.12.16, whose pinned receipt type has no such member and refuses
+unknown ones) cannot decode in the receipts that `install-transition` and `request-shutdown` print,
+so its close and start would fail. It also changes what a person sees: the console's ledger page
+and Lab tab would show the requests of `actingctl` and both MCP servers as the Lab's, its settings
+page "via Lab" for the rows they set, the runs they start the origin `lab`, and their frames would
+be kept as Lab frames. The second survey found that a word alone cannot name today's origin
+(`Lab-CLI` stands for `actingctl`'s `(Cli, Cli)` and `(Agent, Adapter)` and for `actinglab`'s
+`(Lab, Lab)` on the same kinds, and one `actinglab` process sends both), and that keyed by the word
+and the envelope it can: a client that keeps its 0.12.58 envelope is judged by it as on 0.12.58 (no
+branch of `validate()` reads it since LAB-6S1b, and the door checks no envelope against the
+binding), so only what the host writes from the channel needs M, and R keeps every byte acsetup
+decodes. Of the 33 places outside `validate()` that judge or record by the envelope or the channel,
+32 then stay as on 0.12.58; the one left differs only in version skew (a program of LAB-6S2-B1 or
+later that meets a Runtime before LAB-6S1a is dropped, goes on unbound and is bound by its
+envelope, so an MCP server's connection is bound `cli`). The three owner decisions the first survey
+named (kept frames, what the console shows, a console release that reads `initiator`) are not needed
+for LAB-6S2-M, LAB-6S2-B1 and LAB-6S2-B2; they come back with LAB-6S2-E.
+
+**The one cell that is not today's.** The rescue rows that `actinglab-mcp` serves send `(Cli, Cli)`
+on `cli` today; under `Lab-MCP` M records them `mcp`. Those requests write no channel anywhere (the
+rescue module sends no C4 kind, no setting and no debug package, and a pause records no channel),
+so only their receipts' `channel` differs (the second survey's V3).
+
+**Nothing else changes.** No request is refused that was taken and none taken that was refused: M
+changes no judgement and R only the channel members of a receipt on a word binding. **No interface
+revision moves**: `channel`, `via` and `initiator` are optional members of `runtime-client` 8's
+receipt, and no record, row or document gains or loses a member (component-interfaces.md's row of
+revision 8 now says which receipts carry `initiator`). No outcome code is added. `validate()`, the
+UI list, `ui_gate.rs`, the interface revisions file and every client program are untouched.
+
+**Tests.** New: host row "#434 LAB-6S2-M" (`gate_434_lab6s2m`). One test per row of M a program
+will use: `cli` against `lab` with `Lab-CLI` and `mcp` against `lab` with `Lab-MCP`, both with
+`(Cli, Cli)`; `lab` without a word against `lab` with `Lab-CLI`, and `lab` with `via` `mcp` against
+`lab` with `Lab-MCP`, both with `(Lab, Lab)`. Within one host the two connections send a
+`ConfigureSettings` of an instance's `stuck_recovery`, a `PublishFacts` of a priority offset, a
+`RecordClientAction`, a `StopInstanceRun` (a C4 kind on the fake device, refused after its command
+record) and last a `RequestShutdown`; each pair's receipts are equal with the request and
+correlation ids, the terminal's event id and position, the fact's event id, the settings' version
+token and the channel members left out, the channel members being today's binding and R's; both
+write the same records (type, source, module, actor, channel, `via`); and the settings row names
+today's channel after either. Then R on each of the five words for `(Cli, Cli)`, `(Agent, Adapter)`
+and `(Lab, Lab)`, with the answer to `BindChannel` unchanged; a binding without a word, `cli`,
+`mcp`, `ui` and an unbound connection answered and recorded as before; and the UI gate never
+judging a mapped connection (M leaves `ui` and yields it for no binding; a priority offset, off the
+list, with the console's envelope is served on `lab` with each word and refused on `ui`).
+**Adapted**: `gate_434_lab6s1a::lab6s1a_lab_with_each_lab_word_is_bound_echoed_and_carried_by_its_receipts`
+sent its Status and Health with the CLI's envelope and pinned the word on their receipts, which R
+now answers without it; they are sent with the Lab's envelope, whose receipts still carry it (the
+CLI envelope's receipt is pinned in the new gate). No test leaves the gate map.
+
+**At deploy.** Nothing: dormant until a program declares a word (LAB-6S2-B1). A Runtime of this
+release answers every program of 0.12.58, and the released console, byte for byte as 0.12.58
+does.
+
+**LAB-6S2-M rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value, and no
+program of this build declares a word.
+
+**Where LAB-6S2-M differs from its work order's letter.**
+
+- (a) The shutdown the pairs send names another process: an accepted one would stop the host
+  before the pair's second connection is answered. It is recorded and refused
+  (`runtime_shutdown_denied`) on both, with the request's origin.
+- (b) Each connection's priority offset has its own observation time: an observation equal to the
+  active one is a replay, which appends nothing.
+- (c) On the two `lab` rows the pair's receipts differ in their channel members, as R says (the
+  Lab envelope's receipt carries the word, and the MCP children's has no `via`), so the test
+  compares those members against today's binding and R's apart from the rest of the receipt.
+- (d) runtime-interface.md, "Binding" rule 9, which the work order does not name, said that every
+  receipt of a word binding carries `initiator`; it now names M and R, as component-interfaces.md
+  does.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

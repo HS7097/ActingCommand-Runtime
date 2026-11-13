@@ -109,7 +109,14 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
    outside the list is refused `invalid_bind_channel` and the connection stays unbound. The
    answer is `ChannelBound{channel, via?, initiator?}`, which echoes the word, and every receipt
    of the connection carries `initiator` beside `channel`; the runtime client requires the echo
-   of both (`runtime_result_unexpected` otherwise). A connection that declares no word, the
+   of both (`runtime_result_unexpected` otherwise). From Workflow #434 LAB-6S2-M (Runtime
+   0.12.59) until LAB-6S2-E, on such a connection the Runtime records each request with the
+   channel that program's binding had on 0.12.58, by the word and the envelope's source, and a
+   request whose envelope's source is not `Lab` is receipted with that channel (`cli`, or `mcp`
+   under `Lab-MCP`) and without `initiator` ([lab-two-entries.md](lab-two-entries.md) §2.4, the
+   map M; §4.3, the receipt rule R), except the answer to `BindChannel` itself, which carries
+   `lab` and the word whatever the envelope (the first binding's and a refused second one's);
+   the connection's binding itself is unchanged. A connection that declares no word, the
    console's `ui` among them, binds, is answered and reads its receipts byte for byte as before
    (a `ui` connection's initiator `UI` is implied by its channel and never written). Nothing
    records the word, and no status read reports it.

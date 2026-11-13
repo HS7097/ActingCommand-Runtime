@@ -136,8 +136,11 @@ fn lab6s1a_lab_with_each_lab_word_is_bound_echoed_and_carried_by_its_receipts() 
             (Some(RuntimeChannel::Lab), None, Some(word))
         );
 
+        // Workflow #434 LAB-6S2-M (rule R): a request from the Lab is receipted with the word; one
+        // with the CLI's envelope, as `client.request` builds, with the channel the host records
+        // for it and no word (`gate_434_lab6s2m`).
         for operation in [RuntimeOperation::Status, RuntimeOperation::Health] {
-            let request = client.request(operation);
+            let request = request_as(&client, EventActor::Lab, EventSource::Lab, operation);
             let receipt = client.send(&request);
             assert_eq!(receipt.state(), RuntimeReceiptState::Completed, "{word:?}");
             assert_eq!(

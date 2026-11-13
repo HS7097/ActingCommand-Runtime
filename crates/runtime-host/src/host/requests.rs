@@ -38,15 +38,28 @@ impl HostShared {
         // only on `ui`, by the UI list (Workflow #434 LAB-6S3, `ui_gate`), and never by Lab
         // option.
         let channel = self.door_channel(request, connection_id)?;
+        // Workflow #434 LAB-6S2-M (contracts/lab-two-entries.md §2.4, the map M): on a `lab`
+        // binding that declares a word, everything that reads the request's channel (the command
+        // record's channel and `via`, the package debug record's, the settings row's channel)
+        // reads the binding that program had on 0.12.58, by the request's envelope; every other
+        // binding is its own. The envelope itself is untouched. M leaves `ui` as it is and never
+        // yields it, so the UI gate judges exactly the connections bound to `ui`.
+        let recorded = channel.map(|binding| binding.recorded(request.source()));
         let receipt =
-            self.process_request_at_door(request, channel, connection_id, timing, material)?;
-        // A BindChannel's receipt carries the binding it made.
-        let channel = if matches!(request.operation(), RuntimeOperation::BindChannel { .. }) {
+            self.process_request_at_door(request, recorded, connection_id, timing, material)?;
+        // A BindChannel's receipt carries the binding it made. Workflow #434 LAB-6S2-M (§4.3, the
+        // receipt rule R): every other request's receipt carries, for an envelope from the Lab,
+        // the connection's binding with its word (LAB-6S1a), and for any other client envelope the
+        // recorded binding, without a word; both are the connection's binding when it declared
+        // none.
+        let answered = if matches!(request.operation(), RuntimeOperation::BindChannel { .. }) {
             self.connection_channel(connection_id)?
-        } else {
+        } else if request.source() == EventSource::Lab {
             channel
+        } else {
+            recorded
         };
-        Ok(receipt.with_channel(channel))
+        Ok(receipt.with_channel(answered))
     }
 
     /// The channel the door tags `request` with: its connection's binding. Until U-6 a
