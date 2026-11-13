@@ -898,7 +898,15 @@ the rescue face:
   swaps it in with the replaced file kept as `actingd.config.json.prev-<ms>`, starts, waits for
   `alive` and releases (the file's content is never printed, only its SHA-256); `config restore
   <prev>` does the same with a kept `.prev-<ms>`; `place <bundle.zip>` checks the `package` edge
-  first, then plans with the contract crate's readers (the layout: the root files,
+  first (of the zip's `interfaces.json` it reads `schema_version`, which must be
+  `actingcommand.component-interfaces.v1`, and `speaks.package`, a pair of integers `[min, max]`
+  with `min <= max`, and no other member: other names under `speaks` and members such as
+  `validated_with` are neither required nor checked, so a bundle that declares `package` alone, as
+  a resource repository's release does, is read (Workflow #451 PLACE-PKG, since 0.12.59; before it
+  `place` asked a bundle for all six v1 interfaces, the rule of a Runtime's declaration, and
+  refused every released bundle); a missing, unreadable or malformed file, or a declared maximum
+  outside the running installer's `package` range, is `interface_edge` with the path of the file
+  and the game), then plans with the contract crate's readers (the layout: the root files,
   `packs/<listed id>/…`, `tables/<listed id>.json` and, from `package` 10, the notices directory
   `notices/` under the rules of [package-reference.md](package-reference.md), "Notices"), holds
   the instances bound to the bundle's game (the game comes from the bundle), waits until they are
