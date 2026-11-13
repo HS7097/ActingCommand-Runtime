@@ -13,7 +13,9 @@
 //   neither withdraws as a v2 document with `targets: []` does, a v1 document over a v3 record is
 //   refused at its version, a replay appends nothing and `expected_version` is compared as T1-R's;
 // - v1 and v2 documents over v1 or v2 records write exactly the rows they wrote before;
-// - a start reloads a v3 record unchanged.
+// - a start reloads a v3 record unchanged;
+// - the version a writer reads is the version the gate compares, a withdrawal's `0` included
+//   (the coordinator's ruling of 11-14 on #1702).
 // Every alias, pool and id is the fixture's or neutral.
 
 use super::gate_383_ao4q::ledger_head;
@@ -364,13 +366,14 @@ fn refused(receipt: &RuntimeReceipt, reason: ResourceTargetsRejectionReason, fie
 // envelope, a v3 document (a target with its own lifetime, two entries) writes a v3 record: the
 // header, the target row with its lifetime and with `set_unix_ms` the Runtime's time at the
 // request, `channel` `lab` and `initiator` `Lab-CLI`, and the two entry rows, their values'
-// canonical texts, set alike; the receipt names the target's lifetime and its condition. A
+// canonical texts, set alike; the receipt of a v3 document names no lifetime and no condition. A
 // document cannot name who set it: an entry with `set_unix_ms` is `unknown_field` and appends
 // nothing. On `ui` with the console's envelope and the view's version, a v3 document without
 // `entries` replaces the target (now without a lifetime, set at its own time by `ui`, no
 // initiator) and keeps both entry rows byte for byte; its receipt names no lifetime and no
 // condition. On `cli`, a v2 document replaces the target again, the document's lifetime its own,
-// no one named as its setter, and the entry rows are still those of the first write. The view then
+// no one named as its setter, and the entry rows are still those of the first write; its receipt
+// names the document's lifetime and its condition, as a v2 document's does. The view then
 // answers the v3 record: its version, the target in document form with its own lifetime, no
 // lifetime of the record, not expired.
 #[test]
@@ -412,7 +415,8 @@ fn gr2a_h1_a_v3_record_names_who_set_its_rows_and_later_documents_keep_its_entri
     let first = applied(&receipt);
     assert_eq!(
         (first.valid_until_unix_ms, first.conditions.len()),
-        (Some(valid_until), 1)
+        (None, 0),
+        "a v3 document's receipt names no lifetime and no condition"
     );
     let lab_set = set_by(first_at, RuntimeChannel::Lab, Some(Initiator::LabCli));
     let entry_row = |name: &str, value_json: &str| {
@@ -776,4 +780,80 @@ fn gr2a_h4_a_start_reloads_a_v3_record_unchanged() {
     assert_eq!(fixture.policy_events(), events, "nothing appended");
     drop(lab);
     fixture.close();
+}
+
+// The version a writer reads is the version the gate compares, in every state (the coordinator's
+// ruling of 11-14 on #1702, which corrects T1-R's comparison for a withdrawal). In each state the
+// view's version is read (`active.version`, `0` without `active`), a v2 document written with it is
+// applied, and a v3 document written with the version read before is
+// `fact_observation_version_conflict` whose `current_version` is what a new read answers, nothing
+// appended. The states: no record and a withdrawn record (a v2 document with `targets: []`), which
+// the view answers without `active`, so `0`; an active v2 record; a v3 record with targets. A v3
+// record of entries alone is not here: the view cannot answer it an `active` within the answer's
+// shape (`ResourceTargetView::validate` refuses an `active` without targets), which is reported.
+#[test]
+fn gr2a_h5_the_version_a_writer_reads_is_the_version_the_gate_compares_in_every_state() {
+    let valid_until = START + DAY_MS;
+    let v2_document = |amount: u64| {
+        json!({
+            "schema_version": V2,
+            "instance": ALIAS,
+            "valid_until_unix_ms": valid_until,
+            "targets": [floor(amount)]
+        })
+        .to_string()
+    };
+    let withdrawal = json!({"schema_version": V2, "instance": ALIAS, "targets": []}).to_string();
+    let v3_document = |amount: u64| v3(vec![lasting(floor(amount), valid_until)], None);
+    let states = [
+        ("no record", Vec::new(), true),
+        ("an active v2 record", vec![v2_document(40)], false),
+        (
+            "a withdrawn record",
+            vec![v2_document(40), withdrawal],
+            true,
+        ),
+        ("a v3 record with targets", vec![v3_document(40)], false),
+    ];
+    for (label, setup, read_as_none) in states {
+        let fixture = Fixture::start();
+        let mut client = TestClient::connect(&fixture.host);
+        let send: Envelope = TestClient::request;
+        for document in &setup {
+            applied(&fixture.apply(&mut client, send, document, None).0);
+        }
+        let read = fixture.view().active.map_or(0, |active| active.version);
+        assert_eq!(
+            read == 0,
+            read_as_none,
+            "{label}: the version read is {read}"
+        );
+        let written = applied(
+            &fixture
+                .apply(&mut client, send, &v2_document(50), Some(read))
+                .0,
+        );
+        let head = fixture.head();
+        let (refused, _) = fixture.apply(&mut client, send, &v3_document(60), Some(read));
+        let now = fixture.view().active.map_or(0, |active| active.version);
+        assert_eq!(now, written.version, "{label}");
+        assert_eq!(
+            refused.state(),
+            RuntimeReceiptState::Denied,
+            "{label}: {refused:?}"
+        );
+        assert_eq!(
+            refused.outcome().code().as_str(),
+            CONFLICT,
+            "{label}: {refused:?}"
+        );
+        assert_eq!(
+            refused.outcome().value("current_version"),
+            Some(&json!(now)),
+            "{label}: {refused:?}"
+        );
+        assert_eq!(fixture.head(), head, "{label}: a conflict appends nothing");
+        drop(client);
+        fixture.close();
+    }
 }

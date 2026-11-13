@@ -371,7 +371,9 @@ fn gr2a_t2_a_lapsed_target_weighs_nothing_and_says_expired_while_the_other_weigh
 // The v3 reader's refusals, each with its reason at its field: an unknown member (written first
 // in its target, where the declaration parser places it: the target), a 97th entry, a name given
 // twice, a name out of form, a value whose canonical text is 1025 bytes (one of 1024 is taken),
-// `by_unix_ms`, a document-level `valid_until_unix_ms`, and a v1 document over a v3 record.
+// `by_unix_ms` (not a member of a v3 target in this slice: `unknown_field` at itself, the
+// coordinator's ruling of 11-14 on #1702), a document-level `valid_until_unix_ms`, and a v1
+// document over a v3 record.
 #[test]
 fn gr2a_t3_the_v3_reader_refuses_each_mistake_at_its_field() {
     let catalog = catalog(&[task_a(), task_b()]);
@@ -433,9 +435,9 @@ fn gr2a_t3_the_v3_reader_refuses_each_mistake_at_its_field() {
             "/entries/0/value",
         ),
         (
-            "a deadline",
+            "a deadline, not a member of a v3 target in this slice",
             document(json!([dated]), entries(1)),
-            Reason::DeadlineUnsupported,
+            Reason::UnknownField,
             "/targets/0/by_unix_ms",
         ),
         (
@@ -766,4 +768,97 @@ fn gr2a_t6_a_record_of_a_version_the_reader_does_not_know_runs_on_base_schedulin
         "{detail}"
     );
     assert_eq!(term(&evaluation, TASK_A), 1000, "the base weight alone");
+}
+
+// The receipt of a v3 document (the coordinator's ruling of 11-14 on #1702): it never names a
+// lifetime or conditions, both left out together, whatever its targets carry: every target with a
+// lifetime, a target without one, over no record and over a v3 record; the record still holds
+// each target's own lifetime, which the read answers.
+#[test]
+fn gr2a_t7_a_v3_documents_receipt_names_no_lifetime_and_no_condition() {
+    let catalog = catalog(&[task_a(), task_b()]);
+    let lasting_targets = v3_document(vec![
+        lasting(goal_a(), NOW + DAY_MS),
+        lasting(goal_b(), NOW + HOUR_MS),
+    ]);
+    let over_none = compose(&catalog, &lasting_targets, None, NOW)
+        .unwrap_or_else(|error| panic!("the v3 document applies: {error:?}"));
+    let over_v3 = compose(
+        &catalog,
+        &v3_document(vec![goal_a(), lasting(goal_b(), NOW + HOUR_MS)]),
+        Some(over_none.rows.as_slice()),
+        NOW,
+    )
+    .unwrap_or_else(|error| panic!("the v3 document applies over a v3 record: {error:?}"));
+    for (label, composed) in [("over none", &over_none), ("over v3", &over_v3)] {
+        assert_eq!(
+            (composed.valid_until_unix_ms, composed.conditions.len()),
+            (None, 0),
+            "{label}"
+        );
+    }
+    assert_eq!(
+        over_none.rows[1].get("valid_until_unix_ms"),
+        Some(&integer(NOW + DAY_MS)),
+        "the record keeps the target's own lifetime"
+    );
+}
+
+// The receipt of a v2 document over a v3 record (the coordinator's ruling of 11-14 on #1702): the
+// lifetime and the conditions it answers over no record, for the same document checked at the
+// same time; the record it writes is the v3 record that keeps the stored entry. With
+// `targets: []` over a v3 record holding an entry, likewise: no lifetime, no condition.
+#[test]
+fn gr2a_t8_a_v2_documents_receipt_over_a_v3_record_is_the_one_it_answers_over_none() {
+    let catalog = catalog(&[task_a(), task_b()]);
+    let stored = compose(
+        &catalog,
+        &json!({
+            "schema_version": V3,
+            "instance": A,
+            "targets": [lasting(goal_a(), NOW + DAY_MS)],
+            "entries": [{"name": "route", "value": "a"}]
+        }),
+        None,
+        NOW,
+    )
+    .unwrap_or_else(|error| panic!("the v3 document applies: {error:?}"))
+    .rows;
+    for (label, document) in [
+        (
+            "targets",
+            json!({
+                "schema_version": V2,
+                "instance": A,
+                "valid_until_unix_ms": NOW + HOUR_MS,
+                "targets": [goal_a(), goal_b()]
+            }),
+        ),
+        (
+            "targets: []",
+            json!({"schema_version": V2, "instance": A, "targets": []}),
+        ),
+    ] {
+        let over_none = compose(&catalog, &document, None, NOW)
+            .unwrap_or_else(|error| panic!("{label}: applies over none: {error:?}"));
+        let over_v3 = compose(&catalog, &document, Some(stored.as_slice()), NOW)
+            .unwrap_or_else(|error| panic!("{label}: applies over v3: {error:?}"));
+        assert_eq!(
+            (&over_v3.valid_until_unix_ms, &over_v3.conditions),
+            (&over_none.valid_until_unix_ms, &over_none.conditions),
+            "{label}"
+        );
+        assert_eq!(
+            over_v3.rows[0].get("schema_version"),
+            Some(&text(V3)),
+            "{label}: a v3 record"
+        );
+        assert!(
+            over_v3
+                .rows
+                .iter()
+                .any(|row| row.get("name") == Some(&text("route"))),
+            "{label}: the stored entry kept"
+        );
+    }
 }

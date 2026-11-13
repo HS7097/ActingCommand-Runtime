@@ -7012,9 +7012,6 @@
         },
         "duplicate_task": {
           "description": "A task named more than once in the document."
-        },
-        "deadline_unsupported": {
-          "description": "A v3 target names by_unix_ms, a deadline, which this Runtime does not take yet (Workflow #455 G-R2a; deadlines are G-R4)."
         }
       }
     },

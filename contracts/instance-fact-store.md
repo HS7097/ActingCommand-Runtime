@@ -498,7 +498,9 @@ active record's sequence is the new policy's `previous_version`.
 `InstanceFactStore::active_revision(scope, key)` reads the active record with the sequence and
 id of its event. Workflow #455 T1-R (since 0.12.60): in the same hold, before the replay, an
 `ApplyResourceTargets` that names `expected_version` has it compared with the active record's
-sequence (`0` without a record); another is `fact_observation_version_conflict` with `fact_key`
+sequence (`0` without a record, and, since Workflow #455 G-R2a, `0` for a withdrawal, which
+`ResourceTargetView` answers without `active`; before G-R2a a withdrawal compared with its own
+sequence); another is `fact_observation_version_conflict` with `fact_key`
 and `current_version`, nothing appended, as `EditPackSchedule` compares its list ("Pack schedule
 facts"); without the member nothing is compared. Workflow #455 G-R2a (since 0.12.60): in the same
 hold, before the comparison, the active record is read and the record the document writes is

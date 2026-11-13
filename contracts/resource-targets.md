@@ -218,16 +218,15 @@ same entry, parser, 64 KiB bound and general reasons as v1 and v2.
 | `instance`, `targets` (`0..=16`) | as v2 | as v2 |
 | `targets[i]` | a v2 target: every v2 rule of its members holds (`id`, `resource` and one target per resource, `condition`, `scale`, `importance_milli`, `rule`, `apply` with `manual_offset`, `tasks`) | as v2 |
 | `targets[i].valid_until_unix_ms` | optional: the target's own lifetime, `now < v <= now + 31_536_000_000`; absent, the target does not expire | `validity_out_of_range` @ `/targets/i/valid_until_unix_ms` |
-| `targets[i].by_unix_ms` | a deadline: in the shape, refused until G-R4 | `deadline_unsupported` @ `/targets/i/by_unix_ms` |
+| `targets[i].by_unix_ms` | not a member of a v3 target in this slice: deadlines come with a later slice (G-R4), which adds the member | `unknown_field` @ `/targets/i/by_unix_ms` (checked right after the schema version) |
 | `valid_until_unix_ms` (top level) | not a member: a v3 document has no lifetime of its own | `unknown_field` @ `/valid_until_unix_ms` (checked right after the schema version) |
 | `entries` | optional, `0..=96` | `out_of_range` @ `/entries` |
 | `entries[i].name` | `^[a-z0-9][a-z0-9_]*$`, 1 to 64 bytes, unique in the document | `invalid_value` / `duplicate_id` @ `/entries/i/name` |
 | `entries[i].value` | any JSON value whose canonical text (below) is at most 1024 bytes and holds no control character | `invalid_type` (a fraction or an integer beyond 2^53-1, which the canonical writer refuses), `out_of_range` (over 1024 bytes), `invalid_value` (a control character) @ `/entries/i/value` |
 
 The reader is as strict as v2's: an unknown member anywhere is `unknown_field`, and every
-refusal names its field. This version adds one word to the closed reason set,
-`deadline_unsupported`. This slice checks an entry's form only: it does not know the pack's
-declaration (G-R1, G-R2b).
+refusal names its field. The closed reason set is unchanged: no word is added. This slice
+checks an entry's form only: it does not know the pack's declaration (G-R1, G-R2b).
 
 **Version probe.** Exactly when the top-level `schema_version` is the string
 `actingcommand.resource-targets.v3` the Runtime takes the v3 checks; the v2 probe and the v1
@@ -235,9 +234,10 @@ path are unchanged for every other document. `validate_catalog_declaration` with
 `resource_targets` dispatches by the same probes.
 
 The first failing check is reported, in this order: size, the declaration parse, schema
-version, bounds, forms and identifier charset (per target in document order its members, then
-`by_unix_ms`; then the entries' count, each name and each value), uniqueness (target ids, tasks,
-resources, entry names), the v2 apply rules; then the instance; then each target's own lifetime
+version, a top-level `valid_until_unix_ms` and then a target's `by_unix_ms`, bounds, forms and
+identifier charset (per target in document order its members; then the entries' count, each
+name and each value), uniqueness (target ids, tasks, resources, entry names), the v2 apply
+rules; then the instance; then each target's own lifetime
 in document order; then per target its resource, whether `S` and `I` resolve, and its tasks, as
 v2.
 
@@ -276,11 +276,13 @@ before: an equal identity over the active record appends nothing and answers `re
 after a restart. A v3 record has no expiry, so it is replayed until replaced; a document one of
 whose targets' lifetime has passed is refused at that lifetime.
 
-**The receipt.** `ResourceTargetsApplied` keeps its shape and its rules. For a v3 record
-`valid_until_unix_ms` is the latest of its targets' own lifetimes when every target has one, and
-`conditions` lists one condition per target, in document order; when a target has no lifetime,
-or there is no target, both are absent and empty (the receipt's rule binds the two together):
-`ResourceTargetView` shows every target with its own lifetime and its condition.
+**The receipt.** `ResourceTargetsApplied` keeps its shape and its rules. The receipt of a v3
+document never names a lifetime or conditions: `valid_until_unix_ms` is absent and `conditions`
+empty, both together, whatever its targets carry (`ResourceTargetView` answers each target's own
+lifetime and condition). The receipt of a v1 or v2 document is the one it answers before G-R2a,
+also when the record it is applied over is a v3 record: the document's `valid_until_unix_ms` and
+one condition per target (`policy_sha256`, `version` and `event_id` name the record written,
+which over a v3 record is a v3 record). The coordinator's ruling of 11-14 on #1702.
 
 **#429 R-13.** #429 R-13 had reserved the version name `actingcommand.resource-targets.v3` for a
 target table of its own (`maintain` and `gain` targets, `paused`, a `stale_schema` mark, a
@@ -313,12 +315,17 @@ member of `ApplyResourceTargets { document_json, expected_version? }`, on the wi
 `active.version`, `0` when the view has no `active`. The document is checked as without it; then,
 in the hold of the fact write gate that writes the record and before the replay below, the
 version of the instance's `session.resource_targets` record (the sequence of the `fact.published`
-that holds it, expired or not, `0` without one) is compared with it. Another value is Denied
+that holds it, expired or not, `0` without one and for a withdrawal, which the view answers
+without `active`) is compared with it. Another value is Denied
 `fact_observation_version_conflict` with `fact_key` `session.resource_targets` and
 `current_version` (kept in codes mode), and nothing is appended; the equal value applies, or
 answers an equal active policy's replay, exactly as a request without the member. Without the
 member nothing is compared and the last writer wins, as before. The `ui` channel, the console's,
-takes the kind from the same release ([lab-two-entries.md](lab-two-entries.md) §3). Before 0.12.60 a request that named the member was refused `not_implemented`.
+takes the kind from the same release ([lab-two-entries.md](lab-two-entries.md) §3). History: from T1-R
+(0.12.60, register §1.351) until Workflow #455 G-R2a (register §1.354) a withdrawal compared
+with its own sequence, which no read answers, so a writer that sent the view's `0` after a
+withdrawal met a conflict it could not resolve; since G-R2a the version a writer reads is the
+version compared in every state the view answers. Before 0.12.60 a request that named the member was refused `not_implemented`.
 
 A refused document answers Denied + `InvalidRequest` with host code `resource_targets_rejected`
 (operation `apply_resource_targets`), no terminal, and the additive receipt field
@@ -450,7 +457,9 @@ fields exactly when the document states them and `valid_until_unix_ms` exactly w
 has a lifetime. `set_unix_ms`, `channel` and `initiator` say who set the row and when: the
 Runtime writes them from the request, never from the document: `set_unix_ms` the Runtime's
 clock at the request (the record's `observed_at_unix_ms`), `channel` the channel the request is
-recorded with (`cli`, `mcp`, `ui` or `lab`, as the receipt names it), and `initiator` the word the
+recorded with (`cli`, `mcp`, `ui` or `lab`, as the receipt names it; the door always supplies
+one, binding an unbound connection at its first request, and a request without one is a fatal
+`resource_targets_record_invalid`, a state only a bug reaches), and `initiator` the word the
 request's connection declared, only for a request from the Lab (as the receipt carries it,
 [lab-two-entries.md](lab-two-entries.md) §4.3). A target that came through a v3 document carries
 them; a target that came through a v2 document applied over a v3 record does not. Every entry

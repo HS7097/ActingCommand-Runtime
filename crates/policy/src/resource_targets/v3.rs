@@ -50,6 +50,7 @@ const MAX_ENTRY_NAME_BYTES: usize = 64;
 
 const ROW_ENTRY: &str = "entry";
 const FIELD_VALID_UNTIL: &str = "valid_until_unix_ms";
+const FIELD_DEADLINE: &str = "by_unix_ms";
 const FIELD_SET_AT: &str = "set_unix_ms";
 const FIELD_CHANNEL: &str = "channel";
 const FIELD_INITIATOR: &str = "initiator";
@@ -122,17 +123,20 @@ pub struct ResourceTargetSpecV3 {
         deserialize_with = "present"
     )]
     pub valid_until_unix_ms: Option<u64>,
-    /// A deadline (G-R4): in the shape, refused `deadline_unsupported` until G-R4.
+    /// `by_unix_ms`, a deadline, which is not a member of a v3 target in this slice (the slice of
+    /// deadlines adds it): read only so that its refusal (`unknown_field`) names the member itself;
+    /// never written.
     #[serde(
+        rename = "by_unix_ms",
         default,
-        skip_serializing_if = "Option::is_none",
+        skip_serializing,
         deserialize_with = "present"
     )]
-    pub by_unix_ms: Option<u64>,
+    deadline: Option<serde_json::Value>,
 }
 
 impl ResourceTargetSpecV3 {
-    /// The target as a v2 target: every member but its lifetime and its deadline.
+    /// The target as a v2 target: every member but its lifetime.
     pub fn target_v2(&self) -> ResourceTargetSpecV2 {
         ResourceTargetSpecV2 {
             id: self.id.clone(),
@@ -146,7 +150,7 @@ impl ResourceTargetSpecV3 {
         }
     }
 
-    /// The v2 `target` with `valid_until_unix_ms` as its own lifetime and no deadline.
+    /// The v2 `target` with `valid_until_unix_ms` as its own lifetime.
     pub fn of_v2(target: &ResourceTargetSpecV2, valid_until_unix_ms: Option<u64>) -> Self {
         Self {
             id: target.id.clone(),
@@ -158,7 +162,7 @@ impl ResourceTargetSpecV3 {
             apply: target.apply,
             tasks: target.tasks.clone(),
             valid_until_unix_ms,
-            by_unix_ms: None,
+            deadline: None,
         }
     }
 }
@@ -191,10 +195,11 @@ pub struct ComposedResourceTargets {
     pub rows: Vec<BTreeMap<String, ContractFactScalar>>,
     /// The record's expiry: a v1 or v2 policy's lifetime; none for a v3 record or a withdrawal.
     pub expires_at_unix_ms: Option<u64>,
-    /// The receipt's `valid_until_unix_ms`: a v1 or v2 policy's lifetime; for a v3 record the
-    /// latest lifetime of its targets when every target has one, else absent.
+    /// The receipt's `valid_until_unix_ms`: a v1 or v2 document's lifetime, whatever the record it
+    /// is written over; always absent for a v3 document.
     pub valid_until_unix_ms: Option<u64>,
-    /// The receipt's `conditions`: one per target, empty exactly when `valid_until_unix_ms` is.
+    /// The receipt's `conditions`: a v1 or v2 document's, one per target; always empty for a v3
+    /// document (the read answers each target's).
     pub conditions: Vec<ResourceTargetCondition>,
 }
 
@@ -225,11 +230,11 @@ pub(crate) fn declares_v3(bytes: &[u8]) -> bool {
     })
 }
 
-/// The v3 half of `parse_resource_targets`: the declaration parse (unknown members, a
-/// document-level `valid_until_unix_ms` among them, are `unknown_field`), then the schema
-/// version, bounds and forms (16 targets, each a v2 target's, no `by_unix_ms`; 96 entries, each
-/// name of its form and each value's canonical text), uniqueness (target ids, tasks, resources,
-/// entry names) and the v2 apply rules.
+/// The v3 half of `parse_resource_targets`: the declaration parse (unknown members are
+/// `unknown_field`; a document-level `valid_until_unix_ms` and a target's `by_unix_ms`, right after
+/// the schema version, each at itself), then the schema version, bounds and forms (16 targets,
+/// each a v2 target's; 96 entries, each name of its form and each value's canonical text),
+/// uniqueness (target ids, tasks, resources, entry names) and the v2 apply rules.
 pub(super) fn parse_resource_targets_v3(
     source: &CatalogDocumentSource,
 ) -> Result<ParsedResourceTargets, ResourceTargetsError> {
@@ -247,8 +252,19 @@ pub(super) fn parse_resource_targets_v3(
             Reason::UnsupportedSchemaVersion,
         ));
     }
+    // Members a v3 document does not have, refused as every unknown member is, each at itself.
     if document.document_lifetime.is_some() {
         return Err(at(format!("/{FIELD_VALID_UNTIL}"), Reason::UnknownField));
+    }
+    if let Some(index) = document
+        .targets
+        .iter()
+        .position(|target| target.deadline.is_some())
+    {
+        return Err(at(
+            format!("/targets/{index}/{FIELD_DEADLINE}"),
+            Reason::UnknownField,
+        ));
     }
     if document.targets.len() > MAX_RESOURCE_TARGETS {
         return Err(at("/targets".to_owned(), Reason::OutOfRange));
@@ -285,12 +301,6 @@ pub(super) fn parse_resource_targets_v3(
                     return Err(at(format!("{path}/tasks/{task_index}"), Reason::OutOfRange));
                 }
             }
-        }
-        if target.by_unix_ms.is_some() {
-            return Err(at(
-                format!("{path}/by_unix_ms"),
-                Reason::DeadlineUnsupported,
-            ));
         }
     }
     let entries = document.entries.as_deref().unwrap_or_default();
@@ -651,11 +661,14 @@ impl CheckedResourceTargets {
                 },
             ),
         };
-        let lifetimes = targets
-            .iter()
-            .map(|target| target.valid_until_unix_ms)
-            .collect::<Option<Vec<_>>>();
-        let valid_until_unix_ms = lifetimes.and_then(|lifetimes| lifetimes.into_iter().max());
+        // The receipt: a v3 document's never names a lifetime or conditions (the read answers each
+        // target's); a v2 document's is the one it answers over any other record.
+        let from_v3 = target_setter.is_some();
+        let (valid_until_unix_ms, conditions) = if from_v3 {
+            (None, Vec::new())
+        } else {
+            (self.valid_until_unix_ms, self.conditions.clone())
+        };
         let document = composed_document(&self.instance, targets, &entries);
         let policy_sha256 = document.identity()?;
         let rows = match &document {
@@ -669,11 +682,7 @@ impl CheckedResourceTargets {
             rows,
             expires_at_unix_ms: None,
             valid_until_unix_ms,
-            conditions: if valid_until_unix_ms.is_some() {
-                self.conditions.clone()
-            } else {
-                Vec::new()
-            },
+            conditions,
         })
     }
 }
@@ -749,23 +758,7 @@ fn stored_entries(
     stored: &[BTreeMap<String, ContractFactScalar>],
     instance_id: &str,
 ) -> Option<Vec<EntryRow>> {
-    let rows = stored
-        .iter()
-        .map(|row| {
-            row.iter()
-                .map(|(field, value)| {
-                    let value = match value {
-                        ContractFactScalar::Boolean(value) => FactScalar::Boolean(*value),
-                        ContractFactScalar::Integer(value) => FactScalar::Integer(*value),
-                        ContractFactScalar::String(value) => FactScalar::String(value.clone()),
-                        ContractFactScalar::TimestampMs(value) => FactScalar::TimestampMs(*value),
-                        ContractFactScalar::DurationMs(value) => FactScalar::DurationMs(*value),
-                    };
-                    (field.clone(), value)
-                })
-                .collect::<BTreeMap<_, _>>()
-        })
-        .collect::<Vec<_>>();
+    let rows = policy_rows(stored);
     if !declares_v3_rows(&rows) {
         return None;
     }
@@ -783,6 +776,48 @@ fn stored_entries(
             })
             .collect(),
     )
+}
+
+/// Stored rows as the policy crate's readers take them.
+fn policy_rows(
+    stored: &[BTreeMap<String, ContractFactScalar>],
+) -> Vec<BTreeMap<String, FactScalar>> {
+    stored
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|(field, value)| {
+                    let value = match value {
+                        ContractFactScalar::Boolean(value) => FactScalar::Boolean(*value),
+                        ContractFactScalar::Integer(value) => FactScalar::Integer(*value),
+                        ContractFactScalar::String(value) => FactScalar::String(value.clone()),
+                        ContractFactScalar::TimestampMs(value) => FactScalar::TimestampMs(*value),
+                        ContractFactScalar::DurationMs(value) => FactScalar::DurationMs(*value),
+                    };
+                    (field.clone(), value)
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+        .collect()
+}
+
+/// Workflow #455 G-R2a: whether the stored `rows` of `instance_id`'s record are a withdrawal, a v1
+/// or v2 record its reader reads without a target, which `ResourceTargetView` answers with no
+/// `active` and so with the version `0`: the fact write gate then compares an `expected_version`
+/// with `0`, never with the withdrawal's own sequence. A v3 record (it holds targets or entries)
+/// and a record the readers refuse are no withdrawal.
+pub fn resource_targets_withdrawn(
+    rows: &[BTreeMap<String, ContractFactScalar>],
+    instance_id: &str,
+) -> bool {
+    let rows = policy_rows(rows);
+    if declares_v3_rows(&rows) {
+        return false;
+    }
+    if super::declares_v2_rows(&rows) {
+        return decode_rows_v2(&rows, instance_id).is_ok_and(|decoded| decoded.targets.is_empty());
+    }
+    super::decode_rows(&rows, instance_id).is_ok_and(|decoded| decoded.targets.is_empty())
 }
 
 /// Whether stored rows open with a `policy` header of the v3 version.

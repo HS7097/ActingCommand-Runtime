@@ -19,7 +19,7 @@ use v3::{CheckedDocument, LapsedTarget};
 pub use v3::{
     ComposedResourceTargets, MAX_RESOURCE_TARGET_ENTRIES, MAX_RESOURCE_TARGET_ENTRY_VALUE_BYTES,
     RESOURCE_TARGETS_SCHEMA_VERSION_V3, ResourceTargetEntry, ResourceTargetSpecV3,
-    ResourceTargetsDocumentV3, TargetSetter,
+    ResourceTargetsDocumentV3, TargetSetter, resource_targets_withdrawn,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
