@@ -13,8 +13,10 @@
 //!   `contained_task_resource_reading_invalid` with the detail `<id>:<member>`, or the task's
 //!   member alone for a rule of the task.
 //! - **The frames.** The list's frames are the frames the fields collector collects, in collection
-//!   order; frame *i* is the fields report's `frame_index` *i*. The collector keeps each frame's key
-//!   and column readings with their confidences ([`FieldListRelay`]); the report does not change.
+//!   order, each named by its fields report `frame_index`, but for the frame captured before an
+//!   input under an action gap, which shows the item of its step's frame and is no list frame (the
+//!   fields report still takes it). The collector keeps each frame's key and column readings with
+//!   their confidences ([`FieldListRelay`]); the report does not change.
 //! - **Its judgement.** On its first frame the list judges `start`; on every frame `end`. The first
 //!   frame that meets `end` decides the list ([`field_list_of`]): whole, or its one miss, in the
 //!   order start, unread, repeated key, rows. A frame collected after that fails the run. A
@@ -81,8 +83,11 @@ impl TaskFieldLists {
         &self.prepared
     }
 
-    /// A run starts: no capture yet.
+    /// A run starts: no capture yet. Nothing to forget for a task that declares no list.
     pub(super) fn run_started(&self) {
+        if self.prepared.is_empty() {
+            return;
+        }
         *self
             .latest_capture
             .lock()

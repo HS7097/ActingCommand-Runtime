@@ -19389,6 +19389,27 @@ instance, in instance-fact-store.md's capacity table.
 member, and no released package declares it before FL-3. Rollback to 0.12.58 stays open while no
 root is placed from a bundle that uses it; after that, 0.12.58 refuses that package at admission.
 
+**After an independent review (11-13, the coordinator's rulings, in this pull request).**
+- *Which frames are list frames.* A list frame is a frame a step's field observation captures; the
+  frame the kernel captures again before an input when an action gap is configured
+  (`ObservationBeforeInput`, ACT-2) is not one, so the field lists are out of the collector for that
+  one capture and back after it, and the fields report takes the frame as before. Before this, every
+  item but the last reached the list twice under any gap and the list always failed
+  `list_duplicate_key`; now which frames a list is made of does not depend on the gap's
+  configuration. This is no fold by key and value: the core still never folds.
+- *No new work for a package without the member.* The start of a run's capture record returns at
+  once when no list is admitted (no lock), and the fields collector keeps the confidences only while
+  the run reads a field list (no insert). What remains on such a package's run path is a test of an
+  empty list or of an absent relay at each capture, at each collected frame and at the run's
+  successful end: no lock, no allocation, no insert.
+- *One frame per item.* The contract ("Lists from fields", "When the list is whole", item 5) warns
+  package authors that an observation window, a wait step that holds a field page or a confirmation's
+  wait page that is a field page collects one item on several frames inside one step, and that a
+  stability termination ends a run only after steps whose frames did not change.
+- *The revision a bundle declares.* `resource verify`'s `bundle` step keeps writing [3, 3], or
+  [10, 10] for a notices bundle, as it wrote neither 8 nor 9: a bundle whose packs use a field list
+  declares `package` [11, 11] itself (the resource repository's packer, FL-3).
+
 Tests. Contract gate row "#450 FL-1": `field_list_declaration_rules`
 (`crates/actingcommand-contract/src/taskflow/gate_450_fl1.rs`: the declaration reads back as
 written and refuses an unknown member; schemas 0.8 and 0.9, a list without columns, a string column,
@@ -19396,8 +19417,11 @@ pages with and without the game prefix are declared; each rule of the task and o
 refused at its pointer with its reason, and admission's detail is `<id>:<member>`). Exec gate row
 "#450 FL-1": the kernel's `field_list_rows_whole`, `field_list_repeats`,
 `field_list_unresolved_rows`, `field_list_start_end` (the builder over frames made in the test),
-`field_list_run_records_traces`, `field_list_end_unseen`, `field_list_frame_after_end_fails_run`
-(a scripted device and a fixture provider), `field_list_gate_and_admission_refusals`,
+`field_list_run_records_traces`, `field_list_end_unseen`, `field_list_frame_after_end_fails_run`,
+`field_list_under_an_action_gap` (a scripted device and a fixture provider; the last, after the
+review: with an action gap three items give a whole list of three rows, the fields report holds its
+five frames as a package without the member gets them, and the list's frame trace lands on the last
+frame), `field_list_gate_and_admission_refusals`,
 `field_list_absent_package_runs_as_before` and
 `field_list_refused_under_an_older_schema_or_as_a_layer`
 (`crates/execution-kernel/src/contained_task/gate_450_fl1.rs`), and the declaration gate's

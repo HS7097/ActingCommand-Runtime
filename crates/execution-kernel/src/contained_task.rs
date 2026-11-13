@@ -1288,7 +1288,8 @@ struct PostAdmissionOcrCollector<'a> {
     reading_relay: Option<readings::ReadingRelay<'a>>,
     /// Workflow #450 FL-1b: the run's field lists and the frames each collected; `None` when the
     /// run reads none (no list declared, offline simulation, bound recovery entry,
-    /// `recognize_only`).
+    /// `recognize_only`), and while the frame before an input under an action gap is captured,
+    /// which is no list frame.
     field_lists: Option<field_list::FieldListRelay<'a>>,
     /// The fields report was recorded by a successful completion; a reading that then fails
     /// must not record it a second time.
@@ -1687,7 +1688,9 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         let mut targets = Vec::new();
         let mut regions = BTreeMap::new();
         let mut records: Vec<OcrFieldRecord> = Vec::new();
-        // Workflow #450 FL-1b: each field's observation confidence, which a field list reads.
+        // Workflow #450 FL-1b: each field's observation confidence, which a field list reads;
+        // kept only while the run reads a field list.
+        let lists_read = self.field_lists.is_some();
         let mut confidences: BTreeMap<&str, Option<f32>> = BTreeMap::new();
         for field in &declaration.fields {
             let mut result = OcrFieldResult {
@@ -1713,7 +1716,9 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                         Ok(mut evaluated) => {
                             result.region = Some(evaluated.region.clone());
                             regions.insert(field.target_id.clone(), evaluated.region.clone());
-                            confidences.insert(field.id.as_str(), evaluated.confidence);
+                            if lists_read {
+                                confidences.insert(field.id.as_str(), evaluated.confidence);
+                            }
                             if evaluated.target_id != field.target_id
                                 || !self
                                     .invocation_ids
@@ -5529,6 +5534,12 @@ impl PreparedContainedTask {
                                     .map_err(ContainedTaskRunError::operation::<R>)?;
                                 if !gap.is_zero() {
                                     self.wait_pre_input(runtime, gap, pace, task_deadline)?;
+                                    // Workflow #450 FL-1b: this frame is no list frame. No input
+                                    // came between it and the step's frame, which the field lists
+                                    // hold already, so it shows the same item. The lists are out
+                                    // of the collector for its capture and back after it: the
+                                    // fields report takes the frame as before, the lists do not.
+                                    let lists = ocr_collector.field_lists.take();
                                     let frame = self.capture_until_page(
                                         runtime,
                                         ocr_collector,
@@ -5536,7 +5547,9 @@ impl PreparedContainedTask {
                                         capture_interval,
                                         observation_timing,
                                         (pacing, ExecutionKernelLocation::ObservationBeforeInput),
-                                    )?;
+                                    );
+                                    ocr_collector.field_lists = lists;
+                                    let frame = frame?;
                                     step_timing = observation_timing.with_deadline(
                                         budget_observation_now(runtime, pace) + step_window,
                                     );

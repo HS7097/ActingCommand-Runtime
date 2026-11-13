@@ -903,7 +903,9 @@ of value `record_list` under `inventory.list.<name>`, exactly as it writes a lis
 cannot tell the producer. **Status:** built by FL-1 (the declaration, the gate and the kernel)
 with the host's halves in FL-2, one Runtime release; `package` revision 11
 ([component-interfaces.md](component-interfaces.md)); a Runtime before it refuses a package that
-declares one (`UnknownField` at `/field_lists`).
+declares one (`UnknownField` at `/field_lists`). `actinglab resource verify` does not write this
+revision, as it wrote neither 8 nor 9: a bundle whose packs use a field list declares `package`
+[11, 11] itself.
 
 ### Declaration
 
@@ -956,10 +958,13 @@ reports the task's post-admission reading as `pending_real_execution`, as for a 
 
 ### When the list is whole
 
-The list's frames are the frames the fields collector collects, in collection order; frame *i* is
-the fields report's `frame_index` *i*. The collector keeps each frame's key and column values with
-the confidences of their observations, in memory; the fields report and its projection do not
-change.
+The list's frames are the frames the fields collector collects, in collection order, each named by
+its fields report `frame_index`. A list frame is a frame a step's field observation captures; the
+frame the kernel captures again before an input when an action gap is configured is not one, since
+no input came between it and the frame its step started from, which shows the same item (the
+fields report collects it as before, so a list's frame indices skip it). The collector keeps each
+frame's key and column values with the confidences of their observations, in memory; the fields
+report and its projection do not change.
 
 1. **Start.** The list's first frame meets `start`: on one of its `page_ids` when declared, every
    `required` target passing and no `forbidden` one, each judged with its own declaration as a page
@@ -981,7 +986,15 @@ change.
    name). A page or tab that shows items sharing a display name cannot be a field list in this
    revision.
 5. **Every item visited** rests on the start condition on the first frame, the end condition on
-   the last, and one guarded, confirmed tap between consecutive frames. No total is checked.
+   the last, and one guarded, confirmed tap between consecutive frames. No total is checked. A
+   package that declares a field list therefore shows each item on one list frame. A declaration
+   that makes the kernel collect one item on several frames inside one step feeds every one of them
+   to the list: an `observation_window` on a field page, a wait step that holds a field page, or an
+   `expect_after.wait_page` that is a field page. The list then fails `list_duplicate_key`, or, on
+   its end page, the run fails on the frame after the end. A `stability_termination` collects no
+   more frames inside a step, but it ends the run only after consecutive steps whose frames did not
+   change, and those steps' frames are list frames of one item: the list then fails
+   `list_duplicate_key` or `list_end_unseen`, or the run fails on a frame after the end.
 6. **Rows.** One row per frame: `{<key_column>: <canonical dictionary entry>, <column>: <value>,
    …}`, an integer column as an integer and a string column as its canonical entry, in ascending
    byte order of the key. The record's `confidence_milli` is the lowest confidence of the fields
@@ -1022,7 +1035,9 @@ one end and one key per tab or category; a list maximum reads 1 to 16 lists), no
   runs after the fields are prepared, with the key set of the task's marks and `read_list` steps.
   `has_list_readings` counts field lists, so the startup, layer and offline paths treat them as
   list readings.
-- **The run.** On each frame of the group the collector keeps the key's and the columns' readings.
+- **The run.** On each list frame of the group the collector keeps the key's and the columns'
+  readings; for the capture before an input under an action gap the kernel takes the lists out of
+  the collector and puts them back after it.
   On the list's first frame the kernel judges `start`, on each its `end`, after the frame's field
   failure check and before any reading hand-off. On the end frame, the frame captured last, it
   builds the list (`field_list_of`) and records `ListReadingFrame` when the list is whole, then

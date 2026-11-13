@@ -682,6 +682,27 @@ impl ListDevice {
     fn last_capture(&self) -> SystemTime {
         *self.captured_at.last().expect("a frame was captured")
     }
+
+    // The same device, answering every step's gap with `gap` (ACT-2).
+    fn with_action_gap(self, gap: Duration) -> Self {
+        Self {
+            script: self.script.with_action_gap(gap),
+            ..self
+        }
+    }
+
+    // The records of the run's fields report.
+    fn fields_report(&self) -> Vec<OcrFieldRecord> {
+        self.traces()
+            .iter()
+            .find_map(|trace| match trace {
+                ContainedTaskTrace::PostAdmissionOcrFields { report } => {
+                    Some(report.records.clone())
+                }
+                _ => None,
+            })
+            .expect("a fields report")
+    }
 }
 
 impl ContainedTaskRuntime for ListDevice {
@@ -719,6 +740,10 @@ impl ContainedTaskRuntime for ListDevice {
 
     fn pause(&mut self, duration: Duration) {
         self.script.pause(duration);
+    }
+
+    fn step_action_gap(&mut self) -> Result<Duration, Self::Error> {
+        self.script.step_action_gap()
     }
 }
 
@@ -923,6 +948,82 @@ fn field_list_run_records_traces() {
     assert!(observed[2] < frame_trace[0], "after the end frame's fields");
     assert!(frame_trace[0] < list_trace[0], "the frame is bound first");
     assert!(list_trace[0] < finalizing[0], "before Finalizing");
+}
+
+// FL-1b, fix 1 (the independent review of 11-13): with an action gap configured, the kernel
+// captures the step's page again before each tap. No input came between that frame and the step's
+// own, so it shows the same item: it is no list frame. Over the three items, the fields report holds
+// the frames it held before field lists, five (each item's frame and the frame before each of the
+// two taps), as a package without the member gets them on the same script; the list is whole with
+// three rows, and its frame trace lands on the last frame, the end frame.
+#[test]
+fn field_list_under_an_action_gap() {
+    const GAP: Duration = Duration::from_millis(500);
+    let task = package(task_json(Some(list_json()), 256), 256);
+    let mut device = ListDevice::new(three_items()).with_action_gap(GAP);
+    let outcome = task.run(&mut device).expect("the run succeeds");
+    assert_eq!(outcome.outcome, TaskOutcome::Success);
+    assert_eq!(device.script.action_gap_draws(), 2);
+    assert_eq!(device.script.inputs().len(), 2);
+
+    // The fields report: every frame, the two before an input included.
+    let report = device.fields_report();
+    let names = report
+        .iter()
+        .map(|record| {
+            let name = record
+                .fields
+                .iter()
+                .find(|field| field.field_id == "name")
+                .and_then(|field| field.value.clone());
+            (record.frame_index, name)
+        })
+        .collect::<Vec<_>>();
+    let entry = |name: &str| Some(OcrFieldValue::DictionaryEntry(name.to_owned()));
+    assert_eq!(
+        names,
+        vec![
+            (0, entry("entry_c")),
+            (1, entry("entry_c")),
+            (2, entry("entry_a")),
+            (3, entry("entry_a")),
+            (4, entry("entry_b")),
+        ]
+    );
+    let without = package(task_json(None, 256), 256);
+    let mut plain = ListDevice::new(three_items()).with_action_gap(GAP);
+    without.run(&mut plain).expect("the run succeeds");
+    assert_eq!(plain.fields_report(), report);
+
+    // The list: frames 0, 2 and 4, whole, bound to the frame captured last.
+    let (frames, lists) = device.list_traces();
+    let end = device.last_capture();
+    assert_eq!(frames, vec![end]);
+    assert_eq!(
+        lists,
+        vec![RecordedList {
+            declaration: declaration_naming(Vec::new()),
+            captured_at: end,
+            list: Ok(ListReadingRows {
+                rows: vec![row("entry_a", 5), row("entry_b", 7), row("entry_c", 9)],
+                confidence_milli: shown_confidence_milli(),
+            }),
+        }]
+    );
+    let end_fields = device.positions(|trace| {
+        matches!(
+            trace,
+            ContainedTaskTrace::PostAdmissionOcrObservation { frame_index: 4, .. }
+        )
+    });
+    let frame_trace =
+        device.positions(|trace| matches!(trace, ContainedTaskTrace::ListReadingFrame { .. }));
+    assert_eq!(end_fields.len(), 1);
+    assert_eq!(frame_trace.len(), 1);
+    assert!(
+        end_fields[0] < frame_trace[0],
+        "after the end frame's fields"
+    );
 }
 
 // FL-1b: a successful run whose fields stop at `max_frames` (2) before the last page is
