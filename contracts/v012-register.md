@@ -18350,6 +18350,151 @@ and without a byte-order mark and one after the start, CRLF, CR and mixed line e
 kept; each of the 29 refused characters refused at the start, the middle and the end, every other
 ASCII byte kept there; six invalid UTF-8 sequences refused). No existing test changes.
 
+### 1.335 Slice NOTICES-2 (0.12.58): the installer's `place` takes a bundle's notices directory; `package` revision 10 (Workflow #444; the design note `rd-1113/design-notices-in-archive.md`, read on main `29a65e2d`, design (a) with every recommended answer of its section 8 adopted by the coordinator's rulings of 11-13 on board #444, not the owner's words; coordinator work order `rd-1113/brief-444-notices-2.md`, read on main `734dd786`)
+
+1.335 is the coordinator's number. [install-cli.md](install-cli.md), "The Lab's rescue module"
+(`place`) and "Interface checks" (`pack place`), [package-reference.md](package-reference.md),
+"Notices" and "Standard package root", and the `package` row 10 of
+[component-interfaces.md](component-interfaces.md) are the contract. Added: one value of the
+`pack_item` intent's `kind` (`notices`), one rule of the notices set rule, and the `package` raise.
+No outcome code, value key, vocabulary word, configuration key, step kind, intent member, wire
+shape or record is added. **A bundle without the directory on a root without it plans, journals
+and places exactly as before.**
+
+**What `place` does with the directory** (crate `lab-rescue`, `src/install/place.rs`; design
+§3.2, §3.3, §3.6):
+
+- **The edge first.** The `package` edge (the maximum the bundle's `interfaces.json` declares lies
+  in this installer's `package` range) is checked right after `bundle.json` and before the layout,
+  so that a bundle of a later revision is refused through `package` and not through a member this
+  installer does not know. The one refusal that changes: a bundle that fails both the edge and the
+  layout is refused `interface_edge` where it was `pack_invalid` (design Q2, accepted; no released
+  bundle is in that class). Every other refusal and its order are as before.
+- **The layout** takes the members `notices/<path>` (exact lower case: a member `Notices/…` stays
+  unknown, `pack_invalid` naming it). When the zip carries one or more, in this order: a declared
+  `package` maximum below 10 is `notice_undeclared`; the listing (each file's path below the
+  directory with the size the zip declares) goes through `check_notice_listing`; the bundle's
+  listed packs through `check_notice_pack_ids`; each file is read through 2,097,153 bytes (its
+  bound plus one) and what was read goes through `check_notice_size` and `check_notice_text`, so a
+  member that holds more than the zip declares is still refused at its bound. All of it in the
+  plan, before the hold and before any write, as a root file's problem is refused: `pack_invalid`
+  (`path` the zip) caused by `standard_pack_root_invalid` with `game`, `standard_pack_problem` the
+  rule's word, `path` the member below the zip (`<zip>\notices\…`; `<zip>\notices` for the count
+  or the total; `<zip>\bundle.json` with `package_id` for a pack named like the directory;
+  `<zip>\interfaces.json` for `notice_undeclared`), `json_pointer` empty, and the bound with the
+  value found on `limit_count` / `count` or `limit_bytes` / `actual_bytes`. The rules are the
+  contract crate's (§1.334); `place` states none of them.
+- **The item.** One folder item of kind `notices` (`ItemKind::Notices`), `item` `notices`, `dst`
+  `<game root>\notices`, its members `<path>` → `notices/<path>`, digested as a pack's folder is
+  (the listing digest of each file's SHA-256), and **placed first** among the items, before the
+  tables, the packs and the root files, so the texts are in place before the material they
+  accompany. States `new`, `replace`, `unchanged`, and `retire` when the game root holds
+  `notices\` and the zip carries none (design Q3): set aside as `notices.old-<ms>` and kept, as a
+  reader's root file is; not when a pack of the bundle is named `notices` in any ASCII case (that
+  folder is the pack's, and two items would share one place). Its step is one more `pack_item`,
+  its part `notices.new-<ms>.part` in the game root, where the leftover check already looks; no
+  new step kind and no new intent member. The item's files are read through their bound also
+  when it is digested and when its part is written.
+- **`post_check`** covers the item through its rerun (its listing digest, or its absence after
+  `retire`). This release's `standard-pack check` ignores the directory (NOTICES-3 teaches it); a
+  change of the notices alone leaves `schedule_changes` false, so the composition row expects the
+  catalog unchanged. **`undo`** reverses the item by kind and digest: the placed directory set
+  aside as `notices.rolledback-<ms2>` and the kept one renamed back; a retired one renamed back.
+  Nothing is deleted.
+- **Fixed point 4.** A zip without `notices/` on a root without it gets no item: the same canonical
+  plan document and plan id, the same steps and the same journal.
+
+**The added set rule** (`crates/actingcommand-contract/src/standard_pack_notices.rs`,
+`check_notice_listing`, after its two collisions; the coordinator found it reading NOTICES-1):
+two paths whose directories' names are equal under ASCII case folding and not byte for byte
+(`A/x.md` beside `a/y.md`) are refused `notice_name` at the later path in byte order. Their whole
+paths differ, so the two earlier collisions passed them; on a file system that folds case they land
+in one directory, and the placed directory no longer lists as the zip does (the item's digest after
+the swap would not match). One directory spelled alike by several paths is kept; a file `A` beside
+a directory `a/…` stays the earlier rule's. The catalog's description of `notice_name` and the
+"uniqueness" row of package-reference.md say so; the vocabulary does not move.
+
+**The raise.** `package` [3, 9] → [3, 10]: `distribution/windows/component-interfaces.json`, the
+architecture pin (`tools/actinglab-architecture/tests/component_interfaces.rs`) and the row 10 of
+component-interfaces.md, which says that once an installation's register records a root's declared
+range, a rollback below 10 is refused by the `package` edge for a root placed from a notices bundle,
+and that placing a bundle without the directory first is the way (design Q6). A bundle declares
+[10, 10] only when it carries the directory; a bundle without it keeps its revision, so its zip,
+`SHA256SUMS`, plan and journal stay what they are. The packer writes the revision (the resource
+repositories' script and `resource verify`'s mirror, NOTICES-3 and later); `package bundle` writes
+no `interfaces.json`. **Every reader of the `package` range, checked before the raise:** the
+update's and the rollback's `package` edge (`plan.rs`, `interface_edges`: each registered bundle's
+maximum in R\*'s range) compares the register's range, which is unknown for every root
+(`adopt.rs`, `package_range: None`), so it is the warning `pack_declaration_unknown` for [3, 9] →
+[3, 10] and for [3, 10] → [3, 9] alike, and a register holding [3, 3] would pass both; `undo` of an
+update judges the same edges (`rollback_edges`); the update's other edges do not read `package`;
+`place` reads I's range, which now takes [3, 3] to [10, 10]; the Runtime reads no `interfaces.json`
+and no range (its root reader, the composer, check-config); `resource verify` writes [3, 3] and
+compares it with nothing of the Runtime's; `standard-pack check` reads no range; the exact-SHA build
+checks the declaration's form only, and the release reader that both halves declare alike. None of
+them refuses a bundle or a root that is accepted today.
+
+**What programs of an earlier release do** (design §3.2):
+
+| Program | A zip that carries `notices/` | A game root that holds `notices/` |
+|---|---|---|
+| rescue `place` before 0.12.58 | `pack_invalid` naming the first `notices/` member in name order (its layout check, which runs before its `package` edge), before the hold: nothing paused, nothing written | a bundle without the directory is placed and `notices\` is left as it is; a notices bundle is refused as on the left |
+| the coordinator's placement kit, until it learns the directory (design §5) | refused at its layout check, and its release facts check refuses `package` 10 | lists `notices` as an unlisted directory; nothing refused |
+| `standard-pack check` | reads no zip | ignores the directory; the root checks as before |
+| the Runtime (actingd), check-config, the composer | read no zip | ignore it: no catalog, no composed generation, no activation |
+| an earlier installer's `undo` of a `pack_place` journal with a `notices` item | — | cannot read the kind ([install-cli.md](install-cli.md), "Journals across versions": no old-version compatibility); undo with this build first, or leave the inert directory |
+
+`actingctl install` has no pack placement of its own (`actingctl install pack plan|place`, INST-4,
+is not built; the word `pack` is `actingctl_usage_invalid`, `unknown`), so it never opens such a
+zip.
+
+**At deploy.** The Runtime declares `package` [3, 10]; nothing changes for a bundle without the
+directory. A bundle that carries it is placed only by this release's `place`. The coordinator's
+placement kit and the resource repository's packer do not know the directory yet, so no bundle
+that carries it is released before they are changed (design §4, §5; slices 4 and 5). **Rollback**
+to a build before 0.12.58: the update's `package` edge stays the warning
+`pack_declaration_unknown`, and the earlier Runtime reads a root that holds `notices\` as one
+without it; an earlier installer cannot undo a `pack_place` that placed or retired the directory.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NT2-1 | `place`: the `package` edge before the layout | installer behaviour | NOTICES-2 | — | one refusal changes: a bundle that fails both is `interface_edge` (was `pack_invalid`) |
+| NT2-2 | `place`'s layout: `notices/<path>`, the notices rules, `notice_undeclared`, the bounded reads | installer behaviour | NOTICES-2 | — | in the plan, before the hold and any write; `pack_invalid` caused by `standard_pack_root_invalid` |
+| NT2-3 | the `pack_item` intent's and the plan document's `kind` + `notices` | journal value (no new member) | NOTICES-2 | NOTICES-2 | placed first; `retire` when a later bundle carries none; an installer before 0.12.58 cannot read it |
+| NT2-4 | `check_notice_listing` + the directory names' spelling | contract rule (no shape) | NOTICES-2 | — | `notice_name` at the later path; the catalog's description of the word |
+| NT2-5 | `package` [3, 10] | interface revision | NOTICES-2 | the packer (NOTICES-3, the resource repository) | component-interfaces.md row 10 |
+
+Tests (apps gate row "#444 NOTICES-2", `crates/lab-rescue/src/install/gate_444_notices2.rs`, on the
+fake host with placeholder names, a notice file `NOTICE.md`; the fake installer's `package` range is
+a field of `fixture.rs`'s `FakeHost`, by default the fixture's [3, 5]):
+`notices_are_placed_first_and_read_back_unchanged` (a bundle that carries the directory, declared
+10, planned with the item `notices` `new` and first; placed, its step the operation's first, the
+files on disk the zip's bytes; planned again with every item `unchanged`; `undo` sets the placed
+directory aside), `notices_replace_unchanged_retire_and_undo` (a changed text: `replace`, the
+replaced directory kept as `.old-<ms>`; the same texts while the pack changes: `unchanged`, no step
+touches the directory; a bundle without it: `retire`, shown by the plan, the directory kept as
+`.old-<ms>`; each `undo` puts back what was there), `notices_absent_bundle_plans_as_before` (a
+bundle without the directory on a root without it: the journalled plan document is exactly the
+earlier one, its members `game`, `zip_sha256`, `package` and `items` and each item's `item`,
+`kind`, `state` and `digest` as the earlier code computes them, the plan id `plan-` and 16 hex
+digits of the SHA-256 of its canonical form, the same six steps, and every `pack_item` intent with
+only the earlier members; the work order asked to pin the plan id main gave before the slice, which
+cannot be known here without a build, because it covers the zip's SHA-256 and the zip writer's
+bytes decide that, so the test holds the document and the formula instead),
+`notices_refusals_come_before_the_hold` (`notice_undeclared` at `<zip>\interfaces.json`; a refused
+suffix; a size the zip declares below what the member holds, refused at the bound with 2,097,153
+read; 65 files; 8 MiB and one byte; a control character; a pack named like the directory, at
+`<zip>\bundle.json` with `package_id`; one directory's name in two cases, at the later path; each
+`pack_invalid` caused by `standard_pack_root_invalid` with its word, member, empty pointer and
+bound, and no pause, no journal, nothing in the game root) and
+`notices_edge_is_checked_before_the_layout` (a bundle declared [11, 11] with an unknown member:
+`interface_edge`; the same bundle declared 10: `pack_invalid` at that member). Adapted, because the
+requirement changes what they pin: the contract gate row "#444 NOTICES-1"'s
+`notices_set_rule_holds_each_bound_at_its_edge` gains the added rule's edges (two cases of one
+directory, refused at the later path, in either order of case; one directory twice kept; a file
+beside a directory of its name in another case still the earlier rule's), and the architecture
+pin `the_runtime_declares_each_v0120_interface_revision_once` holds `package` [3, 10].
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

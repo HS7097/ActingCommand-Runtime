@@ -119,7 +119,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `read_list` and a selection document's value source `table_max_over_list`; a pack without
 ///   them keeps its revision and a document without the source its bytes, so [3, 8]. Workflow
 ///   #428 S168-LB1b (0.12.55, register §1.312) raises it to 9: `table_max_over_list`'s optional
-///   member `lower_bound_column`; a document without it keeps its bytes, so [3, 9].
+///   member `lower_bound_column`; a document without it keeps its bytes, so [3, 9]. Workflow #444
+///   NOTICES-2 (0.12.58, register §1.335) raises it to 10: a bundle zip's notices directory
+///   `notices/`, placed by the installer and opened by no reader of the Runtime; a bundle without
+///   it keeps its revision, so [3, 10].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -146,7 +149,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
-    ("package", [3, 9]),
+    ("package", [3, 10]),
     ("runtime-client", [3, 8]),
     ("runtime-outcomes", [1, 1]),
 ];
