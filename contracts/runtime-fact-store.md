@@ -154,7 +154,8 @@ The target of [Ledger observer](ledger-observer.md) for this store (LEDG §3.1�
    `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`,
    `host.contained_settlement` (#411 A65), `host.idle_state` (#405 IDLE-1P), `host.agent_wake`
    (#432 AGT-1b, [agent-wake.md](agent-wake.md)), `host.capped_episodes` (#428 SCHED-C1d,
-   0.12.53) and `host.state_root_installation` (Workflow #453 S11, 0.12.60). Keys under
+   0.12.53), `host.state_root_installation` (Workflow #453 S11, 0.12.60) and
+   `host.start_pause_applied` (Workflow #453 S2, 0.12.60). Keys under
    `ledger_observer.tag.reobserve_prefixes` (`device.`, `backend.`, `application.`, `lease.`,
    `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.`) are not
    loaded: this start observes or replays them again, so the takeover invalidation of
@@ -718,6 +719,35 @@ the backend self-check facts (source `device-proxy` or `capture`).
   failed before the fact); any other start records nothing. A Runtime not
   started from an installation root never records it. Tagged
   (`tag.workbench_patterns`), so a start loads it.
+- `host.start_pause_applied` (Workflow #453 S2, 0.12.60; register §1.362;
+  [scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start")
+  — runtime scope, `record_list`, no lifetime, source `runtime`: the
+  configuration entries whose first-start pause was applied, one row per
+  entry `{instance_id, applied_at_unix_ms}` (the entry's instance id as the
+  configuration names it, `timestamp_ms` the clock when it recorded the row).
+  Recorded by a start that applies an entry declaring `start_paused` whose
+  instance id no row names yet, after that start recorded its pause
+  (`host.scheduling_pause`), and (fix 1) by the release of a pause of another
+  reason that held such an entry at its start, after that release recorded the
+  `instance.added` pause it holds in that pause's place. Each record keeps the
+  rows it found whose instance id the start's configuration names (any entry,
+  with or without the member), drops the others, and adds the new ones: at
+  most one row per configured instance, so the store's bound of 256 rows is
+  never reached by history; an instance id removed from the configuration and
+  back with the member is held again. A start reads it only when an entry
+  declares `start_paused`, so a configuration without the member neither reads
+  nor writes it. In the default `tag.workbench_patterns`. Today's start replays
+  the program facts from the snapshot and every later record whatever the
+  tags, so it reads the fact either way; the list decides only the index row
+  and the synchronous write. The key is listed because the rule for program
+  state is tagged records and a later ledger change is to load by tag;
+  check-config notes a configuration with the member whose own list leaves it
+  out (`ledger_tag_key_unclassified`, `fact_key` `host.start_pause_applied`).
+  A value of another shape (another source, not a
+  record list, a row without its string `instance_id` or its `timestamp_ms`
+  `applied_at_unix_ms`) fails the start (`invalid_runtime_state_fact`,
+  operation `hold_start_instance_pause`), as a malformed `host.scheduling_pause`
+  does. A build before it never reads or writes it.
 
 `contracts/actingd-check-config.md` lists the subsystems and parameters
 `actingd` reports; `actingctl facts --program` returns both records as part of

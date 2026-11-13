@@ -99,6 +99,25 @@ fn restore_invalid(code: impl Into<Code>) -> RuntimeHostError {
     )
 }
 
+/// A refused record of a pause or resume request: `scheduling_pause_persist_failed` (Failed); a
+/// fatal one poisons. Workflow #453 S2 fix 1: the applied row a release records is mapped alike.
+pub(super) fn scheduling_pause_persist_failure(error: RuntimeHostError) -> RequestFailure {
+    if error.is_fatal() {
+        RequestFailure::poison_without_terminal(error)
+    } else {
+        RequestFailure::request(
+            RuntimeHostError::request(
+                HostCode::SchedulingPausePersistFailed,
+                HostLocation::PersistSchedulingPause,
+                RuntimeErrorCode::LedgerFailure,
+            )
+            .with_native_detail(format!("{error:?}")),
+            RuntimeReceiptState::Failed,
+            None,
+        )
+    }
+}
+
 fn row_text<'a>(row: &'a BTreeMap<String, FactScalar>, field: &str) -> RuntimeHostResult<&'a str> {
     match row.get(field) {
         Some(FactScalar::String(value)) => Ok(value),
@@ -149,22 +168,8 @@ impl HostShared {
         &self,
         table: &SchedulingPauseTable,
     ) -> Result<(), RequestFailure> {
-        self.record_scheduling_pauses(table).map_err(|error| {
-            if error.is_fatal() {
-                RequestFailure::poison_without_terminal(error)
-            } else {
-                RequestFailure::request(
-                    RuntimeHostError::request(
-                        HostCode::SchedulingPausePersistFailed,
-                        HostLocation::PersistSchedulingPause,
-                        RuntimeErrorCode::LedgerFailure,
-                    )
-                    .with_native_detail(format!("{error:?}")),
-                    RuntimeReceiptState::Failed,
-                    None,
-                )
-            }
-        })
+        self.record_scheduling_pauses(table)
+            .map_err(scheduling_pause_persist_failure)
     }
 
     /// Workflow #369 E3 (#670 safety net): holds a pause of `instance_alias` with `pause_reason`
@@ -193,6 +198,35 @@ impl HostShared {
         self.record_scheduling_pauses(&prospective)?;
         *lock(&self.scheduling_pause, HostLocation::HoldStartInstancePause)? = prospective;
         Ok(())
+    }
+
+    /// Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"):
+    /// [`Self::hold_instance_pause_at_start`] with a pause reason name, `instance.added` for an
+    /// entry that declares `start_paused`. Returns whether it held one; a pause the instance holds
+    /// already, of any reason, stays exactly as it is and nothing is recorded for it.
+    pub(super) fn hold_named_instance_pause_at_start(
+        &self,
+        instance_alias: &str,
+        pause_reason: &SchedulingPauseReason,
+    ) -> RuntimeHostResult<bool> {
+        let _persist = lock(
+            &self.scheduling_pause_persist_gate,
+            HostLocation::HoldStartInstancePause,
+        )?;
+        let mut prospective =
+            lock(&self.scheduling_pause, HostLocation::HoldStartInstancePause)?.clone();
+        let since_unix_ms = self.clock.sample()?.unix_ms;
+        if !prospective.hold_named_instance_at_start(
+            instance_alias,
+            pause_reason.clone(),
+            since_unix_ms,
+            PauseOrigin::set_in(self.owner_epoch)?,
+        )? {
+            return Ok(false);
+        }
+        self.record_scheduling_pauses(&prospective)?;
+        *lock(&self.scheduling_pause, HostLocation::HoldStartInstancePause)? = prospective;
+        Ok(true)
     }
 
     /// A failed instance pause stage: the persisted pauses without the instance, then the gate

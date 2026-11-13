@@ -408,8 +408,9 @@ fn lifecycle_slot(event: &PersistedEvent) -> Option<LifecycleSlot> {
     }
 }
 
-/// A pattern whose every `*` stands for any text, possibly empty.
-fn pattern_matches(pattern: &str, key: &str) -> bool {
+/// A pattern whose every `*` stands for any text, possibly empty. Workflow #453 S2: also the rule
+/// of [`super::workbench_patterns_tag`].
+pub(super) fn pattern_matches(pattern: &str, key: &str) -> bool {
     let mut parts = pattern.split('*');
     let Some(first) = parts.next() else {
         return pattern == key;

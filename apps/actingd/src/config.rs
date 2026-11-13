@@ -91,6 +91,9 @@ mod gate_407_gpu1d;
 // fake discovery.
 #[cfg(test)]
 mod gate_mapp1;
+// Test-only: Workflow #453 S2, an entry's `start_paused` at assembly and in check-config.
+#[cfg(test)]
+mod gate_453_s2;
 // Test-only: Workflow #452, the real assembly judges the candidate the Lab's rescue module's
 // `instance add` composes (its fixture, crates/lab-rescue/tests/fixtures/inst5-application-id.json).
 #[cfg(test)]
@@ -1175,6 +1178,14 @@ struct InstanceConfig {
     // names it, because the entry denies unknown members (`config_decode_failed`).
     #[serde(default)]
     device_group: Option<String>,
+    /// Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"): `true`
+    /// holds the instance with the pause `instance.added` at the first start that sees the entry,
+    /// once (`host.start_pause_applied`); absent is `false`. Read once at assembly, not settable;
+    /// reported as `instance.<id>.start_paused` only for an entry that names it.
+    // Interface anchor `actingd-config` revision 31: a Runtime before #453 S2 refuses an entry that
+    // names it, because the entry denies unknown members (`config_decode_failed`).
+    #[serde(default)]
+    start_paused: Option<bool>,
     /// Workflow #398 RD-1b (model-398 v1.1 §3.1): the kind of device the instance drives,
     /// `{kind, transport}`; absent is an emulator.
     #[serde(default)]
@@ -1706,6 +1717,8 @@ impl ActingdConfigFile {
         // Workflow #437 MAPP-1: what the device groups' rules read of each entry, in
         // configuration order.
         let mut group_entries = Vec::with_capacity(instances.len());
+        // Workflow #453 S2: the instance ids of the entries that declare `start_paused` `true`.
+        let mut start_paused = BTreeSet::new();
         for instance in &mut instances {
             let handset = instance.fixture_backend.is_none()
                 && device_binding::check_device(instance)
@@ -1865,6 +1878,14 @@ impl ActingdConfigFile {
                 actingcommand_runtime_config::DEVICE_GROUP.to_owned(),
                 serde_json::json!(instance.device_group),
             );
+            // Workflow #453 S2: reported as `instance.<id>.start_paused` when the file names it.
+            members.insert(
+                actingcommand_runtime_config::START_PAUSED.to_owned(),
+                serde_json::json!(instance.start_paused),
+            );
+            if instance.start_paused == Some(true) {
+                start_paused.insert(instance.instance_id);
+            }
             // Workflow #384 D2-S2: the location is reported as
             // `instance.<id>.recognition_package`, resolved as it is used. An empty path stays
             // empty, so the binding check reports it unreadable.
@@ -2094,7 +2115,8 @@ impl ActingdConfigFile {
             .with_performance_control(performance_control)
             .with_startup_packages(startup_packages)
             .with_stuck_recovery(stuck_recovery)
-            .with_standard_packs_root(standard_packs_root);
+            .with_standard_packs_root(standard_packs_root)
+            .with_start_paused(start_paused);
         // Every effective value is read back from `host`; the file only says what it named.
         let mut manifest = manifest::build(&manifest::ManifestInputs {
             host: &host,

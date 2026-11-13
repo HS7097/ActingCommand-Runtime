@@ -47,6 +47,7 @@ mod read_work;
 mod tagged;
 pub use capture::{
     DEFAULT_TAG_WORKBENCH_PATTERNS, LedgerCaptureHandle, LedgerCapturePolicy, LedgerCaptureStatus,
+    workbench_patterns_tag,
 };
 pub use tagged::{LedgerTaggedRecord, LedgerTaggedState};
 // The capture queue's tiers are the shared watermark arithmetic (§7.1).
