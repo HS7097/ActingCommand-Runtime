@@ -19328,23 +19328,29 @@ ONNXRuntime "Release boundary": the Runtime and Tools artifacts carry neither ON
 nor models; the installation package carries the files above, each named with its size, SHA-256,
 source package and license; its first sentence, which said GPU and DirectML were disabled, now
 names the execution providers the configuration selects since 0.12.44; the notice's date of state
-is 2026-11-13.
-[vision-model-folders.md](vision-model-folders.md), "Vision root" and "DirectML runtime": who
-carries the files, as the registry says; no rule changes.
+is 2026-11-13. Four more sentences of the notice: FastDeploy / PPOCR "Current status" and "Artifact
+contract status" (no PPOCR model or dictionary is in this repository or its Runtime and Tools
+artifacts; those the installation package carries are listed under the release boundary), and
+ONNXRuntime "Current status" (a classifier runs on the CPU under `directml`) and "Engine
+implementation" (the engine registers DirectML in its DirectML OCR sessions).
+[vision-model-folders.md](vision-model-folders.md), "Vision root" and "DirectML runtime",
+`scripts/windows-tools/README.md`, [INSTALL.md](../distribution/windows/INSTALL.md) and the
+documentation comment of `crates/vision-ffi/src/runtime_pin.rs`: who carries the files, as the
+registry says; no rule and no code changes.
 
-**What did not change.** No Rust product code, interface or outcome code. The Runtime artifact and
-the Tools artifact carry none of these files, as before. `Materialize-VisionRoot.ps1` and
-`Materialize-TaskToolCache.ps1` are unchanged (the latter copies the word into its provenance note
-as it is); no reader holds a list of `redistribution` words.
+**What did not change.** No Rust product code (one documentation comment only), interface or
+outcome code. The Runtime artifact and the Tools artifact carry none of these files, as before.
+`Materialize-VisionRoot.ps1` and `Materialize-TaskToolCache.ps1` are unchanged (the latter copies
+the word into its provenance note as it is); no reader holds a list of `redistribution` words.
 
 **At deploy.** Nothing changes in a deployed Runtime: the registry and the notice are repository
-files.
+files; the Runtime artifact's `INSTALL.md` carries the corrected sentence from 0.12.59.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | VR-1 | `windows-tool-sources.v1.json` `license.redistribution` `redistributed_in_installation_package_by_owner_decision` with `redistribution_note`, on `onnxruntime-directml-1.24.4`, `directml-1.15.4` and `ppocrv6-medium-onnx` | tool source | #441 | — | the two `placement_note`s' sentence on who carries the files; pins unchanged |
-| VR-2 | [NOTICE.md](../NOTICE.md), the ONNXRuntime "Release boundary" | notice text | #441 | — | the three runtime files with the sizes and SHA-256 of vision-model-folders.md, the three model files with the registry's |
-| VR-3 | [vision-model-folders.md](vision-model-folders.md), who carries the files | contract text (no rule change) | #441 | — | the Runtime and Tools packages carry none of them |
+| VR-2 | [NOTICE.md](../NOTICE.md), the ONNXRuntime "Release boundary", and four sentences of the vision section | notice text | #441 | — | the three runtime files with the sizes and SHA-256 of vision-model-folders.md, the three model files with the registry's; `DirectML.dll` with `LICENSE.txt`, `LICENSE-CODE.txt` and `ThirdPartyNotices.txt` |
+| VR-3 | [vision-model-folders.md](vision-model-folders.md), `scripts/windows-tools/README.md`, [INSTALL.md](../distribution/windows/INSTALL.md), the documentation comment of `runtime_pin.rs`: who carries the files | contract and document text (no rule change) | #441 | — | the Runtime and Tools packages carry none of them |
 
 Tests (adapted; the requirement deliberately changes what they pin, nothing else in them):
 `the_runtime_pin_equals_the_tool_sources_entries` (exec gate row "#407 GPU-1 A",
