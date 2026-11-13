@@ -112,6 +112,10 @@ mod gate_434_lab5b1b;
 // `config restore`'s `sha`.
 #[cfg(test)]
 mod gate_434_lab5b1c;
+// Test-only: Workflow #434 LAB-6S0, the detached run of `deploy` and `rollback` carries `Lab-MCP`
+// (the marker beside the initiator's variable), as the Lab's MCP server starts it.
+#[cfg(test)]
+mod gate_434_lab6s0;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.

@@ -19,6 +19,14 @@ use std::str::FromStr;
 /// The environment variable the UI sets for every Lab process it starts (§4.2): `Lab-制包` for
 /// its workbench's `serve`, `Lab-救急` for every other one.
 pub const ENVIRONMENT_VARIABLE: &str = "ACTINGCOMMAND_INITIATOR";
+/// Workflow #434 LAB-6S0 (§4.2): the marker beside [`ENVIRONMENT_VARIABLE`] that only the rescue
+/// module's detached start sets, for a detached run whose initiator is `Lab-MCP`
+/// (`lab_rescue::rescue`, its `detach`). With it set to [`DETACHED_RUN_MARK`] a Lab process takes
+/// `Lab-MCP` from the variable ([`Initiator::of_lab_process_marked`]).
+pub const DETACHED_RUN_VARIABLE: &str = "ACTINGCOMMAND_DETACHED_RUN";
+/// The one value of [`DETACHED_RUN_VARIABLE`] that marks a run, compared byte for byte: the module
+/// whose detached start sets it.
+pub const DETACHED_RUN_MARK: &str = "rescue";
 
 /// Where a request or an operation came from: the group (`UI`) or the Lab module (§4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -96,7 +104,8 @@ impl Initiator {
     /// given the value of [`ENVIRONMENT_VARIABLE`] (`None` when it is not set): `Lab-CLI`, unless
     /// the variable names `Lab-制包` or `Lab-救急`. Any other value, `UI`, `Lab-MCP` and
     /// `Lab-看门狗` included, is `actingctl_usage_invalid` with `variable`
-    /// `ACTINGCOMMAND_INITIATOR`, and the process sends and writes nothing.
+    /// `ACTINGCOMMAND_INITIATOR`, and the process sends and writes nothing. This is the rule
+    /// without the marker of Workflow #434 LAB-6S0 ([`Self::of_lab_process_marked`]).
     pub fn of_lab_process(variable: Option<&OsStr>) -> Result<Self, Outcome> {
         let Some(value) = variable else {
             return Ok(Self::LabCli);
@@ -109,9 +118,28 @@ impl Initiator {
             })
     }
 
-    /// [`Self::of_lab_process`] with this process's environment.
+    /// Workflow #434 LAB-6S0 (§4.2): [`Self::of_lab_process`], but `Lab-MCP` in the variable is
+    /// taken when `marker`, the value of [`DETACHED_RUN_VARIABLE`] (`None` when it is not set), is
+    /// [`DETACHED_RUN_MARK`]: the rescue module's detached run of an operation an MCP server
+    /// started. The marker changes nothing else: alone, beside another word, or with another value
+    /// the answer is [`Self::of_lab_process`]'s.
+    pub fn of_lab_process_marked(
+        variable: Option<&OsStr>,
+        marker: Option<&OsStr>,
+    ) -> Result<Self, Outcome> {
+        let marked = marker.and_then(OsStr::to_str) == Some(DETACHED_RUN_MARK);
+        if marked && variable.and_then(OsStr::to_str) == Some(Self::LabMcp.as_str()) {
+            return Ok(Self::LabMcp);
+        }
+        Self::of_lab_process(variable)
+    }
+
+    /// [`Self::of_lab_process_marked`] with this process's environment.
     pub fn of_this_lab_process() -> Result<Self, Outcome> {
-        Self::of_lab_process(std::env::var_os(ENVIRONMENT_VARIABLE).as_deref())
+        Self::of_lab_process_marked(
+            std::env::var_os(ENVIRONMENT_VARIABLE).as_deref(),
+            std::env::var_os(DETACHED_RUN_VARIABLE).as_deref(),
+        )
     }
 }
 

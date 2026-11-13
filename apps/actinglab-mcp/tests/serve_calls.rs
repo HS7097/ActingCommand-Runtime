@@ -60,9 +60,12 @@
 //! - `mcp_plan_through_the_server_is_the_command_lines`: `ac_mcp_plan` answers the line the rescue
 //!   module's code gives for `mcp plan` on that root, in the shape of LAB-5G5b's checked-in sample,
 //!   its child the server's own file.
-//! - `mcp_detached_rows_refused_and_nothing_started`: `ac_deploy` and `ac_rollback` answer
-//!   `mcp_operation_unsupported` with their tool, and the root holds the same files after them (no
-//!   detached log, no journal).
+//! - `mcp_detached_rows_refused_and_nothing_started` (Workflow #434 LAB-6S0, adapted: the two rows
+//!   are served since, and refused here only by the module): with an unreadable `current.json`
+//!   (an unfinished operation's) in the root, `ac_deploy` and `ac_rollback` each answer the line
+//!   the rescue module's code gives for its row with `detach` true on that root, the module's
+//!   refusal (`state_invalid`) before its detached start, never `mcp_operation_unsupported`; and
+//!   the root holds the same files after them (no detached log, no journal).
 //! - `mcp_rescue_rows_refused_before_the_module`: an undeclared member (`unknown`) and a relative
 //!   path in `release stage`'s `dir` (`not_absolute`) are `arguments_invalid`, which the rescue
 //!   module never answers, with the argument; the root holds the same files after them.
@@ -1652,6 +1655,12 @@ fn mcp_detached_rows_refused_and_nothing_started() {
     let base = TempDir::new().expect("tempdir");
     let temp = TempDir::new().expect("tempdir");
     let (root, program) = made_up_root(base.path());
+    // Workflow #434 LAB-6S0 (adapted): an unfinished operation's `current.json` the module cannot
+    // read, which its detached start refuses before anything starts.
+    write_file(
+        &root.join("install").join("current.json"),
+        b"neutral unreadable",
+    );
     let before = files_under(&root);
     let mut server = Server::start(actinglab_mcp(&program, None, temp.path()));
     server.initialize();
@@ -1659,17 +1668,27 @@ fn mcp_detached_rows_refused_and_nothing_started() {
     let rollback = server.call_tool(3, "ac_rollback", json!({}));
     let status = server.finish();
     assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
-    for (tool, answer) in [("ac_deploy", &deploy), ("ac_rollback", &rollback)] {
-        assert_eq!(answer["result"]["isError"], json!(true), "{tool}: {answer}");
-        let line = answered_line(answer);
+    // Each row: its tool's answer, and what the server hands the module (`detach` true).
+    for (name, answer, handed) in [
+        ("deploy", &deploy, json!({"target": BUILD, "detach": true})),
+        ("rollback", &rollback, json!({"detach": true})),
+    ] {
+        let expected = module_line(&program, name, handed);
         assert_eq!(
             (
-                &line["outcome"]["code"],
-                &line["outcome"]["values"]["mcp_tool"]
+                &expected.0["outcome"]["code"],
+                &expected.0["outcome"]["values"]["install_refusal"],
             ),
-            (&json!("mcp_operation_unsupported"), &json!(tool)),
-            "{tool}: {line}"
+            (&json!("install_command_refused"), &json!("state_invalid")),
+            "setup: the module refuses {name}'s detached start: {}",
+            expected.0
         );
+        assert_ne!(
+            answered_line(answer)["outcome"]["code"],
+            json!("mcp_operation_unsupported"),
+            "{name}: {answer}"
+        );
+        assert_served_as(answer, &expected);
     }
     assert_eq!(
         files_under(&root),

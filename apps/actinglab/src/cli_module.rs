@@ -33,7 +33,10 @@
 //!   the line the operation's `--json` prints, the module's line for every operation, actinglab's
 //!   own commands included (LAB-2b; [`serve`]).
 //! - **Initiator** (§4.1, §4.2). `Lab-CLI`, or `Lab-制包` / `Lab-救急` from
-//!   `ACTINGCOMMAND_INITIATOR`; any other value is refused before anything is sent or written. A
+//!   `ACTINGCOMMAND_INITIATOR`, or (Workflow #434 LAB-6S0) `Lab-MCP` beside the marker
+//!   `ACTINGCOMMAND_DETACHED_RUN=rescue`, which only the rescue module's detached start sets
+//!   (`Initiator::of_lab_process_marked`); any other value is refused before anything
+//!   is sent or written. A
 //!   Lab recording's steps and marks carry it (open point 6, the coordinator's ruling), and
 //!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them, or (Workflow #434 LAB-5G4a) a
 //!   `serve --stdio --front mcp` process, an MCP server's child, whose rescue rows take `Lab-MCP`
