@@ -11334,7 +11334,7 @@ its tools and tests; `actingctl mcp-serve` and `mcp-config`; `actingctl mcp-entr
 `entry_protocol` 1; the first generation `apps/mcp-entry` and `actingcommand-mcp-entry.exe` in the
 Tools lists (`windows-remote-build.yml`'s `--bin` and `$toolFiles`, `scripts/windows-tools/`); on an
 installation, the placed `mcp-entry\g1\`; the umbrella repository's skill `skills/actingcommand/`
-(another repository); README.md's and README.zh-CN.md's sections on today's server and the line
+(another repository); the sections of README.md and of the Chinese README on today's server and the line
 that names the skill; and every sentence of the manual that names today's server (sections 1, 6,
 8, 10 and 11).
 
