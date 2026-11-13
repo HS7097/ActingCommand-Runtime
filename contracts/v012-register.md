@@ -20928,7 +20928,7 @@ literals of today; the task evidence `linked` at both). The forensic leaf's `inp
 the refusal this slice removes; the host's `gate_392_da3` helpers `device_host` and `run` are
 visible to their sibling modules, no assertion changed.
 
-### 1.350 Slice FL-2 (0.12.60): field lists through the host, proved on a fake device (Workflow #450; the owner approved the feature on 11-13, board #450; the design note `rd-1113/design-list-from-fields.md`, sections 3.2 to 3.5 and the row FL-2 of its section 4, with the coordinator's decisions of its section 7; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-450-fl2.md`, read on main `fa724931`; fix 1, after an independent review, coordinator work order `rd-1114/brief-1692-fix1.md`, main `71a658f1` merged)
+### 1.350 Slice FL-2 (0.12.60): field lists through the host, proved on a fake device (Workflow #450; the owner approved the feature on 11-13, board #450; the design note `rd-1113/design-list-from-fields.md`, sections 3.2 to 3.5 and the row FL-2 of its section 4, with the coordinator's decisions of its section 7; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-450-fl2.md`, read on main `fa724931`; fix 1, after an independent review, coordinator work order `rd-1114/brief-1692-fix1.md`, main `71a658f1` merged; fix 2, the first CI run's lint and the full store's sequencing, coordinator work order `rd-1114/brief-1692-fix2.md`, main `803fdfa3` (release 0.12.59) merged)
 
 1.348 and 1.349 are the integration train 0.12.59d's (#1688); this slice took the next free
 section after them.
