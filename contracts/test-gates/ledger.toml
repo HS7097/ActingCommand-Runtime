@@ -952,3 +952,11 @@ tests = [
     "actingcommand-ledger-forensics::lib::input_pairing::tests::da3_fix1_under_the_identity_the_pairing_compares_byte_for_byte",
 ]
 incident = ["#392 DA-3"]
+
+# Workflow #392 DA-3 fix 2 (the review's one point; contracts/display-adapter.md section 10, "The task evidence"): the task evidence finds the run's geometry record in the whole snapshot, backwards from the effect intent, not only in the page read: on a page that starts after a scaled run's geometry record (a pure scale of 2), the tap sent at its device point relates linked to its effect intent and the tap sent one device pixel off is still source_mismatch
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::forensics_read_only::da3_fix2_a_scaled_run_read_on_a_page_without_its_geometry_record_pairs_its_inputs",
+]
+incident = ["#392 DA-3"]

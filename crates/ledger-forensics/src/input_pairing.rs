@@ -11,27 +11,76 @@
 //! display adapter's `DisplayMap::admit_input` and `device_input`, the host's) and compared;
 //! without one, under the plain identity, the comparison is the effect intent's input itself,
 //! byte for byte, as it was before.
+//!
+//! Fix 2: the run's geometry record is looked up in the whole snapshot, not only in the page
+//! being judged, so a scaled run read in pages pairs as it does when read whole.
 
 use actingcommand_contract::{
-    CaptureExtent, EventPayload, InputAction, InputSamplingEvidence, TaskGeometryDisplayMap,
+    CaptureExtent, EventPayload, InputAction, InputSamplingEvidence, RunId, TaskGeometryDisplayMap,
     TaskPayload, TaskSemanticFact,
 };
 use actingcommand_display_adapter::{DisplayMap, DisplayObservation, InputCoordinates, Rect};
 use actingcommand_ledger::PersistedEvent;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 
-/// The display map in effect for `effect`, an effect intent among the page's `events`: the
-/// `display_map` of the last `task.geometry_observed` record of its run before it. `None` under
-/// the plain identity (whose records name no map), and when the page holds no geometry record of
-/// the run before the intent.
-pub(crate) fn run_display_map<'a>(
+/// The display maps in effect for the effect intents of one page of the task evidence, read in
+/// the whole snapshot (`events`, every record in ledger order) and not only in the page: a scaled
+/// run read in pages has its geometry record on an earlier page.
+pub(crate) struct RunDisplayMaps<'a> {
     events: &'a [PersistedEvent],
-    effect: &PersistedEvent,
-) -> Option<&'a TaskGeometryDisplayMap> {
-    let run = effect.links().run_id()?;
+    /// The position in `events` of the page's first record.
+    page_start: usize,
+    /// Per run, the display map in effect at the page's start, looked up once for the page.
+    before_page: RefCell<BTreeMap<RunId, Option<&'a TaskGeometryDisplayMap>>>,
+}
+
+impl<'a> RunDisplayMaps<'a> {
+    /// The maps for the page of the records after `after_sequence`; `events` are the snapshot's
+    /// records in ledger order.
+    pub(crate) fn new(events: &'a [PersistedEvent], after_sequence: u64) -> Self {
+        Self {
+            events,
+            page_start: events.partition_point(|event| event.sequence() <= after_sequence),
+            before_page: RefCell::new(BTreeMap::new()),
+        }
+    }
+
+    /// The display map in effect for `effect`, an effect intent of the page: the `display_map` of
+    /// the last `task.geometry_observed` record of its run before it in the snapshot. `None` under
+    /// the plain identity (whose records name no map), and when the snapshot holds no geometry
+    /// record of the run before the intent. The search goes backwards from the effect intent's
+    /// position (a binary search on its sequence): through the page's records before it, then,
+    /// when they hold none of the run's, through the records before the page, once per run for
+    /// the page, so each input walks at most the page, as when only the page was read.
+    pub(crate) fn in_effect(&self, effect: &PersistedEvent) -> Option<&'a TaskGeometryDisplayMap> {
+        let run = effect.links().run_id()?;
+        let position = self
+            .events
+            .partition_point(|event| event.sequence() < effect.sequence());
+        if position < self.page_start {
+            return last_display_map(&self.events[..position], run).flatten();
+        }
+        last_display_map(&self.events[self.page_start..position], run).unwrap_or_else(|| {
+            *self
+                .before_page
+                .borrow_mut()
+                .entry(*run)
+                .or_insert_with(|| last_display_map(&self.events[..self.page_start], run).flatten())
+        })
+    }
+}
+
+/// The `display_map` of the last `task.geometry_observed` record of `run` in `events`: `None`
+/// when `events` hold no such record, `Some(None)` when it names no map (the plain identity).
+fn last_display_map<'a>(
+    events: &'a [PersistedEvent],
+    run: &RunId,
+) -> Option<Option<&'a TaskGeometryDisplayMap>> {
     events
         .iter()
         .rev()
-        .filter(|event| event.sequence() < effect.sequence() && event.links().run_id() == Some(run))
+        .filter(|event| event.links().run_id() == Some(run))
         .find_map(|event| match event.payload() {
             EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
                 TaskSemanticFact::GeometryObserved { observation } => {
@@ -41,7 +90,6 @@ pub(crate) fn run_display_map<'a>(
             },
             _ => None,
         })
-        .flatten()
 }
 
 /// Whether `sent`, the input an input intent records, is `asked`, the input of the effect intent

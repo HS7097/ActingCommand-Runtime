@@ -447,8 +447,8 @@ operations through the same refusal, and pairs the task evidence in one coordina
   compared with the input sent; an input the product would have refused pairs with nothing
   (`source_mismatch`). Without such a record, under the plain identity, the comparison is the
   effect intent's input itself, byte for byte, as before this slice. The effect intent records no
-  base, so a page that does not hold the run's geometry record before the effect intent compares
-  as under the identity.
+  base, so that record is looked up backwards from the effect intent in the whole snapshot the
+  command reads, not only in the page it reports: read in pages or whole, a run pairs the same.
 - **The Lab's declared operations.** A Lab declared operation's runtime reads no game
   declaration, and its frames, read back from their pictures, carry no producer geometry: it
   cannot know the map a run's input leaves under. It sends an input only on a frame of its

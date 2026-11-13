@@ -988,6 +988,9 @@ fn task_evidence_report(
         || !snapshot.read_complete()
         || snapshot.corrupt_tail().is_some();
     let events = &page.events;
+    // Workflow #392 DA-3 fix 2: the run's geometry record that names its map is looked up in the
+    // whole snapshot, backwards from the effect intent, not only in this page.
+    let display_maps = input_pairing::RunDisplayMaps::new(snapshot.events(), page.after_sequence);
     let mut inputs = Vec::new();
     let mut steps = Vec::new();
     let mut gaps = std::collections::BTreeSet::new();
@@ -1026,7 +1029,7 @@ fn task_evidence_report(
                                     action,
                                     payload.sampling(),
                                     *frame_extent,
-                                    input_pairing::run_display_map(events, candidate),
+                                    display_maps.in_effect(candidate),
                                 ))))
                     },
                 )
