@@ -366,20 +366,55 @@ it on an instance it adds while the Runtime is stopped (S3).
   kept) and those holds are taken, before the instance workers and any instance's daemon-start
   preparation. For each entry that declares it and whose instance id the tagged runtime fact
   `host.start_pause_applied` ([runtime-fact-store.md](runtime-fact-store.md)) does not name yet,
-  it holds an **instance** pause with the existing reason `instance.added`, at the scope's next
-  revision, stage `released`, set in this owner epoch, unless a pause of the instance's own holds
-  it already (of any reason: that pause stays exactly as it is, and the global pause does not
-  count); then it records the entry's row `{instance_id, applied_at_unix_ms}`. The pause rows
+  in the order of the instance ids (the global pause does not count as the instance's own):
+  - **not paused:** it holds an **instance** pause with the existing reason `instance.added`, at
+    the scope's next revision, stage `released`, set in this owner epoch, and applies the entry;
+  - **paused with `instance.added`** (a start that ended between the two records below, or the
+    installer's pause of an added instance): that pause stays as it is, and it applies the entry;
+  - **paused for another reason:** that pause stays exactly as it is and **nothing is recorded**:
+    the member stays unapplied until that pause is released (below).
+
+  To apply is to record the entry's row `{instance_id, applied_at_unix_ms}`. The pause rows
   (`host.scheduling_pause`) are recorded first, the applied rows second; a refused record fails
-  the start, as the other start holds fail. A start that ends between the two records holds the
-  instance again at the next start (or finds its restored pause and keeps it) and then records
-  the row, so the hold is idempotent. As every released instance pause, it leaves the device as
-  it is: the daemon-start preparation does not prepare it, and neither the configured emulator
-  start at daemon start nor an idle wake starts its emulator (PAUSE-AUTO, "The dispatch gate"
-  above).
+  the start, as the other start holds fail. A start that ends between the two records finds the
+  restored `instance.added` pause at the next start, keeps it and then records the row, so the
+  hold is idempotent. As every released instance pause, it leaves the device as it is: the
+  daemon-start preparation does not prepare it, and neither the configured emulator start at
+  daemon start nor an idle wake starts its emulator (PAUSE-AUTO, "The dispatch gate" above).
+- **Applied only by its own pause** (fix 1, the coordinator's ruling on the review). Another
+  pause can be released by someone who never looked at the new instance (the installer's
+  `--hold` restored at the start, a rescue operation's hold, a pause carried over on a reused
+  alias). So when an instance's pause is released while the Runtime runs and its entry's member
+  is unapplied, the release holds it with `instance.added` instead of letting it run. Every path
+  that ends an instance pause while the Runtime runs is the host's `ResumeScheduling` of the
+  instance: a person's resume from any entry, the installer's `release-hold` and every other
+  hand-back of its hold, the rescue module's hand-back (each a conditional resume); the one other
+  lift, a failed pause stage's, only lifts a pause its own request set on an instance that was
+  not paused, which an unapplied entry never is. In the resume's own step, under the persist gate
+  that makes the release and on its reconnect claim's key, after the resume's refusals (stage,
+  expectation): the old pause is lifted and an `instance.added` pause set (each at the scope's
+  next revision, stage `released`, set in this owner epoch), its rows recorded, the live gate
+  changed from the old pause to the new one under one lock (the instance is never without a
+  pause in between, and the key is held throughout, so nothing is dispatched), then the applied
+  row recorded. No reconnect runs; the key is released at once and a routine claim stays gated
+  behind the new pause. The answer is the resume's own shape: `SchedulingResumed` with the new
+  pause's `revision` and a `selfcheck` whose two sides are `ok: false` with no values and whose
+  `failure_code` is `dispatch_paused_instance`, the instance's control gate: the release was
+  made, and the instance is held again (as the player hold's `player_hold_active` means the
+  expected, not a failure). A refused record fails the request with
+  `scheduling_pause_persist_failed`: before the change nothing changed; after it the instance
+  stays held with `instance.added` and the member unapplied, so the next release holds it again.
+  Resuming the `instance.added` pause itself is an ordinary resume: the row is there and nothing
+  happens again, also across restarts. A start that finds the earlier other pause gone (for
+  example dropped by the restore because the instance id is configured under another alias now)
+  holds `instance.added` then, as for an instance not paused.
 - **Once applied, never again.** A start finds the entry's row and holds nothing; the member may
-  stay in the file. A configuration whose entries do not declare it holds nothing and neither
-  reads nor writes `host.start_pause_applied`.
+  stay in the file. Each record of the fact keeps only the rows of instance ids this start's
+  configuration names (any entry, with or without the member), so the list holds at most one row
+  per configured instance; an instance id removed from the configuration that comes back with the
+  member is held again. A configuration whose entries do not declare it holds nothing, neither
+  reads nor writes `host.start_pause_applied`, and leaves every release exactly as before (the
+  set of unapplied entries is empty and the release returns before anything else).
 - **The reason.** `instance.added` is the reason of the installer's pause of an added instance on
   a running Runtime too ([install-cli.md](install-cli.md), "Configuration, instances, packs and a
   fresh root"): one meaning for the
@@ -387,7 +422,9 @@ it on an instance it adds while the Runtime is stopped (S3).
   `INSTANCE_ADDED_PAUSE_REASON` of the contract crate.
 - **Nobody's hand-back hold.** It is no installer's `--hold` and no rescue operation's
   `lab-<op>-<ms>`: nothing hands it back by itself. The rescue module keeps and lists it as
-  another party's pause and never lifts it.
+  another party's pause and never lifts it. A hand-back of the installer's or the module's own
+  hold that meets an unapplied entry is answered as above: its own pause is gone, and the
+  instance shows `instance.added`, another party's pause from then on.
 - **Who lifts it, and how.** A person, by a resume of the instance: the console's resume,
   `actingctl resume --state-root <s> --instance <alias>` (below) or the Lab's `resume <alias>`.
   Once lifted, the applied row keeps it from coming back.
@@ -398,8 +435,9 @@ it on an instance it adds while the Runtime is stopped (S3).
   the start restores it as every pause. An `install start` whose Runtime holds the pause for the
   first time (an instance added while stopped) finds one pause more than its S0, which the
   post-start check reports as the caveat `post_check_mismatch` ("The post-start checks
-  (INST-2)"), not as a failure. An update's own stop never meets
-  an entry not yet applied: its Runtime was running and applied it before the stop.
+  (INST-2)"), not as a failure. An update's own stop meets an entry not yet applied only while a
+  pause of another reason holds it: the stop treats that pause as today, the next start restores
+  it, and the entry stays unapplied until that pause is released.
 
 ## CLI
 

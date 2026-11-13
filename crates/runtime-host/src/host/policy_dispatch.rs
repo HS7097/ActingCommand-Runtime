@@ -655,7 +655,8 @@ impl SchedulingPauseTable {
     /// Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"):
     /// [`Self::hold_instance_at_start`] with a pause reason name rather than a code (the first
     /// start's pause of an entry that declares `start_paused` is `instance.added`). Returns
-    /// whether it set one; a pause the instance holds already stays as it is.
+    /// whether it set one; a pause the instance holds already stays as it is. Fix 1: the release
+    /// of a pause that left such an entry unapplied sets it too, right after the lift.
     pub(super) fn hold_named_instance_at_start(
         &mut self,
         instance_alias: &str,
@@ -825,6 +826,14 @@ fn next_scheduling_pause_revision(revision: &mut u64) -> RuntimeHostResult<u64> 
         )
     })?;
     Ok(*revision)
+}
+
+/// What an instance resume did to the instance's pause: lifted it (the scope's new revision), or,
+/// Workflow #453 S2 fix 1, replaced it by the `instance.added` pause of an entry whose
+/// `start_paused` was not applied yet (that pause's revision).
+enum InstanceResumeLift {
+    Lifted(u64),
+    HeldAgain(u64),
 }
 
 /// A pause a start would hold that is no valid pause state (Workflow #369 E3).
@@ -3417,6 +3426,11 @@ impl HostShared {
     /// and lifts nothing), the preparation runs on the claim's key, and the key's release hands
     /// it on, or pumps, so a claim the lift made eligible follows the reconnect. No dispatch can
     /// reach the instance while the key is held.
+    ///
+    /// Workflow #453 S2 fix 1: an instance whose entry's `start_paused` the start left unapplied
+    /// (a pause of another reason held it) is held with `instance.added` in the lift's place,
+    /// under the same persist gate and on the same key; no reconnect runs
+    /// (`HostShared::hold_start_pause_at_release`).
     pub(super) fn resume_scheduling(
         &self,
         original: &RuntimeRequest,
@@ -3472,22 +3486,51 @@ impl HostShared {
             connection_id,
             ClaimKind::ResumeReconnect,
         )?;
-        let lifted = (|| -> Result<u64, RequestFailure> {
+        let lifted = (|| -> Result<InstanceResumeLift, RequestFailure> {
             let _persist = lock(
                 &self.scheduling_pause_persist_gate,
                 HostLocation::PersistInstanceSchedulingResume,
             )?;
             let mut prospective =
                 self.resumable_instance_pauses(instance_alias, expected, fenced)?;
+            // Workflow #453 S2 fix 1 (`contracts/scheduling-pause.md`, "Pauses held at a first
+            // start"): the release of a pause while the instance's `start_paused` is not applied
+            // yet holds it with `instance.added` instead, in this step; nothing without the member.
+            if let Some(revision) =
+                self.hold_start_pause_at_release(instance_alias, instance_id, &mut prospective)?
+            {
+                return Ok(InstanceResumeLift::HeldAgain(revision));
+            }
             prospective.lift_instance(instance_alias)?;
             self.persist_scheduling_pauses(&prospective)?;
-            Ok(
+            Ok(InstanceResumeLift::Lifted(
                 lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?
                     .lift_instance(instance_alias)?,
-            )
+            ))
         })();
         let revision = match lifted {
-            Ok(revision) => revision,
+            Ok(InstanceResumeLift::Lifted(revision)) => revision,
+            // Workflow #453 S2 fix 1: the instance is paused again, so no reconnect runs and the
+            // claim's key is released at once (a routine claim stays gated behind the new pause).
+            // The answer says so in the resume's shape: the new pause's revision and a self-check
+            // with both sides `ok: false` and `failure_code` `dispatch_paused_instance`, the
+            // instance's control gate.
+            Ok(InstanceResumeLift::HeldAgain(revision)) => {
+                self.release_lease(request, original.request_id(), &token, connection_id, None)?;
+                return Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: None,
+                    result: RuntimeResult::SchedulingResumed {
+                        scope: scope.clone(),
+                        revision,
+                        selfcheck: Some(scheduling_resume_selfcheck(
+                            &[],
+                            Some(HostCode::DispatchPausedInstance.as_str()),
+                        )),
+                    },
+                    failure_outcome: None,
+                });
+            }
             Err(failure) => {
                 return Err(
                     match self.release_lease(

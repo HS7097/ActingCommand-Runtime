@@ -816,8 +816,12 @@ fn summarize(
     );
     // Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"): with an
     // entry that declares `start_paused`, a `ledger_observer.tag.workbench_patterns` in effect that
-    // leaves out `host.start_pause_applied` would hold that entry at every start. Read only for
-    // such a configuration: one without the member is reported as before.
+    // leaves out `host.start_pause_applied` leaves the fact unclassified. Today's start still
+    // reads it (it replays the program facts from the snapshot and every later record whatever
+    // the tags; the list decides only the index row and the synchronous write), but the rule for
+    // program state is tagged records and a later ledger change is to load by tag, so the note
+    // asks for the key. Read only for such a configuration: one without the member is reported
+    // as before.
     if !checked.host.start_paused().is_empty() {
         let workbench_patterns =
             actingcommand_runtime_config::EffectiveConfig::from_manifest(&checked.manifest)

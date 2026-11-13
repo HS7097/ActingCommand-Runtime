@@ -280,9 +280,9 @@ mod scheduling_pause;
 // Workflow #453 S2: an entry that declares `start_paused` is held at the first start that sees it,
 // once (`host.start_pause_applied`).
 mod start_pause;
-#[cfg(test)]
-pub(crate) use start_pause::START_PAUSE_APPLIED_REFUSED_FOR_TEST;
 pub use start_pause::start_pause_tag_note;
+#[cfg(test)]
+pub(crate) use start_pause::{START_PAUSE_APPLIED_REFUSED_FOR_TEST, START_PAUSE_OFF_FOR_TEST};
 mod start_report_read;
 // #411 A48: a self-check reads the emulator status first and recognizes a running emulator again.
 mod selfcheck_emulator;
@@ -1152,7 +1152,8 @@ impl RuntimeHostConfig {
     /// Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"):
     /// installs the instance ids of the entries that declare `start_paused` `true`, as actingd
     /// read them at assembly. At every start each of them that `host.start_pause_applied` does not
-    /// name yet is held with the pause `instance.added` before any instance is prepared.
+    /// name yet is held with the pause `instance.added` before any instance is prepared; one a
+    /// pause of another reason holds is held so when that pause is released (fix 1).
     pub fn with_start_paused(mut self, start_paused: BTreeSet<InstanceId>) -> Self {
         self.start_paused = start_paused;
         self
@@ -2160,6 +2161,7 @@ impl RuntimeHost {
             device_keys: config.device_keys,
             device_group_names: config.device_group_names,
             start_paused: config.start_paused,
+            start_pause_unapplied: Mutex::new(BTreeSet::new()),
             switch_cooldowns: Mutex::new(BTreeMap::new()),
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
@@ -2679,9 +2681,10 @@ impl RuntimeHost {
             shared.hold_skipped_settlement_fact_instances(&skipped_settlement_facts)?;
             // Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"):
             // each entry that declares `start_paused` and that `host.start_pause_applied` does not
-            // name yet is held with `instance.added` (unless a pause holds it already), its pause
-            // recorded before its applied row, after the restore (an installer-held start's too)
-            // and before any instance is prepared. Nothing for a configuration without the member.
+            // name yet is held with `instance.added`, its pause recorded before its applied row,
+            // after the restore (an installer-held start's too) and before any instance is
+            // prepared; one a pause of another reason holds keeps that pause and is not applied
+            // (fix 1: the release of that pause holds it). Nothing without the member.
             shared.hold_start_paused_instances()?;
             // Workflow #369 W-2: the instance workers exist before the daemon-start preparation,
             // so a failed preparation's ladder already has one.
@@ -6103,6 +6106,10 @@ struct HostShared {
     // instance ids of the entries that declare `start_paused`; read once by the start
     // (`start_pause.rs`).
     start_paused: BTreeSet<InstanceId>,
+    // Workflow #453 S2 fix 1: the entries of `start_paused` this start found held by a pause of
+    // another reason, so their member is not applied yet; the release of that pause holds them
+    // with `instance.added` instead (`start_pause.rs`). Memory only; empty without the member.
+    start_pause_unapplied: Mutex<BTreeSet<InstanceId>>,
     // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The member's switch cooldown"): each
     // member of a device group of several whose switch failed, with the Runtime-clock (monotonic)
     // instant its switch cooldown ends. Memory only, never stored: a restart drops it.

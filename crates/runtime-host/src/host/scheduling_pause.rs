@@ -99,6 +99,25 @@ fn restore_invalid(code: impl Into<Code>) -> RuntimeHostError {
     )
 }
 
+/// A refused record of a pause or resume request: `scheduling_pause_persist_failed` (Failed); a
+/// fatal one poisons. Workflow #453 S2 fix 1: the applied row a release records is mapped alike.
+pub(super) fn scheduling_pause_persist_failure(error: RuntimeHostError) -> RequestFailure {
+    if error.is_fatal() {
+        RequestFailure::poison_without_terminal(error)
+    } else {
+        RequestFailure::request(
+            RuntimeHostError::request(
+                HostCode::SchedulingPausePersistFailed,
+                HostLocation::PersistSchedulingPause,
+                RuntimeErrorCode::LedgerFailure,
+            )
+            .with_native_detail(format!("{error:?}")),
+            RuntimeReceiptState::Failed,
+            None,
+        )
+    }
+}
+
 fn row_text<'a>(row: &'a BTreeMap<String, FactScalar>, field: &str) -> RuntimeHostResult<&'a str> {
     match row.get(field) {
         Some(FactScalar::String(value)) => Ok(value),
@@ -149,22 +168,8 @@ impl HostShared {
         &self,
         table: &SchedulingPauseTable,
     ) -> Result<(), RequestFailure> {
-        self.record_scheduling_pauses(table).map_err(|error| {
-            if error.is_fatal() {
-                RequestFailure::poison_without_terminal(error)
-            } else {
-                RequestFailure::request(
-                    RuntimeHostError::request(
-                        HostCode::SchedulingPausePersistFailed,
-                        HostLocation::PersistSchedulingPause,
-                        RuntimeErrorCode::LedgerFailure,
-                    )
-                    .with_native_detail(format!("{error:?}")),
-                    RuntimeReceiptState::Failed,
-                    None,
-                )
-            }
-        })
+        self.record_scheduling_pauses(table)
+            .map_err(scheduling_pause_persist_failure)
     }
 
     /// Workflow #369 E3 (#670 safety net): holds a pause of `instance_alias` with `pause_reason`

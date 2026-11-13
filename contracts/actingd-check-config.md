@@ -575,10 +575,13 @@ What the check noted is not a member of `report`: each is one `note` link of
 - Workflow #453 S2: one `ledger_tag_key_unclassified` (warning, value
   `fact_key` `host.start_pause_applied`) when an entry declares `start_paused`
   `true` and `ledger_observer.tag.workbench_patterns` in effect (the file's own
-  list) leaves that key out, so that no start would load it and every start
-  would hold the entry again ([scheduling-pause.md](scheduling-pause.md),
-  "Pauses held at a first start"); a configuration without the member is not
-  read for it;
+  list) leaves that key out. Today's start still reads the fact (it replays the
+  program facts from the snapshot and every later record whatever the tags; the
+  list decides only the index row and the synchronous write); the note asks for
+  the key because the rule for program state is tagged records and a later
+  ledger change is to load by tag ([runtime-config.md](runtime-config.md), "An
+  entry that starts paused"); a configuration without the member is not read
+  for it;
 - Workflow #373 NAV-6: the root's problem when the standard-pack root itself
   cannot be listed, then the problem of each broken game root (see "Standard
   packs");

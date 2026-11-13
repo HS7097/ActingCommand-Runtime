@@ -709,16 +709,26 @@ the backend self-check facts (source `device-proxy` or `capture`).
   — runtime scope, `record_list`, no lifetime, source `runtime`: the
   configuration entries whose first-start pause was applied, one row per
   entry `{instance_id, applied_at_unix_ms}` (the entry's instance id as the
-  configuration names it, `timestamp_ms` the start's clock when it recorded the
-  row). Recorded only by a start that holds an entry declaring `start_paused`
-  whose instance id no row names yet, after that start recorded its pause
-  (`host.scheduling_pause`), with the rows it found and the new ones; rows are
-  never removed. A start reads it only when an entry declares `start_paused`, so
-  a configuration without the member neither reads nor writes it. Tagged
-  (`tag.workbench_patterns`), so a start loads it; a configuration whose own
-  list leaves it out would pause such an entry at every start, which
-  check-config notes (`ledger_tag_key_unclassified`, `fact_key`
-  `host.start_pause_applied`). A value of another shape (another source, not a
+  configuration names it, `timestamp_ms` the clock when it recorded the row).
+  Recorded by a start that applies an entry declaring `start_paused` whose
+  instance id no row names yet, after that start recorded its pause
+  (`host.scheduling_pause`), and (fix 1) by the release of a pause of another
+  reason that held such an entry at its start, after that release recorded the
+  `instance.added` pause it holds in that pause's place. Each record keeps the
+  rows it found whose instance id the start's configuration names (any entry,
+  with or without the member), drops the others, and adds the new ones: at
+  most one row per configured instance, so the store's bound of 256 rows is
+  never reached by history; an instance id removed from the configuration and
+  back with the member is held again. A start reads it only when an entry
+  declares `start_paused`, so a configuration without the member neither reads
+  nor writes it. In the default `tag.workbench_patterns`. Today's start replays
+  the program facts from the snapshot and every later record whatever the
+  tags, so it reads the fact either way; the list decides only the index row
+  and the synchronous write. The key is listed because the rule for program
+  state is tagged records and a later ledger change is to load by tag;
+  check-config notes a configuration with the member whose own list leaves it
+  out (`ledger_tag_key_unclassified`, `fact_key` `host.start_pause_applied`).
+  A value of another shape (another source, not a
   record list, a row without its string `instance_id` or its `timestamp_ms`
   `applied_at_unix_ms`) fails the start (`invalid_runtime_state_fact`,
   operation `hold_start_instance_pause`), as a malformed `host.scheduling_pause`
