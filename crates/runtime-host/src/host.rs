@@ -2128,9 +2128,12 @@ impl RuntimeHost {
             switch_entries_for_test: AtomicU64::new(0),
             #[cfg(test)]
             member_close_failure_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            switch_off_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             device_keys: config.device_keys,
             device_group_names: config.device_group_names,
+            switch_cooldowns: Mutex::new(BTreeMap::new()),
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
             ladder_busy_holds: Mutex::new(BTreeMap::new()),
@@ -6069,6 +6072,9 @@ struct HostShared {
     // after the stop, as a paired session's close can; the fake device keeps nothing open there.
     #[cfg(test)]
     member_close_failure_for_test: AtomicBool,
+    // Workflow #437 MAPP-2b, test only: nothing of MAPP-2b applies while set, as before the slice.
+    #[cfg(test)]
+    switch_off_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Workflow #437 MAPP-1b (`contracts/device-group.md`, "Derived, never stored"): the member →
@@ -6078,6 +6084,10 @@ struct HostShared {
     // a group read them (`device_group.rs`).
     device_keys: BTreeMap<InstanceId, InstanceId>,
     device_group_names: BTreeMap<String, String>,
+    // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The member's switch cooldown"): each
+    // member of a device group of several whose switch failed, with the Runtime-clock (monotonic)
+    // instant its switch cooldown ends. Memory only, never stored: a restart drops it.
+    switch_cooldowns: Mutex<BTreeMap<InstanceId, u64>>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the
     // per-instance ladder window.
     stuck_recovery: OnceLock<BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>>,
@@ -6209,6 +6219,15 @@ struct PolicyDispatchClock {
     /// #385 P-k (PERF v1.4.2 §5.3, Tk-10): the wall time the run's budget clock did not count,
     /// when its execution had a factor segment above 1000; the run is settled on its budget time.
     paced_reduction: Option<Duration>,
+    /// Workflow #437 MAPP-2b (`contracts/device-group.md`, "The switch before a run"): the time the
+    /// switch before the run took, which the run's own time leaves out; 0 when no switch ran (an
+    /// instance alone on its device never switches). Held only until the settlement subtracts it;
+    /// no sample of it is kept.
+    switch_ms: u64,
+    /// Workflow #437 MAPP-2b: for a member of a device group of several whose lease its admission
+    /// sized for the switch and the run, the end of the run's own share of that lease (the key's
+    /// expiry less its startup run's lease time); `None` for every other dispatch.
+    own_time_through_monotonic_ms: Option<u64>,
 }
 
 impl PolicyDispatchClock {
@@ -6217,6 +6236,8 @@ impl PolicyDispatchClock {
             admitted_at_unix_ms,
             started_at_monotonic_ms: Some(started_at_monotonic_ms),
             paced_reduction: None,
+            switch_ms: 0,
+            own_time_through_monotonic_ms: None,
         }
     }
 
@@ -6225,6 +6246,8 @@ impl PolicyDispatchClock {
             admitted_at_unix_ms,
             started_at_monotonic_ms: None,
             paced_reduction: None,
+            switch_ms: 0,
+            own_time_through_monotonic_ms: None,
         }
     }
 }

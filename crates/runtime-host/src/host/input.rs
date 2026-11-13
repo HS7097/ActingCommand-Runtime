@@ -1154,6 +1154,41 @@ impl HostShared {
         )?;
         let token =
             self.await_input_lifecycle_claim(original, instance_alias, holder_id, connection_id)?;
+        // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The switch before a run", "Where the
+        // switch runs"): a `launch` or `restart` of a member of a device group of several stops
+        // the member in front first (every other member with the front unknown), on the
+        // request's key; the launch or restart itself then starts the member's application. A
+        // failed stop fails the request with `application_switch_failed`, its key released. An
+        // instance alone on its device, and a `stop`, never come here.
+        if matches!(
+            action,
+            ApplicationLifecycleAction::Launch | ApplicationLifecycleAction::Restart
+        ) && self.switch_applies(resolved.instance_id())
+        {
+            let links = self.events.request_links(
+                request,
+                Some(resolved.instance_id()),
+                Some(token.lease_id()),
+                None,
+            );
+            match self.stop_others_before_start(links, &token, connection_id) {
+                Ok(Ok(_)) => {}
+                Ok(Err(failure)) => {
+                    return Err(self.cleanup_composite_failure(
+                        token,
+                        connection_id,
+                        RequestFailure::request(failure, RuntimeReceiptState::Failed, None),
+                    ));
+                }
+                Err(error) => {
+                    return Err(self.cleanup_composite_failure(
+                        token,
+                        connection_id,
+                        super::switch::switch_runtime_failure(error),
+                    ));
+                }
+            }
+        }
         let executed = match self.application_control(
             request,
             &token,
