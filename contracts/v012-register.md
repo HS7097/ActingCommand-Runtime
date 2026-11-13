@@ -22800,9 +22800,12 @@ row (every installation today). The shipped defaults file's `ledger_observer.tag
 gains `host.start_pause_applied`, so `config.parameters.ledger_observer` lists one entry more and
 the defaults file's digest in `config.selection` changes, as for SCHED-C1d; a configuration that
 names its own list should add the key before any entry carries the member (check-config notes it).
-The consoles and installers that read `actingd-config` must accept 31 before the release that
-carries this slice (the UI repository's work); the installer's cold `instance add` (S3) needs a
-live build with this slice.
+The consoles and installers that read `actingd-config` must accept 31 before an installation is
+moved to a release that carries this slice (the UI repository's work): the console pins released
+Runtime commits, so its release that accepts 31 follows the Runtime's release and precedes that
+deployment. No program writes the member before S3, so until then a configuration file carries it
+only where a person wrote it; the installer's cold `instance add` (S3) needs a live build with this
+slice.
 
 **Rollback** (below 0.12.60). A build before this slice refuses a configuration that names the
 member (the entry denies unknown members): remove the member first. It never reads
