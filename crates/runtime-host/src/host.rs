@@ -701,6 +701,10 @@ pub struct RuntimeHostConfig {
     /// the Runtime's own counters.
     #[cfg(test)]
     process_memory_for_test: Option<memory_status::ProcessMemorySampler>,
+    /// Workflow #437 MAPP-1c, test only: see
+    /// [`RuntimeHostConfig::with_takeover_cooldown_for_test`].
+    #[cfg(test)]
+    takeover_instances_for_test: Vec<InstanceId>,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -776,7 +780,22 @@ impl RuntimeHostConfig {
             capture_memory_sample_for_test: None,
             #[cfg(test)]
             process_memory_for_test: None,
+            #[cfg(test)]
+            takeover_instances_for_test: Vec::new(),
         }
+    }
+
+    /// Workflow #437 MAPP-1c, test only: the start gives the devices of `instances` the takeover
+    /// cooldown (the scheduler's `takeover_cooldown_ms` from the Runtime clock's monotonic start),
+    /// as it does for the instances an owner journal of an unclean end lists; nothing else of a
+    /// takeover happens.
+    #[cfg(test)]
+    pub(crate) fn with_takeover_cooldown_for_test(
+        mut self,
+        instances: impl IntoIterator<Item = InstanceId>,
+    ) -> Self {
+        self.takeover_instances_for_test.extend(instances);
+        self
     }
 
     /// #407 PERF-READ, test only: the performance status read samples the process's memory with
@@ -1556,6 +1575,14 @@ impl RuntimeHost {
                 fresh_storage = false;
             }
         }
+        // Workflow #437 MAPP-1c, test only: the instances a test starts in their device's
+        // takeover cooldown, as an owner journal of an unclean end lists them.
+        #[cfg(test)]
+        let takeover_instances = {
+            let mut takeover_instances = takeover_instances;
+            takeover_instances.extend(config.takeover_instances_for_test.iter().copied());
+            takeover_instances
+        };
         // Workflow #437 MAPP-1 (`contracts/device-group.md`, "Derived, never stored"): the member
         // → device key map of this start's configuration; a listed member's whole group gets the
         // takeover cooldown.
@@ -2119,6 +2146,8 @@ impl RuntimeHost {
             blackout_silence: Mutex::new(blackout_silence::BlackoutSilence::default()),
             #[cfg(test)]
             performance_hold_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            mapp1c_off_for_test: AtomicBool::new(false),
             fact_refresh_bindings,
             instance_facts_loaded_at_unix_ms,
             start_facts: Mutex::new(start_report_read::StartFacts::new(
@@ -6061,6 +6090,11 @@ struct HostShared {
     // the stand-in for performance control's suspension.
     #[cfg(test)]
     performance_hold_for_test: AtomicBool,
+    // Workflow #437 MAPP-1c, test only: nothing of MAPP-1c applies while set (a member's keyless
+    // session closes as MAPP-1b closed it; the queue-order lock is the member's), as before the
+    // slice.
+    #[cfg(test)]
+    mapp1c_off_for_test: AtomicBool,
     // Workflow #384 D2-S4: by instance alias, the recognition maintenance package the start kept
     // and the keys its marks write, read once at startup.
     fact_refresh_bindings: BTreeMap<String, crate::fact_refresh::FactRefreshBinding>,

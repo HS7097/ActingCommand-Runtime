@@ -20672,6 +20672,112 @@ dependencies gain `actingcommand-display-adapter`, whose only dependency is the 
 its forbidden closure is unchanged); the helpers of the host's `gate_412_b3_s2` the Lab test
 reuses are visible to their sibling modules, no assertion changed.
 
+### 1.350 Slice MAPP-1c (0.12.60): a device group's two open session gaps, and the lock order of its cross-member paths (Workflow #437; [device-group.md](device-group.md), "Device-level actions", rows 7 and 15, and "The session close of a keyless observation"; the two cases §1.330, point 11, left open; the design survey `rd-1113/mapp-order-design.md`, its section 1.1, its step 19 ("F6") and its row 3; the lock walk the coordinator's acceptance of MAPP-1b asked for before a group of several is accepted; the coordinator's rulings on board #437, not the owner's words; coordinator work order `rd-1114/brief-437-mapp1c.md`, read on main `fa724931`)
+
+1.350 is taken after §1.348 and §1.349 of the pull requests open as this slice is written (the
+0.12.59 train and MAPP-2b); the coordinator renumbers if needed. A build still refuses every group
+of several at load (`several_members_unsupported`, unchanged), so no configuration reaches this
+slice's code: its tests hand the host the member → device key map and the group's name as the
+assembly builds them.
+
+| Part | Built | Where |
+|---|---|---|
+| Gap one: two members' sessions open after a keyless observation | yes | The path: a keyless observation of member A on a free device (`capture_readonly_observation`, `host/observation.rs:226-280`) captures under the device's admission guard; a claim of any member asked meanwhile meets the guard and queues (`request_host_claim`, `queue_lease`); A's dedicated close lease was refused by that waiting claim (`prepare_dedicated_lease`, `lease_transfer_not_safe`), the refusal recorded once and A's session left open, and the guard's drop granted the claim (`pump`), another member's included, whose lease then ran beside A's open session. Now A's session is closed under a session close ahead (`close_session_ahead_while_guarded`, `host/resource_close.rs:585`), which no waiting claim refuses, before the guard is let go; the claim is granted afterwards by the queue's own grant |
+| Gap two: the close lease refused | yes | By a queued claim: as above. By the device's takeover cooldown (`lease_cooldown` at `prepare_acquire_with_policy`, `commit_acquire` and `begin_resource_close`): the observation failed after its capture with its session open. The session close ahead (`SeedScheduler::prepare_session_close_ahead`, `crates/scheduler/src/lib.rs`) is granted through the cooldown (its own token only: `commit_acquire`, `validate_current_lease`), ends no cooldown, carries no write authority (`validate_write` refuses it, `ResourceCloseOnly`) and hands the device to no one while the cooldown runs (`prepare_transfer_gated` answers no candidate for it then); it is released with the new in-memory `LeaseReleaseReason::SessionClosed`, which names no transfer (`host/lease.rs`, `cleanup_token_guarded`) |
+| The lock walk's finding, fixed | yes | `queue_order_lock` (`host/lease.rs:3505-3530`) is keyed by the device key, as the device's admission guard (`instance_guard`, `host/lease.rs:3235-3246`) and the scheduler's state are |
+| The lock table | yes | "The lock order" below |
+
+**The close's choice** ([device-group.md](device-group.md), "Which way, and why"): the observing
+member's session is closed before the other member's lease begins, under the guard the observation
+already holds; the observation is not made a keyed one.
+
+**Why the takeover cooldown allows the close** ([device-group.md](device-group.md), "Why the
+cooldown allows the close"): the cooldown keeps write authority off a device a dead epoch held
+until any client of that epoch has missed its heartbeat (`takeover_cooldown_ms` greater than the
+longest heartbeat interval, the C3a design: "each affected instance enters cooldown before another
+write lease may be granted"). The close ahead retires only the session this epoch's keyless
+observation opened in that cooldown, admits no write and no input, and grants the device to no
+holder, so it does not defeat the cooldown. `read-session-resource-close.md` keeps the cooldown's
+check for every other resource-close lease.
+
+**The lock order.** The host's mutexes the paths that touch more than one member take, in the
+order each takes them; lines are of this slice's head. "→" is "then, while holding the former";
+"; " separates locks taken and released one after another. Leaf locks (taken and released alone,
+never held while another of the table is asked): `registered_instances` (R), `scheduling_pause`
+(P), `resource_fences` (F), `policy_runs_in_flight` (L), `contained_runs` (C), `queued_requests`
+(Q), `host_claim_work` (W), `admission_guards` and `queue_order_locks` (the two maps), the
+blackout silence and `fact_write_gate` (every event append, with the fact store under it). G is
+the device's admission guard, O its queue-order lock, S the scheduler's lock, Ow the owner's.
+
+| Path | Locks, in order (file:line) |
+|---|---|
+| The group's occupancy (`device_occupancy`, `host/device_group.rs:118`) | routine gate of each member: R `host/lease.rs:3538`; P `:3544`; F `host/resource_fence.rs:540`; then L `host/policy_lanes.rs:478`; then S `host/device_group.rs:134` (released `:175`) |
+| The group's waits at a policy cycle (`policy_device_group_holds`, `host/device_group.rs:260`) | the cycle holds `detection_write_gate` (`host/policy_dispatch.rs:1268`) → R `host/device_group.rs:266`; then per member the occupancy above and R `:91` |
+| The group's waits at the admission (`admission_device_group_hold`, `host/device_group.rs:288`, from `host/policy_dispatch.rs:245`) | the admission holds `governance_write_gate` (`host/policy_dispatch.rs:2273`) → R `host/device_group.rs:91`; P `:299`; F `host/resource_fence.rs:503`; the occupancy above. Later in the admission: `policy_outcome_gate` `host/policy_dispatch.rs:2491` → `policy` `:2495` → `fact_write_gate` `:2507` (released at the intent's append, `:951`) → G tried only (`try_acquire_lease`, `:2760`, `host/lease.rs:1180`) → O `host/lease.rs:1229` → S `:1231`; the grant's S `:1921` → Ow `:1929` |
+| The admission guard (`instance_guard`, `host/lease.rs:3235`) | the map `:3240` (released), then G by the caller: blocking (`lock_admission`, `:3480`) or tried (`try_lock_admission`, `:3492`; the pump's `try_lock`, `:3601`) |
+| The session close of a keyless observation (`capture_readonly_observation`, `host/observation.rs:226`) | G `host/observation.rs:253` → the refusal below → the capture (Ow `host/resource_close.rs:247`, handed to the kernel's registration and dropped there) → S `host/resource_close.rs:548` (released) → the close ahead: R `:897`; S `:866` (released); the grant's S `host/lease.rs:1921` → Ow `:1929`; the close: S `host/resource_close.rs:731` (released), the kernel's close, `fact_write_gate` (its records), Ow `:254`, S `:236`; its release (`cleanup_token_inner`, G already held): R `host/lease.rs:2413`; O `:938` (released); O `:2473` → S `:2475` (released); S `:2571` (released); S `:3251` then Ow `:3252` → G released, then the pump below |
+| The refusals of device-level actions | emulator control (`refuse_emulator_control_of_group`, `host/device_group.rs:329`): R only (`resolve_instance`, `host/lease.rs:3083`), no guard. A keyless observation (`refuse_keyless_observation_of_group`, `host/device_group.rs:353`), under G: S `:363` (released); the occupancy above; `fact_write_gate` for its records |
+| The scheduler's per-device state: the queue's own grant (`pump`, `host/lease.rs:3570`) | P and R (routine gate); S `:3575` (released); G tried `:3601` → O `:3611` → S `:3614` (released); Q `:3870`; the grant's S `:1921` → Ow `:1929`; Q (its removal); W `:3725` |
+| A claim's or a client lease's queueing (`request_host_claim`, `host/lease.rs:3891`; `queue_lease`, `:196`) | G tried (`:3942`; `:207`) → O (`:3944`; `:229`) → S (`:3946`, `:3976`; `:230`), released → Q `:368` (its context registered under O); G and O released before the pump |
+| A holder's own end (`release_lease`, `host/lease.rs:1631`; `cleanup_token_inner`, `:2347`; `transfer_preempted_while_guarded`, `:1858`, from `transfer_preempted_if_ready`, `:1848`; `hand_off_to_ladder`, `:2131`, from `cleanup_scheduled_failure_with_run_links`, `:2055`; `release_lease_to_claim`, `:2266`) | G (`:1686`, `:2362`, `:1854`, `:2084`, `:2298`) → O (`:1696`, `:2473`, `:1867`, `:2164`, `:2303`) → S (`:1697`, `:2475`, `:1868`, `:2165`, `:2304`) |
+| Queue paths without the guard (`poll_queued_lease`, `await_operator_claim`, `renew_held_lease`, `cancel_host_claim`, `holds_key`) | O → S: `host/lease.rs:482` → `:484`; `:4033` → `:4035`; `:4121` → `:4151`; `:3753` → `:3754`; `host/host_claims.rs:482` → `:484`. None of them asks G while it holds O |
+| A member's pause release (`release_paused_instance`, `host/policy_dispatch.rs:3222`) | `governance_write_gate` `:3233` (released at once); G `:3255` → P and R (routine gate); S `:3265` (released); C `:3283`; P `:3286`; L; then the dedicated close lease as above under G |
+| MAPP-2a's stop (`stop_member_application`, `host/switch.rs:311`) | R `host/switch.rs:99`; S `:346` (released); `fact_write_gate` (its records); `control_application_of` (`host/input.rs:616`): G `:636` → S (`validated_instance`, `host/lease.rs:1817`) and O `:1867` → S `:1868` (released), G released; then in the command G `host/input.rs:705` → S `host/resource_close.rs:731`, Ow `:254`, S `:236` → S `host/input.rs:742` → Ow `:764` (`mark_resources_in_use`, handed to the kernel); then `fact_write_gate` (the page forgotten, `host/switch.rs:405`); then G `host/switch.rs:442` → S `host/resource_close.rs:731`, Ow `:254`, S `:236` |
+| MAPP-2a's switch entry and borrowed-key startup run (`switch_application`, `host/switch.rs:133`; `run_startup_package_on_borrowed_key`, `host/startup_package.rs:469`) | R `host/switch.rs:99`; S `:154` (released); S `host/startup_package.rs:553` (released); R `:482`; the run on the borrowed key: C `host/contained_task.rs:7900`, G per capture and input `:4775`-`:4776` → S and Ow as above; S `host/startup_package.rs:525` (released) |
+
+The one order every path follows: an outer gate of the policy (`detection_write_gate`; or
+`governance_write_gate`, then `policy_outcome_gate`, then `policy`), under which the device's
+admission guard is only tried, never waited for; then G; then O; then S; then Ow (and the stability
+counter, `note_key_holder`, under S). No path takes two of these in the opposite order, and no path
+asks G while it holds O, S or Ow, so **no inversion was found**. The walk covers the Runtime host's
+mutexes; the kernel's own locks are its own (it closes a session outside its registry lock,
+`read-session-resource-close.md`).
+
+**Findings, reported first.**
+
+1. *The queue-order lock was keyed by the member* (`queue_order_lock`, `host/lease.rs:3504-3517`
+   on main): not an inversion, but the device's one queue was ordered under two locks. A claim of
+   member B asked while member A held the device's guard registered its context under B's lock,
+   while A's pump, once A let the guard go, granted the device's first entry under A's lock: it
+   could take B's entry before B's context was registered (`read_queued_context`,
+   `queued_request_context_missing`, a fatal of the Runtime). Fixed here: the lock is keyed by
+   the device key (an instance alone on its device keys its own id, as before), and the test
+   `mapp1c_a_devices_admission_guard_and_queue_order_lock_are_one_per_device` pins it.
+2. *The monitor's probe is not group-aware* (`run_monitor_probe`, `host/monitor_control.rs:178-
+   481`): a keyless capture of a member under the device's guard that neither refuses while
+   another member holds the device nor closes the member's session after it, so while a monitor is
+   configured on a member two members' sessions can be open. Not fixed: its refusal and close
+   change what a refused or closed probe records and how the monitor's failures count, which the
+   work order does not settle; open for the slice "device-level actions by device".
+3. *A keyless observation's capture failure in a takeover cooldown halts the Runtime*, for any
+   instance (`finish_capture_failure_while_guarded`, `host/resource_close.rs`): its close asks a
+   dedicated close lease, the cooldown refuses it (`lease_cooldown`), and only a refusal by the
+   queue is treated as non-fatal. Not changed: an instance alone on its device must behave as on
+   main.
+
+**Tests.** `crates/runtime-host/src/tests/gate_mapp1c.rs` (gate map `host.toml`, "#437 MAPP-1c"),
+on fake devices whose two members write one session log (each capture or input backend opened or
+closed, in order) and close their captures only under a fenced resource-close step:
+`mapp1c_a_members_keyless_session_is_closed_before_a_claim_queued_meanwhile_is_granted`,
+`mapp1c_in_the_takeover_cooldown_the_session_is_closed_and_the_queued_claim_waits_for_its_end`
+(the cooldown started by the test-only `RuntimeHostConfig::with_takeover_cooldown_for_test`),
+`mapp1c_no_session_close_runs_while_a_run_of_any_member_holds_the_device`,
+`mapp1c_a_lone_instances_observation_and_lease_are_the_same_with_and_without_the_slice_reachable`
+(the test-only `RuntimeHost::mapp1c_off_for_test`) and
+`mapp1c_a_devices_admission_guard_and_queue_order_lock_are_one_per_device`. The MAPP-1 gates
+(policy, host, actingd), the MAPP-2a gate and every other test are unchanged; no test retires.
+
+**What is not added.** No outcome code, value key, word, configuration key, record type, payload
+member, fact, tag, wire shape or interface revision. `LeaseReleaseReason::SessionClosed` is in
+memory only (`lease.released` carries no reason).
+
+**At deploy.** Nothing reachable: the load refuses every group of several, so no installation
+runs the session close ahead or meets the device-keyed queue-order lock other than as its own
+instance's. A root without `device_group` runs byte for byte as before.
+
+**Rollback** (below 0.12.60). Nothing is persisted by MAPP-1c; the build before it reads every
+record this one writes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

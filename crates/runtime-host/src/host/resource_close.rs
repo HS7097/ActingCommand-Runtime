@@ -525,20 +525,19 @@ impl HostShared {
         }
     }
 
-    /// Workflow #437 MAPP-1b (`contracts/device-group.md`, "Device-level actions", rows 7 and
-    /// 15; register §1.330): a keyless observation of a member of a device group of several,
-    /// served on a free device under the device's admission guard (`admission`), keeps no
-    /// session: the member's session is closed before the guard frees the device, through a
-    /// dedicated close lease, as a lease end closes it. The close lease ends as the other closes
-    /// of a session a lease-free path retained end theirs (`close_device_link_session`,
-    /// `close_lapsed_run_session_guarded`): `BackendFailure`, which hands the key to a claim queued
-    /// meanwhile, else releases it. (An explicit release is a client's release request; the
-    /// scheduler refuses it here, `scheduler_cleanup_state_mismatch`, and that fenced the member.)
-    /// A device a lease holds (the member's own: another member's refused the observation) leaves
-    /// the session to that lease's end; a close lease a waiting claim refuses (the member's own, or
-    /// any member's queued while the capture ran: register §1.330, point 11) leaves it to the
-    /// member's next lease end, recorded once. An instance alone on its device keeps its session,
-    /// as before.
+    /// Workflow #437 MAPP-1b, MAPP-1c (`contracts/device-group.md`, "Device-level actions", rows
+    /// 7 and 15, and "The session close of a keyless observation"; register §1.330, §1.350): a
+    /// keyless observation of a member of a device group of several, served on a free device
+    /// under the device's admission guard (`admission`), keeps no session: the member's session is
+    /// closed before the guard frees the device, so no other member's lease begins while it is
+    /// open (every grant of the device's key waits for, or tries and leaves, that guard). The
+    /// close runs under a session close ahead (`close_session_ahead_while_guarded`), which neither
+    /// a claim that waits in the device's queue nor the device's takeover cooldown refuses (the
+    /// two cases MAPP-1b left open), and which hands the device to no one when it ends: the
+    /// guard's drop grants the claim that waited first, in its place. A device a lease holds (the
+    /// member's own: another member's refused the observation) leaves the session to that lease's
+    /// end, which closes it. A close that fails fails the observation, its records written by the
+    /// close path. An instance alone on its device keeps its session, as before.
     pub(super) fn close_keyless_session_of_group(
         &self,
         instance_id: InstanceId,
@@ -552,21 +551,11 @@ impl HostShared {
         {
             return Ok(());
         }
-        // The close's own failure fails the observation (fail loud); a fatal one poisons it.
-        let failed = |error: RuntimeHostError| {
-            if error.is_fatal() {
-                RequestFailure::poison_without_terminal(error)
-            } else {
-                RequestFailure::request(error, RuntimeReceiptState::Failed, None)
-            }
-        };
-        match self.close_retained_instance_while_guarded(
-            instance_id,
-            links.clone(),
-            false,
-            LeaseReleaseReason::BackendFailure,
-            admission,
-        ) {
+        #[cfg(test)]
+        if self.mapp1c_off_for_test.load(Ordering::Acquire) {
+            return self.close_keyless_session_before_mapp1c(instance_id, links, admission);
+        }
+        match self.close_session_ahead_while_guarded(instance_id, links, admission) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(close_error)) => match self.settle_retained_close_failure(
                 HostLocation::CloseExecutionSession,
@@ -574,20 +563,65 @@ impl HostShared {
                 &close_error,
             )? {
                 None => Ok(()),
-                Some(error) => Err(failed(error)),
+                Some(error) => Err(keyless_close_failed(error)),
             },
-            Err(mut refused) if close_lease_refused_by_queue(&refused) => {
-                refused.lifecycle.instance_id = Some(instance_id);
-                self.append_lifecycle_failure(
-                    RuntimeLifecycleFailureStage::SessionClose,
-                    RuntimeLifecycleFailure::Host(&refused),
-                    links,
-                    None,
-                )?;
-                Ok(())
-            }
-            Err(error) => Err(failed(error)),
+            Err(error) => Err(keyless_close_failed(error)),
         }
+    }
+
+    /// Workflow #437 MAPP-1c (`contracts/device-group.md`, "The session close of a keyless
+    /// observation"): the close of the session a keyless observation of `instance_id`, a member
+    /// of a device group of several, opened on a free device, under the device's admission guard
+    /// (`admission`) that the observation holds, so no lease of any member begins before it ends.
+    /// It closes under a session close ahead (`SeedScheduler::prepare_session_close_ahead`): a
+    /// resource-close-only lease granted whatever claim waits in the device's queue and while
+    /// the device's takeover cooldown runs, held for this one close and released, once the close
+    /// is confirmed, with `LeaseReleaseReason::SessionClosed`, which hands the device to no one.
+    /// The queue is not touched, so the guard's drop grants the claim that waited first, in its
+    /// place, with the token its own grant gives it; in a cooldown the claim waits for the
+    /// cooldown's end, as before. Nothing is taken when the member has no session. A failed close
+    /// is returned as the close path recorded (and, unconfirmed, settled) it; an unconfirmed close
+    /// keeps its lease, as every dedicated close lease is kept then.
+    fn close_session_ahead_while_guarded(
+        &self,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<Result<(), ExecutionKernelError>> {
+        if !self
+            .execution()?
+            .has_owned_resources(instance_id)
+            .map_err(|error| {
+                RuntimeHostError::execution(HostLocation::InspectRetainedSession, &error)
+            })?
+        {
+            return Ok(Ok(()));
+        }
+        let (token, connection_id) = self.grant_session_close_ahead_lease(instance_id)?;
+        let result = self
+            .close_instance_resources_result(&token, connection_id, links)
+            .map_err(|failure| *failure.error)?;
+        // As for every dedicated close lease (`close_retained_instance_while_guarded`): a close
+        // that failed without leaving its resources unconfirmed ended its step and holds nothing.
+        let confirmed =
+            result
+                .as_ref()
+                .err()
+                .is_none_or(|error| match error.resource_quiescence() {
+                    Some(ResourceQuiescence::Confirmed) => true,
+                    Some(ResourceQuiescence::Unconfirmed) => false,
+                    None => !self.fatal.is_shutdown_requested(),
+                });
+        if confirmed {
+            self.cleanup_token_inner(
+                &token,
+                connection_id,
+                LeaseReleaseReason::SessionClosed,
+                None,
+                Some(admission),
+            )?;
+        }
+        Ok(result)
     }
 
     pub(super) fn close_instance_resources_result(
@@ -796,6 +830,69 @@ impl HostShared {
         connection_value: u64,
         kind: ClaimKind,
     ) -> RuntimeHostResult<(LeaseToken, ConnectionId, RequestId)> {
+        self.grant_runtime_lease(
+            instance_id,
+            connection_value,
+            |request_id, holder_id, connection_id| {
+                let gate = self.routine_gate(instance_id)?;
+                lock(&self.scheduler, HostLocation::PrepareResourceCloseLease)?
+                    .prepare_dedicated_lease(
+                        request_id,
+                        instance_id,
+                        holder_id,
+                        connection_id,
+                        kind,
+                        gate,
+                        self.monotonic_ms()?,
+                    )
+                    .map_err(|error| {
+                        RuntimeHostError::scheduler(HostLocation::PrepareResourceCloseLease, &error)
+                    })
+            },
+        )
+    }
+
+    /// Workflow #437 MAPP-1c: the session close ahead of `instance_id`'s device
+    /// (`SeedScheduler::prepare_session_close_ahead`), granted as a dedicated close lease is,
+    /// to the Runtime's close connection. The caller holds the device's admission guard.
+    fn grant_session_close_ahead_lease(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<(LeaseToken, ConnectionId)> {
+        self.grant_runtime_lease(
+            instance_id,
+            RESOURCE_CLOSE_CONNECTION_VALUE,
+            |request_id, holder_id, connection_id| {
+                lock(&self.scheduler, HostLocation::PrepareResourceCloseLease)?
+                    .prepare_session_close_ahead(
+                        request_id,
+                        instance_id,
+                        holder_id,
+                        connection_id,
+                        self.monotonic_ms()?,
+                    )
+                    .map_err(|error| {
+                        RuntimeHostError::scheduler(HostLocation::PrepareResourceCloseLease, &error)
+                    })
+            },
+        )
+        .map(|(token, connection_id, _)| (token, connection_id))
+    }
+
+    /// A Runtime-owned lease on `instance_id` to the connection `connection_value`, prepared by
+    /// `prepare` with the grant's request id, holder id and connection and granted with
+    /// `CapacityUse::Drain` under the grant's own links. Returns the token, its connection and the
+    /// grant's request id.
+    fn grant_runtime_lease(
+        &self,
+        instance_id: InstanceId,
+        connection_value: u64,
+        prepare: impl FnOnce(
+            RequestId,
+            actingcommand_contract::HolderId,
+            ConnectionId,
+        ) -> RuntimeHostResult<LeasePreparation>,
+    ) -> RuntimeHostResult<(LeaseToken, ConnectionId, RequestId)> {
         let resolved = lock(
             &self.registered_instances,
             HostLocation::ReadResourceCloseInstance,
@@ -822,20 +919,11 @@ impl HostShared {
         let connection_id = ConnectionId::new(connection_value).map_err(|error| {
             RuntimeHostError::scheduler(HostLocation::BuildResourceCloseConnection, &error)
         })?;
-        let gate = self.routine_gate(instance_id)?;
-        let preparation = lock(&self.scheduler, HostLocation::PrepareResourceCloseLease)?
-            .prepare_dedicated_lease(
-                *request_id.transport(),
-                instance_id,
-                *holder_id.transport(),
-                connection_id,
-                kind,
-                gate,
-                self.monotonic_ms()?,
-            )
-            .map_err(|error| {
-                RuntimeHostError::scheduler(HostLocation::PrepareResourceCloseLease, &error)
-            })?;
+        let preparation = prepare(
+            *request_id.transport(),
+            *holder_id.transport(),
+            connection_id,
+        )?;
         let token = preparation.token().clone();
         let grant_request_id = *request_id.transport();
         let grant_links = self
@@ -1745,6 +1833,91 @@ fn close_lease_refused_by_queue(error: &RuntimeHostError) -> bool {
     !error.is_fatal()
         && error.code() == SchedulerCode::LeaseTransferNotSafe.as_str()
         && error.operation() == HostLocation::PrepareResourceCloseLease.as_str()
+}
+
+/// Workflow #437 MAPP-1b: the failure of a keyless observation whose session close failed (fail
+/// loud): the observation fails with the close's error, and a fatal one poisons it.
+fn keyless_close_failed(error: RuntimeHostError) -> RequestFailure {
+    if error.is_fatal() {
+        RequestFailure::poison_without_terminal(error)
+    } else {
+        RequestFailure::request(error, RuntimeReceiptState::Failed, None)
+    }
+}
+
+/// Workflow #437 MAPP-1c, tests: the slice's branch turned off, and the device's queue-order lock.
+#[cfg(test)]
+impl HostShared {
+    /// The close of a member's keyless session as MAPP-1b made it (register §1.330, point 11),
+    /// while a test turned MAPP-1c off: a dedicated close lease, which a waiting claim refuses
+    /// (recorded once, the session left open) and the takeover cooldown refuses (the observation
+    /// fails), ended with `BackendFailure`.
+    fn close_keyless_session_before_mapp1c(
+        &self,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        admission: &MutexGuard<'_, ()>,
+    ) -> Result<(), RequestFailure> {
+        match self.close_retained_instance_while_guarded(
+            instance_id,
+            links.clone(),
+            false,
+            LeaseReleaseReason::BackendFailure,
+            admission,
+        ) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(close_error)) => match self.settle_retained_close_failure(
+                HostLocation::CloseExecutionSession,
+                instance_id,
+                &close_error,
+            )? {
+                None => Ok(()),
+                Some(error) => Err(keyless_close_failed(error)),
+            },
+            Err(mut refused) if close_lease_refused_by_queue(&refused) => {
+                refused.lifecycle.instance_id = Some(instance_id);
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::SessionClose,
+                    RuntimeLifecycleFailure::Host(&refused),
+                    links,
+                    None,
+                )?;
+                Ok(())
+            }
+            Err(error) => Err(keyless_close_failed(error)),
+        }
+    }
+}
+
+/// Workflow #437 MAPP-1c, tests.
+#[cfg(test)]
+impl RuntimeHost {
+    /// Turns the slice's branch off (`true`) or on again: while off, a member's keyless session
+    /// closes as MAPP-1b closed it and the queue-order lock is keyed by the instance, as before
+    /// the slice.
+    pub(crate) fn mapp1c_off_for_test(&self, off: bool) -> RuntimeHostResult<()> {
+        let location = crate::codes::test_spellings::TestLocation::Mapp1cOffForTest;
+        self.shared_ref(location)?
+            .mapp1c_off_for_test
+            .store(off, Ordering::Release);
+        Ok(())
+    }
+
+    /// The queue-order lock `instance_alias`'s claims are ordered under.
+    pub(crate) fn queue_order_lock_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Arc<Mutex<()>>> {
+        let location = crate::codes::test_spellings::TestLocation::QueueOrderLockForTest;
+        let shared = self.shared_ref(location)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared
+            .queue_order_lock(instance_id)
+            .map_err(|failure| *failure.error)
+    }
 }
 
 /// One connection preparation attempt (`prepare_instance_connection_with_cooldown`).

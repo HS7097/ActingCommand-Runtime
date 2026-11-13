@@ -2697,6 +2697,8 @@ pub(crate) mod test_spellings {
             InstanceActivitiesForTest => "instance_activities_for_test",
             InstanceAdmissionForTest => "instance_admission_for_test",
             InstanceClaimsForTest => "instance_claims_for_test",
+            // Workflow #437 MAPP-1c: a test turns the slice's branch off.
+            Mapp1cOffForTest => "mapp1c_off_for_test",
             // #411 A51: a test latches a condition in the Runtime's fatal state.
             MarkRuntimeFatalForTest => "mark_runtime_fatal_for_test",
             ObserveShutdownSettleForTest => "observe_shutdown_settle_for_test",
@@ -2707,6 +2709,8 @@ pub(crate) mod test_spellings {
             PolicyOutcomeKeySnapshotForTest => "policy_outcome_key_snapshot_for_test",
             ProcessTestRequest => "process_test_request",
             QueryTestPersistedEvents => "query_test_persisted_events",
+            // Workflow #437 MAPP-1c: a test reads the queue-order lock of an instance's device.
+            QueueOrderLockForTest => "queue_order_lock_for_test",
             ReadContainedTaskCheckpointTestControl => "read_contained_task_checkpoint_test_control",
             ReadFailureDetailForTest => "read_failure_detail_for_test",
             // #71 FLK-07: the test client takes a handle to the Runtime's fatal state.

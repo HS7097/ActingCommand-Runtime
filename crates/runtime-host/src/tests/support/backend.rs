@@ -153,7 +153,16 @@ pub(super) struct FakeState {
     application_id: std::sync::Mutex<Option<String>>,
     // Workflow #437 MAPP-2a: every application command that reached the instance, in order.
     application_actions: std::sync::Mutex<Vec<ApplicationLifecycleAction>>,
+    // Workflow #437 MAPP-1c: when set, the label the instance goes by on its device and the log
+    // of that device's sessions, which the other members' states share: each capture or input
+    // backend the instance opens or closes is written to it, in order.
+    session_log: std::sync::Mutex<Option<(String, DeviceSessionLog)>>,
 }
+
+/// Workflow #437 MAPP-1c: one device's session log, shared by its members' fake states: each
+/// capture or input backend a member opened (`true`) or closed (`false`), by the member's label,
+/// in the order the device saw them.
+pub(super) type DeviceSessionLog = Arc<std::sync::Mutex<Vec<(String, bool)>>>;
 
 /// #402 HS-5 (design `rd-1031/backend-switch/model-hs5.md` §5.2): the paired Nemu session of a
 /// fake instance and the application it runs, as a test models them (`gate_hs5`). The fake
@@ -193,6 +202,24 @@ type PixelScript = Arc<dyn Fn(usize, usize) -> Vec<(usize, [u8; 3])> + Send + Sy
 type ForegroundScript = Arc<dyn Fn(usize, usize) -> Option<String> + Send + Sync>;
 
 impl FakeState {
+    /// Workflow #437 MAPP-1c: the instance writes its backends' opens and closes to `log` as
+    /// `label`.
+    fn share_session_log(&self, label: &str, log: &DeviceSessionLog) {
+        *self.session_log.lock().expect("fake session log") =
+            Some((label.to_owned(), Arc::clone(log)));
+    }
+
+    /// Workflow #437 MAPP-1c: one open (`true`) or close (`false`) of a backend of the instance,
+    /// in its device's session log when it shares one.
+    fn log_session(&self, opened: bool) {
+        let shared = self.session_log.lock().expect("fake session log").clone();
+        if let Some((label, log)) = shared {
+            log.lock()
+                .expect("fake device session log")
+                .push((label, opened));
+        }
+    }
+
     /// Workflow #437 MAPP-2a: the application the instance is assigned (`application_id`, else
     /// `neutral.application`).
     fn assigned_application(&self) -> String {
@@ -389,6 +416,7 @@ impl InputBackend for FakeBackend {
             hook();
         }
         self.state.close_count.fetch_add(1, Ordering::AcqRel);
+        self.state.log_session(false);
         let outcome = match self.state.close_error.lock().expect("close error").clone() {
             Some(error) => Err(error),
             None => Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
@@ -634,6 +662,7 @@ impl CaptureBackend for FakeCapture {
         self.state
             .capture_close_count
             .fetch_add(1, Ordering::AcqRel);
+        self.state.log_session(false);
         if self
             .state
             .require_fenced_capture_close
@@ -684,6 +713,7 @@ impl Drop for FakeCapture {
             self.state
                 .capture_close_count
                 .fetch_add(1, Ordering::AcqRel);
+            self.state.log_session(false);
         }
     }
 }
@@ -1374,6 +1404,7 @@ impl ExecutionBackendProvider for FakeProvider {
             {
                 return Err(error);
             }
+            entry.state.log_session(true);
             Ok(Box::new(FakeBackend {
                 state: Arc::clone(&entry.state),
                 close_outcome: None,
@@ -1414,6 +1445,7 @@ impl ExecutionBackendProvider for FakeProvider {
             {
                 return Err(error.clone());
             }
+            entry.state.log_session(true);
             Ok(Box::new(FakeCapture {
                 state: Arc::clone(&entry.state),
                 provenance: self.provenance,

@@ -8,7 +8,11 @@ each remaining session. Grant and release use the existing critical ledger and
 OwnerGuard transitions.
 
 The Scheduler marks this lease as resource-close-only. Epoch, connection, lease
-identity, expiry, cooldown and destructive-step checks remain effective.
+identity, expiry, cooldown and destructive-step checks remain effective. One
+resource-close-only lease passes the takeover cooldown, for its own close only: the
+session close ahead that closes a keyless observation's session of a member of a
+device group of several (Workflow #437 MAPP-1c, [device-group.md](device-group.md),
+"The session close of a keyless observation").
 `begin_resource_close` admits the native close and returns its `FencedWrite`;
 ordinary input validation rejects this lease. Host invokes
 `close_instance(FencedDeviceWrite(Arc<FencedWrite>))` only after that
