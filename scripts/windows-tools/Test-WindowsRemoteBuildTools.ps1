@@ -473,6 +473,24 @@ try {
     $directmlPins = @($directml.pinned_files)
     Assert-True -Condition ($directmlPins.Count -eq 1) -Message 'DirectML must pin exactly one file'
     Assert-True -Condition ($directmlPins[0].path -ceq 'bin/x64-win/DirectML.dll' -and [long]$directmlPins[0].size -eq 18527776 -and $directmlPins[0].sha256 -ceq '9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1') -Message 'DirectML.dll pin is not frozen'
+    # Workflow #453 S7: DirectML's three license files are pinned, each at its place in a vision root.
+    $directmlLicenses = @($directml.pinned_license_files)
+    Assert-True -Condition ($directmlLicenses.Count -eq 3) -Message 'DirectML must pin exactly three license files'
+    Assert-True -Condition ($directmlLicenses[0].path -ceq 'LICENSE.txt' -and $directmlLicenses[0].vision_root_path -ceq 'ort/licenses/directml/LICENSE.txt' -and [long]$directmlLicenses[0].size -eq 10439 -and $directmlLicenses[0].sha256 -ceq 'a05138e3a085ff60a44881eedfa58dccb03ecc1d7b1f6ae888418e8c2fec4b8d') -Message 'DirectML LICENSE.txt pin is not frozen'
+    Assert-True -Condition ($directmlLicenses[1].path -ceq 'LICENSE-CODE.txt' -and $directmlLicenses[1].vision_root_path -ceq 'ort/licenses/directml/LICENSE-CODE.txt' -and [long]$directmlLicenses[1].size -eq 1093 -and $directmlLicenses[1].sha256 -ceq '903df5512f7d02609fed0c780a9b704f5a3eeb6e4d84ebe42a29845c81899a3c') -Message 'DirectML LICENSE-CODE.txt pin is not frozen'
+    Assert-True -Condition ($directmlLicenses[2].path -ceq 'ThirdPartyNotices.txt' -and $directmlLicenses[2].vision_root_path -ceq 'ort/licenses/directml/ThirdPartyNotices.txt' -and [long]$directmlLicenses[2].size -eq 4577 -and $directmlLicenses[2].sha256 -ceq '2c95795c13ff48a58b6ed916f37901c23d964b5d9d601af422f17ad2172e7950') -Message 'DirectML ThirdPartyNotices.txt pin is not frozen'
+    # Workflow #453 S7: the OCR model's component names its model_ref and family, and each artifact
+    # its place in a vision root (the flat layout of contracts/vision-model-folders.md).
+    $ocrModel = $sourceManifest.components.'ppocrv6-medium-onnx'
+    Assert-True -Condition ($ocrModel.model_ref -ceq 'PP-OCRv6_medium' -and $ocrModel.family -ceq 'ppocr-ctc') -Message 'the OCR model component must name model_ref PP-OCRv6_medium and family ppocr-ctc'
+    $ocrArtifacts = @{}
+    foreach ($artifact in @($ocrModel.artifacts)) {
+        $ocrArtifacts[[string]$artifact.id] = $artifact
+    }
+    Assert-True -Condition ($ocrArtifacts.Count -eq 3) -Message 'the OCR model must have exactly three artifacts'
+    Assert-True -Condition ($ocrArtifacts['PP-OCRv6_medium_det_onnx'].vision_root_path -ceq 'models/PP-OCRv6_medium/det.onnx' -and [long]$ocrArtifacts['PP-OCRv6_medium_det_onnx'].size -eq 62032837 -and $ocrArtifacts['PP-OCRv6_medium_det_onnx'].sha256 -ceq 'eb13b44b25bb36f89528b68720af8a61d9cf381176107f465db1757b65d086e1') -Message 'the OCR detector is not frozen at models/PP-OCRv6_medium/det.onnx'
+    Assert-True -Condition ($ocrArtifacts['PP-OCRv6_medium_rec_onnx'].vision_root_path -ceq 'models/PP-OCRv6_medium/rec.onnx' -and [long]$ocrArtifacts['PP-OCRv6_medium_rec_onnx'].size -eq 76554979 -and $ocrArtifacts['PP-OCRv6_medium_rec_onnx'].sha256 -ceq '9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba') -Message 'the OCR recognizer is not frozen at models/PP-OCRv6_medium/rec.onnx'
+    Assert-True -Condition ($ocrArtifacts['ppocrv6_dict'].vision_root_path -ceq 'models/PP-OCRv6_medium/keys.txt' -and [long]$ocrArtifacts['ppocrv6_dict'].size -eq 74947 -and $ocrArtifacts['ppocrv6_dict'].sha256 -ceq 'b5f2bfe2bdd9448429e3e82b51c789775d9b42f2403d082b00662eb77e401c5d') -Message 'the OCR dictionary is not frozen at models/PP-OCRv6_medium/keys.txt'
     Assert-True -Condition ($null -eq $sourceManifest.components.PSObject.Properties['provider-v0.3']) -Message 'the retired provider-v0.3 component is still declared'
     Complete-Case -Name $script:CurrentCase
 

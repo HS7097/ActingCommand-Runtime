@@ -20003,8 +20003,9 @@ session and `read_list` (FL-2 is the host's slice). No outcome code is added.
 **The order of the slices.** FL-0, FL-1a and FL-1b (this section, one pull request), then FL-2 (the
 host's halves on a fake device, host gate rows `field_list_published_like_a_list`,
 `field_list_miss_keeps_record`, `field_list_failed_or_cancelled_run_publishes_nothing`,
-`field_list_full_store_refused`, `field_list_row_read_by_ledger_8`), both in the Runtime release of
-0.12.59, deployed; then FL-3, the resource repository's package (its bundle declares `package`
+`field_list_full_store_refused`, `field_list_row_read_by_ledger_8`; done in 0.12.60, §1.354, with
+no change to the host), FL-1 in the Runtime release of 0.12.59 and FL-2 in that of 0.12.60, both
+deployed; then FL-3, the resource repository's package (its bundle declares `package`
 [11, 11]). The slice that places the first such package books its *L*, one identity on that
 instance, in instance-fact-store.md's capacity table.
 
@@ -21481,6 +21482,572 @@ repository's work). The catalog's `dispatch_instance_cooldown` gains one optiona
 **Rollback** (below 0.12.60). A file that names `scheduling.device_group` must drop it (the earlier
 section denies unknown members). Nothing is persisted by MAPP-2b: the cooldown and the switch's
 time live in memory only, and the build before it reads every record this one writes.
+
+### 1.354 Slice FL-2 (0.12.60): field lists through the host, proved on a fake device (Workflow #450; the owner approved the feature on 11-13, board #450; the design note `rd-1113/design-list-from-fields.md`, sections 3.2 to 3.5 and the row FL-2 of its section 4, with the coordinator's decisions of its section 7; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-450-fl2.md`, read on main `fa724931`; fix 1, after an independent review, coordinator work order `rd-1114/brief-1692-fix1.md`, main `71a658f1` merged; fix 2, the first CI run's lint and the full store's sequencing, coordinator work order `rd-1114/brief-1692-fix2.md`, main `803fdfa3` (release 0.12.59) merged)
+
+1.348 and 1.349 are the integration train 0.12.59d's (#1688); this slice took the next free
+section after them, and the integration train 0.12.60b renumbered it 1.354, the number after
+main's §1.353 (MAPP-2b).
+
+**What it proves.** FL-1 (§1.343) built field lists up to the execution kernel and said the host
+needs no product change: every trace a field list records (`ListReadingFrame` on its end frame
+when the list is whole, then `ListReading` with the list's declaration and the frames a miss names;
+`list_end_unseen` at a successful end on the frame captured last) is one the host already takes
+from a `read_list` step, in an order it accepts. This slice runs field lists through the real host
+on a fake device. **The claim holds: the host needed no product change.** No product code changed;
+the fact store, the ledger, the selection, the fields report, `runtime-client`, the kernel and the
+contract crate are untouched; no interface revision moves; no outcome code, token, key or value is
+added.
+
+**A record of each producer.** In one host, a `read_list` step and a field list publishing the same
+keys under the same fact key give records equal in every member but five: `source_detector`
+(`list_reading:<entry task>/` and the step's or the list's id), `source_snapshot_id` (the run, the
+frame and that id), `observed_at_unix_ms` and `expires_at_unix_ms` (the end frame's capture time)
+and `resource_bundle_hash` (the producing package). The row order is the `read_list` step's
+(ascending byte order of the key). The row bound of a record list (1024) cannot be reached by a
+field list, whose rows are at most its `max_frames` (at most 256): `list_rows_exceeded` stays the
+builder's test (§1.343, `field_list_rows_whole`), and such a miss would reach the same `ListReading`
+arm of the host the other misses take.
+
+Tests. Host gate row "#450 FL-2" (`crates/runtime-host/src/tests/gate_450_fl2.rs`; a made-up field
+list package over item pages, the S168-4 host gate's `read_list` package, keys only, one fake
+device; every id made up):
+- `field_list_published_like_a_list`: a run over six items read whole publishes one `record_list`
+  record with the record's shape, `source_detector` `list_reading:task/list_a` and
+  `source_snapshot_id` `run:<run>/frame:<end frame>/list_a`, observed when its end frame (the frame
+  it captured last) was captured; member for member the `read_list` step's record of the same keys
+  but the five members above; the key's instance record, and loaded again after a restart.
+- `field_list_miss_keeps_record`: an item out of the dictionary (`list_position_unread`, 1, [1]),
+  a name read under the list's floor (`list_position_unread`, 1, [2]), a repeated key
+  (`list_duplicate_key`, 1, [0, 2]), the start unseen (`list_start_unseen`, 3, [0]), the end
+  unseen (`list_end_unseen`, 2, [1]) and, in a list with a column, an item whose key resolves but
+  whose column is read under its target's own minimum (`list_position_unread`, 1, [1]) each
+  succeed as a `read_list` miss does, publish nothing, keep the key's earlier record byte for byte
+  and write exactly one warning row `contained_task_resource_reading_unresolved` with
+  `reading_problem`, `count` and `frame_indices` (an unread position's values are the `read_list`
+  miss's plus `frame_indices`); each frame a row names is a frame of the run's fields report (the
+  column's frame is the one whose column the report gives `low_confidence`); 65 unresolved items
+  name 64 frames and `frame_indices_total` 65.
+- `field_list_failed_or_cancelled_run_publishes_nothing`: on a field list whose end needs a mark on
+  its last item's page and whose target page follows that page by a step, a run that decided its
+  one-item list whole on its first frame is stopped (`StopInstanceRun`) at that step and ends
+  cancelled by its client while the host holds the whole list (the same run shown the target after
+  the step publishes the list); a run that decided its list and then collects the next item after
+  the list's end fails `contained_task_state_invalid` with `state_problem` `runtime_invariant` and
+  no page named, its fields having collected that item as their third frame (the host keeps no
+  kernel detail of this failure). Neither publishes, the earlier record stays byte for byte, and
+  neither writes a miss row, as a `read_list` run stopped at its step after its list step read the
+  list whole writes none.
+- `field_list_full_store_refused`: the byte bound (lowered for each producer's own key) gives each
+  producer one `list_bytes_exceeded` row with the same values, the field list's naming no frame; on
+  a full store each producer's new key is refused, the run fails
+  `contained_task_resource_reading_rejected` with the native detail
+  `<list id>:fact_store_capacity_exceeded`, nothing is published or evicted, and the two receipts'
+  outcomes carry the same values. Each refused run, a `read_list`'s as a field list's, answers
+  before its lease ends (the refusal returns from its terminal before the release a completed run
+  makes): it still holds the device's key, nothing waiting, until its client's connection closes,
+  and the next run on the device waits for that end in the device's queue.
+- `field_list_row_read_by_ledger_8`: the ledger reader of this build (`ledger` 8, `actingledger`'s
+  task evidence) reads the `list_start_unseen` and `list_end_unseen` rows with `frame_indices` and
+  relays their outcome's values unchanged.
+- `field_list_read_by_the_lists_reader`: a select step's `keyed_fact` reads a field list's list
+  (key and the integer column `count`) as S168-4's `list_reading_read_by_keyed_fact` pins it on a
+  `read_list`'s: a listed key's column, an unlisted key's `absent`, a list too old `fact_stale`.
+
+A package without the member runs through the host as before: the existing list-reading rows
+(S168-4, S168-LB1a) are unchanged and no existing test is adapted.
+
+**At deploy.** Nothing: no bundle declares a field list, and the resource repositories' slice FL-3
+comes after this one is on production.
+
+### 1.355 Slices #453 S8 and S7 (0.12.60): `standard-pack check` answers the models a game root's packs need; a vision root's manifest and its offline check (Workflow #453, thing 3 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0 and §3 (3(a), 3a, 3b, 3(d), 3(e)), read on main `fa724931`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-453-s7s8-vision-manifest.md`, read on main `fa724931`)
+
+1.348 was the next free number on main `fa724931`; merging main `71a658f1`, which holds §1.348
+(#454, the real cause) and §1.349 (DA-3b), renumbered it, and the integration train 0.12.60b
+renumbered it 1.355, the number after main's §1.353 (MAPP-2b) and FL-2's §1.354 of the same
+train. Other slices of this release add
+sections at the end of section 1 too, so a train may renumber it again. One pull request, two
+commits: S8 (the survey's 3b) and S7 (its 3a). No configuration key, no interface revision, no
+record, no wire shape of the Runtime, no journal and no step kind is added or moved.
+
+**S8. Why.** Nothing answered which models the installed packs need: a pack's OCR and NN targets
+name their model (`model_ref`, `model_sha256`), and a missing or other model showed only at run
+time, at the model's first use.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S8-1 | the member `models` `[{model_ref, model_sha256, packages}]` of `actinglab standard-pack check`'s answer (`StandardPackCheckResponse.models`, `StandardPackModel`, `crates/resource-tooling/src/api.rs`) | added answer member | S8 | `standard-pack check` (the command, the Lab's core row on the command line and in `serve --stdio`, the Lab's MCP server through its serve child) | the union of the models the recognition packs of the game root's packages name in their OCR and NN targets, each model once with every package that names it; in byte order of `model_ref`, then of `model_sha256`, each model's `packages` in byte order of `package_id`; always present, `[]` when no pack names a model; the answer's last member, so every member before it is as before; the exit code means what it meant |
+| S8-2 | `PreparedContainedTask::recognition_models` and `NavigationPackageDescriptor::recognition_models` (`crates/execution-kernel`) | behaviour (read) | S8 | S8-1 | the `(model_ref, model_sha256)` of each OCR and NN target of the package's recognition pack, once each, in byte order; the cross-check reads them from the descriptor of each package it admits (`standard_pack_check.rs`, `required_models`, over the packages `navigation_check` admitted), so no package is admitted twice; a layout's shared OCR read names no other model (the pack's own check holds that it serves an OCR target of its model); `package bundle` runs the same cross-check and answers no models |
+
+**Who reads the answer** (the work order asks for each). `place`'s post-check
+(`crates/lab-rescue/src/install/place.rs`, its row `standard_pack_check`) reads the exit code and,
+when it fails, keeps the line whole as `answer`; the Lab's core row prints the struct's members
+flat beside its outcome (`apps/actinglab/src/standard_pack_cli.rs`, LAB-2b), one member more; the
+Lab's MCP server serves the row through a serve child and passes the answer on
+(`apps/actinglab-mcp/src/tools.rs`; its `additionalProperties: false` is the input schema's);
+`resource verify`'s bundle step reads the typed struct's `root_files`, `pack_count`, `game`,
+`notices` and `warnings` (`apps/actinglab/src/resource_verify/bundle.rs`); S7's row `vision check`
+reads `models`. No reader decodes the answer strictly: none has `deny_unknown_fields` on it or a
+schema without additional members. Of the tests, `gate_cov1` and `gate_sched_c1f1`
+(`crates/resource-tooling`) build the struct by its fields and gain `models: Vec::new()`, nothing
+else; every other test reads single members (resource-tooling's `gate_373_navt`,
+`gate_411_a25`, `gate_428_cfl2`, `gate_444_notices3`; actinglab's `gate_373_navt`,
+`gate_392_da4`, `gate_434_lab2b`, `gate_434_lab5f`, `gate_rv1`), and the goldens of
+`apps/actinglab/tests/golden/consumers.json` hold the check's refusals only, which do not change.
+
+**S8 tests** (exec gate row "#453 S8"; made-up source packs on temporary game roots, no model
+file). In `crates/resource-tooling` (`gate_453_s8.rs`):
+`s8_two_packs_that_share_a_model_list_it_once_with_both_packages_in_order` (two packs name one
+model in an OCR target each, one of them a second model, a third pack none: the second model first
+by its reference, the shared one once with both packages),
+`s8_a_root_without_recognition_targets_answers_no_models` (`models` `[]`, the member present) and
+`s8_the_other_members_are_as_before_on_an_existing_fixture` (on the root of `gate_428_cfl2`,
+bundle.json only, the answer's bytes before `models` are `status`, `root`, `game`, `root_files`,
+`pack_count` and `warnings` in that order, and `models` names the fixture's one model and pack). A
+task source has no NN target (the source compiler has no NN family, and a source holding its own
+recognition pack is refused `source_contains_derived_output`), so no game root can carry one: the
+case "an OCR target and an NN target of different models" is held on a prepared package, in
+`crates/execution-kernel` (`contained_task::gate_453_s8`):
+`s8_a_pack_with_an_ocr_and_an_nn_target_of_different_models_lists_both` (two OCR targets of one
+model and an NN target of another: both, once each, in the package and in the descriptor the
+cross-check reads). Adapted: `gate_cov1` and `gate_sched_c1f1` (the struct's new field, as
+NOTICES-3 added `notices`); `gate_428_cfl2`'s fixture writer and five of its constants are
+visible to `gate_453_s8` (no assertion changed).
+
+**S7. Why.** A fresh installation needs the recognition files under the vision root in exactly
+the pinned versions, and only a CI script knew which files those are, where each goes and what
+each must hash to (the model's layout lived only inside `Materialize-VisionRoot.ps1`); a wrong or
+missing file showed only at a model's first use. The contract is
+[vision-model-folders.md](vision-model-folders.md), "The manifest"; the rows are in
+[install-cli.md](install-cli.md), "The Lab's rescue module".
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S7-1 | `windows-tool-sources.v1.json`: `ppocrv6-medium-onnx` gains `model_ref` `PP-OCRv6_medium` and `family` `ppocr-ctc`, each of its three artifacts `vision_root_path` (`models/PP-OCRv6_medium/det.onnx`, `rec.onnx`, `keys.txt`) | new members of a tool source | S7 | — | `Test-WindowsRemoteBuildTools.ps1` freezes them; `Materialize-VisionRoot.ps1` keeps its constants (unchanged); `Materialize-TaskToolCache.ps1`, the workflow's platform-tools read, `crates/device/build.rs` and actingd's adb pin reader read no new member and ignore unknown ones |
+| S7-2 | `directml-1.15.4` `pinned_license_files[]` `{path, vision_root_path, size, sha256, hash_provenance}`: `LICENSE.txt` 10,439 B `a05138e3…4b8d`, `LICENSE-CODE.txt` 1,093 B `903df551…9a3c`, `ThirdPartyNotices.txt` 4,577 B `2c95795c…7950`, at `ort/licenses/directml/` | new member of a tool source (the coordinator's ruling on board #453) | S7 | — | read from the pinned package itself, a copy whose size, SHA-256 and NuGet's SHA-512 equal the entry's `archive`: each entry read whole, its CRC checked, then hashed; the same reading of `onnxruntime-directml-1.24.4`'s package gives that entry's two license pins exactly; the sizes equal those design rd-1031 §5 records; frozen by `Test-WindowsRemoteBuildTools.ps1`. #441 (§1.340) recorded the redistribution and added none |
+| S7-3 | `actingd vision manifest --provider <cpu or directml>` (`apps/actingd/src/vision_report.rs`) | new actingd subcommand, read only | S7 | an installer, a person, the row `vision manifest` | report `actingcommand.actingd.vision.v1` `{schema_version, outcome, report}`; `report` `{provider, files, models}` as the contract writes; from the embedded registry (`ac_adb::TOOL_SOURCES_PIN`, now visible to the crate) and `DIRECTML_RUNTIME_PIN`; no address; `invalid_arguments` for another command line; a registry it cannot read so `serialization_failed` caused by `foreign_data_error` |
+| S7-4 | `actingd vision check --config <file> [--install-root <root>] [--model <model_ref>]...` | new actingd subcommand, read only | S7 | an installer, a person, the row `vision check` | the file loaded as check-config loads it (stage `config_load`), `--install-root` by check-config's rule, the `vision` section assembled alone (`ActingdConfigFile::vision_section`, stage `config_assemble`; nothing else of the configuration is assembled), the root resolved as a start resolves it (`ConfiguredVision::resolve_root`, the first part of `inspect`, which now calls it; stage `config_vision`), no section or `cuda` `vision_config_invalid` at `config_vision`; `report` `{provider, vision_root, files, folders, models}`; each file read at most once, in 64 KiB chunks; fix 1: a manifest file's size compared first (another size `sha256_mismatch`, not opened), none read past its pinned size; only the folders the manifest or a `--model` names hashed (`asked`), every other listed by name, its model files unread (fix 2: the listing reads every folder's entries' metadata and `model.json`, at most 64 KiB, uncounted); a folder's file hashed within 256 MiB, everything within 512 MiB in all, the manifest's files included, a file over either `over_bound` and not read; fix 2: each `--model` a model folder's name by the loader's `invalid_model_folder_name`, at most 64, else `invalid_arguments` before the configuration is read, and each name asked about that no folder has listed `{model_ref, asked: true, absent: true}`; no state root, no owner lock, no ledger, no socket, no program, nothing written |
+| S7-5 | the rows `vision manifest` (parameter `provider`, required) and `vision check` (none) (module `rescue`, slice S7, planned; read only, offline; `new` #453 S7) | operation table rows added | S7 | the Lab's command line, `serve --stdio`, the Lab's MCP server | `rescue::SERVED` holds them (36 rows) and `rescue_reads::READ_HERE` their lists (19 rows); the children through `Host::run_program_ending`, each ended at its bound: `programs::VISION_MANIFEST_TIMEOUT_MS` 30 s, `VISION_CHECK_TIMEOUT_MS` 160 s (fix 1; 120 s before), `STANDARD_PACK_CHECK_TIMEOUT_MS` 300 s per game root, and (fix 1) the row `vision check` within `VISION_CHECK_ROW_LIMIT_MS` 900 s in all (the reasons below); `vision check` runs each game root's Tools `standard-pack check` first, then actingd with `--model` for each model their `models` (S8) name, and joins them; fix 1: every entry below the standard-pack root it does not check is named in `standard_packs.skipped` `{name, why}` (`link`, `name_not_utf8`, `no_bundle`, `not_a_folder`) |
+| S7-6 | `vision_manifest_reported`, `vision_check_completed` (actingd, success, no value); the locations `install_vision_manifest`, `install_vision_check` (owner `actingctl`); `install_refusal` `vision_root_unresolved` and (fix 1) `vision_report_unanswered`; `install_caveat` `vision_incomplete` (all `since` 0.12.60, pending) | outcome catalog | S7 | S7-3 to S7-5 | the names 3a gives. G8: `vision_` is a domain of actingd (with vision-ffi and vision-provider-check), `install_` of actingctl (with others), so each prefix belongs to its emitter, unlike S10's first `discover_completed`; vocabulary tokens are not under G8. Fix 1 (review): `vision_root_unresolved` is answered only by `vision check`, only where actingd refused the configuration or the vision root it names; `vision_report_unanswered` is the neutral word for every other failure of `actingd vision` in either row (no report, a refused command line, its own registry unreadable, a report without its lists, not run, ended at a bound): the row `vision manifest` resolves no root, so its failure names none. `vision_report_unanswered` is no registered code or location (G5 holds), and no source outside a test spells it but its vocabulary. Reused: `vision_root_unavailable`, `vision_root_in_program_slot`, `vision_config_invalid` (descriptions now name `vision check`), `invalid_arguments`, `serialization_failed`, `foreign_data_error`, `foreign_os_error`, `config_unreadable`, `pack_invalid` (its description names `vision check` and the row's limit), `install_command_refused`'s `timeout_ms`, `install_caveat_noted`'s `count`; the index is regenerated |
+
+**The bounds** (the coordinator's ruling: from what each child does; fix 1 after the
+independent review). `actingd vision manifest` reads only what is compiled into it and waits on
+nothing: 30 s is a process start with a wide margin. `actingd vision check` reads within bounds of
+its own (`vision_report.rs`, `FILE_BOUND_BYTES`, `TOTAL_BOUND_BYTES`): a manifest file's size is
+compared first, and one of another size is a mismatch and is not opened; none is read past its
+pinned size (about 156 MB for `cpu`, 175 MB for `directml` with this build's pins); only the model
+folders the manifest or a `--model` names are hashed, each file of them within 256 MiB (more than
+three times the largest model file pinned today, the recognizer's 76.6 MB), and the check hashes
+512 MiB at most in all, the manifest's files included; a file over either bound is reported in
+`over_bound` and not read, and a build whose manifest's files hold more than 512 MiB is refused as
+its own defect. What the 512 MiB counts (fix 2; fix 1 said an unasked folder was not read at all,
+which was not true): the bytes hashed, the manifest's files and the asked folders' model files.
+Listing `models\` as a start lists it is not counted: of every folder, asked or not, it reads the
+entries' metadata and the `model.json` when there is one, at most 64 KiB each, as a start reads
+it; no model file of an unasked folder is read. Its worst case is therefore 512 MiB hashed and
+that listing, and the row's bound matches it:
+512 MiB at 4 MiB/s (a slow disk under load) is 128 s, and 32 s more is the process's start and
+the listing of `models\`, about `vision manifest`'s 30 s: **160 s** = 128 s + 32 s (120 s
+before, which covered about 480 MB). The Tools' `standard-pack check` admits every package of one
+game root once in memory, each within its own 60 s deadline, and touches no device: 300 s is five
+whole package deadlines, where `place` runs it under `install.child.check_config_timeout_ms`
+(900 s by default) and leaves it running. **The row's limit in all** (fix 1): its children's
+bounds add up to 160 s + 300 s × the game roots, and the row runs at most **900 s** however many
+there are: 900 s is that same key's default, the longest `place` waits for one such check, and a
+row that only reads should not keep a person or an installer waiting longer in all than the
+installer waits for one check of one game root (one game root: 460 s; two: 760 s; from three on,
+900 s). Each child runs within its own bound or what is left of the 900 s, whichever is less
+(`rescue::child_bound`, on the host's clock); a child ended because the 900 s ran out, or not
+started because none was left, is refused with `timeout_ms` 900000, one ended at its own bound with
+that bound. Each child is ended at its bound by its handle and reaped (S10 fix 1's
+`run_captured_ending`), so none can stay behind where an installer's plan or the watchdog would see
+it; actingd's `vision` makes its own stdout and stderr not inheritable first, as `discover` does,
+though it starts no program; a refusal then carries `timeout_ms` and no cause.
+
+**What it can run.** `actingd vision manifest|check`: nothing. The row `vision manifest`:
+`<root>\runtime\actingcommand-actingd.exe vision manifest --provider <p>`. The row `vision
+check` (fix 1, in this order): `<root>\tools\actinglab.exe --json standard-pack check --root
+<game root>` once per game root below `standard_packs.root` (a folder that is no junction or link,
+whose name is UTF-8 and that holds `bundle.json`), by name; then
+`<root>\runtime\actingcommand-actingd.exe vision check --config <config> --install-root <root>`
+with `--model <model_ref>` for each model those checks name, in byte order. Every other entry
+below `standard_packs.root` is named in the answer's `standard_packs.skipped` with why: nothing is
+skipped silently. Nothing is downloaded, placed, started, stopped or written; no state root is
+touched.
+
+**S7 tests** (apps gate row "#453 S7"; an injected pin table and temporary vision roots of
+made-up bytes; the rescue module's children are the fake host's). In `apps/actingd`
+(`gate_453_s7.rs`): `s7_manifest_directml_lists_the_library_with_the_code_pin_and_cpu_does_not`
+(on the made-up table and on the table the build carries),
+`s7_check_a_complete_vision_root_answers_every_file_ok_and_equal_identities`,
+`s7_check_names_a_missing_a_changed_and_an_unreadable_file` (Windows: the unreadable file is held
+open without sharing), `s7_check_a_model_folder_of_another_identity_does_not_match` and
+`s7_check_a_vision_root_that_cannot_be_resolved_relays_the_existing_cause`. In `crates/lab-rescue`
+(`install::gate_453_s7`): `vision_manifest_answers_the_live_builds_manifest`,
+`vision_manifest_refuses_with_actingds_outcome_as_its_cause`,
+`vision_manifest_a_child_that_never_ends_is_ended_at_its_bound`,
+`vision_check_answers_a_complete_root`, `vision_check_refuses_with_actingds_outcome_as_its_cause`,
+`vision_check_a_child_that_never_ends_is_ended_at_its_bound` and
+`vision_check_joins_the_required_models_of_two_game_roots`. The three gates that hold the
+operation table equal to the code cover both rows as they come, unchanged:
+`rescue_read_here_rows_read_what_they_declare` (`crates/lab-rescue`, `provider` declared and
+read, none for `vision check`), `every_table_driven_row_has_one_list` (actinglab, each row in
+exactly one constant) and `mcp_served_and_refused_partition` (actinglab-mcp, both served by the
+rescue module on Windows). Adapted: `gate_inst1`'s
+`inst1_it_13_check_config_install_root_judges_adb_and_vision_against_the_named_root` also pins
+`adb_default.state` `missing` (its root has no `tools\platform-tools`): a pin that decodes gives
+`missing`, one that does not `sha256_mismatch`, so the existing test now proves that the adb
+pin's reader decodes the registry with its new members; before, its one assertion (the path)
+held either way. `Test-WindowsRemoteBuildTools.ps1` freezes S7-1 and S7-2.
+
+**Fix 1 after the independent review** (coordinator work order `rd-1114/brief-1693-fix1.md`;
+the reviewer found the slice read-only and offline, the identity the loader's own function's,
+S10's bounded child reused and S8 additive). Changed: `vision_report::defect`'s parameter is
+`detail`, no longer `reason` (the outcome guard's G2 finding on a string parameter of that name;
+every signature, getter, field, `json!` key and literal the pull request adds was read against
+the guard's rules once more, and none other is a finding); the row `vision manifest` refuses with
+the new neutral `vision_report_unanswered`, and `vision_root_unresolved` is kept for the row
+`vision check` where actingd really refused the configuration or its vision root (S7-6); the
+check's reads are bounded and the row's bound follows them (S7-4, "The bounds"); the row
+`vision check` has a limit in all and names every entry below the standard-pack root it does not
+check (S7-5); `contracts/vision-model-folders.md` says what the check assembles of a
+configuration (the `vision` section alone, not what a start would refuse) and states its two
+differences from a start (a `cpu` root held to the pinned runtime libraries, which a CPU start
+does not check against the pin, stricter on purpose because an installation set carries exactly
+the pinned files; a missing or empty `models\` an empty list in the check, a refusal of a start).
+Two lints of the first round's CI are fixed with it: `vision_report.rs`'s needless `to_owned`
+and the complex pack-writer type of `resource-tooling`'s `gate_453_s8.rs` (a type alias, no
+assertion changed). New tests, apps gate row "#453 S7": in `apps/actingd`
+`s7_check_compares_the_size_first_and_reads_no_manifest_file_past_its_pin` (of ten bytes, a limit
+of four hashes four; a manifest file one byte longer than its pin `sha256_mismatch` with no cause,
+on Windows held open by another handle without sharing, so never opened) and
+`s7_check_hashes_only_the_folders_it_is_asked_about_within_its_bounds` (a `--model` folder's
+identity, another folder `asked` false with none; a file over the file bound and one over what the
+total bound leaves after the manifest's files, each `over_bound` and unread, the manifest's model
+still identified); in `crates/lab-rescue` `vision_check_refuses_when_the_rows_limit_runs_out`
+(three game roots of 290 s each on the fake clock leave actingd about 30 s, at which it is ended:
+`vision_report_unanswered` with `timeout_ms` 900000) and, on Windows,
+`vision_check_names_a_game_root_it_skips_and_why` (a game root that is a junction is not checked
+and is named in `skipped` as `link`). Adapted, each because its requirement changed: actingd's
+`s7_check_a_complete_vision_root_answers_every_file_ok_and_equal_identities` and
+`s7_check_a_model_folder_of_another_identity_does_not_match` (folders carry `asked`; the
+classifier folder the manifest does not name is listed unread, with no identity); lab-rescue's
+`vision_manifest_refuses_with_actingds_outcome_as_its_cause` and
+`vision_manifest_a_child_that_never_ends_is_ended_at_its_bound` (`vision_report_unanswered`),
+`vision_check_a_child_that_never_ends_is_ended_at_its_bound` (160 000 ms,
+`vision_report_unanswered`), `vision_check_answers_a_complete_root` (`skipped` `[]`) and
+`vision_check_joins_the_required_models_of_two_game_roots` (the checks first, then actingd with
+`--model` for both models, bounds 300 000, 300 000 and 160 000 ms; the folder without
+`bundle.json` and the file named in `skipped`). The fake host's clock now moves by a program's run
+time (`run_ms`, none by default) or, for one that never ends, by its deadline. No test is removed
+or renamed.
+
+**Fix 2 after the differential review** (coordinator work order `rd-1114/brief-1693-fix2.md`;
+the reviewer confirmed the slice read-only, offline and bounded, a `--model` unable to read
+outside the vision root, the `emulators` row unchanged and the outcome guard without a finding).
+Changed: the row `vision check` decides `vision_root_unresolved` positively, by the stage actingd
+names for its refusal, which `actingd vision check` names only where it loads the configuration,
+assembles its `vision` section and resolves the vision root (`config_load`, `config_assemble`,
+`config_vision`; `vision_report::staged` is its only place); every refusal without a stage
+(actingd's installation check or slot lock, `check_config_install_root_invalid`,
+`invalid_arguments`, `serialization_failed`) is `vision_report_unanswered`, where before
+everything but `invalid_arguments` and `serialization_failed` was read as a root not resolved.
+The three words are actingd's locations, which `crates/lab-rescue` cannot spell (G5), so the row
+reads that a stage is named, not which. Each `--model` is a model folder's name by the loader's
+own rule, now named `invalid_model_folder_name` in `crates/vision-ffi/src/models.rs` (moved out of
+`classify_folder` unchanged; listing calls it as before), and `vision check` takes at most 64
+(`MAX_ASKED_MODELS`; S7-4); a name asked about that no folder has is listed `asked` and `absent`,
+and neither `models`' `present` nor the row's counts it. The sentence that an unasked folder is
+not read at all is corrected in the contract, `vision_report.rs` and "The bounds" above. New
+tests, apps gate row "#453 S7": in `apps/actingd`
+`s7_check_reads_a_file_exactly_at_each_bound_and_none_one_byte_past_it` (a folder's file of
+exactly the file bound hashed, one byte more `over_bound` `file`; of exactly what the total
+leaves hashed, one byte more `over_bound` `total`; manifest pins of exactly the total read, one
+byte less of total `serialization_failed`) and
+`s7_check_takes_64_model_names_and_refuses_a_65th_or_a_bad_name_before_reading` (64 names, one of
+255 bytes, answered, each `absent`; a 65th, one of 256 bytes, `..`, `.`, a blank one, `/`, `\`,
+`:` or a control character `invalid_arguments` with no stage on a configuration that does not
+exist); in `crates/lab-rescue`
+`vision_check_a_refusal_where_actingd_loads_the_configuration_is_a_root_not_resolved`
+(`config_decode_failed` at `config_load`: `vision_root_unresolved`),
+`vision_check_a_refusal_before_the_configuration_names_no_root` (`install_executable_unavailable`,
+no stage: `vision_report_unanswered`),
+`vision_check_refuses_when_the_rows_limit_runs_out_during_a_game_roots_check` (four game roots of
+290 s: the fourth ended at what is left, about 30 s, `pack_invalid` naming it with `timeout_ms`
+900000, actingd not started) and `vision_check_starts_nothing_when_no_time_is_left` (three of
+299 999 ms use the 900 s up to the fake clock's millisecond: the fourth not started,
+`pack_invalid` naming it with `timeout_ms` 900000, actingd not started). Neither refusal names the
+game roots checked before it or those not reached: that needs two new keys, so it is not added
+here. Adapted, each because its requirement changed: lab-rescue's
+`vision_check_refuses_with_actingds_outcome_as_its_cause` (actingd's refusal carries its stage
+`config_vision`, as actingd names it) and `vision_check_joins_the_required_models_of_two_game_roots`
+(actingd's report lists the classifier it was asked about `absent`, still not `present`). The fake
+host ends a program at its deadline also when its run time is longer. No test is removed or
+renamed.
+
+**At deploy.** Nothing to do: an added member of a read-only answer, two new read-only
+subcommands and two new read-only rows; nothing persisted, no key, no revision. An installation
+in use changes nothing: actingd's adb pin reader ignores the registry's new members (the test
+above), check-config and a start list the vision root as before (`inspect` calls the extracted
+`resolve_root`, the same code), and no reader decodes `standard-pack check`'s answer strictly.
+These rows fall under the standing operating rule until LAB-7 ([install-cli.md](install-cli.md),
+"Journals across versions": the rescue module's composites are not used on the production root);
+they are no composite and write nothing, so they are harmless there. A build before this release
+has no `vision`: its actingd refuses the words as a start refuses unknown arguments, and the
+rows of a later Tools beside it answer `vision_report_unanswered` with that child's exit and
+stderr as the cause.
+
+**Rollback.** Nothing persisted: code, two table rows, registry members, catalog entries,
+contract sections and test files.
+
+### 1.356 Slice G-R1 (0.12.60): a standard pack's goal declaration `goals.json`, its reader, its check, `package bundle --goals` and the installer's root file; `package` revision 12 (Workflow #455; the final design note `rd-1114/455-goals-design-final.md`, sections 3.1 to 3.3, 3.11 and the rows G-R1 of its sections 4 and 5, read on main `fa724931`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-455-gr1.md`, read on main `fa724931`)
+
+1.348 was the next free section on main `fa724931`; the integration train 0.12.59d (main
+`71a658f1`, merged into this slice) took 1.348 and 1.349, and the integration train 0.12.60b gave
+this slice 1.356, the number after main's §1.353 (MAPP-2b), FL-2's §1.354 and S8 and S7's §1.355
+of the same train.
+[standard-pack-goals.md](standard-pack-goals.md)
+is the contract; [package-reference.md](package-reference.md) (`package bundle`, `standard-pack
+check`, and "Standard package root": the listing and `goals.json`), [install-cli.md](install-cli.md),
+"The Lab's rescue module" (`place`), the `package` row 12 of
+[component-interfaces.md](component-interfaces.md) and the row `package bundle` of
+`lab-operations.json` change with it. Board #455: a person (through
+the console) or an agent (through the Lab) sets goals for an application, and a standard pack says
+which goal entries its game offers. This slice gives that declaration its form and its checks.
+**Nothing reads a value**: no request, no fact, no view, no change of the scheduler, the host or a
+run; a game root without the file is exactly what it was.
+
+**What it builds.**
+
+- *The contract* `contracts/standard-pack-goals.md`: an optional root file of the game root,
+  `actingcommand.goals.v1` with `game` the directory's, by the root-file rule; an entry's members
+  (`name`, `type`, `block?`, `title`, `help?`, `governs?` and the type's members); the eight types
+  of version 1 (`heading`, `note`, `resource`, `integer`, `choice`, `switch`, `ordered`, `tier`, with
+  `tier` and a `resource` entry's `rate` accepted now, their behaviour later slices'); the name rule;
+  position by file order; defaults in the file; texts as `ui.json`'s; the limits (96 entries, the
+  list bounds, 1 MiB); the seven blocks, one base block per type, and the fallback rule; every
+  refusal with its pointer; who reads the file; and what is not the file's, the safety lines kept out
+  at three places as the design words them.
+- *The reader* (`crates/actingcommand-contract/src/standard_pack_goals.rs`, beside the readers of
+  `ui.json` and `schedule.json`): `parse_standard_pack_goals` reads the file strictly into typed
+  entries (`StandardPackGoals`, `DeclaredGoal`, `DeclaredGoalKind`), every problem one
+  `StandardPackRootIssue` of `goals.json` at its pointer, at most 64, in document order;
+  `check_standard_pack_goal_references` holds an accepted file to what the game root offers
+  (`GoalReferences`: the composed schedule's pools and rules, each rule with the package it runs
+  (`GoalRule`), every package of the bundle with what its control declaration provides, made only by
+  `GoalReferences::new`, and the root's tables when the reader holds them; fix round 1 below).
+- *The check* (`crates/resource-tooling/src/standard_pack_goals.rs`): `actinglab standard-pack check`
+  lists `goals.json` in `root_files` and, after the composition it already runs, reads the file with
+  the contract crate's two functions, every package's `provides` (fix round 1; before it, the
+  governed packages' only) read by the Runtime's metadata reader and the root's tables by
+  `read_standard_pack_table`; each problem is one
+  `standard_pack_root_invalid` warning (`game`, `path`, `standard_pack_problem`, `json_pointer`),
+  after the other warnings, in file order. **A refused file never fails the root**: the check
+  answers `checked`, and the answer is otherwise what it is without the file.
+- *`package bundle --goals <file>`* (`StandardPackRootFiles.goals`; the CLI's read list
+  `package_build::BUNDLE_READS`; the row `package bundle` gains `{"name": "goals", "form": "option",
+  "type": "file", "required": false}`): the file is read with the other root files, held after the
+  composition to the root the bundle makes (no table: the bundle holds none), laid beside
+  `bundle.json` byte for byte when accepted; a refused file refuses the bundle as a refused root file
+  does (`standard_pack_root_invalid`, its first problem, `path` the file given, every problem in the
+  message), `--out` not written. `package bundle` writes no `interfaces.json`.
+- *The installer's `place`* (`crates/lab-rescue/src/install/place.rs`): `goals.json` joins
+  `ROOT_FILES`, last (after `schedule.json`, whose pools and rules its entries name), and
+  `RETIRED_WHEN_ABSENT`, first: a later bundle without it sets the placed one aside as
+  `goals.json.old-<ms>`, as the other root files are, and `undo` puts it back. A bundle without the
+  file on a root without it plans, journals and places exactly as before. Fix round 1: a zip that
+  carries the file and declares a `package` maximum below 12 is refused in the plan, `pack_invalid`
+  caused by `standard_pack_root_invalid` with `goal_undeclared` at `<zip>\interfaces.json`, as
+  NOTICES-2 refuses `notice_undeclared` (`check_goals_declared`, a dozen lines).
+
+**The thirteen words** (`goal_name_duplicate`, `goal_type_unknown`, `goal_block_mismatch`,
+`goal_pool_unknown`, `goal_pool_unvalued`, `goal_package_unknown`, `goal_governs_irreversible`,
+`goal_rule_unknown`, `goal_tier_without_fixed_value`, `goal_range_invalid`, `goal_default_invalid`,
+`goal_table_unknown`, `goal_rate_invalid`) are registered as `ui.json`'s problems are (R11-4): tokens
+of the vocabulary `standard_pack_problem`, in the catalog header's vocabularies and in the contract
+crate's `StandardPackProblem` (`outcome_vocabulary!`), which the outcome guard holds equal both ways
+(G7). They are values of the existing code `standard_pack_root_invalid` with its existing keys. No
+outcome code, location or value key is added; the guard's prefix rule (G8) and its literal rule
+(G5) bind codes and locations, and no string literal of the slice's product code equals a
+registered code or location; no `json!` key is written. The index of the catalog is regenerated,
+unchanged (it lists codes). The words `malformed` and `game_mismatch` are reused for the file's
+shape and its game. Fix round 1 adds two words the same way: `goal_out_of_limits` (the file's
+fourteenth, a bound of the shape broken, at what exceeds) and `goal_undeclared` (the installer's,
+modelled on `notice_undeclared`).
+
+**Where the design left a detail open, as built** (each in the contract): the block words are part
+2's names for the blocks the design keeps (`group`, `text`, `goal_row`, `number`, `choice`, `switch`,
+`ordered_list`), one per type, any other `block` `goal_block_mismatch`; a shape bound (a text, a
+list, a map, the length of a name, an option value, an id, a key or a locale, the file) is the
+file's own `goal_out_of_limits` at what exceeds, as `ui.json` has `ui_out_of_limits` for its own
+(fix round 1; the slice first wrote `malformed` here, for want of a word); a `governs` list holds 1
+to 32 ids of 1 to 128 bytes; an option value is 1 to 64
+bytes of `[a-z0-9][a-z0-9_.:-]*`; an `ordered` entry takes 1 to 1024 options or a table's keys, its
+`max_count` 1 to 32; a tier's `scale_milli` is 1 to 1,000,000; a time unit's values are milliseconds
+(part 2's rule).
+
+**The raise, as FL-1 made it (§1.343).** `package` [3, 11] → [3, 12]:
+`distribution/windows/component-interfaces.json`, the architecture pin
+(`tools/actinglab-architecture/tests/component_interfaces.rs`, its `V0120` and its history comment),
+the row 12 of component-interfaces.md, and this section; the contract crate's constant
+`GOALS_PACKAGE_REVISION` (12) states what a bundle that carries the file declares. **Every reader of
+the `package` range, as §1.335 and §1.343 checked them:** `place` reads its own installer's range,
+so `place` of 0.12.59 ([3, 11]) refuses a bundle declaring [12, 12] with `interface_edge` at
+`<zip>\interfaces.json`, in the plan, before the hold and any write, and a zip that carries the file
+and declares less at its layout check (`pack_invalid` naming `goals.json`), and this release's takes
+a zip that carries the file and declares [12, 12] and (fix round 1) refuses one that declares a
+maximum below 12 (`goal_undeclared`); the update's and the rollback's
+`package` edges compare the register's range, unknown for every root (the warning
+`pack_declaration_unknown`); the Runtime reads no `interfaces.json` and no range, and its readers open
+named files only, so a Runtime before 0.12.60 reads a root that holds the file as one without it;
+`resource verify`'s `bundle` step writes [3, 3], or [10, 10] for a notices bundle, and does not pass
+the file (its row is not this slice's), so the packer of a bundle that carries it declares [12, 12]
+itself; `standard-pack check` reads no range. None of them refuses a bundle or a root that is
+accepted today. A bundle without the file keeps its revision.
+
+**What programs of an earlier release do:**
+
+| Program | A zip that carries `goals.json` | A game root that holds `goals.json` |
+|---|---|---|
+| rescue `place` before 0.12.60 | `interface_edge` when it declares 12, `pack_invalid` naming `goals.json` otherwise; before the hold: nothing paused, nothing written | a bundle without the file is placed and `goals.json` is left as it is |
+| `standard-pack check` before 0.12.60 | reads no zip | ignores the file; the root checks as before |
+| the Runtime (actingd), check-config, the composer | read no zip | ignore the file: no catalog, no composed generation, no run changes |
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GR1-1 | `goals.json` (`actingcommand.goals.v1`): entries, types, blocks, texts, `governs`, defaults, `rate`, tiers | game root file | G-R1 | the resource repository (G-P1) | read by no Runtime reader in G-R1 |
+| GR1-2 | `standard_pack_problem` + the thirteen `goal_*` words; fix round 1: + `goal_out_of_limits`, `goal_undeclared` | outcome vocabulary words | G-R1 | the Tools' check; `place` (`goal_undeclared`) | catalog only; `runtime-outcomes` stays 1 |
+| GR1-3 | `standard-pack check`: `goals.json` in `root_files`, its problems as warnings | Tools behaviour | G-R1 | — | the root is never failed by the file |
+| GR1-4 | `package bundle --goals <file>`; `StandardPackRootFiles.goals`; the row `package bundle` + `goals` | Tools flag, request member, operation table | G-R1 | — | refused file refuses the bundle; laid byte for byte |
+| GR1-5 | `place`: `goals.json` in `ROOT_FILES` (last) and `RETIRED_WHEN_ABSENT` (first); fix round 1: a zip that carries it declares `package` 12 at least (`goal_undeclared`) | installer behaviour | G-R1 | — | no item without the file |
+| GR1-6 | `package` [3, 11] → [3, 12]; `GOALS_PACKAGE_REVISION` | interface revision, contract constant | G-R1 | the packer (G-P1) | component-interfaces.md row 12 |
+
+**Not moved.** `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes`; the Runtime's
+root reader, the host, the scheduler workbench, the policy crate, `schedule.json`'s reader and
+members, `ui.json`, the resource-target document, the console and every Lab row but `package
+bundle`. The operation table's rows `standard-pack check` and `resource verify` are unchanged: the
+check's answer gains no member (`root_files` lists one more file, as for any root file), and
+`resource verify` passes no `goals.json`.
+
+**At deploy.** Nothing changes for an installation in use: no released bundle carries the file, and
+nothing reads it at run time until a later slice. The Runtime declares `package` [3, 12]. A rollback
+to 0.12.59 is not refused (the register records a root's range only at adoption, and that range is
+absent, so the `package` edge is the warning `pack_declaration_unknown`): a Runtime before this
+slice treats the file as absent; an installer before this slice refuses a bundle that carries the
+file, and when it places a bundle without it, it leaves an existing `goals.json` where it is.
+
+Tests. Contract gate row "#455 G-R1" (`crates/actingcommand-contract/src/standard_pack_goals_tests.rs`):
+`goals_neutral_example_reads_to_typed_entries` (the design's neutral example, as the design writes
+it, reads to its three typed entries in file order, and its references hold against a root that
+offers the valued pool and the package), `goals_each_type_reads_its_members` (one entry of each type
+with every member its type has, each typed value asserted, and its references holding against a
+root that offers them) and `goals_reader_is_strict` (an unknown member of an entry, of `governs` and
+of the document, a member another type has, a missing member, another version, a name outside the
+rule, a number that is no integer, a repeated member and no JSON: `malformed` at their pointer; 97
+entries and a file over 1 MiB: `goal_out_of_limits` since fix round 1; another game
+`game_mismatch`; an unknown type and a later version's type `slider`: `goal_type_unknown`). Exec
+gate row "#455 G-R1"
+(`crates/resource-tooling/src/gate_455_gr1.rs`, an installed root of four made-up packages, one
+providing an irreversible capability and one a capability that is not, a schedule with a rule with
+a fixed value and one without, a valued pool and one without a gap weight, and a table):
+`gr1_check_reports_each_refusal_at_its_pointer` (the thirteen words and, since fix round 1,
+`goal_out_of_limits`, one fixture each, exactly one warning each with the game, the file, the word
+and the pointer, the root checked),
+`gr1_check_answers_alike_with_and_without_a_valid_file` (every member alike but `root_files`),
+`gr1_check_reports_a_refused_file_in_file_order_and_never_fails_the_root` (the reader's four problems
+and the references' four in file order, last; without them and without `goals.json` in `root_files`
+the answer is the one without the file), `gr1_governs_irreversible_is_refused_by_the_check_and_the_bundle`
+(the check warns, the bundle is refused at the source file with `--out` not written; the package
+whose capability is not irreversible governed without a problem) and
+`gr1_package_bundle_lays_the_file_and_refuses_a_refused_one` (laid byte for byte, the rest of the
+output and the index as without the flag, the `ordered` entry's table not judged; a refused file
+refused at the source file with `--out` not written). Apps gate row "#455 G-R1"
+(`crates/lab-rescue/src/install/gate_455_gr1.rs`, the fake host):
+`goals_file_is_placed_last_and_retired_when_a_later_bundle_carries_none` (installer [3, 12], bundle
+[12, 12]: `goals.json root new` after `bundle.json`, placed byte for byte, the journal's plan
+declaring [12, 12]; a later bundle without it: `retire` before the root files, kept as
+`goals.json.old-<ms>`, put back by `undo`) and `goals_bundle_is_refused_by_an_installer_before_revision_12`
+(installer [3, 11]: `interface_edge` at `interfaces.json`, no pause, no journal, an empty game root).
+Of the earlier note's R1 tests (part 1, section 8, row R1) this slice keeps "every refusal at its
+pointer", "a root with the file and one without check alike otherwise" and "`place` takes and retires
+the file", and drops "extremes composed": the final design composes no value (a value is read by
+the overlay and the evaluator of later slices, and only a `tier` table is compiled, in G-R5).
+Adapted, because the requirement changes what it pins: the architecture pin
+`the_runtime_declares_each_v0120_interface_revision_once` holds `package` [3, 12]. The three gates
+that hold the operation table to the code: `lab_ops_table_complete` takes the parameter (type
+`file`), `gate_434_lab5b3::lenient_rows_match_their_reads` holds the row's `goals` and the read
+list's `--goals` equal both ways, and the Lab MCP server's tools are generated from the row
+(`mcp_tools_from_op_table`), so `goals` reaches `--goals` with no change to the server.
+
+**Fix round 1** (coordinator work order `rd-1114/brief-1694-fix1.md`, after the independent review,
+which confirmed that a root without the file is unchanged, that a refused file only warns, that the
+thirteen refusals match the contract and that the outcome guard finds nothing, and found two ways
+around the safety line `goal_governs_irreversible`). Nothing reads a value, a root without the file
+is unchanged, and a refused file still never fails a root.
+
+- *A `tier` entry is held to its rules' packages.* `GoalReferences.rules` holds each rule with the
+  package it runs (`GoalRule {package_id, fixed_value}`); a governed rule whose package can do
+  something irreversible is `goal_governs_irreversible` at `/entries/<i>/governs/rules/<j>` (before
+  `goal_tier_without_fixed_value`), one whose package the references do not know
+  `goal_package_unknown` there (the composition refuses such a rule first,
+  `rule_package_unregistered`).
+- *Irreversibility is a capability's, across the root.* `goal_issues` reads what every package of
+  the registry provides (not the governed ones only), and `GoalReferences::new` collects the
+  capabilities any package marks `irreversible: true` before it judges a package: one that provides
+  such a capability, marked by itself or not, can do something irreversible
+  (contracts/remedies.md §2.3, "any provider").
+- *No default answer.* `GoalReferences` has no `Default` and a private package map; its only
+  constructor, `GoalReferences::new`, takes what every package of the root provides, so a reader
+  cannot leave "which packages are irreversible" empty by omission, and a package it was not told
+  of is never passed.
+- *`goal_out_of_limits`* for a bound of the shape broken (the file's size, a list's or a map's count,
+  a text's locales, the length of a text, a locale, a name, an option value, an id or a key), at
+  what exceeds; a form broken stays `malformed`.
+- *`goal_undeclared`*: `place` refuses a zip that carries the file and declares a `package` maximum
+  below 12, as NOTICES-2 refuses `notice_undeclared`; built (a dozen product lines), with its test.
+- *Contract and code aligned, which side each:* a member repeated in one object is reported before
+  the file's other problems (the reader meets it while it reads the document): the contract now says
+  so (contract to code, as `ui.json`'s reader does the same); a `scale_milli` that is no safe integer
+  is `malformed` as every integer member is (code to contract: `Check::scale` reads it through
+  `Check::integer` first), while an `integer` entry's `default` of any type or size that is not a
+  value of its range is `goal_default_invalid` (contract to code: a default's type is judged as the
+  `switch` and `ordered` defaults' are); a file with a byte-order mark is `malformed` (contract to
+  code).
+- *Rollback*: the "At deploy" sentence above is corrected to what the installer does.
+- *`resource verify`* still passes over a repository's `goals.json` without a word: a warning in its
+  answer needs an outcome code (no existing warning code says "a file this step does not check"),
+  which this slice does not add; so it is not built. What a later slice owes before any pack
+  carries the file, now in the contract ("Before any pack carries the file"): **`resource verify`
+  checks a repository's `goals.json` and the packer declares the revision.**
+- *Not in this round (the coordinator's ruling, recorded in the contract's safety lines):* a
+  `resource` entry can push an irreversible package indirectly, through a pool such a package's rule
+  produces; the check does not refuse it, and leaves to the evaluator the rule that **a goal's
+  shortfall never raises the weight of a rule whose package can do something irreversible**, which
+  the slice that makes the evaluator read goal entries must build. No evaluator code changes.
+
+Tests of fix round 1. Contract gate row "#455 G-R1":
+`goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root` (made-up packages, one
+marking a capability irreversible, one providing it unmarked, one providing nothing and one the
+references were not told of, each running a rule with a fixed value: a `switch` entry over the four
+and a `tier` entry over their rules are `goal_governs_irreversible` for the first two and
+`goal_package_unknown` for the fourth, each at its pointer; references made from no package pass
+nothing). Exec gate row "#455 G-R1": `gr1_a_tier_over_a_rule_of_an_irreversible_package_is_refused`
+(the package with the irreversible capability runs a rule with a fixed value: the tier over it is
+`goal_governs_irreversible` at `/entries/7/governs/rules/1` and nothing else, for the check and the
+bundle; the tier over a reversible package's rule passes both) and
+`gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused` (the valid file's
+`choice` entry governs a package that provides, unmarked, the capability another marks
+irreversible: `goal_governs_irreversible` at `/entries/4/governs/packages/1` and nothing else, for
+the check and the bundle). Apps gate row "#455 G-R1":
+`goals_bundle_that_does_not_declare_revision_12_is_refused_goal_undeclared` (installer [3, 12],
+bundle [3, 11] carrying the file: `pack_invalid` caused by `goal_undeclared` at `interfaces.json`,
+the pointer empty; no pause, no journal, an empty game root). The existing irreversible test is
+kept as it was. Adapted, because the requirement changes what it pins: `goals_reader_is_strict`
+(97 entries and a file over 1 MiB now `goal_out_of_limits`),
+`gr1_check_reports_each_refusal_at_its_pointer` (one more case, `goal_out_of_limits` at a title one
+byte over its limit), and `goals_neutral_example_reads_to_typed_entries` and
+`goals_each_type_reads_its_members` (their references made by `GoalReferences::new`, no assertion
+changed).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
