@@ -89,6 +89,8 @@ pub struct NavigationPackageDescriptor {
     preprocess_divergences: Vec<(String, String)>,
     /// UPD-1: [`PreparedContainedTask::declares_store_update`].
     store_update: bool,
+    /// Workflow #453 S8: [`PreparedContainedTask::recognition_models`].
+    recognition_models: Vec<(String, String)>,
 }
 
 impl PreparedContainedTask {
@@ -112,6 +114,7 @@ impl PreparedContainedTask {
             store_fixed_taps: self.store_fixed_taps(),
             preprocess_divergences: self.preprocess_divergences(),
             store_update: self.declares_store_update(),
+            recognition_models: self.recognition_models(),
         }
     }
 }
@@ -160,6 +163,11 @@ impl NavigationPackageDescriptor {
     /// hold a shared interrupt page with a named `result` as its own page by its part.
     pub fn declares_store_update(&self) -> bool {
         self.store_update
+    }
+    /// Workflow #453 S8: the models its recognition pack's OCR and NN targets name, `(model_ref,
+    /// model_sha256)`, each once, in byte order of the reference, then of the identity.
+    pub fn recognition_models(&self) -> &[(String, String)] {
+        &self.recognition_models
     }
 }
 

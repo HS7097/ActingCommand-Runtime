@@ -22,13 +22,16 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-const GAME: &str = "neutral";
-const SERVER: &str = "test";
+// Workflow #453 S8: the game, the server, the pack under test and its model are visible to
+// `gate_453_s8`, which checks the answer's other members on this fixture; nothing else changes.
+pub(super) const GAME: &str = "neutral";
+pub(super) const SERVER: &str = "test";
 const FEATURES: &str = "neutral.test.features";
-const SLOTS: &str = "neutral.test.slots";
+pub(super) const SLOTS: &str = "neutral.test.slots";
 const PREPROCESS_DIVERGENT: &str = "package_bundle_preprocess_divergent";
-const MODEL_REF: &str = "neutral-ocr-model";
-const MODEL_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+pub(super) const MODEL_REF: &str = "neutral-ocr-model";
+pub(super) const MODEL_SHA256: &str =
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn rect(x: u32, y: u32, width: u32, height: u32) -> Value {
     json!({"x": x, "y": y, "width": width, "height": height})
@@ -61,7 +64,7 @@ fn ocr(id: &str, region: Value, preprocess: Value) -> Value {
 
 // Writes the source package `package_id`: a `recognize_only` feature package of both pages, or
 // the pack under test (module doc).
-fn write_pack(directory: &Path, package_id: &str) {
+pub(super) fn write_pack(directory: &Path, package_id: &str) {
     let features = package_id == FEATURES;
     let control = json!({
         "schema_version": "Lab-1y.control.v2",

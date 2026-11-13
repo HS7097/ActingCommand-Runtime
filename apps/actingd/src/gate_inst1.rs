@@ -70,6 +70,12 @@ fn inst1_it_13_check_config_install_root_judges_adb_and_vision_against_the_named
         Value::from(adb.to_string_lossy().into_owned()),
         "{report}"
     );
+    // Workflow #453 S7: the adb pin is read from the embedded tool registry, whose components
+    // gained members (`model_ref`, `family`, `vision_root_path`, DirectML's
+    // `pinned_license_files`); the reader ignores them. `missing` (the root holds no
+    // `tools\platform-tools`) is what a pin that decodes gives; one that does not decode would
+    // give `sha256_mismatch` (`adb_install_pin_invalid`'s finding).
+    assert_eq!(report["adb_default"]["state"], "missing", "{report}");
     let vision = fs::canonicalize(root.join("vision")).expect("the canonical vision root");
     assert_eq!(
         report["vision"]["root"],

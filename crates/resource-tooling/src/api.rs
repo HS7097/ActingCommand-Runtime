@@ -166,6 +166,23 @@ pub struct StandardPackCheckResponse {
     /// Absent otherwise; never a member of `root_files`, and no name or text of a file is echoed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notices: Option<StandardPackNotices>,
+    /// Workflow #453 S8 (register §1.350): the models the game root's packs need, the union of
+    /// the models their recognition packs' OCR and NN targets name, each model once with every
+    /// package that names it; in byte order of `model_ref`, then of `model_sha256`, each model's
+    /// `packages` in byte order of `package_id`. Always present, `[]` for a root whose packs name
+    /// none. The last member, so every member before it is as before.
+    pub models: Vec<StandardPackModel>,
+}
+
+/// Workflow #453 S8: one model a game root's packs need, as `standard-pack check` answers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StandardPackModel {
+    /// The model's folder name below the vision root's `models\`, as the targets name it.
+    pub model_ref: String,
+    /// The model's identity the targets name (`contracts/vision-model-folders.md`, "Identity").
+    pub model_sha256: String,
+    /// Every package of the root whose recognition pack names the model, each once.
+    pub packages: Vec<String>,
 }
 
 /// Workflow #444 NOTICES-3: what `standard-pack check` counted of a game root's notices

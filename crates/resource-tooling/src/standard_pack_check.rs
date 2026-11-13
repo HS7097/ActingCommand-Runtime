@@ -77,6 +77,11 @@
 //! of the registry is named like it in any ASCII case (such a folder is that pack's), and the
 //! answer gains `notices` `{files, bytes}`; a root without it answers as before. Nothing beside it
 //! (`notices.old-<ms>`, `notices.rolledback-<ms>`, a `.part`) is looked at.
+//!
+//! Workflow #453 S8 (register §1.350): last, the answer's `models`, the models the root's packages
+//! need, read from the packages the cross-check admitted (each package's recognition pack, its OCR
+//! and NN targets' `model_ref` and `model_sha256`; `required_models`). `package bundle` runs the
+//! same cross-check and answers no models.
 
 use crate::codes::ResourceToolingCode;
 use crate::notices_directory::game_root_notices;
@@ -85,7 +90,7 @@ use crate::package_loading::{check_loading, stale_copies};
 use crate::standard_pack_schedule::report_schedule;
 use crate::{
     DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, StandardPackCheckRequest, StandardPackCheckResponse,
-    StandardPackRootFiles,
+    StandardPackModel, StandardPackRootFiles,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Detail, Outcome, RemedyProblem};
@@ -325,12 +330,15 @@ pub fn check_standard_pack_root(
     } else {
         stale_copies(&game, &packages)?;
     }
-    let mut warnings = cross_check(
+    let (mut warnings, admitted) = cross_check_admitted(
         &game,
         &checked,
         &|directory: &str| root.join(directory),
         BTreeMap::new(),
     )?;
+    // Workflow #453 S8: the models the root's packs need, read from the packages the cross-check
+    // admitted; nothing is admitted again.
+    let models = required_models(&checked, &admitted)?;
     // ROUT-L RL-1a: the schedule rules, composed as the Runtime composes them; SS-2b: with the
     // judged rules' coverage and one warning per judged rule that declares no value; SCHED-C1a:
     // and who wrote their fixed values and the pools' valuation blocks.
@@ -389,6 +397,7 @@ pub fn check_standard_pack_root(
         benefit_followers,
         consumption_facts,
         notices,
+        models,
     })
 }
 
@@ -402,21 +411,67 @@ pub(crate) fn cross_check(
     pack_directory: &dyn Fn(&str) -> PathBuf,
     admitted: BTreeMap<String, NavigationPackageDescriptor>,
 ) -> LabResult<Vec<Outcome>> {
-    let mut warnings = navigation_check(game, root, pack_directory, admitted)?;
+    cross_check_admitted(game, root, pack_directory, admitted).map(|(warnings, _)| warnings)
+}
+
+/// Workflow #453 S8: the packages a cross-check admitted, by package id.
+type Admitted = BTreeMap<String, NavigationPackageDescriptor>;
+
+/// Workflow #453 S8: [`cross_check`], and the packages it admitted by package id (every package
+/// of the registry, each once, with those the caller gave), which [`required_models`] reads.
+fn cross_check_admitted(
+    game: &str,
+    root: &StandardPackRoot,
+    pack_directory: &dyn Fn(&str) -> PathBuf,
+    admitted: Admitted,
+) -> LabResult<(Vec<Outcome>, Admitted)> {
+    let (mut warnings, admitted) = navigation_check(game, root, pack_directory, admitted)?;
     warnings.extend(remedy_report(root, pack_directory)?);
-    Ok(warnings)
+    Ok((warnings, admitted))
+}
+
+/// Workflow #453 S8 (register §1.350): the models the packages of `root` need, the union of the
+/// models each package's recognition pack names (its OCR and NN targets,
+/// [`NavigationPackageDescriptor::recognition_models`]), read from `admitted`, the packages the
+/// cross-check admitted: each model once with every package that names it, in byte order of
+/// `model_ref`, then of `model_sha256`, its `packages` in byte order of `package_id`. Every
+/// package of the registry is admitted before this runs; one that is not is `package_invalid`.
+fn required_models(
+    root: &StandardPackRoot,
+    admitted: &Admitted,
+) -> LabResult<Vec<StandardPackModel>> {
+    let mut models = BTreeMap::<(String, String), BTreeSet<String>>::new();
+    for package_id in root.registry.package_ids() {
+        let package = admitted
+            .get(package_id)
+            .ok_or_else(|| LabError::package_invalid(format!("{package_id} was not admitted")))?;
+        for (model_ref, model_sha256) in package.recognition_models() {
+            models
+                .entry((model_ref.clone(), model_sha256.clone()))
+                .or_default()
+                .insert(package_id.to_owned());
+        }
+    }
+    Ok(models
+        .into_iter()
+        .map(|((model_ref, model_sha256), packages)| StandardPackModel {
+            model_ref,
+            model_sha256,
+            packages: packages.into_iter().collect(),
+        })
+        .collect())
 }
 
 /// The cross-check of the parts `pages.json`, `navigation.json` and `interrupts.json` name and
 /// the report "entry page not in the list". Workflow #411 A25: with or without these files, every
 /// package of the registry is admitted, once; without `pages.json` (which the other two need)
-/// that is all, and nothing is reported.
+/// that is all, and nothing is reported. Workflow #453 S8: with the packages it admitted.
 fn navigation_check(
     game: &str,
     root: &StandardPackRoot,
     pack_directory: &dyn Fn(&str) -> PathBuf,
-    admitted: BTreeMap<String, NavigationPackageDescriptor>,
-) -> LabResult<Vec<Outcome>> {
+    admitted: Admitted,
+) -> LabResult<(Vec<Outcome>, Admitted)> {
     let mut packages = Packages {
         game,
         root,
@@ -432,7 +487,7 @@ fn navigation_check(
         let mut warnings = unlocated_store_taps(root, &mut packages)?;
         // Workflow #428 CFL-2: with or without `pages.json`.
         warnings.extend(preprocess_divergences(root, &mut packages)?);
-        return Ok(warnings);
+        return Ok((warnings, packages.admitted));
     };
     let listed = pages
         .pages
@@ -543,7 +598,7 @@ fn navigation_check(
     warnings.extend(unlocated_store_taps(root, &mut packages)?);
     // Workflow #428 CFL-2.
     warnings.extend(preprocess_divergences(root, &mut packages)?);
-    Ok(warnings)
+    Ok((warnings, packages.admitted))
 }
 
 /// STORE-FG-1 (design-store-fg §8.1; contracts/package-reference.md, the cross-check): a store's

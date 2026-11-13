@@ -34,7 +34,7 @@ const fn reads(row: &'static str, names: &'static [&'static str]) -> Reads {
 }
 
 /// The rows whose parameters the module reads in its process.
-pub static READ_HERE: [Reads; 17] = [
+pub static READ_HERE: [Reads; 19] = [
     reads("restart", &[]),
     reads("alive", &["wait"]),
     reads("deploy", &["target", "plan", "detach", "dir"]),
@@ -61,6 +61,10 @@ pub static READ_HERE: [Reads; 17] = [
     reads("ledger verify", &[]),
     // Workflow #453 S10: the live build's `actingd discover`; the row declares no parameter.
     reads("emulators", &[]),
+    // Workflow #453 S7: the live build's `actingd vision manifest --provider <provider>`, and its
+    // `actingd vision check`, which declares no parameter.
+    reads("vision manifest", &["provider"]),
+    reads("vision check", &[]),
     reads("watchdog install", &[]),
     reads("watchdog uninstall", &[]),
     reads("mcp plan", &["entry_protocol", "current_build"]),

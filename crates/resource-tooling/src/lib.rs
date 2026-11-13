@@ -105,6 +105,11 @@ mod gate_load1;
 #[cfg(test)]
 mod gate_444_notices3;
 
+// Workflow #453 S8 (register §1.350): standard-pack check answers the models a game root's packs
+// need.
+#[cfg(test)]
+mod gate_453_s8;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;
