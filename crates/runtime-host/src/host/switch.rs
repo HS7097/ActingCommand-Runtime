@@ -20,12 +20,20 @@
 //! and a direct run (`run_contained_task`) of a member switch after their own checks, timed so
 //! that their own clock leaves the switch out ([`HostShared::switch_before_run`]); an
 //! `ApplicationLifecycle` `launch` or `restart` of a member and the ladder's application restart
-//! rung stop the member in front first ([`HostShared::stop_others_before_start`]). A member's
-//! dispatch lease is sized for its startup run and its run ([`HostShared::dispatch_lease_ttl`]),
-//! and a failed switch holds the member's candidates for the switch cooldown
+//! rung stop the member in front first ([`HostShared::stop_others_before_start`]). A failed
+//! switch holds the member's candidates for the switch cooldown
 //! (`scheduling.device_group.switch_failure_cooldown_ms`, in memory). Every part and every caller
 //! begins from a member of a device group of several ([`HostShared::switch_applies`]), and the
 //! assembly refuses every such group, so an instance alone on its device never reaches this code.
+//!
+//! Workflow #437 MAPP-2d (register §1.357): the lease across a switch. A member's dispatch is
+//! granted the lease of an instance alone (its run's response deadline and the heartbeat
+//! reserve), and the switch runs inside it: its startup run takes what is left of the key
+//! ([`RunNeed::Renews`]). Once the startup run has handed the key back, the run renews its lease
+//! to its own response deadline and the reserve, counted from then
+//! (`HostShared::renew_after_switch`), before its request lifecycle. The renewal keeps the lease
+//! and replaces its token, so the run's later steps resolve the token the scheduler holds
+//! ([`HostShared::run_token`]).
 
 use super::resource_fence::UnconfirmedResources;
 use super::*;
@@ -35,30 +43,28 @@ use actingcommand_contract::codes::ContractCode;
 use actingcommand_device::DeviceResourceQuiescence;
 
 /// What a member's run still needs on the device's key after the startup run of the switch before
-/// it: the startup run's deadline on the borrowed key leaves it, and the key's remaining time must
-/// cover the startup run's lease time and it (`HostShared::borrowed_key_admits`).
+/// it: the startup run's deadline on the borrowed key leaves it (`HostShared::borrowed_key_admits`
+/// says what the key's remaining time must cover before the startup run).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RunNeed {
-    /// This much time on the key from each moment the switch reads the key (Workflow #437
-    /// MAPP-2a's form, which the public entry [`RuntimeHost::switch_application`] takes).
+    /// This much time on the key from each moment the switch reads the key: the key's remaining
+    /// time must cover the startup run's lease time and it (Workflow #437 MAPP-2a's form, which
+    /// the public entry [`RuntimeHost::switch_application`] takes).
     For(u64),
-    /// Workflow #437 MAPP-2b: the run's own time on a lease its admission sized, counted from each
-    /// moment the switch reads the key: the time to this Runtime-clock instant, the key's expiry
-    /// less what the lease holds beyond the run's response deadline (for a lease sized for the
-    /// switch, its startup run's lease time). So the time the switch's own steps take before the
-    /// startup run is not asked of the key again, and a key not sized for the startup run is
-    /// refused.
-    OwnTime { through_monotonic_ms: u64 },
+    /// Workflow #437 MAPP-2d: nothing, because the run renews its lease once the startup run has
+    /// handed the key back (`HostShared::renew_after_switch`). The startup run takes what is left
+    /// of the key: its deadline is the earlier of its response deadline and the key's expiry less
+    /// the heartbeat reserve, and the key is too little for it to start at all when no more than
+    /// the reserve is left (that deadline would not lie after now).
+    Renews,
 }
 
 impl RunNeed {
-    /// The time this need asks of the key at `now_monotonic_ms`.
-    pub(super) const fn after_ms(self, now_monotonic_ms: u64) -> u64 {
+    /// The time this need keeps on the key after the startup run.
+    pub(super) const fn after_ms(self) -> u64 {
         match self {
             Self::For(after_ms) => after_ms,
-            Self::OwnTime {
-                through_monotonic_ms,
-            } => through_monotonic_ms.saturating_sub(now_monotonic_ms),
+            Self::Renews => 0,
         }
     }
 }
@@ -72,19 +78,6 @@ pub(super) fn switch_runtime_failure(error: RuntimeHostError) -> RequestFailure 
     } else {
         RequestFailure::request(error, RuntimeReceiptState::Failed, None)
     }
-}
-
-/// Workflow #437 MAPP-2b: where the own time of a run of `task_request` on `token`, a key granted
-/// for `lease_ttl_ms`, ends ([`RunNeed::OwnTime`]): the key's expiry less what the lease holds
-/// beyond the run's response deadline (for a member's lease, its startup run's lease time).
-pub(super) fn own_time_through(
-    token: &LeaseToken,
-    lease_ttl_ms: u64,
-    task_request: &ContainedTaskRequest,
-) -> u64 {
-    token
-        .expires_at_monotonic_ms()
-        .saturating_sub(lease_ttl_ms.saturating_sub(task_request.response_deadline_ms()))
 }
 
 /// What the switch before a member's run did (Workflow #437 MAPP-2a).
@@ -235,16 +228,35 @@ impl HostShared {
     /// it took (the time the run's own clock leaves out; no sample of it is kept), and its result.
     /// A switch that failed with `application_switch_failed` starts the member's switch cooldown
     /// before it returns, so the run's failed settlement that follows finds it running.
+    ///
+    /// Workflow #437 MAPP-2d: the switch runs inside the run's own lease, its startup run taking
+    /// what is left of the key ([`RunNeed::Renews`]); once a startup run has handed the key back,
+    /// the run renews its lease to `lease_ttl_ms` (its response deadline and the heartbeat
+    /// reserve) from then (`HostShared::renew_after_switch`, its records under `request`, the
+    /// run's request), inside the time measured here, so the renewal adds no time to the run's
+    /// own. A switch that ran no startup run (the member's own package in front) renews nothing.
     pub(super) fn switch_before_run(
         &self,
         links: EventLinksDraft,
-        request_id: RequestId,
+        request: &ValidatedRuntimeRequest<'_>,
         token: &LeaseToken,
         connection_id: ConnectionId,
-        need: RunNeed,
+        lease_ttl_ms: u64,
     ) -> RuntimeHostResult<(u64, Result<ApplicationSwitch, RuntimeHostError>)> {
         let started_ms = self.monotonic_ms()?;
-        let switched = self.switch_application(links, request_id, token, connection_id, need)?;
+        let mut switched = self.switch_application(
+            links,
+            request.request_id(),
+            token,
+            connection_id,
+            RunNeed::Renews,
+        )?;
+        if matches!(&switched, Ok(switch) if switch.started)
+            && let Err(failure) =
+                self.renew_after_switch(request, token, connection_id, lease_ttl_ms)?
+        {
+            switched = Err(failure);
+        }
         let took_ms = self.monotonic_ms()?.saturating_sub(started_ms);
         if let Err(failure) = &switched
             && failure.code() == HostCode::ApplicationSwitchFailed.as_str()
@@ -307,63 +319,73 @@ impl HostShared {
         Ok(held)
     }
 
-    /// Workflow #437 MAPP-2b (`contracts/device-group.md`, "The switch before a run", "The key's
-    /// time"): the lease a run of `member` under `task_request` is granted. An instance alone on
-    /// its device: its run's own, its response deadline and the heartbeat reserve, as before. A
-    /// member of a device group of several, whose run may switch first: also its startup
-    /// package's response deadline, so the startup run on the borrowed key and the run both fit
-    /// (`D_s + D_run + R`). A member whose lease would exceed the longest the scheduler grants
-    /// (the longest response deadline plus the reserve) cannot be served: it is refused before
-    /// any device step and before any lease, `contained_task_deadline_unavailable`, the same way
-    /// every time. A member with no startup package keeps its run's own lease; its switch then
-    /// fails at its startup step.
-    pub(super) fn dispatch_lease_ttl(
+    /// Workflow #437 MAPP-2d (`contracts/device-group.md`, "The switch before a run", step 4 and
+    /// "The key's time"): after the switch's startup run has handed the key back, the run renews
+    /// its lease to `lease_ttl_ms` (its response deadline and the heartbeat reserve) counted from
+    /// now, with the host's renewal of a Runtime-held lease (`HostShared::renew_held_lease`,
+    /// `scheduler.admitted`, `lease.transition_intent` and `lease.renewed` under `request`, the
+    /// run's request). The renewal keeps the lease (its id, holder, instance and owner epoch) and
+    /// replaces its token; the run's later steps take that token through [`Self::run_token`]. The
+    /// queue is not read: a claim queued on the device stays queued behind the run. A renewal the
+    /// scheduler refuses (the lease lost, lapsed or taken over) is `application_switch_failed` at
+    /// step `lease_renewal`, caused by the refusal, with the member's own package; a Runtime-level
+    /// failure of its records is the error.
+    fn renew_after_switch(
         &self,
-        member: InstanceId,
-        task_request: &ContainedTaskRequest,
-    ) -> Result<u64, RequestFailure> {
-        let run_ttl_ms = self.contained_task_lease_ttl(task_request)?;
-        if !self.switch_applies(member) {
-            return Ok(run_ttl_ms);
-        }
-        let Some(startup_deadline_ms) = self
-            .startup_packages()?
-            .get(&member)
-            .map(ContainedTaskRequest::response_deadline_ms)
-        else {
-            return Ok(run_ttl_ms);
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        lease_ttl_ms: u64,
+    ) -> RuntimeHostResult<Result<(), RuntimeHostError>> {
+        let Some(resolved) = self.switch_registration(token.instance_id())? else {
+            return Ok(Err(member_mismatch()));
         };
-        let reserve_ms = lock(
-            &self.scheduler,
-            HostLocation::ReadContainedTaskLeaseTtlConfig,
-        )?
-        .config()
-        .maximum_client_heartbeat_interval_ms;
-        let lease_ttl_ms = run_ttl_ms.checked_add(startup_deadline_ms).ok_or_else(|| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                HostCode::ContainedTaskLeaseTtlOverflow,
-                HostLocation::DeriveContainedTaskLeaseTtl,
-                RuntimeErrorCode::RuntimeHalted,
-            ))
-        })?;
-        let maximum_ms = ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS.saturating_add(reserve_ms);
-        if lease_ttl_ms > maximum_ms {
-            return Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    HostCode::ContainedTaskDeadlineUnavailable,
-                    HostLocation::DeriveContainedTaskLeaseTtl,
-                    RuntimeErrorCode::ContainedTaskDeadlineExceeded,
-                )
-                .with_native_detail(format!(
-                    "startup_deadline_ms={startup_deadline_ms}; response_deadline_ms={}; \
-                     reserve_ms={reserve_ms}; lease_ms={lease_ttl_ms}; maximum_lease_ms={maximum_ms}",
-                    task_request.response_deadline_ms()
-                )),
-                RuntimeReceiptState::Denied,
-                None,
-            ));
+        let alias = resolved.instance_alias.as_str();
+        let Some(own) = self.execution()?.assigned_application_id(alias) else {
+            return Ok(Err(no_assigned_application()));
+        };
+        #[cfg(test)]
+        let refused_for_test = self.renewal_token_for_test(token);
+        #[cfg(test)]
+        let token = refused_for_test.as_ref().unwrap_or(token);
+        match self.renew_held_lease(request, token, connection_id, lease_ttl_ms) {
+            Ok(_) => Ok(Ok(())),
+            Err(failure) if failure.poison_runtime => Err((*failure.error).into_fatal()),
+            Err(failure) if failure.error.is_fatal() => Err(*failure.error),
+            Err(failure) => Ok(Err(switch_failed(
+                alias,
+                ApplicationSwitchStep::LeaseRenewal,
+                &own,
+                &failure.error,
+            ))),
         }
-        Ok(lease_ttl_ms)
+    }
+
+    /// Workflow #437 MAPP-2d (`contracts/device-group.md`, "The key's time"): the token of the
+    /// lease `granted` names, as the scheduler holds it now. A member's run renews its lease once
+    /// the switch's startup run has handed the key back, and the renewal replaces the token (the
+    /// lease id, holder, instance and owner epoch stay), so every step of the run after the switch
+    /// takes its token here: the device's lease with the same lease id and holder on
+    /// `connection_id`, found as `release_host_key` finds a host key. When the device holds no
+    /// such lease any more (it ended, lapsed or was handed on), the granted token itself, so what
+    /// then validates or releases it meets that end as before. An instance alone on its device
+    /// never renews: its granted token is returned and nothing is read.
+    pub(super) fn run_token(
+        &self,
+        granted: &LeaseToken,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<LeaseToken> {
+        if !self.switch_applies(granted.instance_id()) {
+            return Ok(granted.clone());
+        }
+        Ok(lock(&self.scheduler, HostLocation::ReadHostKey)?
+            .active_lease(granted.instance_id())
+            .filter(|lease| {
+                lease.token().lease_id() == granted.lease_id()
+                    && lease.token().holder_id() == granted.holder_id()
+                    && lease.connection_id() == connection_id
+            })
+            .map_or_else(|| granted.clone(), |lease| lease.token().clone()))
     }
 
     /// The switch's steps on the key `token` (`connection_id`) of the member it names: steps 1
@@ -761,6 +783,63 @@ impl HostShared {
                 )
             })
     }
+
+    /// Workflow #437 MAPP-2d: once, when a test asked for it
+    /// ([`RuntimeHost::refuse_next_switch_renewal_for_test`]), the token the next renewal after a
+    /// switch is asked with: `token`'s lease with an expiry the scheduler does not hold, as a token
+    /// left behind by a renewal or a takeover elsewhere, so the scheduler refuses it
+    /// (`lease_mismatch`) and the key itself is untouched; `None` otherwise.
+    fn renewal_token_for_test(&self, token: &LeaseToken) -> Option<LeaseToken> {
+        if !self
+            .switch_renewal_refusal_for_test
+            .swap(false, Ordering::AcqRel)
+        {
+            return None;
+        }
+        LeaseToken::new(
+            token.owner_epoch(),
+            token.lease_id(),
+            token.instance_id(),
+            token.holder_id(),
+            token.expires_at_monotonic_ms().saturating_add(1),
+        )
+        .ok()
+    }
+
+    /// Workflow #437 MAPP-2d: once, when a test asked for it
+    /// ([`RuntimeHost::fail_next_run_after_switch_for_test`]), the failure of the next member's
+    /// run right after its switch (its renewal included) and before anything else of the run:
+    /// `backend_operation_failed`, as a failure of the run's next step would be; `None`
+    /// otherwise.
+    pub(super) fn take_run_failure_after_switch_for_test(&self) -> Option<RequestFailure> {
+        self.run_failure_after_switch_for_test
+            .swap(false, Ordering::AcqRel)
+            .then(|| {
+                RequestFailure::request(
+                    RuntimeHostError::request(
+                        RuntimeErrorCode::BackendOperationFailed,
+                        HostLocation::SwitchApplication,
+                        RuntimeErrorCode::BackendOperationFailed,
+                    ),
+                    RuntimeReceiptState::Failed,
+                    None,
+                )
+            })
+    }
+
+    /// Workflow #437 MAPP-2d fix round 1: once, when a test asked for it
+    /// ([`RuntimeHost::release_failed_policy_run_with_granted_token_for_test`]), `granted`, the
+    /// token a policy run was granted, for the release of its failed settlement in place of the
+    /// token [`Self::run_token`] resolves, as a build that released with the granted token would;
+    /// `None` otherwise.
+    pub(super) fn take_granted_token_release_for_test(
+        &self,
+        granted: &LeaseToken,
+    ) -> Option<LeaseToken> {
+        self.granted_token_release_for_test
+            .swap(false, Ordering::AcqRel)
+            .then(|| granted.clone())
+    }
 }
 
 /// Workflow #437 MAPP-2a, tests: the switch's parts one by one, and how often its entry was
@@ -837,6 +916,44 @@ impl RuntimeHost {
         let location = crate::codes::test_spellings::TestLocation::FailNextMemberCloseForTest;
         self.shared_ref(location)?
             .member_close_failure_for_test
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Workflow #437 MAPP-2d: the next renewal after a member's switch is asked with a token the
+    /// scheduler does not hold, so the scheduler refuses it (`lease_mismatch`); the key stays the
+    /// run's, untouched (`HostShared::renewal_token_for_test`).
+    pub(crate) fn refuse_next_switch_renewal_for_test(&self) -> RuntimeHostResult<()> {
+        let location = crate::codes::test_spellings::TestLocation::RefuseNextSwitchRenewalForTest;
+        self.shared_ref(location)?
+            .switch_renewal_refusal_for_test
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Workflow #437 MAPP-2d: the next member's run fails right after its switch, its renewal
+    /// included, before anything else of the run (`backend_operation_failed`): a policy run before
+    /// its request lifecycle, so its failed settlement releases its key; a direct run before its
+    /// deadline is set again, so its failure path releases it.
+    pub(crate) fn fail_next_run_after_switch_for_test(&self) -> RuntimeHostResult<()> {
+        let location = crate::codes::test_spellings::TestLocation::FailNextRunAfterSwitchForTest;
+        self.shared_ref(location)?
+            .run_failure_after_switch_for_test
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Workflow #437 MAPP-2d fix round 1: the next release of a policy run's failed settlement
+    /// (`HostShared::ensure_scheduled_policy_lease_released`) takes the token the run was granted,
+    /// not the one the scheduler holds (`HostShared::take_granted_token_release_for_test`): what a
+    /// build that released with the granted token would do after a renewal.
+    pub(crate) fn release_failed_policy_run_with_granted_token_for_test(
+        &self,
+    ) -> RuntimeHostResult<()> {
+        let location =
+            crate::codes::test_spellings::TestLocation::ReleaseFailedPolicyRunWithGrantedTokenForTest;
+        self.shared_ref(location)?
+            .granted_token_release_for_test
             .store(true, Ordering::Release);
         Ok(())
     }
