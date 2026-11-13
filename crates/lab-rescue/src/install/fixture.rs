@@ -3,7 +3,7 @@
 // Test-only: the neutral builds, release folders and roots of the INST-1 gates, and the fake host
 // they run `actingctl install` on. Every name is neutral; no file is a real program.
 
-use super::host::{Host, Installer, NotRan, Ran, RunningImage};
+use super::host::{Host, Installer, NotFinished, NotRan, Ran, RunningImage};
 use super::manifest::{Speaks, parse_declaration};
 use super::runtime::{
     Closed, ConfigSeen, Drained, InstanceSeen, PauseSeen, PlanSeen, RuntimeLink, RuntimeSeen,
@@ -338,6 +338,17 @@ pub(super) struct Programs {
     /// The builds whose check-config refuses `--install-root` as a build before
     /// `actingd-config` revision 17 does: `check_config_usage_invalid`, no value, no report.
     pub(super) refuse_install_root: RefCell<Vec<String>>,
+    /// Workflow #453 S6 fix 1: the notes every check-config that passes gives with its
+    /// `check_config_passed`, as wire links (`code`, `category`, `relation` `note`, `values`), as
+    /// the real one joins a problem of a game root or of its composition (none by default).
+    pub(super) check_config_notes: RefCell<Vec<Value>>,
+    /// Workflow #453 S6 fix 2: the `causes_total` of every check-config that passes, as the
+    /// outcome's envelope sets it when it cut links (none by default).
+    pub(super) check_config_causes_total: Cell<Option<u64>>,
+    /// Workflow #453 S6 fix 2: members of the `report` of every check-config that passes, each
+    /// replacing the default's member of its name (`standard_packs`, `standard_pack_schedule`;
+    /// none by default).
+    pub(super) check_config_report: RefCell<BTreeMap<&'static str, Value>>,
     /// The ledger head the head read and `events` read.
     pub(super) ledger_head: Cell<u64>,
     /// A build whose reader refuses a read that reaches this sequence (every read also reads
@@ -350,6 +361,13 @@ pub(super) struct Programs {
     pub(super) stall: RefCell<Vec<&'static str>>,
     /// Every program run, by that word, with the deadline it was given.
     pub(super) deadlines: RefCell<Vec<(String, u64)>>,
+    /// Workflow #453 S10: the exit code of `actingd discover` and the line it prints (`null`, no
+    /// report, until a test sets one).
+    pub(super) discover: RefCell<(i32, Value)>,
+    /// Workflow #453 S10 fix 1: every program run to be ended at its deadline
+    /// (`run_program_ending`) that never exits (a word of `stall`) and was ended there, by that
+    /// word, with its deadline.
+    pub(super) ended: RefCell<Vec<(String, u64)>>,
 }
 
 /// The process id of a fake program left running at its deadline.
@@ -378,11 +396,16 @@ impl FakeHost {
             programs: Programs {
                 refuse_check_config: RefCell::new(Vec::new()),
                 refuse_install_root: RefCell::new(Vec::new()),
+                check_config_notes: RefCell::new(Vec::new()),
+                check_config_causes_total: Cell::new(None),
+                check_config_report: RefCell::new(BTreeMap::new()),
                 ledger_head: Cell::new(100),
                 unreadable: RefCell::new(None),
                 verify_exit: Cell::new(0),
                 stall: RefCell::new(Vec::new()),
                 deadlines: RefCell::new(Vec::new()),
+                discover: RefCell::new((0, Value::Null)),
+                ended: RefCell::new(Vec::new()),
             },
             on_step: RefCell::new(None),
             log: RefCell::new(Vec::new()),
@@ -544,20 +567,37 @@ impl Host for FakeHost {
                         }),
                     )
                 } else {
+                    let mut outcome = json!({"schema_version": "actingcommand.outcome.v1",
+                        "code": "check_config_passed", "category": "success", "values": {}});
+                    let notes = self.programs.check_config_notes.borrow().clone();
+                    if !notes.is_empty() {
+                        outcome["causes"] = Value::Array(notes);
+                    }
+                    if let Some(total) = self.programs.check_config_causes_total.get() {
+                        outcome["causes_total"] = json!(total);
+                    }
+                    let mut report = json!({"policy_plan": {"plan": null, "approvals": null},
+                        "standard_packs": {"games": []}});
+                    for (name, member) in self.programs.check_config_report.borrow().iter() {
+                        report[*name] = member.clone();
+                    }
                     ran(
                         0,
                         json!({
                             "schema_version": "actingcommand.actingd.check-config.v2",
-                            "outcome": {"schema_version": "actingcommand.outcome.v1",
-                                "code": "check_config_passed", "category": "success", "values": {}},
-                            "report": {"policy_plan": {"plan": null, "approvals": null},
-                                "standard_packs": {"games": []}},
+                            "outcome": outcome,
+                            "report": report,
                         }),
                     )
                 }
             }
             ("actingcommand-actingd.exe", Some("ledger-maintenance")) => {
                 ran(self.programs.verify_exit.get(), json!({}))
+            }
+            // Workflow #453 S10: the line the test set.
+            ("actingcommand-actingd.exe", Some("discover")) => {
+                let (exit_code, line) = self.programs.discover.borrow().clone();
+                ran(exit_code, line)
             }
             // The bounded head read (S0): no row but the head's.
             ("actingledger.exe", _)
@@ -604,6 +644,52 @@ impl Host for FakeHost {
             }
             _ => panic!("an unexpected program: {} {words:?}", program.display()),
         })
+    }
+
+    /// Workflow #453 S10 fix 1: a program whose word is in `stall` never exits; it is ended at its
+    /// deadline, kept in `ended`, and left among no processes (unlike [`Self::run_program`]'s, which
+    /// is left running with `STALLED_PID`). Any other program answers as `run_program` does.
+    fn run_program_ending(
+        &self,
+        program: &Path,
+        arguments: &[OsString],
+        timeout_ms: u64,
+    ) -> Result<Ran, NotFinished> {
+        let doing = arguments
+            .first()
+            .map(|word| word.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if !self
+            .programs
+            .stall
+            .borrow()
+            .iter()
+            .any(|stalled| *stalled == doing)
+        {
+            return self.run_program(program, arguments, timeout_ms).map_err(
+                |not_ran| match not_ran {
+                    NotRan::Failed(cause) => NotFinished::Failed(cause),
+                    NotRan::StillRunning { .. } => panic!("only a stalled program runs on"),
+                },
+            );
+        }
+        let name = program
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        let words = arguments
+            .iter()
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        self.log
+            .borrow_mut()
+            .push(format!("{} {name} {}", build_of(program), words.join(" ")));
+        self.programs
+            .deadlines
+            .borrow_mut()
+            .push((doing.clone(), timeout_ms));
+        // It runs on to its deadline; there it is ended and reaped.
+        self.programs.ended.borrow_mut().push((doing, timeout_ms));
+        Err(NotFinished::Ended)
     }
 
     fn log_dirs(&self, root: &Path) -> Vec<PathBuf> {

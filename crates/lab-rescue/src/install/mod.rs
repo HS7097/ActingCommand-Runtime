@@ -132,6 +132,13 @@ mod gate_451_place_pkg;
 // keeps the CLI's envelope.
 #[cfg(test)]
 mod gate_434_lab6s2b1;
+// Test-only: Workflow #453 S5 and S6, the rescue module's `place` with no instance bound to the
+// bundle's game, and while the Runtime is stopped.
+#[cfg(test)]
+mod gate_453_cold_place;
+// Test-only: Workflow #453 S10, the rescue row `emulators` on the fake host's actingd.
+#[cfg(test)]
+mod gate_453_s10;
 // Test-only: Workflow #454, a post-start check that fails closes its step with what it read.
 #[cfg(test)]
 mod gate_454_postcheck;
@@ -193,17 +200,22 @@ impl Face {
 const USAGE: &str = "usage: actingctl install release verify --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>]\nusage: actingctl install release stage --root <root> --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>] [--local-build]\nusage: actingctl install adopt --root <root>\nusage: actingctl install update plan --root <root> --build <commit> [--preview] [--accept-ledger-one-way]\nusage: actingctl install update apply --root <root> --build <commit> --plan <id> [--accept-ledger-one-way] [--stop --hold <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]]\nusage: actingctl install rollback plan|apply --root <root> --to <commit> [--plan <id>] [--accept-ledger-one-way] [--stop --hold <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]]\nusage: actingctl install undo|resume --root <root> --operation <id>\nusage: actingctl install status --root <root> [--operation <id>] [--check-rollback]\nusage: actingctl install leftovers --root <root>\nusage: actingctl install stop --root <root> --hold <reason> [--known-pause ALIAS=REASON]... [--ack-guard <id>]...\nusage: actingctl install start --root <root> [--ack-guard <id>]...\nusage: actingctl install release-hold --root <root> --reason <reason>\nusage: actingctl install guards --root <root> --for stop|start [--hold <reason>] [--known-pause ALIAS=REASON]...";
 
 /// Runs `install` when the first argument names it, with the revision-1 face; `None` leaves every
-/// other command to the CLI, unchanged. The caller (actingctl) prints the exit.
-pub fn dispatch(arguments: &[OsString]) -> Option<Exit> {
+/// other command to the CLI, unchanged. The caller (actingctl) prints the exit. Workflow #434
+/// LAB-6S2-B2: every connection to a running Runtime declares `initiator`, the caller's word
+/// (actingctl's `Lab-CLI`), and keeps the CLI's envelope; the journals of this face still record
+/// no initiator ([`Face::Install`]).
+pub fn dispatch(arguments: &[OsString], initiator: Initiator) -> Option<Exit> {
     if arguments.first()?.to_str()? != "install" {
         return None;
     }
     if let Err(invalid) = cli_line::detail() {
         return Some(cli_line::failure(&invalid, None));
     }
-    // Workflow #434 LAB-6S2-B1: actingctl's connections declare no word, the CLI channel as on
-    // 0.12.58, until LAB-6S2-B2.
-    Some(print(execute(&arguments[1..], &SystemHost::of(None))))
+    // Workflow #434 LAB-6S2-B2: the caller's word, where LAB-6S2-B1 declared none.
+    Some(print(execute(
+        &arguments[1..],
+        &SystemHost::of(Some(initiator)),
+    )))
 }
 
 const MCP_ENTRY_USAGE: &str = "usage: actingctl mcp-entry plan --root <root> --entry-protocol 1 [--current-build <commit>] [-- <child arguments>]\nusage: actingctl mcp-entry list --root <root> [--all]";

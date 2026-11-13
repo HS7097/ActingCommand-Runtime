@@ -792,6 +792,7 @@ impl HostShared {
             recheck_from: None,
             failure_stage: None,
             clock_failure: None,
+            base: task.resolution(),
         };
         let outcome = task.run_declared_operation(&mut runtime, operation_id);
         let recheck_frames = runtime.recheck_frames()?;
@@ -1514,6 +1515,37 @@ fn lab_declared_state_invalid() -> RequestFailure {
     )
 }
 
+/// Workflow #392 DA-3 fix 1 (`contracts/display-adapter.md` section 10): a declared operation's
+/// input on a frame of `frame` size, which is not its package's base `base`. The Lab's runtime
+/// reads no game declaration and its frames, read back from their pictures, carry no producer
+/// geometry, so it cannot know the map a run's input leaves under; it never sends a base point
+/// to such a frame. The input is refused before anything is sent, as a run's input under a map
+/// it does not map: `display_map_unresolved` (`input_scale_unsupported`) at stage
+/// `display_input_map`, with the frame's and the base's sizes. Only that operation fails,
+/// non-fatal.
+fn lab_input_scale_unsupported(frame: (u32, u32), base: (u32, u32)) -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(
+            actingcommand_display_adapter::DisplayCode::MapUnresolved,
+            HostLocation::ValidateTaskGeometryInput,
+            RuntimeErrorCode::BackendOperationFailed,
+        )
+        .with_outcome_values(|outcome| {
+            outcome
+                .display_problem(
+                    actingcommand_display_adapter::DisplayProblem::InputScaleUnsupported,
+                )
+                .stage(actingcommand_display_adapter::DisplayLocation::InputMap)
+                .frame_width(frame.0)
+                .frame_height(frame.1)
+                .base_width(base.0)
+                .base_height(base.1)
+        }),
+        RuntimeReceiptState::Failed,
+        None,
+    )
+}
+
 /// The request a Lab operation serves: its request, instance and connection.
 #[derive(Clone, Copy)]
 struct LabOperationContext<'a> {
@@ -1611,6 +1643,9 @@ struct LabOperationRuntime<'a> {
     failure_stage: Option<LabOperationStage>,
     /// A failed read of the Runtime clock, reported at the next capture, input or record.
     clock_failure: Option<RuntimeHostError>,
+    /// Workflow #392 DA-3 fix 1: the package's base (its control resolution), `(width, height)`;
+    /// an input is sent only on a frame of this size.
+    base: (u32, u32),
 }
 
 impl LabOperationRuntime<'_> {
@@ -1778,6 +1813,8 @@ impl LabOperationRuntime<'_> {
     /// bound it to. Its intent and outcome are read from after the previous attempt's events
     /// (after the prepared record for attempt 1). A frame other than the one captured last fails
     /// the operation with `contained_task_effect_frame_identity_mismatch` (ISO-2b: non-fatal).
+    /// Workflow #392 DA-3 fix 1: an input on a frame of another size than the package's base is
+    /// refused before anything is sent ([`lab_input_scale_unsupported`]).
     fn press(
         &mut self,
         action: InputAction,
@@ -1800,6 +1837,19 @@ impl LabOperationRuntime<'_> {
             return Err(lab_declared_state_failure(
                 HostCode::ContainedTaskEffectFrameIdentityMismatch,
             ));
+        }
+        let input_frame = self
+            .frames
+            .last()
+            .map(|entry| {
+                (
+                    entry.frame.observation.width(),
+                    entry.frame.observation.height(),
+                )
+            })
+            .ok_or_else(invalid)?;
+        if input_frame != self.base {
+            return Err(lab_input_scale_unsupported(input_frame, self.base));
         }
         self.host.device_state_keepalive(
             self.instance_id,

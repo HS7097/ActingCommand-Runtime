@@ -12129,6 +12129,170 @@ Both arise only where programs of this build meet a Runtime of an earlier one.
 
 **LAB-6S2-B1 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
 
+#### Slice LAB-6S2-B2 (0.12.59): `actingctl` and today's MCP server bind `lab` with their word; the envelope stays as on 0.12.58
+
+Coordinator work order `rd-1113/brief-lab6s2b2.md`, after the second survey `rd-1113/lab6s2-mapping.md`
+(its sections 1, 3, 4, 5 and its row S2-B2); the coordinator's rulings of 2026-11-13 on board
+#434, not the owner's words; based on main `7938d10e` (0.12.58, LAB-6S2-M, LAB-6S2-B1 and two
+slices of boards #441 and #452). The contracts are [lab-two-entries.md](lab-two-entries.md) (the
+slice table, §4.2) and [runtime-interface.md](runtime-interface.md) ("Binding" rule 6, "Old
+Runtimes"), which states the channel of today's MCP server; its agent manual is a skill of the
+umbrella repository, not of this one.
+
+**What.** The last two programs of this repository move onto the Lab channel with their word, and
+keep the envelope they sent on 0.12.58; the Runtime records each request with the channel that
+program's binding had then (LAB-6S2-M's map M) and receipts it by rule R:
+
+| Program, connection | Word, and where it is taken | Envelope (as on 0.12.58) |
+|---|---|---|
+| `actingctl`'s own commands (`client_config`: `status`, `request-shutdown`, `install-transition` with its identity card, `config`, `pause`, `resume`, `task-offset`, the emulator, monitor, observation and run commands and the rest) | `Lab-CLI`, actingctl's `WORD` | (Cli, Cli); (Agent, Adapter) for `agent-publish-facts` and `agent-apply-resource-targets` (`Command::origin`, unchanged) |
+| `actingctl`'s commands of the operation layer (`events`, `observe --export`, `runs`, `diagnose`, `overview`, `run evidence`, `remedy`, `evidence confirm-read`, `perf-preset`, `routine-summary`: `Front::Actingctl`, which actingctl never changes) | `Lab-CLI` (`Front::initiator`) | (Cli, Cli) |
+| the code `actingctl` shares with the Lab: `install` (the rescue module's client, `SystemHost::of`), `start` and `restart` (`runtime_start::run`, its readiness probe included), `watchdog` (`dispatch`) and the overview's `watchdog` block | `Lab-CLI`, which actingctl hands to `install::dispatch`, `runtime_start::dispatch` and `watchdog::dispatch` (each a new parameter) and `Front::Actingctl` gives the block | (Cli, Cli); the watchdog's probe sends `Health` and `BindChannel` only |
+| today's MCP server (`actingctl mcp-serve`): the kept connection and each write's (`mcp::runtime::client_config`) | `Lab-MCP` | (Cli, Cli); (Agent, Adapter) for `ac_targets_set`, `ac_remedy_set` and `ac_evidence_confirm_read` |
+| today's MCP server's overview `watchdog` block | `Lab-MCP`: the server says it is `Front::Mcp` at its start (`front::set`), as the Lab's MCP server does | (Cli, Cli), `Health` and `BindChannel` only |
+| today's MCP server's actinglab children (`--via mcp`) | `Lab-MCP` without `via`, since LAB-6S2-B1 (`lab_client_config_via`); the launcher still passes `--via mcp` | (Lab, Lab) |
+
+Since this slice no program of this repository binds `cli` or `mcp`; a `lab` binding without a
+word is left only where LAB-6S2-B1 keeps one (`--via ui`, and actinglab's own commands under a
+variable that names no word). The shared code keeps its word as an `Option` (LAB-6S2-B1's
+parameters); no product caller passes none.
+
+**What stays.** Every envelope; every record and every receipt the Runtime writes for these
+programs. Their requests all carry an envelope other than the Lab's, so M records them on `cli`
+(actingctl) and `mcp` (today's MCP server) without `via`, and R receipts them so, without
+`initiator`: the C4 command records' `channel` and `via`, the package debug records' and the
+`host.config_overrides` rows' `channel` ("经命令行", "经 MCP" on the console's settings page), the
+client records, the identity card (`(Cli, Cli)`, judged by the envelope, so `install-transition`'s
+card and MCP's `actingctl-mcp` card are accepted as before), the evidence read confirmations and
+their frame index rows, the shutdown request's origin: all as on 0.12.58. `actingctl install`'s
+journals still record no initiator (the face of `install-cli` revision 1). No interface revision
+moves, no outcome code is added, and `RuntimeRequest::validate()`, the host, the UI list and the
+contract crate's map are untouched.
+
+**The receipts the released installation helper decodes.** acsetup (UI v0.12.16) runs
+`actingctl install-transition --action-json <a> [--wait 60]` and the cold
+`actingctl request-shutdown --wait 60` and decodes the printed `receipt` strictly into the
+`RuntimeReceipt` of the Runtime commit the console pins (`c0f75c7e`): twelve members
+(`schema_version`, `request_id`, `correlation_id`, `state`, `terminal`, `result`, `outcome`,
+`resource_declaration`, `resource_declaration_event`, `resource_targets_rejection`, `channel`,
+`via`), unknown members refused. On a `lab` binding with `Lab-CLI` both requests carry (Cli, Cli),
+so R answers them with M's binding, `ChannelBinding::new(Cli)`: `channel` `cli`, no `via`, no
+`initiator`, the members 0.12.58's `cli` binding wrote. Nothing else in either receipt reads the
+binding (the shutdown and the install transition read no channel).
+
+**What a person sees.** Nothing, on a Runtime of 0.12.59. The answer to `BindChannel` carries
+`lab` and the word, which only the client reads (it requires the echo).
+
+**Decided in this slice, by the texts** (each the only way to keep 0.12.58's records and receipts):
+- (a) actingctl's word is `Lab-CLI` and today's MCP server's `Lab-MCP` (the slice table; §4.1, "the
+  word names where the request came from": a command line, an MCP client); actingctl reads no
+  variable.
+- (b) `actingctl install` binds with `Lab-CLI` while its journals keep recording no initiator: the
+  journal is the revision-1 face's, unchanged until LAB-7.
+- (c) Today's MCP server says it is `Front::Mcp`, so the one reader of the program in force, the
+  overview's `watchdog` block, declares `Lab-MCP` there; nothing else of that server reads it.
+
+**Tests.** New: apps row "#434 LAB-6S2-B2". On the runtime client's scripted Runtime, each first
+request refused: actingctl's command lines, one per kind they send first (`actingctl`
+`gate_434_lab6s2b2`), the operation layer's `routine-summary`, and on Windows the rescue
+module's client and the watchdog's probe with actingctl's word; the real `mcp-serve`'s kept
+connection and its two write connections (`ac_config_set`, (Cli, Cli); `ac_remedy_set`, (Agent,
+Adapter)); a Runtime that drops the word, the real `actingctl status` going on unbound once with
+its one report (gate `lab6s2b2`). On the test host: one `ConfigureSettings` through the real
+`actingctl` and through the real `mcp-serve`, the client and command records 0.12.58's literals;
+and the two receipts as the real `actingctl` prints them (`install-transition`'s drain and the
+commit of its ticket, `request-shutdown`), each decoded by the helper's receipt type written member
+for member (`--wait`, which only adds a member beside `receipt`, left out: the test host runs in
+the test's own process). **Adapted** (the binding they pinned moved, or a fake answered the old
+binding): `actingctl` `gate::lab5g1b_front_mcp` and `actinglab-mcp` `serve_calls::mcp_write_provenance_as_todays_server`
+(today's server binds `lab` with `Lab-MCP`); the fake Runtimes of `gate::mcp_diagnose_parity`,
+`gate::mcp_ladder_drill_parity`, `gate::mcp_overview_parity`, `gate::mcp_runs_parity`,
+`gate::mcp_run_evidence_parity` and `mcp::tests::gate_411_a42` (shared by `gate_422_idle_ov`,
+`gate_422_qr2` and `gate_422_qr2b`), which answered every `BindChannel` without a word and now
+echo the word declared, as the Runtime does since LAB-6S1a (the client requires the echo); and
+the comments of LAB-6S2-B1's tests of the no-word branch (`lab-rescue`, `watchdog`), whose
+assertions stay. No test leaves the gate map.
+
+**Fix 1** (work order `rd-1113/brief-1683-fix1.md`, after an independent review that found nothing
+that must change: a Runtime that does not know the binding drops the connection at its second
+frame, before admission, so no write runs twice): this entry's "At deploy", which now counts the
+records such a Runtime writes and names the reads of the post-start check and of the release as
+the code makes them; [runtime-interface.md](runtime-interface.md), "Old Runtimes", which said that
+the later reconnects of the client *process* send no `BindChannel`, where the code decides per
+client (`RuntimeClient`); and one test in the same apps row that goes through actingctl's own
+dispatch: in gate `lab6s2b2`, `lab6s2b2_watchdog_status_through_actingctl_probes_with_lab_cli`
+(Windows) runs the real `actingctl watchdog status --root` on a single-location root whose owner
+lock the test holds, against the scripted Runtime; `main`'s `watchdog` site hands the watchdog
+actingctl's word, so the status's one probe binds `lab` with `Lab-CLI` and no `via`, sends `Health`
+and `BindChannel` with (Cli, Cli), and the report is `watchdog_alive`. No product code changes.
+
+**At deploy.** Works on a Runtime of 0.12.59 (LAB-6S2-M in the same build). On an earlier Runtime
+each program is served by that Runtime's own rules (fix 1: the connections counted from the code):
+- **Runtime 0.12.58** accepts the word and has no map M and no rule R. It serves every request of
+  these programs and refuses none (no origin gate since LAB-6S1b; the identity card is judged by
+  the envelope), records each with the binding as declared, `lab` without `via`, and receipts it
+  with `lab` and the word. So the C4 command records, the package debug records and the settings
+  rows of `actingctl` and of today's MCP server are written with the channel `lab` where 0.12.59
+  writes `cli` and `mcp` (the console's settings page then shows their settings as the Lab's),
+  and every receipt they get carries `initiator`. Among them are the two receipts the installation
+  helper decodes: a helper that ran a 0.12.59 `actingctl` against a 0.12.58 Runtime would refuse
+  them ("Installation control receipt unreadable") and its close or start would stop. The helper
+  never does: it closes a Runtime with its own slot's `actingctl` and starts and releases with the
+  target slot's, the same build as each Runtime.
+- **Runtime 0.12.57 or earlier** cannot decode the word. It drops the connection at its second
+  frame, the `BindChannel`, before it admits anything, and records one connection failure: a
+  record `runtime_protocol_invalid` of category error in its ledger (at the request's decoding).
+  The client reconnects once in the same owner epoch, unbound, and that client (one
+  `RuntimeClient`, with its clones) sends no `BindChannel` again; every client a program connects
+  anew is dropped once more, so each connection a program makes adds one such record. The process
+  writes one line `client_channel_unsupported` to stderr, a warning, once per process; the exit
+  status is unaffected. The connection is then bound by its first request's envelope, `cli` for
+  (Cli, Cli) and (Agent, Adapter): `actingctl`'s requests as that Runtime recorded them, today's
+  MCP server's as the command line's, `cli`, where that Runtime recorded `mcp`. Receipts name `cli`
+  without `initiator`. Each `actingctl overview` adds 2 records (its connection, and its `watchdog`
+  block's probe, which an overview without an install root does not make), and each tick of this
+  build's watchdog adds 1 while the owner lock is held (its probe of the owner; `actingctl
+  watchdog status` the same). Who sees them: only an unfiltered `diagnose`'s failure groups
+  (`failures_grouped`), `events`, and a console's count of records by severity. No guard, no
+  post-start check row, no watchdog attention and no overview warning reads them, and nothing
+  stops, refuses or alarms on them.
+- **The deploy kit** runs `actingctl install` of the new build against the old running Runtime.
+  Every connection the rescue module makes keeps (Cli, Cli) and is a client of its own, one per
+  read or write (`SystemRuntime`). `update plan` and its `--preview` connect to nothing (they read
+  the owner lock and the processes). `update apply --stop --hold <reason> --start` connects to the
+  old Runtime N + 9 times, N the number of instances the hold pauses:
+  - 3 for the reads before the hold (`deploy::hold_start`: S0 and the guards): `Status`,
+    `RuntimeFactSnapshot`, `ScheduleExplanation`;
+  - N + 2 for the hold (the pause step, `hold::pause_all`): `Status`, one `PauseScheduling` per
+    instance, all at once, and `Status` again (a pause refused for a queued request adds one
+    connection per status poll while its queue clears and one for its second pause);
+  - 4 for the stop (the close step): the reread of S0 (`Status`, `RuntimeFactSnapshot`) and the
+    close (`Status`, `RequestShutdown`); the wait after it reads the owner journal and connects to
+    nothing, and so does the check that nothing of the Runtime still runs.
+
+  Everything after the new Runtime starts goes to that Runtime of 0.12.59, which accepts the
+  binding: the readiness probe (`Health`, `BindChannel`), the post-start check (`Status`,
+  `RuntimeFactSnapshot`, `StartReport`; `postcheck::evaluate`) and the release (`Status`, the
+  `ResumeScheduling` of exactly each pause it saw, and `ScheduleExplanation` for the hand-back,
+  `deploy::release_hold`). On an old 0.12.58 every request is taken as 0.12.58 takes `cli`'s: the
+  pause and the shutdown record no channel, the reads record nothing, and the receipts, which carry
+  `lab` and `Lab-CLI`, are read through this build's client and printed nowhere. On an old 0.12.57
+  or earlier each of the N + 9 connections is dropped once and made again unbound, bound `cli` by
+  its envelope: every request is then taken and answered as `actingctl install` of that build's
+  is, and `actingctl` writes the one stderr line. So one such deployment adds N + 9 records
+  `runtime_protocol_invalid` to the ledger, all written by the old Runtime before it closes, and
+  none after the new one starts. No step is refused or fails for the binding.
+- **The automatic rollback** (the composite update's new start did not become ready, or one of its
+  fail-class post-start checks failed): this build's `actingctl` closes the new Runtime, puts the
+  previous build back, starts it, and talks to that old Runtime again: the readiness probe, the
+  post-start check (`Status`, `RuntimeFactSnapshot`, `StartReport`) and the release (`Status`,
+  each `ResumeScheduling`, `ScheduleExplanation`). On 0.12.57 or earlier each of these connections
+  is dropped once, adding one such record, and made again unbound; none fails.
+- **The deployer's choice:** deploying 0.12.58 first avoids all of these records, because that
+  Runtime accepts the binding.
+
+**LAB-6S2-B2 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
@@ -20008,9 +20172,509 @@ one `record start --force` left behind, by its id. Nothing is migrated.
 as a session that is not active: the earlier `record start` starts the next one without `--force`,
 and the manifests stay as files nothing reads.
 
-### 1.345 Slice MAPP-2b (0.12.59): the application switch before a run, its failure and the member's cooldown (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its finding F3, its row "MAPP-2b" and its row for slice 2; the coordinator's rulings of 11-14 on board #437, not the owner's words; coordinator work order `rd-1113/brief-437-mapp2b.md`, read on main `bd58c9a6`)
+### 1.345 Slices #453 S5 and S6 (0.12.59): the installer's `place` with no instance bound to the bundle's game, and while the Runtime is stopped (Workflow #453, approved by the owner on 11-13; the design note `rd-1113/fresh-root-design.md` §0 and §2, read on main `98924e28`; the coordinator's rulings of 11-13 on board #453, not the owner's words; coordinator work order `rd-1113/brief-453-s5s6-cold-place.md`, read on main `98924e28`)
 
-1.345 is the next free number after §1.344. MAPP-2a (§1.342) built the switch's parts with no
+1.342 was the next free number after main `10f538ea` (which took 1.341 for Workflow #454); the
+integration train 0.12.59c renumbered it 1.345, after §1.342 (MAPP-2a), §1.343 (FL-1) and §1.344
+(REC-ARCH).
+[install-cli.md](install-cli.md), "The Lab's rescue module" ("The composition after a placement"
+and "`place` while the Runtime is stopped"), and the row `place` of
+[lab-operations.json](lab-operations.json) (`runtime` now `optional`) are the contract;
+[lab-two-entries.md](lab-two-entries.md) §7 names both. No outcome
+code, value key, vocabulary word, configuration key, step kind, intent member, wire shape, record
+or interface revision is added or moved, and no outcome code fragment changes, so the index is not
+regenerated. These are rescue rows only: `actingctl` gains nothing.
+
+**S5, what was wrong.** The checks after a placement (`post_check`, crate `lab-rescue`,
+`src/install/place.rs`, `check_step`) end with the row `composition`: when the bundle changes the
+game's `schedule.json`, it waits for the catalog of the Runtime's latest evaluation to change,
+within `standard_packs.check_interval_ms` plus `install.hot.idle_wait_ms`. The scheduler workbench
+reads only the games of configured instances (`crates/runtime-host/src/host/standard_pack_schedule.rs`:
+a game root installed without a bound instance is never read), so on a root whose instances do not
+bind the bundle's game the catalog never changes: the row waited, with the defaults 60000 and
+600000 ms, eleven minutes, and failed, `post_check_failed` with the hold kept, after a placement
+that had done nothing wrong. Read from the code; production never met it (it places its bundles
+with the coordinator's placement kit, not with this row).
+
+**S5, the rule** (`src/rescue.rs`, `place`; `src/install/place.rs`, `open` and `check_step`).
+`place` records the instances the running Runtime's status binds to the bundle's game (those it
+already computed for its hold, paused or not) in the journal's free `inputs` as `bound`, before
+the first step. The row waits for a new catalog only when `schedule.json` changes **and** `bound`
+is not empty; with `bound` empty it reads the catalog once and passes, its values
+`{catalog_hash, catalog_before, expected: "unchanged", bound: []}`. A journal without `bound` (an
+operation an earlier build began, resumed by this one) keeps the wait. `CheckIntent` denies unknown
+members, so the new value lives in `inputs`, not in the step's intent; the rows and values of every
+other case are those of before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S5-1 | the `pack_place` journal's input `bound` (the aliases the status binds to the game) | journal input member (free `inputs`) | #453 S5 | `install::place::open` | written before the first step; an earlier build's journal has none |
+| S5-2 | the row `composition` with `bound` empty and `schedule.json` changed: `pass` at its first read, `expected` `unchanged`, `bound` `[]` | installer behaviour, a row value member | #453 S5 | `install::place::check_step` | a journal without `bound` keeps the wait |
+
+Tests (apps gate row "#453 S5", `crates/lab-rescue/src/install/gate_453_cold_place.rs`, on the
+fake host with placeholder names, the installer declaring `package` [3, 10], every bundle [3, 5],
+a schedule placeholder bytes, the fake clock moved only by calls):
+`s5_unbound_composition_passes_at_once` (the Runtime's one instance bound to another game, a
+bundle that changes `schedule.json`: `bound` `[]`, the row `pass` with `expected` `unchanged` and
+`bound` `[]`, the catalog read three times in all, before the hold, by the check and for the
+schedule, so the check never waited; the other game's instance not paused),
+`s5_a_bound_instance_waits_for_a_new_composition` (an instance bound to the game: `bound` names it,
+the check reads the catalog of before, waits 500 ms, reads the new one and passes with `expected`
+`new`, four reads), `s5_a_journal_without_bound_keeps_the_wait` (no instance bound, the operation
+stopped by the fake host after its last item, `bound` removed from its journal as an earlier
+build writes it, `op resume`: the row waits and passes with `expected` `new`, two reads) and
+`s5_a_hot_placement_with_a_bound_instance_answers_as_before` (the work order's added test: an
+instance bound to the game and no `schedule.json`: the steps `pause`, three `pack_item`,
+`post_check`, `release_hold`, the inputs of before and `bound`, the rows `rerun`,
+`standard_pack_check` and `composition` with the composition values of before, the hold of the
+bound instance paused and resumed, the answer's members, steps and `place` step members of before,
+all literals of `gate_434_lab3` and `gate_451_loadp`). No existing test changes.
+
+**S6, what was missing.** With no Runtime answering, `place` refused `runtime_not_running` after
+its plan, so a fresh root had to start its Runtime before it could hold any pack, though the
+contract's INST-4 line already said "cold when stopped".
+
+**S6, the two paths** (`src/rescue.rs`, `place` and `place_cold`; `src/install/place.rs`,
+`steps`, `open_cold` and `check_step`). The plan is computed as before and holds no running state,
+so its id is the same either way. The status read decides: a Runtime that answers takes the path
+of before, step for step (the hold of the bound instances, the items, the checks, the release, the
+schedule read). With none, `place_cold` takes the writer lock, refuses an unfinished operation,
+and applies the stopped rule the composite update applies after its close, before any file
+changes, and `install start` before it spawns, which the update plan refuses by too
+(`install::launch::refuse_running`, reused: the state root's owner lock held refuses
+`owner_lock_held`, an `actingcommand-actingd.exe` under the root `runtime_running`, a probe that
+cannot decide `processes_unreadable`; judged under the lock, so no watchdog tick starts a Runtime
+between the judgement and the operation). It then opens `pack_place` (`open_cold`) with the same
+plan and plan id, the inputs `commit`, `game`, `zip`, `zip_sha256`, `config_sha256` and `cold:
+true` (fix 1: and `bound`, below), no S0 and no guards, and the steps `pack_item` per changed item, none marked `first` (so none
+waits for idle instances), and `post_check`; no `pause`, no `release_hold`. The items are placed as
+before (`.new-<ms>.part`, the replaced item renamed `.old-<ms>` and kept, the part renamed in, its
+digest checked). `check_step` reads the input `cold`: the rows `rerun` and `standard_pack_check` as
+before, then `check_config` (the live build's check-config of the live configuration with
+`--install-root <root>`, as `config_swap::candidate` runs it; a refusal `fail` with its answer, no
+answer `fail` with `check_config_unanswered`) and `composition` `not_evaluated` with `runtime`
+`stopped`. A failed row ends `post_check_failed` (`count`, `game`) with the items placed; there is
+no hold to keep, so `next` names `undo` of the operation (the module's `undo <operation>`), which
+reverses the items as for a placement with a Runtime. The answer's steps are `plan` and `place`.
+While the operation is unfinished, `current.json` names a `pack_place`, which watchdog row 7a″
+does not pass, so no Runtime starts on a half-placed game root.
+
+**`install/deploy.rs`'s `finish` needs no change** (the design note's point marked not verified,
+settled by reading the code): its `pack_place` arm reads the input `game`, the `pack_item`
+evidence and the first `post_check` evidence only, and the hold it reports comes from `hold_of`,
+which reads the input `hold` or a `pause` step's intent; a cold journal has neither, so the
+answer carries no `hold` and no `next`, as it should. `hold_caveats` returns at once without a
+done `pause` step, `guard_caveats` finds no guard rows, `end` (a failed check) builds on the same
+reads, `update::run` runs `pack_item` and `post_check` by kind whatever came before them, and
+`undo` reverses `pack_item` steps and passes `post_check` as before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S6-1 | `place` with no Runtime answering: the stopped rule under the writer lock, then `pack_place` without a hold | installer behaviour | #453 S6 | `rescue::place_cold` | `runtime_not_running` is no longer `place`'s answer to a stopped Runtime |
+| S6-2 | the `pack_place` journal's input `cold` (`true`) | journal input member (free `inputs`) | #453 S6 | `install::place::open_cold` | an earlier build ignores it ("Rollback" below) |
+| S6-3 | the row `check_config` of `place`'s `post_check`, and `composition` `not_evaluated` with `runtime` `stopped`, on a cold journal | installer behaviour, row ids and values | #453 S6 | `install::place::check_step` | a failed row: `next` names `undo` |
+| S6-4 | the row `place`: `runtime` `required` → `optional`, its `help` and `notes` | operation table | #453 S6 | — | the CLI help and the MCP tool's description read them |
+
+Tests (apps gate row "#453 S6", the same file, on the fake host with no Runtime booted unless
+named): `s6_cold_place_places_the_items_and_keeps_the_replaced_ones` (a game root with a pack and a
+`bundle.json` of before, a bundle that replaces both and adds the table and `schedule.json`: the
+answer's steps `plan` and `place`; every item on disk the zip's bytes, the replaced pack and
+`bundle.json` kept as `.old-<ms>`; the journal with the initiator, the answer's plan id, no S0, the
+six inputs with `cold` (fix 1: seven, with `bound` `[]`), four `pack_item` steps without `first`
+and `post_check`; the rows `rerun`
+pass, `standard_pack_check` `not_evaluated`, `check_config` pass with `install_root`, run once by the
+live build with `--install-root`, `composition` `not_evaluated` with `runtime` `stopped`; no call to
+the fake Runtime; after each of the five steps the watchdog's reader of `current.json` names the
+operation), `s6_cold_place_refuses_a_running_actingd_or_a_held_owner_lock` (an actingd image under
+the root: `runtime_running` with its `pid`; an owner journal locked as a running Runtime locks it:
+`owner_lock_held`; each with the game root as it was, no journal and no `current.json`),
+`s6_a_failed_check_names_undo_and_undo_restores_the_game_root` (the live build's check-config
+refusing: `post_check_failed`, `count` 1, the game and the operation id, the failed row
+`check_config` with check-config's answer, no `hold`, `next` exactly `undo <operation>`, the steps
+`plan`, the items placed and the operation ended; that `undo` leaves the game root of before, the
+four placed items kept beside it as `.rolledback-<ms2>`) and
+`s6_the_same_bundle_has_the_same_plan_id_hot_and_cold` (two roots with the same files of before:
+one plan id with the Runtime stopped and running, and both journals, placed hot on one root and
+cold on the other, carry it and the same plan document). No existing test changes: every earlier
+gate that places boots its fake Runtime first, so it takes the path of before.
+
+**S6 fix 1** (coordinator work order `rd-1113/brief-1680-fix1.md`, after the independent review
+of the pull request; the coordinator's rulings, not the owner's words). Six points, each read
+against the code first.
+
+1. *The row `check_config` passed for every bundle.* It judged only the category of
+   check-config's top outcome, and check-config answers `check_config_passed` with a broken game
+   root (`inspect_standard_packs`, every game folder below `standard_packs.root`) and a refused
+   composition (`preview_standard_pack_schedule`, only the games of `policy.facts.instances`) as
+   notes (`apps/actingd/src/check_config.rs`, the notes folded under the passed outcome). Now
+   (`place::check_config_row`) the row also fails when a note's `game` is the placed game, those
+   notes in its new value `game_notes`; `open_cold` records the input `bound` on a cold journal
+   too (`configured_bound`: the `instance_id` of each `policy.facts.instances` row whose `game_id`
+   is the game), the row carries it as `bound`, and with `bound` empty it says `composition`
+   `not_previewed`, its result then check-config's own and the game's root notes. The contract
+   sentence that said the row previews the composition now says what it judges, and the done
+   answer's `next` names `composition_at_start` (the module's `up`). What the start does, read
+   from the code: `register_standard_packs_on_start` reads and records every game root and a
+   broken one never stops the start (`crates/runtime-host/src/host.rs`); the workbench's check
+   (`standard_pack_schedule.rs`, `refresh_standard_pack_rules`) reads the games in use only,
+   records a refused `schedule.json` once as `standard_pack_root_invalid` and gives that game the
+   rules of its last good file from the active generation, or none when it never had one, the
+   other games composed; a broken game root returns before composing and keeps the active
+   generation as it is (`adopt_active_generation`: none on a new root, so no rules).
+2. *`undo` of a cold placement* took no writer lock and no stopped check (`undo.rs` took the lock
+   only for an update or rollback). Now an operation whose input `cold` is `true` takes the lock
+   and then `launch::refuse_running` with `install_undo` before `begin_undo`, so nothing is moved
+   or journalled before both; every other `undo` is unchanged.
+3. *`resume` of a cold placement* (`update::resume`) took the lock but no stopped check. Now it
+   applies `launch::refuse_running` with `install_resume` under the lock before any step runs;
+   every other `resume` is unchanged.
+4. *A failed check left its step `started` with no evidence.* `check_step` now closes it with
+   `Operation::close_with_end` (main, Workflow #454) with `{game, checks, failed}` before it
+   builds `post_check_failed`, with a Runtime and without one, as `deploy::post_check` does. The
+   register entry of Workflow #454 (§1.341) lists the operations its fix covers and does not name
+   `place` as left out, so it is not corrected; this sentence records that `place`'s checks close
+   the same way from this fix.
+5. *A check-config that does not answer:* the test was missing; added.
+6. *The contract on `owner_lock_held`.* The machine's status read (`install::runtime`, `status`)
+   answers "no Runtime" only while the owner lock is not held, and `place` answers a failed read
+   `processes_unreadable` before it takes this path, so on a real installation `owner_lock_held`
+   comes only from a Runtime that took the lock after that read; the contract says so, and the
+   test's comment says that it pins that window (the fake Runtime's status answers "none runs"
+   without reading the lock). `undo` and `resume` read no status first: there a running Runtime
+   is `owner_lock_held`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S6-5 | the cold `pack_place` journal's input `bound` (from the configuration) | journal input member (free `inputs`) | #453 S6 fix 1 | `install::place::open_cold` | S5-1's name, another source: the hot journal's comes from the status |
+| S6-6 | the row `check_config`: `fail` on a note naming the placed game, the values `game_notes`, `bound` and, with `bound` empty, `composition` `not_previewed` | installer behaviour, row values | #453 S6 fix 1 | `install::place::check_step` | |
+| S6-7 | the cold done answer's `next` `composition_at_start` (`up`) | answer member | #453 S6 fix 1 | `rescue::place_cold` | |
+| S6-8 | a failed check's `post_check` step `done` with `{game, checks, failed}` | journal behaviour (no shape change) | #453 S6 fix 1 | `install::place::check_step` | also with a Runtime; as PC-1 |
+| S6-9 | `undo` and `resume` of a cold `pack_place`: the writer lock, then the stopped rule | installer behaviour | #453 S6 fix 1 | `install::undo::undo`, `install::update::resume` | the refusals of `install undo` and `install resume` |
+
+Tests (apps gate row "#453 S6 fix 1", the same file; the fixture's check-config can now give
+notes, `Programs::check_config_notes`, none by default):
+`s6_fix1_a_note_naming_the_placed_game_fails_check_config` (an instance bound to the game, notes
+naming another game and the game: the row fails, check-config's answer `check_config_passed`,
+`game_notes` the one note of the game, `bound` the instance, no `composition`;
+`post_check_failed`, `count` 1, `next` exactly `undo <operation>`),
+`s6_fix1_no_bound_instance_says_the_composition_was_not_previewed` (the one instance bound to
+another game: `bound` `[]`, the row passes with `composition` `not_previewed`; `next`
+`composition_at_start` `up`, since fix 2 `composition_at_start_once_bound` `up`),
+`s6_fix1_a_bound_instance_and_no_note_passes_check_config` (`bound`
+the game's instance alone, the row passes with exactly `answer`, `bound`, `game_notes`,
+`install_root`, `packs`), `s6_fix1_a_check_config_that_does_not_answer_fails_its_row` (the child
+left running: the row fails with `check_config_unanswered`, its `pid` and `config_key`;
+`post_check_failed`, `next` `undo`), `s6_fix1_undo_of_a_stopped_placement_refuses_a_running_runtime`
+(after a failed cold check: an actingd under the root `runtime_running` with its `pid`, the owner
+lock held `owner_lock_held`, both `install_undo`, the game root and the journal byte for byte as
+they were; then done, the game root of before),
+`s6_fix1_resume_of_a_stopped_placement_refuses_a_running_runtime` (a cold placement stopped after
+its first item: `owner_lock_held` and `runtime_running` of `install_resume`, nothing moved,
+`current.json` kept; then done, every item placed, `check_config` passed),
+`s6_fix1_undo_and_resume_of_a_running_placement_are_unchanged` (a hot placement stopped after its
+first item: `op resume` and then `undo` done while the fake Runtime's actingd runs under the
+root), `s6_fix1_a_failed_check_closes_its_step_with_what_it_read` (hot, `rerun` failed by a file
+changed after the last item; cold, `check_config` refused: each `post_check` step `done` with
+exactly `checks`, `failed`, `game`, `failed` the failed row, the evidence the answer's `checks`)
+and `s6_fix1_a_passed_check_keeps_its_record` (hot and cold: the step `done` with the same three
+members, `failed` empty, the evidence the answer's `place` step's `checks`). One existing test of
+this slice is adapted: `s6_cold_place_places_the_items_and_keeps_the_replaced_ones` pinned the
+cold inputs without `bound`, which the ruling on point 1 adds (the list `[]` there).
+
+**S6 fix 2** (coordinator work order `rd-1113/brief-1680-fix2.md`, after the review of fix 1;
+the coordinator's rulings, not the owner's words). Three points, each read against the code
+first.
+
+1. *A cut answer hid the game's note.* check-config's outcome passes through the envelope's
+   bound (`crates/actingcommand-contract/src/outcome.rs`: at most 32 links, breadth first, within
+   32 KiB, a cut setting `causes_total`; `apps/actingd/src/main.rs` writes the outcome through
+   it), and check-config joins the composition's problems last
+   (`apps/actingd/src/check_config.rs`), so they are cut first and the row saw no note of the
+   game. Its `report` beside the outcome is written whole, and holds every problem of a game the
+   notes give but one: `standard_packs.games` (each game root's `problem`, each table's
+   `problem` and `expired_columns`) and `standard_pack_schedule.problems` (the composition's
+   problems, each in full). The one it does not hold is a `tables/` check-config could not list
+   (`StandardPackGameReport::tables_problem`, not serialized; the entry's `tables` is then
+   empty). Now the installer keeps that report (`programs::Checked::report`) and the row judges
+   the game from it (`place::GameReport`), beside the outcome's notes as in fix 1; an outcome
+   that says it was cut adds `notes` `cut` and `causes_total`, and fails the row with
+   `game_tables` `not_judged` when the game's entry lists no table, the only case in which a cut
+   could hide a problem of the game the report does not carry. A cut outcome whose report lists
+   a table of the game is judged from the report alone and may pass.
+2. *Two kinds of note the row missed.* (a) A refusal of the composition as a whole names no game
+   (`preview_standard_pack_schedule`, the issue without `game_id`): any such problem of the report
+   fails the row for every placement, in `composition_refused`. (b) A collision across the games
+   in use (`crates/policy/src/compose.rs`, `id_conflicts` and the package collision) is
+   `rule_id_conflict` recorded on the game whose name sorts later; its note names that game and
+   not the other one (the other is in the composer's developer text only), and a file's own
+   repeated id gives the same token, so the note cannot tell whether the placed bundle caused
+   it: every `rule_id_conflict` of the report on another game fails the row, in `collisions`
+   with `collision_cause` `not_told`; one on the placed game fails it as a problem naming the
+   game (`composition_problems`).
+3. *A hint that was not true.* With `bound` empty the done answer's `next` named
+   `composition_at_start`, but a start composes only the games of the configured instances. Now
+   it names `composition_at_start_once_bound` (`up`) then (`rescue::place_cold`, from
+   `place::configured_bound`, the journal's source of `bound`), and `composition_at_start` with an
+   instance bound; the contract says the composition is first judged at the first start after an
+   instance is bound to the game.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S6-10 | the row `check_config` judged from check-config's report: `fail` with `game_root`, `composition_problems`, `composition_refused`, `collisions` and `collision_cause` `not_told`; `notes` `cut` with `causes_total` on a cut outcome, `fail` with `game_tables` `not_judged` when the game's entry lists no table | installer behaviour, row values | #453 S6 fix 2 | `install::place::check_step` | each member only when it holds something |
+| S6-11 | the cold done answer's `next` `composition_at_start_once_bound` (`up`) with `bound` empty | answer member | #453 S6 fix 2 | `rescue::place_cold` | S6-7 with an instance bound |
+
+Tests (apps gate row "#453 S6 fix 2", the same file; the fixture's check-config can now also give
+a `causes_total`, `Programs::check_config_causes_total`, and report members,
+`Programs::check_config_report`, none by default): `s6_fix2_a_cut_answer_is_judged_from_the_report`
+(an outcome cut, `causes_total` 40, the one note left naming another game; the report's entry
+of the game lists a table with an expired column and `standard_pack_schedule.problems` names the
+game: the row fails with `game_root` exactly that entry, exactly that problem in
+`composition_problems`, `game_notes` empty, `notes` `cut`, `causes_total` 40, no `game_tables`;
+`next` exactly `undo <operation>`),
+`s6_fix2_a_cut_answer_that_lists_no_table_fails_as_not_judged` (the same cut outcome, the entry
+listing no table, no problem: the row fails with `game_tables` `not_judged`, `notes` `cut`,
+nothing else of the game), `s6_fix2_a_composition_refused_as_a_whole_fails_every_placement` (the
+one instance bound to another game, a problem naming no game: the row fails with it in
+`composition_refused` beside `composition` `not_previewed` and `bound` `[]`),
+`s6_fix2_a_collision_recorded_on_another_game_fails_as_not_told` (instances bound to the game
+and to another whose name sorts later; a `schedule_invalid` and a `rule_id_conflict` of that
+other game: the row fails with the `rule_id_conflict` alone in `collisions`, `collision_cause`
+`not_told`) and `s6_fix2_the_hint_names_the_start_that_composes_the_game` (two roots, no note:
+`next` exactly `composition_at_start_once_bound` `up` with `bound` empty and
+`composition_at_start` `up` with the game's instance bound). One existing test of this slice is
+adapted: `s6_fix1_no_bound_instance_says_the_composition_was_not_previewed` pinned `next`
+`composition_at_start` with `bound` empty, which the ruling on point 3 changes.
+
+**At deploy.** Nothing to do: production places packs with the coordinator's own kit, not with
+this row. **Rollback** to a build before 0.12.59: its installer reads a journal with `bound` (its
+`inputs` are free JSON), ignores it and resumes such an operation with the wait. It ignores `cold`
+too: it resumes a cold `pack_place` left unfinished with its items as here (none is marked
+`first`, so none waits) and its checks without `check_config`, the composition `not_evaluated`
+because no Runtime answers its catalog read; finish such an operation with this build to have the
+check of the configuration.
+
+### 1.346 Slice S10 (0.12.59): `actingd discover` and the rescue row `emulators` list this machine's emulator instances while no Runtime runs (Workflow #453, thing 4 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0 and §4, read on main `98924e28`; the coordinator's rulings of 11-13 in the work order, not the owner's words; coordinator work order `rd-1113/brief-453-s10-offline-discovery.md`, read on main `98924e28`, main `7938d10e` merged; fix 1, after an independent review, coordinator work order `rd-1113/brief-1681-fix1.md`, main `10f538ea` merged; fix 2, the outcome guard's G8 and the review of fix 1, coordinator work order `rd-1113/brief-1681-fix2.md`, main `bd58c9a6` merged)
+
+1.345 was the next free number on main `bd58c9a6` (#441 took 1.340, #454 1.341, #437 MAPP-2a 1.342,
+#450 FL-1 1.343, #449 REC-ARCH 1.344); the integration train 0.12.59c renumbered it 1.346, after
+§1.345 (#453 S5 and S6). The contract is
+[emulator-control.md](emulator-control.md), "Offline instance discovery": its subject is the
+instance discovery that section's "Instance discovery query" gives for a running Runtime (the same
+two vendor reads, the same instance shape, the same refusal codes), while
+[install-cli.md](install-cli.md) is about what changes an installation root, which this command
+never does, and it works before a root exists. No configuration key, no interface revision, no
+record, no wire shape and no journal or step kind is added or moved.
+
+**Why.** Discovery was a Runtime request only (the core row `discover`, `DiscoverInstances`), so an
+installer could not list a machine's emulator instances before the Runtime of a fresh root first
+ran. check-config already resolved the emulator installation offline and never ran the vendor
+tool; the device crate ran the tool's two read-only subcommands only inside the start's
+discovery.
+
+**What it is.**
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S10-1 | `actingd discover [--config <file> [--install-root <root>]] [--mumu-root <dir>]` (`apps/actingd/src/discover.rs`) | new actingd subcommand, read only | S10 | an installer, a person, the row `emulators` | report `actingcommand.actingd.discover.v1` `{schema_version, outcome, report}`; `report` `{mumu_root {path, source}, provider_version, instances}`, `instances` in `RuntimeDiscoveredInstance`'s shape and rule; `path` as check-config reports it (a folder `--mumu-root` or the file names, as written; one found, canonical: fix 1); `source` `person` (fix 1: the vocabulary's word, no word of its own), `config`, `env`, `running_process`, `registry_uninstall` or `vendor_enumeration`; each option once with a value, `--install-root` only with `--config`, `--mumu-root` absolute, else `invalid_arguments` |
+| S10-2 | `ActingdConfigFile::discovery_inputs` (`apps/actingd/src/config.rs`) | behaviour | S10 | S10-1 | of the file only `mumu_root` (`mumu_root_invalid`), `allow_env_overrides` (the environment rung as `assemble` injects it) and the binding keys of the entries a start binds by discovery (neither a fixture nor a handset; `device_config_invalid`, `instance_binding_key_invalid`), stage `config_assemble`; the file loaded as check-config loads it (stage `config_load`); nothing else is assembled, so no other file is opened, the private binding file of a handset in the state root included; `--install-root` is checked by check-config's `install_root_of` and nothing read depends on it |
+| S10-3 | `bound_alias` of each instance | behaviour | S10 | S10-1 | the entry whose `instance_index` is the index, or whose `instance_name` is the name when one listed instance alone carries it; of several, the one with the smallest `instance_id`, as the Runtime's answer takes it (fix 1; only a configuration a start refuses has several: `undeclared_shared_device`, `several_members_unsupported`); absent without `--config` (the host's shape omits an absent member); an explicit HOST:PORT entry is matched by the online discovery and never by this one (no binding key, no Runtime to ask); for a configuration check-config would refuse the alias is only a hint |
+| S10-4 | `actingcommand_device::discover_mumu_installation` with `MumuManagerReads` (`version`, `instances`, and since fix 1 `processes`, the resolver's process listing), `SystemMumuManagerReads` and (fix 1) `BoundedMumuManagerReads` (`crates/device/src/mumu_manager.rs`) | behaviour | S10 | S10-1 and the start | the one function that composes the resolver, `version` and `info -v all`; the start's `discover_mumu_instances` is it with the system reads, unchanged in what it runs and answers; `query_version` and `query_instances` read through the same reads; the trait has the vendor tool's two reads only, so nothing else of it can be asked through it; `resolve_mumu_manager` (check-config's) lists through the system reads, unbounded as before; `actingd discover` uses the bounded reads, whose listing is `system_processes_within(MUMU_MANAGER_PROCESS_LIST_TIMEOUT)` (10 s; at the bound only its own PowerShell process is ended), a listing past it `instance_discovery_unavailable` caused by `provider_native_failed` |
+| S10-5 | the row `emulators` (module `rescue`, slice S10, planned; no parameter; read only, offline; `source` `actingd discover`, `new` #453 S10) | operation table row added | S10 | the Lab's command line, `serve --stdio`, the Lab's MCP server | `rescue::SERVED` holds it (34 rows) and `rescue_reads::READ_HERE` its empty list (17 rows); the live build's `actingd discover --config <the root's selected configuration> --install-root <root>` within `programs::DISCOVER_TIMEOUT_MS` (fix 1: 60 s, the child's three bounds of 10 s and as much again; it was `install.child.check_config_timeout_ms`, 900 s by default, with the child left running), at which the child is ended through `Host::run_program_ending`; `install_command_done` (operation `install_emulators`, actingd's outcome its `related` link) with `report`, else `install_command_refused`, `install_refusal` `emulator_discovery_failed`, actingd's outcome or the child's failure its `caused_by` link, or for a child ended at the bound `timeout_ms` 60000 and no cause |
+| S10-7 | `actingd discover` clears the inheritable flag of its own stdout and stderr (`standard_handles::apply`, `apps/actingd/src/main.rs`) | behaviour (fix 1) | S10 | S10-1 | before it does anything, as the daemon does (WD-MT): no descendant of the vendor tool or PowerShell keeps the row's pipe open; a failure is `host_stdio_inheritance_failed` as a developer line on stderr and the discovery goes on |
+| S10-8 | `Host::run_program_ending` and `NotFinished` (`crates/lab-rescue/src/install/host.rs`) | behaviour (fix 1) | S10 | S10-5 | the host's run of a child that is ended at its deadline, killed, reaped and no longer read, through the shared helper's existing `child::run_captured_ending` (RL-1c fix 1); only `programs::discover` uses it, every other child keeps the stall rule through `run_program` |
+| S10-6 | `actingd_discover_completed` (actingd, success, no value; fix 2: it was `discover_completed`, whose prefix `discover_` the catalog's `domains` give to other components, so the outcome guard's G8 refused it; `actingd_` is actingd's alone); the location `install_emulators` (owner `actingctl`); `install_refusal` `emulator_discovery_failed` (all `since` 0.12.59, pending) | outcome catalog | S10 | S10-1, S10-5 | `ActingdCode::DiscoverCompleted`, `InstallLocation::Emulators`, `InstallRefusal::EmulatorDiscoveryFailed`; reused: `instance_discovery_unavailable` and `mumu_manager_version_unsupported` (the Runtime's discovery surface's classification, `DiscoverySpec::discover`), the device failure outcome provider startup records (`config::device_failure_outcome`) as their cause, `invalid_arguments` and `serialization_failed` (the contract's shared codes), check-config's load and assembly codes and `check_config_install_root_invalid` (its description now names `discover` too); fix 1: `install_command_refused` takes the optional key `timeout_ms` (the row's bound of an ended discovery), `host_stdio_inheritance_failed`'s description names `discover`, and the vocabulary `mumu_root_source`'s `person` is reused; no code or word added; fix 2: the code renamed (never released, so no retired entry) and one sentence added to `host_stdio_inheritance_failed`'s `handling` for `discover`; the index is regenerated |
+
+**Why one new code and one new token.** No success code meant "an offline discovery answered":
+`instances_discovered` is actingctl's, the answer of a running Runtime's discovery, and actingd's
+other subcommands each have their own success. No `install_refusal` token meant "actingd's
+discovery did not complete": `check_config_unanswered`, `config_refused_by_target` and
+`ledger_verify_failed` name other commands. The arguments and the encoding reuse the shared
+`invalid_arguments` and `serialization_failed` rather than a third and fourth actingd code
+(`subcommand_report` and `report_line` in `apps/actingd/src/main.rs` now take any registered code
+for the encoding failure; the four existing subcommands pass theirs as before).
+
+**What it can run** (the coordinator's ruling: every program it can spawn, with its arguments). actingd discover: the vendor tool found in the installation,
+`<installation>\nx_main\MuMuManager.exe` or `<installation>\shell\MuMuManager.exe`, with `version`
+and then `info -v all`, each once, each within `MUMU_MANAGER_COMMAND_TIMEOUT` (10 s), through
+`BoundedMumuManagerReads` and `run_json` (`crates/device/src/mumu_manager.rs`; a run past its bound
+stops that tool's own process, never an emulator); and, only when no folder is named (no
+`--mumu-root`, no `mumu_root`, no environment rung), the resolver's process listing
+`<SystemRoot>\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass
+-Command <the Win32_Process listing script>` (`crates/device/src/discovery.rs`,
+`system_processes_within`), once and, since fix 1, within `MUMU_MANAGER_PROCESS_LIST_TIMEOUT`
+(10 s), where check-config and a start still list without a bound of their own
+(`system_processes`). Since fix 1 none of these children inherits actingd's own stdout or stderr.
+The row `emulators`: `<root>\runtime\actingcommand-actingd.exe discover --config <config>
+--install-root <root>` (`crates/lab-rescue/src/install/programs.rs`, `discover`), within 60 s and
+ended there. Nothing starts, stops, restarts or controls an emulator; no other subcommand of the
+vendor tool and no adb is run; nothing is written and no state root is touched.
+
+**Fix 1 (the independent review of the pull request; the coordinator's rulings, not the owner's
+words).** Three things had to change: the process listing had no bound (every call on a root whose
+configuration states no `mumu_root`, and the row never passes `--mumu-root`, took that step); the
+vendor tool and PowerShell inherited actingd's stdout and stderr, so a descendant of a tool ended at
+its bound could hold the row's pipe, which the row reads to its end without a bound; and the row
+waited 900 s by default and then left its actingd running, which an installer's plan
+(`runtime_running`) and the watchdog take for the root's Runtime, one more with every retry. Four
+should: the word `argument` was not in the closed vocabulary `mumu_root_source` (now `person`);
+several entries on one instance took the least alias where the Runtime's answer takes the smallest
+instance id; `path` was canonical where check-config reports a named folder as written, and the
+README said no lock where an A/B installation takes the slot's shared lock; and the contract now
+says that a configuration check-config would refuse is still answered (its `bound_alias` then a
+hint) and that an explicit host and port is matched online only. The subcommand's answer shape
+beyond these, its codes and the refusal word, check-config, a start and every other rescue row are
+unchanged.
+
+**Fix 2 (the outcome guard in CI and the review of fix 1; the coordinator's rulings, not the
+owner's words).** The guard's G8 refused `discover_completed`: the longest prefix of the catalog's
+`domains` it starts with, `discover_`, belongs to contract, device, execution-kernel,
+runtime-client and runtime-host, not to actingd. The code is now `actingd_discover_completed`,
+whose longest prefix `actingd_` only actingd owns (as `actingd_fallback_log_failed`); the guard
+and the prefix table are unchanged, and the Rust variant stays `ActingdCode::DiscoverCompleted`.
+The code was never released, so it is renamed outright, with no retired entry. Checked against the
+guard's other rules: the code's registry and fragment agree (G1: owner, category, ladder class);
+the location `install_emulators` takes `install_`, which actingctl owns (G8), and is registered in
+actingctl's registry (G1); the refusal word `emulator_discovery_failed` is in the vocabulary
+`install_refusal` and in its enum (G7); the optional key `timeout_ms` of `install_command_refused`
+is in the key table and the code is pending, released in no file (G9, G10). Two small points of the
+review of fix 1: a test pins that of several entries on one instance the smallest instance id
+gives the alias, where the entry with the larger id has the smaller alias; and
+`host_stdio_inheritance_failed`'s `handling` says what a caller of `discover` meets when the
+handles could not be cleared.
+
+**At deploy.** Nothing to do: a new read-only command and a new read-only row; nothing persisted,
+no key, no revision. Beside a running Runtime the command is a second reader of the same vendor
+tool, whose behaviour under two `info` calls at once has not been verified (the survey's §4(e)).
+A build before this release has no `discover`: its actingd refuses the words as a start refuses
+unknown arguments, and the row of a later Tools beside it answers `emulator_discovery_failed`
+with that child's exit and stderr as the cause.
+
+**Rollback.** Nothing persisted: code, one table row, catalog entries, a contract section and two
+test files.
+
+Tests (apps gate row "#453 S10"; no program is spawned: the reads are injected and the rescue
+module's actingd is the fake host's). In `apps/actingd` (`gate_453_s10.rs`, temporary emulator
+roots whose tool files are empty and never run):
+`s10_discover_lists_the_instances_with_the_files_bound_aliases` (a file binding index 0, the name
+of instance 1 and a name two instances carry: the four instances in the host's shape with
+`neutral.first`, `neutral.second` and no alias on the two that share a name, `mumu_root` the
+configured folder as written with `source` `config`, `provider_version` 6.5.7.0, the two reads
+once each and in order of the tool the resolver found, no state root made, the report line's
+schema and outcome), `s10_discover_resolves_the_named_emulator_root` (`--mumu-root` without a
+file: the folder as given, `source` `person`, no alias; a folder without the tool:
+`instance_discovery_unavailable` caused by `candidate_absent` with `install_source`
+`explicit_folder` and `mumu_root`, nothing read),
+`s10_discover_a_read_past_its_bound_is_unavailable` (`info -v all` past its bound:
+`instance_discovery_unavailable` caused by `provider_native_failed` with `device_category`
+`backend_launch` and `mumu_root`, each read asked once) and, fix 1,
+`s10_fix1_discover_a_process_listing_past_its_bound_is_unavailable` (no folder named, a process
+listing past its bound: `instance_discovery_unavailable` caused by `provider_native_failed` with no
+`mumu_root`, the listing asked once, the vendor tool never) and, fix 2,
+`s10_fix2_several_entries_on_one_instance_the_smallest_instance_id_gives_the_alias` (two entries
+bind index 0; the one with the larger instance id has the alias `neutral.alpha` and stands first
+in the file, the other `neutral.zeta`: the instance's `bound_alias` is `neutral.zeta`). In
+`crates/lab-rescue` (`install::gate_453_s10`, the fake host):
+`emulators_answers_the_live_builds_report`,
+`emulators_refuses_with_actingds_outcome_as_its_cause` (the one child line, the answers above, the
+root and its state root byte for byte as before) and, fix 1,
+`emulators_fix1_a_discovery_that_never_ends_is_ended_at_its_bound` (an actingd that never exits:
+ended once at 60 000 ms, the refusal `emulator_discovery_failed` with `timeout_ms` 60000, no cause,
+no `pid`, no `config_key`, no report, the one child line, nothing written). The three gates that
+hold the operation table equal to the code cover the row as they come, unchanged:
+`rescue_read_here_rows_read_what_they_declare` (`crates/lab-rescue`, its constant and its declared
+parameters, none), `every_table_driven_row_has_one_list` (actinglab, the row in exactly one
+constant) and `mcp_served_and_refused_partition` (actinglab-mcp, the row served by the rescue
+module on Windows). Adapted by fix 1 (the requirement deliberately changes what they pin, nothing
+else in them): the first two tests of `apps/actingd` pinned the canonical folder and `source`
+`argument` and now pin the folder as written and `person`; their fixture of the reads answers the
+new third read. Adapted by fix 2 (the code's rename, nothing else in them): the first test of
+`apps/actingd` and the first of `crates/lab-rescue` name `actingd_discover_completed` where they
+named `discover_completed`. No other existing test changes.
+
+### 1.347 Slice DA-3 (0.12.59): the display adapter's input side for the identity and the pure scales whose double is a whole number (#392 / #401; model 392 v1.2 §0.2 C2, C4 to C6, §4.6, §4.7, §6, §9, §12.1 row DA-3; the coordinator's work order of 11-13 on board #392, not the owner's words: the maps the capture side admits, the identity and a pure scale; its fix 1 after the independent review, the coordinator's rulings of 11-13, not the owner's words)
+
+[display-adapter.md](display-adapter.md) section 10 is the contract. **No new persisted shape, no
+configuration key, no new code, token or value key, and no interface revision moves**:
+`display_map_stale` (registered by DA-1) is emitted for the first time, and the descriptions of
+`display_map_unresolved`, `display_map_stale`, `contained_task_input_out_of_bounds` and the token
+`input_scale_unsupported` say what the input side now does (the code index is regenerated). Every
+input of a run leaves for the device at one place, the host's input of the run, mapped by the run's
+display map: under a pure scale whose double is a whole number (`den` 1 or 2: 3/2, 2, 5/2, 3, …)
+it is no longer refused; under any other pure scale every input is refused up front. A Lab declared
+operation sends its input only on a frame of its package's size. The effect intent keeps what the
+package asked for in base pixels, the input intent records what is sent in device pixels; no record
+gains a member, and the task evidence pairs the two in one coordinate system. A 1280x720 package on
+a 1280x720 device records and sends byte for byte what it did: under the plain identity nothing is
+mapped, kept or recorded. Gates: the adapter's `gate_392_da3` tests (work order points 2, 4 and 5
+at the pure level; DA3-T1, T5, T6, T7, T10 to T12, T14, T15; fix 1's scale admission), the host's
+`gate_392_da3` tests (a tap, a swipe and a path drag at two and three times the base, the identity;
+fix 1's refused scale, Lab declared operation and task evidence), the forensic leaf's
+`input_pairing` tests and DA-2a's adapted input test. The number 1.342 was provisional for parallel
+slices (1.341 is #454's); the integration train 0.12.59c renumbered it 1.347, after §1.342
+(MAPP-2a), §1.343 (FL-1), §1.344 (REC-ARCH), §1.345 (#453 S5 and S6) and §1.346 (#453 S10).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DA3-1 | the run's input at its one exit (`RuntimeContainedTask::input`, after the input prerequisite) | behaviour (memory only) | DA-3 | — | under the plain identity the input leaves as the kernel made it (the prerequisite's one identity check, DA-2a's, stays); under any other map `DisplayMap::admit_input`, `current_for` and `device_input` (the adapter crate) map it before anything is sent: every point `round_half_up(v · s)` inside the device frame and inside the device box (inward) of the input box it was drawn in (the effect intent's sampling regions), a brake's cross `round_half_up(|d| · s)` with its sign, a path drag's box inward holding every point, durations, holds and slopes kept |
+| DA3-2 | the input side's refusals, all before any input | behaviour | DA-3 | DA-3 | a translation or a cropped frame `display_map_unresolved` (`translation_unsupported`), a turned frame (`orientation_mismatch`), a pure scale whose double is not a whole number, every input whatever its point (`input_scale_unsupported`, fix 1), a vertical-brake drag under a pure scale, the one input kind a scaled device cannot use (`input_scale_unsupported`: its brake is held at exactly 100 pixels by `InputAction` and the device layer), an input box with no device pixel (`collapsed`), a point outside the scale frame (`outside_frame`), each at stage `display_input_map`; a mapped point outside the device frame or its device box `contained_task_input_out_of_bounds`, never clamped (no legal point meets it under the admitted scales); an input whose frame reference names a frame of another size than the one the map was last built for `display_map_stale` (warning, stage `display_input_map`), and the run ends with it; a geometry change after the last frame was taken is not detected (the rotation verification slice) |
+| DA3-3 | `display_map_stale` | outcome code, first emitted | DA-1 | DA-3 | its one registered value `stage`; the model's old and new frame sizes are not registered values and are not written |
+| DA3-4 | DA-2a's DA2a-5 (the input prerequisite's `input_scale_unsupported` for every input under a pure scale) | behaviour removed | DA-2a | — | replaced by DA3-1; the token keeps DA3-2's meanings (a scale whose double is not whole, the vertical brake) and DA3-6's |
+| DA3-5 | `DisplayMap::device_input` with `InputCoordinates::Display` (a cropped frame's offset added) and `DeliveredFrame` (a turned frame's quarter turn undone) | adapter function (pure) | DA-3 | — | built and tested; the host refuses cropped and turned frames until DA-2b, so no run reaches it |
+| DA3-6 | a Lab declared operation's input (`LabOperationRuntime::press`) | behaviour (fix 1) | DA-3 | DA-3 | its runtime reads no game declaration and its frames carry no producer geometry, so it sends the kernel's input only on a frame of its package's size; on any other frame `display_map_unresolved` (`input_scale_unsupported`, stage `display_input_map`, the frame's and the base's sizes) before anything is sent, only that operation failing at its `input` stage |
+| DA3-7 | `actingledger task-evidence`, an input's `source_step` | forensic reading (fix 1) | DA-3 | — | the effect intent's input converted by the product's `admit_input` and `device_input` on the map of the run's last geometry record's base and the effect intent's `frame_extent`, then compared; that record is looked up backwards from the effect intent in the whole snapshot the command reads, not only in the page it reports (fix 2), so a run read in pages pairs as one read whole; under the plain identity byte for byte as before; the forensic leaf depends on the display adapter (a pure crate of the contract alone) |
+| DA3-8 | `Scale::doubled_is_whole` and `DisplayMap::admit_input`'s refusal of the other pure scales | adapter function (fix 1) | DA-3 | — | exactly the scales under which every base point of every base box maps inside its inward device box (`display-adapter.md` section 10, "Points") |
+
+**At deploy.** Nothing changes for an instance at the base's size (every production instance runs
+its packages at 1280x720 on a 1280x720 emulator: the plain identity). An instance whose display has
+the package's aspect ratio at a larger size (for example 1920x1080 or 2560x1440 for a 1280x720
+package) now runs its taps, long presses, swipes, drags with a pause and path drags instead of
+ending `display_map_unresolved` (`input_scale_unsupported`) at its first input; a vertical-brake
+drag there still ends so. The input side serves only the pure scales whose double is a whole
+number (1920x1080 and 2560x1440 for 1280x720, 3/2 and 2), and any other, such as 1600x900 (5/4),
+still ends every run at its first input until the slice that draws the points in the device box.
+A Lab declared operation on such a device ends at its input. Such an instance is to be verified on
+a device before it is used.
+
+Tests. The adapter's `gate_392_da3`:
+`da3_points_land_in_the_device_frame_and_in_their_device_box_at_the_edges` (the last column and row
+and a one-pixel box at 3/2, 2 and 3; a point outside its device box at 4/3 refused, a one-pixel box
+there `collapsed`, a point outside the base `outside_frame`),
+`da3_identity_sends_every_input_as_it_was_made`, `da3_t1_a_box_under_a_translation_lands_by_the_hand_table`,
+`da3_t5_a_vertical_brake_scales_with_the_map_and_waits_for_its_bound`,
+`da3_t6_a_map_of_another_frame_size_is_stale`,
+`da3_t7_a_turned_frame_undoes_its_turn_for_frame_coordinates`,
+`da3_t10_t11_long_presses_swipes_and_braked_drags_keep_their_durations`,
+`da3_t12_a_path_drag_maps_its_box_and_every_point`,
+`da3_t14_a_cropped_frame_adds_its_offset_back_for_display_coordinates`,
+`da3_the_input_side_refuses_every_map_the_capture_side_refuses`. The host's `gate_392_da3`:
+`da3_a_tap_a_swipe_and_a_drag_reach_the_device_at_two_and_three_times_their_base_points` (and the
+identity at once) and `da3_identity_a_1280x720_package_on_a_1280x720_device_records_and_sends_as_before`.
+Adapted: DA-2a's `da2a_an_input_waits_for_the_input_side_under_a_pure_scale`, renamed
+`da2a_an_input_under_a_pure_scale_leaves_at_its_device_pixel` (retired entry in
+`ci/retired-gates.toml`): it pinned the refusal this slice removes.
+
+Fix 1 tests. The adapter's `da3_fix1_the_input_side_sends_under_a_scale_only_when_its_double_is_whole`
+(over an 8x4 base every point of every box admitted and sent inside its inward device box at 1,
+3/2, 2, 5/2, 3, 7/2 and 4, the expected values by hand; at 4/3, 5/4, 8/5 and 9/4 some point its
+box cannot keep; at 5/4 every point refused up front, `input_scale_unsupported`). The host's
+`da3_fix1_a_scale_whose_double_is_not_whole_refuses_the_first_input_up_front` (16x12 on 20x15:
+the run ends `input_scale_unsupported` at `display_input_map` with no input),
+`da3_fix1_a_lab_declared_operation_sends_its_base_point_only_on_a_frame_of_its_package` (16x9 on
+16x9: the device takes the literal tap (1, 0); on 32x18: the operation fails at `input`,
+`input_scale_unsupported`, the device takes nothing) and
+`da3_fix1_the_task_evidence_pairs_every_scaled_input_with_its_effect_intent` (the three inputs
+`linked` at 1, 2 and 3 times the base). The forensic leaf's `input_pairing::tests`:
+`da3_fix1_a_scaled_input_pairs_with_its_effect_intent`,
+`da3_fix1_a_mismatched_input_under_a_scale_is_still_reported`,
+`da3_fix1_under_the_identity_the_pairing_compares_byte_for_byte`. Adapted: the architecture guard
+`forensic_leaf_dependency_boundary_is_narrow_and_production_free` (the leaf's internal
+dependencies gain `actingcommand-display-adapter`, whose only dependency is the contract crate;
+its forbidden closure is unchanged); the helpers of the host's `gate_412_b3_s2` the Lab test
+reuses are visible to their sibling modules, no assertion changed.
+
+### 1.348 Slice MAPP-2b (0.12.59): the application switch before a run, its failure and the member's cooldown (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its finding F3, its row "MAPP-2b" and its row for slice 2; the coordinator's rulings of 11-14 on board #437, not the owner's words; coordinator work order `rd-1113/brief-437-mapp2b.md`, read on main `bd58c9a6`, main `fa724931` merged)
+
+1.348 is the next free number after §1.347. MAPP-2a (§1.342) built the switch's parts with no
 caller; MAPP-2b makes the run paths use them. A build still refuses every group of several at load
 (`several_members_unsupported`, unchanged), so no installation reaches this slice's code: its tests
 hand the host the member → device key map and the group's name as the assembly builds them. Every

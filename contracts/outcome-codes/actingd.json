@@ -1111,9 +1111,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.28",
-      "description": "At start, before any child process is started, actingd could not make its own standard output or standard error handle not inheritable (WD-MT, Workflow #421). Each failed call is a caused_by foreign_os_error link whose operation names it (process_stdout_inheritance_clear, process_stderr_inheritance_clear). Child processes started from then on may inherit actingd's log, and a long-lived one (the adb server) keeps it open. The start goes on. Nothing is written when both handles were cleared or are absent.",
+      "description": "At start, before any child process is started, actingd could not make its own standard output or standard error handle not inheritable (WD-MT, Workflow #421). Each failed call is a caused_by foreign_os_error link whose operation names it (process_stdout_inheritance_clear, process_stderr_inheritance_clear). Child processes started from then on may inherit actingd's log, and a long-lived one (the adb server) keeps it open. The start goes on. Nothing is written when both handles were cleared or are absent. Since 0.12.59 actingd discover clears them the same way before it starts anything (Workflow #453 S10): there a failure is the warning's developer line on stderr, the report line is unchanged, and the discovery goes on, its children possibly holding the caller's pipes.",
       "common_causes": "A standard handle Windows will not change, for example a console handle of an old Windows.",
-      "handling": "The Runtime runs on, and the watchdog reads each log's own modification time, so a log held open does not change its decision. Report the os_error of the link; a log held open is released when the process holding it ends."
+      "handling": "The Runtime runs on, and the watchdog reads each log's own modification time, so a log held open does not change its decision. Report the os_error of the link; a log held open is released when the process holding it ends. Under actingd discover the report line is still printed, but a caller that reads actingd's output to its end (the rescue row emulators) can wait after actingd has exited until a descendant of the vendor tool or of PowerShell that inherited the pipe ends, so end that descendant when such a caller does not answer."
     },
     "vision_provider_unavailable": {
       "category": "error",
@@ -2210,7 +2210,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "actingd check-config --install-root named a directory that is not an install root: it does not exist or has no runtime\\BUILD-MANIFEST.json. path is the given root.",
+      "description": "actingd check-config --install-root (and, since 0.12.59, actingd discover --install-root, Workflow #453 S10) named a directory that is not an install root: it does not exist or has no runtime\\BUILD-MANIFEST.json. path is the given root.",
       "common_causes": "A typo in the root, or a root that was never installed.",
       "handling": "Name the root that holds runtime\\BUILD-MANIFEST.json."
     },
@@ -2248,6 +2248,20 @@
       "description": "actingd's daemon line at a start, one per device group of several, written once the provider startup has registered the instances (Workflow #437 MAPP-1, contracts/device-group.md, \"What check-config and the start print\"): aliases are the group's members in alias order and device_label the HOST:PORT its first member is bound to, absent while that endpoint is pending (the emulator is stopped at the start). It goes to the daemon log only; nothing is recorded in the ledger, where each member records its own runtime.instance_bound. A group of one prints nothing, and a build that refuses every group of several at load (before the slice \"order within one device\") never prints it.",
       "common_causes": "A configuration with several instances on one device, on a build that accepts a group of several.",
       "handling": "None."
+    },
+    "actingd_discover_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.59",
+      "description": "actingd discover listed this machine's emulator instances without a Runtime (Workflow #453 S10, contracts/emulator-control.md, \"Offline instance discovery\"): it resolved the emulator installation as check-config does and ran only the vendor tool's version and info -v all, writing nothing and touching no state root. report holds mumu_root {path, source}, provider_version and instances in the shape of an answered DiscoverInstances, each with the bound_alias of the configuration entry whose instance_index or instance_name names it (absent without --config). Exit 0.",
+      "common_causes": "A person, an installer or the Lab's rescue row emulators asked which emulator instances this machine has.",
+      "handling": "None; read the report."
     }
   },
   "locations": {

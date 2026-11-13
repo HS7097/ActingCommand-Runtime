@@ -6,9 +6,10 @@
 //! geometry passed, and rebuilds it when the frame changes. A frame of another size no longer
 //! stops the run's input: its geometry is read again, the change is recorded (`changed`, trigger
 //! `extent_changed`, with its `display_map`), the instance's display facts follow it, and the run
-//! goes on. Until the input side maps (DA-3) an input waits for a frame whose map is the plain
-//! identity: under a pure scale the run ends `display_map_unresolved` (`input_scale_unsupported`)
-//! with no input. A declaration that measures on the safe area finds no insets on a handset that
+//! goes on. Workflow #392 DA-3 adapted the input under a pure scale: the input side maps it, so
+//! the tap leaves at its device pixel and the run completes (it waited for DA-3 and ended
+//! `display_map_unresolved`, `input_scale_unsupported`, before). A declaration that measures on
+//! the safe area finds no insets on a handset that
 //! declares no device model (Workflow #392 DA-4b-D): `contained_task_geometry_unavailable`
 //! (`safe_area_unavailable`), no input.
 //!
@@ -377,39 +378,37 @@ fn da2a_t9_a_frame_that_changes_its_size_rebuilds_the_map_and_the_run_goes_on() 
     host.close().expect("close runtime host");
 }
 
-/// The host's input prerequisite under a pure scale (Workflow #392 DA-2a; model 392 v1.2 §6.6;
-/// the input side maps from DA-3): a 1280x720 package on a 1920x1080 device recognises its home
-/// page on the scale frame, but its tap is not sent; the run ends `display_map_unresolved` with
-/// `input_scale_unsupported` at `display_input_map`, the frame's and the base's sizes, and the
-/// device took no input.
+/// The host's input under a pure scale (Workflow #392 DA-2a, adapted by DA-3: model 392 v1.2 §6,
+/// the input side maps): a 1280x720 package on a 1920x1080 device recognises its home page on the
+/// scale frame and its tap (1, 0) leaves at (2, 0), `round_half_up(1 · 3/2)` = 2; the run completes
+/// on its target page. The effect intent keeps the tap (1, 0) the package asked for, the input
+/// intent and the device have (2, 0), and the first geometry record names the undeclared pure
+/// scale.
 #[test]
-fn da2a_an_input_waits_for_the_input_side_under_a_pure_scale() {
+fn da2a_an_input_under_a_pure_scale_leaves_at_its_device_pixel() {
     let temp = TempDir::new().expect("tempdir");
     let (host, state) = device_host(&temp, None, (1920, 1080), None, false);
     let run = run(&host, &temp, "scaled", &package_at(1280, 720));
     host.close().expect("close runtime host");
     assert_eq!(
         run.receipt.state(),
-        RuntimeReceiptState::Failed,
+        RuntimeReceiptState::Completed,
         "{:?}",
         run.receipt
     );
-    let outcome = run.receipt.outcome();
+    let (effects, inputs, _) = super::gate_392_da3::input_records(&run.events);
     assert_eq!(
-        outcome.code().as_str(),
-        "display_map_unresolved",
-        "{outcome:?}"
+        effects
+            .iter()
+            .map(|effect| effect.action.clone())
+            .collect::<Vec<_>>(),
+        [InputAction::Tap { x: 1, y: 0 }]
     );
+    assert_eq!(inputs, [InputAction::Tap { x: 2, y: 0 }]);
     assert_eq!(
-        text(outcome, "display_problem"),
-        Some("input_scale_unsupported")
+        *state.input_actions.lock().expect("fake input actions"),
+        [InputAction::Tap { x: 2, y: 0 }]
     );
-    assert_eq!(text(outcome, "stage"), Some("display_input_map"));
-    assert_eq!(number(outcome, "frame_width"), Some(1920));
-    assert_eq!(number(outcome, "frame_height"), Some(1080));
-    assert_eq!(number(outcome, "base_width"), Some(1280));
-    assert_eq!(number(outcome, "base_height"), Some(720));
-    assert_eq!(state.input_count.load(Ordering::Acquire), 0, "no input");
     let geometry = run.geometry();
     assert_eq!(
         geometry

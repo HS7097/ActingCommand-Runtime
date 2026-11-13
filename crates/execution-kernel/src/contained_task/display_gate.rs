@@ -21,8 +21,11 @@
 //!   (a frame whose geometry does not show its display: `contained_task_frame_invalid`).
 //!
 //! Evidence leaves the adapter in device-frame pixels: a recognised target's region is the
-//! device box that covers it (outward rounding). The input side maps nothing yet (DA-3); the
-//! host holds input back on a frame that is not the plain identity.
+//! device box that covers it (outward rounding). The kernel makes every input in base pixels;
+//! Workflow #392 DA-3: the host's input of a run maps it to the device frame under the frame's
+//! map (`DisplayMap::admit_input`, `device_input`), and a Lab declared operation, whose runtime
+//! knows no game declaration and no producer geometry, sends an input only on a frame of its
+//! package's size.
 
 use super::{
     ContainedTaskError, ExecutionKernelCode, Resolution, scene_from_frame, scene_from_pixels,

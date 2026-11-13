@@ -604,7 +604,7 @@ HELD-1 refuses a file that names either member (the section and the entry deny u
 
 **The switch cooldown of a device group's member (Workflow #437 MAPP-2b, since 0.12.59;
 `actingd-config` revision 30, [component-interfaces.md](component-interfaces.md);
-[v012-register.md](v012-register.md) §1.345).** `scheduling.device_group.switch_failure_cooldown_ms`
+[v012-register.md](v012-register.md) §1.348).** `scheduling.device_group.switch_failure_cooldown_ms`
 (milliseconds `1..=3600000`, default `300000`, settable), in the file the `scheduling` section's
 `device_group` member, is how long a member of a device group of several whose switch before a
 run failed does not compete for its device ([device-group.md](device-group.md), "The member's

@@ -76,6 +76,10 @@ mod gate_381a;
 // `request-shutdown --wait` (G11), in-process.
 #[cfg(test)]
 mod gate_382_a1;
+// Test-only: Workflow #434 LAB-6S2-B2, every connection of the command lines binds `lab` with
+// `Lab-CLI` and keeps its envelope of 0.12.58.
+#[cfg(test)]
+mod gate_434_lab6s2b2;
 // Test-only: Workflow #381 A, the held Runtime start and the provider without instances, mounted
 // once for the whole binary (mcp::tests::gate_387_d1b; `crates/watchdog` mounts it for its own
 // gates since Workflow #434 LAB-4).
@@ -116,6 +120,7 @@ use actingcommand_contract::{
     RuntimeResult, SanitizationError,
 };
 use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
+use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_lab_ops::instance_selector::SelectorMiss;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde::Serialize;
@@ -137,6 +142,15 @@ const RESULT_MEMBER: &str = "result";
 /// Upper bound for `--wait <seconds>` (`request-shutdown`, `install-transition`; Workflow #389
 /// MCP-21: `emulator start|stop|restart` and `task-run`).
 const MAX_WAIT_SECONDS: u64 = 3600;
+/// Workflow #434 LAB-6S2-B2 (`contracts/lab-two-entries.md` §2.4, §4.2; register §1.287, "Slice
+/// LAB-6S2-B2"; the coordinator's rulings of 2026-11-13 on board #434, not the owner's words):
+/// the word every connection of this program's command lines declares, `Lab-CLI`, a command line
+/// being where its requests come from: its own commands ([`client_config`]), the operation
+/// layer's (`lab_ops::front::Front::Actingctl`, the same word), and the code it shares with the
+/// Lab (`install`, `start`, `restart`, `watchdog`). Each keeps the envelope it sent on 0.12.58,
+/// and the Runtime records and answers it on the CLI channel, as on 0.12.58 (the map M and the
+/// receipt rule R of LAB-6S2-M). `mcp-serve` declares `Lab-MCP` (`mcp::runtime`).
+const WORD: Initiator = Initiator::LabCli;
 // Workflow #434 LAB-1b: `task-offset`'s `source_detector` and the `pause` defaults are
 // `scheduling`'s (`TASK_OFFSET_DETECTOR`, `CLI_PAUSE_REASON`, `CLI_DRAIN_TIMEOUT_MS`).
 
@@ -152,7 +166,8 @@ fn main() -> ExitCode {
     }
     // Workflow #389 U-2 (model section 3.5): an actingd before U-2 leaves this process's
     // connections unbound; the runtime client reports it once, as a developer line on stderr
-    // (mcp-serve's stdout is the protocol, so the same line serves it).
+    // (mcp-serve's stdout is the protocol, so the same line serves it). Workflow #434 LAB-6S2-B2:
+    // so does an actingd before LAB-6S1a (0.12.57 or earlier), which drops the word.
     actingcommand_runtime_client::set_channel_unsupported_reporter(|outcome| {
         cli_line::developer_line(outcome, None);
     });
@@ -198,16 +213,18 @@ fn main() -> ExitCode {
     };
     // Workflow #374: `watchdog` takes `--root`, not `--state-root`. Workflow #434 LAB-4 fix 1:
     // its developer lines go where actingctl prints its own, on stderr; the crate has no default.
+    // Workflow #434 LAB-6S2-B2: its probe of the Runtime declares this program's word.
     #[cfg(windows)]
     {
-        if let Some(exit) = watchdog::dispatch(&arguments, &cli_line::developer_line) {
+        if let Some(exit) = watchdog::dispatch(&arguments, &cli_line::developer_line, WORD) {
             return exit;
         }
     }
-    // Workflow #421 INST-1: `install` takes `--root`, not `--state-root`; CLI only.
+    // Workflow #421 INST-1: `install` takes `--root`, not `--state-root`; CLI only. Workflow #434
+    // LAB-6S2-B2: its connections to a running Runtime declare this program's word.
     #[cfg(windows)]
     {
-        if let Some(exit) = install::dispatch(&arguments) {
+        if let Some(exit) = install::dispatch(&arguments, WORD) {
             return cli_line::print(exit);
         }
         // Workflow #421 MCP-ENTRY: `mcp-entry plan|list`, asked by the MCP entry.
@@ -226,9 +243,10 @@ fn main() -> ExitCode {
         return cli_line::print(exit);
     }
     // Workflow #389 MCP-10: `start` and `restart` take `--root`, not `--state-root`; CLI only.
+    // Workflow #434 LAB-6S2-B2: their connections declare this program's word.
     #[cfg(windows)]
     {
-        if let Some(exit) = runtime_start::dispatch(&arguments) {
+        if let Some(exit) = runtime_start::dispatch(&arguments, WORD) {
             return cli_line::print(exit);
         }
     }
@@ -387,15 +405,19 @@ fn install_transition_run(action: &InstallTransitionAction) -> InstallTransition
 }
 
 /// Workflow #381 A R1′: the client configuration of one run. An install-transition run gets its
-/// budget as the exchange timeout and as one deadline counted from `started`.
+/// budget as the exchange timeout and as one deadline counted from `started`. Workflow #434
+/// LAB-6S2-B2: the Lab channel with this program's word ([`WORD`]), where it was the CLI channel,
+/// and the envelope of 0.12.58 ([`Command::origin`]: (Cli, Cli), or (Agent, Adapter) for
+/// `agent-publish-facts` and `agent-apply-resource-targets`).
 fn client_config(state_root: &Path, command: &Command, started: Instant) -> RuntimeClientConfig {
     let (actor, source) = command.origin();
     let config = RuntimeClientConfig::new(
         state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         actor,
         source,
-    );
+    )
+    .with_initiator(WORD.word());
     let Command::InstallTransition { action } = command else {
         return config;
     };

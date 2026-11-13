@@ -236,7 +236,7 @@ mod gate_mapp1b;
 // another member's stop under the device's key, the startup run on a borrowed key, the stopped
 // member's page forgotten, and their one entry.
 mod gate_mapp2a;
-// Workflow #437 MAPP-2b (0.12.59; register §1.345): the switch's callers, the run's clock that
+// Workflow #437 MAPP-2b (0.12.59; register §1.348): the switch's callers, the run's clock that
 // leaves the switch out, the member's lease, a failed switch and the member's switch cooldown.
 mod gate_mapp2b;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).
@@ -427,6 +427,8 @@ mod gate_392_da2a;
 // Workflow #392 DA-4b-D (Alice's ruling 69): the declared safe area, its live changes and its
 // refusals.
 mod gate_392_da4bd;
+// Workflow #392 DA-3: the input side: every input of a run mapped at its one exit to the device.
+mod gate_392_da3;
 mod gate_398_rd1a;
 mod gate_398_rd1b;
 // Workflow #398 RD-2: a handset's wired device link through the host.

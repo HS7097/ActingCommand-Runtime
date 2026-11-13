@@ -7801,6 +7801,9 @@
         },
         "mcp_server_not_in_build": {
           "description": "The Lab's rescue module's mcp plan, the plan of the MCP entry's second generation, found no actinglab-mcp.exe in the manifests of the installed build, neither in its runtime\\ nor in its tools\\ (commit_sha the build, path the last place looked). It names no program that does not exist and no other program; every build before the server is packaged answers this. The refusal carries the tunables, as every refusal of the plan after its configuration read does. (Workflow #434 LAB-5G5b, since 0.12.57)"
+        },
+        "emulator_discovery_failed": {
+          "description": "The Lab's rescue module's emulators got no completed discovery from the live build's actingd discover of the root's configuration (contracts/emulator-control.md, \"Offline instance discovery\"): actingd refused (its outcome is the caused_by link: instance_discovery_unavailable, mumu_manager_version_unsupported, invalid_arguments, or a configuration refusal of check-config's), printed no discover report (a build before it, or a crash: foreign_other_error with the exit code and stderr), did not run, or was still running at its bound of 60 s and was ended there (timeout_ms the bound, no cause link; it is read only, so ending it loses nothing, and no actingd of the root is left running). Nothing was written. (Workflow #453 S10, since 0.12.59)"
         }
       }
     },
@@ -8868,7 +8871,7 @@
           "description": "The map moves regions (a translation, or a frame cropped from its display), which this Runtime does not map yet: translations and crops come with Workflow #392 DA-2b. The kernel's frame gate refuses the frame and the run ends with no input."
         },
         "input_scale_unsupported": {
-          "description": "The frame's map is not the plain identity (a pure scale) and the input side does not map input boxes to the device frame yet (Workflow #392 DA-3): the host's input prerequisite sends nothing and the run ends."
+          "description": "The frame's map is not the plain identity (a pure scale) and the input side does not map the input to the device frame: the host sends nothing and the run ends. Until Workflow #392 DA-3 every input under a pure scale; from DA-3 every input under a pure scale whose double is not a whole number (a point on a box's edge could map outside the box's device box), a vertical-brake drag under any scale, whose brake the contract holds at exactly 100 pixels while the map would change it, and a Lab declared operation's input on a frame of another size than its package, whose map the Lab cannot know."
         },
         "safe_area_unavailable": {
           "description": "The game's display declaration measures on the safe area and the frame's geometry has no insets: a handset that declares no device model (Workflow #392 DA-4b-D: no capture backend reads a cutout; an emulator's insets are 0): the value of contained_task_geometry_unavailable, and of display_map_unresolved where a frame reaches the kernel's gate without the host's check."

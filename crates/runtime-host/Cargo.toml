@@ -45,6 +45,8 @@ sha2 = { workspace = true }
 actingcommand-agent-forward = { workspace = true, features = ["test-support"] }
 # Workflow #369 E3 (#670 safety net): the ledger's settlement refusal hook in host tests.
 actingcommand-ledger = { workspace = true, features = ["test-hooks"] }
+# Workflow #392 DA-3 fix 1: a scaled run's task evidence, read back as `actingledger` reads it.
+actingcommand-ledger-forensics = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 tempfile = "3"
 zip = { workspace = true }

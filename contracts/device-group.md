@@ -3,7 +3,7 @@
 Workflow #437 MAPP-C (contracts only; [v012-register.md](v012-register.md) §1.323). **Every rule of
 this file is (MAPP, not built yet)** unless its section names MAPP-1 ([v012-register.md](v012-register.md)
 §1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57), MAPP-2a (§1.342, Runtime 0.12.59) or
-MAPP-2b (§1.345, Runtime 0.12.59):
+MAPP-2b (§1.348, Runtime 0.12.59):
 no code, key, code, value key or word named here exists until the code slices of §1.323 build it,
 and every code, value key and vocabulary word below is proposed but those MAPP-1 registers:
 `device_group`, `instance.<instance id>.device_group`, `device_group_config_invalid` with the
@@ -21,7 +21,7 @@ acquire, release and second-hold refusal are not built (the player hold itself i
 Workflow #429 R-7b). The coordinator cut MAPP-2 in two as well: MAPP-2a (§1.342, built in Runtime
 0.12.59) builds the switch's parts (another member's stop under the device's key, the member's
 startup run on the borrowed key, the stopped member's page forgotten), their one entry and its
-code, with no caller in the Runtime; MAPP-2b (§1.345, built in Runtime 0.12.59) calls the switch
+code, with no caller in the Runtime; MAPP-2b (§1.348, built in Runtime 0.12.59) calls the switch
 from the run paths, takes its time out of the run's clock, settles a run with its failure, adds
 the member's switch cooldown and its key, and sizes a member's dispatch lease for the switch and
 the run ("The switch before a run"). The load still refuses every group of several, so no root
@@ -367,7 +367,7 @@ the front, under the device's lease.
 (step 3, `host/startup_package.rs` over `run_prepared_package_on_borrowed_key` in
 `host/contained_task.rs`) and `HostShared::forget_stopped_application_facts` (step 2's forgetting,
 `host/runtime_facts.rs`), and their one entry `HostShared::switch_application` (also public as
-`RuntimeHost::switch_application`). **What MAPP-2b builds (Runtime 0.12.59, register §1.345):**
+`RuntimeHost::switch_application`). **What MAPP-2b builds (Runtime 0.12.59, register §1.348):**
 the calls from the run paths named below (`HostShared::switch_before_run` and
 `HostShared::stop_others_before_start`, `host/switch.rs`), the switch's time taken out of the run's
 clock ("The run's clock"), a member's dispatch lease sized for the startup run and the run ("The
@@ -783,7 +783,7 @@ them, and it comes before the first real use of a group of several.
   the code `application_switch_failed` with the vocabulary `application_switch_step`, with no
   caller in the Runtime; the load still refuses every group of several, and the catalog gains one
   code and one vocabulary.
-- MAPP-2b is built in Runtime 0.12.59 (register §1.345): the switch's callers, the run's clock that
+- MAPP-2b is built in Runtime 0.12.59 (register §1.348): the switch's callers, the run's clock that
   leaves the switch out, a member's lease sized for the startup run and the run, the failure's
   settlement and the member's switch cooldown with its key, in `actingd-config` revision 30; the
   load still refuses every group of several, so no installation reaches any of it.

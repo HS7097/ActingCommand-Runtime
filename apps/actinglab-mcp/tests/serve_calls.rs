@@ -34,6 +34,8 @@
 //!   `ac_pause` on surface `mcp`, then `PauseScheduling`), each with the envelope (Cli, Cli).
 //!   Workflow #434 LAB-6S2-B1 (adapted): but for the binding, which this server declares as `lab`
 //!   with `Lab-MCP` and no `via`, and today's server as the MCP channel until LAB-6S2-B2.
+//!   Workflow #434 LAB-6S2-B2 (adapted): today's server declares `lab` with `Lab-MCP` and no
+//!   `via` too.
 //!
 //! Workflow #434 LAB-5G3 (register §1.287, "Slice LAB-5G3"), each server with a short call budget
 //! (`--call-budget`), so that no test waits for today's 25 s:
@@ -751,9 +753,10 @@ fn mcp_write_provenance_as_todays_server() {
         bound(&connection.requests[1]),
         (RuntimeChannel::Lab, None, Some(Initiator::LabMcp))
     );
+    // Workflow #434 LAB-6S2-B2 (adapted): today's server's binding moved to this one's.
     assert_eq!(
         bound(&todays_connection.requests[1]),
-        (RuntimeChannel::Mcp, None, None)
+        (RuntimeChannel::Lab, None, Some(Initiator::LabMcp))
     );
     for request in connection.requests.iter().map(sent) {
         assert_eq!(

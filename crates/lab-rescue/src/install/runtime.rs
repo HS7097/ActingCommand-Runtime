@@ -200,7 +200,7 @@ pub(crate) trait RuntimeLink {
 
 /// The machine's Runtime. Workflow #434 LAB-6S2-B1: every connection it makes declares the word
 /// of the program that runs the command (`crate::runtime_start::client_config`): the rescue
-/// module's, or none for `actingctl install`, as on 0.12.58 until LAB-6S2-B2.
+/// module's, or `actingctl install`'s (`Lab-CLI` since LAB-6S2-B2; none before, as on 0.12.58).
 pub(crate) struct SystemRuntime {
     initiator: Option<Initiator>,
 }

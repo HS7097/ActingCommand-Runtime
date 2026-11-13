@@ -70,6 +70,17 @@ pub(crate) enum NotRan {
     StillRunning { pid: u32 },
 }
 
+/// Workflow #453 S10 fix 1 (review): a program run by [`Host::run_program_ending`] that did not
+/// run to its end.
+#[derive(Debug)]
+pub(crate) enum NotFinished {
+    /// It could not be run or waited for: the OS's failure.
+    Failed(Outcome),
+    /// It was still running at its deadline and was ended there and reaped; what it printed is
+    /// not read.
+    Ended,
+}
+
 pub(crate) trait Host {
     /// The wall clock, in Unix milliseconds: operation ids and the `<ms>` of kept names.
     fn now_unix_ms(&self) -> u64;
@@ -94,6 +105,16 @@ pub(crate) trait Host {
         arguments: &[OsString],
         timeout_ms: u64,
     ) -> Result<Ran, NotRan>;
+    /// Workflow #453 S10 fix 1 (review): [`Self::run_program`] for a read-only child that is
+    /// ended at its deadline instead of left running: killed, reaped and no longer read
+    /// ([`NotFinished::Ended`]; the shared child helper's `run_captured_ending`). Only the rescue
+    /// row `emulators` runs a program this way; every other child keeps the stall rule.
+    fn run_program_ending(
+        &self,
+        program: &Path,
+        arguments: &[OsString],
+        timeout_ms: u64,
+    ) -> Result<Ran, NotFinished>;
     /// The folders an actingd start of `root` writes its log to.
     fn log_dirs(&self, root: &Path) -> Vec<PathBuf>;
     /// Called after each journalled step of `operation_id` is recorded done. Production never
@@ -159,8 +180,9 @@ pub(crate) struct SystemHost {
 }
 
 impl SystemHost {
-    /// The machine, its Runtime reached with `initiator`: the rescue module's word, or none for
-    /// `actingctl install`, which binds the CLI channel as on 0.12.58 until LAB-6S2-B2.
+    /// The machine, its Runtime reached with `initiator`: the rescue module's word, or
+    /// `actingctl install`'s (`Lab-CLI` since Workflow #434 LAB-6S2-B2; none before, the CLI
+    /// channel as on 0.12.58).
     pub(crate) const fn of(initiator: Option<Initiator>) -> Self {
         Self {
             runtime: SystemRuntime::of(initiator),
@@ -241,6 +263,39 @@ impl Host for SystemHost {
                         .unwrap_or_else(|| Outcome::new(ActingctlCode::SpawnFailed).path(program)),
                 ),
             })?;
+        Ok(Ran {
+            exit_code: captured.status.code(),
+            stdout: captured.stdout,
+            stderr: captured.stderr,
+        })
+    }
+
+    fn run_program_ending(
+        &self,
+        program: &Path,
+        arguments: &[OsString],
+        timeout_ms: u64,
+    ) -> Result<Ran, NotFinished> {
+        let mut command = Command::new(program);
+        command.args(arguments);
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        // A child still running at the deadline is ended there and reaped, and its pipes are no
+        // longer read (`child::run_captured_ending`). A reader thread that panicked leaves no OS
+        // failure: the program could not be run.
+        let captured =
+            crate::child::run_captured_ending(command, deadline).map_err(
+                |failure| match failure {
+                    crate::child::ChildFailure::Ended => NotFinished::Ended,
+                    failure => NotFinished::Failed(
+                        failure
+                            .os_failure()
+                            .map(|cause| cause.path(program))
+                            .unwrap_or_else(|| {
+                                Outcome::new(ActingctlCode::SpawnFailed).path(program)
+                            }),
+                    ),
+                },
+            )?;
         Ok(Ran {
             exit_code: captured.status.code(),
             stdout: captured.stdout,

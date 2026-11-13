@@ -2872,13 +2872,13 @@ tests = [
 ]
 incident = ["#392 DA-2a"]
 
-# Workflow #392 DA-2a (model 392 v1.2 §6.6; the input side maps from DA-3): on a 1920x1080 device a 1280x720 package's tap is not sent; the run ends display_map_unresolved (input_scale_unsupported at display_input_map) with no input
+# Workflow #392 DA-2a (model 392 v1.2 §6.6), adapted by DA-3 (the input side maps): on a 1920x1080 device a 1280x720 package's tap (1, 0) leaves at (2, 0) and the run completes; the effect intent keeps (1, 0), the input intent and the device have (2, 0)
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_an_input_waits_for_the_input_side_under_a_pure_scale",
+    "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_an_input_under_a_pure_scale_leaves_at_its_device_pixel",
 ]
-incident = ["#392 DA-2a"]
+incident = ["#392 DA-2a", "#392 DA-3"]
 
 # Workflow #392 DA-2a (model 392 v1.2 §4.5): a declaration measured on the safe area finds no insets before DA-4b; the run ends contained_task_geometry_unavailable (safe_area_unavailable) after its geometry record and before any input
 [[gate]]
@@ -2920,6 +2920,46 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_392_da4bd::da4bd_t4_an_emulator_takes_insets_0_and_a_screen_layout_no_declaration",
 ]
 incident = ["#392 DA-4b-D"]
+
+# Workflow #392 DA-3 (work order tests; model 392 v1.2 §6.1, §6.2, §13 row DA3-T9's one exit; contracts/display-adapter.md section 10): a 16x9 package on a 32x18 and a 48x27 device and on a 16x9 one completes; a tap drawn in its box, a swipe and a path drag reach the device at their base points times 2, 3 and 1, durations and hold kept; the effect intents keep the base inputs, their base boxes and the device frame's size, the input intents name the device inputs, and the first geometry record names the pure scale (none under the identity)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_a_tap_a_swipe_and_a_drag_reach_the_device_at_two_and_three_times_their_base_points",
+]
+incident = ["#392 DA-3"]
+
+# Workflow #392 DA-3 (work order point 5; model 392 v1.2 §0.2 C16; the owner's ruling of 10-26, merge is deploy): with the existing gates' literals, a 1280x720 package on a 1280x720 device records the effect intent tap (1, 0) without sampling and the frame 1280x720, the input intent tap (1, 0), sends the one tap (1, 0), and its one geometry record is initial without a display map
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_identity_a_1280x720_package_on_a_1280x720_device_records_and_sends_as_before",
+]
+incident = ["#392 DA-3"]
+
+# Workflow #392 DA-3 fix 1 (work order point 3; contracts/display-adapter.md section 10): a 16x12 package on a 20x15 device (s = 5/4, admitted by the capture side) recognises its page and ends display_map_unresolved (input_scale_unsupported at display_input_map, frame 20x15, base 16x12) at its first input, whatever the point; the effect intent keeps the tap (1, 0), no input intent, no input
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_fix1_a_scale_whose_double_is_not_whole_refuses_the_first_input_up_front",
+]
+incident = ["#392 DA-3"]
+
+# Workflow #392 DA-3 fix 1 (work order point 1; contracts/display-adapter.md section 10, "The Lab's declared operations"): a Lab declared operation of a 16x9 package tapping (1, 0) sends the literal tap on a 16x9 device and is confirmed; on a 32x18 device it fails at its input with display_map_unresolved (input_scale_unsupported at display_input_map, frame 32x18, base 16x9), its attempt keeps the base tap and never reached its input, and the device received nothing
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_fix1_a_lab_declared_operation_sends_its_base_point_only_on_a_frame_of_its_package",
+]
+incident = ["#392 DA-3"]
+
+# Workflow #392 DA-3 fix 1 (work order point 2; contracts/display-adapter.md section 10, "The task evidence"): the task evidence of the three-input run on a 16x9, a 32x18 and a 48x27 device relates each of its three inputs linked to its step's effect intent, with no source_mismatch
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_fix1_the_task_evidence_pairs_every_scaled_input_with_its_effect_intent",
+]
+incident = ["#392 DA-3"]
 
 # LN-7c R (#422; ledger-observer.md §11.7; coordinator 10-26): the ledger scrub's finding about the derived frame index `ledger_frame_refs` is non-fatal: the host hands it to the daemon's log once (one line with the code, what, where and `extent=untrusted`), latches nothing, and the Runtime keeps running and closes as usual
 [[gate]]
@@ -3613,7 +3653,7 @@ tests = [
 ]
 incident = ["#437 MAPP-2a"]
 
-# Workflow #437 MAPP-2b (0.12.59; register §1.345; contracts/device-group.md, "The switch before a run"): the switch's callers, the run's clock, the member's lease, a failed switch and the member's switch cooldown, on the fake devices and the manual Runtime clock of the MAPP-2a gate (members A, B and D of one device group, C alone). A policy run of B with A in front: the device sees A's stop, B's startup restart, then B's task's own restart, one application alive after each step, A's task.page and application.foreground gone, A's stop records A's, B's startup run and run B's, one causation id for the stops and the startup run, whose scheduling record is under B's run's request, B's home before its task, and A's queued claim never handed the key before B's run ends (1); the front unknown stops A and D first, and B's own package in front stops nothing and runs no startup package (2); a 400 s switch before a short task: the run settles a success on its own time within its 300 s budget, its run-duration sample and last_duration_ms are that time, the dispatch's wall time holds both (3); a member's dispatch is granted D_s + D_run + R and a lone instance's D_run + R, the borrowed-key startup run's time check passes on the member's key and fails on a key granted without the startup run's share, whose run then fails its switch at startup_package before any stop, and a member whose D_s + D_run exceeds the longest response deadline is refused before any lease or device step, contained_task_deadline_unavailable, on its dispatch and on two direct runs alike, while the lone instance's dispatch with that run is granted (4); a failure at foreground_read, stop and startup_package ends the run application_switch_failed with that step and its cause, settles it failed with that code, releases the key with no claim left and no ladder, and starts the switch cooldown (5); the cooldown (key set to 120 s by the file; default 300000, range 1..=3600000, settable) defers B's candidate dispatch_instance_cooldown with failure_code application_switch_failed, next_eligible_unix_ms and its wake at its end, while A's task is dispatched and runs, B is dispatched again once it ended, a second failure starts it again and a restart drops it (6); a lone instance's dispatch, run and settlement with and without the slice's branch reachable, within one host: the same lease, run records, receipt state, runtime, budget verdict, sample and last_duration_ms, and the switch never reached (7); no interruption: while B's run holds the device the switch it reaches stops nothing and starts nothing, and A's queued claim waits until B's run ended (8); a direct run of B with A in front goes through the same switch and completes, a launch of B with A in front stops A first and launches B, with B in front stops nothing, and a lone instance's launch never reaches the switch (9)
+# Workflow #437 MAPP-2b (0.12.59; register §1.348; contracts/device-group.md, "The switch before a run"): the switch's callers, the run's clock, the member's lease, a failed switch and the member's switch cooldown, on the fake devices and the manual Runtime clock of the MAPP-2a gate (members A, B and D of one device group, C alone). A policy run of B with A in front: the device sees A's stop, B's startup restart, then B's task's own restart, one application alive after each step, A's task.page and application.foreground gone, A's stop records A's, B's startup run and run B's, one causation id for the stops and the startup run, whose scheduling record is under B's run's request, B's home before its task, and A's queued claim never handed the key before B's run ends (1); the front unknown stops A and D first, and B's own package in front stops nothing and runs no startup package (2); a 400 s switch before a short task: the run settles a success on its own time within its 300 s budget, its run-duration sample and last_duration_ms are that time, the dispatch's wall time holds both (3); a member's dispatch is granted D_s + D_run + R and a lone instance's D_run + R, the borrowed-key startup run's time check passes on the member's key and fails on a key granted without the startup run's share, whose run then fails its switch at startup_package before any stop, and a member whose D_s + D_run exceeds the longest response deadline is refused before any lease or device step, contained_task_deadline_unavailable, on its dispatch and on two direct runs alike, while the lone instance's dispatch with that run is granted (4); a failure at foreground_read, stop and startup_package ends the run application_switch_failed with that step and its cause, settles it failed with that code, releases the key with no claim left and no ladder, and starts the switch cooldown (5); the cooldown (key set to 120 s by the file; default 300000, range 1..=3600000, settable) defers B's candidate dispatch_instance_cooldown with failure_code application_switch_failed, next_eligible_unix_ms and its wake at its end, while A's task is dispatched and runs, B is dispatched again once it ended, a second failure starts it again and a restart drops it (6); a lone instance's dispatch, run and settlement with and without the slice's branch reachable, within one host: the same lease, run records, receipt state, runtime, budget verdict, sample and last_duration_ms, and the switch never reached (7); no interruption: while B's run holds the device the switch it reaches stops nothing and starts nothing, and A's queued claim waits until B's run ended (8); a direct run of B with A in front goes through the same switch and completes, a launch of B with A in front stops A first and launches B, with B in front stops nothing, and a lone instance's launch never reaches the switch (9)
 [[gate]]
 coverage = "Y"
 tests = [
