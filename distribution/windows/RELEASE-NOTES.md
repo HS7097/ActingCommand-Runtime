@@ -9,6 +9,232 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.57
+
+本版是 v0.12.56 之后 main 上的 19 个合并：17 个 PR 和两趟并车，并车又带进 5 个 PR（#1640 带 #1636、#1638、#1639，#1643 带 #1641、#1642）。按单子分：#434 LAB-5G 的新 MCP 服务器一整组（LAB-5G1b #1636、LAB-5G2a #1639、
+LAB-5G5a #1637、LAB-5G6 #1641、LAB-5G5b #1642、LAB-5G2b #1644 和 #1645、LAB-5G3 #1646 和 #1647、LAB-5G4b #1651 和 #1652、LAB-5G4c #1650、LAB-5G7 #1658）和 LAB-5B1 三片（#1654、#1655、
+#1657），#437 MAPP-1b（#1635），#447 IDLE-3（#1648），#448 SBUD-1（#1649），#428 LAB-OCR-DL（#1638），#446 的两片（#1633 只动 CI，#1653 只换掉本机路径）。先说部署：**生产上跑的是
+v0.12.54，v0.12.55 和 v0.12.56 发布了、都没有部署**；计划是先从 v0.12.54 装 v0.12.56（跨过 v0.12.55 的单向一步，见 v0.12.56 一节），过几天再从 v0.12.56 装本版。从 v0.12.56 装本版：
+**没有一个接口修订移动，不用任何标志，计划里没有 `ledger_verify`，默认值文件不变（`defaults_diff` 是空的），装上以后能退回 v0.12.56**。没有新的配置键，`config.subsystems` 不变；
+Tools 包多两个文件（布局仍是 `platform-tools-v3`）。**部署前要做的一件事：用本版的 `standard-pack check` 把每个已装的包根查一遍，查出被拒的包先放改好的那一版**（SBUD-1，下面第一条）。
+运行上要知道的是这几处：
+
+- **声明的采样需要放不进时限的包，装载时就拒**（#448 SBUD-1，登记 §1.333）。
+  - **原来的毛病**（#448）：一个已发布的包，选择步的候选布局加了用 OCR 读整数的特征（四行同时读、每个目标的 `timeout_ms` 是 5000、没有共识），步骤没写时限（默认 5000 毫秒）。
+    `standard-pack check` 和 Runtime 的准入都放行了，跑到那一步每次都失败：`candidate_sample_budget_insufficient`，`required_ms` 20000、`remaining_ms` 4997，跑之前什么都看不出来。
+    原因是准入只比 `sampling_budget_ms`，它只在声明了共识时才有答数。
+  - **现在准入比的是运行时那条规则本身**：哪些布局要采样并检查（有共识，或有读身份、读整数的特征）、需要多少（布局声明的最坏识别时间加等待，减去帧间等待）收进一个函数
+    `selection::candidate_provider_need_ms`（`crates/execution-kernel/src/contained_task/selection.rs` 726），运行时的检查（1278）和准入都调它。准入在 `prepare_bundle` 的循环里
+    （`contained_task.rs` 3367–3408）拿这个需要量比这一步的上限：步骤和任务时限里小的那个；扫描选择和 `read_list` 用自己的 `max_ms`，再受任务时限限制。声明了目标共识的包里，`read_list`
+    每次截图的页识别也按 `max_ms` 比。超了就拒：`recognition_sample_budget_invalid`（`required_ms`、`limit_ms`、`pack_operation_id`），正好相等放行（但实机拍完第一帧以后剩下的时间更少，
+    正好相等的包实机仍会失败，作者要留余量）。没有新码、新键，`package` 不升。
+  - **拒的是整个包**：准入是一个任务包（一个 `package_id`）一起过的，包里哪一步超了，整个包被拒，它绑定的所有任务都跟着停，不只是用到那一步的任务。
+  - **操作员看到的**：Runtime 照默认的 `scheduling.pack_admission.suspend_codes`（只有 `recognition_sample_budget_invalid`，`distribution/windows/actingd.defaults.json` 354–358）把这个包挂起，
+    码是 `pack_admission_suspended`（`failure_code` 是 `recognition_sample_budget_invalid`，带 `package_id`、`actual_digest`、`runtime_commit`）；离线的 `standard-pack check`、`package check`、
+    `package preflight` 以 `package_invalid` 拒，原因里是 `recognition_sample_budget_invalid` 和那三个值。首次启动时具体会怎样，见下面配对里的「已装的包」。
+  - **部署前操作员要做的**：本版的 Lab 不必装上就能跑：`install release stage` 以后它在 `<根>\install\builds\<本版提交>\tools\actinglab.exe`（或者解开的 Tools 包里）。对每个已装的
+    包根跑 `actinglab --json standard-pack check --root <standard_packs.root>\<游戏目录>`。**干净的回答**：退出码 0，行的 `outcome` 是成功（`lab_operation_completed`），`status` 是 `checked`，`pack_count` 是这个根登记的包数，
+    `warnings` 里只有以前就有的警告。**被拒的回答**：退出码非 0，`outcome` 是 `package_invalid`（导航角色的包是 `package_bundle_navigation_package_invalid`，`navigation_problem`
+    `admission_failed`），原因里是 `recognition_sample_budget_invalid` 和 `pack_operation_id`、`required_ms`、`limit_ms`（`crates/resource-tooling/src/standard_pack_check.rs` 967–983、
+    1053–1059）。检查碰到第一个被拒的包就停，改好以后要再跑一遍，直到每个根都是干净的回答。有被拒的包，就先在 v0.12.56 上照常热放置改好的版本（给它的步骤写上不小于需要量的时限，
+    扫描写 `max_ms`，或者减少、缩短识别），再部署。
+- **空闲动作只照「算进了上一次运行结束」的计划做**（#447 IDLE-3，登记 §1.332；`contracts/runtime-config.md` 的 `idle` 一节）。
+  - **原来的毛病**（#447，生产 v0.12.54）：一台实例上两个串起来的计划任务，第一个结束后不到一秒，空闲动作把应用关了（`instance_idle_action` `close_app`），第二个任务的派单排在冷启动
+    后面被拒（`dispatch_instance_held`），它的包从第一个任务结束的那一页起步，第一步就失败。原因：空闲动作只等「上次看到实例在用以后」评估出的计划（对租约的抽样）；租约在结算之前就放了，
+    而链上的下一个任务要等上一个的完成记进策略才到期，一次在完成之前读了输入、在放租约之后才评估的计划就过了抽样。
+  - **现在**：回主页、关应用、关模拟器这三种动作，只在这样的计划上决定：它的评估读输入时，策略在这台实例上没有开着的派单（从意向到完成或被拒），而且之后没有新开的
+    （`crates/runtime-host/src/policy_host.rs` 3181 `idle_dispatches_read`、3205 `idle_runs_counted`；`crates/runtime-host/src/host/idle.rs` 387–424，周期的检查和每秒清扫的检查
+    读的是同一把锁下的同一组值）。
+    拿到这台的钥匙以后再照同一条规则读一次最新计划，不算数、有到期的任务或读数、或者下一件事已经近于这一档的门槛，就照「中途来了暂停」那样放手：什么都不发，不留记录，下一次检查再定
+    （`idle.rs` 1141、1244、1430–1443，`idle_action.rs` 329 `stands_on_key`）。策略不派的活（手动、直跑、Lab、阶梯、宿主自己的运行）照旧用抽样那条；叫醒、`none`、跨启动保留的状态都不变。
+  - **没有新的键、码、记录或日志行**。看得出规则在起作用的地方是现有的记录：链上第一个任务的 `policy.dispatch_completed` 和下一个任务的 `policy.dispatch_intent` 之间不再夹着
+    `instance_idle_action` `close_app`，下一个任务也不再以 `dispatch_instance_held` 被拒；真该做的空闲动作照旧记 `instance_idle_action`，出现在这台实例最后一次 `policy.dispatch_completed`
+    之后的那次评估之后（通常同一秒内）。放手的那一次什么都不留。
+  - **临时把 `idle.action` 设成 `none` 的**：部署本版以后可以撤回。这个键运行中能改（`contracts/runtime-config.md` 1157）：用指令设的，`config clear idle.action` 回到文件或默认值
+    （默认 `close_app`），或者 `config set idle.action=<值>`（Lab 的 `config set`、MCP `ac_config_set`），下一次空闲检查就按新值；写在配置文件里的，改文件，下次启动生效。v0.12.54 和
+    v0.12.56 都还有这个毛病，部署之前不要撤回。
+- **新的 MCP 服务器随 Tools 发布，但没有任何注册指向它**（#434 LAB-5G，登记 §1.287 里 LAB-5G1b 到 LAB-5G7 各小节；`contracts/lab-two-entries.md` §8、§9.3）。
+  - **发的是什么**：Tools 包多两个程序：Lab 的 MCP 服务器 `actinglab-mcp.exe`，和 MCP 入口的第二代 `actingcommand-mcp-entry-g2.exe`（它每次新起子进程时先找已装构建的
+    `<根>\runtime\actinglab-mcp.exe`，没有就找 `<根>\tools\actinglab-mcp.exe`，把客户端的消息转给它，换版以后在两次调用之间自己切过去）。部署把两个文件装进 `<根>\tools\`。服务器给操作表里
+    每个提供的行一个工具，Windows 上 143 个（不列创作模块 108 个；别的平台 110 个），没有档位；141 个在服务（核心行 49 个、救急行 31 个在它自己的进程里，其余 61 个交给
+    `actinglab serve --stdio --front mcp` 子进程），只有两个拒（下面的例外）。它照今天的服务器那样记来源（身份卡 `actingctl-mcp`、客户端动作），`governance.allowed_clients` 不用改。
+  - **没有东西注册它**：今天的服务器 `actingctl mcp-serve`、`mcp-entry\g1\` 里的第一代入口和现有的每一份客户端注册都照旧工作（`apps/actingctl/src`、`apps/mcp-entry` 自 v0.12.56 没改）。
+    一个客户端只有在它的主人改了注册以后才会换过去，做法见 `apps/actinglab-mcp/MANUAL.md` 第 11 节「Changing a registration」：二代入口要手放一次（把 `<根>\tools\actingcommand-mcp-entry-g2.exe`
+    复制进 `<根>\mcp-entry\g2\`，不能放进 `g1\`；没有安装步骤写 `mcp-entry\` 下面）；`actinglab --json mcp config --client <claude|codex|antigravity|dsh> [--list <模块>]` 只印出要写的片段，
+    不读也不写任何客户端的文件（入口还没放时照样印，带警告 `mcp_entry_not_placed`）；拿它替换今天的注册（服务名同是 `actingcommand`），开新会话；`mcp entries` 列两代入口的状态。
+    **退回**：把今天的注册写回去（`actingctl mcp-config --client <客户端> --entry --root <根> --tier <档位>` 再印一次），开新会话；**安装退回到 0.12.57 以前之前先这样退回**（第 11.7 节）。
+  - **唯一的例外**：经它的部署和回滚还不服务：`ac_deploy`、`ac_rollback` 答 `mcp_operation_unsupported`，什么都不启动（到 LAB-6）。手册第 10 节：Windows 上启动、停止、重启 Runtime、
+    替换或恢复配置文件、加实例（`ac_up`、`ac_down`、`ac_restart`、`ac_config_replace`、`ac_config_restore`、`ac_instance_add`）它照命令行一样服务，但做不做由人决定，代理只在人在当次对话里
+    要求这一件事时才调用。
+  - **从本版的安装工具起**：部署时正在跑的 `actinglab-mcp.exe` 像 `actingctl.exe` 一样改名让开（`<文件>.old-<毫秒>`）、不挡部署，`install status` 把它列在 `mcp_servers_on_old_images`；
+    二代入口起的服务器不要求客户端重连（`crates/lab-rescue/src/install/plan.rs` 37、41–44、953、966，同目录 `host.rs` 461–476）。部署是当时装着的那一版的安装工具做的，所以这条规则从本版之后的那次
+    部署才起作用：先装上本版，再让客户端换过去（Tools 文件的配对见下面）。
+  - `actinglab` 多三个救急行：`mcp config`、`mcp entries`、`mcp plan`（二代入口问的计划）；`actinglab serve --stdio --front mcp` 现在答信封 `{exit_code, req_id, line}`（`req_id` 可无），不带这个选项的每一行不变。
+- **一台设备上几个应用：宿主那一半做了，多个成员的组照旧拒收**（#437 MAPP-1b，登记 §1.330；`contracts/device-group.md`）。
+  - **宿主现在做的**：一台设备一个工作线程（多个成员的组叫 `actingd-device-<组名>`，独占一台设备的实例照旧叫 `actingd-instance-<别名>`）；占用按整组算（设备的租约、任何成员登记了的运行、
+    排在最前的等待），别的成员占着时本成员带 `device_group_waiting` `held` 等；准入的守卫按设备认；暂停一个成员只等它自己的活；别的成员的玩家占用和围栏挡住本成员；多个成员的组里，成员的租约结束后不留会话；
+    链上的下一环排在同设备别的成员前面；两种拒绝用新码 `device_group_action_refused`（`alias`、`operation`）：操作员对某个成员的模拟器控制，和别的成员占着设备时对它的无钥观察。
+  - **这一版收什么、拒什么**：不写 `device_group` 的条目和一个成员的组照收，行为和以前一样；**多个成员的组在装配时照旧拒**（`device_group_config_invalid`、`several_members_unsupported`；
+    `apps/actingd/src/config/device_group.rs` 377–383 没改），两个条目没编成一组却指向同一台设备也照旧拒（v0.12.56 起）。所以本版收的配置走不到这些新代码，`device_group_action_refused`
+    不会出现。第一个收多成员组的版本要把 MAPP-1b、MAPP-2（开跑前的切换）和「同一台上先后怎么排」一起带上（`contracts/device-group.md` 634–646）。设备组什么都不落盘。
+- **离线评估存下来的画面时可以放宽 OCR 期限**（#428 LAB-OCR-DL，登记 §1.331）：十行（`observe`、`do`、`ensure`、`wait`、`recognize`、`detect-page`、`current-page`、`is-visible`、
+  `tap-target`、`navigate`）在 `--scene` 的路径上多一个开关 `--ocr-deadline-max`（行参数 `ocr_deadline_max`）：每个 OCR 请求的期限放到契约上限 60000 毫秒（`crates/lab/src/ocr.rs` 472–496），
+  回答多 `ocr_deadline_raised_to_ms: 60000`；和 `--capture` 一起、或者没有 `--scene`，以 `validation_failed`（`conflicting`）拒（`apps/actinglab/src/offline_ocr.rs` 43–56）。
+  生产永远不走它：Runtime 不带这段代码，执行内核、识别包和引擎一个文件没改；不带开关时每一行都和以前一样。`replay` 不收它。资源仓的回归脚本在它的 Tools 钉到本版以后才能用。
+- **`record draft` 成了 actinglab 的命令**（#434 LAB-5G4c）：`actinglab record draft --record-stop <json>` 或 `--record-stop-export <json>`，就是 MCP `ac_binding_draft` 搬过来的同一份做法，
+  命令行和 `serve --stdio` 都能用。今天的 `ac_binding_draft` 没变，调它的人和脚本什么都不用改；以前 actinglab 没有这条命令。
+- **LAB-5B1 三片不改行为**（#434 LAB-5B1、LAB-5B1b、LAB-5B1c）：表驱动的每一行读哪些参数、交给安装工具和代理通道哪些标志，都和操作表钉成一致，由测试守着；每条命令行、`serve --stdio`
+  的行都逐字节不变（读到表外参数的检查只在测试构建里）。改了东西的只有一处：`config restore` 声明了 `sha`，命令行收 `--sha <sha256>`、`serve --stdio` 收成员 `sha`，保留的文件的 SHA-256
+  对不上时先以 `actingctl_usage_invalid`（`--sha`、`unusable`）拒，什么都不改，和 `config replace` 一样。另外一个不是行的 `agent <词>` 现在由救急模块拒，不再交给代理通道去拒。
+- **只换本机路径、只动 CI 的两片**：#446 的 #1653 把仓里现行文件中本机的路径换掉了：测试、注释、一处契约示例、七份七月的报告，和 `distribution/windows/INSTALL.md`、
+  `scripts/windows-tools/README.md` 的下载示例（示例目录换成中立的 `ActingCommand` 目录，仍在 D 盘，因为下载脚本只收 D 盘上的任务根）。没有哪个工具的行为或默认值变了，也没有脚本因此多要一个
+  参数（这一片没改任何脚本）。#1633 只动 CI：提交身份检查的白名单只剩三个账号的 noreply 地址和 GitHub 网页端提交者。
+- **LAB-3 的运维规矩到 LAB-7 前照旧：生产照旧用 `actingctl install` 部署**，不用 Lab 救急模块的 `deploy`、`rollback`、`place`、`config replace`、`instance add`，也不经新的 MCP 服务器
+  （它本来就拒 `ac_deploy`、`ac_rollback`）。
+- **生产上**：自 2026-11-11 起有一台实例在试跑调度，其余实例暂停着；部署本身不改变派单。
+
+配置：没有接口修订移动，按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过。`component-interfaces.json`（4–10）自 v0.12.56 没改：
+`actingd-config` [5, 29]、`install-selection` [1, 1]、`install-control` [0, 1]、`ledger` [3, 8]、`runtime-client` [3, 7]、`package` [3, 9]、`runtime-outcomes` [1, 1]；架构测试
+`tools/actinglab-architecture/tests/component_interfaces.rs` 的 `V0120`（141–142）照旧钉 [5, 29]。
+
+- `contracts/component-interfaces.md` 里 `actingd-config` 29（129）、`ledger` 8（141）、`runtime-client` 7（148）、`package` 9（157）几行没动；改的只有 `tools-layout` 一行的说明（161）和
+  计划中的布局 5 那一段（291–296）：两个新文件照一代入口在 v0.12.18 的先例加在布局 3 里面，不升，没有读者因此不能用（安装工具和控制台的安装器装清单列的每个文件，资源仓只核整包哈希、
+  清单的构建成员和 `actinglab.exe`）。SBUD-1 只是收紧准入，`package` 不升（登记 §1.333 的 “Interfaces”）；MAPP-1b、IDLE-3 什么都不落盘；二代入口的 `entry_protocol` 2 只是它和
+  `mcp plan` 之间的约定，状态文件的位置、名字和形状不变。`install-selection`、`install-control`、`player-hold` 不变。
+- 配置键：没有新增，也没有去掉。`distribution/windows/actingd.defaults.json` 自 v0.12.56 一字没改；`contracts/runtime-config.md` 只改了文字：`idle` 一节「什么时候动」的句子
+  （1184–1257，IDLE-3）和 MAPP-2 那个计划中的键的说明（1747–1752，它跟 MAPP-2 走、取下一个空号）。`apps/actingd/src/config.rs` 只多把每个条目的组名交给宿主（2140–2143），不读新成员。
+- `config.subsystems` 不变：`apps/actingd/src/config/manifest.rs` 和 `crates/policy/src/compose.rs` 自 v0.12.56 都没改，没有新的子系统，也没有新的 `requires` 词。
+- 结果码：目录从 3917 个码变成 3924 个（在用的 3899 → 3906，状态为 `retired` 的仍是 18 个，定稿的仍是 172 个），位置从 1750 个变成 1751 个，分片从 29 个变成 31 个（新属主 `actinglab-mcp`、
+  `mcp-entry-g2`），键仍是 642 个，词表仍是 227 个、词多 3 个。新码 7 个（都待定稿，since 0.12.57，原因和处理办法都写了）：`device_group_action_refused`（runtime-host，error，ladder `none`；
+  `alias`、`operation` 必有）、`mcp_operation_unsupported`（actinglab-mcp，error）、`mcp_identity_declaration_refused`（actinglab-mcp，warning）、`mcp_job_started`（actinglab-mcp，info）、
+  `mcp_entry_g2_outcome_unknown`、`mcp_entry_g2_child_unavailable`、`mcp_entry_g2_usage_invalid`（mcp-entry-g2，error），ladder 都是 `none`。新位置 1 个：`install_mcp_config`（actingctl）。
+  新词 3 个：`argument_problem` 的 `not_absolute`、`install_refusal` 的 `mcp_server_not_in_build`、`install_caveat` 的 `mcp_entry_not_placed`；新域前缀 `mcp_entry_g2_`，前缀 `mcp_` 多给了
+  `actinglab-mcp`。改了的：`lab_operation_completed` 从 actinglab 的分片搬到 actingctl 的分片（`actingctl codes`、`ac_outcome_code` 和索引里显示的属主从 `actinglab` 变成 `actingctl`，拼写、
+  类别、值和文字都没变）；`binding_requires_unavailable`、`preflight_failed`、`check_config_unavailable` 的描述（前一个和后一个还有常见原因）提到了 `record draft`。没有新停用（`retired`）或新定稿的码，
+  没有哪个码的类别、阶梯分类、值、状态或审阅变了；在用码里两段文字都写了的从 705 个变成 712 个。本版的发布文件是空的。索引照旧由脚本生成，现在是 32 个文件。
+- Tools 包：布局仍是 `platform-tools-v3`（`.github/workflows/windows-remote-build.yml` 771），文件清单 `$toolFiles`（670–678）多 `actinglab-mcp.exe`、`actingcommand-mcp-entry-g2.exe`，
+  一共七个程序加 `platform-tools/` 下的五个文件，每个都是 Tools `BUILD-MANIFEST.json` 的一项；`scripts/windows-tools/Get-ExactBuildArtifact.ps1` 照一代入口的写法，清单声明了哪个就要求哪个，
+  以前的包照样通过。Runtime 包的文件不变。
+- 程序文件：`Cargo.toml` 多两个工作区成员（`apps/actinglab-mcp`、`apps/mcp-entry-g2`），`Cargo.lock` 只多它们两项，没有新的外部依赖；`.github/` 改了 `ci.yml`（两个新包进 `apps` 作业）、
+  `windows-remote-build.yml`（两个程序）和 `commit-identity-guard.yml`（#1633）；`ci/` 一个文件没改（不稳定表照旧是 FLK-08 和 FLK-10，`ci/retired-gates.toml` 没改，没有测试离开门表）；
+  `ratchet/`、`apps/ledger-forensics`、`apps/mcp-entry`、`apps/actingctl/src` 都没改，今天的 MCP 服务器仍是 41 个工具。
+
+升级与退回（部署由当时装着的那一版的安装工具做。v0.12.56 的安装工具就是 v0.12.55 的那份代码：`crates/lab-rescue` 在 v0.12.55 和 v0.12.56 之间没改，其中 `plan.rs`、`update.rs`、
+`programs.rs`、`postcheck.rs`、`host.rs`、`undo.rs` 自 v0.12.51 没改，`deploy.rs` 自 v0.12.54 没改，所以 v0.12.56 一节核过的行号对 v0.12.54、v0.12.55、v0.12.56 的安装工具都对，下面
+写「v0.12.56 的」行号就是那份代码的；本版的安装工具只改了 `plan.rs` 的两个名字清单、`host.rs` 的一个谓词、各命令的标志清单提成常量（内容不变）和三个新的救急行）：
+
+- **v0.12.56 的安装工具装本版：能装，不用任何标志。** 安装工具的声明是它自己构建里的 `component-interfaces.json`（`host.rs` 23–25），v0.12.56 的和本版一模一样。计划的边逐条（v0.12.56 的
+  `plan.rs`）：
+  - `ledger` `previous_max_in_next`（288–294）：8 在 [3, 8] 里，过；`one_way`（295–301）：8 不大于 8，不触发，不带标志也过。`ledger_verify` 是 false（915），步骤里没有它；
+    `notice.rollback_window_bounded` 是 false（203）。
+  - `runtime-outcomes` `next_max_in_installer`（302–314）、`install-control` 和 `runtime-client` 的 `installer_meets_previous`、`installer_meets_next`（315–331）：三方相同，都过。
+  - `package` `bundle_max_in_next`（332–355）：目标仍是 [3, 9]，和 v0.12.56 上一样；`speaks` `runtime_equals_tools`（756–763）：过。
+  - `actingd-config` `installer_knows_keys`（359–376）：本版没有新键，v0.12.56 的键表都认识，过。`next_check_config`（902–914）：本版的 check-config 带 `--install-root` 读现行的文件，
+    v0.12.56 收的文件本版照收，过。SBUD-1 在这里看得出来：check-config 默认（`scheduling.pack_admission.check_in_check_config`）把要调度的包（组合模式下是组合出来的过程绑定的包）
+    都准入一遍，被拒的包是一条 `pack_admission_suspended` 注记，不算失败
+    （`apps/actingd/src/check_config.rs` 257–279，`contracts/actingd-check-config.md` 601–603），计划照常不拒；计划的 `check_config.target.notes` 里会有 `pack_admission_suspended`，
+    `check_config.differs` 多 `notes`（v0.12.56 的 `programs.rs` 141–159、251–260）。
+  - **要带的标志：没有**。部署工具包要是照 v0.12.56 那次还带着 `--accept-ledger-one-way`，预览、计划、apply 三步都带的话照样能过（那条边本来就过），但计划里
+    `inputs.accept_ledger_one_way` 是 true、计划 id 跟着变，日志的 `acknowledged` 会记下它（`deploy.rs` 1720–1724），容易看错，去掉。
+  - 计划的 `defaults_diff`（574–598）：两边的默认值文件相同，是空的 `[]`。部署后检查的 `new_keys`（`postcheck.rs` 494–526；`added_keys` 593–601）：`keys` 是空的，结果是过（511–517）。
+  - **两个新的 Tools 文件**：`release stage` 照清单逐项核（v0.12.56 的 `release.rs` 496–507：包里的文件和清单要正好一致，两个新文件都在清单里，过；布局名照旧要 `platform-tools-v3`，
+    `manifest.rs` 18）。计划把它们列在 `files` 里，动作是 `new`（`plan.rs` 815–819；`notice.added` 是 2，191–195）；apply 跟别的文件一样先放 `.part` 再换上，新文件没有要留的旧文件
+    （`update.rs` 539–565），`verify_tree` 核清单列的每个文件（`manifest.rs` 358–383）。正在跑的程序只有动作是 `replace` 的才算（`plan.rs` 951–953），这两个文件部署前在 `<根>\tools\` 下
+    还不存在，所以**这次部署它们不会被挡、也不会挡别人**；v0.12.56 的安装工具不认识它们（可改名让开的只有 `actingctl.exe`，`plan.rs` 34、957–964；也不把它算作 MCP 服务器），但这次碰不到。
+    **下一次部署**是本版的安装工具做的：没有客户端注册新服务器时，它们是普通的替换；有客户端注册了、`actinglab-mcp.exe` 正在跑时，它改名让开、不挡部署，apply 带
+    `mcp_clients_on_previous_build` 提示，二代入口起的那个在两次调用之间自己换版，不用客户端重连（本版 `plan.rs` 37、41–44、953、966–967）。
+  - 部署的自动回退（`deploy.rs` 763–854）在部署后检查不过时退回 v0.12.56：边都过，回退门第 2 部分对被替换的那一版放行，能退。
+- **v0.12.54 的安装工具直接装本版：能装，和从 v0.12.54 装 v0.12.56 完全一样**，要带 `--accept-ledger-one-way`（预览、`install update plan`、`install update apply` 三步都带，不带时
+  `ledger` 的 `one_way` 不过，以 `interface_edge` 拒，`plan.rs` 295–301、1030–1041），计划多一步 `ledger_verify`（915；`update.rs` 528–538），`defaults_diff` 是那三行
+  （`recovery_ladder.profiles.without_emulator_restart.rungs`、`scheduling.task_held.after_ms`、`scheduling.task_held.enabled`，本版的默认值文件和 v0.12.56 的相同），`installer_knows_keys`
+  不认识 `scheduling.task_held`，文件里不要提前写它；两个新的 Tools 文件和上面一样是 `new`。**比经过 v0.12.56 差的地方**：装上并跑过以后同一个状态根上没有退回的路（见下面）；
+  部署后检查不过时的自动回退也走不了（退向 v0.12.54，`ledger` 那条边不过，以 `rollback_gate_failed` 结束，新构建和 hold 都留着）；v0.12.55、v0.12.56 的改动（单向的账本、两个条目一台设备
+  被拒、压着记录、补救表）和本版的 SBUD-1 在同一次部署里一起到生产；控制台要先换成 UI v0.12.16。没有让它装不上的东西。做法照 v0.12.56 一节「从 v0.12.54 部署」。
+- **退回：从 v0.12.56 装上本版以后，能退回 v0.12.56**（退回由当时装着的本版安装工具做；它的边和回退门的代码和 v0.12.56 的相同：`update.rs` 没改，`plan.rs` 的行号往下移了 9 行）。
+  - 边都过：`ledger` 8 在 [3, 8] 里，`one_way` 不触发，别的三方相同；回退门第 2 部分 `ledger_readability` 对被替换的那一版放行（`update.rs` 400–437，`live_operation` 181–204），
+    v0.12.56 就是被替换的那一版，它自己的读者读本版写的页；第 4 部分 `config`：v0.12.56 的 check-config 读现行的文件（490–503），本版没加成员，过。
+  - **v0.12.56 对本版写下的东西**：账本里没有新的记录形状，本版能新写的码要么只在多成员的组里才会出现（`device_group_action_refused`，本版拒收这种组），要么是现成的形状
+    （`pack_admission_suspended` 规划信号是 SR-3 起就有的形状，新服务器记的客户端动作和今天的服务器一样），v0.12.56 照读；MAPP-1b 和 IDLE-3 什么都没落盘，没有要清的。SBUD-1 的挂起只在内存里，
+    退回以后 v0.12.56 又会收那种包，它照旧在那一步每次失败；IDLE-3 的毛病也回来。
+  - **Tools 目录里多的两个文件**：退回的文件计划只管目标清单列的文件，这两个不在 v0.12.56 的清单里，列在计划的 `extra` 里、原样留着（本版 `plan.rs` 846–856），没有步骤删它们，
+    `verify_tree` 只核列出的文件；正在跑的 `actinglab-mcp.exe` 不在目标的文件里，既不让开也不挡。v0.12.56 自己从不启动或读它们。**有客户端已经换到新服务器的，退回之前先退回注册**
+    （手册 11.7）：不然二代入口会接着起留在 `<根>\tools\` 的本版服务器，它问的 `mcp plan` v0.12.56 的 actinglab 不认识，计划一直被拒、隔一阵再问；之后再用 v0.12.56 的安装工具部署换掉这个
+    文件时，正在跑的它会被当成挡住部署的程序（v0.12.56 的 `plan.rs` 34、957–964）。
+  - **退到 v0.12.54 或更早**：本版声明 `ledger` [3, 8]，以 `interface_edge` 拒（8 ∉ [3, 7]），和 v0.12.56 一节说的一样。
+- **从 v0.12.54 直接装上本版的**：和 v0.12.56 一节一样，安装工具哪一版都不让退回：退到 v0.12.54 或更早，`ledger` 的边不过；退到 v0.12.55 或 v0.12.56，边都过，但回退门第 2 部分只对被替换的
+  v0.12.54 放行，以 `rollback_gate_failed` 拒；部署的自动回退（`deploy.rs` 813 不带标志）和起过新 Runtime 的 `install undo`（本版 `undo.rs` 395）同样被拒。出了问题剩下的是：配置的问题，
+  改好文件再起；程序的问题，往前修；或者换一个全新的状态根（之前的账本、事实、运行中设的指令、封顶回合和空闲状态都留在旧根上）。
+- 配对：
+  - **v0.12.54 或 v0.12.56 写的配置文件**：本版照收，不用改。本版没有新成员、新键，也没有新的配置拒收；v0.12.54 写的文件只有一个例外，是 v0.12.56 起就有的「两个条目没编成一组、却指向同一台
+    设备」被拒。
+  - **已装的包：SBUD-1 在部署后第一次启动时做什么**（这决定部署和放包的次序）：
+    - 启动本身不因此失败，组合代也不受影响：调度器工作台照旧组合、激活组合出来的一代（组合只看 `schedule.json`，准入不在其中，
+      `crates/runtime-host/src/host/standard_pack_schedule.rs` 26–44）。
+    - 工作台第一次检查之后，后台的准入检查（`scheduling.pack_admission.check_after_start`，默认开）把组合出来的过程绑定的每个包准入一遍（`crates/runtime-host/src/host.rs` 6621–6645，
+      `crates/runtime-host/src/host/failure_settlement.rs` 212–237），被拒的包按它的 `package_id` 挂起（`crates/runtime-host/src/pack_admission.rs` 244–269）。在它查到之前，这个包的任务要是
+      先到期，那次派单在准备包时就被拒、照常写执行记录，包也从这次起挂起（`failure_settlement.rs` 140–147）。
+    - 挂起以后，**每台实例**上绑定这个包的每个任务都在评估里以 `pack_admission_suspended` 推迟，不派单、不准备（`pack_admission.rs` 286–380）；同一个标准包里别的任务包、这台实例别的任务、
+      别的实例上别的任务照常调度（`contracts/policy-suspension.md` 620–627）。账本里每台实例第一次推迟时记一条 `pack_admission_suspended` 规划信号（`goal_missed`）；`actingd suspended` 的
+      `packs`、`ac_diagnose` 和 `actingctl diagnose` 的包行、`ac_overview` 和 `ac_schedule` 的「没跑」行都看得到。
+    - 解除：包的内容哈希变了就解除（放了改好的包；任务到期时查，每个包最多每 `scheduling.suspension.lift_check_min_interval_ms` 一次，默认 60 秒），不用重启；重启以后挂起不在了，后台检查
+      再判一次。改好以后还超的，下一次准备又挂起。
+    - 安装工具在换文件之前说的：预览里目标的 check-config 给每个被拒的包一条 `pack_admission_suspended` 注记，计划照常通过（见上）；它只查组合出来的过程绑定的包，`standard-pack check`
+      查根里登记的每一个包。
+    - **次序**：先用本版的 `standard-pack check` 查遍每个包根；查出被拒的，先在 v0.12.56 上放改好的包（v0.12.56 收新旧两版）；再预览，看目标 check-config 的注记里没有
+      `pack_admission_suspended`；然后部署。反过来先部署也装得上，只是被拒的包绑定的任务在每台实例上都停下，直到改好的包放上去。
+  - **控制台 UI**（最新发版 UI v0.12.16 是 UI main 的 `6c2e30f2`；UI main 现在是 `d19a2b69`，之后只改了建模的目录，没有动控制台的声明和 Runtime 钉点）：它声明 `actingd-config` [5, 28]、
+    `ledger` [3, 8]、`runtime-client` [3, 7]、`runtime-outcomes` [1, 1]（`crates/acui-setup/component-interfaces.json`），本版这几项和 v0.12.56 相同，所以和 v0.12.56 一节的结论一样配得上：
+    `ledger` 8 在 [3, 8] 里，`runtime-client` 两边都是 [3, 7]，`actingd-config` 三方共有修订 28。它的安装器照清单装文件，两个新的 Tools 文件也装进 `tools\`。在它的范围升到 29 以前，
+    照旧不要用它改 `scheduling.task_held` 的键或编辑写了 `device_group` 的配置。
+  - **部署工具包的命令行**：它跑的全是在线安装工具的 `actingctl install`：`release stage --root --dir --facts --expect-tag --expect-commit`、`guards --root --for stop --hold --known-pause …`、
+    `status --root [--operation]`、`update plan --root --build [--preview]`、`update apply --root --build --plan --stop --hold --known-pause … --start --detach`、`release-hold --root --reason`；
+    回答它们的是在线的 v0.12.56 的安装工具，代码就是上面核过的那份，**没有一条被拒**。**答法变了的**：计划的 `ledger_verify` 是 false、步骤里没有它，`notice.rollback_window_bounded` 是
+    false，`defaults_diff` 是空的，`files` 里多两条 `new`（`notice.added` 2），被拒的包会让 `check_config.target.notes` 多 `pack_admission_suspended`；部署以后 `new_keys` 的 `keys` 是空的，
+    `install status` 的 `rollback_window` 里 v0.12.56 的 `ledger_edge_passes` 是 true。工具包另用新版 actinglab 跑的 `--json standard-pack check --root <包根>`：干净的根答法照旧，
+    有声明超时限的包的根现在被拒（见上）。**工具包要跟着改的**：在线安装工具换成 v0.12.56 的那一份；三步都去掉 `--accept-ledger-one-way`；预期改成没有 `ledger_verify`、`defaults_diff`
+    为空、`new_keys` 为空、多两个 `new` 文件；「装上就没有退回的路」那一段对这一步不再成立（能退回 v0.12.56）；部署前查包那一步（新版 actinglab 的 `standard-pack check`）要求每个根都退出 0、
+    `status` 是 `checked`，否则先放改好的包；部署后核文件的那一步可以加上两个新程序的哈希；给热放置工具包写构建记录那一步，`actingd-config`、`package`、`ledger` 照旧是 `5,29`、`3,9`、
+    `3,8`，换的只是提交和清单。
+  - **热放置工具包的命令行**：actinglab 两行，`--json standard-pack check --root <游戏根>` 和 `--json standard-pack compose --root <包根> --instance <别名>=<游戏>/<区服> … --out <新目录>`：
+    `apps/actinglab/src/standard_pack_cli.rs` 和 `crates/resource-tooling` 自 v0.12.56 没改，标志清单不变；但重钉到本版以后，check 用的是本版的准入，**一个包声明的采样需要超过时限的根现在
+    被拒**（退出码非 0，`package_invalid`），工具包在 S7 停下、实例保持暂停，这是对的，要放的是改好的包；干净的根答法照旧。actingctl 的 `status`、`status --config`、
+    `pause --instance <别名> --reason <理由> --drain-timeout-ms <毫秒>`、`resume --instance <别名>`、`schedule --instance <别名>`、`overview --root <根> --instance <别名> --sections catalog`
+    （都带 `--state-root`）：`apps/actingctl/src` 没改，`overview` 走的 `lab_ops::overview::dispatch` 现在经不带预算的 `dispatch_within`（`crates/lab-ops/src/overview.rs` 1392–1393），整份答回，和以前一样；actingledger 的
+    `events --after … --through … --limit …`：`apps/ledger-forensics` 没改。**没有一条被拒，也没有一条换了答法的形状**；`status --config` 的参数行不变（没有新键），`schedule --instance`
+    可能多出 `pack_admission_suspended` 推迟（现成的形状）。**热放置工具包要学的**：重钉到本版（构建记录的三个值不变，默认值文件内容不变），S7 的检查会拒 SBUD-1 的包；没有新的子系统、
+    检查警告码或 `requires` 词。
+  - **今天的 MCP 服务器（`actingctl mcp-serve`，现在注册着的那个）**：`apps/actingctl/src/mcp` 自 v0.12.56 没改，41 个工具和档位不变。LAB-5G1b 把 Lab 的核心行的服务代码改成接受调用方给的
+    预算和游标绑定，但今天的服务器调的是 `crates/lab-ops` 里下面一层的读法和 `within_budget`，这些没改；各个 `dispatch_on` 和 `dispatch` 都是不带预算的 `dispatch_within`。所以每个工具答法照旧。
+    看得到的差别只有：`ac_outcome_code` 里 `lab_operation_completed` 的属主是 `actingctl`，新码查得到，那三条提到 `record draft` 的描述；`ac_diagnose`、`ac_schedule` 可能列出 SBUD-1 挂起的包。
+
+运行上的变化：
+
+- 从 v0.12.56 部署：不用标志，没有 `ledger_verify`，`defaults_diff` 为空，能退回 v0.12.56；部署前用本版的 `standard-pack check` 查遍包根，被拒的先放改好的包。
+- 声明的采样需要超过时限的包装载时就被拒、挂起，绑定它的任务在每台实例上都不跑，放上改好的包就自动解除；不再是跑到那一步每次失败。
+- 链上的下一个任务不会再碰上被空闲动作关掉的应用；临时设成 `none` 的 `idle.action` 可以撤回。
+- Tools 里多了新 MCP 服务器和二代入口，但没有注册指向它们；今天的服务器和注册都照旧，换不换由主人按手册第 11 节做。
+- 设备组的宿主那一半做了，多个成员的组照旧拒收；`actinglab record draft`、离线的 `--ocr-deadline-max`、`config restore --sha` 是新的命令行。
+
+本版合并的 PR：
+
+- #1633（#446）：`.github/workflows/commit-identity-guard.yml` 的白名单、注释和失败说明；只动 CI，没有测试。
+- #1637 LAB-5G5a（#434）：新程序 `apps/mcp-entry-g2`（二代入口，代码先原样复制一代再改），新码 3 个；照搬改写的一代入口测试、5 个新测试和一个进程测试；这时还不打包。
+- #1640 并车 0.12.57a：#1636 LAB-5G1b（#434，登记 §1.287）：核心行的服务代码接受预算和游标绑定，`lab_ops::front::Front::Mcp`，`lab_operation_completed` 搬到 lab-ops，5 个新测试；
+  #1639 LAB-5G2a（#434）：新程序 `apps/actinglab-mcp` 的外壳和从操作表生成的工具清单，新码 `mcp_operation_unsupported`，outcome guard 给它的 `error_response` 一条 G3 豁免，6 个新测试；
+  #1638 LAB-OCR-DL（#428，登记 §1.331）：开关 `--ocr-deadline-max`，3 个新测试。
+- #1635 MAPP-1b（#437，登记 §1.330）：宿主那一半的八项和链上下一环的次序，新码 `device_group_action_refused`；主机门表和策略门表的新测试，测试用的假后端多一个截图钩子；没有改现有测试。
+- #1643 并车 0.12.57b：#1641 LAB-5G6（#434）：两个程序进 Tools 包，安装工具的两个名字清单和 `serves_mcp`，2 个新测试和打包脚本的 3 种新情形；#1642 LAB-5G5b（#434）：救急行
+  `mcp config`、`mcp entries`、`mcp plan`，新位置 `install_mcp_config`、两个新词，一份检入的 `mcp plan` 样例，10 个新测试。
+- #1644、#1645 LAB-5G2b（#434）：新服务器在自己的进程里服务核心行，再服务救急行；新码 `mcp_identity_declaration_refused`、新词 `not_absolute`；9 个新测试，改造了 LAB-5G2a 钉着中间状态的断言。
+- #1646、#1647 LAB-5G3（#434）：新服务器的作业、句柄、等待和收回游标，新码 `mcp_job_started`；4 个新测试，改造了两处钉工具形状的断言。
+- #1648 IDLE-3（#447，登记 §1.332）：空闲动作的规则；主机门行 `IDLE-3` 的 5 个测试（`gate_idle3` 4 个、`gate_idle3_host` 1 个）；没有改现有测试，没有新码、新键。
+- #1649 SBUD-1（#448，登记 §1.333）：准入的比较；执行门行 `#448 SBUD-1` 的 4 个测试和 actinglab 的 1 个；一个现有夹具的步骤时限按它的需要量放到 32000（断言没动）。
+- #1651、#1652 LAB-5G4b（#434）：新服务器经 `actinglab serve --stdio --front mcp` 子进程服务其余的行，Lab 的超长回答导出规则和截图后的客户端动作；4 个新测试，改造了 4 处钉服务划分的断言。
+- #1650 LAB-5G4c（#434）：`actinglab record draft`；5 个新测试，一个列表测试多算一条命令。
+- #1653（#446）：本机路径换成中立示例（测试、注释、一处契约示例、七份报告、两份下载说明）；没有增删或放宽测试，`agent_wake/summary.rs` 的期望长度按新示例重算。
+- #1654、#1655、#1657 LAB-5B1、LAB-5B1b、LAB-5B1c（#434）：表驱动的行读的参数、交出的标志和接收方的标志清单都钉成和操作表一致，`config restore` 声明 `sha`；只有新测试，一个现有测试多查一类行。
+- #1658 LAB-5G7（#434）：`apps/actinglab-mcp/MANUAL.md`，说明文字定稿；2 个新测试。
+
 ## v0.12.56
 
 本版是 v0.12.55 之后合并的 10 个 PR：#439 CODES-IX（#1622）、CODES-T1（#1626）、CODES-T2（#1632），#441 许可声明（只改文档，#1627），#438 HELD-C（只有契约，#1625）、
