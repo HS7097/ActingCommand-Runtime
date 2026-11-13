@@ -161,25 +161,32 @@ pub(crate) fn parse_declaration(value: &Value) -> Option<Speaks> {
 /// Workflow #451 PLACE-PKG: a resource bundle's declaration, the `interfaces.json` at the root of
 /// its zip, by the bundle's own rule (`contracts/component-interfaces.md`, "Declaration",
 /// "Resource bundle"; a resource repository's release declares `package` alone, beside
-/// `validated_with`): the schema, and `speaks.package` a `[min, max]` integer pair with
-/// `min <= max`. Other names under `speaks` and other members are neither required nor read; the
-/// six v1 interfaces of [`parse_declaration`] are a Runtime's, Tools' or UI's rule, not a
-/// bundle's. The declared `package` range; `None` when the declaration breaks this rule.
+/// `validated_with`), under the parse rules every v1 reader applies: the schema, and every value
+/// under `speaks` a `[min, max]` integer pair with `min <= max`, a malformed value under any name
+/// making the declaration unreadable; `package` must be named. Other names are otherwise neither
+/// required nor checked, and other members are not read; the six v1 interfaces of
+/// [`parse_declaration`] are a Runtime's, Tools' or UI's rule, not a bundle's. The declared
+/// `package` range; `None` when the declaration breaks this rule.
 pub(crate) fn parse_bundle_package(value: &Value) -> Option<[u64; 2]> {
     let object = value.as_object()?;
     if object.get("schema_version")?.as_str()? != INTERFACES_SCHEMA {
         return None;
     }
-    let pair = object
-        .get("speaks")?
-        .as_object()?
-        .get("package")?
-        .as_array()?;
-    let [min, max] = pair.as_slice() else {
-        return None;
-    };
-    let (min, max) = (min.as_u64()?, max.as_u64()?);
-    (min <= max).then_some([min, max])
+    let mut package = None;
+    for (name, range) in object.get("speaks")?.as_object()? {
+        let pair = range.as_array()?;
+        let [min, max] = pair.as_slice() else {
+            return None;
+        };
+        let (min, max) = (min.as_u64()?, max.as_u64()?);
+        if min > max {
+            return None;
+        }
+        if name == "package" {
+            package = Some([min, max]);
+        }
+    }
+    package
 }
 
 /// Workflow #429 A.4 a (R-15a, since 0.12.30): party U*, a UI build's declaration. It is the UI

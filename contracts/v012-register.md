@@ -18998,11 +18998,15 @@ used on the production root before LAB-7.
 `gate_444_notices2.rs`) build its declaration from the fixture's `speaks()`, all six v1 interfaces
 and `runtime-outcomes`: the shape of a Runtime's declaration, not of a released bundle's.
 
-**The rule.** `manifest::parse_bundle_package` reads a bundle's declaration: `schema_version`
-exactly `actingcommand.component-interfaces.v1`, and `speaks.package` an array of two integers
-`[min, max]` with `min <= max`; other names under `speaks` and other members (`validated_with`)
-are neither required nor checked. `place` takes the pair it answers, and the rest of the edge is
-as before: the declared maximum lies within the running installer's `package` range, else
+**The rule.** `manifest::parse_bundle_package` reads a bundle's declaration by the parse rules of
+component-interfaces.md that every v1 reader applies: `schema_version` exactly
+`actingcommand.component-interfaces.v1`; every value under `speaks`, under any name, an array of
+two integers `[min, max]` with `min <= max`, a malformed one making the declaration unreadable (as
+a malformed `package` does); and `package` named. Other names are otherwise neither required nor
+checked, and other members (`validated_with`) are not read. (The coordinator's ruling on the open
+point of this slice, 11-13 on board #451: the work order's sentence that other names under
+`speaks` are not checked was wrong where it contradicts the parse rules.) `place` takes the
+`package` pair it answers, and the rest of the edge is as before: the declared maximum lies within the running installer's `package` range, else
 `interface_edge` with `path` `<zip>\interfaces.json` and `game`; a missing, unreadable or
 malformed file, or one the reader refuses, is the same refusal (component-interfaces.md takes a
 bundle without the file as [1, 1], which lies below every installer's `package` minimum since
@@ -19022,7 +19026,7 @@ bundle that declares all six interfaces plans as before.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| PP-1 | `place`'s `package` edge reads a bundle's `interfaces.json` by the bundle's rule (`manifest::parse_bundle_package`: the schema and `speaks.package`) | installer behaviour (no shape change) | PLACE-PKG | — | `since` 0.12.59; a bundle that declares `package` alone is read; the refusals and their order as before |
+| PP-1 | `place`'s `package` edge reads a bundle's `interfaces.json` by the bundle's rule (`manifest::parse_bundle_package`: the schema, every value under `speaks` a pair, `speaks.package` named) | installer behaviour (no shape change) | PLACE-PKG | — | `since` 0.12.59; a bundle that declares `package` alone is read; the refusals and their order as before |
 | PP-2 | [install-cli.md](install-cli.md), the `place` paragraph | contract text | PLACE-PKG | — | the members of the bundle's declaration `place` reads |
 
 Tests (apps gate row "#451 PLACE-PKG", `crates/lab-rescue/src/install/gate_451_place_pkg.rs`, on
@@ -19036,9 +19040,11 @@ the same root: the same items with their states, places, digests and members, th
 document but for `zip_sha256`, the same items in the answer of `place --plan`),
 `place_pkg_refusals_come_before_the_hold` (no `interfaces.json`; the schema `…v2`; `speaks` naming
 the fixture's other names and no `package`; `package` `[3]`, `[3, 3, 3]`, `"3"`, `[3, "3"]`,
-`[3, 3.5]` and `[-1, 3]`; `[5, 3]`; `[11, 11]`, above the range; `[2, 2]`, below it: each
-`interface_edge` of `install_pack_place` with `path` `<zip>\interfaces.json` and `game`, and no
-pause, no journal, nothing in the game root) and
+`[3, 3.5]` and `[-1, 3]`; `[5, 3]`; a well-formed `package` beside another name whose value is
+`[1, "1"]`; `[11, 11]`, above the range; `[2, 2]`, below it: each `interface_edge` of
+`install_pack_place` with `path` `<zip>\interfaces.json` and `game`, and no pause, no journal,
+nothing in the game root; and a well-formed `package` beside a well-formed name the reader does
+not know, planned with the same items as the released shape) and
 `place_pkg_notices_bundle_declaring_package_alone` (a bundle that carries `notices/NOTICE.md` and
 declares `package` [3, 9] alone: `pack_invalid` caused by `standard_pack_root_invalid`
 `notice_undeclared` at `<zip>\interfaces.json`, before the hold; declaring [10, 10] alone: planned

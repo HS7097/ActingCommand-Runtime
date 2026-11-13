@@ -3,9 +3,10 @@
 // Workflow #451 PLACE-PKG (register §1.339; contracts/install-cli.md, "The Lab's rescue module",
 // `place`; contracts/component-interfaces.md, "Declaration", "Resource bundle"; coordinator work
 // order `rd-1113/brief-451-place-pkg.md`): the rescue module's `place` reads a bundle's
-// `interfaces.json` by the bundle's own rule, its schema and `speaks.package`, and no longer by
-// the rule of a Runtime's declaration, which names all six v1 interfaces; a resource repository's
-// release declares `package` alone, beside `validated_with`.
+// `interfaces.json` by the bundle's own rule (its schema, every value under `speaks` a pair,
+// `speaks.package` named), and no longer by the rule of a Runtime's declaration, which names all
+// six v1 interfaces; a resource repository's release declares `package` alone, beside
+// `validated_with`.
 // - `place_pkg_takes_a_bundle_that_declares_package_alone`: a bundle whose `interfaces.json` has
 //   that shape is planned and placed, and the journalled plan document's `package` is the pair it
 //   declares;
@@ -13,10 +14,12 @@
 //   interfaces (the earlier gates' shape) plans identically: the same items, the same document but
 //   for the zip's SHA-256, the same answer of `place --plan`;
 // - `place_pkg_refusals_come_before_the_hold`: no `interfaces.json`, a wrong schema string,
-//   `speaks` without `package`, a `package` that is no pair of integers, `min > max`, a maximum
-//   above the installer's range and one below it are each refused `interface_edge` at
-//   `<zip>\interfaces.json` with the game, before the hold: no pause, no journal, nothing in the
-//   game root;
+//   `speaks` without `package`, a `package` that is no pair of integers, `min > max`, a
+//   well-formed `package` beside a malformed value of another name (every value under `speaks` is
+//   a pair, the parse rules of contracts/component-interfaces.md), a maximum above the installer's
+//   range and one below it are each refused `interface_edge` at `<zip>\interfaces.json` with the
+//   game, before the hold: no pause, no journal, nothing in the game root; a well-formed `package`
+//   beside a well-formed name the reader does not know is planned as the released shape is;
 // - `place_pkg_notices_bundle_declaring_package_alone`: a bundle that carries the notices
 //   directory and declares `package` [3, 9] alone is `notice_undeclared` as before; declaring
 //   [10, 10] alone it is planned and placed.
@@ -400,9 +403,11 @@ fn place_pkg_six_interfaces_plan_as_package_alone() {
     );
 }
 
-// Each declaration the bundle's rule refuses, and each declared maximum outside the installer's
-// `package` range: `interface_edge` of `place` at `<zip>\interfaces.json` with the game, in the
-// plan, before the hold: no pause, no journal, nothing in the game root.
+// Each declaration the bundle's rule refuses (a malformed value under any name of `speaks`
+// included), and each declared maximum outside the installer's `package` range: `interface_edge`
+// of `place` at `<zip>\interfaces.json` with the game, in the plan, before the hold: no pause, no
+// journal, nothing in the game root. A well-formed name the reader does not know beside `package`
+// is planned as the released shape is.
 #[test]
 fn place_pkg_refusals_come_before_the_hold() {
     let temp = TempDir::new().expect("tempdir");
@@ -452,6 +457,14 @@ fn place_pkg_refusals_come_before_the_hold() {
         ),
         ("min above max", Some(released(json!([5, 3])))),
         (
+            "a well-formed package beside a malformed value of another name",
+            Some(json!({
+                "schema_version": SCHEMA,
+                "speaks": {"package": RELEASED, "neutral-interface": [1, "1"]},
+                "validated_with": {"repository": REPOSITORY, "commit": C1},
+            })),
+        ),
+        (
             "a maximum above the installer's range",
             Some(released(json!([11, 11]))),
         ),
@@ -489,6 +502,39 @@ fn place_pkg_refusals_come_before_the_hold() {
         );
         assert_eq!(top_value(&refused, "game"), GAME, "{case}: {refused}");
     }
+    // A well-formed `package` beside a second, well-formed name the reader does not know: planned
+    // as the released shape is (only planned, so nothing is held or written).
+    let real = temp.path().join("neutral-real.zip");
+    Bundle::new(Some(released(json!(RELEASED)))).write(&real);
+    let unknown = temp.path().join("neutral-unknown-name.zip");
+    Bundle::new(Some(json!({
+        "schema_version": SCHEMA,
+        "speaks": {"package": RELEASED, "neutral-interface": [1, 2]},
+        "validated_with": {"repository": REPOSITORY, "commit": C1},
+    })))
+    .write(&unknown);
+    let (real_line, exit) = place(&host, &root, &real, true);
+    assert_eq!(exit, 0, "{real_line}");
+    let (unknown_line, exit) = place(&host, &root, &unknown, true);
+    assert_eq!(exit, 0, "{unknown_line}");
+    assert_eq!(
+        top_code(&unknown_line),
+        top_code(&real_line),
+        "{unknown_line}"
+    );
+    assert_eq!(
+        unknown_line["plan"]["items"], real_line["plan"]["items"],
+        "{unknown_line}"
+    );
+    assert_eq!(
+        items(&unknown_line),
+        [
+            "neutral_scores table new",
+            "neutral.pack pack new",
+            "bundle.json root new"
+        ],
+        "{unknown_line}"
+    );
     // Nothing was held or written.
     assert!(
         calls_of(&host, "pause ").is_empty(),

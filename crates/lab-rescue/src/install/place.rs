@@ -9,8 +9,8 @@
 //!   `bundle.json` as the contract crate validates it, the package interface the bundle declares
 //!   (`interfaces.json`, its maximum within the running installer's `package` range; Workflow
 //!   #444 NOTICES-2: checked before the layout, so a bundle of a later revision is refused through
-//!   `package`; Workflow #451 PLACE-PKG: read by the bundle's own rule, its schema and
-//!   `speaks.package` only), its layout (the root files, `packs/<listed id>/…`,
+//!   `package`; Workflow #451 PLACE-PKG: read by the bundle's own rule, its schema, every value
+//!   under `speaks` a pair and `speaks.package` named), its layout (the root files, `packs/<listed id>/…`,
 //!   `tables/<listed id>.json` and the notices directory `notices/…`, held to the contract
 //!   crate's notices rules), the root
 //!   files as every reader checks them ([`read_standard_pack_root`]), each pack's file count and
@@ -530,9 +530,9 @@ pub(crate) fn plan(
     // The package interface the bundle declares: its maximum within this installer's range.
     // Workflow #444 NOTICES-2: checked before the layout, so that a bundle of a later revision is
     // refused through `package` and not through a member this installer does not know. Workflow
-    // #451 PLACE-PKG: read by the bundle's own rule (the schema and `speaks.package`), not by the
-    // rule of a Runtime's declaration, which names all six v1 interfaces; a missing, unreadable or
-    // malformed file is the refusal below.
+    // #451 PLACE-PKG: read by the bundle's own rule (the schema, every value under `speaks` a pair,
+    // `speaks.package` named), not by the rule of a Runtime's declaration, which names all six v1
+    // interfaces; a missing, unreadable or malformed file is the refusal below.
     let declared = archive
         .read(INTERFACES_FILE)
         .ok()
