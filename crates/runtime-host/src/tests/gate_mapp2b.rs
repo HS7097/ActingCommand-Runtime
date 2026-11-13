@@ -7,7 +7,12 @@
 //! Three fixture instances A, B and D are one device group of several (`device.one`) and C is
 //! alone on its own device; each has its own application and the neutral startup package, whose
 //! one step restarts the application and whose home is the fake device's first frame. Every run
-//! here runs that package as its task too, so a run's own work is one application restart. The
+//! here runs that package as its task too, and the fake device's frame shows that home throughout.
+//! A run the host starts itself (the switch's startup run) begins with the package's restart,
+//! before any capture (`run_host_package`, R24); a task's run (a policy run, a direct run) takes
+//! its first frame first and runs that restart only when the frame shows no page of the package
+//! (`ApplicationEntryRun::AfterInitialFrame`, the kernel's `contained_task.rs`), so on the home it
+//! sends no application command: every restart a device logs here is a startup run's. The
 //! load refuses every group of several (actingd's MAPP-1 gate), so the host is handed the member
 //! → device key map and the group's name as the assembly builds them. A manual Runtime clock
 //! moves only by the kernel's waits and the test's own steps; nothing waits on the wall clock but
@@ -903,8 +908,8 @@ fn stop_run(address: SocketAddr, alias: &str, run: RequestId) -> RuntimeReceipt 
 /// The register's MAPP-2's tests, "a switch kills the first application, starts the second and
 /// reaches its home before the task, under one causation id, the key never granted to another
 /// claim in between", with the work order's run of B with A in front: the device sees A's stop,
-/// then B's startup restart, then B's task's own restart; one application is alive after each
-/// step; A's `task.page` and `application.foreground` are gone; A's stop records are A's, B's
+/// then B's startup run's restart, and nothing of B's task, whose run finds B's home on its first
+/// frame and so sends no application command; one application is alive after each step; A's `task.page` and `application.foreground` are gone; A's stop records are A's, B's
 /// startup run and B's run are B's, the stops and the startup run share one causation id and the
 /// startup run's scheduling record is under B's run's request; A's queued claim is never granted
 /// or handed the key before B's run ends.
@@ -938,11 +943,8 @@ fn mapp2b_a_run_of_b_with_a_in_front_stops_a_starts_b_and_then_runs_b() {
     assert_eq!(bench.actions(A), [ApplicationLifecycleAction::Stop]);
     assert_eq!(
         bench.actions(B),
-        [
-            ApplicationLifecycleAction::Restart,
-            ApplicationLifecycleAction::Restart
-        ],
-        "B's startup restart, then its task's own"
+        [ApplicationLifecycleAction::Restart],
+        "B's startup run's restart only: B's task, on B's home, sends no command"
     );
     assert!(bench.actions(D).is_empty(), "D was not in front");
     assert!(bench.actions(C).is_empty(), "C is not in the group");
@@ -956,11 +958,8 @@ fn mapp2b_a_run_of_b_with_a_in_front_stops_a_starts_b_and_then_runs_b() {
                 bench.id(B),
                 ApplicationLifecycleAction::Restart.event_action()
             ),
-            (
-                bench.id(B),
-                ApplicationLifecycleAction::Restart.event_action()
-            ),
-        ]
+        ],
+        "A's stop, then B's startup run's restart; B's task writes no application command"
     );
     assert!(
         alive_after_each(&steps, &[bench.id(A)])
@@ -1036,8 +1035,10 @@ fn mapp2b_a_run_of_b_with_a_in_front_stops_a_starts_b_and_then_runs_b() {
 
 /// The work order's "the front unknown: every other member is stopped first. The front already
 /// B: no stop, no startup run": with no resumed activity reported, A and D are both stopped
-/// before B's startup run and B's task; with B's own package in front the run only runs (its
-/// task's own restart), the switch is reached once and schedules no startup package.
+/// before B's startup run (its restart, the only command B's device sees: B's task finds B's home
+/// on its first frame) and B's task; with B's own package in front nothing reaches any device (no
+/// stop, no startup run, and B's task, on its home, sends no command), the switch is reached once
+/// and schedules no startup package.
 #[test]
 fn mapp2b_the_front_unknown_stops_every_other_member_and_b_in_front_switches_nothing() {
     let bench = Bench::standard();
@@ -1050,10 +1051,8 @@ fn mapp2b_the_front_unknown_stops_every_other_member_and_b_in_front_switches_not
     assert_eq!(bench.actions(D), [ApplicationLifecycleAction::Stop]);
     assert_eq!(
         bench.actions(B),
-        [
-            ApplicationLifecycleAction::Restart,
-            ApplicationLifecycleAction::Restart
-        ]
+        [ApplicationLifecycleAction::Restart],
+        "B's startup run's restart only: B's task, on B's home, sends no command"
     );
     assert!(bench.actions(C).is_empty(), "C is not in the group");
     let steps = application_steps(&bench.events_after(mark));
@@ -1073,10 +1072,9 @@ fn mapp2b_the_front_unknown_stops_every_other_member_and_b_in_front_switches_not
     bench.run_and_settle(&context);
     assert!(bench.actions(A).is_empty(), "no stop");
     assert!(bench.actions(D).is_empty(), "no stop");
-    assert_eq!(
-        bench.actions(B),
-        [ApplicationLifecycleAction::Restart],
-        "only the task's own restart: no startup run"
+    assert!(
+        bench.actions(B).is_empty(),
+        "no startup run, and B's task, on B's home, sends no command"
     );
     assert_eq!(bench.host.switch_entries_for_test().expect("count"), 1);
     assert!(
@@ -1509,12 +1507,14 @@ fn mapp2b_a_failed_switch_holds_the_member_for_the_cooldown_while_the_other_memb
 /// - The entry is the only way in: B, a member, with A in front, run on two hosts started alike,
 ///   one with the test-only switch off (`switch_off_for_test`, compiled into this crate's test
 ///   build only) and one with it on. Off: the fake device logs no foreground read of B, no stop
-///   of A and no startup run (B's task's own restart only), the switch's entry is never reached
-///   and B's lease is `D_run + R`. On: the switch's three steps (one foreground read, A's stop,
-///   B's startup run, then B's task), its entry reached once, the lease `D_s + D_run + R`.
+///   of A and no startup run, and no application command at all (B's task finds B's home on its
+///   first frame and sends none), the switch's entry is never reached and B's lease is
+///   `D_run + R`. On: the switch's three steps (one foreground read, A's stop, B's startup run's
+///   restart, then B's task, which sends no command), its entry reached once, the lease
+///   `D_s + D_run + R`.
 /// - C, alone on its device, with the slice reachable: the fake device logs no foreground read
-///   of C and no command but C's task's own restart, A, B and D see nothing, no startup package
-///   is scheduled; C's lease is exactly `D_run + R`; its dispatch clock holds a switch time of 0
+///   of C and C's application log is empty (no startup run, and C's task finds C's home on its
+///   first frame and sends no command), A, B and D see nothing, no startup package is scheduled; C's lease is exactly `D_run + R`; its dispatch clock holds a switch time of 0
 ///   for the settlement to subtract; no switch cooldown entry exists afterwards and the switch's
 ///   entry was never reached.
 /// - C's run on that host and on a second host started alike with the switch off from the start:
@@ -1552,10 +1552,9 @@ fn mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it()
             );
             assert_eq!(reads.load(Ordering::Acquire), 0, "off: no foreground read");
             assert!(bench.actions(A).is_empty(), "off: A is not stopped");
-            assert_eq!(
-                bench.actions(B),
-                [ApplicationLifecycleAction::Restart],
-                "off: B's task's own restart only, no startup run"
+            assert!(
+                bench.actions(B).is_empty(),
+                "off: no startup run, and B's task, on B's home, sends no command"
             );
             assert!(!scheduled, "off: no startup package is scheduled");
             assert_eq!(entries, 0, "off: the switch's entry is never reached");
@@ -1573,11 +1572,8 @@ fn mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it()
             );
             assert_eq!(
                 bench.actions(B),
-                [
-                    ApplicationLifecycleAction::Restart,
-                    ApplicationLifecycleAction::Restart
-                ],
-                "on: B's startup run, then its task's own restart"
+                [ApplicationLifecycleAction::Restart],
+                "on: B's startup run's restart only: B's task, on B's home, sends no command"
             );
             assert!(scheduled, "on: B's startup package is scheduled");
             assert_eq!(entries, 1, "on: the switch's entry is reached once");
@@ -1615,10 +1611,9 @@ fn mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it()
         };
         if !off {
             assert_eq!(reads.load(Ordering::Acquire), 0, "no foreground read of C");
-            assert_eq!(
-                bench.actions(C),
-                [ApplicationLifecycleAction::Restart],
-                "C's task's own restart only: no startup run"
+            assert!(
+                bench.actions(C).is_empty(),
+                "C's log is empty: no startup run, and C's task, on C's home, sends no command"
             );
             for alias in [A, B, D] {
                 assert!(bench.actions(alias).is_empty(), "no stop of {alias}");
@@ -1679,8 +1674,9 @@ fn mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it()
 
 /// The work order's "no interruption", for the switch's caller: while B's run holds the device's
 /// key with its own package in front, A's queued claim waits; the run reaches the switch, which
-/// stops nothing and starts nothing, so A's application is neither started nor stopped and B's
-/// is never stopped; A's claim gets the key only after B's run ended.
+/// stops nothing and starts nothing, so A's application is neither started nor stopped and no
+/// command reaches B's device at all (B's task finds B's home on its first frame and sends none);
+/// A's claim gets the key only after B's run ended.
 #[test]
 fn mapp2b_no_switch_interrupts_the_run_that_holds_the_device() {
     let bench = Bench::standard();
@@ -1715,10 +1711,9 @@ fn mapp2b_no_switch_interrupts_the_run_that_holds_the_device() {
         bench.actions(A).is_empty(),
         "A is neither started nor stopped"
     );
-    assert_eq!(
-        bench.actions(B),
-        [ApplicationLifecycleAction::Restart],
-        "B's run's own restart only: B is never stopped"
+    assert!(
+        bench.actions(B).is_empty(),
+        "B is never stopped, and B's task, on B's home, sends no command"
     );
     let events = bench.events_after(mark);
     let run_ended = bench
@@ -1742,7 +1737,8 @@ fn mapp2b_no_switch_interrupts_the_run_that_holds_the_device() {
 
 /// The register's "a direct run (the Lab) goes through the same switch" and "`ApplicationLifecycle`
 /// `launch` stops the member in front first": B's direct run with A in front stops A, runs B's
-/// startup package and then B's task, and completes; B's launch with A in front stops A and then
+/// startup package (its restart, the only command B's device sees) and then B's task, which finds
+/// B's home on its first frame and sends no command, and completes; B's launch with A in front stops A and then
 /// launches B, with no startup run; B's launch with B in front stops nothing; C's launch, alone on
 /// its device, never reaches the switch.
 #[test]
@@ -1762,10 +1758,8 @@ fn mapp2b_a_direct_run_and_a_launch_of_a_member_stop_the_member_in_front_first()
     assert_eq!(bench.actions(A), [ApplicationLifecycleAction::Stop]);
     assert_eq!(
         bench.actions(B),
-        [
-            ApplicationLifecycleAction::Restart,
-            ApplicationLifecycleAction::Restart
-        ]
+        [ApplicationLifecycleAction::Restart],
+        "B's startup run's restart only: B's task, on B's home, sends no command"
     );
     assert_eq!(bench.host.switch_entries_for_test().expect("count"), 1);
     bench.close();
@@ -1993,8 +1987,9 @@ fn mapp2b_the_switch_cooldown_also_holds_the_rerun_the_member_is_owed() {
 /// The work order's "while one member is in its cooldown, a task of the device's other member is
 /// dispatched and runs to its end with its own records": B's switch fails at its foreground read
 /// (nothing stopped) and B's switch cooldown runs. At the next round B is not dispatched and A's
-/// task is; it is granted, runs and settles a success on its own time: the device saw A's task's
-/// own restart and nothing of B or D, the run's records that name an instance name A only (its
+/// task is; it is granted, runs and settles a success on its own time: no application command
+/// reached A, B or D (A's own package is in front, so the switch does nothing, and A's task finds
+/// A's home on its first frame and sends none), the run's records that name an instance name A only (its
 /// request and its terminal among them), its run-duration sample and `last_duration_ms` are its
 /// own time, and B's cooldown still runs.
 #[test]
@@ -2021,10 +2016,9 @@ fn mapp2b_while_one_member_cools_down_the_other_members_task_runs_to_its_end_wit
     assert!(!dispatches(&held, TASK_B), "{:#?}", held.dispatch_intents);
     let a = bench.grant(&held, TASK_A);
     let runtime_ms = bench.run_and_settle(&a);
-    assert_eq!(
-        bench.actions(A),
-        [ApplicationLifecycleAction::Restart],
-        "A's task's own restart, A's own package in front"
+    assert!(
+        bench.actions(A).is_empty(),
+        "A's own package in front: no switch step, and A's task, on A's home, sends no command"
     );
     assert!(bench.actions(B).is_empty(), "nothing of B");
     assert!(bench.actions(D).is_empty(), "nothing of D");

@@ -20820,8 +20820,8 @@ things. B, a member with A in front, on two hosts started alike: with the test-o
 startup run and the lease is `D_run + R`; with it on, the three steps and `D_s + D_run + R`. The
 switch exists in this crate's test build only (the field `HostShared::switch_off_for_test` and its
 check in `switch_applies` are `#[cfg(test)]`); no product build has it. C, alone, with the slice
-reachable: no foreground read of C, no command but its task's own restart, nothing on the other
-members, the lease exactly `D_run + R`, a switch time of 0 in its dispatch clock for the settlement
+reachable: no foreground read of C and an empty application log (no startup run, and C's task
+sends no command), nothing on the other members, the lease exactly `D_run + R`, a switch time of 0 in its dispatch clock for the settlement
 to subtract (`RuntimeHost::policy_switch_ms_for_test`), no cooldown entry afterwards
 (`switch_cooldown_entries_for_test`). And C's run on that host and on a second host started alike
 with the switch off from the start: the run's records equal record by record, type, severity and
@@ -20829,8 +20829,16 @@ whole payload with ids and times normalised (every run of 32 or more hexadecimal
 string, and every member that names an instant, a measurement on the process clock or a place in
 the ledger), and the same receipt state, own time, budget verdict, sample and `last_duration_ms`.
 Two hosts, not one: a second dispatch of the same pair on one host carries the pair's history (its
-budget counts and runtime reserved, its expected duration, its ranking). The register's
-"MAPP-2's tests" (§1.323) are covered but for the rung and a hold's release: the ladder runs on the
+budget counts and runtime reserved, its expected duration, its ranking). Fix round 2 (the first
+CI run of these tests) corrected what the tests expected a task's own run to send: the fixture's
+package is an application entry (its first operation a `from: "any"` `restart`), and a task's run
+(a policy run, a direct run) takes its first frame first and runs that restart only when the frame
+shows no page of the package (the kernel's `ApplicationEntryRun::AfterInitialFrame`), while a run
+the host starts itself (the startup run) begins with it (`run_host_package`, R24). The fake device
+shows the package's home throughout, so every restart a device logs in these tests is a startup
+run's and a task's run sends no application command; six tests had counted one restart more, and
+the lone instance's log, said to hold its task's one restart, is empty. No product code changed.
+The register's "MAPP-2's tests" (§1.323) are covered but for the rung and a hold's release: the ladder runs on the
 device's worker and its gate fixtures wait by polling, so the rung's call of
 `stop_others_before_start` is covered through the `ApplicationLifecycle` path that shares it, and a
 player hold is not built. The MAPP-1, MAPP-2a and ED-2 gates are unchanged. One existing test is
