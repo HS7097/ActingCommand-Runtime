@@ -621,6 +621,16 @@ not report `runtime_operation_unsupported`) fails the fail-class checks it feeds
 fail-class check acts (the automatic rollback, or `post_check_failed`); `not_evaluated` never
 does.
 
+The `post_check` step's evidence is `{commit, checks, failed}`: every row, and the ids of the
+fail-class checks that failed. A step whose checks pass, and one that begins an automatic rollback
+(with the member `rollback`), is `done` with it as before. Workflow #454 (0.12.59): a step whose
+failed check ends the command `post_check_failed` (a composite rollback, the rescue module's
+`config replace`, `config restore` and `instance add`) is closed `done` with the same evidence in
+the write that records the operation's result, so the record says which row failed and what it
+read; before, it stayed `started` with no evidence, the rows only in the answer's `post_check` and
+`failed_checks`. A crash before that write leaves the step `started`, and `install resume` runs the
+checks again.
+
 | id | Judged | Fail-class |
 |---|---|---|
 | `ready` | the start reached readiness (`ready_ms`), and the owner it made ready still answers (a Runtime gone or restarted at check time fails) | yes |
