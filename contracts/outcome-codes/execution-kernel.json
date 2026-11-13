@@ -1894,7 +1894,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A contained task input lies outside the frame.",
+      "description": "A contained task input lies outside the frame. Workflow #392 DA-3 (model 392 v1.2 §6.2, §9.3): also an input point that, mapped to the device frame, lies outside the device frame or outside the device box its input box maps to; the point is never clamped and no input is sent.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

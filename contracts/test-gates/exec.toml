@@ -2699,6 +2699,44 @@ tests = [
 ]
 incident = ["#392 DA-2a"]
 
+# Workflow #392 DA-3 (work order point 4; model 392 v1.2 §4.6; contracts/display-adapter.md section 10): an input point goes to the nearest device pixel inside the device frame and inside the device box its base box maps to inward, the last column and row and a one-pixel box at the scales 3/2, 2 and 3 included; at 4/3 a point on its box's edge is refused out of bounds and a one-pixel box collapsed, a point outside the base outside_frame, never clamped
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da3::da3_points_land_in_the_device_frame_and_in_their_device_box_at_the_edges",
+]
+incident = ["#392 DA-3"]
+
+# Workflow #392 DA-3 (work order point 5; model 392 v1.2 §0.2 C16): under the identity every kind of input, with or without its boxes, leaves exactly as the kernel made it, in display and in frame coordinates
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da3::da3_identity_sends_every_input_as_it_was_made",
+]
+incident = ["#392 DA-3"]
+
+# Workflow #392 DA-3 (work order point 2; contracts/display-adapter.md section 10): the input side admits the identity and a pure scale and refuses a translation and a cropped frame translation_unsupported and a turned frame orientation_mismatch, display_map_unresolved at display_input_map with the frame's and the base's sizes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da3::da3_the_input_side_refuses_every_map_the_capture_side_refuses",
+]
+incident = ["#392 DA-3"]
+
+# Workflow #392 DA-3 (model 392 v1.2 §13 rows DA3-T1, T5, T6 and T15, T7, T10, T11, T12, T14, at the pure level): a box under a translation by the hand table; a vertical brake of 100 is 150 at 3/2 and held input_scale_unsupported; a map of another frame size is display_map_stale (warning, stability_warning, display_input_map); a turned frame's tap with its turn undone for frame coordinates; long presses, swipes and braked drags keep their durations, a brake's cross scaled with its sign; a path drag's box and points times 3; a cropped frame's offset added back for display coordinates
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da3::da3_t1_a_box_under_a_translation_lands_by_the_hand_table",
+    "actingcommand-display-adapter::lib::gate_392_da3::da3_t5_a_vertical_brake_scales_with_the_map_and_waits_for_its_bound",
+    "actingcommand-display-adapter::lib::gate_392_da3::da3_t6_a_map_of_another_frame_size_is_stale",
+    "actingcommand-display-adapter::lib::gate_392_da3::da3_t7_a_turned_frame_undoes_its_turn_for_frame_coordinates",
+    "actingcommand-display-adapter::lib::gate_392_da3::da3_t10_t11_long_presses_swipes_and_braked_drags_keep_their_durations",
+    "actingcommand-display-adapter::lib::gate_392_da3::da3_t12_a_path_drag_maps_its_box_and_every_point",
+    "actingcommand-display-adapter::lib::gate_392_da3::da3_t14_a_cropped_frame_adds_its_offset_back_for_display_coordinates",
+]
+incident = ["#392 DA-3"]
+
 # Workflow #411 B35 (0.12.28; register §1.158 B35-1; no persisted ledger shape; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_interrupt_page_shadowed warning (package_id, page_id) per pack that declares a shared interrupt page of interrupts.json itself and is neither a feature package of pages.json nor a handler of that page, and both still pass; a root without such a pack, or without interrupts.json, reports none
 [[gate]]
 coverage = "Y"

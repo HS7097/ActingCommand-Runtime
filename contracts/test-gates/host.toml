@@ -2872,13 +2872,13 @@ tests = [
 ]
 incident = ["#392 DA-2a"]
 
-# Workflow #392 DA-2a (model 392 v1.2 §6.6; the input side maps from DA-3): on a 1920x1080 device a 1280x720 package's tap is not sent; the run ends display_map_unresolved (input_scale_unsupported at display_input_map) with no input
+# Workflow #392 DA-2a (model 392 v1.2 §6.6), adapted by DA-3 (the input side maps): on a 1920x1080 device a 1280x720 package's tap (1, 0) leaves at (2, 0) and the run completes; the effect intent keeps (1, 0), the input intent and the device have (2, 0)
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_an_input_waits_for_the_input_side_under_a_pure_scale",
+    "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_an_input_under_a_pure_scale_leaves_at_its_device_pixel",
 ]
-incident = ["#392 DA-2a"]
+incident = ["#392 DA-2a", "#392 DA-3"]
 
 # Workflow #392 DA-2a (model 392 v1.2 §4.5): a declaration measured on the safe area finds no insets before DA-4b; the run ends contained_task_geometry_unavailable (safe_area_unavailable) after its geometry record and before any input
 [[gate]]
@@ -2920,6 +2920,22 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_392_da4bd::da4bd_t4_an_emulator_takes_insets_0_and_a_screen_layout_no_declaration",
 ]
 incident = ["#392 DA-4b-D"]
+
+# Workflow #392 DA-3 (work order tests; model 392 v1.2 §6.1, §6.2, §13 row DA3-T9's one exit; contracts/display-adapter.md section 10): a 16x9 package on a 32x18 and a 48x27 device and on a 16x9 one completes; a tap drawn in its box, a swipe and a path drag reach the device at their base points times 2, 3 and 1, durations and hold kept; the effect intents keep the base inputs, their base boxes and the device frame's size, the input intents name the device inputs, and the first geometry record names the pure scale (none under the identity)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_a_tap_a_swipe_and_a_drag_reach_the_device_at_two_and_three_times_their_base_points",
+]
+incident = ["#392 DA-3"]
+
+# Workflow #392 DA-3 (work order point 5; model 392 v1.2 §0.2 C16; the owner's ruling of 10-26, merge is deploy): with the existing gates' literals, a 1280x720 package on a 1280x720 device records the effect intent tap (1, 0) without sampling and the frame 1280x720, the input intent tap (1, 0), sends the one tap (1, 0), and its one geometry record is initial without a display map
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_identity_a_1280x720_package_on_a_1280x720_device_records_and_sends_as_before",
+]
+incident = ["#392 DA-3"]
 
 # LN-7c R (#422; ledger-observer.md §11.7; coordinator 10-26): the ledger scrub's finding about the derived frame index `ledger_frame_refs` is non-fatal: the host hands it to the daemon's log once (one line with the code, what, where and `extent=untrusted`), latches nothing, and the Runtime keeps running and closes as usual
 [[gate]]

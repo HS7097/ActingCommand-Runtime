@@ -19300,6 +19300,55 @@ with the item `notices` `new` first, placed, the journalled plan document's `pac
 file on disk the zip's bytes). No existing test changes: the earlier gates' bundles keep their
 six-interface declarations, which the new reader reads by their `package` pair.
 
+### 1.340 Slice DA-3 (0.12.59): the display adapter's input side for the identity and a pure scale (#392 / #401; model 392 v1.2 §0.2 C2, C4 to C6, §4.6, §4.7, §6, §9, §12.1 row DA-3; the coordinator's work order of 11-13 on board #392, not the owner's words: the maps the capture side admits, the identity and a pure scale)
+
+[display-adapter.md](display-adapter.md) section 10 is the contract. **No new persisted shape, no
+configuration key, no new code, token or value key, and no interface revision moves**:
+`display_map_stale` (registered by DA-1) is emitted for the first time, and the descriptions of
+`display_map_unresolved`, `display_map_stale`, `contained_task_input_out_of_bounds` and the token
+`input_scale_unsupported` say what the input side now does (the code index is regenerated). Every
+input of a run leaves for the device at one place, the host's input of the run, mapped by the run's
+display map: under a pure scale it is no longer refused. The effect intent keeps what the package
+asked for in base pixels, the input intent records what is sent in device pixels; no record gains a
+member. A 1280x720 package on a 1280x720 device records and sends byte for byte what it did: under
+the plain identity nothing is mapped, kept or recorded. Gates: the adapter's `gate_392_da3` tests
+(work order points 2, 4 and 5 at the pure level; DA3-T1, T5, T6, T7, T10 to T12, T14, T15), the
+host's `gate_392_da3` tests (a tap, a swipe and a path drag at two and three times the base, the
+identity) and DA-2a's adapted input test. The number 1.340 is provisional for parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DA3-1 | the run's input at its one exit (`RuntimeContainedTask::input`, after the input prerequisite) | behaviour (memory only) | DA-3 | — | under the plain identity the input leaves as the kernel made it (the prerequisite's one identity check, DA-2a's, stays); under any other map `DisplayMap::admit_input`, `current_for` and `device_input` (the adapter crate) map it before anything is sent: every point `round_half_up(v · s)` inside the device frame and inside the device box (inward) of the input box it was drawn in (the effect intent's sampling regions), a brake's cross `round_half_up(|d| · s)` with its sign, a path drag's box inward holding every point, durations, holds and slopes kept |
+| DA3-2 | the input side's refusals, all before any input | behaviour | DA-3 | DA-3 | a translation or a cropped frame `display_map_unresolved` (`translation_unsupported`), a turned frame (`orientation_mismatch`), a vertical-brake drag under a pure scale (`input_scale_unsupported`: its brake is held at exactly 100 pixels by `InputAction` and the device layer), an input box with no device pixel (`collapsed`), a point outside the scale frame (`outside_frame`), each at stage `display_input_map`; a mapped point outside the device frame or its device box `contained_task_input_out_of_bounds`, never clamped; an input decided on a frame of another size than the map's `display_map_stale` (warning, stage `display_input_map`), and the run ends with it |
+| DA3-3 | `display_map_stale` | outcome code, first emitted | DA-1 | DA-3 | its one registered value `stage`; the model's old and new frame sizes are not registered values and are not written |
+| DA3-4 | DA-2a's DA2a-5 (the input prerequisite's `input_scale_unsupported` for every input under a pure scale) | behaviour removed | DA-2a | — | replaced by DA3-1; the token keeps only DA3-2's vertical-brake meaning |
+| DA3-5 | `DisplayMap::device_input` with `InputCoordinates::Display` (a cropped frame's offset added) and `DeliveredFrame` (a turned frame's quarter turn undone) | adapter function (pure) | DA-3 | — | built and tested; the host refuses cropped and turned frames until DA-2b, so no run reaches it |
+
+**At deploy.** Nothing changes for an instance at the base's size (every production instance runs
+its packages at 1280x720 on a 1280x720 emulator: the plain identity). An instance whose display has
+the package's aspect ratio at a larger size (for example 1920x1080 or 2560x1440 for a 1280x720
+package) now runs its taps, long presses, swipes, drags with a pause and path drags instead of
+ending `display_map_unresolved` (`input_scale_unsupported`) at its first input; a vertical-brake
+drag there still ends so. Such an instance is to be verified on a device before it is used.
+
+Tests. The adapter's `gate_392_da3`:
+`da3_points_land_in_the_device_frame_and_in_their_device_box_at_the_edges` (the last column and row
+and a one-pixel box at 3/2, 2 and 3; a point outside its device box at 4/3 refused, a one-pixel box
+there `collapsed`, a point outside the base `outside_frame`),
+`da3_identity_sends_every_input_as_it_was_made`, `da3_t1_a_box_under_a_translation_lands_by_the_hand_table`,
+`da3_t5_a_vertical_brake_scales_with_the_map_and_waits_for_its_bound`,
+`da3_t6_a_map_of_another_frame_size_is_stale`,
+`da3_t7_a_turned_frame_undoes_its_turn_for_frame_coordinates`,
+`da3_t10_t11_long_presses_swipes_and_braked_drags_keep_their_durations`,
+`da3_t12_a_path_drag_maps_its_box_and_every_point`,
+`da3_t14_a_cropped_frame_adds_its_offset_back_for_display_coordinates`,
+`da3_the_input_side_refuses_every_map_the_capture_side_refuses`. The host's `gate_392_da3`:
+`da3_a_tap_a_swipe_and_a_drag_reach_the_device_at_two_and_three_times_their_base_points` (and the
+identity at once) and `da3_identity_a_1280x720_package_on_a_1280x720_device_records_and_sends_as_before`.
+Adapted: DA-2a's `da2a_an_input_waits_for_the_input_side_under_a_pure_scale`, renamed
+`da2a_an_input_under_a_pure_scale_leaves_at_its_device_pixel` (retired entry in
+`ci/retired-gates.toml`): it pinned the refusal this slice removes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
