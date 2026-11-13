@@ -269,6 +269,11 @@ fourteen of the file and `goal_undeclared`) are words of the existing vocabulary
      pointer when a rule that follows it (a chain follower the composition lists as riding with it,
      `benefit_followers`, which runs when it completes), directly or through further followers, runs
      such a package or one the references were not told of, each follower visited once.
+     **A limit that the slice which makes a tier act must lift first:** only followers that ride with
+     the governed rule are followed. A rule that carries a value of its own, or that depends on the
+     governed rule's completion without riding with it, is not followed here, although a governed
+     rule that runs more often lets it run more often too. Before a tier can scale anything, the
+     check judges every rule whose trigger depends on the governed rule's completion.
      A `resource` entry can still push such a package indirectly: its pool may be produced by a
      rule of that package, and a goal's shortfall raises the weight of what produces the pool. The
      check does not refuse such an entry (it would forbid goals on ordinary pools); the rule
