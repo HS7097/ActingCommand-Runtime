@@ -19304,11 +19304,12 @@ six-interface declarations, which the new reader reads by their `package` pair.
 
 1.340 is the next free number on main `98924e28`; a slice of this release merged before this one
 may take it, and this section then moves to the next. [install-cli.md](install-cli.md), "The
-Lab's rescue module" ("The composition after a placement"), and the row `place` of
-[lab-operations.json](lab-operations.json) are the contract. No outcome code, value key, vocabulary
-word, configuration key, step kind, intent member, wire shape, record or interface revision is
-added or moved, and no outcome code fragment changes, so the index is not regenerated. These are
-rescue rows only: `actingctl` gains nothing.
+Lab's rescue module" ("The composition after a placement" and "`place` while the Runtime is
+stopped"), and the row `place` of [lab-operations.json](lab-operations.json) (`runtime` now
+`optional`) are the contract; [lab-two-entries.md](lab-two-entries.md) §7 names both. No outcome
+code, value key, vocabulary word, configuration key, step kind, intent member, wire shape, record
+or interface revision is added or moved, and no outcome code fragment changes, so the index is not
+regenerated. These are rescue rows only: `actingctl` gains nothing.
 
 **S5, what was wrong.** The checks after a placement (`post_check`, crate `lab-rescue`,
 `src/install/place.rs`, `check_step`) end with the row `composition`: when the bundle changes the
@@ -19355,9 +19356,80 @@ instance bound to the game and no `schedule.json`: the steps `pause`, three `pac
 bound instance paused and resumed, the answer's members, steps and `place` step members of before,
 all literals of `gate_434_lab3` and `gate_451_loadp`). No existing test changes.
 
+**S6, what was missing.** With no Runtime answering, `place` refused `runtime_not_running` after
+its plan, so a fresh root had to start its Runtime before it could hold any pack, though the
+contract's INST-4 line already said "cold when stopped".
+
+**S6, the two paths** (`src/rescue.rs`, `place` and `place_cold`; `src/install/place.rs`,
+`steps`, `open_cold` and `check_step`). The plan is computed as before and holds no running state,
+so its id is the same either way. The status read decides: a Runtime that answers takes the path
+of before, step for step (the hold of the bound instances, the items, the checks, the release, the
+schedule read). With none, `place_cold` takes the writer lock, refuses an unfinished operation,
+and applies the stopped rule the composite update applies after its close, before any file
+changes, and `install start` before it spawns, which the update plan refuses by too
+(`install::launch::refuse_running`, reused: the state root's owner lock held refuses
+`owner_lock_held`, an `actingcommand-actingd.exe` under the root `runtime_running`, a probe that
+cannot decide `processes_unreadable`; judged under the lock, so no watchdog tick starts a Runtime
+between the judgement and the operation). It then opens `pack_place` (`open_cold`) with the same
+plan and plan id, the inputs `commit`, `game`, `zip`, `zip_sha256`, `config_sha256` and `cold:
+true`, no S0 and no guards, and the steps `pack_item` per changed item, none marked `first` (so none
+waits for idle instances), and `post_check`; no `pause`, no `release_hold`. The items are placed as
+before (`.new-<ms>.part`, the replaced item renamed `.old-<ms>` and kept, the part renamed in, its
+digest checked). `check_step` reads the input `cold`: the rows `rerun` and `standard_pack_check` as
+before, then `check_config` (the live build's check-config of the live configuration with
+`--install-root <root>`, as `config_swap::candidate` runs it; a refusal `fail` with its answer, no
+answer `fail` with `check_config_unanswered`) and `composition` `not_evaluated` with `runtime`
+`stopped`. A failed row ends `post_check_failed` (`count`, `game`) with the items placed; there is
+no hold to keep, so `next` names `undo` of the operation (the module's `undo <operation>`), which
+reverses the items as for a placement with a Runtime. The answer's steps are `plan` and `place`.
+While the operation is unfinished, `current.json` names a `pack_place`, which watchdog row 7a″
+does not pass, so no Runtime starts on a half-placed game root.
+
+**`install/deploy.rs`'s `finish` needs no change** (the design note's point marked not verified,
+settled by reading the code): its `pack_place` arm reads the input `game`, the `pack_item`
+evidence and the first `post_check` evidence only, and the hold it reports comes from `hold_of`,
+which reads the input `hold` or a `pause` step's intent; a cold journal has neither, so the
+answer carries no `hold` and no `next`, as it should. `hold_caveats` returns at once without a
+done `pause` step, `guard_caveats` finds no guard rows, `end` (a failed check) builds on the same
+reads, `update::run` runs `pack_item` and `post_check` by kind whatever came before them, and
+`undo` reverses `pack_item` steps and passes `post_check` as before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S6-1 | `place` with no Runtime answering: the stopped rule under the writer lock, then `pack_place` without a hold | installer behaviour | #453 S6 | `rescue::place_cold` | `runtime_not_running` is no longer `place`'s answer to a stopped Runtime |
+| S6-2 | the `pack_place` journal's input `cold` (`true`) | journal input member (free `inputs`) | #453 S6 | `install::place::open_cold` | an earlier build ignores it ("Rollback" below) |
+| S6-3 | the row `check_config` of `place`'s `post_check`, and `composition` `not_evaluated` with `runtime` `stopped`, on a cold journal | installer behaviour, row ids and values | #453 S6 | `install::place::check_step` | a failed row: `next` names `undo` |
+| S6-4 | the row `place`: `runtime` `required` → `optional`, its `help` and `notes` | operation table | #453 S6 | — | the CLI help and the MCP tool's description read them |
+
+Tests (apps gate row "#453 S6", the same file, on the fake host with no Runtime booted unless
+named): `s6_cold_place_places_the_items_and_keeps_the_replaced_ones` (a game root with a pack and a
+`bundle.json` of before, a bundle that replaces both and adds the table and `schedule.json`: the
+answer's steps `plan` and `place`; every item on disk the zip's bytes, the replaced pack and
+`bundle.json` kept as `.old-<ms>`; the journal with the initiator, the answer's plan id, no S0, the
+six inputs with `cold`, four `pack_item` steps without `first` and `post_check`; the rows `rerun`
+pass, `standard_pack_check` `not_evaluated`, `check_config` pass with `install_root`, run once by the
+live build with `--install-root`, `composition` `not_evaluated` with `runtime` `stopped`; no call to
+the fake Runtime; after each of the five steps the watchdog's reader of `current.json` names the
+operation), `s6_cold_place_refuses_a_running_actingd_or_a_held_owner_lock` (an actingd image under
+the root: `runtime_running` with its `pid`; an owner journal locked as a running Runtime locks it:
+`owner_lock_held`; each with the game root as it was, no journal and no `current.json`),
+`s6_a_failed_check_names_undo_and_undo_restores_the_game_root` (the live build's check-config
+refusing: `post_check_failed`, `count` 1, the game and the operation id, the failed row
+`check_config` with check-config's answer, no `hold`, `next` exactly `undo <operation>`, the steps
+`plan`, the items placed and the operation ended; that `undo` leaves the game root of before, the
+four placed items kept beside it as `.rolledback-<ms2>`) and
+`s6_the_same_bundle_has_the_same_plan_id_hot_and_cold` (two roots with the same files of before:
+one plan id with the Runtime stopped and running, and both journals, placed hot on one root and
+cold on the other, carry it and the same plan document). No existing test changes: every earlier
+gate that places boots its fake Runtime first, so it takes the path of before.
+
 **At deploy.** Nothing to do: production places packs with the coordinator's own kit, not with
 this row. **Rollback** to a build before 0.12.59: its installer reads a journal with `bound` (its
-`inputs` are free JSON), ignores it and resumes such an operation with the wait.
+`inputs` are free JSON), ignores it and resumes such an operation with the wait. It ignores `cold`
+too: it resumes a cold `pack_place` left unfinished with its items as here (none is marked
+`first`, so none waits) and its checks without `check_config`, the composition `not_evaluated`
+because no Runtime answers its catalog read; finish such an operation with this build to have the
+check of the configuration.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

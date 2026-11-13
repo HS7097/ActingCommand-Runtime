@@ -921,7 +921,8 @@ the rescue face:
   file itself as a root file's, and a pack named `loading` in any ASCII case beside the directory
   `loading_pack_name` (`path` `<zip>\bundle.json`, `package_id`), all before the hold; an installer
   before it refuses such a zip at its layout check, naming the first `loading/` member, before
-  anything is paused or written), holds
+  anything is paused or written), then, while a Runtime runs (without one: "`place` while the
+  Runtime is stopped", below), holds
   the instances bound to the bundle's game (the game comes from the bundle), waits until they are
   idle, places each item `.part` → `.old-<ms>` → in place (step `pack_item`), checks the bundle
   again, runs `<root>\tools\actinglab.exe standard-pack check` on the placed game root and checks
@@ -953,6 +954,32 @@ the rescue face:
   change it passes at its first read, `expected` `unchanged`, as before. A journal without `bound`
   (an operation an earlier build began, resumed by this one) keeps the wait. A catalog that cannot
   be read is `not_evaluated`, as before.
+- **`place` while the Runtime is stopped** (Workflow #453 S6, since 0.12.59; register §1.340; the
+  coordinator's rulings of 11-13 on board #453, not the owner's words). With no Runtime answering,
+  `place` no longer refuses `runtime_not_running`. After its plan, which holds no running state
+  (the same plan and `plan_id` as with a Runtime; `--plan` answers it as before), it takes the
+  writer lock, refuses an unfinished operation, and applies the stopped rule the update applies
+  after its close, before any file changes, and `install start` before it spawns (the update plan
+  refuses by the same two tests): the state root's owner lock held refuses `owner_lock_held`
+  (`path`), an `actingcommand-actingd.exe` running under the root `runtime_running` (`path`,
+  `pid`), a probe that cannot decide `processes_unreadable`; each before anything is written,
+  judged under the lock, so no watchdog tick starts a Runtime in between. It then opens one
+  `pack_place` operation whose inputs say `cold: true` (no `hold`, `known_pauses`, `instances` or
+  `bound`), without S0 or guards, with one `pack_item` step per item that changes and one
+  `post_check`: no `pause`, no `release_hold`, and no item waits for idle instances (there is no
+  Runtime to ask). Each item is placed as with a Runtime: `<dst>.new-<ms>.part`, the item in place
+  renamed `<dst>.old-<ms>` and kept, the part renamed in, its content checked; nothing is deleted.
+  The checks after the placement are `rerun` and `standard_pack_check` as with a Runtime,
+  `check_config` (the live build's check-config of the live configuration with
+  `--install-root <root>`, as `config replace` checks a file; it previews the composition for the
+  configured instances offline: a configuration it refuses `fail` with its answer, one it does not
+  answer `fail` with `check_config_unanswered`), and `composition` `not_evaluated` with `runtime`
+  `stopped`. A failed row ends the command `post_check_failed` (`count`, `game`), the items placed
+  and the operation ended; no hold is kept, and `next` names `undo <operation>`, which reverses the
+  items as for a placement with a Runtime (each placed item set aside as `.rolledback-<ms2>`, each
+  kept one put back). The answer's steps are `plan` and `place`, with no `schedule`. While the
+  operation is unfinished the watchdog stands aside (`pack_place` is off row 7a″'s pass list), so
+  no Runtime starts on a half-placed game root; the next start reads the placed game root.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
@@ -2501,6 +2528,10 @@ the fragment registers, names the command.
   answers; `install_caveat` `mcp_entry_not_placed` (`path`). `mcp plan` and `mcp entries` answer
   with the existing locations `install_mcp_entry_plan` and `install_mcp_entry_list`; no code or key
   is new.
+- **Workflow #453 S5 and S6** (since 0.12.59; "The composition after a placement", "`place` while
+  the Runtime is stopped"): with no Runtime answering, `install_pack_place` refuses with the
+  existing `runtime_running` (`path`, `pid`), `owner_lock_held` (`path`) and
+  `processes_unreadable`, no longer `runtime_not_running`; no code, location, key or word is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

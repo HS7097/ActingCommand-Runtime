@@ -3,7 +3,8 @@
 //! The rescue module's `place` (Workflow #434 LAB-3; `contracts/lab-two-entries.md` §7;
 //! `contracts/install-cli.md`, "The Lab's rescue module", `place`): one game's standard-package
 //! bundle zip placed into the configuration's standard-pack root, `<standard_packs.root>\<game>`,
-//! while the Runtime runs. The game comes from the bundle's `bundle.json`; no game is named here.
+//! while the Runtime runs or (Workflow #453 S6) while it is stopped. The game comes from the
+//! bundle's `bundle.json`; no game is named here.
 //!
 //! - **The plan** (read-only): the zip's SHA-256 (against `SHA256SUMS` when given),
 //!   `bundle.json` as the contract crate validates it, the package interface the bundle declares
@@ -21,8 +22,9 @@
 //!   of kind `notices`, placed first; the loading templates directory one item of kind `loading`,
 //!   placed after the packs and before the root files. The plan id is `plan-` and the first 16
 //!   hex digits of the SHA-256 of the canonical plan document.
-//! - **The operation** (`kind` `pack_place`, journalled): the hold of the instances bound to the
-//!   bundle's game (`pause`), then each item that changes (`pack_item`: written to
+//! - **The operation** (`kind` `pack_place`, journalled) while a Runtime runs: the hold of the
+//!   instances bound to the bundle's game (`pause`), then each item that changes (`pack_item`:
+//!   written to
 //!   `<dst>.new-<ms>.part`, the item in place renamed `<dst>.old-<ms>` and kept, the part renamed
 //!   in, the content checked; a root file, the notices directory or the loading templates
 //!   directory the zip no longer carries renamed `<dst>.old-<ms>`), the first item waiting until
@@ -40,6 +42,14 @@
 //!   the command `post_check_failed` with the instances staying paused (the items are placed:
 //!   `undo`, then `release-hold`); then the release of the hold (`release_hold`: only the
 //!   instances the pause step paused, each while it shows the revision recorded).
+//! - **The operation while the Runtime is stopped** (Workflow #453 S6; the caller applies the
+//!   stopped rule under the writer lock, `crate::rescue`): the same plan and plan id, the input
+//!   `cold`, and only the items that change (`pack_item`, none waiting for idle instances) and the
+//!   checks after the placement (`post_check`): no `pause` and no `release_hold`. The checks are
+//!   the plan again and `standard-pack check` as above, the live build's check-config of the live
+//!   configuration (`check_config`), and the composition `not_evaluated` (no Runtime to ask); a
+//!   failed check ends the command `post_check_failed` with the items placed and `next` naming
+//!   `undo`, no hold kept.
 //!
 //! Nothing is deleted: every replaced item is kept beside its place, and `undo` puts them back.
 
@@ -916,23 +926,54 @@ pub(crate) fn steps(
     ms: u64,
 ) -> Vec<PlannedStep> {
     let mut steps: Vec<PlannedStep> = vec![(StepKind::Pause, "runtime".to_owned(), pause_intent)];
-    for (index, item) in placement.changes().enumerate() {
-        let dst = PathBuf::from(&item.dst);
-        let placed = item.state != ItemState::Retire;
-        let mut intent = item.clone();
-        intent.zip = placed.then(|| files::plain(&placement.zip));
-        intent.part =
-            placed.then(|| files::plain(&files::with_suffix(&dst, &format!(".new-{ms}.part"))));
-        intent.old = (item.state != ItemState::New)
-            .then(|| files::plain(&files::with_suffix(&dst, &format!(".old-{ms}"))));
-        intent.first = index == 0;
-        steps.push((
-            StepKind::PackItem,
-            item.dst.clone(),
-            serde_json::to_value(&intent).unwrap_or(Value::Null),
-        ));
-    }
+    steps.extend(item_steps(placement, true, ms));
+    steps.push(check_planned(placement, catalog_before));
     steps.push((
+        StepKind::ReleaseHold,
+        "runtime".to_owned(),
+        super::hold::ReleaseIntent::value(reason, false),
+    ));
+    steps
+}
+
+/// Workflow #453 S6: the steps of a placement while no Runtime runs: each item that changes and
+/// the checks after the placement; no hold, so no `pause` and no `release_hold`, and no item
+/// waits for idle instances.
+fn cold_steps(placement: &Placement, ms: u64) -> Vec<PlannedStep> {
+    let mut steps = item_steps(placement, false, ms);
+    steps.push(check_planned(placement, None));
+    steps
+}
+
+/// One `pack_item` step per item that changes, in the plan's order; with `wait_first` the first
+/// waits until the held instances are idle.
+fn item_steps(placement: &Placement, wait_first: bool, ms: u64) -> Vec<PlannedStep> {
+    placement
+        .changes()
+        .enumerate()
+        .map(|(index, item)| {
+            let dst = PathBuf::from(&item.dst);
+            let placed = item.state != ItemState::Retire;
+            let mut intent = item.clone();
+            intent.zip = placed.then(|| files::plain(&placement.zip));
+            intent.part =
+                placed.then(|| files::plain(&files::with_suffix(&dst, &format!(".new-{ms}.part"))));
+            intent.old = (item.state != ItemState::New)
+                .then(|| files::plain(&files::with_suffix(&dst, &format!(".old-{ms}"))));
+            intent.first = wait_first && index == 0;
+            (
+                StepKind::PackItem,
+                item.dst.clone(),
+                serde_json::to_value(&intent).unwrap_or(Value::Null),
+            )
+        })
+        .collect()
+}
+
+/// The `post_check` step of a placement; its intent records `catalog_before`, the catalog read
+/// before the hold (none while no Runtime runs).
+fn check_planned(placement: &Placement, catalog_before: Option<String>) -> PlannedStep {
+    (
         StepKind::PostCheck,
         "runtime".to_owned(),
         serde_json::to_value(CheckIntent {
@@ -943,13 +984,7 @@ pub(crate) fn steps(
             catalog_before,
         })
         .unwrap_or(Value::Null),
-    ));
-    steps.push((
-        StepKind::ReleaseHold,
-        "runtime".to_owned(),
-        super::hold::ReleaseIntent::value(reason, false),
-    ));
-    steps
+    )
 }
 
 /// What a placement records before its first step.
@@ -1025,6 +1060,56 @@ pub(crate) fn open<'h>(
         .progress(1, json!({"deferred": begun.hold.deferred}))
         .map_err(|cause| operation.interrupted(cause))?;
     Ok(operation)
+}
+
+/// Workflow #453 S6: the input of a `pack_place` journal begun while no Runtime ran (`true`).
+const COLD_INPUT: &str = "cold";
+
+/// Workflow #453 S6: opens the placement's operation (`pack_place`) while no Runtime runs, the
+/// caller having applied the stopped rule under the writer lock: the same plan and plan id, the
+/// inputs of a placement without its hold (no `hold`, `known_pauses`, `instances` or `bound`) and
+/// [`COLD_INPUT`], no S0, no guards, and the steps [`cold_steps`].
+pub(crate) fn open_cold<'h>(
+    host: &'h dyn Host,
+    paths: &Paths,
+    loaded: &Loaded,
+    placement: &Placement,
+    initiator: Option<actingcommand_lab_ops::initiator::Initiator>,
+) -> Result<Operation<'h>, Outcome> {
+    let mut inputs = json!({
+        "commit": loaded.state.live.as_ref().map(|live| live.commit.clone()),
+        "game": placement.game,
+        "zip": files::plain(&placement.zip),
+        "zip_sha256": placement.zip_sha256,
+        "config_sha256": loaded.config_sha256,
+    });
+    inputs[COLD_INPUT] = Value::Bool(true);
+    let opening = Opening {
+        kind: OperationKind::PackPlace,
+        initiator,
+        one_way: false,
+        inputs,
+        plan_id: Some(placement.id.clone()),
+        plan: Some(placement.document.clone()),
+        acknowledged: Vec::new(),
+        s0: None,
+        previous: Previous {
+            live: loaded.state.live.as_ref().map(|live| live.commit.clone()),
+            state: None,
+        },
+    };
+    Operation::open(host, paths, opening, |ms| cold_steps(placement, ms))
+}
+
+/// Workflow #453 S6: whether the operation was begun while no Runtime ran (its input
+/// [`COLD_INPUT`]).
+fn is_cold(operation: &Operation<'_>) -> bool {
+    operation
+        .journal()
+        .inputs
+        .get(COLD_INPUT)
+        .and_then(Value::as_bool)
+        == Some(true)
 }
 
 /// The instances the operation's hold took (its pause step's intent).
@@ -1266,10 +1351,60 @@ pub(crate) fn check_step(
             json!({"path": files::plain(&lab)}),
         ));
     }
-    // 3. The new composition: the catalog of the latest evaluation changed, within the
-    // workbench's check interval and the hot idle wait, when the game's rules changed and
-    // (Workflow #453 S5) an instance was bound to the game; with none bound, the catalog read once
-    // and expected unchanged.
+    // 3. Workflow #453 S6: an operation begun while no Runtime ran checks the live configuration
+    // with the live build's check-config, which previews the composition for the configured
+    // instances offline, and leaves the composition itself not evaluated; any other checks the
+    // new composition ([`composition_row`]).
+    let cold = is_cold(operation);
+    let composition = if cold {
+        rows.push(check_config_row(host, &paths, loaded, command));
+        row(
+            "composition",
+            "not_evaluated",
+            json!({"runtime": "stopped"}),
+        )
+    } else {
+        composition_row(host, &paths, loaded, &intent, unbound)
+    };
+    rows.push(composition);
+    let failed = rows
+        .iter()
+        .filter(|row| row["result"] == "fail")
+        .filter_map(|row| row["id"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    let evidence = json!({"game": intent.game, "checks": rows, "failed": failed});
+    if failed.is_empty() {
+        return Ok(StepEnd::Done(Some(evidence)));
+    }
+    let (reason, _) = held_of(operation);
+    let mut members = hold_kept(&paths, reason.as_ref(), false);
+    members.insert("checks".to_owned(), evidence);
+    // Workflow #453 S6: no hold to keep; the items stay placed, and `next` names their `undo`.
+    if cold {
+        members.insert(
+            "next".to_owned(),
+            json!({"undo": ["install", "undo", "--root", paths.plain, "--operation", operation.id()]}),
+        );
+    }
+    Ok(StepEnd::Ends(
+        super::refusal(command, InstallRefusal::PostCheckFailed)
+            .count(failed.len())
+            .game(intent.game),
+        members,
+    ))
+}
+
+/// The row `composition` of the checks after a placement while a Runtime runs: the catalog of the
+/// latest evaluation changed, within the workbench's check interval and the hot idle wait, when
+/// the game's rules changed and (Workflow #453 S5) an instance was bound to the game (`unbound`
+/// false); with none bound, the catalog read once and expected unchanged.
+fn composition_row(
+    host: &dyn Host,
+    paths: &Paths,
+    loaded: &Loaded,
+    intent: &CheckIntent,
+    unbound: bool,
+) -> Value {
     let interval = actingcommand_runtime_config::member(&loaded.config, CHECK_INTERVAL_KEY)
         .and_then(Value::as_u64)
         .or_else(|| {
@@ -1282,7 +1417,7 @@ pub(crate) fn check_step(
         .unwrap_or(0);
     let runtime = host.runtime();
     let since = host.now_unix_ms();
-    let composition = loop {
+    loop {
         let read = runtime.catalog_hash(&loaded.state_root);
         let now = match &read {
             Ok(hash) => hash.clone(),
@@ -1324,26 +1459,44 @@ pub(crate) fn check_step(
             );
         }
         host.pause_ms(POLL_MS);
-    };
-    rows.push(composition);
-    let failed = rows
-        .iter()
-        .filter(|row| row["result"] == "fail")
-        .filter_map(|row| row["id"].as_str().map(str::to_owned))
-        .collect::<Vec<_>>();
-    let evidence = json!({"game": intent.game, "checks": rows, "failed": failed});
-    if failed.is_empty() {
-        return Ok(StepEnd::Done(Some(evidence)));
     }
-    let (reason, _) = held_of(operation);
-    let mut members = hold_kept(&paths, reason.as_ref(), false);
-    members.insert("checks".to_owned(), evidence);
-    Ok(StepEnd::Ends(
-        super::refusal(command, InstallRefusal::PostCheckFailed)
-            .count(failed.len())
-            .game(intent.game),
-        members,
-    ))
+}
+
+/// Workflow #453 S6: the row `check_config` of the checks after a placement begun while no
+/// Runtime ran: the live build's check-config of the live configuration with `--install-root
+/// <root>`, as `config replace` checks a file (`super::config_swap::candidate`). A configuration
+/// it refuses fails with its answer; one it does not answer fails with
+/// `check_config_unanswered`.
+fn check_config_row(
+    host: &dyn Host,
+    paths: &Paths,
+    loaded: &Loaded,
+    command: InstallLocation,
+) -> Value {
+    match programs::check_config(
+        host,
+        &paths.root.join(manifest::Half::Runtime.dir()),
+        &paths.config(),
+        Some(&paths.root),
+        Deadline::check_config(&loaded.settings),
+    ) {
+        Ok(checked) => row(
+            "check_config",
+            if checked.passed() { "pass" } else { "fail" },
+            json!({
+                "install_root": checked.install_root,
+                "answer": crate::cli_line::warning(&checked.received),
+                "packs": checked.summary.packs,
+            }),
+        ),
+        Err(failure) => row(
+            "check_config",
+            "fail",
+            json!({"failure": crate::cli_line::warning(
+                &failure.onto(super::refusal(command, InstallRefusal::CheckConfigUnanswered))
+            )}),
+        ),
+    }
 }
 
 /// `undo` of one `pack_item` step: the placed item set aside as `.rolledback-<ms2>` and the kept
