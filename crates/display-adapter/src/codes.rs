@@ -46,9 +46,11 @@ actingcommand_contract::outcome_vocabulary! {
         TranslationUnsupported => "translation_unsupported",
         /// Workflow #392 DA-2a: the map is not the plain identity (a pure scale) and the input
         /// side does not map the input to the device frame: the step sends nothing and the run
-        /// ends. Workflow #392 DA-3 maps every input under a pure scale except a vertical-brake
-        /// drag, whose brake the contract holds at exactly 100 pixels while the map would change
-        /// it.
+        /// ends. Workflow #392 DA-3 maps every input under a pure scale whose double is a whole
+        /// number (3/2, 2, 5/2, 3, ...) except a vertical-brake drag, whose brake the contract
+        /// holds at exactly 100 pixels while the map would change it; it refuses every input under
+        /// any other pure scale, where a point on a box's edge can map outside the box's device
+        /// box, and a Lab declared operation's input on a frame of another size than its package.
         InputScaleUnsupported => "input_scale_unsupported",
         /// Workflow #392 DA-2a: the game's declaration measures on the safe area and the frame's
         /// geometry has no insets: a handset that declares no device model (Workflow #392

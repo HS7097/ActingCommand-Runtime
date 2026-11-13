@@ -12,11 +12,17 @@
 //! page in their 3x3 top-left block: `home` before any input, `second` after one, `third` after
 //! two, `terminal` after three, so the scale frame's first pixel keeps the page's colour.
 
+use super::gate_392_da2a::{number, text};
 use super::*;
 use actingcommand_contract::{
-    CaptureExtent, DisplayMapKind, InputPathPoint, TaskGeometryObservation, TaskGeometryPhase,
+    CaptureExtent, DisplayMapKind, InputPathPoint, LabOperationEnd, LabOperationStage,
+    TaskGeometryObservation, TaskGeometryPhase,
 };
 use actingcommand_device::{PathDragAction, SegmentedDragAction};
+use actingcommand_ledger_forensics::{
+    ForensicEventFilter, ForensicEventsRequest, ForensicOutput, ForensicReport, ForensicRequest,
+    MAX_FORENSIC_EVENTS,
+};
 use serde_json::json;
 
 const ALIAS: &str = "neutral.instance";
@@ -183,12 +189,13 @@ pub(super) struct EffectRecord {
 }
 
 /// What a run recorded: its receipt, its effect intents and the inputs its input intents name,
-/// in order, and its task geometry records.
+/// in order, and its task geometry records; the sequence of its first record.
 pub(super) struct InputRun {
     pub(super) receipt: RuntimeReceipt,
     pub(super) effects: Vec<EffectRecord>,
     pub(super) inputs: Vec<InputAction>,
     pub(super) geometry: Vec<TaskGeometryObservation>,
+    pub(super) first_sequence: u64,
 }
 
 /// The effect intents, the input intents' inputs and the geometry records of `events`.
@@ -267,11 +274,17 @@ fn run(host: &RuntimeHost, temp: &TempDir, name: &str, package: &[u8]) -> InputR
         })
         .expect("run events");
     let (effects, inputs, geometry) = input_records(&events);
+    let first_sequence = events
+        .iter()
+        .map(PersistedEvent::sequence)
+        .min()
+        .expect("the run's records");
     InputRun {
         receipt,
         effects,
         inputs,
         geometry,
+        first_sequence,
     }
 }
 
@@ -516,4 +529,210 @@ fn da3_identity_a_1280x720_package_on_a_1280x720_device_records_and_sends_as_bef
             .collect::<Vec<_>>(),
         [(TaskGeometryPhase::Initial, None)]
     );
+}
+
+/// Fix 1, work order point 3 (`contracts/display-adapter.md` section 10): a pure scale whose
+/// double is not a whole number is refused up front, whatever the point. DA-2a's package at
+/// 16x12 on a 20x15 device (s = 5/4, which the capture side admits) recognises its home page; its
+/// first input, the point (1, 0), which `round_half_up(1 · 5/4)` would put at (1, 0) inside the
+/// frame, is not sent: the run ends `display_map_unresolved` with `input_scale_unsupported` at
+/// `display_input_map`, the frame 20x15 and the base 16x12. The effect intent keeps the tap
+/// (1, 0), no input intent is written, the device took no input, and the first geometry record
+/// names the pure scale 5/4.
+#[test]
+fn da3_fix1_a_scale_whose_double_is_not_whole_refuses_the_first_input_up_front() {
+    let temp = TempDir::new().expect("tempdir");
+    let (host, state) = device_host(&temp, (20, 15));
+    let run = run(
+        &host,
+        &temp,
+        "five-quarters",
+        &super::gate_392_da2a::package_at(16, 12),
+    );
+    host.close().expect("close runtime host");
+    assert_eq!(
+        run.receipt.state(),
+        RuntimeReceiptState::Failed,
+        "{:?}",
+        run.receipt
+    );
+    let outcome = run.receipt.outcome();
+    assert_eq!(
+        outcome.code().as_str(),
+        "display_map_unresolved",
+        "{outcome:?}"
+    );
+    assert_eq!(
+        text(outcome, "display_problem"),
+        Some("input_scale_unsupported")
+    );
+    assert_eq!(text(outcome, "stage"), Some("display_input_map"));
+    assert_eq!(number(outcome, "frame_width"), Some(20));
+    assert_eq!(number(outcome, "frame_height"), Some(15));
+    assert_eq!(number(outcome, "base_width"), Some(16));
+    assert_eq!(number(outcome, "base_height"), Some(12));
+    assert_eq!(
+        run.effects
+            .iter()
+            .map(|effect| effect.action.clone())
+            .collect::<Vec<_>>(),
+        [InputAction::Tap { x: 1, y: 0 }]
+    );
+    assert!(run.inputs.is_empty(), "{:?}", run.inputs);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0, "no input");
+    assert_eq!(
+        run.geometry
+            .first()
+            .and_then(|record| record.display_map.map(|map| (
+                map.kind,
+                map.scale_num,
+                map.scale_den
+            ))),
+        Some((DisplayMapKind::Scale, 5, 4))
+    );
+}
+
+/// Fix 1, work order point 1 (`contracts/display-adapter.md` section 10): a Lab declared
+/// operation, whose runtime reads no game declaration and whose frames carry no producer
+/// geometry, sends its input only on a frame of its package's size. `op_a` of a 16x9 package taps
+/// the point (1, 0) from `page_a` to `page_b` (the page in the frame's 3x3 top-left block). On a
+/// 16x9 device, the identity, the device receives the literal tap (1, 0) and the operation is
+/// confirmed. On a 32x18 device, a pure scale of 2 that the kernel's frame gate admits, the
+/// operation fails at its input with `display_map_unresolved` (`input_scale_unsupported` at
+/// `display_input_map`, the frame 32x18 and the base 16x9): its one attempt keeps the base tap
+/// (1, 0) and never reached its input, and the device received nothing.
+#[test]
+fn da3_fix1_a_lab_declared_operation_sends_its_base_point_only_on_a_frame_of_its_package() {
+    use super::gate_412_b3_s2 as lab;
+    for k in [1_u32, 2] {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
+        *state
+            .physical_task_extent
+            .lock()
+            .expect("fake physical task extent") = Some((16 * k, 9 * k));
+        let row = (16 * k) as usize;
+        *state.pixel_script.lock().expect("pixel script") = Some(Arc::new(
+            move |_capture: usize, inputs: usize| -> Vec<(usize, [u8; 3])> {
+                let page = if inputs > 0 { lab::PAGE_B } else { lab::PAGE_A };
+                (0..3)
+                    .flat_map(move |line| (0..3).map(move |column| (line * row + column, page)))
+                    .collect()
+            },
+        ));
+        let host = lab::start(
+            &root,
+            FakeProvider::one(lab::ALIAS, instance_id(), Arc::clone(&state)),
+        );
+        let package = lab::write_package(
+            &root,
+            (16, 9),
+            json!({
+                "id": lab::OPERATION,
+                "from": "page_a",
+                "to": "page_b",
+                "click": {"kind": "point", "x": 1, "y": 0},
+                "unguarded_trusted_coordinate": true,
+                "retryable": false
+            }),
+        );
+        let client = lab::lab_client(&root);
+
+        let verified = lab::run_operation(&client, &package, None);
+
+        let record = &verified.operation().record;
+        let result = record
+            .operation_result
+            .as_ref()
+            .expect("the declared operation's result");
+        let [attempt] = result.attempts.as_slice() else {
+            panic!("{k}: one attempt, got {:?}", result.attempts);
+        };
+        assert_eq!(attempt.action, InputAction::Tap { x: 1, y: 0 }, "{k}");
+        let received = state
+            .input_actions
+            .lock()
+            .expect("fake input actions")
+            .clone();
+        if k == 1 {
+            assert!(record.failure.is_none(), "{:?}", record.failure);
+            assert_eq!(result.end, LabOperationEnd::Confirmed);
+            assert_eq!(received, [InputAction::Tap { x: 1, y: 0 }]);
+        } else {
+            let failure = record.failure.as_ref().expect("the operation failed");
+            assert_eq!(failure.code, "display_map_unresolved", "{failure:?}");
+            assert_eq!(failure.stage, LabOperationStage::Input, "{failure:?}");
+            assert_eq!(result.end, LabOperationEnd::Failed);
+            let outcome = verified.receipt().outcome();
+            assert_eq!(outcome.code().as_str(), "display_map_unresolved");
+            assert_eq!(
+                text(outcome, "display_problem"),
+                Some("input_scale_unsupported")
+            );
+            assert_eq!(text(outcome, "stage"), Some("display_input_map"));
+            assert_eq!(number(outcome, "frame_width"), Some(32));
+            assert_eq!(number(outcome, "frame_height"), Some(18));
+            assert_eq!(number(outcome, "base_width"), Some(16));
+            assert_eq!(number(outcome, "base_height"), Some(9));
+            assert!(!attempt.input_returned, "the tap never reached its input");
+            assert!(received.is_empty(), "{received:?}");
+            assert_eq!(state.input_count.load(Ordering::Acquire), 0, "no input");
+        }
+        drop(client);
+        host.close().expect("close host");
+    }
+}
+
+/// Fix 1, work order point 2 (`contracts/display-adapter.md` section 10): the task evidence
+/// pairs every input of a scaled run with its effect intent. The three-input package on a 16x9,
+/// a 32x18 and a 48x27 device, read back as `actingledger task-evidence` reads it from the run's
+/// first record: each of the tap, the swipe and the path drag relates `linked` to its step's
+/// effect intent (under a scale the effect intent's base input, mapped by the run's map, is the
+/// input sent; under the identity the two are the same bytes), and no `source_mismatch` is
+/// reported.
+#[test]
+fn da3_fix1_the_task_evidence_pairs_every_scaled_input_with_its_effect_intent() {
+    for k in [1_u32, 2, 3] {
+        let temp = TempDir::new().expect("tempdir");
+        let (host, _state) = device_host(&temp, (16 * k, 9 * k));
+        let run = run(&host, &temp, "three-inputs", &three_inputs_package());
+        host.close().expect("close runtime host");
+        assert_eq!(
+            run.receipt.state(),
+            RuntimeReceiptState::Completed,
+            "{k}: {:?}",
+            run.receipt
+        );
+        let request = ForensicRequest::task_evidence(
+            temp.path(),
+            ForensicEventsRequest::new(
+                ForensicEventFilter::default(),
+                run.first_sequence - 1,
+                None,
+                MAX_FORENSIC_EVENTS,
+            )
+            .expect("a task evidence page"),
+        );
+        let ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) =
+            actingcommand_ledger_forensics::run(request).expect("the task evidence")
+        else {
+            panic!("{k}: a task evidence report");
+        };
+        assert_eq!(
+            report
+                .inputs
+                .iter()
+                .map(|input| input.source_step.state)
+                .collect::<Vec<_>>(),
+            ["linked", "linked", "linked"],
+            "{k}: {:?}",
+            report.gaps
+        );
+        assert!(
+            !report.gaps.contains(&"source_mismatch"),
+            "{k}: {:?}",
+            report.gaps
+        );
+    }
 }

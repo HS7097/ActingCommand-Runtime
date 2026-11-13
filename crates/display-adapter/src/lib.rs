@@ -368,6 +368,13 @@ impl Scale {
         self.num == self.den
     }
 
+    /// Workflow #392 DA-3 fix 1: whether `2 · s` is a whole number. `s` is reduced, so that is a
+    /// denominator of 1 or 2: exactly the scales under which every base point of every base box
+    /// maps inside that box's inward device box ([`DisplayMap::admit_input`]).
+    pub const fn doubled_is_whole(self) -> bool {
+        self.den <= 2
+    }
+
     fn reduced(num: u32, den: u32) -> Self {
         let divisor = greatest_common_divisor(num, den).max(1);
         Self {
@@ -906,15 +913,22 @@ impl DisplayMap {
     /// `action` under this map. The input side sends under the maps the capture side admits
     /// (section 8), the identity and a pure scale; under any other map it refuses with the token
     /// the frame gate gives that map: a turned frame `orientation_mismatch`, a translation or a
-    /// cropped frame `translation_unsupported` (until DA-2b admits them). A vertical-brake drag
-    /// whose brake the map changes (a scale other than 1) is refused `input_scale_unsupported`:
-    /// the contract holds that drag's brake at exactly 100 pixels. Every refusal is at stage
-    /// `display_input_map`, with the frame's and the base's sizes.
+    /// cropped frame `translation_unsupported` (until DA-2b admits them). Workflow #392 DA-3 fix
+    /// 1: of the pure scales it sends under those whose double is a whole number
+    /// ([`Scale::doubled_is_whole`]), the scales under which every base point of every base box
+    /// lands inside that box's inward device box; any other pure scale refuses every input
+    /// `input_scale_unsupported`, whatever its point, so the refusal never depends on a draw. A
+    /// vertical-brake drag whose brake the map changes (a scale other than 1) is refused
+    /// `input_scale_unsupported` too: the contract holds that drag's brake at exactly 100
+    /// pixels. Every refusal is at stage `display_input_map`, with the frame's and the base's
+    /// sizes.
     pub fn admit_input(&self, action: &InputAction) -> Result<(), DisplayMapUnresolved> {
         let problem = if self.turn.is_some() {
             Some(DisplayProblem::OrientationMismatch)
         } else if self.kind == DisplayMapKind::Translate || self.crop.is_some() {
             Some(DisplayProblem::TranslationUnsupported)
+        } else if !self.scale.doubled_is_whole() {
+            Some(DisplayProblem::InputScaleUnsupported)
         } else if let InputAction::SingleTouchDragWithVerticalBrakeV1 {
             brake_distance_px, ..
         } = action

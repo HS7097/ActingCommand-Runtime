@@ -11,7 +11,7 @@ onto whatever frame the device delivers. This document grows slice by slice:
 | DA-2a | the capture side for the identity and a pure scale: the frame gate, the scale frame, evidence out of the adapter, the run's declaration, rebuilds and the geometry records | section 8 |
 | DA-2b | translations and cropped frames (region mapping in recognition), the nearest correction window, the `anchor` member, the refusal of crossing positional boxes | later |
 | DA-4b-D | the declared safe area: declaration files of device models, an instance's model setting, the live change (Alice's ruling 69; it replaces DA-4b, which read a device's cutout) | section 9 |
-| DA-3 | the input side: every click and drag kind, `display_map_stale`, the crop offset and the turn undone for input | section 10, built in 0.12.59 |
+| DA-3 | the input side: every click and drag kind, `display_map_stale`, the crop offset and the turn undone for input | section 10, built in 0.12.59 for the identity and the pure scales whose double is a whole number (3/2, 2, 5/2, 3, …); every other pure scale waits for the slice that draws the input points in the device box |
 | DA-5 | task schema `0.10` and box references; the Lab | later |
 
 From DA-2a every frame a run recognises passes the crate's map (section 8), and from DA-3 every
@@ -154,8 +154,10 @@ The crate's registry is `crates/display-adapter/src/codes.rs`, its fragment
 - Vocabulary `display_problem`: `layout_undeclared`, `scale_below_base`, `collapsed`,
   `outside_frame`, `straddles_zones`, `orientation_mismatch` (only a cause under the run's own
   end from DA-2b on); DA-2a adds `translation_unsupported`, `input_scale_unsupported` and
-  `safe_area_unavailable` (section 8; DA-3 narrows `input_scale_unsupported` to a vertical-brake
-  drag, section 10); DA-4b-D adds `safe_area_declaration_invalid`,
+  `safe_area_unavailable` (section 8; DA-3 narrows `input_scale_unsupported` to a pure scale
+  whose double is not a whole number, a vertical-brake drag under a scale, and a Lab declared
+  operation's input on a frame of another size than its package, section 10); DA-4b-D adds
+  `safe_area_declaration_invalid`,
   `safe_area_model_repeated`, `safe_area_model_undeclared` and `safe_area_form_undeclared`, with
   the optional values `path`, `other_path`, `json_pointer` and `config_key` (section 9.4).
 - Locations (the value of `stage`): `display_map_build`, `display_region_map`,
@@ -216,7 +218,8 @@ DA-3.
 - **Input.** Before DA-3 the input side mapped nothing, so the host made an input only on a frame
   whose map was the plain identity, and under a pure scale the step sent nothing and the run ended
   `display_map_unresolved` (`input_scale_unsupported`, stage `display_input_map`). DA-3 removes
-  that refusal: an input under a pure scale is mapped (section 10).
+  that refusal for the pure scales whose double is a whole number: their inputs are mapped
+  (section 10).
 - **The safe area.** No capture backend reads insets; a frame's insets are declared (section 9).
   A declaration that measures on the safe area on a frame without insets (a handset that declares
   no device model) ends the run with `contained_task_geometry_unavailable` (`display_problem`
@@ -367,38 +370,62 @@ any model.
 
 Workflow #392 DA-3 (0.12.59), model 392 v1.2 §0.2 C2, C4 to C6, §4.6, §4.7, §6, §9; the
 coordinator's work order narrows the slice to the maps the capture side admits (section 8): the
-identity and a pure scale.
+identity and a pure scale. Its fix 1 (the coordinator's rulings after the independent review)
+narrows the pure scales to those whose double is a whole number, routes the Lab's declared
+operations through the same refusal, and pairs the task evidence in one coordinate system.
 
 - **One exit.** Every input of a run (its own steps and its layers', a select's candidate, a
   linear step, a scan's moves and page flips, a store step's tap) leaves for the device at one
   place, the host's input of the run, after the input prerequisite. The kernel makes, checks and
-  records every input in base pixels as before.
+  records every input in base pixels as before. A Lab declared operation's input, which the
+  kernel makes in base pixels too, leaves at the Lab's own exit under the rule below ("The Lab's
+  declared operations").
 - **The identity.** Under the plain identity (section 8) the input leaves exactly as the kernel
   made it: nothing is mapped, kept, read or recorded beyond what was before. What remains on the
   path is the check DA-2a made, whether the run's map is the plain identity, and the same check
-  where the step's effect intent is recorded.
-- **The maps it sends under.** The identity and a pure scale (`DisplayMap::admit_input`). Under
-  any other map the input is refused before anything is sent, with the token the frame gate gives
-  that map, `display_map_unresolved` at stage `display_input_map` with the frame's and the base's
-  sizes: a translation or a cropped frame `translation_unsupported`, a turned frame
+  where the step's effect intent is recorded; on a Lab declared operation's path, one comparison
+  of the frame's size with the package's base.
+- **The maps it sends under.** The identity and a pure scale whose double is a whole number,
+  `s = num / den` reduced with `den` 1 or 2 (3/2, 2, 5/2, 3, …; `DisplayMap::admit_input`).
+  Under any other map the input is refused before anything is sent, with the token the frame gate
+  gives that map, `display_map_unresolved` at stage `display_input_map` with the frame's and the
+  base's sizes: a translation or a cropped frame `translation_unsupported`, a turned frame
   `orientation_mismatch`. The capture side refuses such frames first, so no run reaches this
-  refusal before DA-2b. Under a pure scale a `single_touch_drag_with_vertical_brake_v1` is refused
-  `input_scale_unsupported`: its brake would be `round_half_up(100 · s)` on the device, and the
-  contract holds that drag's brake at exactly 100 pixels (`InputAction` and the device layer).
-- **Stale.** An input decided on a frame of another size than the frame the run's map was built
-  for (the size its frame reference names) is `display_map_stale` (warning, stage
-  `display_input_map`; `DisplayMap::current_for`): nothing is sent, and the run ends with it.
-  Under the identity and a pure scale a frame's size decides its map, and the host rebuilds the map
-  on every frame whose geometry changed (section 8), so this is a frame the map moved past.
+  refusal before DA-2b. A pure scale whose double is not a whole number (5/4, 4/3, 8/5, 9/4, …),
+  which the capture side admits and recognises, is refused `input_scale_unsupported` at the run's
+  first input, whatever its point, before anything is sent; the run ends with it, so the same
+  device always ends the same run the same way. Such a scale waits for the slice that draws the
+  input points in the device box.
+- **The vertical brake.** A `single_touch_drag_with_vertical_brake_v1` is the one input kind a
+  scaled device cannot use: under any scale other than 1 it is refused `input_scale_unsupported`.
+  Sending the base's brake of 100 pixels on a larger frame would be a different gesture, a
+  shorter brake than the package declared; scaling it, `round_half_up(100 · s)`, would change what
+  the interface accepts, since `InputAction` and the device layer hold that drag's brake at
+  exactly 100 pixels.
+- **Stale.** The host reports `display_map_stale` (warning, stage `display_input_map`;
+  `DisplayMap::current_for`) in exactly one case: an input whose frame reference names a frame of
+  another size than the frame the run's map was last built for. Nothing is sent, and the run ends
+  with it. The input prerequisite already requires the run's last frame to be the frame its
+  geometry and map were taken on, and the map is rebuilt on every frame whose geometry changed
+  (section 8), so the code reports a stale map only for an input decided on an earlier frame than
+  the last one taken when the two differ in size. A change of the display's geometry after the
+  last frame was taken (a rotation, a resize before the input) is not detected in this slice: the
+  input leaves under the map of the last frame. That detection belongs to the rotation
+  verification slice.
 - **Points.** Each point goes into the scale frame by the anchor of its own zone (outside it:
   `outside_frame`), then to the device frame `round_half_up(v · s)` (section 5). It must lie in the
   device frame and, when the step drew it in a box, in the device box that box maps to, rounded
   inward: the step's effect intent names those boxes (its sampling regions: a tap's or a long
   press's one, a drag's press and end). A box with no whole device pixel is `collapsed`; a point
   outside the device frame or its device box is `contained_task_input_out_of_bounds`. A point is
-  never clamped, and every refusal sends nothing. At a scale of 3/2, 2 or 3 every point drawn in
-  its box lands in its device box, the frame's last column and row included (1279 at 3/2 is 1919);
-  at another scale a point on a box's edge can be refused.
+  never clamped, and every refusal sends nothing. Under the scales the input side sends under no
+  legal point meets either refusal, the frame's last column and row included (1279 at 3/2 is
+  1919): for a box `a ≤ v < b` the point `⌊v · s + ½⌋` lies in `⌈a · s⌉ .. ⌊b · s⌋` for every
+  `v` exactly when the fraction of every `a · s` is 0 or at least ½, which holds over a base
+  exactly when `den ≤ 2` (`a · num` takes every residue modulo `den`), and the upper edge holds
+  for every `s ≥ 3/2`. Under any other pure scale a point on a box's edge would be refused
+  depending on which point was drawn, and `contained_task_input_out_of_bounds` is a declaration
+  error that must be the same on every run; hence the up-front refusal above.
 - **Kinds.** A tap and a long press map their point; a swipe its press and its end; a drag with a
   pause and a brake its press and end, and its brake's cross `round_half_up(|d| · s)` with its
   sign; a path drag its own box (inward) and every point, each inside that box. Durations, holds,
@@ -407,7 +434,28 @@ identity and a pure scale.
   input, its sampling regions (the base boxes) and the device frame's size (`frame_extent`). The
   input intent records what is sent, in device pixels: the input of its provenance and its
   execution plan. No record gains a member; a reader that needs the scale finds it in the run's
-  `task.geometry_observed` record (`display_map`, section 8).
+  `task.geometry_observed` record (`display_map`, section 8). The Lab's `run evidence` reads them
+  so: a step's `action` (its `point` and its `rect`) is the effect intent's, in base pixels, and a
+  recognised target's `box` is the recognition record's, in device-frame pixels (section 8,
+  "Evidence").
+- **The task evidence.** `actingledger task-evidence` pairs an input intent with the effect intent
+  of its step in one coordinate system: with the run's last `task.geometry_observed` record before
+  the effect intent naming a map (its `display_map`: never under the plain identity), the effect
+  intent's input is converted by the product's own functions (`DisplayMap::admit_input`,
+  `device_input`, display coordinates, the effect intent's sampling regions as its boxes) on the
+  map of that record's base and the effect intent's `frame_extent`, with the host's rounding, and
+  compared with the input sent; an input the product would have refused pairs with nothing
+  (`source_mismatch`). Without such a record, under the plain identity, the comparison is the
+  effect intent's input itself, byte for byte, as before this slice. The effect intent records no
+  base, so a page that does not hold the run's geometry record before the effect intent compares
+  as under the identity.
+- **The Lab's declared operations.** A Lab declared operation's runtime reads no game
+  declaration, and its frames, read back from their pictures, carry no producer geometry: it
+  cannot know the map a run's input leaves under. It sends an input only on a frame of its
+  package's size, as the kernel made it; on any other frame the input is refused before anything
+  is sent, `display_map_unresolved` (`input_scale_unsupported`, stage `display_input_map`, the
+  frame's and the base's sizes), and only that operation fails, at its `input` stage. A base
+  coordinate never leaves for a scaled frame unchanged.
 - **The crop offset and the turn undone.** `DisplayMap::device_input` also adds a cropped frame's
   offset for a backend that takes display coordinates (`InputCoordinates::Display`) and undoes a
   turned frame's quarter turn for one that takes frame coordinates
@@ -420,4 +468,6 @@ identity and a pure scale.
   drag generated again in its device box (the host maps the points the kernel generated in the
   base box); a landing history kept per device box (it is kept per base box, which under one map
   names one device box); a step that takes its next frame after `display_map_stale` within the
-  run; the Lab's own inputs (DA-5).
+  run; a geometry change after the last frame was taken (the rotation verification slice); the
+  pure scales whose double is not a whole number (the slice that draws the points in the device
+  box); a Lab declared operation on a scaled frame, and the Lab's own inputs (DA-5).

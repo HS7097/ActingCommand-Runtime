@@ -76,6 +76,44 @@ fn cropped() -> DisplayObservation {
     }
 }
 
+/// `round_half_up(v · num / den)` for `v ≥ 0`, by hand: `⌊(2 · v · num + den) / (2 · den)⌋`.
+fn nearest(value: i64, num: i64, den: i64) -> i64 {
+    (2 * value * num + den) / (2 * den)
+}
+
+/// `⌈v · num / den⌉` for `v ≥ 0`, by hand.
+fn up(value: i64, num: i64, den: i64) -> i64 {
+    (value * num + den - 1) / den
+}
+
+/// `⌊v · num / den⌋` for `v ≥ 0`, by hand.
+fn down(value: i64, num: i64, den: i64) -> i64 {
+    value * num / den
+}
+
+/// Every box of a `width` x `height` base, each with every point in it.
+fn every_box(width: i64, height: i64) -> Vec<(Rect, Vec<(i64, i64)>)> {
+    let mut boxes = Vec::new();
+    for left in 0..width {
+        for right in left + 1..=width {
+            for top in 0..height {
+                for bottom in top + 1..=height {
+                    let points = (left..right)
+                        .flat_map(|x| (top..bottom).map(move |y| (x, y)))
+                        .collect();
+                    boxes.push((rect(left, top, right - left, bottom - top), points));
+                }
+            }
+        }
+    }
+    boxes
+}
+
+/// A base or device coordinate of a small test frame as an input's `i32`.
+fn coordinate(value: i64) -> i32 {
+    i32::try_from(value).expect("a small test coordinate")
+}
+
 /// A 720x1280 frame of a 1280x720 display at 90°, for a 1280x720 package: turned upright.
 fn turned() -> DisplayObservation {
     DisplayObservation {
@@ -150,6 +188,92 @@ fn da3_points_land_in_the_device_frame_and_in_their_device_box_at_the_edges() {
     let outside = unresolved(sent(&half, &tap(1280, 0), &[]));
     assert_eq!(outside.problem, DisplayProblem::OutsideFrame);
     assert_eq!(outside.stage, DisplayLocation::InputMap);
+}
+
+/// Fix 1, work order point 3 (`contracts/display-adapter.md` section 10): the input side sends
+/// under a pure scale `s = num / den` (reduced) only when `2 · s` is a whole number, `den` 1 or
+/// 2, because exactly then every base point of every base box lands inside that box's inward
+/// device box.
+///
+/// Why (a box spans `a ≤ v < b`, `s ≥ 1`): the point goes to `⌊v · s + ½⌋`, the box to
+/// `⌈a · s⌉ .. ⌊b · s⌋`. The low edge holds for every `v ≥ a` exactly when `⌊a · s + ½⌋ ≥
+/// ⌈a · s⌉`, that is when the fraction of `a · s` is 0 or at least ½; as `a` runs over the base
+/// (`den` divides its sides), `a · num` takes every residue modulo `den`, so the fraction takes
+/// every `k / den`, and none lies strictly between 0 and ½ exactly when `den ≤ 2`. The high edge,
+/// `⌊(b − 1) · s + ½⌋ < ⌊b · s⌋`, holds for every `b` once `s ≥ 3/2`, which every such scale
+/// above 1 is; the frame's bound is the whole base box's.
+///
+/// Over an 8x4 base, for the scales 1, 3/2, 2, 5/2, 3, 7/2 and 4, every point of every box is
+/// admitted and sent at `⌊(2 · v · num + den) / (2 · den)⌋`, which lies in `⌈x · s⌉ ..
+/// ⌊(x + w) · s⌋` (both worked out here, not by the code under test). For 4/3, 5/4, 8/5 and 9/4
+/// the same enumeration finds a point its box cannot keep. At 5/4 the input side refuses every
+/// point of the base up front, `input_scale_unsupported` at `display_input_map` with the frame's
+/// and the base's sizes, whatever the point.
+#[test]
+fn da3_fix1_the_input_side_sends_under_a_scale_only_when_its_double_is_whole() {
+    for (num, den) in [
+        (1_u32, 1_u32),
+        (3, 2),
+        (2, 1),
+        (5, 2),
+        (3, 1),
+        (7, 2),
+        (4, 1),
+    ] {
+        let map = map((8, 4), plain(8 * num / den, 4 * num / den), None);
+        assert!(map.scale().doubled_is_whole(), "{num}/{den}");
+        let (n, d) = (i64::from(num), i64::from(den));
+        for (input_box, points) in every_box(8, 4) {
+            let (left, top) = (up(input_box.x, n, d), up(input_box.y, n, d));
+            let (right, bottom) = (
+                down(input_box.right(), n, d),
+                down(input_box.bottom(), n, d),
+            );
+            for (x, y) in points {
+                let base = tap(coordinate(x), coordinate(y));
+                let (device_x, device_y) = (nearest(x, n, d), nearest(y, n, d));
+                assert!(
+                    (left..right).contains(&device_x) && (top..bottom).contains(&device_y),
+                    "{num}/{den}: ({x}, {y}) of {input_box:?} by hand"
+                );
+                assert_eq!(map.admit_input(&base), Ok(()), "{num}/{den}");
+                assert_eq!(
+                    sent(&map, &base, &[input_box]),
+                    Ok(tap(coordinate(device_x), coordinate(device_y))),
+                    "{num}/{den}: ({x}, {y}) of {input_box:?}"
+                );
+            }
+        }
+    }
+    for (base, num, den) in [
+        ((6_u32, 3_u32), 4_u32, 3_u32),
+        ((8, 4), 5, 4),
+        ((10, 5), 8, 5),
+        ((8, 4), 9, 4),
+    ] {
+        let map = map(base, plain(base.0 * num / den, base.1 * num / den), None);
+        assert_eq!(map.kind(), DisplayMapKind::Scale, "{num}/{den}");
+        assert!(!map.scale().doubled_is_whole(), "{num}/{den}");
+        let kept = every_box(i64::from(base.0), i64::from(base.1))
+            .into_iter()
+            .all(|(input_box, points)| {
+                points.into_iter().all(|(x, y)| {
+                    sent(&map, &tap(coordinate(x), coordinate(y)), &[input_box]).is_ok()
+                })
+            });
+        assert!(!kept, "{num}/{den}: some point lies outside its device box");
+    }
+    let quarters = map((8, 4), plain(10, 5), None);
+    for x in 0..8 {
+        for y in 0..4 {
+            let refused = quarters
+                .admit_input(&tap(x, y))
+                .expect_err("a scale of 5/4 is refused up front");
+            assert_eq!(refused.problem, DisplayProblem::InputScaleUnsupported);
+            assert_eq!(refused.stage, DisplayLocation::InputMap);
+            assert_eq!((refused.frame, refused.base), (extent(10, 5), extent(8, 4)));
+        }
+    }
 }
 
 /// Work order point 5 at the pure level: under the identity every kind of input, with or without

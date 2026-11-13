@@ -11,6 +11,9 @@ publish = false
 [dependencies]
 actingcommand-contract = { workspace = true }
 actingcommand-artifact-store = { path = "../artifact-store", default-features = false, features = ["evidence-archive"] }
+# Workflow #392 DA-3 fix 1: the task evidence pairs an input with its effect intent through the
+# product's own input conversion.
+actingcommand-display-adapter = { workspace = true }
 actingcommand-ledger = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
