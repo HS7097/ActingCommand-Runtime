@@ -218,7 +218,7 @@ naming this file.
   run's `pid` and `log` (where its output goes, `install\detached-<ms>.log` under the root), and
   `next` naming `op status`. It does not wait for the operation and says nothing of how it ends.
   A refusal before the start (an unfinished operation, a root whose installation state cannot
-  be read) answers at once, and nothing starts. With `plan` true the call answers the plan only,
+  be read, no `actinglab.exe` beside the server to run it) answers at once, and nothing starts. With `plan` true the call answers the plan only,
   in the server's process, and nothing starts.
 - **Follow it with `ac_op_status`.** Without arguments it answers the unfinished operation
   (`unfinished`, its `operation_id` among its members) while the detached run works, and the last

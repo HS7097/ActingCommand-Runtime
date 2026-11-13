@@ -290,7 +290,8 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   programs MCP itself runs. Since Workflow #434 LAB-6S0 (0.12.58; the coordinator's ruling of
   2026-11-13 on board #434, not the owner's words) `actinglab-mcp` serves `ac_deploy` and
   `ac_rollback` on Windows (`convert` is not offered: its source is not built). The front gives
-  the row's `detach` true, and the module starts the `actinglab.exe` beside the server with the
+  the row's `detach` true, and the module starts the `actinglab.exe` beside the server (one that
+  is not there is refused before the start, with its path) with the
   row's words, the initiator `Lab-MCP` and the marker of section 4.2, and answers at once:
   `detached`, the detached run's `pid` and `log`, and `next` naming `op status`, which follows the
   operation (its id in `unfinished` while it runs, in `last_operations` once it ended, its journal

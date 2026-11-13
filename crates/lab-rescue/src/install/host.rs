@@ -299,6 +299,13 @@ impl Host for SystemHost {
     ) -> Result<u32, Outcome> {
         let program = running_program()?
             .with_file_name(format!("{LAB_PROGRAM}{}", std::env::consts::EXE_SUFFIX));
+        // The start itself cannot tell: the shell it creates would answer a pid, write "not found"
+        // into the log and run nothing. So a program that is not there is refused here, before
+        // anything starts, and the caller is never told "detached" of a run that cannot begin.
+        if !program.is_file() {
+            let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+            return Err(super::files::os_failure(&program, &missing, IoOp::Open));
+        }
         detach_with_wmi(&program, arguments, environment, directory, log)
     }
 }
