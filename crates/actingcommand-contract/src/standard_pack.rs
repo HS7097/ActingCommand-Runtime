@@ -70,7 +70,8 @@ crate::outcome_vocabulary! {
     /// What is wrong with a standard-pack root file (vocabulary `standard_pack_problem`,
     /// Workflow #373 NAV-6) or, since Workflow #357 DB-1, a table file of the root's `tables/`
     /// (M-357a v1.1 §6.2), or, since Workflow #407 LOAD-1, a pack's loading copy, or, since
-    /// Workflow #444 NOTICES-1, a bundle's notices directory ([`crate::standard_pack_notices`]).
+    /// Workflow #444 NOTICES-1, a bundle's notices directory ([`crate::standard_pack_notices`]),
+    /// or, since Workflow #451 LOAD-P, a bundle zip's loading templates directory.
     pub enum StandardPackProblem: "standard_pack_problem" {
         /// The file is not JSON of the file's shape and version (for a table: not canonical
         /// JSON either, that is with a floating point number, an unsafe integer or a duplicate
@@ -215,6 +216,10 @@ crate::outcome_vocabulary! {
         /// NOTICES-1: a bundle carries the notices directory and declares a `package` maximum
         /// below 10. Registered with the other six; NOTICES-2 is its first user.
         NoticeUndeclared => "notice_undeclared",
+        /// Workflow #451 LOAD-P (since 0.12.59): a bundle zip that carries the loading templates
+        /// directory `loading/` lists a pack named `loading` in any ASCII case; placed, the two
+        /// would share one folder of the game root.
+        LoadingPackName => "loading_pack_name",
     }
 }
 

@@ -959,14 +959,33 @@ data files beside its package directories, one directory per game below the conf
   "Loading pages"). Optional; laid with its `loading/` templates by `package bundle --loading`, for
   audit only. What runs is each pack's own copy (`resources/loading.json`), which the pack's
   version freezes. Only `actinglab standard-pack check` reads the file (every package's copy is
-  checked against it, and without it no package may carry a copy), and from LOAD-2 `actinglab
-  resource validate` of the repository's file and of a pack's copy. The Runtime's root reader, its
+  checked against it, and without it no package may carry a copy), from LOAD-2 `actinglab
+  resource validate` of the repository's file and of a pack's copy, and from 0.12.59 the
+  installer's `place` for the templates it declares (below). The Runtime's root reader, its
   startup, a run's preparation, the policy crate and check-config never read it; the pack loader
   compiles a pack's copy (LOAD-2, since 0.12.37) and no run waits on it yet: **a pack that carries
-  one needs a Runtime that reads it, so the Runtime is deployed first, then the packs.** The
-  installed `loading/` directory makes a
-  package id `loading` collide with it; the bundle index does not reserve that name in this
-  release, so a resource repository must not name a pack `loading`.
+  one needs a Runtime that reads it, so the Runtime is deployed first, then the packs.**
+  **The installer's `place` places the `loading/` directory from 0.12.59** (Workflow #451 LOAD-P;
+  `v012-register.md` §1.338; [install-cli.md](install-cli.md), "The Lab's rescue module"). It
+  takes a bundle zip's members `loading/<file>` exactly for the templates the zip's own
+  `loading.json` declares (`parse_standard_pack_loading`, each template `loading/<file>.png`, the
+  member of the same name), in the plan, before the hold and before any write: a `loading/` member
+  the file does not declare, a deeper path and any `loading/` member of a zip without
+  `loading.json` are refused `pack_invalid` naming the member; a template the file declares and the
+  zip lacks is refused caused by `standard_pack_root_invalid` `loading_template_invalid`, `path` the
+  missing member below the zip. It reads the declaration and the names only: what a template shows
+  stays `standard-pack check`'s, which `place`'s `post_check` runs on the placed game root. The
+  directory is one item of kind `loading`, placed after the packs and before the root files, and
+  set aside as `loading.old-<ms>` when the game root holds one and the zip carries none (not when a
+  pack of the bundle is named `loading`); `undo` puts back what was there. No `package` revision
+  moves: the bundle format has carried the directory since LOAD-1. An installer before 0.12.59
+  refuses a zip that carries it at its layout check, naming the first `loading/` member, before
+  anything is paused or written. The installed `loading/` directory makes a package id `loading`
+  collide with it; the bundle index does not reserve that name (`reserved_package_id` is
+  unchanged), so a resource repository must not name a pack `loading` in any ASCII case. From
+  0.12.59 `place` refuses a bundle that carries the directory and lists such a pack
+  (`standard_pack_root_invalid`, `loading_pack_name`, `path` `<zip>\bundle.json`, with its
+  `package_id`); a bundle without the directory may still name a pack so.
 - **Notices** (Workflow #444 NOTICES-1, since 0.12.58; `v012-register.md` §1.334). A bundle zip
   may carry one directory `notices/` at its root, beside `packs/`, holding the texts a package's
   author must ship with it; the installer places it in the game root as it is, byte for byte. It
