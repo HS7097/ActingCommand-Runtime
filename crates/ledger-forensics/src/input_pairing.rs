@@ -14,6 +14,10 @@
 //!
 //! Fix 2: the run's geometry record is looked up in the whole snapshot, not only in the page
 //! being judged, so a scaled run read in pages pairs as it does when read whole.
+//!
+//! Workflow #392 DA-3b: under a scale the product sends a vertical-brake drag as a drag with a
+//! pause and a brake, so such a step's effect intent names the package's kind and its input
+//! intent the kind sent; the same conversion pairs them, and nothing here reads the kind.
 
 use actingcommand_contract::{
     CaptureExtent, EventPayload, InputAction, InputSamplingEvidence, RunId, TaskGeometryDisplayMap,
@@ -316,6 +320,138 @@ mod tests {
                 &tap(10, 6),
                 &tap(5, 3),
                 Some(&pressed),
+                frame_extent,
+                None
+            ));
+        }
+    }
+
+    /// The vertical-brake drag the kernel makes from the press (`x1`, `y1`) to the corner (`x2`,
+    /// `y2`), its brake of 100 straight above the corner, with the interface's times and slopes.
+    fn vertical(x1: i32, y1: i32, x2: i32, y2: i32) -> InputAction {
+        InputAction::SingleTouchDragWithVerticalBrakeV1 {
+            x1,
+            y1,
+            x2,
+            y2,
+            x3: x2,
+            y3: y2 - 100,
+            horizontal_duration_ms: 200,
+            corner_hold_ms: 150,
+            brake_distance_px: 100,
+            brake_duration_ms: 200,
+            slope_in: 2,
+            slope_out: 0,
+        }
+    }
+
+    /// A drag with a pause and a brake through the press, the corner and the brake's end, with the
+    /// vertical-brake drag's three times: drag 200 ms, pause 150 ms, brake 200 ms.
+    fn paused((x1, y1): (i32, i32), (x2, y2): (i32, i32), (x3, y3): (i32, i32)) -> InputAction {
+        InputAction::SingleTouchDragWithPauseAndBrakeV1 {
+            x1,
+            y1,
+            x2,
+            y2,
+            drag_duration_ms: 200,
+            pause_ms: 150,
+            x3,
+            y3,
+            brake_duration_ms: 200,
+        }
+    }
+
+    /// Workflow #392 DA-3b (the coordinator's work order, point 2): a scaled run's vertical-brake
+    /// step pairs, its effect intent's drag converted by the product's own function. At s = 2
+    /// (320x180 on 640x360) the drag from (300, 150), drawn in (300, 150, 1, 1), to the corner
+    /// (20, 150), drawn in (20, 150, 1, 1), was sent as the drag with a pause and a brake
+    /// (600, 300) → (40, 300) → (40, 100), its brake 200; at s = 3/2 (1280x720 on 1920x1080) the
+    /// drag (201, 601) → (901, 501), drawn in (180, 580, 40, 40) and (880, 480, 40, 40), as
+    /// (302, 902) → (1352, 752) → (1352, 602), its brake 150 (301.5, 901.5, 1351.5 and 751.5 up).
+    #[test]
+    fn da3b_a_scaled_vertical_brake_step_pairs_with_the_drag_sent() {
+        assert!(sent_as_asked(
+            &paused((600, 300), (40, 300), (40, 100)),
+            &vertical(300, 150, 20, 150),
+            Some(&sampling(&[(300, 150, 1, 1), (20, 150, 1, 1)])),
+            Some(extent(640, 360)),
+            Some(&scale_record((320, 180), 2, 1))
+        ));
+        assert!(sent_as_asked(
+            &paused((302, 902), (1352, 752), (1352, 602)),
+            &vertical(201, 601, 901, 501),
+            Some(&sampling(&[(180, 580, 40, 40), (880, 480, 40, 40)])),
+            Some(extent(1920, 1080)),
+            Some(&scale_record((1280, 720), 3, 2))
+        ));
+    }
+
+    /// Workflow #392 DA-3b: a step whose input truly is not its effect intent's is still
+    /// reported. At s = 2, against the drag of the test above, none of these pairs: the vertical
+    /// kind at the device points with a brake of 200, the drag with a pause and a brake braked by
+    /// the base's 100 (to (40, 200)), the same drag at the base points, the base drag itself, the
+    /// drag one device pixel off at its press, or with a pause of 120. Under the identity (no map
+    /// recorded, with or without the frame's size) the drag pairs with itself only, never with the
+    /// drag with a pause and a brake through its own points.
+    #[test]
+    fn da3b_a_mismatched_vertical_brake_step_is_still_reported() {
+        let asked = vertical(300, 150, 20, 150);
+        let drawn = sampling(&[(300, 150, 1, 1), (20, 150, 1, 1)]);
+        let double = scale_record((320, 180), 2, 1);
+        for sent in [
+            InputAction::SingleTouchDragWithVerticalBrakeV1 {
+                x1: 600,
+                y1: 300,
+                x2: 40,
+                y2: 300,
+                x3: 40,
+                y3: 100,
+                horizontal_duration_ms: 200,
+                corner_hold_ms: 150,
+                brake_distance_px: 200,
+                brake_duration_ms: 200,
+                slope_in: 2,
+                slope_out: 0,
+            },
+            paused((600, 300), (40, 300), (40, 200)),
+            paused((300, 150), (20, 150), (20, 50)),
+            asked.clone(),
+            paused((601, 300), (40, 300), (40, 100)),
+            InputAction::SingleTouchDragWithPauseAndBrakeV1 {
+                x1: 600,
+                y1: 300,
+                x2: 40,
+                y2: 300,
+                drag_duration_ms: 200,
+                pause_ms: 120,
+                x3: 40,
+                y3: 100,
+                brake_duration_ms: 200,
+            },
+        ] {
+            assert!(
+                !sent_as_asked(
+                    &sent,
+                    &asked,
+                    Some(&drawn),
+                    Some(extent(640, 360)),
+                    Some(&double)
+                ),
+                "{sent:?}"
+            );
+        }
+        for frame_extent in [Some(extent(320, 180)), None] {
+            assert!(sent_as_asked(
+                &asked,
+                &asked,
+                Some(&drawn),
+                frame_extent,
+                None
+            ));
+            assert!(!sent_as_asked(
+                &paused((300, 150), (20, 150), (20, 50)),
+                &asked,
+                Some(&drawn),
                 frame_extent,
                 None
             ));
