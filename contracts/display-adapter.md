@@ -156,7 +156,8 @@ The crate's registry is `crates/display-adapter/src/codes.rs`, its fragment
   end from DA-2b on); DA-2a adds `translation_unsupported`, `input_scale_unsupported` and
   `safe_area_unavailable` (section 8; DA-3 narrows `input_scale_unsupported` to a pure scale
   whose double is not a whole number, a vertical-brake drag under a scale, and a Lab declared
-  operation's input on a frame of another size than its package, section 10); DA-4b-D adds
+  operation's input on a frame of another size than its package; DA-3b takes the vertical-brake
+  drag out of it, section 10); DA-4b-D adds
   `safe_area_declaration_invalid`,
   `safe_area_model_repeated`, `safe_area_model_undeclared` and `safe_area_form_undeclared`, with
   the optional values `path`, `other_path`, `json_pointer` and `config_key` (section 9.4).
@@ -373,6 +374,8 @@ coordinator's work order narrows the slice to the maps the capture side admits (
 identity and a pure scale. Its fix 1 (the coordinator's rulings after the independent review)
 narrows the pure scales to those whose double is a whole number, routes the Lab's declared
 operations through the same refusal, and pairs the task evidence in one coordinate system.
+Workflow #392 DA-3b (0.12.59; the coordinator's ruling of 11-13 on board #392, route E) sends the
+vertical-brake drag under those scales too ("The vertical brake"), with no interface revision.
 
 - **One exit.** Every input of a run (its own steps and its layers', a select's candidate, a
   linear step, a scan's moves and page flips, a store step's tap) leaves for the device at one
@@ -396,12 +399,22 @@ operations through the same refusal, and pairs the task evidence in one coordina
   first input, whatever its point, before anything is sent; the run ends with it, so the same
   device always ends the same run the same way. Such a scale waits for the slice that draws the
   input points in the device box.
-- **The vertical brake.** A `single_touch_drag_with_vertical_brake_v1` is the one input kind a
-  scaled device cannot use: under any scale other than 1 it is refused `input_scale_unsupported`.
-  Sending the base's brake of 100 pixels on a larger frame would be a different gesture, a
-  shorter brake than the package declared; scaling it, `round_half_up(100 · s)`, would change what
-  the interface accepts, since `InputAction` and the device layer hold that drag's brake at
-  exactly 100 pixels.
+- **The vertical brake.** `InputAction` and the device layer hold a
+  `single_touch_drag_with_vertical_brake_v1`'s brake at exactly 100 pixels; on a scaled device the
+  package's brake of 100 base pixels is `round_half_up(100 · s)` device pixels. DA-3b: under a
+  scale other than 1 the host sends such a step as a `single_touch_drag_with_pause_and_brake_v1`:
+  its press and its corner mapped as every point is ("Points"), drag `horizontal_duration_ms`
+  (200 ms), pause `corner_hold_ms` (150 ms), and the brake to `(x2′, y2′ − round_half_up(100 · s))`
+  over `brake_duration_ms` (200 ms). At 2 the drag (300, 150) → (20, 150) → (20, 50) leaves as
+  (600, 300) → (40, 300) → (40, 100). For the same points the device layer performs both kinds
+  with the same events: the press, a segment of the MAA 2.0 curve over 200 ms, a hold of 150 ms, a
+  segment over 200 ms, the release (the vertical kind's slopes are constants no plan reads). A
+  brake end outside the device frame is `contained_task_input_out_of_bounds`, never clamped; the
+  kernel makes no such drag, since its corner lies at least the brake below the top. No interface
+  revision moves and no code is added: `InputAction::validate` and the device layer accept the
+  drag sent as they do today. Under a scale of 1 the drag leaves as the kind it is, byte for byte
+  as before. A reader sees the bundle's kind in the effect intent and the sent kind in the input
+  intent ("Records").
 - **Stale.** The host reports `display_map_stale` (warning, stage `display_input_map`;
   `DisplayMap::current_for`) in exactly one case: an input whose frame reference names a frame of
   another size than the frame the run's map was last built for. Nothing is sent, and the run ends
@@ -430,6 +443,7 @@ operations through the same refusal, and pairs the task evidence in one coordina
   pause and a brake its press and end, and its brake's cross `round_half_up(|d| · s)` with its
   sign; a path drag its own box (inward) and every point, each inside that box. Durations, holds,
   slopes and the number of points never change. Keys, text and the reset carry no coordinate.
+  Every input keeps its kind but a vertical-brake drag under a scale ("The vertical brake").
 - **Records.** The task's effect intent keeps what the package asked for, in base pixels: the
   input, its sampling regions (the base boxes) and the device frame's size (`frame_extent`). The
   input intent records what is sent, in device pixels: the input of its provenance and its
@@ -437,7 +451,12 @@ operations through the same refusal, and pairs the task evidence in one coordina
   `task.geometry_observed` record (`display_map`, section 8). The Lab's `run evidence` reads them
   so: a step's `action` (its `point` and its `rect`) is the effect intent's, in base pixels, and a
   recognised target's `box` is the recognition record's, in device-frame pixels (section 8,
-  "Evidence").
+  "Evidence"). DA-3b: a vertical-brake step under a scale has the bundle's
+  `single_touch_drag_with_vertical_brake_v1` in its effect intent (base pixels, its two sampling
+  regions) and the `single_touch_drag_with_pause_and_brake_v1` sent in its input intent (device
+  pixels), whose intent, as every such drag's, records no execution plan (register §1.58); both
+  are `input.swipe`. `run evidence` shows the bundle's kind; the Lab's recording, which presses no
+  brake drag, the diagnosis and the landing history, which read no input's kind, are unchanged.
 - **The task evidence.** `actingledger task-evidence` pairs an input intent with the effect intent
   of its step in one coordinate system: with the run's last `task.geometry_observed` record before
   the effect intent naming a map (its `display_map`: never under the plain identity), the effect
@@ -449,6 +468,9 @@ operations through the same refusal, and pairs the task evidence in one coordina
   effect intent's input itself, byte for byte, as before this slice. The effect intent records no
   base, so that record is looked up backwards from the effect intent in the whole snapshot the
   command reads, not only in the page it reports: read in pages or whole, a run pairs the same.
+  DA-3b: the same conversion turns a scaled vertical-brake step's effect intent into the drag with
+  a pause and a brake sent, so the step pairs; an input that is not that drag still pairs with
+  nothing.
 - **The Lab's declared operations.** A Lab declared operation's runtime reads no game
   declaration, and its frames, read back from their pictures, carry no producer geometry: it
   cannot know the map a run's input leaves under. It sends an input only on a frame of its
@@ -464,7 +486,7 @@ operations through the same refusal, and pairs the task evidence in one coordina
   tests carry them, no run.
 - **Not in this slice.** The model's `anchored` click, a drag's `delta` and the box references
   (package members of task schema `0.10`, DA-5); moving the brake bound of `InputAction` and the
-  device layer (a scaled vertical brake, above); a path
+  device layer (DA-3b sends a scaled vertical brake without it, above); a path
   drag generated again in its device box (the host maps the points the kernel generated in the
   base box); a landing history kept per device box (it is kept per base box, which under one map
   names one device box); a step that takes its next frame after `display_map_stale` within the
