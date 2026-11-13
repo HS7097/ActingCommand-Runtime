@@ -30,6 +30,17 @@ resource ownership refuses maintenance. The canonical Ledger lock remains
 `ledger/writer.lock`; a present candidate `writer.lock` is also held and must
 have a provably closed owner.
 
+Workflow #453 S11 (since 0.12.60, [state-root-installation.md](state-root-installation.md)): when
+the directory of `--config` holds the installer's own `install\state.json`, every pass (`dry-run`,
+`import`, `backup`, `restore` and `verify`, with or without `--full` and `--frame-query`) first
+reads the state root's installation record as a start does, before it takes the owner: every pass
+takes the owner and so writes to the state root (the owner journal's open and close records),
+`verify` without flags included. Another installation's record, or a record while the
+installation has no identity file, is `state_root_installation_mismatch`, a record or identity
+file it cannot read `state_root_installation_record_invalid`, each with `activated` `false` and
+nothing written, the owner journal included. It never mints an identity and never writes a
+record. A pass started from another directory reads neither file.
+
 ```text
 actingd ledger-maintenance backup --config runtime.json --backup frozen-backup
 actingd ledger-maintenance dry-run --config runtime.json --backup frozen-backup

@@ -62,7 +62,7 @@ const SILENT: &str = "sr4a3.instance";
 const HOME: [u8; 3] = [255, 0, 0];
 
 /// A neutral `once` blackout entry `[from_unix_ms, until_unix_ms)`.
-fn once(id: &str, from_unix_ms: u64, until_unix_ms: u64) -> Value {
+pub(super) fn once(id: &str, from_unix_ms: u64, until_unix_ms: u64) -> Value {
     json!({"kind": "once", "id": id, "from_unix_ms": from_unix_ms, "until_unix_ms": until_unix_ms})
 }
 
@@ -75,7 +75,7 @@ fn instance_text(instance: InstanceId) -> String {
 
 /// The configuration actingd assembles over the defaults file: the `recovery_ladder` section's
 /// members `ladder`, the host list `host`, and for each instance of `own` its own list.
-fn silence_manifest(
+pub(super) fn silence_manifest(
     ladder: Value,
     host: Value,
     own: &[(InstanceId, Value)],

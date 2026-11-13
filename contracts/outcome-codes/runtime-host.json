@@ -46,7 +46,7 @@
       "status": "active",
       "since": "0.11.5",
       "description": "A policy candidate met an instance in a cooldown; the candidate is deferred with a wake at next_eligible_unix_ms, the cooldown's end. Nothing is written for it. Without failure_code it is the instance's takeover cooldown, which still runs after a previous owner ended without closing. With failure_code application_switch_failed (Workflow #437 MAPP-2b, since 0.12.60, contracts/device-group.md \"The member's switch cooldown\") it is the switch cooldown of a member of a device group of several whose switch before a run failed: every candidate of that member waits for scheduling.device_group.switch_failure_cooldown_ms, held in memory only, while the device's other members run.",
-      "common_causes": "Without failure_code: actingd was killed or crashed while it held a lease on the instance, and the new owner started less than the takeover cooldown (6 s by default) ago. With failure_code application_switch_failed: the member's last switch (the read of the application in front, the stop of another member's application or the member's startup package) failed.",
+      "common_causes": "Without failure_code: actingd was killed or crashed while it held a lease on the instance, and the new owner started less than the takeover cooldown (6 s by default) ago. With failure_code application_switch_failed: the member's last switch (the read of the application in front, the stop of another member's application, the member's startup package or, since MAPP-2d, the run's renewal of its lease after it) failed.",
       "handling": "Nothing to repair for a takeover cooldown: the candidate is evaluated again when the cooldown ends. For a switch cooldown, read the run's application_switch_failed record (its step and cause) and fix what failed; the member competes for its device again when the cooldown ends, and a restart of the Runtime ends it at once."
     },
     "dispatch_instance_held": {
@@ -3912,7 +3912,7 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports contained task deadline unavailable.",
-      "common_causes": "A run's deadline, the earlier of its response deadline and its key's expiry less the heartbeat reserve, had passed when the run was to start: a direct run waited in its device's queue until the response deadline counted from its receipt had passed, or the key had no more than the reserve left. On a device group of several (Workflow #437, contracts/device-group.md \"The switch before a run\"): before a member's startup run on its run's key, the key's remaining time did not cover the startup run's lease time and the time the run still needs (MAPP-2a's check; the step startup_package of application_switch_failed); and a member whose startup package's response deadline plus its run's response deadline exceeds 1800000 ms, the longest lease the scheduler grants less the reserve, is refused at its policy admission and at a direct run's claim, before any lease and any device step (MAPP-2b). The evaluator does not know that bound, so such a member's task is selected and refused again in every round, an error-level dispatch refusal each time. With today's request deadlines (every startup package, configured procedure and composed pack request carries 1800000 ms) every run of a member of a group of several meets this refusal; the load still refuses every group of several, so no installation does.",
+      "common_causes": "A run's deadline, the earlier of its response deadline and its key's expiry less the heartbeat reserve, had passed when the run was to start: a direct run waited in its device's queue until the response deadline counted from its receipt had passed, or the key had no more than the reserve left. On a device group of several (Workflow #437, contracts/device-group.md \"The switch before a run\"): before a member's startup run on its run's key, the key had too little time left for it (the step startup_package of application_switch_failed): for a run's own switch (MAPP-2d), no more than the heartbeat reserve, so the startup run could not start at all; for a caller that states the time it still needs on the key (MAPP-2a's form), less than the startup run's lease time and that time. The load still refuses every group of several, so no installation meets this case.",
       "handling": "TBD"
     },
     "contained_task_effect_frame_identity_mismatch": {
@@ -10446,6 +10446,91 @@
       "description": "actingd suspended could not read a recorded error frame of a pair; the artifact store's failure is the caused_by link (Workflow #378 A6a, was the text artifact_unreadable).",
       "common_causes": "actingd suspended, or another read of the suspension report, could not read a recorded error frame of a pair from the artifact store: the artifact is missing, fails its verification or cannot be read; the caused_by link says which.",
       "handling": "The pair's comparison is unavailable and has no verdict; the rest of the report stands. The frame_id and artifact_sha256 in the report name the artifact the caused_by link concerns."
+    },
+    "state_root_installation_mismatch": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "at_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #453 S11 (contracts/state-root-installation.md): the state root's record installation.json names another installation than the one the Runtime, actingd unlock-owner or a ledger maintenance pass runs from, or this installation has no identity file install\\identity.json while the state root has a record; the developer text says which of the two. path is the state root and at_unix_ms the time the record's installation claimed it. Nothing was written; a start's refusal leaves the owner journal as it was, except after two starts raced, when the start that lost closes the owner epoch it opened. check-config refuses the same configuration at stage config_state_root.",
+      "common_causes": "The configuration's state_root names the state root of another installation (a configuration copied from another installation root, or edited by hand), or this installation's identity file was removed.",
+      "handling": "Correct state_root in this installation's configuration so that it names this installation's own state root, or put the previous configuration file back. When this installation is meant to own that state root, a later release brings a command that hands it over; until then the only other way is by hand: with no Runtime running on it, rename installation.json in the state root aside (keep it), and this installation's next start claims the state root."
+    },
+    "state_root_installation_record_invalid": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #453 S11 (contracts/state-root-installation.md): the state root's record installation.json, the installation's identity file install\\identity.json or the installer's state file install\\state.json cannot be read or has another shape (not the document, another schema_version, an installation_id that is not 32 lowercase hexadecimal digits, larger than 64 KiB); path is the file and the read failure is the caused_by link. Nothing was written. check-config refuses the same configuration at stage config_state_root.",
+      "common_causes": "A file damaged by a disk failure or edited by hand, or a file another program holds locked.",
+      "handling": "Read the caused_by link and free the file when another program holds it. Otherwise put the file back from a backup of the same installation or the same state root; a damaged installation.json can also be renamed aside by hand (keep it), with no Runtime running on the state root, and the next start claims the state root again."
+    },
+    "state_root_claim_failed": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #453 S11 (contracts/state-root-installation.md): a start's claim of an unrecorded state root, under the owner lock, could not mint the installation's identity (the operating system's random source failed) or could not write install\\identity.json or the state root's installation.json (its .part file, its flush or its rename); path is the file and the operating system's failure is the caused_by link. The start fails and closes its owner epoch.",
+      "common_causes": "A full disk, a folder the Runtime may not write, or a file another program holds locked.",
+      "handling": "Read the caused_by link, free the disk or the file, and start again: the next start claims the state root."
+    },
+    "state_root_claimed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #453 S11 (contracts/state-root-installation.md): the start recorded in the state root (path) the installation it runs from, in installation.json, minting the installation's identity file first when it had none, and mirrored the claim once as the tagged runtime fact host.state_root_installation. actingd writes it as a daemon line. An existing installation's state root is recorded so by its first start of 0.12.60 or later.",
+      "common_causes": "The first start of this release on an installation, or the first start of a new installation.",
+      "handling": "None."
     },
     "observation_evidence_encode_failed": {
       "category": "error",
@@ -23521,9 +23606,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.59",
-      "description": "The switch that brings a member of a device group of several to the front before its run failed at one of its steps (Workflow #437 MAPP-2a, contracts/device-group.md \"The switch before a run\"): alias is the member to run, application_switch_step the step, failure_code the step's own code and application_id the package the step concerned (the member's own for foreground_read and startup_package, the stopped member's for stop). The step's failure is its cause. The switch reads the package in front through the member's registration, stops another member's application under the run's key with that member's records, and runs the member's startup package on the run's key, which it hands back to the run unrenewed. In 0.12.59 the switch has no caller: no run goes through it and nothing settles a run with this code; an instance alone on its device never meets it.",
-      "common_causes": "Several applications declared on one device (device_group in instances[]): the device's ADB query did not answer, the application in front could not be force-stopped, the member's startup package did not reach its home page, or the run's key did not leave time for the startup package and the run.",
-      "handling": "Read the step and its cause. For foreground_read, check the emulator's ADB connection. For stop, check the stopped member's application and its records. For startup_package, run the member's startup package by hand and check that it reaches its home page within its response deadline."
+      "description": "The switch that brings a member of a device group of several to the front before its run failed at one of its steps (Workflow #437 MAPP-2a, contracts/device-group.md \"The switch before a run\"): alias is the member to run, application_switch_step the step, failure_code the step's own code and application_id the package the step concerned (the member's own for foreground_read, startup_package and lease_renewal, the stopped member's for stop). The step's failure is its cause. The switch reads the package in front through the member's registration, stops another member's application under the run's key with that member's records, and runs the member's startup package on the run's key, which it hands back to the run unrenewed; since 0.12.60 (MAPP-2d) the run then renews its lease to its own response deadline and the heartbeat reserve before its task (step lease_renewal). In 0.12.59 the switch has no caller: no run goes through it and nothing settles a run with this code; an instance alone on its device never meets it.",
+      "common_causes": "Several applications declared on one device (device_group in instances[]): the device's ADB query did not answer, the application in front could not be force-stopped, the member's startup package did not reach its home page, the run's key had too little time left for the startup package to start, or the run's lease was lost before its renewal after the startup package.",
+      "handling": "Read the step and its cause. For foreground_read, check the emulator's ADB connection. For stop, check the stopped member's application and its records. For startup_package, run the member's startup package by hand and check that it reaches its home page within its response deadline. For lease_renewal, read the lease's records (actingctl status shows the device's holder): the member's application is at its home and the task is tried again after the member's switch cooldown."
     }
   },
   "locations": {
@@ -23558,6 +23643,22 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: acquire owner file."
+    },
+    "check_state_root_installation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "A Runtime host operation (Workflow #453 S11, contracts/state-root-installation.md): the read-only check of the state root's installation record against the installation's identity file, made by a start before anything is written and by actingd unlock-owner, a ledger maintenance pass that takes the owner and check-config; it never mints or writes."
+    },
+    "record_state_root_installation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "A Runtime host operation (Workflow #453 S11, contracts/state-root-installation.md): a start's claim of the state root under the owner lock: the record read again, the installation's identity minted when it has none, and the record installation.json written once."
     },
     "acquire_resource_close_lease": {
       "owner": "runtime-host",
@@ -30551,7 +30652,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.59",
-      "description": "A Runtime host operation (Workflow #437 MAPP-2a): the switch that brings a member of a device group of several to the front before its run, under the run's key: the read of the package in front, the stop of another member's application and the member's startup package on the run's key."
+      "description": "A Runtime host operation (Workflow #437 MAPP-2a): the switch that brings a member of a device group of several to the front before its run, under the run's key: the read of the package in front, the stop of another member's application and the member's startup package on the run's key, and since 0.12.60 (MAPP-2d) the run's renewal of its lease after that startup package."
     },
     "emulator_watch": {
       "owner": "runtime-host",

@@ -1913,3 +1913,63 @@ fn hs2b_ledger_six_needs_the_one_way_flag_and_refuses_the_rollback_to_five() {
         );
     }
 }
+
+// Workflow #453 S11 (contracts/state-root-installation.md, "The installer"; ruling 8 of the work
+// order rd-1114/brief-453-s11-state-root-record.md): the installation's identity file
+// `install\identity.json`, which the Runtime mints, is no file of the installer's: an update and a
+// rollback of the root leave it in place, byte for byte, with no kept copy beside it.
+#[test]
+fn s11_an_update_and_a_rollback_leave_the_installation_identity_in_place() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let live = BuildSpec::new(C1);
+    host.programs.ledger_head.set(100);
+    let root = prepared(temp.path(), "identity", &live, &BuildSpec::new(C2), &host);
+    let identity = root.join("install").join("identity.json");
+    let bytes = br#"{"schema_version":"actingcommand.installation-identity.v1","installation_id":"00112233445566778899aabbccddeeff","minted_at_unix_ms":1800000000000,"minted_by":{"pid":4242,"build_commit":null}}"#.to_vec();
+    fs::write(&identity, &bytes).expect("the installation's identity file");
+    let identity_files = |root: &Path| {
+        fs::read_dir(root.join("install"))
+            .expect("the install folder")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name.starts_with("identity.json"))
+            .collect::<Vec<_>>()
+    };
+
+    let applied = apply_update(
+        &host,
+        &root,
+        C2,
+        &plan_id(&plan_update(&host, &root, C2, &[])),
+        &[],
+    );
+    assert_done(&applied, "install_update_apply");
+    assert_eq!(
+        fs::read(&identity).ok(),
+        Some(bytes.clone()),
+        "after the update"
+    );
+    assert_eq!(identity_files(&root), ["identity.json"], "after the update");
+
+    host.programs.ledger_head.set(150);
+    own_start_log(&root, even_phases(1_000));
+    let planned = plan_rollback(&host, &root);
+    assert_done(&planned, "install_rollback_plan");
+    let rolled_back = apply_rollback(&host, &root, &plan_id(&planned));
+    assert_done(&rolled_back, "install_rollback_apply");
+    for (path, spec_bytes) in spec_tree(&live) {
+        assert_eq!(fs::read(root.join(&path)).ok(), Some(spec_bytes), "{path}");
+    }
+    assert_eq!(fs::read(&identity).ok(), Some(bytes), "after the rollback");
+    assert_eq!(
+        identity_files(&root),
+        ["identity.json"],
+        "after the rollback"
+    );
+}

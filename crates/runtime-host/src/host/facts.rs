@@ -162,6 +162,28 @@ fn policy_instance_seed_digest(
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+/// Workflow #455 G-R2a (the coordinator's ruling of 11-14 on #1702): whether `ResourceTargetView`
+/// answers no `active` for a stored `session.resource_targets` record (no policy: a withdrawal, a
+/// v3 record of entries alone), judged by the read's own reading
+/// (`actingcommand_policy::resource_targets_without_active`); its version is then `0`.
+fn resource_targets_without_active(record: &FactRecord, now_unix_ms: u64) -> bool {
+    match (&record.scope, &record.content) {
+        (
+            FactScope::Instance { instance_id },
+            FactContent::Inline {
+                value: ContractFactValue::RecordList(rows),
+            },
+        ) => actingcommand_policy::resource_targets_without_active(
+            rows,
+            record.observed_at_unix_ms,
+            record.expires_at_unix_ms,
+            instance_id,
+            now_unix_ms,
+        ),
+        _ => false,
+    }
+}
+
 /// Which entry publishes an observation (Workflow #308 RT-S1a).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FactPublicationPurpose {
@@ -171,7 +193,8 @@ pub(super) enum FactPublicationPurpose {
     /// `ApplyResourceTargets`: exactly one instance-scoped `session.resource_targets` record.
     /// Workflow #455 T1-R: with `expected_version`, under `fact_write_gate` the record is
     /// refused when the key's active record is of another version (its `fact.published`
-    /// sequence, `0` without one); without it nothing is compared.
+    /// sequence, `0` without one; Workflow #455 G-R2a: `0` whenever the view answers no `active`,
+    /// as it answers it); without it nothing is compared.
     ResourceTargets { expected_version: Option<u64> },
     /// Workflow #384 D2-S3 (D2 model §3.6, A-1): one record a run's resource adjustment wrote
     /// from the key's active record, which the `fact.published` at ledger sequence
@@ -541,8 +564,14 @@ impl HostShared {
             // Workflow #455 T1-R: `expected_version` is compared in this hold of the gate, before
             // the replay, as `EditPackSchedule` compares its list's: the version is the active
             // record's sequence, `0` without one; another is refused and nothing is appended.
+            // Workflow #455 G-R2a: the version compared is the version `ResourceTargetView`
+            // answers, in every state: `0` when the read shows no `active` (no record, a
+            // withdrawal, a v3 record of entries alone), judged by the read's own reading.
             if let Some(expected) = expected_version {
-                let current_version = active.map_or(0, |(_, sequence, _)| sequence);
+                let current_version = active
+                    .as_ref()
+                    .filter(|(stored, _, _)| !resource_targets_without_active(stored, now))
+                    .map_or(0, |(_, sequence, _)| *sequence);
                 if expected != current_version {
                     return Err(RuntimeHostError::request(
                         HostCode::FactObservationVersionConflict,

@@ -245,7 +245,7 @@ fn gate_p2b_g12_each_realistic_mistake_of_either_version_is_refused_with_its_rea
     let rows: [(&str, Mistake, Reason, &str); 8] = [
         (
             "a version no reader takes",
-            |document| document.schema_version = Some("actingcommand.resource-targets.v3"),
+            |document| document.schema_version = Some("actingcommand.resource-targets.v4"),
             Reason::UnsupportedSchemaVersion,
             "/schema_version",
         ),

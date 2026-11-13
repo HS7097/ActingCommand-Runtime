@@ -236,6 +236,11 @@ mod gate_438_held;
 // another member's lease begins, whatever waits in the queue and in the takeover cooldown, and
 // the lock walk's pins.
 mod gate_mapp1c;
+// Workflow #437 MAPP-1d (0.12.60; register §1.359): a member's monitor probe made only on a free
+// device and its session closed before it lets the device go, a lapsed run lease of a member
+// handed on only after the member's session is closed, and each queued claim judged by its own
+// member's gate.
+mod gate_mapp1d;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
 // one worker per device, the group's occupancy, pause, gates, session rule and refusals.
 mod gate_mapp1b;
@@ -393,6 +398,8 @@ mod gate_429_r8;
 // Workflow #455 T1-R: the `ui` channel takes `ApplyResourceTargets`, and its `expected_version` is
 // compared with the version of the instance's record.
 mod gate_455_t1r;
+// Workflow #455 G-R2a: the goal document's value store, a v3 record written through the host.
+mod gate_455_gr2a;
 // Workflow #429 R-6b1: the readers of a stopped run's record (its projections, the remedy
 // journal and `actingd suspended`).
 mod gate_429_r6b1;
@@ -635,6 +642,9 @@ mod gate_407_perf_read;
 mod gate_421_s2if;
 
 mod gate_epoch_close;
+// Workflow #453 S11 (0.12.60): the state root remembers its installation: the start's check
+// before anything is written, the claim under the owner lock, and the writers that only check.
+mod gate_453_s11;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
 // read, and of the epochs before a start that failed after appending its start event.
 mod gate_411_a65;

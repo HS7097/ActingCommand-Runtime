@@ -24,16 +24,20 @@
 //!   no application id given and none the game's root declares for the server (no file, an
 //!   unreadable one, no such member, or none of the form), with `game`, `server`, the file's `path`
 //!   and the read's failure as the cause when there is one; a configuration without the list
-//!   `instances` or `policy.facts.instances`, or without a row there to take the host and the
-//!   capabilities from, with the key as `config_key`.
+//!   `instances` or `policy.facts.instances`, with the key as `config_key`; (Workflow #453 S1) one
+//!   without `policy`, with `config_key` `policy`; a first row (`policy.facts.instances` empty)
+//!   when `policy.resources.hosts` declares no host or several, with that key, or when the policy
+//!   names a catalog, with `config_key` `policy.facts.instances` ([`first_row_source`]).
 //! - **The candidate** ([`compose`]): the live file's document with the entry `{alias,
 //!   instance_id, application_id, instance_index, touch_backend, capture_backend}` appended to
 //!   `instances` and the row `{instance_id: <alias>, server_id, game_id, host_id, available: true,
 //!   capability_operation_ids, preferred_task_ids: []}` appended to `policy.facts.instances`, the
 //!   host and the capabilities those of a row of the same game and server, else of the same game,
-//!   else of the first row; every other member as it was, in its order, with the live file's line
-//!   ends. Until INST-R the instance is written in both places, as the configuration's assembly
-//!   requires (`policy_instance_set_mismatch`).
+//!   else of the first row; (Workflow #453 S1) with no row there, the one declared host and the
+//!   composer's one operation ([`STANDARD_PACK_OPERATION_ID`]), and `capabilities_from` none; every
+//!   other member as it was, in its order, with the live file's line ends. Until INST-R the
+//!   instance is written in both places, as the configuration's assembly requires
+//!   (`policy_instance_set_mismatch`).
 //! - **The instance id** is minted (`instance_<32 hex>`, the contract crate's issuer) and checked
 //!   against every `instance_id` of the live file and every one a journal of this root recorded as
 //!   added (`inputs.instance_add`): it is never one of them. A journal that cannot be read counts
@@ -58,6 +62,7 @@ use actingcommand_contract::{
     SchedulingPauseReason, validate_instance_alias,
 };
 use actingcommand_lab_ops::core_reads::Params;
+use actingcommand_policy::STANDARD_PACK_OPERATION_ID;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -74,6 +79,10 @@ const ROOT_KEY: &str = "standard_packs.root";
 const INSTANCES_KEY: &str = "instances";
 /// The policy section's instance list, which INST-R will derive from the entries.
 const POLICY_INSTANCES_KEY: &str = "policy.facts.instances";
+/// Workflow #453 S1: the policy section, which a first row is written into.
+const POLICY_KEY: &str = "policy";
+/// Workflow #453 S1: the policy's declared hosts, whose one host a first row takes.
+const HOSTS_KEY: &str = "policy.resources.hosts";
 /// Workflow #452: the root file of a game's standard pack that declares its application per server
 /// (`servers.<server>.application_id`), which the host's idle action reads.
 const APPLICATIONS_FILE: &str = "applications.json";
@@ -211,21 +220,22 @@ impl Asked {
 }
 
 /// What the command added: what was asked, the minted id, the application id written and where it
-/// came from (Workflow #452), the alias whose policy row gave the host and the capabilities, and
-/// the reason the instance is paused with ([`PAUSE_REASON`]).
+/// came from (Workflow #452), the alias whose policy row gave the host and the capabilities (none
+/// for a first row, Workflow #453 S1), and the reason the instance is paused with
+/// ([`PAUSE_REASON`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Added {
     pub(crate) asked: Asked,
     pub(crate) instance_id: String,
     pub(crate) application_id: String,
     pub(crate) application_id_from: ApplicationIdFrom,
-    pub(crate) capabilities_from: String,
+    pub(crate) capabilities_from: Option<String>,
     pub(crate) pause_reason: SchedulingPauseReason,
 }
 
 /// Workflow #421 INST-5 fix 1: [`Added`] as a record, its pause reason the name type as the hold's
 /// records keep a reason (`super::hold`). Workflow #452: and the application id with where it came
-/// from, two additive members.
+/// from, two additive members. Workflow #453 S1: `capabilities_from` is `null` for a first row.
 #[derive(Serialize)]
 struct AddedRecord<'a> {
     alias: &'a str,
@@ -235,7 +245,7 @@ struct AddedRecord<'a> {
     instance_index: u16,
     touch_backend: &'a str,
     capture_backend: &'a str,
-    capabilities_from: &'a str,
+    capabilities_from: Option<&'a str>,
     pause_reason: &'a SchedulingPauseReason,
     application_id: &'a str,
     application_id_from: ApplicationIdFrom,
@@ -252,7 +262,7 @@ impl Added {
             instance_index: self.asked.mumu_index,
             touch_backend: &self.asked.touch_backend,
             capture_backend: &self.asked.capture_backend,
-            capabilities_from: &self.capabilities_from,
+            capabilities_from: self.capabilities_from.as_deref(),
             pause_reason: &self.pause_reason,
             application_id: &self.application_id,
             application_id_from: self.application_id_from,
@@ -283,6 +293,70 @@ fn text_of<'a>(entry: &'a Value, member: &str) -> Option<&'a str> {
     entry.get(member).and_then(Value::as_str)
 }
 
+/// The new row's host and capabilities, and the alias of the row they were taken from (none for a
+/// first row, Workflow #453 S1).
+struct RowSource {
+    host_id: String,
+    capabilities: Vec<Value>,
+    capabilities_from: Option<String>,
+}
+
+/// The host and the capabilities of a row of `rows` (not empty) of the asked game and server,
+/// else of the asked game, else of the first row; a row without them refuses with
+/// `policy.facts.instances`.
+fn sibling_source(rows: &[Value], asked: &Asked) -> Result<RowSource, Outcome> {
+    let same = |row: &&Value, server: bool| {
+        text_of(row, "game_id") == Some(asked.game.as_str())
+            && (!server || text_of(row, "server_id") == Some(asked.server.as_str()))
+    };
+    let sibling = rows
+        .iter()
+        .find(|row| same(row, true))
+        .or_else(|| rows.iter().find(|row| same(row, false)))
+        .or_else(|| rows.first())
+        .ok_or_else(|| invalid().config_key(POLICY_INSTANCES_KEY))?;
+    let (Some(capabilities_from), Some(host_id), Some(capabilities)) = (
+        text_of(sibling, "instance_id"),
+        text_of(sibling, "host_id"),
+        sibling
+            .get("capability_operation_ids")
+            .and_then(Value::as_array),
+    ) else {
+        return Err(invalid().config_key(POLICY_INSTANCES_KEY));
+    };
+    Ok(RowSource {
+        host_id: host_id.to_owned(),
+        capabilities: capabilities.clone(),
+        capabilities_from: Some(capabilities_from.to_owned()),
+    })
+}
+
+/// Workflow #453 S1: the host and the capabilities of a first row (`policy.facts.instances`
+/// empty), taken from the configuration alone. In catalog mode (`policy.catalog` present and not
+/// `null`) the catalog, not the installer, says what an instance can run: refused with
+/// `policy.facts.instances`, as before. In composer mode the host is the one
+/// `policy.resources.hosts[].host_id` (no list, no host, several, or one without a `host_id`
+/// refuses with `policy.resources.hosts`), the capabilities the composer's one operation, and no
+/// row gave them.
+fn first_row_source(config: &Value) -> Result<RowSource, Outcome> {
+    if config
+        .pointer("/policy/catalog")
+        .is_some_and(|catalog| !catalog.is_null())
+    {
+        return Err(invalid().config_key(POLICY_INSTANCES_KEY));
+    }
+    let hosts = list(config, "/policy/resources/hosts", HOSTS_KEY)?;
+    let [host] = hosts.as_slice() else {
+        return Err(invalid().config_key(HOSTS_KEY));
+    };
+    let host_id = text_of(host, "host_id").ok_or_else(|| invalid().config_key(HOSTS_KEY))?;
+    Ok(RowSource {
+        host_id: host_id.to_owned(),
+        capabilities: vec![Value::from(STANDARD_PACK_OPERATION_ID)],
+        capabilities_from: None,
+    })
+}
+
 /// Composes the candidate from the live configuration `loaded.config` (the selected one) for
 /// `asked`, refusing (`instance_invalid`) what the module description lists.
 pub(crate) fn compose(
@@ -293,6 +367,11 @@ pub(crate) fn compose(
 ) -> Result<Composed, Outcome> {
     let config = &loaded.config;
     let instances = list(config, "/instances", INSTANCES_KEY)?;
+    // Workflow #453 S1: without `policy` (absent or `null`, as the configuration's assembly reads
+    // it) there is nothing to put a row in.
+    if config.get(POLICY_KEY).is_none_or(Value::is_null) {
+        return Err(invalid().config_key(POLICY_KEY));
+    }
     let rows = list(config, "/policy/facts/instances", POLICY_INSTANCES_KEY)?;
     // The alias: neither place may have it.
     if instances
@@ -330,25 +409,15 @@ pub(crate) fn compose(
         ),
     };
     // The host and the capabilities: those of a row of the same game and server, else of the same
-    // game, else of the first row.
-    let same = |row: &&Value, server: bool| {
-        text_of(row, "game_id") == Some(asked.game.as_str())
-            && (!server || text_of(row, "server_id") == Some(asked.server.as_str()))
-    };
-    let sibling = rows
-        .iter()
-        .find(|row| same(row, true))
-        .or_else(|| rows.iter().find(|row| same(row, false)))
-        .or_else(|| rows.first())
-        .ok_or_else(|| invalid().config_key(POLICY_INSTANCES_KEY))?;
-    let (Some(capabilities_from), Some(host_id), Some(capabilities)) = (
-        text_of(sibling, "instance_id"),
-        text_of(sibling, "host_id"),
-        sibling
-            .get("capability_operation_ids")
-            .and_then(Value::as_array),
-    ) else {
-        return Err(invalid().config_key(POLICY_INSTANCES_KEY));
+    // game, else of the first row; (Workflow #453 S1) with no row, a first row's.
+    let RowSource {
+        host_id,
+        capabilities,
+        capabilities_from,
+    } = if rows.is_empty() {
+        first_row_source(config)?
+    } else {
+        sibling_source(rows, asked)?
     };
     let instance_id = mint(&used_ids(host, paths, instances)?)?;
     let added = Added {
@@ -356,7 +425,7 @@ pub(crate) fn compose(
         instance_id,
         application_id,
         application_id_from,
-        capabilities_from: capabilities_from.to_owned(),
+        capabilities_from,
         pause_reason: pause_reason()?,
     };
     let entry = json!({

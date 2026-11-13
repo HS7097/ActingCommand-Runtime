@@ -456,9 +456,9 @@ impl HostShared {
     /// Workflow #437 MAPP-2a (`contracts/device-group.md`, "The switch before a run", step 3):
     /// the startup package of `token`'s member, a member of a device group of several, run on
     /// `token`'s key, which the member's own run holds and gets back. Before anything, the key is
-    /// validated and its remaining time must cover the startup run's lease time (its response
-    /// deadline and the heartbeat reserve) and `need`, the time the member's run needs on the
-    /// key afterwards; otherwise nothing is recorded and the refusal is returned. Then the
+    /// validated and its remaining time must be enough for the startup run given `need`, the time
+    /// the member's run needs on the key afterwards ([`Self::borrowed_key_admits`]); otherwise
+    /// nothing is recorded and the refusal is returned. Then the
     /// scheduling intent is recorded under `links` (the member's run's request links) with
     /// `causation_id`, and the package runs as an ordinary host run under it
     /// ([`Self::run_prepared_package_on_borrowed_key`]): the key is never renewed and never
@@ -535,11 +535,15 @@ impl HostShared {
     }
 
     /// Workflow #437 MAPP-2a: whether `token` is still the device's key on `connection_id` and
-    /// its remaining time covers the member's startup run (its response deadline and the
-    /// heartbeat reserve) and `need`, read now. `Ok(Err(refusal))` otherwise: the scheduler's own
-    /// refusal of the key, `startup_package_missing` for a member with no startup package, or
-    /// `contained_task_deadline_unavailable` for a key whose time does not cover both. An
-    /// instance alone on its device is refused first (`instance_mismatch`).
+    /// its remaining time, read now, is enough for the member's startup run: with
+    /// `RunNeed::For(after_ms)`, the startup run's lease time (its response deadline and the
+    /// heartbeat reserve) and `after_ms`; with `RunNeed::Renews` (Workflow #437 MAPP-2d: the run
+    /// renews its lease after the startup run, which takes what is left of the key), more than
+    /// the heartbeat reserve, the least on which the startup run's deadline (the key's expiry less
+    /// the reserve) lies after now. `Ok(Err(refusal))` otherwise: the scheduler's own refusal of
+    /// the key, `startup_package_missing` for a member with no startup package, or
+    /// `contained_task_deadline_unavailable` for a key with too little time left. An instance
+    /// alone on its device is refused first (`instance_mismatch`).
     pub(super) fn borrowed_key_admits(
         &self,
         token: &LeaseToken,
@@ -562,10 +566,19 @@ impl HostShared {
         let Some(request) = self.startup_packages()?.get(&token.instance_id()).cloned() else {
             return Ok(Err(startup_package_not_configured()));
         };
-        let startup_ttl_ms = self
-            .contained_task_lease_ttl(&request)
-            .map_err(|failure| *failure.error)?;
-        let needed_ms = startup_ttl_ms.saturating_add(need.after_ms(now));
+        let needed_ms = match need {
+            super::switch::RunNeed::For(after_ms) => self
+                .contained_task_lease_ttl(&request)
+                .map_err(|failure| *failure.error)?
+                .saturating_add(after_ms),
+            super::switch::RunNeed::Renews => lock(
+                &self.scheduler,
+                HostLocation::ReadContainedTaskDeadlineConfig,
+            )?
+            .config()
+            .maximum_client_heartbeat_interval_ms
+            .saturating_add(1),
+        };
         if token.expires_at_monotonic_ms().saturating_sub(now) < needed_ms {
             return Ok(Err(RuntimeHostError::request(
                 HostCode::ContainedTaskDeadlineUnavailable,

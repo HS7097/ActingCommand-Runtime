@@ -18026,11 +18026,11 @@ The coordinator cut MAPP-1 in two on 11-12. "MAPP-1" elsewhere in this section a
   (`device_group_config_invalid`, `several_members_unsupported`), and no release ships the switch
   after every task. MAPP-2's key comes with MAPP-2 and takes the next free revision of
   `actingd-config`.
-- Before the load accepts a group of several, main must also end **the member that cannot fit**
-  (added by MAPP-2b, §1.353, point 8; device-group.md, "The member that cannot fit, as built"):
-  with today's request deadlines every run of a member of a group of several is refused by this
-  bound; the lease across a switch is reworked in a later slice before any group of several is
-  accepted, and a task that cannot fit never becomes a candidate.
+- *History.* MAPP-2b (§1.353, point 8) added here that main must end **the member that cannot
+  fit** before the load accepts a group of several (with the request deadlines a configuration
+  gives, its lease bound refused every run of every member). MAPP-2d (§1.360) ended it: a
+  member's dispatch is granted an instance alone's lease and its run renews it after the switch,
+  so no member is refused for its deadlines (device-group.md, "The key's time").
 - The slice "device-level actions by device" comes before the first real use of a group of
   several.
 
@@ -21174,7 +21174,10 @@ second's. Every other kind `ui` refused stays refused.
   the document is parsed and checked as without the member (Phase A); then, in the hold of the
   fact write gate that writes the record (Phase B), after the store is synchronized and before the
   replay, the version of the instance's active `session.resource_targets` record (the sequence of
-  the `fact.published` that holds it, expired or not; `0` without one) is compared with
+  the `fact.published` that holds it, expired or not; `0` without one; corrected by G-R2a,
+  §1.361: the version the view answers in every state, `0` whenever it shows no `active`, a
+  withdrawal and a v3 record of entries alone included, where this slice compared a
+  withdrawal's own sequence) is compared with
   `expected_version`. Another value is Denied `fact_observation_version_conflict` (`fact_key`
   `session.resource_targets`, `current_version`, `operation` `apply_resource_targets`; the
   `current_version` kept in codes mode), nothing appended; the equal value goes on as without the
@@ -21315,7 +21318,9 @@ instance alone on its device keeps its path unchanged because the run path's exi
 ED-2 gate among them) pass unchanged and because the slice's only entry is that group-of-several
 check; the gate test `mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it`
 pins that the entry is never taken and that the records are equal (below, "Tests"). The slice
-ships in 0.12.60 (release 0.12.59 is cut without it).
+ships in 0.12.60 (release 0.12.59 is cut without it). MAPP-2d (§1.360) replaced the lease, the
+bound and its refusal, the run's need on the borrowed key (rows "the lease" and "the run's need",
+points 1, 2, 7 and 8) and the known gap; what follows is what MAPP-2b built.
 
 | Part | Built | Where |
 |---|---|---|
@@ -22049,6 +22054,588 @@ byte over its limit), and `goals_neutral_example_reads_to_typed_entries` and
 `goals_each_type_reads_its_members` (their references made by `GoalReferences::new`, no assertion
 changed).
 
+### 1.357 Slice #453 S1 (0.12.60): `instance add` gives a configuration its first policy row (Workflow #453, approved by the owner on 11-13; the design survey `rd-1113/fresh-root-design.md` §0, §1(a), §1(c) "1a. The first row" and the row S1 of §1(d), read on main `98924e28`, every place it names found again on main `95525c98`; the coordinator's rulings of 11-13 on board #453, items 5 and 8, not the owner's words; coordinator work order `rd-1114/brief-453-s1-first-row.md`, read on main `95525c98`)
+
+The slice took the next free number on main `95525c98` (after §1.352), which main has since given
+to MAPP-2b; the integration train 0.12.60c gave it 1.357, the number after main's §1.356, as the
+first row of that train. [install-cli.md](install-cli.md), "Instances, the first
+slice" ("Refused before anything is written", "The candidate", "A first row" and "The commit"),
+and its list of codes and words ("Workflow #453 S1") are the contract. The row `instance add` of
+[lab-operations.json](lab-operations.json) is unchanged: its parameters, its `help` and its
+`output` still say what it does. No outcome code, value key, vocabulary word, configuration key,
+step kind, journal kind, wire shape, record or interface revision is added or moved, and no
+outcome code fragment changes, so the index is not regenerated. A rescue row only: `actingctl`
+gains nothing (ruling 5).
+
+**What was missing.** `instance add` (crate `lab-rescue`, `src/install/instance_add.rs`, `compose`)
+copied the new row's `host_id` and `capability_operation_ids` from a row of
+`policy.facts.instances` (same game and server, else same game, else the first row) and refused
+`instance_invalid` with `config_key` `policy.facts.instances` when there was none, so a
+configuration with no instance yet, as on a fresh root, could not get its first one. Nothing else
+came from a sibling: the entry's `application_id` comes from the parameter or from the game
+root's `applications.json`, never from a sibling (Workflow #452), so a first row gets it the same
+way, and the row's other members are the asked alias, game and server and the constants
+`available: true` and `preferred_task_ids: []`.
+
+**The rule** (`compose`, `first_row_source`, `sibling_source`). With rows, exactly as before (the
+code moved into `sibling_source`, unchanged). With `policy.facts.instances` empty: in catalog mode
+(`policy.catalog` present and not `null`) refused as before, `config_key`
+`policy.facts.instances`; in composer mode the host is the one `policy.resources.hosts[].host_id`
+(no list, none, several, or one without a `host_id` text: `config_key` `policy.resources.hosts`),
+the capabilities `[STANDARD_PACK_OPERATION_ID]` (the policy crate's constant, `crates/policy`;
+`lab-rescue` now depends on `actingcommand-policy` for it, one line in `Cargo.toml` and in
+`Cargo.lock`), and `capabilities_from` `null`. These refusals stand where the copied row's
+refusal stood, after the alias, the index, the game and the application id. A configuration
+without `policy` (absent, or `null` as actingd's assembly reads it) is refused right after the
+`instances` list, as it was, now with `config_key` `policy` instead of `policy.facts.instances`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S1-1 | a first row of `policy.facts.instances`: the asked alias, game and server, the one declared host, `[STANDARD_PACK_OPERATION_ID]` | installer behaviour (the candidate) | #453 S1 | `install::instance_add::compose` | composer mode only; the candidate passes the assembly's `validate_instance_identities` by construction |
+| S1-2 | `capabilities_from` `null` in the journal input `instance_add` and the answer's `added` | journal input member value (free `inputs`; INST5-3) | #453 S1 | `install::instance_add::Added::value` | the member is always present; with rows it names the copied row's alias as before; the readers of the input read only `instance_id` |
+| S1-3 | `config_key` `policy` (no `policy`) and `policy.resources.hosts` on `instance_invalid` of `install_instance_add` | refusal values (existing key `config_key`, a token) | #453 S1 | `install::instance_add::compose` | catalog mode with no row keeps `policy.facts.instances` |
+
+Tests (apps gate row "#453 S1"), on the fake host and Runtime of `fixture.rs` and the module's
+temporary roots, no sleep: `gate_421_inst5::inst5_453_s1_a_first_row_takes_the_one_host_and_the_standard_pack_operation`
+(`compose` on the new checked-in fixture `crates/lab-rescue/tests/fixtures/inst5-first-row.json`,
+composer mode, no row, one host: the one row has the asked alias, game and server, the declared
+host and exactly `[STANDARD_PACK_OPERATION_ID]`, `added` records `capabilities_from` `null`, and
+the candidate is the fixture's, every member in its order, the minted id compared by its form),
+`inst5_453_s1_no_host_or_several_hosts_are_refused_with_the_hosts_key` (an empty host list, two
+hosts, no host list), `inst5_453_s1_catalog_mode_with_no_row_is_refused_with_the_rows_key`,
+`inst5_453_s1_no_policy_is_refused_with_the_policy_key` (absent and `null`), each through the row
+on an adopted root with a running Runtime that has no instance: `instance_invalid` with the key,
+the root byte for byte as it was, no journal, nothing asked of the Runtime; and
+`inst5_453_s1_a_configuration_with_rows_composes_the_bytes_of_before` (`compose` on the inputs of
+#452's checked-in fixture `inst5-application-id.json`, one row: the candidate's bytes, the minted
+id put back to the fixture's, are exactly the fixture's candidate as pretty JSON with a final line
+end, with the live file's `\n` and with its `\r\n`, and `added` names the copied row). The real
+judge, actingd's `config::gate_452_inst5::inst5_453_s1_the_real_assembly_takes_a_first_rows_candidate`:
+`load` and `assemble_or_refusal`, whose `PolicyAssembly::validate_instance_identities`
+(`apps/actingd/src/config.rs`) holds the policy's instance set equal to the configured aliases and
+every row's host declared, take the first row's candidate; the same document with the row's host
+undeclared is refused `policy_instance_host_unknown`, without the row `policy_instance_set_mismatch`.
+No existing test changes; every INST-5, INST-5b and #452 test stays as it is.
+
+**At deploy.** Nothing changes for an installation whose configuration has rows: the candidate
+`instance add` composes is the same, byte for byte, and so are its file, its commit and its
+refusals. A configuration without `policy` is refused with `config_key` `policy` where it named
+`policy.facts.instances`. The production root is not touched: the rescue module's composite
+operations are not used on it before LAB-7 (ruling 8; install-cli.md, "Journals across
+versions"), and production adds instances as before.
+
+### 1.358 Slice S11 (0.12.60): the state root remembers its installation (Workflow #453; the owner approved board #453, and the coordinator's rulings on the board replace the design survey's identity by the configuration's salt, not the owner's words; the design survey `rd-1113/fresh-root-design.md` §0 and §6, read on main `98924e28`, its line numbers found again on main `95525c98`; coordinator work order `rd-1114/brief-453-s11-state-root-record.md`, read on main `95525c98`; mains `691c20f5` and `1ffb6c7f` merged)
+
+[state-root-installation.md](state-root-installation.md) is the contract;
+[actingd-check-config.md](actingd-check-config.md) (the report member `state_root_installation`,
+the stage `config_state_root`), [actingd-unlock-owner.md](actingd-unlock-owner.md) ("Order", step
+0), [ledger-maintenance.md](ledger-maintenance.md) ("Offline entry"),
+[runtime-fact-store.md](runtime-fact-store.md) (`host.state_root_installation`),
+[ledger-observer.md](ledger-observer.md) (§15, the tag list's default),
+[install-cli.md](install-cli.md) ("Layout"; the clean's "Never touched") and
+[runtime-watchdog.md](runtime-watchdog.md) (the fatal start refusals row 5′ holds down) follow it.
+**No interface revision moves** ([component-interfaces.md](component-interfaces.md)): the two
+files are neither configuration nor ledger shapes; the fact is a new key of `runtime.fact_recorded`;
+the codes, operations and stage are catalog additions; the tag list's default gains one entry (no
+key, no revision, as AGT1A-5 and C1D-2 added theirs). The integration train 0.12.60c gave it
+1.358, the number after main's §1.356 and #453 S1's §1.357 of the same train: main `691c20f5`,
+merged into this branch, took §1.353 for MAPP-2b, and main `1ffb6c7f` (the train 0.12.60b),
+merged in fix round 1, took §1.354 to §1.356 for FL-2, S8 and S7, and G-R1.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S11-1 | `<installation root>\install\identity.json`, `actingcommand.installation-identity.v1` `{schema_version, installation_id, minted_at_unix_ms, minted_by {pid, build_commit\|null}}` | file outside the ledger (installation root) | S11 | the first start of an installation that finds none, under its owner lock | `installation_id` 16 bytes of `actingcommand_host_metrics::fill_system_random` (FLK-10's OS source), 32 lowercase hex; not a secret, in no configuration; placed only when absent (`.part`, flush, a hard link that fails when the file is there, the part's name removed) and read back, so the number the disk holds is the one recorded; no installer command writes, moves, renames, keeps or lists it |
+| S11-2 | `<state root>\installation.json`, `actingcommand.state-root-installation.v1` `{schema_version, installation_id, claimed_at_unix_ms, claimed_by {pid, owner_epoch, build_commit\|null}}` | file outside the ledger (state root): a registered exception to iron rule 13, as `runtime-state.key` and the watchdog's `state.json` | S11 | the claim, under the owner lock | written once (read absent under the lock, then placed only when absent as S11-1 is, and read back); read before the ledger opens by the check of a start, `unlock-owner`, every maintenance pass and check-config |
+| S11-3 | `host.state_root_installation`: runtime scope, `record_list` of one row `{claimed_at_unix_ms, claimed_by_pid, claimed_by_owner_epoch, claimed_by_build_commit?}` | new runtime fact key | S11 | the start that placed the record, once the ledger is open; else a start that finds this installation's record while the store holds no such fact, from the record, once | never the installation's number; the fact follows the record; in the default of `ledger_observer.tag.workbench_patterns` (`[&str; 15]`, `actingd.defaults.json`), so a start loads it; `config.parameters.ledger_observer` lists one entry more and the shipped defaults file's digest in `config.selection` changes |
+| S11-4 | `state_root_installation_mismatch` (fatal; `path`, `at_unix_ms`), `state_root_installation_record_invalid` (fatal; `path`, the read failure as `caused_by`), `state_root_claim_failed` (fatal; `path`, the OS failure as `caused_by`), `state_root_claimed` (info; `path`) | outcome codes (runtime-host) | S11 | the start, `unlock-owner`, `ledger-maintenance`, check-config; actingd's daemon line | operations `check_state_root_installation`, `record_state_root_installation`; actingd's stage `config_state_root`; no vocabulary word |
+| S11-5 | check-config's report member `state_root_installation` (`claimed_by_this`, `unclaimed`, `not_installed`) | report member (`check-config.v2` unchanged) | S11 | actingd | `claimed_by_other` and `record_invalid` are refusals with the start's codes at stage `config_state_root`, never values |
+
+**The installation root** (ruling 2). No program gets a flag: a writer of the state root (the
+start, `unlock-owner`, every maintenance pass) takes the directory of its
+`--config` when that directory holds the installer's own `install\state.json`; check-config the
+root `--install-root` names, else the same directory, under the same condition. The installer's
+start and the watchdog start `<root>\runtime\actingcommand-actingd.exe --config
+<root>\actingd.config.json`, so an installed Runtime finds its root; any other start (CI's example
+configuration, a developer's run) reads neither file.
+
+**Settled here** (each the slice's; the coordinator may change them):
+- *The claim reads the record before it mints.* Ruling 5 names minting first; this slice reads the
+  record again first and mints only for an unrecorded state root, so a start that lost a race
+  mints nothing either. The record is written right after the identity, in the same step.
+- *A step of the claim that fails* is the fourth code, `state_root_claim_failed` (fatal), since no
+  existing code says that the identity could not be minted or a file of the claim not written.
+- *The installer's state file that cannot be inspected* for another reason than its absence is
+  `state_root_installation_record_invalid` with that file as `path`: whether the program belongs
+  to an installation is then unknown, and the check is not skipped silently.
+- *check-config's member is `state_root_installation`*, a new top-level member: the report's
+  `state_root` stays the configured path string (a member of another type would change the
+  report's shape for every reader).
+
+**Fix round 1** (coordinator work order `rd-1114/brief-1700-fix1.md`, after the independent
+review; the three decisions above accepted):
+- *Every maintenance pass checks*, `verify` without flags included: every pass takes the owner and
+  appends an open and a close record to the owner journal, so a pass that writes anything to a
+  state root, the owner journal included, checks first and never mints or claims. This replaces
+  the last sentence of ruling 6 for that pass; the forensic readers and the watchdog, which take
+  no owner, still do not check.
+- *The fact follows the record.* A start that placed the record and failed before the fact (at a
+  ledger migration requirement, for example) left no fact; a start that finds this
+  installation's record while the fact store holds no `host.state_root_installation` records the
+  fact from the record (its `claimed_at_unix_ms` and `claimed_by`), once. The daemon line stays
+  the claim's own.
+- *Placed only when absent.* The identity file and the record are placed by a hard link of their
+  flushed `.part` (it fails when the file is there and never replaces it, unlike the rename
+  before), and each is read back from the disk: two configurations of one installation root that
+  start for the first time together keep the identity the first placed, and the record carries
+  its number.
+- *Without hard links* (fix round 2, the coordinator's ruling of 11-14): a hard link that fails
+  for any other reason than "already exists" (FAT32, exFAT) falls back to an exclusive create of
+  the target itself (`create_new`), written and flushed, then read back as after a link; "already
+  exists" on either means another start placed the file, which is kept and used; only when the
+  fallback fails too is the claim `state_root_claim_failed`. A file system without hard links
+  keeps no Runtime from starting; what the fallback gives up is that a crash while its few bytes
+  are written can leave an incomplete file, which the next start refuses as invalid.
+- *The contract says the limits*: an A/B root of the older installer configured from
+  `install\generations\…` is `not_installed`; the one more file-metadata read of a Runtime without
+  an installation root and the refusal when it fails other than "not found"; a leftover
+  `identity.json.part`; and the hand-over by hand when the identity file is corrupt and has no
+  backup.
+
+**Not touched.** The salt and everything derived from it, the integrity key, the owner journal's
+format, the hand-over command and its rescue row (S12), `install status`, `install new`, every
+behaviour of a Runtime not started from an installation root.
+
+**At deploy.** The first start of this release on an installation mints `install\identity.json`
+and writes the state root's `installation.json`, one fact and one daemon line `state_root_claimed`;
+nothing else of the start changes. A build before this slice ignores both files; forward again
+they match.
+
+**Rollback** (below 0.12.60): the older build neither reads nor writes either file, and its tag
+list does not name the fact, whose one record stays in the ledger as written; a configuration that
+names another installation's state root starts on it again. The files stay; the next start of
+this release or a later one reads them and matches.
+
+Tests: host rows "#453 S11", `actingcommand-runtime-host::lib::tests::gate_453_s11` (fourteen
+tests, the start fixture on temporary state roots and installation roots, no sleep, no clock read
+by a test; the test of a Runtime without an installation root pins the state root's entries and
+the start's runtime facts as main `691c20f5`'s code leaves them, written out in the test, and
+not the start's whole record list, whose capacity monitor records vary with the machine's disk
+and the timing);
+apps rows "#453 S11", `gate_453_s11::s11_check_config_reports_each_state_of_the_state_root_and_never_writes`
+(actingd) and `gate_inst1_update::s11_an_update_and_a_rollback_leave_the_installation_identity_in_place`
+(lab-rescue, the installer's fake host). Two existing tests change with the slice, keeping their
+names: `actingcommand-runtime-config`'s `ao1_keys_every_ledger_observer_key_has_its_contract_default`
+pinned the default this slice changes (its `WORKBENCH_PATTERNS`, 15 entries), and actingd's
+process test `an_idle_runtime_accepts_the_first_shutdown_request_right_after_ready` runs once more
+from an installation root and asserts the daemon line `state_root_claimed` where actingd prints
+it (fix round 1). The installer's own tests are unchanged; no golden changes; no test leaves the
+gate map.
+
+### 1.359 Slice MAPP-1d (0.12.60): a device group's monitor probe, the hand-over at a lease's expiry, and the queue's gate per member (Workflow #437; [device-group.md](device-group.md), "The monitor's probe in a device group", "Device-level actions", rows 7 and 15, and "One queue, one worker, one lease per device"; [read-session-resource-close.md](read-session-resource-close.md); MAPP-1c's open findings 2, 4 and 5, §1.350, and its independent review; the coordinator's rulings on board #437, not the owner's words; coordinator work order `rd-1114/brief-437-mapp1d.md`, read on main `95525c98`, main `691c20f5` merged; fix round 1 `rd-1114/brief-1701-fix1.md`, main `1ffb6c7f` merged)
+
+This slice took 1.354, the next free number on main `691c20f5`; main `1ffb6c7f` (the integration
+train 0.12.60b) holds §1.354 to §1.356, and the integration train 0.12.60c gave it 1.359, the
+number after main's §1.356 and the sections of the rows merged before it in that train (#453 S1's
+§1.357, S11's §1.358). A build still refuses every group of several at load
+(`several_members_unsupported`, unchanged), so no configuration reaches this slice's code: its
+tests hand the host the member → device key map and the group's name as the assembly builds them.
+
+| Part | Built | Where |
+|---|---|---|
+| The monitor's probe of a member (finding 2) | yes | `run_monitor_probe` (`host/monitor_control.rs:178`): under the device's guard (`:184`) the probe is judged as a keyless observation is (`monitor_probe_waits_for_device`, `:749`, over `device_held_by_another_member`, `host/device_group.rs:386`, which `refuse_keyless_observation_of_group` now uses too, unchanged in effect); the device held by another member: the round returns before anything is issued or recorded, the monitor state untouched, the probe still due; the device free: the probe as before (`probe_monitor_instance`, `:224`, the former body), then `close_monitor_session_of_group` (`:769`) closes the member's session under MAPP-1c's session close ahead (`close_keyless_session_of_group`) before the guard is let go; a failure of that close that poisons the Runtime is returned, any other is the close path's own records |
+| The hand-over at a lapsed run lease's expiry (finding 4) | yes | `cleanup_token_guarded` (`host/lease.rs:2465`) is the lease end under the guard: its former body, renamed `end_lease_ordered` (`:2488`), names no transfer while `lapsed_close_owed_in_group` (`host/resource_close.rs:548`: a member of several whose run's close met the lapsed lease, #411 A64) holds (`:2519`), so the lease expires or is released with no hand-over; then, still under the guard, `close_lapsed_run_session_guarded` (`host/resource_close.rs:482`) closes the member's session under the session close ahead (`:511`-`:518`) on the free device, whatever claim waits; the guard's drop (the sweep's own, or a holder's end) then grants the claim that waited first by the queue's own grant. `cleanup_token_inner` (`:2358`), `cleanup_expired_if_guard_free` (`:2393`) and `cleanup_scheduled_failure_with_run_links` (`:2065`) hand their guard in. An unconfirmed close fences the member (fenced already by the refused lapsed close) and keeps its close lease, as every dedicated close lease is kept then, for that lease's time to live only: the sweep then ends it and hands the device to the next waiting member (an open item of [device-group.md](device-group.md), "Release."); nothing ends the Runtime |
+| The queue's gate per member (finding 5) | yes | `HostShared::device_gates` (`host/device_group.rs:106`) reads the routine gate of each member of the device (`DeviceGates::gate_of`) and every grant from the device's queue passes them as one gate per member (`MemberGates`, a closure): the queue's own grant (`pump`, `host/lease.rs:3627`), the transfers (`promote_idle_preemption` `:1091`, `release_lease` `:1701`, `transfer_preempted_while_guarded` `:1874`, `end_lease_ordered` `:2525`), the immediate grants and the queueing (`queue_lease` `:228`, `acquire_lease_guarded` `:1232`, `request_host_claim` `:4019`). The pump's candidate is read with its member (`first_eligible_claim`): its performance directive and a ladder's release are read for that member, and its `lease.granted` names that member (it named the pumping member before; `pump_names_claims_member`, `:3759`). The hand-offs to a holder's own ladder or claim (`:2171`, `:2312`) keep the holder's member's gate. The dedicated close lease (`grant_dedicated_instance_lease`, `host/resource_close.rs:860`) keeps the asking member's one routine gate (`:870`), exactly as on main: every waiting entry that gate lets through refuses it (fix round 1, below). For an instance alone on its device one gate is read, as before |
+| Contract, register, lock table | yes | [device-group.md](device-group.md), [read-session-resource-close.md](read-session-resource-close.md), this entry; the three findings leave "Release."'s list with a history line |
+
+**The order of the device's queue for the rest.** Nothing is reordered: the scheduler's queue keeps
+its order (priority, then arrival), and its first eligible entry, each judged by its own member's
+gate, is the one granted (`first_eligible`, `crates/scheduler/src/lib.rs`). An entry its member's
+gate holds is passed over and keeps its place; the entries behind it, of the device's other members,
+are judged by their own gates; once the held member's gate opens, its entry is the first again.
+
+**The status of a probe that waits.** The monitor's row (`RuntimeMonitorInstanceStatus`,
+`runtime-client`) has no member that says why a probe did not run: a refused probe records a
+failure (`refuse_monitor_probe`, its run counted and its verdict replaced), which the work order
+rules out, and a probe a blackout passes over leaves the row as it is. A waiting round leaves the
+row as it is too: due, its run count and its last verdict unchanged. No word, member or interface
+revision is added; showing the wait as such in the status is the coordinator's question.
+
+**The lock order.** "→" and "; " as in §1.350; lines are of this entry's head. Leaf locks as there,
+and C (`contained_runs`, `run_end_control_of_lease`, `host/contained_task.rs:10965`) taken and
+released on its own.
+
+| Path | Locks, in order (file:line) |
+|---|---|
+| The monitor's probe of a member (`run_monitor_probe`, `host/monitor_control.rs:178`), changed | R (`monitor_instance`, `:180`, released); the map `host/lease.rs:3297` (released); G `host/monitor_control.rs:184`, blocking and held to the end (a plain guard: its drop pumps nothing) → the judgement (`device_held_by_another_member`, `host/device_group.rs:386`): S `:394` (released); the occupancy (`device_occupancy`, `:154`: R, P, F per member, the routine gate `host/lease.rs:3593`; L `host/policy_lanes.rs:474`; S `host/device_group.rs:170`, released) → waiting: return, G released. Free: the probe as in §1.350's row (`performance`; Ow handed to the kernel; on a capture failure `finish_capture_failure_while_guarded`, `host/resource_close.rs:1100`, whose dedicated lease reads the member's one routine gate, `:870` (R, P, F, released), before S, as on main; the monitor's registry; S `host/monitor_control.rs:598` in `monitor_recovery_admission`) → the close (`close_monitor_session_of_group`, `:769`): S `host/resource_close.rs:581` (released) → the session close ahead as in §1.350's row of a keyless observation (R `:931`; S `:899`; the grant's S `host/lease.rs:1930` → Ow `:1939`; the close: S `host/resource_close.rs:764`, Ow `:254` → F, S; its release, `cleanup_token_inner` with G held: R; O → S; C; O `host/lease.rs:2530` → S → S `:3308` → Ow `:3309`; C) → G released |
+| The sweep's end of a lapsed lease (`cleanup_expired_if_guard_free`, `host/lease.rs:2393`), changed | R; the map; G tried `:2404`, held to the end → `cleanup_token_guarded` (`:2465`) → `end_lease_ordered` (`:2488`): O → S (expired entries, released); the lease end's device use (S; the lapsed close's fence, `fence_lapsed_lease_close`, `host/resource_close.rs:409`); C (`lapsed_close_owed_in_group`, `:548`, released); R, P, F per member (`device_gates`, `host/device_group.rs:106`, each released); O `host/lease.rs:2530`, held to the end of `end_lease_ordered` → S `:2532` (the transfer's preparation, skipped when the close is owed) → … → S (`expire_token`, `:2627`) → S `:3308` → Ow `:3309`; O released → C (released) → `close_lapsed_run_session_guarded` (`host/resource_close.rs:482`), still under G: C; S `:497` (released); for a member of several the session close ahead (as in the row above), else the dedicated close lease as before → `close_lapsed_run_session_guarded` again (nothing owed) → G released, its drop pumps |
+| A holder's own end (`cleanup_token_inner`, `host/lease.rs:2358`; `cleanup_scheduled_failure_with_run_links`, `:2065`), changed | G (`:2376` when not handed in; `:2094`) → `cleanup_token_guarded` as in the row above (O → S → Ow inside `end_lease_ordered`; then, for a member owing its lapsed close, C → S → the session close ahead) → G released, its drop pumps |
+| The scheduler's per-device state: the queue's own grant (`pump`, `host/lease.rs:3627`), changed | R, P, F per member (`device_gates`, `:3638`, each released); S `:3642` (`grant_candidate` and `first_eligible_claim`, released); the candidate member's performance directive (R, then its own lock, released); G tried `:3679` → O `:3689` → S `:3692` (released); Q; the grant's S `:1930` → Ow `:1939`; Q; W |
+| The queueing, the immediate grants and the transfers (`queue_lease` `:228`, `acquire_lease_guarded` `:1232`, `request_host_claim` `:4019`; `promote_idle_preemption` `:1091`, `release_lease` `:1701`, `transfer_preempted_while_guarded` `:1874`), changed | the gates per member (R, P, F per member, each released) where the one routine gate was read before, before O and S, as in §1.350's rows; nothing else changes. The dedicated close lease (`grant_dedicated_instance_lease`, `host/resource_close.rs:860`) is unchanged from main (fix round 1) |
+
+Every changed path takes its locks in §1.350's one order (an outer gate of the policy, then G, then
+O, then S, then Ow); the gates per member are leaf locks taken and released before O and S, as the
+one routine gate was; the session close ahead runs under the G its caller holds, after O is
+released, as MAPP-1c's does. **No inversion was found.**
+
+**Findings, reported.** (1) A lease of a member of several that is not a run's (a client's lease,
+a Runtime claim) and lapses while the member's session is open: the sweep's expiry tries to close
+the session under the lapsed lease (`keeps_device_session` is false for a member), which is
+refused, and only a run's end phase is #411 A64's fence; the refusal is returned from the sweep as
+an error, the sweep marks it fatal (`lease_sweep_loop`, `host.rs`), and the whole Runtime stops.
+The independent review reads it as reachable today by instances alone when several instances
+share the emulator's native capture (the multi-Nemu gate), and by every member of a group of
+several. It has its own defect issue, board #458, and must be on main before the load accepts a
+group of several ([device-group.md](device-group.md), "Release."); it is not fixed here.
+*History:* a second finding, that a capture failure's dedicated close lease released with
+`HostShutdown` cancels the whole device's queue, was reported here and removed in fix round 1: the
+review checked it, and the removal takes only the requesting member's own queued entries.
+
+**Fix round 1 (the independent review, the coordinator's rulings).** (a) The dedicated close lease
+read each waiting entry by its own member's gate (`grant_dedicated_instance_lease`): with another
+member paused, fenced or inside a blackout and holding a queued routine claim, that claim refused
+nothing, the scheduler refused the close lease as a queue ahead (`lease_busy`), which
+`close_lease_refused_by_queue` does not take for a refusal by the queue, and a member's probe or
+observation whose capture failed on a free device ended the Runtime. That place reads the asking
+member's own routine gate again, exactly as on main (`host/resource_close.rs:870`); what
+`close_lease_refused_by_queue` recognises is unchanged. (b) The lone instance's comparison ran the
+same code in both rounds; the switch now also gates the queue grant's attribution and per-member
+judgement (`pump_names_claims_member`, `host/lease.rs:3759`), so the comparison runs main's code
+off and the slice's on (Tests, below). (c) The contract's texts on a waiting probe, on an
+unconfirmed close's lease and on what must be on main before the load accepts a group of several
+were corrected ([device-group.md](device-group.md)).
+
+**Tests.** `crates/runtime-host/src/tests/gate_mapp1d.rs` (gate map `host.toml`, "#437 MAPP-1d"),
+on MAPP-1c's fixture (two members writing one session log, fenced capture closes, a manual Runtime
+clock), with stuck recovery off and the resident monitor loop held (`hold_monitor_loop_for_test`;
+each round run by `run_due_monitor_probe_for_test`, as the loop runs it):
+`mapp1d_a_members_probe_on_a_free_device_closes_its_session_before_another_members_lease_begins`,
+`mapp1d_a_members_probe_while_another_member_holds_the_device_waits_and_runs_once_it_is_free`,
+`mapp1d_neither_former_fatal_path_of_a_members_probe_is_reached`,
+`mapp1d_a_lapsed_run_lease_hands_the_device_on_only_after_the_members_session_is_closed` (a direct
+run's end work lets its lease lapse past the end grace while another member's claim waits; also with
+the capture close unconfirmed),
+`mapp1d_a_paused_members_claim_stays_queued_while_another_members_later_claim_is_granted` (the
+pause lifted by the test-only `lift_instance_pause_for_test`, without a resume's reconnect),
+`mapp1d_the_switch_changes_a_members_grant_record_and_no_record_of_a_lone_instance` and (fix round
+1) `mapp1d_a_members_failed_probe_capture_beside_a_held_members_claim_keeps_the_runtime_running`
+(another member paused, fenced, or inside a blackout of its own list, its routine claim queued on
+the free device; the probing member's capture fails: one refusal `lease_transfer_not_safe` naming
+that member, which is not fenced, the probe failed `capture_failed`, its session closed by the
+probe's session close ahead, the held claim still queued, the Runtime's health clean; it fails on
+the head fix round 1 started from, where the probe ends the Runtime). The test-only switch
+`RuntimeHost::mapp1d_off_for_test` (the field `HostShared::mapp1d_off_for_test`, its six checks in
+`device_gates`, `pump_names_claims_member`, `lapsed_close_owed_in_group`,
+`close_lapsed_run_session_guarded`, `monitor_probe_waits_for_device` and
+`close_monitor_session_of_group`, and its setter, all under `cfg(test)`) shows the old gap of each
+part for a member on hosts started alike. Off, the queue's grant (`pump`) runs main's code: it
+names the member whose queue was pumped in its candidate's performance check, its ladder judgement
+and its `lease.granted`, and judges every claim by that member's gate; on, it names the member the
+candidate serves and judges each claim by its own member's gate. The comparison
+(`mapp1d_the_switch_changes_a_members_grant_record_and_no_record_of_a_lone_instance`) runs on one
+host, two rounds, on then off: for a member of several the switch shows in a record (the
+`lease.granted` of a member's claim granted by the pump of another member's queue names the claim's
+own member on and the pumping member off; the lease sweep's scan is held for that step,
+`hold_lease_expiry_scan_for_test`, so no other thread can grant the claim); for an instance alone the probe's, the expiry's and the
+startup claim's grant records are equal record by record by type, severity, the instance the links
+name and whole payload, with what the compared records cannot share normalised (every run of 32 or
+more hexadecimal digits, every member naming an instant, a measurement on the process clock or a
+ledger place, the monitor registry's `revision`, `previous_revision`, `configuration_version` and
+`probe_configuration_version`, and an evaluation's `seed`), every difference named in one failure.
+**What rests on reading, not on that test:** the slice's pure refactorings, which an instance alone
+runs and which cannot be put under the switch without keeping a copy of main's code:
+`HostShared::run_monitor_probe`'s body moved into `probe_monitor_instance`
+(`host/monitor_control.rs`), `cleanup_token_guarded`'s former body renamed `end_lease_ordered` and
+the admission guard handed through `cleanup_token_inner`, `cleanup_expired_if_guard_free` and
+`cleanup_scheduled_failure_with_run_links` (`host/lease.rs`), and the judgement of
+`refuse_keyless_observation_of_group` moved into `device_held_by_another_member`
+(`host/device_group.rs`). The MAPP-1, MAPP-1b, MAPP-1c, MAPP-2a and MAPP-2b gates and every other
+test are unchanged; the SR-4a3 gate's helpers `once` and `silence_manifest` are made visible to
+the MAPP-1d gate (`pub(super)`), and nothing else of it changes.
+
+**What is not added.** No outcome code, value key, word, configuration key, record type, payload
+member, fact, tag, wire shape or interface revision.
+
+**At deploy.** Nothing reachable until the load accepts a group of several: no installation runs a
+member's probe, a member's lapsed run lease or a device of several members' queue. An instance
+alone on its device runs as before: its probe, its expiry and its queue's grant write the same
+records (the comparison test), its dedicated close lease is judged as on main, and the
+refactorings it runs rest on reading (Tests, above).
+
+**Rollback** (below 0.12.60). Nothing is persisted by MAPP-1d; the build before it reads every
+record this one writes.
+
+### 1.360 Slice MAPP-2d (0.12.60): the lease across a switch: the run renews its lease after the switch, and the bound goes (Workflow #437; [device-group.md](device-group.md), "The switch before a run", step 4 and "The key's time"; the coordinator's ruling of 11-14 on board #437 and its ruling of 11-14 on the renewed token after the work order's "verify first" report, not the owner's words; the owner's rulings on board #437 it respects: a running task is never interrupted, the time a switch takes is counted nowhere, an application is launched only through an application launch over ADB; coordinator work order `rd-1114/brief-437-mapp2d.md`, read on main `691c20f5`; fix 1, after an independent review, coordinator work order `rd-1114/brief-1703-fix1.md`, main `1ffb6c7f` merged)
+
+The slice took 1.354, the next free number on its base (main `691c20f5`, whose last section is
+§1.353); main then gave 1.354 to 1.356 to FL-2, S8 and S7, and G-R1 (the integration train
+0.12.60b, main `1ffb6c7f`), and the integration train 0.12.60c gave this section 1.360, the number
+after main's §1.356 and the sections of the rows merged before it in that train (#453 S1's §1.357,
+S11's §1.358, MAPP-1d's §1.359). MAPP-2b (§1.353) granted a member's dispatch `D_s + D_run + R`
+and refused a member whose `D_s + D_run` exceeded 1 800 000 ms; with the request deadlines a
+configuration gives (1 800 000 ms for every startup package, configured procedure and composed
+pack request, 60 000 ms for a fact refresh) that refused every
+run of every member (its point 8). MAPP-2d replaces that lease: a dispatch's lease is the same for
+every instance, the switch runs inside it, and the run renews its lease after the switch's
+startup run. A build still refuses every group of several at load (`several_members_unsupported`,
+unchanged), so no installation reaches this slice's code.
+
+| Part | Built | Where |
+|---|---|---|
+| the lease | yes | every dispatch, a member's included, is granted its run's lease, `D_run + R` (`contained_task_lease_ttl`), at the policy admission (`host/policy_dispatch.rs`, as before MAPP-2b) and for a direct run's claim (`host/contained_task.rs`); `HostShared::dispatch_lease_ttl`, the bound and its refusal are deleted |
+| the startup run's time | yes | `RunNeed::Renews` (`host/switch.rs`): the startup run's deadline is the earlier of its response deadline and the key's expiry less `R` (`borrowed_key_deadline`); before any stop and again before the startup run, `borrowed_key_admits` (`host/startup_package.rs`) refuses a key with no more than `R` left (`contained_task_deadline_unavailable`, step `startup_package`); `RunNeed::For` keeps MAPP-2a's check for `RuntimeHost::switch_application`; `RunNeed::OwnTime`, `own_time_through`, `policy_run_need` and `PolicyDispatchClock::own_time_through_monotonic_ms` are deleted |
+| the renewal | yes | `HostShared::renew_after_switch` (`host/switch.rs`), from `switch_before_run` after a switch that ran a startup run, inside the switch's timed window: the host's `renew_held_lease` (`host/lease.rs`) to the run's `D_run + R`, under the run's request; a refusal or failure is `application_switch_failed` at step `lease_renewal`, which starts the member's switch cooldown as any failed switch |
+| the token after the switch | yes | `HostShared::run_token` (`host/switch.rs`): the device's lease with the granted token's lease id and holder on the run's connection, else the granted token; for an instance alone its granted token, with no read. The policy run takes it after its switch for every later step (`run_scheduled_contained_task`: the deadline, the request lifecycle, the run's execution and its release); the direct run replaces its local token with it; the release of a policy run's failed settlement resolves it too (`ensure_scheduled_policy_lease_released`, `host/policy_outcome.rs`) |
+| the step word | yes | `ApplicationSwitchStep::LeaseRenewal` (`crates/runtime-host/src/codes.rs`), `lease_renewal` in the catalog's vocabulary `application_switch_step` |
+
+**Verify first** (the work order's section, read before anything was written). (1) A renewal
+replaces the token: `Scheduler::renew_with_ttl` (`crates/scheduler/src/lib.rs`) keeps the lease
+id, the holder, the member and the owner epoch and mints a token with the new expiry, and a token
+compares whole (`LeaseToken`, `crates/actingcommand-contract/src/runtime.rs`), so the granted one
+no longer validates (`validate_active_lease`, `lease_mismatch`; the scheduler's own test, "a
+renewal replaces the token"). The work order had assumed the same token; the coordinator ruled on
+11-14 that the run carries the token the renewal returns, resolved by lease id and holder where
+a policy run's context keeps the granted one. (2) The renewal is bounded by the cap of a grant
+counted from the renewal (`validate_claim_ttl`, `expiry_from_ttl`), so it extends past the
+granted expiry. (3) It reads no queue and refuses nothing because of a queued claim; the host's
+`renew_held_lease` takes the device's queue-order lock, not its admission guard. The scheduler
+crate is not changed.
+
+**The stale token, closed.** A policy run's context keeps the granted token, and the release of a
+failed settlement used it. After a renewal that release would have met no lease with that token:
+the transfer's preparation answers `lease_mismatch`, read as no candidate, and the release as a
+lease already removed, so `lease.released` would be written as not performed while the renewed
+lease stayed held to its expiry and another member's queued claim waited for it. Every place of
+the policy path that uses the token after the switch resolves it (`run_token`); the context is
+not made mutable and no copy of the renewed token is kept. The settlement's other readers of the
+context's token read its lease id and member only, which a renewal keeps; no place needed the
+dispatch clock.
+
+**Where the build completes the contract.**
+
+1. *Too little.* MAPP-2a's startup run on the borrowed key goes through the deadline check of
+   every run (`contained_task_deadline_until`), which refuses a deadline that does not lie after
+   now. With the startup run's deadline the earlier of its response deadline and the key's expiry
+   less `R`, that happens exactly when the key has no more than `R` left: that is "too little",
+   checked before any stop and again before the startup run.
+2. *The run's deadline.* Set from the granted lease before the switch, moved on by the switch's
+   time (MAPP-2b) and computed again from the renewed lease, the earlier kept: the run's grant
+   plus `D_run`, moved on by the switch's time, as an instance alone's is its grant plus `D_run`.
+3. *The renewal's time* is inside the switch's timed window (`switch_before_run`), so it is the
+   switch's time and counts in no run's own time, sample or budget.
+4. *A start outside a run* (an `ApplicationLifecycle` `launch` or `restart`, the ladder's
+   application restart rung) runs no startup package in its switch (`stop_others_before_start`),
+   so nothing is renewed and nothing changes for it.
+5. *The lone-instance comparison* (`comparable`, `time_or_place` in the MAPP-2b gate) needed
+   nothing more: an instance alone renews nothing, so no record is added to its run; the
+   renewal's records (`scheduler.admitted`, `lease.transition_intent`, `lease.renewed`) are a
+   member's, under its run's request and lease, and not run-linked.
+
+**The code.** No code is added. The vocabulary `application_switch_step` gains `lease_renewal`
+(`codes.rs`, `catalog.json`); `application_switch_failed`'s description, common causes and handling
+name the step; `contained_task_deadline_unavailable` keeps its other uses, its common causes lose
+the refusal of a member that cannot fit and say what "too little" is. The index is regenerated
+(`ci/outcome_codes_index.py`). `runtime-outcomes` stays 1.
+
+**Tests.** `crates/runtime-host/src/tests/gate_mapp2b.rs` (gate map `host.toml`, "#437 MAPP-2d"),
+on the MAPP-2b gate's fixture:
+`mapp2d_with_real_deadlines_a_member_switches_and_runs_on_its_renewed_lease`,
+`mapp2d_a_member_is_granted_an_instance_alones_lease_and_renews_nothing_without_a_startup_run`,
+`mapp2d_the_startup_run_takes_what_is_left_and_too_little_fails_the_switch_at_its_step`,
+`mapp2d_a_failed_renewal_fails_the_switch_at_lease_renewal_and_hands_the_device_on`,
+`mapp2d_another_members_claim_stays_queued_through_the_renewal`,
+`mapp2d_a_renewed_lease_is_gone_after_its_run_and_the_next_claim_is_granted_at_once` (the stale
+token: on the policy path, completed and failed right after the switch so that the failed
+settlement releases the key, and on the direct path, the same two, every release of the renewed
+lease is performed, the scheduler holds no lease of it and the next claim is granted at once) and
+`mapp2d_the_member_that_could_not_fit_is_dispatched_and_runs`. Two test-only hooks
+(`#[cfg(test)]`): `RuntimeHost::refuse_next_switch_renewal_for_test` (the next renewal after a
+switch is asked with a token the scheduler does not hold, so it is refused `lease_mismatch`) and
+`RuntimeHost::fail_next_run_after_switch_for_test` (the next member's run fails right after its
+switch, `backend_operation_failed`). Two MAPP-2b tests are retired (`ci/retired-gates.toml`), as
+the requirement removes what they pinned:
+`mapp2b_a_member_dispatch_is_granted_the_startup_and_the_run_and_one_that_cannot_fit_is_refused`
+(the member's lease `D_s + D_run + R`, the time check on it and the bound's refusal) and
+`mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round` (replaced by
+`mapp2d_the_member_that_could_not_fit_is_dispatched_and_runs`). One is adapted:
+`mapp2b_the_group_check_is_the_only_entry_and_a_lone_instance_never_takes_it` asserted the member's
+lease `D_s + D_run + R` with the slice reachable; it now asserts `D_run + R`, as with the slice
+off. Its lone instance's half is unchanged. The other MAPP-2b tests, the run-duration sample,
+`last_duration_ms` and budget test among them, and the MAPP-2a gate are unchanged.
+
+**Fix round 1** (after the independent review; no behaviour changes).
+
+1. *The stale-token test pins the defect.* In
+   `mapp2d_a_renewed_lease_is_gone_after_its_run_and_the_next_claim_is_granted_at_once` the
+   fixture's clock had not moved between the grant and the renewal, so the renewed token equalled
+   the granted one in all five members and a build that released with the granted token passed.
+   Every switch of the test now takes time (B's first front read moves the Runtime clock on by
+   5 000 ms, `Bench::slow_front`), and both completed runs assert that their admitted key expires
+   at least that much after the granted one (the policy run against its context's token, the
+   direct run against the key its startup run ran on). The test's comment names the assertions a
+   build that releases with the granted token fails (every release performed, no lease left, the
+   next claim granted). A third test-only hook, `RuntimeHost::release_failed_policy_run_with_granted_token_for_test`
+   (`#[cfg(test)]`, read once by `ensure_scheduled_policy_lease_released`), makes the failed
+   settlement's release take the granted token; with it the same failed policy run shows the
+   defect's shape: its one `lease.released` not performed, the renewed lease still holding the
+   device with the other member's claim queued, that claim not granted. Every earlier assertion
+   of the test is kept.
+2. *Texts.* `device-group.md`: a member already in front renews nothing, so its switch's one
+   foreground read comes out of its run's deadline (computed again from the granted lease, the
+   earlier kept), at most one device command's time limit, the consequence of no renewal without
+   a startup run; "too little" means only that the startup run cannot begin: a key with a little
+   more is used, the other members are stopped first, a startup run that then runs out of time
+   fails the switch at its step like any switch failure (the cooldown, no ladder), and the run
+   itself is never squeezed (it starts on a full renewed lease). The catalog
+   (`runtime-host.json`): `application_switch_failed`'s description names `lease_renewal` among
+   the steps whose package is the member's own; `dispatch_instance_cooldown`'s common causes and
+   the location `switch_application` name the renewal among the switch's steps. The index is
+   unchanged (`ci/outcome_codes_index.py --check`: current).
+3. *Records before the lifecycle.* The renewal's three records (`scheduler.admitted`,
+   `lease.transition_intent`, `lease.renewed`) are written under the run's own request before its
+   request lifecycle begins, where MAPP-2b already writes `startup_package_scheduled`; the
+   stop's records are the stopped member's own stop request's and the startup run's its own
+   request's, under the switch's causation id. The client's strict run read (`runtime-client`,
+   `read_contained_run_status`) reads a request by the 17 types of `RUN_STATUS_EVENT_TYPES`, none
+   of these four. `mapp2d_another_members_claim_stays_queued_through_the_renewal` now asserts that
+   before the lifecycle the run's request holds exactly those four records, and reads the closed
+   ledger after its mark with the forensic side's task evidence reader (`actingledger`'s, the one
+   the FL-2 gate reads with): nothing refused, no corrupt tail, and every record of the run's
+   request read in the host's order.
+
+**At deploy.** Nothing reachable until the load accepts a group of several. No configuration key,
+no interface revision; the catalog's `application_switch_step` gains one word. An instance alone
+on its device keeps its lease, records, settlement and budget verdict (the MAPP-2b gate's
+lone-instance test).
+
+**Rollback** (below this slice). Nothing is persisted by MAPP-2d; the build before it reads every
+record this one writes.
+
+### 1.361 Slice G-R2a (0.12.60): the goal document's value store, resource targets v3 (Workflow #455, step 2; the owner asked that a person in the console and an agent through the Lab set an application's goals in one document, board #455; the design `rd-1114/455-goals-design-final.md` §0, §1, §3.4, §3.12, §4 and §5 rows G-R2a, §6.1 and §6.2, read on main `fa724931`; the coordinator's rulings on board #455, not the owner's words; coordinator work order `rd-1114/brief-455-gr2a-v3-store.md`, read on main `95525c98`)
+
+[resource-targets.md](resource-targets.md) ("Document `actingcommand.resource-targets.v3`",
+"Storage", "Resource weights (v2)", "Read-only view") is the contract;
+[instance-fact-store.md](instance-fact-store.md) ("Resource target policy facts": the rows, the
+bounds, the replay) and [runtime-interface.md](runtime-interface.md) (the rows of
+`EditResourceTarget`, `active.rows?` and `stale_schema?`) follow it. The base this slice was read
+on (`95525c98`) ended at §1.352; main then took §1.353 (MAPP-2b) and, in the integration train
+0.12.60b, §1.354 (FL-2), §1.355 (S8 and S7) and §1.356 (G-R1). The fix round of 11-14 merged main
+`1ffb6c7f`; the integration train 0.12.60c gave this section 1.361, the number after main's §1.356
+and the sections of the rows merged before it in that train (#453 S1's §1.357, S11's §1.358,
+MAPP-1d's §1.359, MAPP-2d's §1.360).
+
+**What.** A third document version, `actingcommand.resource-targets.v3`, holds an application's
+goals in the record that exists, the instance fact `session.resource_targets`: no new fact key,
+no new file, no new event (the design's §3.12). Nothing reads the entries yet, and nothing writes
+one of them alone: the goal view and the edit of one entry (G-R2b), the pack's declaration
+(G-R1), deadlines (G-R4), tiers (G-R5) and the rule about irreversible packages (its own slice,
+after this one) are later.
+
+- **The document** `{schema_version, instance, targets, entries?}`: a target is a v2 target with
+  an optional `valid_until_unix_ms` of its own (the v2 bound; absent, no expiry); `by_unix_ms` is
+  not a member in this slice (`unknown_field` at it; the deadline slice adds it); the document has
+  no lifetime of its own (a top-level `valid_until_unix_ms` is `unknown_field` at it); `entries` at most 96, each
+  `{name, value}`, the name `[a-z0-9][a-z0-9_]*` of 1 to 64 bytes, unique, the value any JSON value
+  whose canonical text (the policy crate's `canonical_serialized`, the writer of every policy
+  identity) is at most 1024 bytes without a control character. The reader is as strict as v2's.
+- **The rows**: `policy`; `target` (v2's members, its own `valid_until_unix_ms`, and for a target
+  that came through a v3 document `set_unix_ms`, `channel` and, for a request from the Lab,
+  `initiator`); `task`; `entry` `{name, value_json, set_unix_ms, channel [, initiator]}`. The
+  Runtime writes who set a row from the request (its clock at the request, the channel the request
+  is recorded with, the initiator its connection declared, as the receipt names them), never from
+  the document. At most 1 + 16 + 128 + 96 = 241 rows, inside the 256 of the scheduler's input. A
+  v3 record is stored without expiry. Only a v3 document needs the request's channel (the
+  coordinator's ruling of 11-14 on #1702): a request that names none (the door tags every client
+  request with one) applies a v1 or v2 document as any request does, and its v3 document is
+  refused at request level, Denied `invalid_request` with the existing host code
+  `channel_binding_missing` at `apply_resource_targets`, nothing appended, nothing latched.
+- **`ApplyResourceTargets`**: in the hold of the fact write gate that writes the record, the
+  active record is read and the record composed over it (`CheckedResourceTargets::compose`): a v1
+  or v2 document over a record that is not v3 exactly as before; a v1 document over a v3 record
+  refused `unsupported_schema_version` at `/schema_version`; a v2 document over a v3 record a v3
+  record of its targets, each with the document's lifetime, the stored entries kept; a v3 document
+  replaces the targets and keeps the stored entries unless it carries `entries`; with no target and
+  no entry left, the withdrawal a v2 document with `targets: []` writes, byte for byte. Replay as
+  before; `expected_version` is compared as T1-R built it, for every version, except that a
+  withdrawal is now `0` (below).
+- **The evaluator** reads a v3 record into the same resolved form as a v2 record
+  (`TargetPolicyState::ActiveV2` or `ExpiredV2`; no third path): the targets whose own lifetime has
+  not passed are an active v2 policy's, whose lifetime is the earliest of theirs; a target whose
+  lifetime has passed weighs nothing and its candidates carry `resource_target_policy_expired`
+  with its lifetime; when all have passed, an expired v2 policy.
+- **The read**: `ResourceTargetView.active` for a v3 record names the version, every target in v3
+  document form with its own lifetime, no record lifetime, and `expired` exactly when every target
+  has lapsed. Entries are not shown (G-R2b). A console built against the released client decodes
+  it with the same strict types and `validate`, which this slice does not change; it sees a
+  `schema_version` it does not know and must not interpret the targets.
+- **The receipt** keeps its shape and rules: a v3 document's never names `valid_until_unix_ms`
+  or `conditions` (both left out together; the read answers each target's); a v1 or v2
+  document's is the one it answered before, also over a v3 record (the document's lifetime and
+  conditions; the identity, version and event name the record written, so over a v3 record
+  `policy_sha256` is the v3 record's, the one difference from before). `expected_version` is only
+  ever the value a read answered; the receipt's `version` is not a value to send back (after a
+  withdrawal or a record of entries alone it is the record's sequence while the read answers `0`).
+- **The version compared** (T1-R corrected, the coordinator's rulings of 11-14 on #1702): the
+  version `expected_version` meets under the fact write gate is the version the read answers,
+  in every state: the record's sequence when `ResourceTargetView` shows `active`, `0` when it
+  shows none (no record, a withdrawal, a v3 record of entries alone, which the read does not
+  answer as `active`: the answer's shape stays). The gate takes the judgement from the read's own
+  reading (`actingcommand_policy::resource_targets_without_active`, the evaluator's
+  `stored_policy_state`). Until this slice a withdrawal's own sequence was compared, which no read
+  answers. Given up: while the record holds entries and no target, two writers of whole
+  documents that both read `0` are not told apart, and the later one wins; the versioned edit of
+  single entries is a later slice's request with its own view.
+- **#429 R-13** had reserved the version name for a target table of its own (`maintain`/`gain`,
+  `paused`, `stale_schema`, a per-target edit); this design took the name, and none of that was
+  built: `EditResourceTarget` stays answered `not_implemented`. The contract crate's comments on
+  `stale_schema`, `ResourceTargetKind` and `ResourceTargetEdit` say so (comments only).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GR2A-1 | `actingcommand.resource-targets.v3`: the document and its reader | document (the `ApplyResourceTargets` text) | G-R2a | agents (a document file through `targets set`), later G-R2b | no wire shape: the request carries the document as text |
+| GR2A-2 | `session.resource_targets` record list: the v3 header, `target` rows with `valid_until_unix_ms`, `set_unix_ms`, `channel`, `initiator`, and `entry` rows | fact content (`ledger` unchanged, as v2 was) | G-R2a | the host | 241 rows at most; no event type, payload or key added |
+| GR2A-3 | the version `ApplyResourceTargets.expected_version` meets: the read's, `0` without `active` (a withdrawal, a v3 record of entries alone) | behaviour of T1-R's check (`runtime-client` unchanged) | G-R2a | the host | the read's own judgement; §1.351 corrected with a history line |
+
+**Interface.** No revision moves in this slice: `runtime-client` stays [3, 8], `ledger`,
+`actingd-config` and `package` do not move. The record is fact content, the targets untyped values
+of the view, the document text. No word is added to any closed vocabulary: the refusals use the
+existing reasons (the coordinator's ruling of 11-14 on #1702 took out the word the first round
+had added).
+
+**At deploy.** Nothing changes until someone applies a v3 document: every v1 and v2 document and
+record is written, read, weighed and shown as before.
+
+**Rollback** (below 0.12.60): a build before this slice reads a v3 record as an unknown version
+(`resource_target_policy_unreadable`, `unsupported_schema_version`) and runs that application on
+base scheduling, its view answering `resource_target_view_policy_unreadable`, until a v2 document
+is applied again; nothing fails.
+
+Tests (policy gate rows and host gate rows "#455 G-R2a"): `gate_455_gr2a::gr2a_t1_a_v3_record_with_a_v2_records_targets_weighs_byte_for_byte_as_the_v2_record`,
+`gr2a_t2_a_lapsed_target_weighs_nothing_and_says_expired_while_the_other_weighs_on`,
+`gr2a_t3_the_v3_reader_refuses_each_mistake_at_its_field`,
+`gr2a_t4_a_record_of_16_targets_128_task_rows_and_96_entries_is_241_rows_and_is_evaluated`,
+`gr2a_t5_v1_and_v2_documents_write_the_bytes_they_wrote_before_and_weigh_as_before`,
+`gr2a_t6_a_record_of_a_version_the_reader_does_not_know_runs_on_base_scheduling`,
+`gr2a_t7_a_v3_documents_receipt_names_no_lifetime_and_no_condition` and
+`gr2a_t8_a_v2_documents_receipt_over_a_v3_record_is_the_one_it_answers_over_none` (the policy crate,
+gate_ss1's catalog and documents, whose fixture functions became visible to their sibling module);
+the host's `gate_455_gr2a::gr2a_h1_a_v3_record_names_who_set_its_rows_and_later_documents_keep_its_entries`,
+`gr2a_h2_entries_replaced_a_record_of_entries_alone_the_withdrawal_and_the_refusals`,
+`gr2a_h3_v1_and_v2_documents_over_v1_or_v2_records_write_the_rows_they_wrote_before` (T1-R's v2
+document), `gr2a_h4_a_start_reloads_a_v3_record_unchanged` and
+`gr2a_h5_the_version_a_writer_reads_is_the_version_the_gate_compares_in_every_state` (no record,
+an active v2 record, a withdrawn record, a v3 record of entries alone, a v3 record with
+targets; the receipt's `version` sent back after a withdrawal or entries alone is the conflict),
+`gr2a_h6_a_request_without_a_channel_applies_v1_and_v2_and_its_v3_document_is_refused` (through
+the test hook `process_request_without_channel_for_test`, the door's own path with no channel,
+since no client request arrives without one) and
+`gr2a_h7_a_v3_records_view_decodes_through_the_contracts_strict_types_and_passes_validate` (a
+second fixture pool). The policy half's `compose` helper passes its setter as the composition now
+takes it (an option); what it pins is unchanged. One existing test pinned what this
+slice changes and changes with it, keeping its name:
+`gate_p2b::gate_p2b_g12_each_realistic_mistake_of_either_version_is_refused_with_its_reason_at_its_field`
+wrote `actingcommand.resource-targets.v3` as "a version no reader takes" and now writes `.v4`. No
+golden changes; no test leaves the gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -22116,6 +22703,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.idle_state` (a record list: the instances the idle action closed or is closing, with their action and wake; since 0.12.25 its writer row names the start anchor, not the owner epoch (#405 N-2), and a woken instance stays in it, `woken`, until its startup package has run (#405 O-2); [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #405 IDLE-1P) | #405 IDLE-1P |
 | `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `host.capped_episodes` (a record list: the writer's start anchor, then per instance and pool with an open or waiting capped episode its episode row, consumer rows and member rows; [runtime-fact-store.md](runtime-fact-store.md); §1.299 SC1-11, C1D-1) | workbench | yes (added to `tag.workbench_patterns` by SCHED-C1d) | #428 SCHED-C1d |
+| `host.state_root_installation` (one row: the claim's time and who claimed, never the installation's number; [state-root-installation.md](state-root-installation.md); §1.358 S11-3) | workbench | yes (added to `tag.workbench_patterns` by S11) | #453 S11 |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
 | `config.catalog_provenance` (count and id rows of who wrote the active composed generation's fixed values and valuations; §1.299 SC1-7, C1B-1) | workbench | no (`config.` is re-observed) | #428 SCHED-C1b |

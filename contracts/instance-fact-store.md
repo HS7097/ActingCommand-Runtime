@@ -473,7 +473,16 @@ Workflow #308 RT-S1a stores an instance's resource target policy as the instance
 
 | Key | Value | Scope |
 | --- | --- | --- |
-| `session.resource_targets` | `record_list`: a `policy` header, `target` rows and `task` rows | `instance` only |
+| `session.resource_targets` | `record_list`: a `policy` header, `target` rows and `task` rows; for an `actingcommand.resource-targets.v3` record (Workflow #455 G-R2a, since 0.12.60) also `entry` rows | `instance` only |
+
+**Rows and bounds** ([resource-targets.md](resource-targets.md), "Storage"). A v1 or v2 record
+holds at most 1 + 16 + 128 = 145 rows. A v3 record, the goal document's value store, holds at
+most 1 header, 16 `target` rows, 128 `task` rows and 96 `entry` rows, 241 rows, inside the 256
+rows of a record list the scheduler's input takes ("Projection into the evaluation": a longer list
+is left out of the evaluation), and at most 14 fields a row; an `entry` row's `value_json` is a
+canonical text of at most 1024 bytes, the fact string bound. Its `target` and `entry` rows name
+who set them (`set_unix_ms`, `channel`, `initiator`), which the Runtime writes from the request,
+never from the document. A v3 record is stored without expiry; no key and no file is added.
 
 **Formal entry.** Only `ApplyResourceTargets` writes it, through `publish_facts` with the
 request's origin (source `adapter`, actor `agent`) on the `fact.published` event. An ordinary
@@ -489,9 +498,16 @@ active record's sequence is the new policy's `previous_version`.
 `InstanceFactStore::active_revision(scope, key)` reads the active record with the sequence and
 id of its event. Workflow #455 T1-R (since 0.12.60): in the same hold, before the replay, an
 `ApplyResourceTargets` that names `expected_version` has it compared with the active record's
-sequence (`0` without a record); another is `fact_observation_version_conflict` with `fact_key`
+sequence (`0` without a record; since Workflow #455 G-R2a, the version `ResourceTargetView`
+answers in every state: `0` whenever it shows no `active`, a withdrawal and a v3 record of
+entries alone included; before G-R2a a withdrawal compared with its own sequence); another is `fact_observation_version_conflict` with `fact_key`
 and `current_version`, nothing appended, as `EditPackSchedule` compares its list ("Pack schedule
-facts"); without the member nothing is compared.
+facts"); without the member nothing is compared. Workflow #455 G-R2a (since 0.12.60): in the same
+hold, before the comparison, the active record is read and the record the document writes is
+composed over it (resource-targets.md, "Applying a document"): a v1 or v2 document over a record
+that is not v3 writes exactly what it wrote before; over a v3 record a v2 document's targets
+replace the stored ones and the stored entries are kept, and a v1 document is refused at
+`/schema_version`.
 
 **Projection.** The key is not excluded from the overlay: an unexpired or expired policy is an
 ordinary overlaid fact, so it reaches `EvaluationFacts.facts`, the combined

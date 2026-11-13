@@ -1054,3 +1054,19 @@ test = "actingcommand-display-adapter::lib::gate_392_da3::da3_t5_a_vertical_brak
 ruling = "Workflow #392 DA-3b (contracts/display-adapter.md section 10, \"The vertical brake\"; the coordinator's work order of 11-13 on board #392, route E)"
 reason = "Renamed: the test pinned that a vertical-brake drag under a scale is held input_scale_unsupported until the interface's bound on its brake moves. DA-3b sends that drag under a scale as a drag with a pause and a brake and moves no bound, so the refusal it pinned no longer exists; its other assertion, the brake of 100 base pixels at 150 straight above the corner at 3/2, is kept on the drag sent."
 covered_by = "actingcommand-display-adapter::lib::gate_392_da3::da3_t5_a_vertical_brake_scales_with_the_map, in the same exec.toml row; the drag at 3/2, 2, 5/2 and 3 and the brake end outside the frame are actingcommand-display-adapter::lib::gate_392_da3b::da3b_a_vertical_brake_leaves_a_scaled_device_as_a_drag_with_a_pause_and_a_brake and da3b_a_brake_end_outside_the_device_frame_is_refused_not_clamped."
+
+# host.toml, the row of Workflow #437 MAPP-2b, item 4.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_mapp2b::mapp2b_a_member_dispatch_is_granted_the_startup_and_the_run_and_one_that_cannot_fit_is_refused"
+ruling = "Workflow #437 MAPP-2d (contracts/device-group.md, \"The switch before a run\", \"The key's time\"; the coordinator's work order rd-1114/brief-437-mapp2d.md and its ruling of 11-14 on the renewed token, board #437)"
+reason = "Removed: it pinned the lease MAPP-2b sized for a member (D_s + D_run + R), the borrowed-key time check that passed only on that lease and refused a key granted without the startup run's share, and the refusal of a member whose D_s + D_run exceeded the longest lease, contained_task_deadline_unavailable, at its admission and at its direct runs. MAPP-2d grants every dispatch its run's own lease, lets the startup run take what is left of the key and renews the run's lease after it, and removes the bound and its refusal, so none of what it pinned exists."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_mapp2b::mapp2d_a_member_is_granted_an_instance_alones_lease_and_renews_nothing_without_a_startup_run (a member's lease equals an instance alone's, D_run + R), mapp2d_the_startup_run_takes_what_is_left_and_too_little_fails_the_switch_at_its_step (the startup run's time check on the key, both ways) and mapp2d_the_member_that_could_not_fit_is_dispatched_and_runs (the member and its direct runs with those deadlines are served), in the host.toml row of #437 MAPP-2d."
+
+# host.toml, the row of Workflow #437 MAPP-2b, item 10.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_mapp2b::mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round"
+ruling = "Workflow #437 MAPP-2d (contracts/device-group.md, \"The switch before a run\", \"The key's time\" and \"Release.\"; the coordinator's work order rd-1114/brief-437-mapp2d.md, board #437)"
+reason = "Replaced, as the test itself said it would be: it pinned MAPP-2b's known gap, a member whose D_s + D_run exceeded the longest lease selected and refused at its admission in every round while the device's other members waited. MAPP-2d ends the gap (no member cannot fit), so the refusal it pinned no longer exists; the work order replaces it by a test that the same member with the same deadlines is dispatched and runs."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_mapp2b::mapp2d_the_member_that_could_not_fit_is_dispatched_and_runs, in the host.toml row of #437 MAPP-2d: the same member with the same deadlines is selected while A waits, granted with no dispatch refusal, runs through its switch and settles a success; its direct run completes."

@@ -22,19 +22,19 @@ use crate::{
     check_resource_targets, compile_catalog, evaluate, parse_resource_targets, project_fact_pools,
 };
 
-const A: &str = "instance-a";
+pub(super) const A: &str = "instance-a";
 const GAME: &str = "game-a";
 const OPERATION: &str = "operation.run";
-const TASK_A: &str = "task_a";
-const TASK_B: &str = "task_b";
+pub(super) const TASK_A: &str = "task_a";
+pub(super) const TASK_B: &str = "task_b";
 /// Valued at `scale` 10, `base_weight_milli` 500, gap weight 100; targetable.
-const POOL_A: &str = "pool_a";
-const POOL_A_KEY: &str = "resource.pool_a";
+pub(super) const POOL_A: &str = "pool_a";
+pub(super) const POOL_A_KEY: &str = "resource.pool_a";
 /// Valued at `scale` 1, `base_weight_milli` 7, no gap block.
 const POOL_B: &str = "pool_b";
-const POOL_B_KEY: &str = "resource.pool_b";
-const V1: &str = "actingcommand.resource-targets.v1";
-const V2: &str = "actingcommand.resource-targets.v2";
+pub(super) const POOL_B_KEY: &str = "resource.pool_b";
+pub(super) const V1: &str = "actingcommand.resource-targets.v1";
+pub(super) const V2: &str = "actingcommand.resource-targets.v2";
 
 /// Task A's base term: per-run yield 20 × base 500 / scale 10.
 const TASK_A_BASE_TERM: u64 = 20 * 500 / 10;
@@ -337,11 +337,11 @@ fn ss1_t5_an_expired_withdrawn_unreadable_or_v1_record_keeps_the_base_term() {
 
 // ---- Fixture.
 
-fn task_a() -> Value {
+pub(super) fn task_a() -> Value {
     task(TASK_A, 100, &[(POOL_A, 20)])
 }
 
-fn task_b() -> Value {
+pub(super) fn task_b() -> Value {
     task(TASK_B, 200, &[(POOL_A, 30), (POOL_B, 3)])
 }
 
@@ -363,7 +363,7 @@ fn with_priority(mut task: Value, priority: i16) -> Value {
 }
 
 /// The fixture catalog, `actingcommand.scheduling.v2`, with these tasks and both valued pools.
-fn catalog(tasks: &[Value]) -> CompiledCatalog {
+pub(super) fn catalog(tasks: &[Value]) -> CompiledCatalog {
     let header = json!({
         "catalog_id": "fixture.base-valuation",
         "catalog_version": 1,
@@ -424,7 +424,7 @@ fn catalog(tasks: &[Value]) -> CompiledCatalog {
     .unwrap_or_else(|failure| panic!("the fixture catalog compiles: {:?}", failure.diagnostics()))
 }
 
-fn pool(id: &str, fact_key: &str, valuation: Value) -> Value {
+pub(super) fn pool(id: &str, fact_key: &str, valuation: Value) -> Value {
     json!({
         "id": id,
         "scope": {"kind": "instance", "instance_id": A},
@@ -437,7 +437,7 @@ fn pool(id: &str, fact_key: &str, valuation: Value) -> Value {
     })
 }
 
-fn task(id: &str, priority: i16, produces: &[(&str, u64)]) -> Value {
+pub(super) fn task(id: &str, priority: i16, produces: &[(&str, u64)]) -> Value {
     let produces = produces
         .iter()
         .map(|(pool_id, amount)| {
@@ -513,7 +513,7 @@ fn v2_target_entry(tasks: Option<&[&str]>) -> Value {
     target
 }
 
-fn v2_target(tasks: Option<&[&str]>) -> Value {
+pub(super) fn v2_target(tasks: Option<&[&str]>) -> Value {
     json!({
         "schema_version": V2,
         "instance": A,
@@ -523,7 +523,7 @@ fn v2_target(tasks: Option<&[&str]>) -> Value {
 }
 
 /// A v1 target `goal-a` on pool A naming `tasks`: `at_least` 100, scale 10, importance 1000.
-fn v1_target(tasks: &[&str]) -> Value {
+pub(super) fn v1_target(tasks: &[&str]) -> Value {
     json!({
         "schema_version": V1,
         "instance": A,
@@ -579,7 +579,7 @@ fn stored_document(catalog: &CompiledCatalog, document: &Value, checked_at: u64)
 }
 
 /// A reading of a pool's key on the instance, a minute before NOW, fresh for a day.
-fn reading(fact_key: &str, value: i64) -> ObservedFact {
+pub(super) fn reading(fact_key: &str, value: i64) -> ObservedFact {
     fact(A, fact_key, value, NOW - 60_000, Some(NOW + DAY_MS))
 }
 
@@ -594,14 +594,17 @@ fn offset(task_id: &str, offset_milli: i32) -> Vec<PriorityOffset> {
     }]
 }
 
-fn time(at: u64) -> EvaluationTime {
+pub(super) fn time(at: u64) -> EvaluationTime {
     EvaluationTime {
         unix_ms: at,
         monotonic_ms: at,
     }
 }
 
-fn inputs(facts: Vec<ObservedFact>, priority_offsets: Vec<PriorityOffset>) -> EvaluationFacts {
+pub(super) fn inputs(
+    facts: Vec<ObservedFact>,
+    priority_offsets: Vec<PriorityOffset>,
+) -> EvaluationFacts {
     EvaluationFacts {
         ledger_position: 7,
         fact_snapshot_id: "snapshot:fixture-base-valuation".to_owned(),
@@ -615,7 +618,7 @@ fn inputs(facts: Vec<ObservedFact>, priority_offsets: Vec<PriorityOffset>) -> Ev
 
 /// One round at NOW. The pools' values are the ones the Runtime derives from the readings; the
 /// instance has its own host and every candidate is admitted.
-fn round(
+pub(super) fn round(
     catalog: &CompiledCatalog,
     facts: Vec<ObservedFact>,
     priority_offsets: Vec<PriorityOffset>,
@@ -655,7 +658,7 @@ fn dispatched(evaluation: &PolicyEvaluation) -> Vec<&'static str> {
         .collect()
 }
 
-fn decision<'a>(evaluation: &'a PolicyEvaluation, task_id: &str) -> &'a TaskDecision {
+pub(super) fn decision<'a>(evaluation: &'a PolicyEvaluation, task_id: &str) -> &'a TaskDecision {
     evaluation
         .decisions
         .iter()
@@ -674,7 +677,11 @@ fn weights<'a>(evaluation: &'a PolicyEvaluation, task_id: &str) -> &'a str {
 }
 
 /// The detail of the candidate's first reason with `code`.
-fn reason_detail<'a>(evaluation: &'a PolicyEvaluation, task_id: &str, code: &str) -> &'a str {
+pub(super) fn reason_detail<'a>(
+    evaluation: &'a PolicyEvaluation,
+    task_id: &str,
+    code: &str,
+) -> &'a str {
     let task = decision(evaluation, task_id);
     task.reasons
         .iter()
@@ -684,7 +691,7 @@ fn reason_detail<'a>(evaluation: &'a PolicyEvaluation, task_id: &str, code: &str
 }
 
 /// The candidate's resource term `R`.
-fn term(evaluation: &PolicyEvaluation, task_id: &str) -> u64 {
+pub(super) fn term(evaluation: &PolicyEvaluation, task_id: &str) -> u64 {
     let detail = weights(evaluation, task_id);
     detail
         .split_once(" term=")
@@ -694,7 +701,7 @@ fn term(evaluation: &PolicyEvaluation, task_id: &str) -> u64 {
 }
 
 /// The candidate's weighed pools, each `<pool>:r=…,per=…,base=…,gap=…,effective=<W>,term=…`.
-fn items<'a>(evaluation: &'a PolicyEvaluation, task_id: &str) -> &'a str {
+pub(super) fn items<'a>(evaluation: &'a PolicyEvaluation, task_id: &str) -> &'a str {
     let detail = weights(evaluation, task_id);
     detail
         .split_once(" items=")

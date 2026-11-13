@@ -2,16 +2,17 @@
 
 Workflow #437 MAPP-C (contracts only; [v012-register.md](v012-register.md) §1.323). **Every rule of
 this file is (MAPP, not built yet)** unless its section names MAPP-1 ([v012-register.md](v012-register.md)
-§1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57), MAPP-2a (§1.342, Runtime 0.12.59) or
-MAPP-2b (§1.353, Runtime 0.12.60):
+§1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57), MAPP-2a (§1.342, Runtime 0.12.59),
+MAPP-2b (§1.353, Runtime 0.12.60) or MAPP-2d (§1.360, Runtime 0.12.60):
 no code, key, code, value key or word named here exists until the code slices of §1.323 build it,
 and every code, value key and vocabulary word below is proposed but those MAPP-1 registers:
 `device_group`, `instance.<instance id>.device_group`, `device_group_config_invalid` with the
 vocabulary `device_group_problem`, `device_group_assembled`, `device_group_waiting` with the
 vocabulary `device_group_wait`, (MAPP-1b) `device_group_action_refused`, (MAPP-2a)
-`application_switch_failed` with the vocabulary `application_switch_step`, and (MAPP-2b) the key
+`application_switch_failed` with the vocabulary `application_switch_step`, (MAPP-2b) the key
 `scheduling.device_group.switch_failure_cooldown_ms` and the optional value `failure_code` of
-`dispatch_instance_cooldown`. The coordinator cut
+`dispatch_instance_cooldown`, and (MAPP-2d) the word `lease_renewal` of
+`application_switch_step`. The coordinator cut
 MAPP-1 in two: MAPP-1a (§1.328) builds the configuration form and its checks, the refusal of every
 group of several, the member → device key map, the scheduler keyed by device and the evaluator's
 one pick per device; MAPP-1b (§1.330) builds the host's worker, occupancy, admission guard and
@@ -23,9 +24,12 @@ Workflow #429 R-7b). The coordinator cut MAPP-2 in two as well: MAPP-2a (§1.342
 startup run on the borrowed key, the stopped member's page forgotten), their one entry and its
 code, with no caller in the Runtime; MAPP-2b (§1.353, built in Runtime 0.12.60) calls the switch
 from the run paths, takes its time out of the run's clock, settles a run with its failure, adds
-the member's switch cooldown and its key, and sizes a member's dispatch lease for the switch and
-the run ("The switch before a run"). The load still refuses every group of several, so no root
-reaches any of it. The other contracts point here instead of repeating the rules.
+the member's switch cooldown and its key, and sized a member's dispatch lease for the switch and
+the run ("The switch before a run"); MAPP-2d (§1.360, built in Runtime 0.12.60) replaces that
+lease: a member's dispatch is granted an instance alone's lease, the switch runs inside it, and
+the run renews its lease after the switch's startup run ("The key's time"). The load still
+refuses every group of several, so no root reaches any of it. The other contracts point here
+instead of repeating the rules.
 
 The owner settled the direction on 2026-11-11 (board #437): one device may hold several applications
 that the scheduler serves in turn; one application is in front at any time; one device has one
@@ -39,8 +43,11 @@ are settled; each answer stands in the section it belongs to, and §1.323 lists 
 MAPP-1c ([v012-register.md](v012-register.md) §1.350, built in Runtime 0.12.60) closes the two
 cases in which a member's session stayed open after a keyless observation ("The session close of
 a keyless observation"; "Device-level actions", rows 7 and 15) and keys the device's queue-order
-lock by the device; what a section says of MAPP-1c is built, and what it lists as still open (rows
-7 and 15, "Release.") is not.
+lock by the device. MAPP-1d ([v012-register.md](v012-register.md) §1.359, built in Runtime
+0.12.60) closes the three gaps MAPP-1c's review found and listed as open: the monitor's probe
+("The monitor's probe in a device group"; row 15), the hand-over at a lapsed run lease's expiry
+(row 7) and the queue's grant judged by one member's gate ("One queue, one worker, one lease per
+device"). What a section says of MAPP-1c and MAPP-1d is built.
 
 ## Words (MAPP, not built yet)
 
@@ -225,7 +232,7 @@ keeps the member ids it keeps today. The next start maps each listed id to its g
 configuration in effect and gives the whole group the takeover cooldown (`SeedScheduler::new`,
 lib.rs:923-939).
 
-## One queue, one worker, one lease per device (MAPP-1: the scheduler; MAPP-1b: the worker, the in-flight registration, the admission guard and the pause's wait)
+## One queue, one worker, one lease per device (MAPP-1: the scheduler; MAPP-1b: the worker, the in-flight registration, the admission guard and the pause's wait; MAPP-1d: each entry by its own member's gate)
 
 Today "the queue" of an instance is three things, each keyed by its instance id:
 
@@ -246,6 +253,31 @@ lib.rs:111). The group keys these as follows:
   device is the exclusion.
   - A queue entry keeps, in memory, the member it serves. `QueueEntry` (lib.rs:594-607) holds no
     instance today, because the map key gave it.
+  - **Each entry is judged by the gate of the member it serves** (MAPP-1d, built): every grant
+    from the device's queue (the queue's own grant, the transfers at a lease's end, the immediate
+    grants and the queueing) reads the routine gate of each member of the device
+    (`HostShared::device_gates`, `host/device_group.rs`: the pauses, a #403 fence and blackout
+    silence, as `routine_gate` reads them) and hands the scheduler one gate per member
+    (`MemberGates`). An entry its own member's gate holds (a paused or fenced member's routine
+    claim) stays in its place in the queue and does not block the entries of the device's other
+    members behind it: the first entry, in the queue's order (priority, then arrival), that its own
+    member's gate lets through is granted. Nothing is reordered, so once the gate opens the held
+    entry is first again, in its place. A dedicated close lease is not such a grant: it is
+    refused, as for an instance alone, by every waiting entry that the routine gate of the member
+    asking for it lets through (`grant_dedicated_instance_lease`;
+    [read-session-resource-close.md](read-session-resource-close.md)), so a claim its own member's
+    gate holds refuses it too and the refusal stays #411 A52's non-fatal one (judged per member,
+    that claim refused nothing, the scheduler refused the close lease as a queue ahead,
+    `lease_busy`, and a member's capture failure on a free device ended the whole Runtime: found by
+    MAPP-1d's review, fixed before its merge). The queue's
+    grant then names the member the entry serves: its performance directive and a ladder's
+    performance release are read for that member, and its `lease.granted` names that member (the
+    grant of a member's entry pumped by another member named the pumping member before). The
+    hand-offs to a holder's own ladder or claim keep the holder's member's gate: they concern that
+    member's claim only. A person's hold is not a routine gate today (Workflow #429 R-7b builds the
+    hold's gate); the group's hold of the policy's dispatch is MAPP-1b's (`player_hold`). For an
+    instance alone on its device every entry is its own, its one gate is read once, and nothing
+    changes.
   - A lease's token keeps the member's instance id (`LeaseToken::new`, lib.rs:1167-1173), so every
     record's links, the run's identity check (`PolicyRunLeaseInstanceMismatch`,
     `crates/runtime-host/src/host/contained_task.rs:7868-7877`) and the fence of a write stay the
@@ -362,7 +394,7 @@ Whatever today's rules run next on one instance runs next on its device:
 Another member's due task queues behind: it waits with `device_group_waiting` until the device is
 free and it wins a round.
 
-## The switch before a run (MAPP-2a: its parts and its entry, built in Runtime 0.12.59; MAPP-2b: its callers, the run's clock, the lease, the failure's settlement and the cooldown, built in Runtime 0.12.60)
+## The switch before a run (MAPP-2a: its parts and its entry, built in Runtime 0.12.59; MAPP-2b: its callers, the run's clock, the failure's settlement and the cooldown, built in Runtime 0.12.60; MAPP-2d: the lease across the switch and its renewal, built in Runtime 0.12.60)
 
 In a group of several, before a run of a member, the Runtime brings that member's application to
 the front, under the device's lease.
@@ -376,9 +408,14 @@ the front, under the device's lease.
 `RuntimeHost::switch_application`). **What MAPP-2b builds (Runtime 0.12.60, register §1.353):**
 the calls from the run paths named below (`HostShared::switch_before_run` and
 `HostShared::stop_others_before_start`, `host/switch.rs`), the switch's time taken out of the run's
-clock ("The run's clock"), a member's dispatch lease sized for the startup run and the run ("The
-key's time"), a run's failed settlement with `application_switch_failed` ("When the switch
-fails"), and the member's switch cooldown and its key ("The member's switch cooldown"). Every part
+clock ("The run's clock"), a member's dispatch lease sized for the startup run and the run
+(replaced by MAPP-2d), a run's failed settlement with `application_switch_failed` ("When the
+switch fails"), and the member's switch cooldown and its key ("The member's switch cooldown").
+**What MAPP-2d builds (Runtime 0.12.60, register §1.360):** the lease across the switch ("The
+key's time"): a member's dispatch is granted the lease of an instance alone, the startup run of
+step 3 takes what is left of it, and the run renews its lease after it (step 4,
+`HostShared::renew_after_switch`) and takes the renewed token at every later step
+(`HostShared::run_token`); a renewal that fails is the step `lease_renewal`. Every part
 and every caller begins from a member of a group of several (`HostShared::switch_applies`, over
 `in_group_of_several`), which the load refuses (`several_members_unsupported`), so no root reaches
 them. An instance alone on its device keeps its path unchanged because the run path's existing
@@ -426,10 +463,10 @@ on which the entry is switched off.
    and no record is written. Which member's package is in front is told by the `application_id`
    each member's registration assigns, read from memory (`assigned_application_id` of the
    execution provider): no other device query is made.
-2. **Stop.** Before any stop of a run's switch, the key's remaining time must cover the startup
-   run of step 3 and the run's own (step 3, "The key's time"); otherwise the step
-   `startup_package` fails with `contained_task_deadline_unavailable` and nothing is stopped. (A
-   start outside a run runs no startup package, so it asks no time.) When the package in front is
+2. **Stop.** Before any stop of a run's switch, the key must have time enough left for the startup
+   run of step 3 to start (step 3, "The key's time"); otherwise the step `startup_package` fails
+   with `contained_task_deadline_unavailable` and nothing is stopped. (A start outside a run runs
+   no startup package, so it asks no time.) When the package in front is
    another member's `application_id`, that member's application is force-stopped under the
    device's key; when the package in front is no member's, or no resumed activity is reported,
    every other member's application is stopped the same way, in id order, one stop each, because
@@ -469,73 +506,111 @@ on which the entry is switched off.
      of the member's `application_id` (provider.rs:902-929). So the application is started by its
      package name through the one existing path, an application launch over ADB, and the run
      succeeds only on the home page its package declares. Nothing on the launcher is tapped.
-   - **The borrowed key.** The key is never renewed (a renewal mints a new token, and the run
-     checks the one it holds throughout) and never ended: no release, no queued continuation, no
-     new token. When the startup run ends, on success or on failure, the key is the run's again,
-     its token unchanged and valid, and a claim of another member queued on the device stays
-     queued. A key the startup run lost (it no longer validates) fails the step.
-   - **The key's time** (MAPP-2b). A member's run is granted a lease for both: its startup
-     package's response deadline `D_s`, its own response deadline `D_run` and the heartbeat reserve
-     `R` (the scheduler's `maximum_client_heartbeat_interval_ms`, 5 000 ms by default), so
-     `D_s + D_run + R`, where an instance alone on its device is granted `D_run + R` as before
-     (`HostShared::dispatch_lease_ttl`, `host/switch.rs`, at the policy admission and for a direct
-     run's claim). The run then asks of the key, at each check, its own time: the time to the
-     key's expiry less what its lease holds beyond its response deadline (for a member's lease,
-     the startup run's lease time `D_s + R`), so the time the switch's own steps take before the
-     startup run is not asked again (`RunNeed::OwnTime`; a policy dispatch keeps that instant
-     with its dispatch clock from its admission). Before any stop, and again before the startup
-     run, the key's remaining time must cover the startup run's lease time and that time: it does
-     on a lease sized so, and it does not on a lease sized for the run alone, which is refused at
-     the step `startup_package` with `contained_task_deadline_unavailable` before any stop. The
-     startup run's deadline is the earlier of its response deadline and the key's expiry less
-     that time, so it gets its `D_s` and leaves the run its own time.
-   - **Where the read and the stops go.** The time of the front read (step 1) and of the stops
-     (step 2) is not part of `D_s`: the lease is `D_s + D_run + R`, and the run's deadline is cut
-     at the lease's expiry less the reserve, so the run has `D_run` less what the read and the
-     stops took (and less its own checks before the switch, as every run's deadline is counted
-     from its grant). In the worst case the task has less than `D_run` and, when it needs all of
-     it, fails as an ordinary timeout of its deadline; when the time since the grant passes
-     `D_run` before the startup run, the check before the startup run refuses the key and the
-     switch fails at `startup_package` with `contained_task_deadline_unavailable`. Nothing of the
-     run's clock bounds the read and the stops: each ADB command they run ends within the ADB
-     command timeout of the registration that runs it (an entry's `command_timeout_ms`, 12 000 ms
-     by default), and a switch makes one read and at most one stop per other member.
-   - **What cannot fit.** The scheduler grants at most the longest response deadline plus the
-     reserve (`ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS`, 1 800 000 ms, plus `R`), so a
-     member whose `D_s + D_run` exceeds 1 800 000 ms cannot be served: its dispatch is refused at
-     the admission, before any lease and any device step, and its direct run before its claim,
-     both with `contained_task_deadline_unavailable` (an existing code), the same way every time.
-     A lone instance's lease and refusals are as before.
-   - **The member that cannot fit, as built (a known gap).** The evaluator does not know the
-     bound. It selects such a member's task again in every round, as for any due task; when the
-     task wins the device's one pick, the round's admission writes the dispatch's intent and its
-     refusal (`policy.dispatch_rejected`, severity error, `contained_task_deadline_unavailable`),
-     and nothing else happens: no lease, no device step, no switch, no cooldown, no failure of
-     the pair. The device's other members meet `device_group_waiting` (`selected`) in every such
-     round and wait while the refused task keeps winning the pick, so it can starve its device.
-     **With today's request deadlines every run of a member of a group of several is refused by
-     this bound**: every startup package request (`apps/actingd/src/config.rs`,
-     `StartupPackageConfigFile::request`), every configured procedure's request (the same file,
-     the procedure request) and every composed pack request
+   - **The borrowed key.** The startup run never renews the key and never ends it: no release, no
+     queued continuation, no new token (a renewal replaces the token, and the key goes back to the
+     run with the token it lent). When the startup run ends, on success or on failure, the key is
+     the run's again, its token unchanged and valid, and a claim of another member queued on the
+     device stays queued. A key the startup run lost (it no longer validates) fails the step. The
+     run renews the key itself once it is back (step 4).
+   - **The key's time** (MAPP-2d). Every dispatch is granted the same lease, a member's as an
+     instance alone's: its run's response deadline `D_run` and the heartbeat reserve `R` (the
+     scheduler's `maximum_client_heartbeat_interval_ms`, 5 000 ms by default), `D_run + R`, at
+     the policy admission and for a direct run's claim (`contained_task_lease_ttl`). The switch
+     runs inside that lease, and its startup run takes what is left of it: the startup run's
+     deadline is the earlier of its own response deadline `D_s` and the key's expiry less `R`
+     (`RunNeed::Renews`, `borrowed_key_deadline`), so it may have less than `D_s`. What is left is
+     too little for the startup run to start at all when the key has no more than `R` left: its
+     deadline would then not lie after now, which is where the deadline check of every run
+     (`contained_task_deadline_until`, the check MAPP-2a's startup run on the borrowed key goes
+     through) refuses it. The switch asks that before any stop and again before the startup run
+     (`borrowed_key_admits`); a key with no more than `R` left fails the step `startup_package`
+     with `contained_task_deadline_unavailable`, as any failure of the switch does (the run
+     settled failed, the member's switch cooldown, no ladder), never as a refusal of the member's
+     declaration. "Too little" means only that the startup run cannot begin. A key with a little
+     more than `R` left is used: the other members are stopped first, the startup run begins with
+     the deadline that is left, and a startup run that then runs out of time (its deadline, the
+     key's expiry less `R`, comes before its home) fails the switch at `startup_package` like
+     any other failure of that step (the member's switch cooldown, no ladder). The run itself is
+     never squeezed: it starts only after a startup run that reached its home, and then on a full
+     renewed lease, `D_run + R` from the renewal (step 4), however little the startup run had
+     left. A caller that states the time it still needs on the key after the startup run
+     (MAPP-2a's form, `RunNeed::For`, the public `RuntimeHost::switch_application`) is asked, as
+     MAPP-2a built it, for the startup run's lease time `D_s + R` and that time.
+   - **Where the read, the stops and the startup run go.** Their time comes out of the granted
+     lease, not out of the run's: the run renews its own lease after them (step 4). The one
+     exception is a member already in front, whose switch is its read alone and renews nothing
+     (step 4, "When nothing is renewed"). A switch whose
+     read, stops and startup run need more than the lease leaves fails at `startup_package`: too
+     little left before the startup run, or the startup run ending at its deadline, the key's
+     expiry less `R`, before its home. Nothing of the run's clock bounds the read and the stops:
+     each ADB command they run ends within the ADB command timeout of the registration that runs
+     it (an entry's `command_timeout_ms`, 12 000 ms by default), and a switch makes one read and
+     at most one stop per other member.
+   - **With the deadlines a configuration gives.** Every startup package request
+     (`apps/actingd/src/config.rs`, `StartupPackageConfigFile::request`), every configured
+     procedure's request and every composed pack request
      (`crates/runtime-host/src/host/standard_pack_schedule.rs`) carries the longest response
-     deadline, 1 800 000 ms, every member must declare a startup package ("The configuration
-     form"), and a fact refresh's request carries 60 000 ms; so `D_s + D_run` exceeds the bound
-     for every run of every member, the refresh included, and only fixtures with shorter
-     deadlines pass it. The lease across a switch is reworked in a later slice before any group of
-     several is accepted, and such a task must never become a candidate: it is held where tasks
-     are composed, in the slice that orders a device or the one that lets the load accept a group
-     ("Release"). The admission's refusal stays as it is until then; the MAPP-2b gate pins
-     today's behaviour in a test named for that later slice to replace
-     (`mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round`).
-4. **Run.** The member's run starts on the same key.
+     deadline, 1 800 000 ms, and a fact refresh's request 60 000 ms. A member's dispatch is
+     granted its run's `D_run + R` as an instance alone's, the startup run takes what is left of
+     it, and the run then holds its own `D_run + R` from the renewal: no member is refused for its
+     deadlines.
+   - **History** (MAPP-2b, §1.353). MAPP-2b granted a member `D_s + D_run + R`, asked the key at
+     each check for the run's own share of that lease (`RunNeed::OwnTime`), and refused a member
+     whose `D_s + D_run` exceeded 1 800 000 ms at its admission and before a direct run's claim
+     (`contained_task_deadline_unavailable`). With the deadlines a configuration gives that refused
+     every run of every member, a known gap the list "Release." carried. MAPP-2d (§1.360) replaced
+     that lease, its check and its refusal by the rules above and step 4.
+4. **Renew** (MAPP-2d). Once the startup run has handed the key back, the run renews its lease to
+   its own response deadline and the reserve, `D_run + R`, counted from that moment, before its
+   request lifecycle (`HostShared::renew_after_switch`, over the host's renewal of a Runtime-held
+   lease, `renew_held_lease`, the one a startup claim uses before its package:
+   `scheduler.admitted`, `lease.transition_intent` and `lease.renewed`, under the run's request
+   links with the lease). The scheduler bounds the renewal by the cap of a grant (the longest
+   response deadline plus `R`), counted from the renewal (`renew_with_ttl`), and reads no queue:
+   a claim of another member queued on the device stays queued behind the run, and the renewal is
+   not refused because of it.
+   - **The token.** The renewal keeps the lease (its id, its holder, its member and the owner
+     epoch) and replaces the token: the scheduler then holds a token with the new expiry, and the
+     token the run was granted no longer validates. So every step of the run after the switch
+     takes the token the scheduler holds, resolved by the lease's id and holder on the run's
+     connection (`HostShared::run_token`): the deadline computed from the lease (as it is computed
+     from a granted one), the request lifecycle and every validation of the key during the run,
+     the run's release at its end, and the release of a policy run's failed settlement
+     (`ensure_scheduled_policy_lease_released`), which with the granted token would find no lease,
+     write it as already removed and leave the renewed lease held. A policy run's context keeps
+     the granted token unchanged and no copy of the renewed one is stored; its other readers read
+     the lease id and the member only, which a renewal keeps. A direct run replaces its own token
+     with the resolved one.
+   - **When nothing is renewed.** With the member's own package in front (no startup run) and for
+     an instance alone on its device, nothing is renewed and the granted token is the run's
+     throughout (`run_token` returns it; for an instance alone it reads nothing). So a member
+     already in front pays for its switch's one foreground read out of its run's own deadline:
+     the deadline, moved on by the switch's time, is computed again from the granted lease and the
+     earlier is kept, which is the granted lease's (the grant plus `D_run`, as an instance
+     alone's), so the read's time comes off the run's `D_run`. That is at most one device
+     command's time limit: the read is one ADB command, which ends within the registration's
+     `command_timeout_ms` (12 000 ms by default). It is the consequence of renewing only after a
+     startup run: no startup run, no renewal.
+   - **Its failure.** A renewal that is refused or fails (the lease lost, lapsed, fenced or taken
+     over) fails the switch at the step `lease_renewal`, caused by the refusal; a Runtime-level
+     failure of its records is the run's Runtime failure. The device is then as the startup run
+     left it: every member the switch meant to stop stopped, this member started at its home, and
+     no task of the run ran.
+   - **Its time** is the switch's: the renewal ends before the switch's time is taken, so it adds
+     nothing to the run's own time.
+5. **Run.** The member's run starts on the same lease.
 
 **The run's clock** (MAPP-2b). The time a switch takes counts in no order and in no run's own
 duration (board #437). So the switch's time (from before its read to its end, the startup run
-included, on the Runtime clock) is taken out of the run's own time:
+and, MAPP-2d, the renewal included, on the Runtime clock) is taken out of the run's own time:
 
 - **The deadline.** The run's deadline, set before the switch, moves on by the switch's time,
   within the key's lease (`ContainedRunControl::postpone_deadline`; a direct run's deadline,
-  anchored at its receipt, the same).
+  anchored at its receipt, the same). MAPP-2d: after a renewal the deadline is computed again
+  from the renewed lease as it is from a granted one, and the earlier is kept, so a run whose
+  switch renewed has its grant's deadline moved on by the switch's time and nothing taken from it.
+  A member already in front renews nothing, so its deadline stays the granted lease's and its
+  switch's one read comes out of it (step 4, "When nothing is renewed").
 - **The dispatch clock.** A policy run's switch time is kept with its dispatch clock until its
   settlement (`PolicyDispatchClock::switch_ms`, in memory), which subtracts it from the elapsed time:
   the execution record's `runtime_ms`, and from it the run-duration sample, the
@@ -559,10 +634,10 @@ inputs of the startup run meet the gate as every startup run's do.
 with `application_switch_failed` (registered by MAPP-2a: error, ladder class `none`, owner
 `runtime-host`, since 0.12.59), whose cause (`caused_by`) is the step's own failure. Its values are
 `alias` (the member to run), `application_switch_step` (a vocabulary registered by MAPP-2a:
-`foreground_read`, `stop`, `startup_package`), `failure_code` (the step's own code) and
-`application_id` (the package the step concerned: the member's own for `foreground_read` and
-`startup_package`, the stopped member's for `stop`). The steps done before the failed one stay
-done. Two refusals come
+`foreground_read`, `stop`, `startup_package`, and by MAPP-2d `lease_renewal`), `failure_code`
+(the step's own code) and `application_id` (the package the step concerned: the member's own for
+`foreground_read`, `startup_package` and `lease_renewal`, the stopped member's for `stop`). The
+steps done before the failed one stay done. Two refusals come
 back as themselves, not as `application_switch_failed`, because that code's required `alias` or
 `application_id` would name nothing: a member to run, a key's holder or a member to stop that the
 registry does not hold (`instance_mismatch`), and a member to run or a member to stop whose
@@ -574,7 +649,9 @@ refuses every group of several.
 lifecycle, and is settled as every run refused before its request lifecycle is: a failed
 settlement of the pair, its failure the code's top node, its lease released
 (`run_scheduled_policy_task`, `host/policy_lanes.rs`, then `record_scheduled_policy_failure` and
-`complete_scheduled_policy_failure`, `host/policy_outcome.rs`). A direct run's switch fails after
+`complete_scheduled_policy_failure`, `host/policy_outcome.rs`; MAPP-2d: with the token the
+scheduler holds for the lease, `HostShared::run_token`, so a lease renewed before a later step
+failed is really released). A direct run's switch fails after
 its request lifecycle: its key is released (`cleanup_composite_failure`) and its receipt is failed
 with the code. An `ApplicationLifecycle` request's stop fails the request the same way, its key
 released, and its own command is not sent. The ladder's application restart rung fails with the
@@ -596,13 +673,16 @@ run's are the startup run's, which never starts a ladder), and its key is releas
 |---|---|
 | `foreground_read` | A key that no longer validates as the device's (the scheduler's refusal), before any device step. The query's ADB failure is handled as the gate's: the member's `device.connected`, `application.foreground` and `task.page` are invalidated with `adb_unreachable`, and an unconfirmed ADB cleanup fences the member. `failure_code` is `application_foreground_unknown` or `instance_resources_fenced` |
 | `stop` | A key of another device or a member outside the holder's group, before any device step (`instance_mismatch`), or a key that no longer validates. The stop's own failure records, as the rung's (`application.failed` and the lifecycle failure). A fatal device error with confirmed resources fences the member whose application was being stopped (#411 A46). The stopped member's page is not forgotten. A failed close of the session the stop used fails the step too: after a force-stop that succeeded, with the close's own code, the page forgotten all the same; after a failed one, as that failure's related cleanup failure |
-| `startup_package` | A key whose remaining time does not cover the startup run and the run after it, before any stop (`contained_task_deadline_unavailable`); no startup package (`startup_package_missing`); the startup run's admission refusal (`startup_package_admission_failed`, `startup_package_adb_not_ready`) or its failed terminal; a key the startup run lost. A home that is not reached is the step's timeout. The stopped member's application stays stopped and the member's own is not known to run, and the key stays with the run until the run's end releases it |
+| `startup_package` | A key with too little time left for the startup run to start (for a run's switch, no more than the heartbeat reserve; MAPP-2d), before any stop and again before the startup run (`contained_task_deadline_unavailable`); no startup package (`startup_package_missing`); the startup run's admission refusal (`startup_package_admission_failed`, `startup_package_adb_not_ready`) or its failed terminal; a key the startup run lost. A home that is not reached is the step's timeout, at the latest the key's expiry less the reserve. The stopped member's application stays stopped and the member's own is not known to run, and the key stays with the run until the run's end releases it |
+| `lease_renewal` | MAPP-2d: the run's renewal of its lease after the startup run handed the key back, refused by the scheduler (the lease lost, lapsed, fenced or taken over; `failure_code` the scheduler's code, `lease_mismatch`, `lease_expired`, `lease_missing` and the like) or failed; its failure records are the renewal's (`lease.transition_intent` and the lease failure). The key, when it still lives, stays with the run until the run's end releases it, with the token the scheduler holds |
 
 What each failing step leaves on the device: at `foreground_read`, nothing stopped and nothing
 started; at `stop`, the members stopped before the failed one stay stopped, the one whose stop
 failed is as its device left it, and the member's own application is not started; at
 `startup_package`, every member the switch meant to stop is stopped, and the member's own
-application was not brought to its home (its startup run may have restarted it).
+application was not brought to its home (its startup run may have restarted it); at
+`lease_renewal` (MAPP-2d), every member the switch meant to stop is stopped, the member's own
+application is at its home (its startup run reached it), and no task of the run ran.
 
 **What a person sees of a failed switch on the policy path** (MAPP-2b; no view changes). The run's
 failure, `application_switch_failed` with its step and its cause, as the run's failure record
@@ -622,9 +702,10 @@ ends.
   the run registry from its preparation (a policy run) or its receipt (a direct run), so the stop
   reaches it and answers at once that the run is still stopping. Nothing of the switch reads it:
   the stops already made stay made and the startup run (a run of its own, which no stop may end)
-  goes on to its end. The run then stops at its first check, as a run stopped during its
-  preparation does: it ends `contained_task_cancelled`, the Runtime resets the device on the
-  run's key before the key's release (`reset_stopped_run`), and a policy run settles as one
+  goes on to its end, and the run renews its lease after it (MAPP-2d). The run then stops at its
+  first check, as a run stopped during its preparation does: it ends `contained_task_cancelled`,
+  the Runtime resets the device on the run's key (the renewed one) before the key's release
+  (`reset_stopped_run`), and a policy run settles as one
   `stopped` execution record, its runtime its own time as for any settlement, no failure of the
   pair, no owed rerun, an interruption in the routine summary. The key is released at the run's
   end as a stopped run's, and no ladder starts. Left on the device: the other member stopped,
@@ -712,7 +793,7 @@ today ([device-binding.md](device-binding.md), "Backends").
 - **The emulator manager's mutable application commands stay unused**
   ([emulator-control.md](emulator-control.md)).
 
-## Device-level actions (MAPP-1: the refusals at assembly; MAPP-1b: rows 5, 7, 10 and 15; the switch's parts: MAPP-2a; their calls, row 4's included: MAPP-2b)
+## Device-level actions (MAPP-1: the refusals at assembly; MAPP-1b: rows 5, 7, 10 and 15; MAPP-1c and MAPP-1d: rows 7 and 15; the switch's parts: MAPP-2a; their calls, row 4's included: MAPP-2b)
 
 These act on the device, not on one application. The starting point: each such setting is read
 from one place per group; a member that carries a conflicting one is refused at assembly; anything
@@ -727,7 +808,7 @@ lists each action, where it is today, and what slice 1 does in a group of severa
 | 4 | Ladder rung `emulator_restart` | [emulator-control.md](emulator-control.md), "Rungs" and "Ladder profiles"; `crates/runtime-host/src/host/recovery_ladder.rs` | **Refused**: a profile in effect whose rungs hold it. The rungs `return_home` and `application_restart` stay per member on the device's key; before the latter stops and starts the member's own application, it stops the member in front, or every other member with the front unknown (MAPP-2b, "The switch before a run") |
 | 5 | Operator emulator control (`actingctl emulator`, the console, MCP `ac_emulator`: start, stop, restart) | [emulator-control.md](emulator-control.md), "Operation and origin gate", "The operator's claim and the fence" (`ClaimKind::EmulatorControl`) | **Refused** before any device step with `device_group_action_refused` (registered by MAPP-1b; error, ladder class `none`, owner `runtime-host`; values `alias`, `operation` `control_emulator_instance`), before its intent. It would rebind and refresh only the asking member (`rebind_discovered_endpoint`, [device-binding.md](device-binding.md), "Backends") and leave the other members' endpoints and device facts as they were |
 | 6 | Device binding: the handset's private file, and the discovery binding | `apps/actingd/src/config/device_binding.rs`; provider_startup.rs:105-141; `bound_alias`, `crates/runtime-host/src/host/instance_discovery.rs:171-194` | **Handsets refused** (`handset_member`). Discovery-bound members resolve the same index. The discovery answer and the startup record name one `bound_alias` per index (instance_discovery.rs takes the lowest instance id; provider_startup.rs keeps the last deferred entry). Slice 1 names the group's first member in alias order in both; the console slice decides how the others are shown |
-| 7 | Capture and input sessions (retained session, Nemu pairing, the touch tool on the device) | `keeps_device_session`, the multi-Nemu gate, `crates/runtime-host/src/host/resource_close.rs:105-139` | A member of a group of several keeps no session across lease ends (`keeps_device_session` false): each member opens its own on its turn, so that two members' sessions are not open on one device at once. A member's lease end closes the member's session under that lease, before its release or its transfer (`end_lease_device_use`), when that close is admitted; a keyless observation closes its own before it lets the device go (MAPP-1c, "The session close of a keyless observation"). Two paths still leave a member's session open while another member holds the device, both open and both to be closed before the load accepts a group of several ("Release."): a run's lease that lapses in its end phase while a claim of another member waits (the expiry's close is refused on the lapsed lease, the device is transferred to that claim, and the later close of the run's session finds a lease on the device and closes nothing, `crates/runtime-host/src/host/resource_close.rs:497-502`), and the monitor's probe (row 15). Whether two members' sessions could coexist on one emulator (two Nemu connections, two touch servers) is not verified, and slice 1 never tries |
+| 7 | Capture and input sessions (retained session, Nemu pairing, the touch tool on the device) | `keeps_device_session`, the multi-Nemu gate, `crates/runtime-host/src/host/resource_close.rs:105-139` | A member of a group of several keeps no session across lease ends (`keeps_device_session` false): each member opens its own on its turn, so that two members' sessions are not open on one device at once. A member's lease end closes the member's session under that lease, before its release or its transfer (`end_lease_device_use`), when that close is admitted; a keyless observation closes its own before it lets the device go (MAPP-1c, "The session close of a keyless observation"), and so does the monitor's probe (MAPP-1d, "The monitor's probe in a device group"). A run's lease that lapses in its end phase (MAPP-1d): its close under the lapsed lease is refused and fences the member, as before (#411 A64, `fence_lapsed_lease_close`); that end then hands the device to no one (no transfer, whatever claim waits), and before the device's admission guard is let go the member's session is closed under a session close ahead ("The session close of a keyless observation"), which no waiting claim refuses (`HostShared::cleanup_token_guarded`, `close_lapsed_run_session_guarded`, `crates/runtime-host/src/host/lease.rs`, `resource_close.rs`); the claim that waited first is then granted in its place by the queue's own grant (its own member, holder and lease time). A close that cannot be confirmed fences the member (it is fenced already) and keeps its close lease, as every dedicated close lease is kept then, but only for that lease's time to live: the lease sweep then ends it (the fence keeps the member out of use) and hands the device to the next waiting member, whose session may open while the unconfirmed one is not confirmed closed ("Release."); nothing ends the Runtime. Whether two members' sessions could coexist on one emulator (two Nemu connections, two touch servers) is not verified, and slice 1 never tries |
 | 8 | Backend switch (#402 HS-2) | `crates/runtime-host/src/host/backend_switch.rs`; [runtime-config.md](runtime-config.md), "Switching an instance's backends" | Per member, on the device's key: it closes the member's session and opens the new backends while no other member runs |
 | 9 | Self-check, resume reconnect, connection preparation | [emulator-control.md](emulator-control.md), "Triggers", preparation stages | Per member, on the device's key, with the member's own session, closed at the lease end (row 7) |
 | 10 | Resource fence (#403) and its recheck | [emulator-control.md](emulator-control.md), "Resource fence"; `crates/runtime-host/src/host/resource_fence.rs` | Per member as today (cause, ladder, recheck, lift). Every other member waits (`device_group_waiting` `fenced`) until the fence is lifted |
@@ -735,7 +816,7 @@ lists each action, where it is today, and what slice 1 does in a group of severa
 | 12 | Performance pacing per instance (level, factor, share, `R_eff`) | [performance-control.md](performance-control.md), "Directive", "Tracked value" | Per member as today. It acts on no device: it slows a member's own steps, and a group runs one member at a time |
 | 13 | Shared run limits (`max_concurrent_runs`, heavy-scene slots) | [scheduling/README.md](scheduling/README.md), "Shared Run Limits" | Unchanged; a group adds at most one run |
 | 14 | Handset device state (sampling, holds, start gate) | `crates/runtime-host/src/host/device_state.rs:1-30`, `:1017` | Not reached: handsets are refused (row 6) |
-| 15 | Keyless read-only observations (`observe`, `capture_sequence`) | [emulator-control.md](emulator-control.md), "The operator's claim and the fence" | Under the device's admission guard. **Refused** with `device_group_action_refused` (`operation` `observe_readonly`, with `scheduler.denied` and the failure's record) while another member holds the device, because it would open a second member's session on the device (row 7). Served on a free device it keeps no session: for its duration (each frame's capture, under the device's guard) no other member's run starts, and its session is closed before the guard frees the device (MAPP-1b, the coordinator's ruling of 11-12, register §1.330), under a session close ahead that neither a claim waiting in the device's queue nor the device's takeover cooldown refuses (MAPP-1c, register §1.350, "The session close of a keyless observation"). The monitor's probe, a keyless capture of its own (`run_monitor_probe`, `crates/runtime-host/src/host/monitor_control.rs:178`), is not group-aware: it opens its member's session while another member's lease holds the device and does not close it, and in a group of several it can then end the whole Runtime (register §1.350, finding 2). It must be made group-aware before the load accepts a group of several ("Release.") |
+| 15 | Keyless read-only observations (`observe`, `capture_sequence`) | [emulator-control.md](emulator-control.md), "The operator's claim and the fence" | Under the device's admission guard. **Refused** with `device_group_action_refused` (`operation` `observe_readonly`, with `scheduler.denied` and the failure's record) while another member holds the device, because it would open a second member's session on the device (row 7). Served on a free device it keeps no session: for its duration (each frame's capture, under the device's guard) no other member's run starts, and its session is closed before the guard frees the device (MAPP-1b, the coordinator's ruling of 11-12, register §1.330), under a session close ahead that neither a claim waiting in the device's queue nor the device's takeover cooldown refuses (MAPP-1c, register §1.350, "The session close of a keyless observation"). The monitor's probe, a keyless capture of its own (`run_monitor_probe`, `crates/runtime-host/src/host/monitor_control.rs`), is made group-aware by MAPP-1d ("The monitor's probe in a device group"): under the device's guard it is judged as a keyless observation is; while another member holds the device the round is not made, and on a free device its session is closed before it lets the device go |
 
 **The limits of slice 1 on a device with several members.** The Runtime does not start, stop or
 restart that device's emulator (rows 1, 2 and 5); it does not close the application or the
@@ -771,8 +852,8 @@ observation lets the guard go, the member's session is closed (`close_keyless_se
   unconfirmed close fences the member and keeps the lease, as every dedicated close lease is kept
   then. A member whose own lease holds the device (a run, a ladder's settle probe) leaves its
   session to that lease's end, which closes it under that lease when the close is admitted (row
-  7; a run's lease that lapses in its end phase while another member's claim waits is the open
-  path there).
+  7; a run's lease that lapses in its end phase while another member's claim waits, which MAPP-1c
+  left open there, is closed by MAPP-1d under the same session close ahead).
 
 **Which way, and why.** The work order allowed two: close the observing member's session before
 another member's lease begins, or never leave one open. MAPP-1c closes it before, under the guard
@@ -808,14 +889,16 @@ cooldown keeps its purpose, and the close does not defeat it.
 
 **What stays as it was.** An instance alone on its device keeps its session after a keyless
 observation, as before, and meets none of this (`close_keyless_session_of_group` returns before
-it). The capture-failure close of an observation, the monitor's probe (a keyless capture that is
-not group-aware: row 15, register §1.350, finding 2) and every other close path are unchanged.
+it). The capture-failure close of an observation and every other close path are unchanged. MAPP-1d
+uses the same session close ahead for the monitor's probe ("The monitor's probe in a device
+group") and for the session a lapsed run lease of a member left open (row 7).
 
-**What is still open.** The session close of a keyless observation does not make "two members'
-sessions are not open on one device at once" hold everywhere. Two paths are open (row 7): a run's
-lease that lapses in its end phase while another member's claim waits, and the monitor's probe.
-With the queue's grant judged by one member's gate (register §1.350, finding 5) they are listed
-under "Release." as what must be on main before the load accepts a group of several.
+**What was open, and is closed by MAPP-1d.** The session close of a keyless observation alone did
+not make "two members' sessions are not open on one device at once" hold everywhere: a run's lease
+that lapsed in its end phase while another member's claim waited, and the monitor's probe, left a
+member's session open beside another member's lease, and the queue's grant judged the device's
+queue by one member's gate (register §1.350, findings 2, 4 and 5). MAPP-1d (register §1.359)
+closes the three (row 7, row 15, "One queue, one worker, one lease per device").
 
 **The one lock order** of the paths that touch more than one member (register §1.350, "The lock
 order", with file and line for each): an outer gate of the policy (`detection_write_gate`, or
@@ -825,7 +908,56 @@ device's queue-order lock, then the scheduler's lock, then the owner's. Every ot
 paths is taken and released on its own, never held while one of these is asked. The queue-order
 lock is keyed by the device since MAPP-1c, as the queue it orders and the admission guard are; it
 was keyed by the member, so a member's pump could grant another member's claim before that claim's
-context was registered.
+context was registered. MAPP-1d's paths (the monitor's probe, the lapsed run lease's end and the
+close of its session, the gates of each member read before the queue-order lock) keep this order
+(register §1.359, "The lock order").
+
+## The monitor's probe in a device group (MAPP-1d, built in Runtime 0.12.60)
+
+The monitor's probe (`run_monitor_probe`, `crates/runtime-host/src/host/monitor_control.rs`) is
+a keyless capture of one instance on the resident monitor's thread, under the device's admission
+guard, held to the probe's end (a plain guard, whose drop pumps nothing, as before). For a member
+of a device group of several:
+
+- **The judgement.** Under the guard, before anything is issued or recorded, the probe is judged
+  as a keyless observation of the member is (`device_held_by_another_member`,
+  `host/device_group.rs`, which `refuse_keyless_observation_of_group` uses too): another member
+  holds the device when a lease of the device names another member (lapsed or not), or the
+  device's occupancy names another member (its registered run, or its claim that waits first,
+  each judged by its own member's gate).
+- **The device held by another member: this round is not made.** Nothing is captured, no
+  session is opened, no request, start, failure or recovery coordination is recorded, no lease is
+  taken, and the member's monitor state is left as it is: its run count, its last verdict and its
+  last error are not touched, so the round counts toward no failure and replaces no verdict. The
+  probe stays due, and it is not passed over as a probe a blackout covers is
+  ([scheduling-blackout.md](scheduling-blackout.md), "Complete silence": that one is set aside
+  before the tick's bound and takes nothing): at every tick of the resident loop (every 25 ms,
+  `MONITOR_POLL_INTERVAL`) the waiting probe takes one of the tick's 16 places
+  (`MAX_MONITOR_PROBES_PER_TICK`) and the device's admission guard (a blocking lock) for its
+  judgement, until the device is free. The monitor's status shows it as a probe that is due and
+  has not run (`next_due_unix_ms` passed, the run count unchanged); the row has no member that
+  says why a probe waits (`RuntimeMonitorInstanceStatus`, `runtime-client`), and none is added
+  (what a person sees: "Later slices", "The console and the command line").
+- **The device free: the probe runs and closes its session.** The probe runs as before, and
+  before it lets the guard go the member's session is closed under a session close ahead
+  (`close_keyless_session_of_group`, "The session close of a keyless observation"), which neither
+  a claim that waited meanwhile nor the takeover cooldown refuses; a claim that waited is granted
+  afterwards, in its place, by the queue's own grant (at the next pump: the sweep's tick, or
+  another guard's drop). A device the member's own lease holds leaves the session to that lease's
+  end, which closes it. A failed close is recorded by the close path, an unconfirmed one fences
+  the member there; the probe keeps its own records, and only a failure that poisons the Runtime
+  is returned.
+- **Neither former fatal path is reached.** A capture that fails closes under the member's own
+  lease or a dedicated close lease on a free device (a lease of another member, which refused
+  that close busy and ended the Runtime, cannot hold the device under the guard once the round is
+  made; a dedicated close lease that a waiting claim refuses, judged by the probing member's own
+  gate as for an instance alone, so also a claim of another member that member's own gate holds,
+  is recorded once, #411 A52, and the session close ahead closes the session); the recovery
+  coordination (`monitor_recovery_admission`) runs under the same guard and reads no lease of
+  another member (whose token made it fatal). The capture failure of a keyless
+  capture during a takeover cooldown is not changed here (its own defect, board #456).
+- **An instance alone on its device** meets none of this: the judgement and the close return
+  before any lock, and its probe is exactly as before.
 
 ## A failure stays where it belongs (MAPP-1b: the group's waits, `held` and `fenced`)
 
@@ -931,7 +1063,10 @@ context was registered.
   - the invalidation fanned out to every member;
   - observation of a device held by another member.
 - **The console and the command line.** How a device with its applications is shown and named, and
-  `Status` with the group (`runtime-client`).
+  `Status` with the group (`runtime-client`). While a member's monitor probe waits for its device
+  ("The monitor's probe in a device group"), a person sees today only that the row's due time has
+  passed and its run count is unchanged, with no reason, so the row has to say that the probe waits
+  for the device.
 - **Clones.** A member's identity becomes its package name with its Android user (or its clone
   index). The start, the force-stop and the foreground query then carry the user (keeping the
   `u<user>` the foreground parse drops today, `crates/device/src/adb.rs`). This waits for a test on
@@ -947,6 +1082,12 @@ context was registered.
   device's queue-order lock keyed by the device; the load still refuses every group of several, so
   no installation reaches it, and nothing is added to the catalog, the configuration or an
   interface.
+- MAPP-1d is built in Runtime 0.12.60 (register §1.359): the monitor's probe of a member made only
+  on a free device and its session closed before it lets the device go, a lapsed run lease of a
+  member handed on only after the member's session is closed, and each claim of a device's queue
+  judged by its own member's gate; the load still refuses every group of several, so no
+  installation reaches it, and nothing is added to the catalog, the configuration or an
+  interface.
 - MAPP-2a is built in Runtime 0.12.59 (register §1.342): the switch's parts, their one entry and
   the code `application_switch_failed` with the vocabulary `application_switch_step`, with no
   caller in the Runtime; the load still refuses every group of several, and the catalog gains one
@@ -955,52 +1096,53 @@ context was registered.
   leaves the switch out, a member's lease sized for the startup run and the run, the failure's
   settlement and the member's switch cooldown with its key, in `actingd-config` revision 30; the
   load still refuses every group of several, so no installation reaches any of it.
+- MAPP-2d is built in Runtime 0.12.60 (register §1.360): the lease across a switch (a member's
+  dispatch granted an instance alone's lease, the startup run taking what is left of it, the
+  run's renewal after it with the token the renewal returns, and the step `lease_renewal`); the
+  load still refuses every group of several, so no installation reaches any of it, and nothing is
+  added to the configuration or an interface.
 - The release that first accepts a device group of more than one member carries the host's rows
-  (MAPP-1b), the switch before a run (MAPP-2a and MAPP-2b) and the slice "order within one device"
-  together, so that no released build runs a group of several without the switch. Until then
-  every build refuses such a group at load (`device_group_config_invalid`,
+  (MAPP-1b), the switch before a run (MAPP-2a, MAPP-2b and MAPP-2d) and the slice "order within
+  one device" together, so that no released build runs a group of several without the switch.
+  Until then every build refuses such a group at load (`device_group_config_invalid`,
   `several_members_unsupported`; "The configuration form"), and no release ships the switch after
   every task.
-- **Before the load accepts a group of several, main must also end the member that cannot fit**
-  (MAPP-2b's known gap, "The switch before a run", "The member that cannot fit, as built"): with
-  today's request deadlines every run of a member of a group of several is refused by this bound;
-  the lease across a switch is reworked in a later slice before any group of several is
-  accepted, and a task that cannot fit never becomes a candidate (it is held where tasks are
-  composed, in the slice that orders a device or in the one that lets the load accept a group),
-  which replaces the MAPP-2b gate's test
-  `mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round`.
+- *History.* MAPP-2b (§1.353) added to this list "the member that cannot fit": with the request
+  deadlines a configuration gives, its lease bound refused every run of every member, and main
+  had to end that before the load accepts a group of several. MAPP-2d (§1.360) ended it (no
+  member is refused for its deadlines, "The key's time"), and the gate test that pinned the
+  refusal (`mapp2b_known_gap_a_member_that_cannot_fit_is_selected_and_refused_every_round`) is
+  replaced by `mapp2d_the_member_that_could_not_fit_is_dispatched_and_runs`.
 - MAPP-2's key `scheduling.device_group.switch_failure_cooldown_ms` came with MAPP-2b, in
   `actingd-config` revision 30.
 - The slice "device-level actions by device" comes before the first real use of a group of
   several.
-- **Before the load accepts a group of several**, besides the slices above (MAPP-2b, "order within
-  one device" and "device-level actions by device"), these must be on main (MAPP-1c's open
-  findings, register §1.350, its findings 2, 4 and 5):
-  - *A run's lease that lapses in its end phase while a claim of another member waits* (row 7):
-    the sweep's expiry tries to close the member's session under the lapsed lease, which refuses
-    the close, so the member is fenced (`fence_lapsed_lease_close`); the expiry then transfers the
-    device to the waiting claim (`cleanup_token_guarded`,
-    `crates/runtime-host/src/host/lease.rs:2474-2529`), and the run's owed close finds a lease on
-    the device and closes nothing (`close_lapsed_run_session_guarded`,
-    `crates/runtime-host/src/host/resource_close.rs:497-502`): the member's session stays open
-    under the other member's lease.
-  - *The monitor's probe* (row 15; `run_monitor_probe`,
-    `crates/runtime-host/src/host/monitor_control.rs:178`): it is not refused while another
-    member's lease holds the device and does not close the session it opened. Then either of two
-    things ends the whole Runtime: its capture fails and the dedicated close lease of its cleanup
-    is refused busy by the other member's lease, which only a refusal by the queue would have made
-    non-fatal (`crates/runtime-host/src/host/resource_close.rs:1108`); or its recovery
-    coordination reads the device's lease, whose token names another member, and answers the
-    fatal `monitor_recovery_fencing_state_invalid`
-    (`crates/runtime-host/src/host/monitor_control.rs:570-577`).
-  - *The queue's grant judged by one member's gate*: the pump reads the routine gate of the
-    member it was asked for and judges every entry of the device's queue by it
-    (`crates/runtime-host/src/host/lease.rs:3574`; a `ClaimGate` is every member's gate,
-    `crates/scheduler/src/lib.rs:341-345`), so a routine claim of a paused member may be granted
-    while another member's gate is open. The transfers, the dedicated leases and the queueing pass
-    one member's gate the same way.
+- **Before the load accepts a group of several**, besides the slices above (MAPP-2b, MAPP-2d,
+  "order within one device" and "device-level actions by device"), these must be on main (found by
+  MAPP-1d and its review, register §1.359; MAPP-1c's open findings 2, 4 and 5, register §1.350, are
+  closed by MAPP-1d):
+  - *A member's non-run lease that lapses while its session is open* (board #458): the sweep's
+    close under the lapsed lease is refused, the sweep marks that error fatal and the whole Runtime
+    stops, for every member of a group of several (and, as the review reads it, already today for
+    instances alone when several of them share the emulator's native capture).
+  - *An unconfirmed close of one member must keep the device from the other members until it is
+    confirmed*: today the close lease holds the device only for its time to live and the device
+    then passes on, so two members' sessions can be open together after an unconfirmed close (row
+    7).
+  - *A pump candidate blocked by its own member's performance directive or ladder wait* (`pump`)
+    blocks the whole device's queue, so one member's performance pause stops the others.
+  - *History (MAPP-1d, 0.12.60).* Before MAPP-1d this list named: a run's lease that lapses in
+    its end phase while a claim of another member waits (the expiry transferred the device to that
+    claim and left the member's session open under it, row 7); the monitor's probe, which was not
+    refused while another member's lease held the device, did not close its session, and could end
+    the whole Runtime by a close lease refused busy or by reading another member's token in its
+    recovery coordination (row 15); and the queue's grant, which judged the device's whole queue by
+    the gate of the member it was asked for, as the transfers and the queueing did. Each is closed
+    as row 7, "The monitor's probe in a device group" and "One queue, one worker, one lease per
+    device" now say; the dedicated close lease keeps the asking member's gate, as before (fix round
+    1, register §1.359).
 
-## Codes, value keys and words (MAPP-1 registers the first three codes and two vocabularies, MAPP-1b the fifth code, MAPP-2a the fourth code and the third vocabulary, MAPP-2b one optional value and the key)
+## Codes, value keys and words (MAPP-1 registers the first three codes and two vocabularies, MAPP-1b the fifth code, MAPP-2a the fourth code and the third vocabulary, MAPP-2b one optional value and the key, MAPP-2d one word)
 
 | Code | Owner | Category, ladder class | Values | State |
 |---|---|---|---|---|
@@ -1016,7 +1158,9 @@ New value keys, each with its vocabulary:
   `handset_member`, `fixture_member`, `application_shared`, `startup_package_missing`,
   `device_action_unsupported`, `undeclared_shared_device`, `several_members_unsupported`.
 - `device_group_wait` (registered, MAPP-1): `selected`, `held`, `player_hold`, `fenced`.
-- `application_switch_step` (registered, MAPP-2a): `foreground_read`, `stop`, `startup_package`.
+- `application_switch_step` (registered, MAPP-2a): `foreground_read`, `stop`, `startup_package`;
+  and (registered, MAPP-2d, 0.12.60) `lease_renewal`, the run's renewal of its lease after the
+  startup run.
 
 Every other key is an existing key of the one key table
 (`crates/actingcommand-contract/src/outcome/keys.rs`).
