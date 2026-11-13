@@ -257,15 +257,15 @@ holds `ui` to it (section 2.3 step 5); `lab_ops_ui_allows_is_the_tables_ui_kinds
 | `ConfigureSettings` | write | the console sends it today; every key `daily` or `advanced` and settable (section 2.3) |
 | `StopInstanceRun` | write | built by #429 R-6's first slice (0.12.53) and R-6b (since 0.12.55; `v012-register.md` §1.314, §1.316): it stops a client's direct run and a run the scheduler started (a fact refresh read included), and the Runtime resets the device itself; a stopped scheduled run settles as a stop, neither a success nor a failure of its task; only a run the Runtime started for itself is refused, with `run_origin` `host`. A stop ends this run only: a task whose trigger still holds is dispatched again once its cooldown has passed (at the next evaluation when the stopped run outlasted it); a closing row (`pack-schedule set`) or a pause keeps it from running (runtime-interface.md, "Workbench request kinds") |
 | `EditPackSchedule` | write | built by #429 R-8 (0.12.55), with the read `PackScheduleView`: it replaces one task package's rows in one scope's pack schedule list, a compare-and-swap with `expected_version`; a run in progress is not stopped (instance-fact-store.md, "Pack schedule facts") |
+| `ApplyResourceTargets` | write | on the list since Workflow #455 T1-R (0.12.60; `v012-register.md` §1.348), before the console sends it: the whole resource target document of one instance, the one `ResourceTargetView` reads ([resource-targets.md](resource-targets.md), "Entry and receipts"), a compare-and-swap with `expected_version` (the view's `active.version`, `0` without `active`; another version is `fact_observation_version_conflict` with `current_version`, nothing written). The owner asked that the console set an application's goals as the Lab does (board #455, step 1); the coordinator's ruling on board #455, not the owner's words, reverses LAB-6S3's decision that refused the kind here |
 | `RunInstanceTask`, `EditResourceTarget`, `AcquirePlayerHold`, `ReleasePlayerHold` | write | on the list before they are built (#429 R-5, R-13c, R-7b); until then the Runtime answers them `not_implemented` |
 | `RecordClientAction` | write | transitional: the console's button trace, until UI-L1 ships; LAB-7 takes it off the list, since the G14 record's initiator replaces it |
 
 - **Everything else is refused** on `ui`: a run by path, input and leases, stopping a run with the
   client's reset, reset, Lab operations, the Lab observation page, artifact recognition,
   signatures, debug packages, evidence export, pin release, drills, pack load and unload, fact
-  publishing (`PublishFact`, `PublishFacts`), the whole resource target document
-  (`ApplyResourceTargets`), monitor settings, the agent wake test, event subscriptions, the project
-  projection, the planning session and the authoring and debug events.
+  publishing (`PublishFact`, `PublishFacts`), monitor settings, the agent wake test, event
+  subscriptions, the project projection, the planning session and the authoring and debug events.
 - **A clean mapping.** Every kind on the list is a request of an operation whose `entries` hold
   `ui` (section 9). The console builds those requests and reads their answers with `lab-ops`' own
   types, a Runtime crate it pins as it pins `runtime-client`, so the name, the parameters and the

@@ -20672,6 +20672,90 @@ dependencies gain `actingcommand-display-adapter`, whose only dependency is the 
 its forbidden closure is unchanged); the helpers of the host's `gate_412_b3_s2` the Lab test
 reuses are visible to their sibling modules, no assertion changed.
 
+### 1.348 Slice T1-R (0.12.60): the console's entry takes the resource target document, with its version check (Workflow #455, step 1; the owner asked that the console set an application's goals as agents do through the Lab, board #455; the design `rd-1114/455-goals-design-final.md` §1.3, §2.1, §4 and §5 rows T1-R, §6.1 rows 12 and 13, §6.2 point 1, read on main `fa724931`; the coordinator's rulings on board #455, not the owner's words, the reversal below among them; coordinator work order `rd-1114/brief-455-t1r.md`, read on main `fa724931`)
+
+[lab-two-entries.md](lab-two-entries.md) §3 and [resource-targets.md](resource-targets.md) ("Entry
+and receipts") are the contract; [runtime-interface.md](runtime-interface.md) (the kind's row of
+the general instructions, the row `ApplyResourceTargets.expected_version?` of "Workbench request
+kinds", revision rule 2), [instance-fact-store.md](instance-fact-store.md) ("Resource target policy
+facts", "Replay") and [lab-operations.json](lab-operations.json) follow it. **No wire shape,
+configuration key, ledger shape, outcome code, value key, location or interface revision is new**:
+`expected_version` has been on the wire since `runtime-client` 3 (§1.213 R0-3), and its refusal is
+`fact_observation_version_conflict` with `fact_key` and `current_version`, as R-4 (§1.239) and R-8
+(§1.308) emit it; the code's description names the new case (the code index regenerated, its text
+unchanged). The number 1.348 is provisional for parallel slices.
+
+**The reversal.** LAB-6S3 ("Slice LAB-6S3" under §1.287, "What a `ui` connection is refused that
+it was served before": the resource target documents) kept `ApplyResourceTargets` off the UI list,
+and lab-two-entries.md §3 refused "the whole resource target document" on `ui` in words, while
+runtime-interface.md's revision rule 2 expected the console to send its `expected_version` once
+R-13c deployed. The coordinator's ruling on board #455, not the owner's words, reverses that
+recorded gate decision: `ApplyResourceTargets` joins the UI list, and the two texts now say the
+second's. Every other kind `ui` refused stays refused.
+
+**What.**
+
+- **The UI list** (`actingcommand_contract::ui_allows`): `ApplyResourceTargets` joins it, 31 kinds
+  (46 off it). The operation table: its `ui_kinds` row (`write`, `console_today` false, as the
+  table marks the kinds the console does not send yet), and the row `targets set` offered on
+  `lab` and `ui` (`entries`), every request of it now on the list (§9.1's rule). lab-two-entries.md
+  §3: the kind's row; the list of refusals no longer names the resource target document.
+- **The version check** (`runtime-host`, `HostShared::publish_facts_under_gate` with the purpose
+  `FactPublicationPurpose::ResourceTargets { expected_version }`, from `apply_resource_targets`):
+  the document is parsed and checked as without the member (Phase A); then, in the hold of the
+  fact write gate that writes the record (Phase B), after the store is synchronized and before the
+  replay, the version of the instance's active `session.resource_targets` record (the sequence of
+  the `fact.published` that holds it, expired or not; `0` without one) is compared with
+  `expected_version`. Another value is Denied `fact_observation_version_conflict` (`fact_key`
+  `session.resource_targets`, `current_version`, `operation` `apply_resource_targets`; the
+  `current_version` kept in codes mode), nothing appended; the equal value goes on as without the
+  member (a new record, or an equal active policy's replay). R-0's `not_implemented` arm leaves
+  `requests.rs`. Without the member nothing is compared and every step is as before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| T1R-1 | `ui_allows` holds `ApplyResourceTargets` | static table of the contract crate | T1-R | — | the 31 kinds of lab-two-entries.md §3; equal to the operation table's `ui_kinds` |
+| T1R-2 | `lab-operations.json`: the `ui_kinds` row `ApplyResourceTargets` (`write`, `console_today` false); `targets set`'s `entries` `["lab", "ui"]` | table text | T1-R | — | the row's other members unchanged; a note names the slice |
+| T1R-3 | `ApplyResourceTargets.expected_version` compared under the fact write gate | behaviour of an R-0 member (`runtime-client` unchanged) | T1-R (R-13c's check of this member) | the console (T1-C) | replaces §1.213 R0-3's `not_implemented` for this member; `EditResourceTarget` stays `not_implemented` |
+| T1R-4 | `fact_observation_version_conflict` of an `ApplyResourceTargets` | outcome catalog text | T1-R | the host | its description names the case; no code, key, location or word added |
+
+**Settled here** (each the slice's; the coordinator may change them): the version is compared
+before the replay, so an equal document sent with another version is the conflict, as an
+`EditPackSchedule` is compared before its list is written; the document is checked before the
+version, so a refused document is refused for its own reason whatever the version; an expired
+record keeps its version (it stays stored until replaced, and the view answers it with
+`expired`).
+
+**Not touched.** `EditResourceTarget` (R-13c's per-target edit) stays `not_implemented`; the
+document's versions, readers and checks, the view, the evaluator, the Lab's other rows, the console.
+
+**Interface.** None raised ([component-interfaces.md](component-interfaces.md)): `runtime-client`
+stays [3, 8] (the member is revision 3's), and `ledger`, `actingd-config` and `package` do not
+move. A console that sends the kind on `ui` to an older Runtime meets `channel_request_refused`,
+which changed nothing (runtime-interface.md, revision rule 2).
+
+**At deploy.** Nothing changes for a writer that does not name `expected_version`: actinglab's
+`targets set`, the MCP tools' `ac_targets_set` and `actingctl agent-apply-resource-targets` send
+none and are answered as before. The `ui` channel takes the document, so a console that sends it
+writes the instance's targets; a request that names the member is compared instead of refused.
+
+**Rollback** (below 0.12.60): `ui` refuses `ApplyResourceTargets` again (`channel_request_refused`,
+recorded `command.rejected`), and a request that names `expected_version` is `not_implemented`
+again; the records written stay ordinary policies that the older build reads.
+
+Tests (host gate rows "#455 T1-R"): `gate_455_t1r::t1r_the_ui_channel_takes_the_document_and_every_kind_off_the_table_stays_refused`,
+`t1r_expected_version_is_compared_with_the_version_of_the_record`,
+`t1r_two_writers_a_version_read_before_the_other_write_is_refused_until_read_again` and
+`t1r_a_replay_with_the_records_version_appends_nothing_and_answers_as_without_it` (the host, a
+manual clock, a fake device, the fixture catalog). Two existing tests pinned what this slice
+changes and change with it, keeping their names: `gate_429_r0::r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effect`
+no longer sends an `ApplyResourceTargets` naming `expected_version`, and
+`gate_434_lab6s3::lab6s3_gate_two_entries_ui_takes_the_handshake_and_the_ui_list_only` writes the
+list of §3 with `ApplyResourceTargets` (31 kinds). The gates that tie the table, the code and the
+contract together take the new row unchanged: lab-ops' `lab_ops_ui_allows_is_the_tables_ui_kinds`
+and `lab_ops_table_complete` (the `entries` rule), and the host's LAB-6S3 test above. No golden
+changes; no test leaves the gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

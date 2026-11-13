@@ -566,7 +566,9 @@ impl RuntimeOperationKind {
 /// table: no roles, users or tokens. It equals the operation table's `ui_kinds`
 /// (`contracts/lab-operations.json`), the transitional `RecordClientAction` included. On `ui` a
 /// `ConfigureSettings` also needs every change's key within the console's tiers, which the
-/// Runtime's gate checks (§2.3 step 5); every other kind is refused there.
+/// Runtime's gate checks (§2.3 step 5); every other kind is refused there. Workflow #455 T1-R
+/// (0.12.60): `ApplyResourceTargets` joins the list, the one write of the resource target
+/// document that `ResourceTargetView` reads.
 pub const fn ui_allows(kind: RuntimeOperationKind) -> bool {
     use RuntimeOperationKind as Kind;
     matches!(
@@ -600,6 +602,9 @@ pub const fn ui_allows(kind: RuntimeOperationKind) -> bool {
             | Kind::ConfigureSettings
             | Kind::StopInstanceRun
             | Kind::EditPackSchedule
+            // A write on the list before the console sends it (Workflow #455 T1-R): the whole
+            // resource target document, with its `expected_version`.
+            | Kind::ApplyResourceTargets
             // Writes on the list before they are built.
             | Kind::RunInstanceTask
             | Kind::EditResourceTarget

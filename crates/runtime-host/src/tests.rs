@@ -380,6 +380,9 @@ mod gate_429_r12;
 mod gate_429_r6;
 // Workflow #429 R-8: a task package switched on or off for one instance.
 mod gate_429_r8;
+// Workflow #455 T1-R: the `ui` channel takes `ApplyResourceTargets`, and its `expected_version` is
+// compared with the version of the instance's record.
+mod gate_455_t1r;
 // Workflow #429 R-6b1: the readers of a stopped run's record (its projections, the remedy
 // journal and `actingd suspended`).
 mod gate_429_r6b1;

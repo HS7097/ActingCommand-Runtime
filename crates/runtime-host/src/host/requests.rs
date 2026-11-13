@@ -730,18 +730,13 @@ impl HostShared {
             }
             RuntimeOperation::CompileProposal { proposal } => self.compile_proposal(proposal),
             RuntimeOperation::PromoteProposal { proposal } => self.promote_proposal(proposal),
-            // Workflow #429 R-0 (register §1.213): the version check of `expected_version` is
-            // R-13c's; until then a request that names it is refused and records nothing.
-            RuntimeOperation::ApplyResourceTargets {
-                expected_version: Some(_),
-                ..
-            } => Err(not_implemented(
-                actingcommand_contract::codes::ContractLocation::ApplyResourceTargets,
-            )),
+            // Workflow #455 T1-R: with `expected_version` the document is written only while the
+            // instance's record is of that version (R-13c's check of this member; register
+            // §1.213 R0-3 had it refused `not_implemented` until then); without it as before.
             RuntimeOperation::ApplyResourceTargets {
                 document_json,
-                expected_version: None,
-            } => self.apply_resource_targets(validated, document_json),
+                expected_version,
+            } => self.apply_resource_targets(validated, document_json, *expected_version),
             RuntimeOperation::ResourceTargetView { instance_alias } => {
                 self.resource_target_view(instance_alias)
             }
