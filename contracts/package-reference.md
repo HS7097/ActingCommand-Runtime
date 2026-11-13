@@ -442,7 +442,7 @@ bytes}` when the root holds `notices/`, whose files it checks by the notices rul
 below; `notices` never joins `root_files`), given only once every package of the registry was
 admitted; `pack_count` is the registry's length, and `warnings` is the report (empty when there
 is nothing to report; its entry-page entries need `pages.json`). Workflow #453 S8 (since 0.12.60,
-register §1.348): last, always, `models`, the models the root's packs need: the union of the
+register §1.350): last, always, `models`, the models the root's packs need: the union of the
 models their recognition packs' OCR and NN targets name (`model_ref`, `model_sha256`), read from
 the packages the cross-check admitted, each `{model_ref, model_sha256, packages}`, a model several
 packs name listed once with each of them, in byte order of `model_ref`, then of `model_sha256`,

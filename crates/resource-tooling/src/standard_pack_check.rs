@@ -78,7 +78,7 @@
 //! answer gains `notices` `{files, bytes}`; a root without it answers as before. Nothing beside it
 //! (`notices.old-<ms>`, `notices.rolledback-<ms>`, a `.part`) is looked at.
 //!
-//! Workflow #453 S8 (register §1.348): last, the answer's `models`, the models the root's packages
+//! Workflow #453 S8 (register §1.350): last, the answer's `models`, the models the root's packages
 //! need, read from the packages the cross-check admitted (each package's recognition pack, its OCR
 //! and NN targets' `model_ref` and `model_sha256`; `required_models`). `package bundle` runs the
 //! same cross-check and answers no models.
@@ -430,7 +430,7 @@ fn cross_check_admitted(
     Ok((warnings, admitted))
 }
 
-/// Workflow #453 S8 (register §1.348): the models the packages of `root` need, the union of the
+/// Workflow #453 S8 (register §1.350): the models the packages of `root` need, the union of the
 /// models each package's recognition pack names (its OCR and NN targets,
 /// [`NavigationPackageDescriptor::recognition_models`]), read from `admitted`, the packages the
 /// cross-check admitted: each model once with every package that names it, in byte order of

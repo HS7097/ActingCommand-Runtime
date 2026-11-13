@@ -166,7 +166,7 @@ pub struct StandardPackCheckResponse {
     /// Absent otherwise; never a member of `root_files`, and no name or text of a file is echoed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notices: Option<StandardPackNotices>,
-    /// Workflow #453 S8 (register §1.348): the models the game root's packs need, the union of
+    /// Workflow #453 S8 (register §1.350): the models the game root's packs need, the union of
     /// the models their recognition packs' OCR and NN targets name, each model once with every
     /// package that names it; in byte order of `model_ref`, then of `model_sha256`, each model's
     /// `packages` in byte order of `package_id`. Always present, `[]` for a root whose packs name

@@ -47,7 +47,7 @@ Runtime package and the Tools package carry none of them.
 
 ## The manifest
 
-Workflow #453 S7 (since 0.12.60; register §1.348). What a vision root must hold
+Workflow #453 S7 (since 0.12.60; register §1.350). What a vision root must hold
 is data of the build, not of a script, and two read-only actingd subcommands
 answer it; nothing in them downloads, and no answer names an address.
 

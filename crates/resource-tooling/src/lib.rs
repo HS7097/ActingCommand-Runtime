@@ -105,7 +105,7 @@ mod gate_load1;
 #[cfg(test)]
 mod gate_444_notices3;
 
-// Workflow #453 S8 (register §1.348): standard-pack check answers the models a game root's packs
+// Workflow #453 S8 (register §1.350): standard-pack check answers the models a game root's packs
 // need.
 #[cfg(test)]
 mod gate_453_s8;

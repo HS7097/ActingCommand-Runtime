@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S7 (register §1.348; contracts/vision-model-folders.md, "The manifest"; coordinator
+// Workflow #453 S7 (register §1.350; contracts/vision-model-folders.md, "The manifest"; coordinator
 // work order rd-1114/brief-453-s7s8-vision-manifest.md): `actingd vision manifest` and `actingd
 // vision check` on an injected pin table (a made-up registry and runtime pin) and temporary vision
 // roots whose files are made-up bytes, never the real files:

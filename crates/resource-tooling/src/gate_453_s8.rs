@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S8 (register §1.348; contracts/package-reference.md, the answer of `actinglab
+// Workflow #453 S8 (register §1.350; contracts/package-reference.md, the answer of `actinglab
 // standard-pack check`; coordinator work order rd-1114/brief-453-s7s8-vision-manifest.md): the
 // check of an installed game root answers `models`, the models its packs need: the union of the
 // models their recognition packs' OCR and NN targets name, each `{model_ref, model_sha256,
