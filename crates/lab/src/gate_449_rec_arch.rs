@@ -192,7 +192,13 @@ impl Bench {
         .unwrap_or_else(|error| panic!("frame: {}: {}", error.code, error.message))
     }
 
-    // `do --capture --record` with `request`, Performed.
+    // `do --capture --record` with `request`, Performed: the recording plans the step's input
+    // (`record_plan_click`), the Runtime presses it, and the recording takes the Runtime's answer
+    // (`record_commit_click`), as `do --capture --record` and the crate's other recording gates
+    // do; no input port is called here. Fix 2 (rd-1113/brief-1675-fix2.md): the two helpers
+    // below are `commit_tap` and `commit_swipe`, since the guard
+    // `lab_input_face_is_semantic_input_executor` reads every method call named like a
+    // `LabInputPort` write (`tap`, `swipe`, ...) as one.
     fn press(
         &self,
         initiator: &str,
@@ -205,7 +211,7 @@ impl Bench {
     }
 
     // `do --capture --record --tap-rect` of `TAP` at its centre.
-    fn tap(&self, initiator: &str, id: &str) -> CommitClickOutcome {
+    fn commit_tap(&self, initiator: &str, id: &str) -> CommitClickOutcome {
         self.press(
             initiator,
             PlanClickRequest {
@@ -218,7 +224,7 @@ impl Bench {
     }
 
     // `do --capture --record --swipe 9,3,13,6,300`.
-    fn swipe(&self, initiator: &str, id: &str) -> CommitClickOutcome {
+    fn commit_swipe(&self, initiator: &str, id: &str) -> CommitClickOutcome {
         self.press(
             initiator,
             PlanClickRequest {
@@ -358,7 +364,7 @@ fn expected_row(step: &Value, kind: &str) -> Value {
 fn rec_arch_a_swipe_is_a_step_and_record_stop_generates_it_as_a_drag() {
     let bench = Bench::new();
     bench.observe("Lab-CLI", RED);
-    let swiped = bench.swipe("Lab-CLI", "request-swipe");
+    let swiped = bench.commit_swipe("Lab-CLI", "request-swipe");
     assert!(swiped.step_closed);
 
     let recording = bench.recording();
@@ -414,9 +420,9 @@ fn rec_arch_a_swipe_is_a_step_and_record_stop_generates_it_as_a_drag() {
 fn rec_arch_steps_of_several_callers_archive_and_the_rows_equal_the_step_table() {
     let bench = Bench::new();
     bench.observe("Lab-CLI", RED);
-    bench.swipe("Lab-CLI", "request-cli");
+    bench.commit_swipe("Lab-CLI", "request-cli");
     bench.observe("Lab-MCP", GREEN);
-    bench.tap("Lab-MCP", "request-mcp");
+    bench.commit_tap("Lab-MCP", "request-mcp");
     bench.observe("Lab-CLI", BLUE);
     let table = bench.recording_bytes();
     let before = bench.files();
@@ -570,6 +576,41 @@ fn rec_arch_a_step_table_written_by_0_12_54_archives() {
     };
     let first = frame(RED, "f0001", STARTED_AT + 100);
     let second = frame(BLUE, "f0002", STARTED_AT + 300);
+    // Fix 2: the step table is built from its parts, each its own `json!`, so that no literal
+    // nests deeper than the macro's recursion limit allows (one literal of it all did not build).
+    let before = json!({
+        "frame_id": "before-0154", "frame_sha256": hex_sha256(b"before"),
+        "page": "neutral_page", "informational": true
+    });
+    let after = json!({
+        "frame_id": "after-0154", "frame_sha256": hex_sha256(b"after"),
+        "page": null, "informational": true
+    });
+    let execution = json!({
+        "point": {"x": 10, "y": 4}, "point_rule": "rect_center", "effect": "performed",
+        "carrier_package": {"package_label": "neutral.package"},
+        "req_id": "request-0154", "correlation_id": "correlation-0154",
+        "action_id": "action-0154", "lease_id": "lease-0154", "failure": null,
+        "before": before, "after": after, "executed_at_unix_ms": STARTED_AT + 200
+    });
+    let click = json!({
+        "rect": TAP, "source": "tap_rect", "from": null, "retry": null,
+        "declared_at_unix_ms": STARTED_AT + 200, "execution": execution,
+        "attempts": [], "needs_review": false
+    });
+    let tapped = json!({
+        "index": 1, "page": null, "dropped": false, "converted_to_transition": false,
+        "frames": [first], "marks": [], "reused": [], "click": click, "click_guard": null,
+        "transition": null, "closed": true, "closed_by": "click", "initiator": "Lab-MCP"
+    });
+    let last = json!({
+        "index": 2, "page": null, "dropped": false, "converted_to_transition": false,
+        "frames": [second], "marks": [], "reused": [], "click": null, "click_guard": null,
+        "transition": null, "closed": false, "closed_by": null, "initiator": "Lab-CLI"
+    });
+    let defaults = json!({
+        "template_threshold": 0.95, "color_max_distance": 20, "match_metric": "ccoeff_normed"
+    });
     let table = json!({
         "schema_version": "actingcommand.lab-recording.v1",
         "record_id": RECORD_ID,
@@ -578,31 +619,11 @@ fn rec_arch_a_step_table_written_by_0_12_54_archives() {
         "instance": INSTANCE,
         "status": "active",
         "game": null, "server": null, "locale": null,
-        "defaults": {"template_threshold": 0.95, "color_max_distance": 20, "match_metric": "ccoeff_normed"},
+        "defaults": defaults,
         "coordinate_space": {"width": 16, "height": 9},
         "created_at_unix_ms": STARTED_AT,
         "updated_at_unix_ms": STARTED_AT + 300,
-        "steps": [
-            {"index": 1, "page": null, "dropped": false, "converted_to_transition": false,
-             "frames": [first], "marks": [], "reused": [],
-             "click": {"rect": TAP, "source": "tap_rect", "from": null, "retry": null,
-                "declared_at_unix_ms": STARTED_AT + 200,
-                "execution": {"point": {"x": 10, "y": 4}, "point_rule": "rect_center",
-                    "effect": "performed", "carrier_package": {"package_label": "neutral.package"},
-                    "req_id": "request-0154", "correlation_id": "correlation-0154",
-                    "action_id": "action-0154", "lease_id": "lease-0154", "failure": null,
-                    "before": {"frame_id": "before-0154", "frame_sha256": hex_sha256(b"before"),
-                        "page": "neutral_page", "informational": true},
-                    "after": {"frame_id": "after-0154", "frame_sha256": hex_sha256(b"after"),
-                        "page": null, "informational": true},
-                    "executed_at_unix_ms": STARTED_AT + 200},
-                "attempts": [], "needs_review": false},
-             "click_guard": null, "transition": null, "closed": true, "closed_by": "click",
-             "initiator": "Lab-MCP"},
-            {"index": 2, "page": null, "dropped": false, "converted_to_transition": false,
-             "frames": [second], "marks": [], "reused": [], "click": null, "click_guard": null,
-             "transition": null, "closed": false, "closed_by": null, "initiator": "Lab-CLI"}
-        ],
+        "steps": [tapped, last],
         "artifact": null
     });
     let bytes = serde_json::to_vec_pretty(&table).expect("step table JSON");
@@ -642,9 +663,9 @@ fn rec_arch_a_step_table_written_by_0_12_54_archives() {
 fn rec_arch_a_recorded_frame_tap_and_swipe_name_their_recording_and_step() {
     let bench = Bench::new();
     let observed = bench.observe("Lab-CLI", RED);
-    let tapped = bench.tap("Lab-MCP", "request-tap");
+    let tapped = bench.commit_tap("Lab-MCP", "request-tap");
     let second = bench.observe("Lab-MCP", GREEN);
-    let swiped = bench.swipe("Lab-CLI", "request-swipe");
+    let swiped = bench.commit_swipe("Lab-CLI", "request-swipe");
     for (answer, step) in [
         (serde_json::to_value(&observed).expect("JSON"), 1),
         (serde_json::to_value(&tapped).expect("JSON"), 1),
