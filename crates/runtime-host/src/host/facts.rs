@@ -169,7 +169,10 @@ pub(super) enum FactPublicationPurpose {
     /// target policy key.
     Ordinary,
     /// `ApplyResourceTargets`: exactly one instance-scoped `session.resource_targets` record.
-    ResourceTargets,
+    /// Workflow #455 T1-R: with `expected_version`, under `fact_write_gate` the record is
+    /// refused when the key's active record is of another version (its `fact.published`
+    /// sequence, `0` without one); without it nothing is compared.
+    ResourceTargets { expected_version: Option<u64> },
     /// Workflow #384 D2-S3 (D2 model §3.6, A-1): one record a run's resource adjustment wrote
     /// from the key's active record, which the `fact.published` at ledger sequence
     /// `base_sequence` carried. Under `fact_write_gate` the record is refused when another
@@ -421,7 +424,7 @@ impl HostShared {
                         ));
                     }
                 }
-                FactPublicationPurpose::ResourceTargets => {
+                FactPublicationPurpose::ResourceTargets { .. } => {
                     if !matches!(
                         observation.records.as_slice(),
                         [record] if record.key == RESOURCE_TARGETS_FACT_KEY
@@ -473,7 +476,7 @@ impl HostShared {
             // set them; every other publication stays a Runtime fact-store event.
             let origin = match source_request {
                 Some(request)
-                    if purpose == FactPublicationPurpose::ResourceTargets
+                    if matches!(purpose, FactPublicationPurpose::ResourceTargets { .. })
                         || (!observation.records.is_empty()
                             && observation.records.iter().all(|record| {
                                 actingcommand_contract::fact_key_family(&record.key)
@@ -531,12 +534,29 @@ impl HostShared {
         // A resource target policy equal to the active, unexpired one is a replay: the
         // active revision answers and nothing is appended.
         let mut previous_version = None;
-        if purpose == FactPublicationPurpose::ResourceTargets {
+        if let FactPublicationPurpose::ResourceTargets { expected_version } = purpose {
             let record = &observation.records[0];
             let facts = lock(&self.facts, ContractLocation::PublishFact)?;
-            if let Some((active, sequence, event_id)) =
-                facts.active_revision(&record.scope, &record.key)
-            {
+            let active = facts.active_revision(&record.scope, &record.key);
+            // Workflow #455 T1-R: `expected_version` is compared in this hold of the gate, before
+            // the replay, as `EditPackSchedule` compares its list's: the version is the active
+            // record's sequence, `0` without one; another is refused and nothing is appended.
+            if let Some(expected) = expected_version {
+                let current_version = active.map_or(0, |(_, sequence, _)| sequence);
+                if expected != current_version {
+                    return Err(RuntimeHostError::request(
+                        HostCode::FactObservationVersionConflict,
+                        ContractLocation::ApplyResourceTargets,
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .with_outcome_values(|outcome| {
+                        outcome
+                            .fact_key(RESOURCE_TARGETS_FACT_KEY)
+                            .current_version(current_version)
+                    }));
+                }
+            }
+            if let Some((active, sequence, event_id)) = active {
                 if active.resource_bundle_hash == record.resource_bundle_hash
                     && !active.is_expired(now)
                 {

@@ -4052,8 +4052,11 @@ pub enum RuntimeOperation {
     /// client envelope. Workflow #429 R-0 (register §1.213): with
     /// `expected_version` the table is replaced only while its version is that one (R-13c),
     /// `0` while the instance has no table (`ResourceTargetView` answers no `active`); the
-    /// version is an opaque token compared only for equality. Until R-13c a request that
-    /// names it is refused `not_implemented`.
+    /// version is an opaque token compared only for equality. Since Workflow #455 T1-R
+    /// (0.12.60), which builds R-13c's check of this member, another version is refused
+    /// `fact_observation_version_conflict` (`fact_key` `session.resource_targets`,
+    /// `current_version`) and nothing is written, and the `ui` channel takes the kind; before
+    /// it a request that named the member was refused `not_implemented`.
     ApplyResourceTargets {
         document_json: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]

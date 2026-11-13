@@ -117,6 +117,13 @@ fact ("A run's consumption read from a fact" below) requires `consumption_fact`,
 refuses a file that writes one while `requires` does not name it, `schedule_invalid` at the first
 such `amount` in file order (for example `/rules/0/consumes/0/amount`).
 
+Workflow #437 ORD-1a (register §1.352, since 0.12.60). A rule that writes `max_queue_wait_ms`, the
+longest time its task may wait in its device's queue (a V2 task member that passes through,
+[scheduling/v2/README.md](scheduling/v2/README.md)), requires `queue_wait`, alike: the composer
+refuses a file that writes it while `requires` does not name it, whatever its value,
+`schedule_invalid` at the first such member in file order (for example
+`/rules/0/max_queue_wait_ms`). The catalog compiler checks the value, mapped back to the rule.
+
 A timeline event that writes `excludes_fact_prefixes`, with any value (Workflow #411 P19, since
 0.12.25; [scheduling/README.md](scheduling/README.md), "Reset exclusions and the task's own last
 result"), requires `reset_exclusions`, alike: the composer refuses a file that writes it while
@@ -424,7 +431,8 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    `hard_line`, SCHED-C1c (0.12.53) and SCHED-C1a (0.12.52): `pool_trigger_line` when one writes
    `trigger_line` and `benefit_fixed_value` when a rule writes `fixed_value_milli` or a pool
    `valuation_origin`, SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
-   entry writes its `amount` as a fact,
+   entry writes its `amount` as a fact, Workflow #437 ORD-1a (0.12.60): `queue_wait` when a rule
+   writes `max_queue_wait_ms`,
    `reset_exclusions` when a timeline event writes
    `excludes_fact_prefixes`, `fact_unknown_probe` when a rule's `fact` predicate writes
    `on_unknown`, and the given subsystems name each entry), no timeline event

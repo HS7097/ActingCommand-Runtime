@@ -224,6 +224,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // Workflow #437 ORD-1a (register §1.352): this build reads a task's `max_queue_wait_ms`
+        // (the longest time its candidate may wait in its device's queue); a `schedule.json`
+        // whose rule writes it requires it, so an older Runtime refuses the file instead of
+        // refusing the composed task.
+        subsystem(
+            "queue_wait",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // Workflow #411 P19: this build reads a timeline event's `excludes_fact_prefixes`, and its
         // resets keep a task's own last result for the task's own edges; a `schedule.json` whose
         // event writes the member requires it, so an older Runtime refuses the file instead of

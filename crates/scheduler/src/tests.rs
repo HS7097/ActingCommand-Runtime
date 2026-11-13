@@ -4,6 +4,8 @@ use super::*;
 use actingcommand_contract::{IdentifierIssuer, IssuedHolderId};
 
 mod gate_mapp1;
+// Workflow #437 MAPP-1c (register §1.350): the grant of the session close ahead.
+mod gate_mapp1c;
 mod gate_p1;
 mod scenario;
 

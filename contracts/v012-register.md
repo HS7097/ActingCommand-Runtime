@@ -20932,6 +20932,375 @@ literals of today; the task evidence `linked` at both). The forensic leaf's `inp
 the refusal this slice removes; the host's `gate_392_da3` helpers `device_host` and `run` are
 visible to their sibling modules, no assertion changed.
 
+### 1.350 Slice MAPP-1c (0.12.60): a device group's two open session gaps, and the lock order of its cross-member paths (Workflow #437; [device-group.md](device-group.md), "Device-level actions", rows 7 and 15, and "The session close of a keyless observation"; the two cases §1.330, point 11, left open; the design survey `rd-1113/mapp-order-design.md`, its section 1.1, its step 19 ("F6") and its row 3; the lock walk the coordinator's acceptance of MAPP-1b asked for before a group of several is accepted; the coordinator's rulings on board #437, not the owner's words; coordinator work order `rd-1114/brief-437-mapp1c.md`, read on main `fa724931`; fix 1, after an independent review, coordinator work order `rd-1114/brief-1690-fix1.md`, main `71a658f1` merged)
+
+1.350 is the next free number on main `71a658f1`, which holds §1.348 (the real cause of #454) and
+§1.349 (DA-3b), merged at fix 1. A build still refuses every group of several at load
+(`several_members_unsupported`, unchanged), so no configuration reaches this slice's code: its
+tests hand the host the member → device key map and the group's name as the assembly builds them.
+
+| Part | Built | Where |
+|---|---|---|
+| Gap one: two members' sessions open after a keyless observation | yes | The path: a keyless observation of member A on a free device (`capture_readonly_observation`, `host/observation.rs:226-280`) captures under the device's admission guard; a claim of any member asked meanwhile meets the guard and queues (`request_host_claim`, `queue_lease`); A's dedicated close lease was refused by that waiting claim (`prepare_dedicated_lease`, `lease_transfer_not_safe`), the refusal recorded once and A's session left open, and the guard's drop granted the claim (`pump`), another member's included, whose lease then ran beside A's open session. Now A's session is closed under a session close ahead (`close_session_ahead_while_guarded`, `host/resource_close.rs:585`), which no waiting claim refuses, before the guard is let go; the claim is granted afterwards by the queue's own grant |
+| Gap two: the close lease refused | yes | By a queued claim: as above. By the device's takeover cooldown (`lease_cooldown` at `prepare_acquire_with_policy`, `commit_acquire` and `begin_resource_close`): the observation failed after its capture with its session open. The session close ahead (`SeedScheduler::prepare_session_close_ahead`, `crates/scheduler/src/lib.rs`) is granted through the cooldown (its own token only: `commit_acquire`, `validate_current_lease`), ends no cooldown, carries no write authority (`validate_write` refuses it, `ResourceCloseOnly`) and hands the device to no one while the cooldown runs (`prepare_transfer_gated` answers no candidate for it then); it is released with the new in-memory `LeaseReleaseReason::SessionClosed`, which names no transfer (`host/lease.rs`, `cleanup_token_guarded`) |
+| The lock walk's finding, fixed | yes | `queue_order_lock` (`host/lease.rs:3505-3530`) is keyed by the device key, as the device's admission guard (`instance_guard`, `host/lease.rs:3235-3246`) and the scheduler's state are |
+| The lock table | yes | "The lock order" below |
+
+**The close's choice** ([device-group.md](device-group.md), "Which way, and why"): the observing
+member's session is closed before the other member's lease begins, under the guard the observation
+already holds; the observation is not made a keyed one.
+
+**Why the takeover cooldown allows the close** ([device-group.md](device-group.md), "Why the
+cooldown allows the close"): the cooldown keeps write authority off a device a dead epoch held
+until any client of that epoch has missed its heartbeat (`takeover_cooldown_ms` greater than the
+longest heartbeat interval, the C3a design: "each affected instance enters cooldown before another
+write lease may be granted"). The close ahead retires only the session this epoch's keyless
+observation opened in that cooldown, admits no write and no input, and grants the device to no
+holder, so it does not defeat the cooldown. `read-session-resource-close.md` keeps the cooldown's
+check for every other resource-close lease.
+
+**The lock order.** The host's mutexes the paths that touch more than one member take, in the
+order each takes them; lines are of this entry's head after fix 1. "→" is "then, while holding the
+former"; "; " separates locks taken and released one after another. Leaf locks (taken and released
+alone, never held while another of the table is asked): `registered_instances` (R),
+`scheduling_pause` (P), `resource_fences` (F; also read under Ow, `host/resource_close.rs:263`),
+`policy_runs_in_flight` (L), `contained_runs` (C), `queued_requests` (Q), `host_claim_work` (W),
+`queue_terminals`, `governance_connections`, `connection_channels`, `observe_marks`, the
+monitor's registry and `performance` (each with only the ledger's own appends under it), the
+stability counter (under S or `fact_write_gate`), `admission_guards` and `queue_order_locks` (the
+two maps), the blackout silence and `fact_write_gate` (every event append, with the fact store
+under it). G is the device's admission guard, O its queue-order lock, S the scheduler's lock, Ow
+the owner's. A ledger append takes the ledger's own lock for that append only, never across a
+critical execution's action (`crates/ledger/src/critical.rs:580-642`).
+
+| Path | Locks, in order (file:line) |
+|---|---|
+| The group's occupancy (`device_occupancy`, `host/device_group.rs:118`) | routine gate of each member: R `host/lease.rs:3538`; P `:3544`; F `host/resource_fence.rs:540`; then L `host/policy_lanes.rs:478`; then S `host/device_group.rs:134` (released `:175`) |
+| The group's waits at a policy cycle (`policy_device_group_holds`, `host/device_group.rs:260`) | the cycle holds `detection_write_gate` (`host/policy_dispatch.rs:1268`) → R `host/device_group.rs:266`; then per member the occupancy above and R `:91` |
+| The group's waits at the admission (`admission_device_group_hold`, `host/device_group.rs:288`, from `host/policy_dispatch.rs:245`) | the admission holds `governance_write_gate` (`host/policy_dispatch.rs:2273`) → R `host/device_group.rs:91`; P `:299`; F `host/resource_fence.rs:503`; the occupancy above. Later in the admission: `policy_outcome_gate` `host/policy_dispatch.rs:2491` → `policy` `:2495` → `fact_write_gate` `:2507` (released at the intent's append, `:951`) → G tried only (`try_acquire_lease`, `:2760`, `host/lease.rs:1180`) → O `host/lease.rs:1229` → S `:1231`; the grant's S `:1921` → Ow `:1929` |
+| The admission guard (`instance_guard`, `host/lease.rs:3235`) | the map `:3240` (released), then G by the caller: blocking (`lock_admission`, `:3480`) or tried (`try_lock_admission`, `:3492`; the pump's `try_lock`, `:3601`) |
+| The session close of a keyless observation (`capture_readonly_observation`, `host/observation.rs:226`; `close_keyless_session_of_group`, `host/resource_close.rs:541`; `close_session_ahead_while_guarded`, `:585`), re-walked at fix 1 | the map `host/lease.rs:3240` (released); G `host/observation.rs:253`, held to the end → the refusal below → the capture: `performance` `host/performance.rs:140` (released), Ow `host/resource_close.rs:247` (handed to the kernel's registration and dropped there), `observe_marks` `host/observation.rs:736` (released) → S `host/resource_close.rs:548` (released) → the close ahead's grant: R `:896` (released); S `:866` (released); the grant's S `host/lease.rs:1921` → Ow `:1929` (both released) → the close: S `host/resource_close.rs:731` (released), R `host/nemu_input.rs:323` (released), the kernel's close (a Nemu instance's close check reads S from the session's thread, `host/nemu_input.rs:303`, while this thread holds G), Ow `host/resource_close.rs:254` → F `host/resource_fence.rs:526` (both released), S `host/resource_close.rs:236` (released) → its release, `cleanup_token_inner` with G already held (`host/lease.rs:2347`): R `:2413` (released); O `:938` → S `:944` (both released); the lease end's device use, with nothing left open (`end_lease_device_use`: Ow `host/resource_close.rs:254` → F, released); R `host/lease.rs:3538`, P `:3544`, F (the routine gate, each released); then O `:2473`, held to the end of `cleanup_token_guarded` → S `:2571` (released `:2602`) → S `:3251` (released in its statement) → Ow `:3252` (released). S `:2475` is not taken: `SessionClosed` names no transfer (`:2458`-`:2468`). Then G is released and its drop pumps (`:158`-`:166`; the pump below) |
+| The refusals of device-level actions | emulator control (`refuse_emulator_control_of_group`, `host/device_group.rs:329`): R only (`resolve_instance`, `host/lease.rs:3083`), no guard. A keyless observation (`refuse_keyless_observation_of_group`, `host/device_group.rs:353`), under G: S `:363` (released); the occupancy above; `fact_write_gate` for its records |
+| The scheduler's per-device state: the queue's own grant (`pump`, `host/lease.rs:3570`) | P and R (routine gate); S `:3575` (released); G tried `:3601` → O `:3611` → S `:3614` (released); Q `:3870`; the grant's S `:1921` → Ow `:1929`; Q (its removal); W `:3725` |
+| A claim's or a client lease's queueing (`request_host_claim`, `host/lease.rs:3891`; `queue_lease`, `:196`) | G tried (`:3942`; `:207`) → O (`:3944`; `:229`) → S (`:3946`, `:3976`; `:230`), released → Q `:368` (its context registered under O); G and O released before the pump |
+| A holder's own end (`release_lease`, `host/lease.rs:1631`; `cleanup_token_inner`, `:2347`; `transfer_preempted_while_guarded`, `:1858`, from `transfer_preempted_if_ready`, `:1848`; `hand_off_to_ladder`, `:2131`, from `cleanup_scheduled_failure_with_run_links`, `:2055`; `release_lease_to_claim`, `:2266`) | G (`:1686`, `:2362`, `:1854`, `:2084`, `:2298`) → O (`:1696`, `:2473`, `:1867`, `:2164`, `:2303`) → S (`:1697`, `:2475`, `:1868`, `:2165`, `:2304`) |
+| Queue paths without the guard (`poll_queued_lease`, `await_operator_claim`, `renew_held_lease`, `cancel_host_claim`, `holds_key`) | O → S: `host/lease.rs:482` → `:484`; `:4033` → `:4035`; `:4121` → `:4151`; `:3753` → `:3754`; `host/host_claims.rs:482` → `:484`. None of them asks G while it holds O |
+| A client's cancel of a queued lease (`cancel_queued_lease`, `host/lease.rs:567`), added at fix 1 | Q `:573` (released); O `:593`, held to `:636` → S `:595` (released) → Q `:829` (released), the ledger's append, `queue_terminals` `:784` (released), Q `:882` (released); O released `:636`, then the pump `:637`. No G |
+| An idle holder's preemption (`promote_idle_preemption`, `host/lease.rs:1079`, from `queue_lease` `:346`, under G: tried `:207` or blocking `:344`), added at fix 1 | under G: R, P, F (the routine gate `:1088`, each released); O `:1090` → S `:1092` (released `:1112`) → `performance` (`capacity_allows_transfer`, `host/performance.rs:200`, `:140`; released) → either O released `:1119` and a holder's own end under the same G (`cleanup_token_inner`, `host/lease.rs:1120`), or the transfer under O (`perform_transfer`, `:955`): Q `:972` (released), the ledger's appends, S `:1043` → the stability counter (released `:1048`), Q `:882` (released), W `:3725` (released), S `:3251` (released) → Ow `:3252` (released) |
+| The sweep's end of a lapsed lease (`cleanup_expired_if_guard_free`, `host/lease.rs:2372`, from the sweep, `:2964`), added at fix 1 | R `:2413` (released); the map `:3240` (released); G tried `:2383`, held to the end → S `host/resource_close.rs:100` (`lease_step_active`, released) → `cleanup_token_guarded` with `Expired`: O `host/lease.rs:938` → S `:944` (both released); the lease end's device use (S `host/resource_close.rs:100`; a member's close: S `:731`, Ow `:254`, S `:236`; or the lapsed close's fence, `fence_lapsed_lease_close`, `:409`); R, P, F (the routine gate `host/lease.rs:2469`, each released); O `:2473`, held to the end of `cleanup_token_guarded` → S `:2475` (the transfer's preparation, released) → `performance` (`:2505`, released) → the transfer (`cleanup_via_transfer`, `:2700`: the ledger's appends and `perform_transfer` as in the row above) or S `:2571` (released) → S `:3251` (released) → Ow `:3252` (released); O released → `close_lapsed_run_session_guarded` (`host/resource_close.rs:482`), still under G: C (`run_end_control_of_lease`, `host/contained_task.rs:10858`, released), S `host/resource_close.rs:497` (released), then the dedicated close lease as in the pause release below → G released, its drop pumps |
+| A connection's end (`cleanup_connection`, `host/lease.rs:3024`), added at fix 1 | `governance_connections` `:3029`; `connection_channels` `host/governance.rs:262`; P `host/policy_dispatch.rs:3601`; S `host/lease.rs:3038` (each released); then for each instance with an entry of the connection: O `:3044` → S `:3045` (released) → Q `:882` (`take_queued_context`, released) and the ledger's append; O released `:3057`, then the pump `:3058`; then S `:3060` (released); then for each lease of the connection a holder's own end (`cleanup_token`, `:2042`: G `:2362` → O → S → Ow, as in its row). No G while O is held |
+| The monitor's probe (`run_monitor_probe`, `host/monitor_control.rs:178`), added at fix 1 | R (`monitor_instance`, `:180`, released); the map `host/lease.rs:3240` (released); G `host/monitor_control.rs:184`, blocking and held to the end (a plain guard: its drop pumps nothing) → `performance` `host/performance.rs:140` (released) → Ow `host/resource_close.rs:247` (handed to the kernel's registration and dropped there) → on a capture failure, still under G, `finish_capture_failure_while_guarded` (`host/resource_close.rs:1067`): S `:962` (released), a dedicated close lease's grant (R `:896`, the routine gate, S `:838`, then S `host/lease.rs:1921` → Ow `:1929`), its close (S `host/resource_close.rs:731`, Ow `:254` → F, S `:236`) and its release (O → S → Ow, as a holder's own end), or, on a refusal not by the queue, Ow `:1124` (released); on a frame, the monitor's registry `host/monitor_control.rs:447` (held over its record's append, released `:476`), then S `:569` (released at the end of `monitor_recovery_admission`) |
+| A member's pause release (`release_paused_instance`, `host/policy_dispatch.rs:3222`) | `governance_write_gate` `:3233` (released at once); G `:3255` → P and R (routine gate); S `:3265` (released); C `:3283`; P `:3286`; L; then the dedicated close lease as above under G |
+| MAPP-2a's stop (`stop_member_application`, `host/switch.rs:311`) | R `host/switch.rs:99`; S `:346` (released); `fact_write_gate` (its records); `control_application_of` (`host/input.rs:616`): G `:636` → S (`validated_instance`, `host/lease.rs:1817`) and O `:1867` → S `:1868` (released), G released; then in the command G `host/input.rs:705` → S `host/resource_close.rs:731`, Ow `:254`, S `:236` → S `host/input.rs:742` → Ow `:764` (`mark_resources_in_use`, handed to the kernel); then `fact_write_gate` (the page forgotten, `host/switch.rs:405`); then G `host/switch.rs:442` → S `host/resource_close.rs:731`, Ow `:254`, S `:236` |
+| MAPP-2a's switch entry and borrowed-key startup run (`switch_application`, `host/switch.rs:133`; `run_startup_package_on_borrowed_key`, `host/startup_package.rs:469`) | R `host/switch.rs:99`; S `:154` (released); S `host/startup_package.rs:553` (released); R `:482`; the run on the borrowed key: C `host/contained_task.rs:7902`, G per capture and input `:4777`-`:4778` → S and Ow as above; S `host/startup_package.rs:525` (released) |
+
+Fix 1 corrected the row of the session close of a keyless observation (it named S `:2475`, which a
+release with `SessionClosed` never takes, and left out that O is held from `:2473` through S `:2571`
+and S `:3251` to Ow `:3252`) and added the five paths the independent review named (a client's
+cancel of a queued lease, an idle holder's preemption, the sweep's end of a lapsed lease, a
+connection's end and the monitor's probe), each re-walked in the code; none takes two of the locks
+below in the opposite order of another path, as the review found.
+
+The one order every listed path follows: an outer gate of the policy (`detection_write_gate`; or
+`governance_write_gate`, then `policy_outcome_gate`, then `policy`), under which the device's
+admission guard is only tried, never waited for; then G; then O; then S; then Ow (the stability
+counter, `note_key_holder`, under S; F, under Ow). A path takes any suffix of this order, skipping
+what it does not need (a queue path without the guard starts at O, a lease end that names no
+transfer takes S and Ow under O one after the other); no path takes two of these in the opposite
+order, and no path asks G while it holds O, S or Ow, so **no inversion was found**. The walk covers
+the Runtime host's mutexes; the kernel's own locks are its own (it closes a session outside its
+registry lock, `read-session-resource-close.md`); a Nemu close check, which takes S on the
+session's thread while the closing host thread holds G (`host/nemu_input.rs:303`), keeps the order.
+
+**Findings, reported first.**
+
+1. *The queue-order lock was keyed by the member* (`queue_order_lock`, `host/lease.rs:3504-3517`
+   on main): not an inversion, but the device's one queue was ordered under two locks. A claim of
+   member B asked while member A held the device's guard registered its context under B's lock,
+   while A's pump, once A let the guard go, granted the device's first entry under A's lock: it
+   could take B's entry before B's context was registered (`read_queued_context`,
+   `queued_request_context_missing`, a fatal of the Runtime). Fixed here: the lock is keyed by
+   the device key (an instance alone on its device keys its own id, as before), and the test
+   `mapp1c_a_devices_admission_guard_and_queue_order_lock_are_one_per_device` pins it.
+2. *The monitor's probe ignores device groups* (`run_monitor_probe`, `host/monitor_control.rs:178`;
+   established by the independent review, re-walked at fix 1). Under the device's guard (`:184`)
+   it captures its member while another member's lease holds the device, so it opens its own
+   session beside that lease, and it does not close it afterwards. Then either of two things ends
+   the whole Runtime, the monitor's loop latching any error of a probe (`:779`-`:781`):
+   - its capture fails: `finish_capture_failure_while_guarded` (`host/resource_close.rs:1067`)
+     closes through a dedicated close lease of the member, since no active token names the member
+     (`:962`-`:990`); the other member's lease refuses it busy, which is not the refusal by the
+     queue that alone is non-fatal (`:1098`), so the branch at `:1108` makes the cleanup fatal: the
+     owner retains its resources unconfirmed (`:1124`) and the Runtime latches (`:1125`);
+   - its decision asks a recovery and its state changed: `monitor_recovery_admission` reads the
+     device's lease (`host/monitor_control.rs:569`-`:570`), whose token names another member, and
+     answers the fatal `monitor_recovery_fencing_state_invalid` (`:572`-`:577`).
+
+   Not fixed here: a refusal and a close of the probe change what a refused or closed probe
+   records and how the monitor's failures count, which the work order does not settle. It is a
+   precondition of the load accepting a group of several (below).
+3. *A keyless observation's capture failure during a takeover cooldown ends the whole Runtime*,
+   for any instance (established by the independent review). `finish_capture_failure_while_guarded`
+   asks a dedicated close lease, the cooldown refuses it (`lease_cooldown`), only a refusal by the
+   queue is non-fatal, and the branch at `host/resource_close.rs:1108` marks the process fatal with
+   its resources unconfirmed closed (the owner retains them, `:1124`; the Runtime latches, `:1125`).
+   The contract keeps this fatal in words (`read-session-resource-close.md`, "Every other failure
+   of this close keeps its fatality", its line 136), which is at odds with the rule that one
+   instance's failure does not end the Runtime (`runtime-outcomes.md`, "Failure scope", its line
+   283). On an installation in use it is all but unreachable: a takeover cooldown exists only at a
+   start after an abnormal exit (`takeover_cooldown_ms`, 6 000 ms by default), the start's
+   preparation waits for its end (`host/resource_close.rs:1203`-`:1205`, from `host.rs:2653`),
+   and observations and probes are admitted only later (the monitor's thread starts at
+   `host.rs:2688`-`:2700`, the request admission opens at `host.rs:2755`,
+   `finish_install_preparation`, and a start that is not held publishes its address at `:2757`).
+   Not changed here; the coordinator opens a defect for it.
+4. *A run's lease that lapses in its end phase while a claim of another member waits leaves the
+   member's session open* (established by the independent review, re-walked at fix 1). The sweep's
+   expiry (`cleanup_expired_if_guard_free`, `host/lease.rs:2372`) closes the member's session
+   under the lapsed lease (`end_lease_device_use`, `host/resource_close.rs:31`), which
+   `begin_resource_close` refuses; the refusal fences the member (`fence_lapsed_lease_close`,
+   `:409`), and the expiry transfers the device to the waiting claim (`host/lease.rs:2474`-
+   `:2529`). The run's owed close then finds a lease on the device and closes nothing
+   (`close_lapsed_run_session_guarded`, `host/resource_close.rs:497`-`:502`), so the member's
+   session stays open under the other member's lease. This is the third open path beside the two
+   MAPP-1c closes; `device-group.md` lists it (row 7, "Release."). Not fixed here.
+5. *The queue's grant judges the whole device's queue by one member's gate* (outside this slice;
+   established by the independent review, verified at fix 1). The pump reads the routine gate of
+   the member it is asked for (`pump`, `host/lease.rs:3574`) and passes it as a `ClaimGate`, which
+   is every member's gate (`crates/scheduler/src/lib.rs:341`-`:345`), so a routine claim of a
+   paused member may be granted while another member's gate is open. The transfers
+   (`host/lease.rs:1088`, `:1694`, `:1865`, `:2160`, `:2301`, `:2469`), a dedicated lease
+   (`host/resource_close.rs:837`), the queueing and the immediate grants (`host/lease.rs:227`,
+   `:1227`, `:3922`) pass one member's gate the same way. Not fixed here.
+
+**Before the load accepts a group of several** these must be on main, besides the slices
+`device-group.md` names ("Release.": MAPP-2b, "order within one device", "device-level actions by
+device"): the third session path closed (finding 4); the monitor's probe made group-aware, refused
+while another member holds the device and closing the session it opened, so that neither of its two
+fatal paths is reached (finding 2); each queued claim judged by its own member's gate in the
+queue's grant, the transfers, the dedicated leases and the queueing (finding 5). Finding 3 concerns
+every instance, a group of one included, and is the coordinator's defect, not a precondition of
+the group.
+
+**Tests.** `crates/runtime-host/src/tests/gate_mapp1c.rs` (gate map `host.toml`, "#437 MAPP-1c"),
+on fake devices whose two members write one session log (each capture or input backend opened or
+closed, in order) and close their captures only under a fenced resource-close step:
+`mapp1c_a_members_keyless_session_is_closed_before_a_claim_queued_meanwhile_is_granted`,
+`mapp1c_in_the_takeover_cooldown_the_session_is_closed_and_the_queued_claim_waits_for_its_end`
+(the cooldown started by the test-only `RuntimeHostConfig::with_takeover_cooldown_for_test`),
+`mapp1c_no_session_close_runs_while_a_run_of_any_member_holds_the_device`,
+`mapp1c_the_switch_shows_a_members_old_gap_and_a_lone_instance_never_reaches_the_slice` and
+`mapp1c_a_devices_admission_guard_and_queue_order_lock_are_one_per_device`.
+
+The fourth test was rebuilt at fix 1 (it was
+`mapp1c_a_lone_instances_observation_and_lease_are_the_same_with_and_without_the_slice_reachable`,
+which compared only receipt states and each record's type and severity, and whose switch reached
+neither changed place for an instance alone, so both of its runs ran the same code). It now uses
+the test-only switch `RuntimeHost::mapp1c_off_for_test` where it makes a difference, on two hosts
+started alike: a member A observed while B's claim queues; off, A's close lease is refused, the
+refusal recorded and B's claim granted with A's session open, and B's observation opens B's
+session beside it (the old gap); on, A's session is closed before B's lease begins and nothing of A
+fails. For C, alone on its device, which the switch does not reach, it asserts directly what must
+not happen, with the switch on and off on one host: no lease for its observation (no session close
+ahead), its queue-order lock held by the lock map under its own id (the test-only
+`RuntimeHost::queue_order_lock_key_for_test`), its session opened by its first observation and
+closed only by the Host close; and it compares the two rounds' records (observation, lease grant,
+lease release) record by record by type, severity and whole payload, with ids and times
+normalised. The switch exists in test builds only: its flag (`HostShared::mapp1c_off_for_test`),
+its two branches (`queue_order_lock`, `close_keyless_session_of_group`) and its setter are under
+`cfg(test)`, so no product build carries it.
+
+The scheduler's own gate, added at fix 1: `crates/scheduler/src/tests/gate_mapp1c.rs` (gate map
+`policy.toml`, "#437 MAPP-1c"),
+`mapp1c_a_close_ahead_is_granted_only_on_a_free_device_and_a_queued_claim_keeps_its_place` (busy
+under another member's lease, `lease_expired` under a lapsed one; on the free device the waiting
+claim refuses the dedicated close lease and not the close ahead, which takes nothing out of the
+queue, lets no queued grant through, carries no write authority but its close and names no
+transfer at its end; the waiting claim is then granted in its place with its own member, holder
+and lease time) and
+`mapp1c_in_the_cooldown_only_the_close_aheads_token_passes_and_the_cooldown_end_stays` (in a
+takeover cooldown an acquisition is refused with the cooldown's remaining time and the queue grants
+nothing, the close ahead is granted and only its token passes for its close, it hands the device
+to no one, its end leaves the cooldown's end unchanged and its token no longer passes, and the
+waiting claim is granted at the cooldown's end).
+
+The MAPP-1 gates (policy, host, actingd), the MAPP-2a gate and every other test are unchanged. The
+renamed test was never on main, so no test retires.
+
+**What is not added.** No outcome code, value key, word, configuration key, record type, payload
+member, fact, tag, wire shape or interface revision. `LeaseReleaseReason::SessionClosed` is in
+memory only (`lease.released` carries no reason).
+
+**At deploy.** Nothing reachable: the load refuses every group of several, so no installation
+runs the session close ahead or meets the device-keyed queue-order lock other than as its own
+instance's. A root without `device_group` runs byte for byte as before.
+
+**Rollback** (below 0.12.60). Nothing is persisted by MAPP-1c; the build before it reads every
+record this one writes.
+
+### 1.351 Slice T1-R (0.12.60): the console's entry takes the resource target document, with its version check (Workflow #455, step 1; the owner asked that the console set an application's goals as agents do through the Lab, board #455; the design `rd-1114/455-goals-design-final.md` §1.3, §2.1, §4 and §5 rows T1-R, §6.1 rows 12 and 13, §6.2 point 1, read on main `fa724931`; the coordinator's rulings on board #455, not the owner's words, the reversal below among them; coordinator work order `rd-1114/brief-455-t1r.md`, read on main `fa724931`)
+
+[lab-two-entries.md](lab-two-entries.md) §3 and [resource-targets.md](resource-targets.md) ("Entry
+and receipts") are the contract; [runtime-interface.md](runtime-interface.md) (the kind's row of
+the general instructions, the row `ApplyResourceTargets.expected_version?` of "Workbench request
+kinds", revision rule 2), [instance-fact-store.md](instance-fact-store.md) ("Resource target policy
+facts", "Replay") and [lab-operations.json](lab-operations.json) follow it. **No wire shape,
+configuration key, ledger shape, outcome code, value key, location or interface revision is new**:
+`expected_version` has been on the wire since `runtime-client` 3 (§1.213 R0-3), and its refusal is
+`fact_observation_version_conflict` with `fact_key` and `current_version`, as R-4 (§1.239) and R-8
+(§1.308) emit it; the code's description names the new case (the code index regenerated, its text
+unchanged). The number 1.348 was provisional for parallel slices: it followed DA-3's §1.347 on
+the base this slice was read on; the integration train 0.12.60a renumbered it 1.351, after §1.348
+(#454, the real cause), §1.349 (DA-3b) and §1.350 (MAPP-1c).
+
+**The reversal.** LAB-6S3 ("Slice LAB-6S3" under §1.287, "What a `ui` connection is refused that
+it was served before": the resource target documents) kept `ApplyResourceTargets` off the UI list,
+and lab-two-entries.md §3 refused "the whole resource target document" on `ui` in words, while
+runtime-interface.md's revision rule 2 expected the console to send its `expected_version` once
+R-13c deployed. The coordinator's ruling on board #455, not the owner's words, reverses that
+recorded gate decision: `ApplyResourceTargets` joins the UI list, and the two texts now say the
+second's. Every other kind `ui` refused stays refused.
+
+**What.**
+
+- **The UI list** (`actingcommand_contract::ui_allows`): `ApplyResourceTargets` joins it, 31 kinds
+  (46 off it). The operation table: its `ui_kinds` row (`write`, `console_today` false, as the
+  table marks the kinds the console does not send yet), and the row `targets set` offered on
+  `lab` and `ui` (`entries`), every request of it now on the list (§9.1's rule). lab-two-entries.md
+  §3: the kind's row; the list of refusals no longer names the resource target document.
+- **The version check** (`runtime-host`, `HostShared::publish_facts_under_gate` with the purpose
+  `FactPublicationPurpose::ResourceTargets { expected_version }`, from `apply_resource_targets`):
+  the document is parsed and checked as without the member (Phase A); then, in the hold of the
+  fact write gate that writes the record (Phase B), after the store is synchronized and before the
+  replay, the version of the instance's active `session.resource_targets` record (the sequence of
+  the `fact.published` that holds it, expired or not; `0` without one) is compared with
+  `expected_version`. Another value is Denied `fact_observation_version_conflict` (`fact_key`
+  `session.resource_targets`, `current_version`, `operation` `apply_resource_targets`; the
+  `current_version` kept in codes mode), nothing appended; the equal value goes on as without the
+  member (a new record, or an equal active policy's replay). R-0's `not_implemented` arm leaves
+  `requests.rs`. Without the member nothing is compared and every step is as before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| T1R-1 | `ui_allows` holds `ApplyResourceTargets` | static table of the contract crate | T1-R | — | the 31 kinds of lab-two-entries.md §3; equal to the operation table's `ui_kinds` |
+| T1R-2 | `lab-operations.json`: the `ui_kinds` row `ApplyResourceTargets` (`write`, `console_today` false); `targets set`'s `entries` `["lab", "ui"]` | table text | T1-R | — | the row's other members unchanged; a note names the slice |
+| T1R-3 | `ApplyResourceTargets.expected_version` compared under the fact write gate | behaviour of an R-0 member (`runtime-client` unchanged) | T1-R (R-13c's check of this member) | the console (T1-C) | replaces §1.213 R0-3's `not_implemented` for this member; `EditResourceTarget` stays `not_implemented` |
+| T1R-4 | `fact_observation_version_conflict` of an `ApplyResourceTargets` | outcome catalog text | T1-R | the host | its description names the case; no code, key, location or word added |
+
+**Settled here** (each the slice's; the coordinator may change them): the version is compared
+before the replay, so an equal document sent with another version is the conflict, as an
+`EditPackSchedule` is compared before its list is written; the document is checked before the
+version, so a refused document is refused for its own reason whatever the version; an expired
+record keeps its version (it stays stored until replaced, and the view answers it with
+`expired`).
+
+**Not touched.** `EditResourceTarget` (R-13c's per-target edit) stays `not_implemented`; the
+document's versions, readers and checks, the view, the evaluator, the Lab's other rows, the console.
+
+**Interface.** None raised ([component-interfaces.md](component-interfaces.md)): `runtime-client`
+stays [3, 8] (the member is revision 3's), and `ledger`, `actingd-config` and `package` do not
+move. A console that sends the kind on `ui` to an older Runtime meets `channel_request_refused`,
+which changed nothing (runtime-interface.md, revision rule 2).
+
+**At deploy.** Nothing changes for a writer that does not name `expected_version`: actinglab's
+`targets set`, the MCP tools' `ac_targets_set` and `actingctl agent-apply-resource-targets` send
+none and are answered as before. The `ui` channel takes the document, so a console that sends it
+writes the instance's targets; a request that names the member is compared instead of refused.
+
+**Rollback** (below 0.12.60): `ui` refuses `ApplyResourceTargets` again (`channel_request_refused`,
+recorded `command.rejected`), and a request that names `expected_version` is `not_implemented`
+again; the records written stay ordinary policies that the older build reads.
+
+Tests (host gate rows "#455 T1-R"): `gate_455_t1r::t1r_the_ui_channel_takes_the_document_and_every_kind_off_the_table_stays_refused`,
+`t1r_expected_version_is_compared_with_the_version_of_the_record`,
+`t1r_two_writers_a_version_read_before_the_other_write_is_refused_until_read_again` and
+`t1r_a_replay_with_the_records_version_appends_nothing_and_answers_as_without_it` (the host, a
+manual clock, a fake device, the fixture catalog). Two existing tests pinned what this slice
+changes and change with it, keeping their names: `gate_429_r0::r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effect`
+no longer sends an `ApplyResourceTargets` naming `expected_version`, and
+`gate_434_lab6s3::lab6s3_gate_two_entries_ui_takes_the_handshake_and_the_ui_list_only` writes the
+list of §3 with `ApplyResourceTargets` (31 kinds). The gates that tie the table, the code and the
+contract together take the new row unchanged: lab-ops' `lab_ops_ui_allows_is_the_tables_ui_kinds`
+and `lab_ops_table_complete` (the `entries` rule), and the host's LAB-6S3 test above. No golden
+changes; no test leaves the gate map.
+
+### 1.352 Slices ORD-1a and ORD-1b (0.12.60): a task's longest wait in its device's queue, and the selection among the members of one device (Workflow #437; the owner's rulings on board #437 as the coordinator recorded them, not the owner's words; the design note `rd-1114/ord1-design.md`, read on main `fa724931`, with the coordinator's four amendments; coordinator work order `rd-1114/brief-437-ord1ab.md`, read on main `fa724931`)
+
+[scheduling/v2/README.md](scheduling/v2/README.md) (ORD-1a) and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("`requires`", "Composition") are the
+contract of ORD-1a. **No ledger shape, no configuration key and no interface revision moves**: the
+member is a catalog and `schedule.json` addition gated by `requires`, as SCHED-C1a's
+`benefit_fixed_value_milli` (§1.299, its slice table: "none: catalog and `schedule.json`
+additions gated by `requires`"); `schedule.json` lies beside `bundle.json` and is no part of what
+`package` covers ([component-interfaces.md](component-interfaces.md)), and the subsystem row is a
+new row value of an existing fact. The number 1.350 was provisional for parallel slices (1.348 and
+1.349 went to #454's fix and DA-3b on main `71a658f1`, merged into this branch); the integration
+train 0.12.60a renumbered it 1.352, after §1.350 (MAPP-1c) and §1.351 (T1-R).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ORD1A-1 | `TaskSpec::max_queue_wait_ms` (`Option<u64>`, V2 only, `60000..=86400000`) | catalog format addition | ORD-1a | a `schedule.json` rule (passed through by the composer); a raw V2 catalog | `crates/policy/src/schema.rs`; read as a written bound (an explicit `null` is `type_mismatch`); absent it serializes as nothing, so a catalog without it keeps its hash; `validate_queue_wait` in `validation.rs`: V1 `unknown_field`, out of range `limit_exceeded`, at the member; `MIN_QUEUE_WAIT_MS`, `MAX_QUEUE_WAIT_MS`; the Runtime's own reading (`_fact_refresh`) declares none |
+| ORD1A-2 | the always-on row `queue_wait` of `config.subsystems`; `QUEUE_WAIT_SUBSYSTEM` | new row value of an existing fact | ORD-1a | actingd | `apps/actingd/src/config/manifest.rs`; the composer refuses a file whose rule writes `max_queue_wait_ms` (any value) without it in `requires`, `schedule_invalid` at the first such rule's member; a Runtime before ORD-1a refuses such a file at `requires` (`schedule_requires_missing`) |
+
+**ORD-1a tests.** New: policy rows "#437 ORD-1a",
+`actingcommand-policy::lib::tests::gate_ord1` tests
+`ord1a_t1_the_compiler_holds_max_queue_wait_ms_to_v2_and_its_range`,
+`ord1a_t2_the_composer_passes_it_through_and_refuses_it_without_requires` and
+`ord1a_t3_without_the_member_every_catalog_hash_is_unchanged`, on fakes, no clock read.
+
+**At deploy (ORD-1a).** Nothing: no catalog writes the member, and no decision reads it in this
+slice; every catalog keeps its hash. `config.subsystems` gains the row `queue_wait`.
+
+**ORD-1b.** [scheduling/README.md](scheduling/README.md), "Order within one device", and
+[device-group.md](device-group.md), "Ranking across members" (which replaces the ranking "as it is
+today" and the normalized weight of its "Later slices"), are the contract, with the coordinator's
+amendments to the design note: the device's chain successor goes first whether or not it fits (by
+the coordinator's ruling of the first fix round, also when another member or none is in front), a
+promoted request does not; the wait's start is an input of the evaluation (none given:
+the wait begins at the evaluation's time), how the Runtime keeps it is the host's slice; no
+"unservable pair" is built; the default is the constant 1 800 000 until the host passes the
+configured one. **No ledger shape, no configuration key, no code and no interface revision
+moves**: the values are optional values of two existing codes (`runtime-outcomes`: catalog
+additions only; `ledger`: the reader only spells codes and value words), and the policy crate's
+inputs are memory only.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ORD1B-1 | `DeviceOrder` (the member in front by alias, each waiting contender's start by task and alias, the default limit; `DEFAULT_MAX_QUEUE_WAIT_MS` 1 800 000) and `DeviceGroups::with_order` | policy input (memory only) | ORD-1b | the Runtime, from the host's slice on | `crates/policy/src/evaluator.rs`; `DeviceGroups::new` keeps its signature and passes none, so the evaluation is MAPP-1's until a host passes them; two members of one device named in front refuse the evaluation (`policy_evaluation_input_invalid`) |
+| ORD1B-2 | the selection among a device's contenders, at its first contender's place in the allocation order: the device's chain successor when it contends, whatever its fit and whoever is in front; else the front's first contender that ends by the binding waiter's deadline (the binding waiter: earliest deadline, then the allocation order); else the binding waiter; a deferred pick gives way and the selection runs again from the same place, so the device's picks meet the shared run limits there, before every later candidate of the allocation order | behaviour (evaluation) | ORD-1b | the policy evaluator | `crates/policy/src/evaluator/device_order.rs`; a step-by-step procedure over the allocation order, no new comparator; a contender excludes the Runtime's whole-instance holds, the members held as the cycle starts and the handover's held candidates, which take their turns as before; only a device the map names for two or more aliases |
+| ORD1B-3 | optional values `required_ms`, `remaining_ms` on `instance_already_selected`, and `required_ms`, `remaining_ms`, `limit_ms` on `device_group_waiting` (`selected`) | outcome catalog additions (policy) | ORD-1b | the policy evaluator | `contracts/outcome-codes/policy.json`; a front contender passed over before a pick that fits, the front's contenders when another member's pick switches the device, every other member's contender; the step 3 of before is the helper `settle_behind_instance`, unchanged without the values |
+
+**Without the host's inputs the rows stay MAPP-1's.** The design note had the existing constructor
+give empty inputs, the front unknown and every wait fresh, and two MAPP-1 tests gain the waiting
+values. The host's MAPP-1b tests (`crates/runtime-host/src/tests/gate_mapp1b.rs`) pin the
+`device_group_waiting` `selected` rows of a device of several with exactly MAPP-1's values, and
+this slice changes no file of the host: so the order applies, and the values appear, only once a
+host passes the inputs (`with_order`); the MAPP-1 and MAPP-1b policy tests are unchanged. The host's
+slice passes them and adapts those rows.
+
+**ORD-1b tests.** New: policy rows "#437 ORD-1b", `gate_ord1` tests `ord1b_t1` to `ord1b_t11`
+(`ord1b_t10_a_chain_successor_goes_first_whether_or_not_it_fits`, amendment 1, with its member in
+front and with none in front against another member's shorter declared limit, and a promoted front
+request that does not go first; `ord1b_t9_a_waiting_members_fact_refresh_takes_the_default`) and
+`ord1b_without_a_device_of_several_a_declared_limit_changes_no_decision`, whose lone instance is
+named in front of nothing and whose first task declares the longer limit, so an evaluation that
+took the lone instance for a device of several would pick its second task; `ord1b_t7` compares
+each row's evaluation byte for byte under the six orders of the instances and with the task
+snapshots reversed. Its sixth row takes row 2's durations: with row 1's, a2 fits against either
+waiter and the tie of the two limits decides nothing visible. In `ord1b_t10`, SHORT ranks above
+LEAD, whose priority the chain step CLOSE ranks with (SS-2's chain inheritance), so that the
+handover moves CLOSE before it. Unchanged and holding:
+`mapp1_without_a_device_of_several_the_evaluation_is_byte_for_byte_the_one_before`.
+
+**For the host's slice of the order.** Once another member's pick has taken the device, a candidate
+of a member that is paused or under a person's hold as the cycle starts is no contender: it is
+settled by the older branch, as a `device_group_waiting` `selected` row with MAPP-1's values only.
+A wait clock must tell such rows from waiting contenders by the presence of `limit_ms` or
+`required_ms`, not by the code.
+
+**At deploy (ORD-1b).** Nothing: no Runtime build passes the order inputs, and every group of
+several is refused at load; a device of one never reads them.
+
 ### 1.353 Slice MAPP-2b (0.12.60): the application switch before a run, its failure and the member's cooldown (Workflow #437; the contract of §1.323 and [device-group.md](device-group.md), "The switch before a run"; the design survey `rd-1113/mapp-order-design.md`, its finding F3, its row "MAPP-2b" and its row for slice 2; the coordinator's rulings of 11-14 on board #437, not the owner's words; coordinator work orders `rd-1113/brief-437-mapp2b.md`, read on main `bd58c9a6`, main `fa724931` merged, `rd-1114/brief-1689-fix1.md`, its fix round after the independent review, with the coordinator's addition of 11-14 on the lease bound, and `rd-1114/brief-1689-fix2.md`, its fix round after the first CI run, main `803fdfa3` merged)
 
 1.353 is the next free number after §1.352: the slice took 1.348 on its first base and 1.350 on
