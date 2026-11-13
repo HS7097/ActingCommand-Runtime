@@ -3413,6 +3413,23 @@
       "notes": "LAB-3: the live build's ledger-maintenance verify of the root's configuration"
     },
     {
+      "name": "emulators",
+      "module": "rescue",
+      "params": [],
+      "help": "Lists this machine's emulator instances through the live build's actingd, without a Runtime, each with the configured instance it binds.",
+      "output": "actingd discover's report: mumu_root {path, source}, provider_version and instances in the shape the core row discover answers, each with bound_alias when an entry of this root's configuration binds it",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actingd discover"],
+      "new": "#453 S10 (the emulator instances of a fresh root, listed while no Runtime runs)",
+      "slice": "S10",
+      "status": "planned",
+      "notes": "#453 S10: the live build's actingd discover --config <this root's configuration> --install-root <root>, within 60 s, at which the child is ended (fix 1: never left running; the refusal then has timeout_ms); read only: no state root, no owner lock, no ledger, nothing written, and of the vendor tool only its version and instance listing (contracts/emulator-control.md, Offline instance discovery); a refusal is install_command_refused with install_refusal emulator_discovery_failed and actingd's outcome as its cause. The core row discover, which asks a running Runtime, stays as it is"
+    },
+    {
       "name": "watchdog install",
       "module": "rescue",
       "params": [],

@@ -210,29 +210,116 @@ pub struct MumuDiscoveryReport {
     pub instances: Vec<DiscoveredMumuInstance>,
 }
 
+/// The arguments of `MuMuManager version`, the first of discovery's two reads.
+const VERSION_ARGS: [&str; 1] = ["version"];
+/// The arguments of `MuMuManager info -v all`, the second of discovery's two reads.
+const INSTANCES_ARGS: [&str; 3] = ["info", "-v", "all"];
+
+/// Workflow #453 S10: the reads that discovery runs: the vendor tool's two read-only reads,
+/// `version` and `info -v all`, and nothing else of it (a discovery can ask no other subcommand
+/// through it), and (fix 1) the resolver's process listing, which only a discovery that names no
+/// folder makes. The start's and check-config's reads are [`SystemMumuManagerReads`], `actingd
+/// discover`'s [`BoundedMumuManagerReads`]; a test injects its own.
+pub trait MumuManagerReads {
+    /// The JSON document `MuMuManager version` answers.
+    fn version(&mut self, mumu_manager_path: &Path) -> DeviceResult<serde_json::Value>;
+    /// The JSON document `MuMuManager info -v all` answers.
+    fn instances(&mut self, mumu_manager_path: &Path) -> DeviceResult<serde_json::Value>;
+    /// Workflow #453 S10 fix 1: the running processes, listed once (the resolver's running-process
+    /// rung, reached only when no folder is named).
+    fn processes(&mut self) -> DeviceResult<Vec<DeviceDiscoveryProcess>>;
+}
+
+/// The vendor tool itself: each read runs `MuMuManager.exe` once, bounded by
+/// `MUMU_MANAGER_COMMAND_TIMEOUT`, and requires exit 0, strict UTF-8 JSON and the output bound.
+/// The process listing has no bound of its own, as the start's discovery and check-config have
+/// always listed.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemMumuManagerReads;
+
+impl MumuManagerReads for SystemMumuManagerReads {
+    fn version(&mut self, mumu_manager_path: &Path) -> DeviceResult<serde_json::Value> {
+        run_json(mumu_manager_path, &VERSION_ARGS)
+    }
+
+    fn instances(&mut self, mumu_manager_path: &Path) -> DeviceResult<serde_json::Value> {
+        run_json(mumu_manager_path, &INSTANCES_ARGS)
+    }
+
+    fn processes(&mut self) -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+        crate::discovery::system_processes()
+    }
+}
+
+/// Workflow #453 S10 fix 1 (review): `actingd discover`'s reads, the vendor tool's two as
+/// [`SystemMumuManagerReads`] runs them, and the process listing bounded by
+/// `MUMU_MANAGER_PROCESS_LIST_TIMEOUT` (10 s), as a Stop's process check lists: at the bound only
+/// the PowerShell process the listing started is ended, and the listing fails.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BoundedMumuManagerReads;
+
+impl MumuManagerReads for BoundedMumuManagerReads {
+    fn version(&mut self, mumu_manager_path: &Path) -> DeviceResult<serde_json::Value> {
+        run_json(mumu_manager_path, &VERSION_ARGS)
+    }
+
+    fn instances(&mut self, mumu_manager_path: &Path) -> DeviceResult<serde_json::Value> {
+        run_json(mumu_manager_path, &INSTANCES_ARGS)
+    }
+
+    fn processes(&mut self) -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+        crate::discovery::system_processes_within(MUMU_MANAGER_PROCESS_LIST_TIMEOUT)
+    }
+}
+
+/// Workflow #453 S10: one discovery, and the installation root its resolver chose (canonical).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MumuInstallationDiscovery {
+    pub install_root: PathBuf,
+    pub report: MumuDiscoveryReport,
+}
+
 /// The single discovery entry, used by the daemon. `env_folder` is
 /// the caller-injected `ACTINGCOMMAND_NEMU_FOLDER` value (see [`resolve_mumu_manager`]).
 pub fn discover_mumu_instances(
     explicit_root: Option<&Path>,
     env_folder: Option<&Path>,
 ) -> DeviceResult<MumuDiscoveryReport> {
-    discover_mumu_instances_inner(explicit_root, env_folder)
+    discover_mumu_installation(explicit_root, env_folder, &mut SystemMumuManagerReads)
+        .map(|discovered| discovered.report)
+}
+
+/// Workflow #453 S10: the one function that composes discovery, the daemon's and `actingd
+/// discover`'s: [`resolve_mumu_manager`] (its process listing, only when no folder is named, is
+/// `reads`' `processes`: fix 1), then `reads`' `version` (the policy floor enforced) and
+/// `info -v all`, each once and in that order; nothing else is run or written. Its failures are
+/// those of [`discover_mumu_instances`].
+pub fn discover_mumu_installation(
+    explicit_root: Option<&Path>,
+    env_folder: Option<&Path>,
+    reads: &mut dyn MumuManagerReads,
+) -> DeviceResult<MumuInstallationDiscovery> {
+    discover_mumu_installation_inner(explicit_root, env_folder, reads)
         .map_err(with_mumu_manager_discovery_detail)
 }
 
-fn discover_mumu_instances_inner(
+fn discover_mumu_installation_inner(
     explicit_root: Option<&Path>,
     env_folder: Option<&Path>,
-) -> DeviceResult<MumuDiscoveryReport> {
-    let manager = resolve_mumu_manager(explicit_root, env_folder)?;
-    let version = query_version(&manager.mumu_manager_path)?;
-    let instances = query_instances(&manager, version)?;
-    Ok(MumuDiscoveryReport {
-        source: manager.source,
-        mumu_manager_path: manager.mumu_manager_path,
-        version,
-        registry_display_version: manager.registry_display_version,
-        instances,
+    reads: &mut dyn MumuManagerReads,
+) -> DeviceResult<MumuInstallationDiscovery> {
+    let manager = resolve_mumu_manager_with(explicit_root, env_folder, reads)?;
+    let version = query_version_with(&manager.mumu_manager_path, reads)?;
+    let instances = query_instances_with(&manager, version, reads)?;
+    Ok(MumuInstallationDiscovery {
+        install_root: manager.install_root,
+        report: MumuDiscoveryReport {
+            source: manager.source,
+            mumu_manager_path: manager.mumu_manager_path,
+            version,
+            registry_display_version: manager.registry_display_version,
+            instances,
+        },
     })
 }
 
@@ -371,13 +458,23 @@ pub fn resolve_mumu_manager(
     explicit_root: Option<&Path>,
     env_folder: Option<&Path>,
 ) -> DeviceResult<ResolvedMumuManager> {
+    resolve_mumu_manager_with(explicit_root, env_folder, &mut SystemMumuManagerReads)
+}
+
+/// [`resolve_mumu_manager`] with the running-process rung's listing through `reads`' `processes`
+/// (Workflow #453 S10 fix 1); [`SystemMumuManagerReads`] lists as the resolver always has.
+fn resolve_mumu_manager_with(
+    explicit_root: Option<&Path>,
+    env_folder: Option<&Path>,
+    reads: &mut dyn MumuManagerReads,
+) -> DeviceResult<ResolvedMumuManager> {
     if let Some(root) = explicit_root {
         return manager_in_root(root, MumuManagerSource::ExplicitRoot, None);
     }
     if let Some(root) = env_folder {
         return manager_in_root(root, MumuManagerSource::FolderEnvironment, None);
     }
-    let running = crate::discovery::running_mumu_executable_paths()?;
+    let running = crate::discovery::mumu_executable_paths(reads.processes()?);
     if let Some(installation) = resolve_mumu_installation_from_sources(None, &running, &[])? {
         return manager_in_root(&installation.root, MumuManagerSource::RunningProcess, None);
     }
@@ -496,8 +593,16 @@ fn manager_in_root(
 
 /// Runs `MuMuManager version` and enforces `MUMU_MANAGER_MINIMUM_VERSION`.
 pub fn query_version(mumu_manager_path: &Path) -> DeviceResult<MumuManagerVersion> {
-    let args = ["version"];
-    let document = run_json(mumu_manager_path, &args)?;
+    query_version_with(mumu_manager_path, &mut SystemMumuManagerReads)
+}
+
+/// [`query_version`] through `reads` (Workflow #453 S10).
+fn query_version_with(
+    mumu_manager_path: &Path,
+    reads: &mut dyn MumuManagerReads,
+) -> DeviceResult<MumuManagerVersion> {
+    let args = VERSION_ARGS;
+    let document = reads.version(mumu_manager_path)?;
     let observed = document
         .as_object()
         .and_then(|object| object.get("version"))
@@ -535,8 +640,17 @@ pub fn query_instances(
     manager: &ResolvedMumuManager,
     mumu_version: MumuManagerVersion,
 ) -> DeviceResult<Vec<DiscoveredMumuInstance>> {
-    let args = ["info", "-v", "all"];
-    let document = run_json(&manager.mumu_manager_path, &args)?;
+    query_instances_with(manager, mumu_version, &mut SystemMumuManagerReads)
+}
+
+/// [`query_instances`] through `reads` (Workflow #453 S10).
+fn query_instances_with(
+    manager: &ResolvedMumuManager,
+    mumu_version: MumuManagerVersion,
+    reads: &mut dyn MumuManagerReads,
+) -> DeviceResult<Vec<DiscoveredMumuInstance>> {
+    let args = INSTANCES_ARGS;
+    let document = reads.instances(&manager.mumu_manager_path)?;
     let Some(object) = document.as_object() else {
         return Err(shape_error(
             &args,

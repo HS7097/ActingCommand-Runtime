@@ -58,6 +58,9 @@
 //!   generations, `crate::install::mcp_entry::entries`) and `mcp config` (the second
 //!   generation's registration snippet, `crate::install::mcp_config`). The first generation's
 //!   `actingctl mcp-entry plan|list` and `mcp-config` answer as before.
+//! - **`emulators`** (Workflow #453 S10; `contracts/emulator-control.md`, "Offline instance
+//!   discovery"), read only, offline: the live build's `actingd discover` of the module's own root,
+//!   its report the answer.
 
 use crate::agent_channel::{self, Answer as Answered};
 use crate::cli_line::{self, Exit};
@@ -98,8 +101,9 @@ const USAGE: &str = "usage: actinglab [--json] <rescue operation> [<positionals>
      rescue; no --root, no --state-root: the root is the one actinglab runs from";
 
 /// The rows of module `rescue` this slice serves, by the table's name (Workflow #421 INST-5: and
-/// `instance add`; Workflow #434 LAB-5G5b: and the three MCP rows).
-pub const SERVED: [&str; 33] = [
+/// `instance add`; Workflow #434 LAB-5G5b: and the three MCP rows; Workflow #453 S10: and
+/// `emulators`).
+pub const SERVED: [&str; 34] = [
     "up",
     "restart",
     "down",
@@ -122,6 +126,7 @@ pub const SERVED: [&str; 33] = [
     "unlock",
     "check-config",
     "ledger verify",
+    "emulators",
     "watchdog install",
     "watchdog uninstall",
     "agent add",
@@ -242,6 +247,7 @@ pub(crate) fn answer_with(
         "unlock" => unlock(context),
         "check-config" => check_config(context, params),
         "ledger verify" => ledger_verify(context),
+        "emulators" => emulators(context),
         "watchdog install" => watchdog(context, crate::watchdog::Asked::Install),
         "watchdog uninstall" => watchdog(context, crate::watchdog::Asked::Uninstall),
         "mcp plan" => mcp_plan(context, params),
@@ -2027,6 +2033,48 @@ fn ledger_verify(context: &Context<'_>) -> Exit {
             failure.onto(install::refusal(VERIFY, InstallRefusal::LedgerVerifyFailed))
         })?;
         Ok(cli_line::success(Map::new(), &install::done(VERIFY)))
+    };
+    run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
+}
+
+/// Workflow #453 S10 (contracts/emulator-control.md, "Offline instance discovery"): `emulators`,
+/// the live build's `actingd discover --config <the root's configuration> --install-root <root>`,
+/// which lists this machine's emulator instances without a Runtime and writes nothing. Fix 1
+/// (review): within `programs::DISCOVER_TIMEOUT_MS` (60 s, the child's own three bounds and a
+/// margin), at which the child is ended, never left running where an installer or the watchdog
+/// would take it for the root's Runtime. A completed discovery is `install_command_done`
+/// (operation `install_emulators`, actingd's outcome as its `related` link) with actingd's report
+/// as `report`; anything else is `install_command_refused` with `install_refusal`
+/// `emulator_discovery_failed`: actingd's outcome (or the child's failure) as its cause, or, for a
+/// child ended at the bound, `timeout_ms` the bound and no cause.
+fn emulators(context: &Context<'_>) -> Exit {
+    const EMULATORS: InstallLocation = InstallLocation::Emulators;
+    let refused = || install::refusal(EMULATORS, InstallRefusal::EmulatorDiscoveryFailed);
+    let run = || -> Result<Exit, Outcome> {
+        // The configuration's usual refusals (`config_unreadable`, `install_section_invalid`)
+        // come first; the bound is no key of it.
+        configuration(context, EMULATORS)?;
+        let discovered = programs::discover(
+            context.host,
+            &context.location.root.join(Half::Runtime.dir()),
+            &context.location.config,
+            &context.location.root,
+        )
+        .map_err(|undiscovered| match undiscovered {
+            programs::Undiscovered::Failed(cause) => {
+                refused().joined(CauseRelation::CausedBy, cause)
+            }
+            programs::Undiscovered::Ended => refused().timeout_ms(programs::DISCOVER_TIMEOUT_MS),
+        })?;
+        if !discovered.completed() {
+            return Err(refused().joined(CauseRelation::CausedBy, discovered.received));
+        }
+        let mut members = Map::new();
+        members.insert("report".to_owned(), discovered.report);
+        Ok(cli_line::success(
+            members,
+            &install::done(EMULATORS).link(CauseRelation::Related, discovered.received),
+        ))
     };
     run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
 }

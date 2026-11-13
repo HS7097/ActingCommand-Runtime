@@ -7801,6 +7801,9 @@
         },
         "mcp_server_not_in_build": {
           "description": "The Lab's rescue module's mcp plan, the plan of the MCP entry's second generation, found no actinglab-mcp.exe in the manifests of the installed build, neither in its runtime\\ nor in its tools\\ (commit_sha the build, path the last place looked). It names no program that does not exist and no other program; every build before the server is packaged answers this. The refusal carries the tunables, as every refusal of the plan after its configuration read does. (Workflow #434 LAB-5G5b, since 0.12.57)"
+        },
+        "emulator_discovery_failed": {
+          "description": "The Lab's rescue module's emulators got no completed discovery from the live build's actingd discover of the root's configuration (contracts/emulator-control.md, \"Offline instance discovery\"): actingd refused (its outcome is the caused_by link: instance_discovery_unavailable, mumu_manager_version_unsupported, invalid_arguments, or a configuration refusal of check-config's), printed no discover report (a build before it, or a crash: foreign_other_error with the exit code and stderr), did not run, or was still running at its bound of 60 s and was ended there (timeout_ms the bound, no cause link; it is read only, so ending it loses nothing, and no actingd of the root is left running). Nothing was written. (Workflow #453 S10, since 0.12.59)"
         }
       }
     },

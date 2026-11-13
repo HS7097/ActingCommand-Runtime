@@ -4,14 +4,17 @@
 //! `contracts/install-cli.md`, "Update and rollback", "The rollback gate"): actingd's
 //! `check-config` (the live build in place, a kept build with `--install-root <root>` when it
 //! takes the option), its `ledger-maintenance verify`, and actingledger's bounded head read (S0)
-//! and `events` pages (whether a build's own reader reads the ledger after S0).
+//! and `events` pages (whether a build's own reader reads the ledger after S0). Workflow #453
+//! S10: and the live build's `actingd discover`, which the rescue row `emulators` runs.
 //!
 //! INST-1b-F fix round 1 (review S1 F4): every child runs within its deadline, a key of the
 //! `install` section (`install.child.*`). A child still running then is left running, never
-//! killed (the stall rule), and its failure names its `pid` and the key.
+//! killed (the stall rule), and its failure names its `pid` and the key. Workflow #453 S10 fix 1
+//! (review): the one exception is `actingd discover`, read only, which runs within
+//! [`DISCOVER_TIMEOUT_MS`] and is ended there ([`Host::run_program_ending`]).
 
 use super::files;
-use super::host::{Host, NotRan, Ran};
+use super::host::{Host, NotFinished, NotRan, Ran};
 use crate::codes::ActingctlCode;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{CauseRelation, Outcome, OutcomeEnvelope, RawSource};
@@ -290,6 +293,93 @@ fn check_config_once(
         && report.get("report").is_none_or(Value::is_null)
         && checked.received.values().is_empty();
     Ok((checked, refused_arguments))
+}
+
+/// Workflow #453 S10: the schema of `actingd discover`'s report.
+const DISCOVER_SCHEMA: &str = "actingcommand.actingd.discover.v1";
+
+/// What `actingd discover` answered with its report: its outcome as received, its `report`
+/// (`null` when it carries none, as a refusal does) and its exit code.
+#[derive(Debug, Clone)]
+pub(crate) struct Discovered {
+    pub(crate) received: Outcome,
+    pub(crate) report: Value,
+    pub(crate) exit_code: Option<i32>,
+}
+
+impl Discovered {
+    /// Whether the discovery completed: exit 0 and a success outcome.
+    pub(crate) fn completed(&self) -> bool {
+        self.exit_code == Some(0)
+            && self.received.category() == actingcommand_contract::outcome::Category::Success
+    }
+}
+
+/// Workflow #453 S10 fix 1 (review): the bound of `actingd discover` in the rescue row
+/// `emulators`, at which the child is ended (it is read only: ending it loses nothing). The
+/// child's own reads are each bounded at 10 s: the process listing, made only when no folder is
+/// named (`MUMU_MANAGER_PROCESS_LIST_TIMEOUT`), then the vendor tool's `version` and `info -v all`
+/// (`MUMU_MANAGER_COMMAND_TIMEOUT` each), 30 s together; as much again is the margin for the
+/// process's start, the configuration's read and the ending of a read at its bound. A bound of
+/// the child's own bounds, not a tunable.
+pub(crate) const DISCOVER_TIMEOUT_MS: u64 = 60_000;
+
+/// Workflow #453 S10 fix 1: why `actingd discover` gave no report.
+#[derive(Debug, Clone)]
+pub(crate) enum Undiscovered {
+    /// It failed, printed no report, or did not run: the outcome that says why.
+    Failed(Outcome),
+    /// It was still running at [`DISCOVER_TIMEOUT_MS`] and was ended there; nothing it printed
+    /// was read.
+    Ended,
+}
+
+/// Workflow #453 S10: `<runtime>\actingcommand-actingd.exe discover --config <config>
+/// --install-root <root>`, the live build's read-only listing of this machine's emulator instances,
+/// within [`DISCOVER_TIMEOUT_MS`]. Its report line (`actingcommand.actingd.discover.v1`) is the
+/// answer; a child that prints none (a build before the subcommand refuses its words as a start
+/// would, on stderr) is its exit's failure (`foreign_other_error` with the exit code and stderr),
+/// and one still running at the bound is ended there, [`Undiscovered::Ended`] (fix 1: never left
+/// running, where an installer or the watchdog would take it for the root's Runtime).
+pub(crate) fn discover(
+    host: &dyn Host,
+    runtime: &Path,
+    config: &Path,
+    install_root: &Path,
+) -> Result<Discovered, Undiscovered> {
+    let program = runtime.join(DAEMON);
+    let config_word = config.to_string_lossy().into_owned();
+    let root_word = install_root.to_string_lossy().into_owned();
+    let arguments = [
+        "discover",
+        "--config",
+        config_word.as_str(),
+        "--install-root",
+        root_word.as_str(),
+    ]
+    .map(OsString::from);
+    let ran = host
+        .run_program_ending(&program, &arguments, DISCOVER_TIMEOUT_MS)
+        .map_err(|not_finished| match not_finished {
+            NotFinished::Failed(cause) => Undiscovered::Failed(cause),
+            NotFinished::Ended => Undiscovered::Ended,
+        })?;
+    let report = serde_json::from_slice::<Value>(files::without_bom(&ran.stdout))
+        .ok()
+        .filter(|report| report["schema_version"] == DISCOVER_SCHEMA);
+    let received = report.as_ref().and_then(|report| {
+        serde_json::from_value::<OutcomeEnvelope>(report["outcome"].clone())
+            .ok()
+            .map(OutcomeEnvelope::into_outcome)
+    });
+    match (report, received) {
+        (Some(report), Some(received)) => Ok(Discovered {
+            received,
+            report: report["report"].clone(),
+            exit_code: ran.exit_code,
+        }),
+        _ => Err(Undiscovered::Failed(exited(&ran))),
+    }
 }
 
 /// `<runtime>\actingcommand-actingd.exe ledger-maintenance verify --config <config>`: `Ok` on

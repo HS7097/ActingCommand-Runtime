@@ -3,7 +3,7 @@
 // Test-only: the neutral builds, release folders and roots of the INST-1 gates, and the fake host
 // they run `actingctl install` on. Every name is neutral; no file is a real program.
 
-use super::host::{Host, Installer, NotRan, Ran, RunningImage};
+use super::host::{Host, Installer, NotFinished, NotRan, Ran, RunningImage};
 use super::manifest::{Speaks, parse_declaration};
 use super::runtime::{
     Closed, ConfigSeen, Drained, InstanceSeen, PauseSeen, PlanSeen, RuntimeLink, RuntimeSeen,
@@ -361,6 +361,13 @@ pub(super) struct Programs {
     pub(super) stall: RefCell<Vec<&'static str>>,
     /// Every program run, by that word, with the deadline it was given.
     pub(super) deadlines: RefCell<Vec<(String, u64)>>,
+    /// Workflow #453 S10: the exit code of `actingd discover` and the line it prints (`null`, no
+    /// report, until a test sets one).
+    pub(super) discover: RefCell<(i32, Value)>,
+    /// Workflow #453 S10 fix 1: every program run to be ended at its deadline
+    /// (`run_program_ending`) that never exits (a word of `stall`) and was ended there, by that
+    /// word, with its deadline.
+    pub(super) ended: RefCell<Vec<(String, u64)>>,
 }
 
 /// The process id of a fake program left running at its deadline.
@@ -397,6 +404,8 @@ impl FakeHost {
                 verify_exit: Cell::new(0),
                 stall: RefCell::new(Vec::new()),
                 deadlines: RefCell::new(Vec::new()),
+                discover: RefCell::new((0, Value::Null)),
+                ended: RefCell::new(Vec::new()),
             },
             on_step: RefCell::new(None),
             log: RefCell::new(Vec::new()),
@@ -585,6 +594,11 @@ impl Host for FakeHost {
             ("actingcommand-actingd.exe", Some("ledger-maintenance")) => {
                 ran(self.programs.verify_exit.get(), json!({}))
             }
+            // Workflow #453 S10: the line the test set.
+            ("actingcommand-actingd.exe", Some("discover")) => {
+                let (exit_code, line) = self.programs.discover.borrow().clone();
+                ran(exit_code, line)
+            }
             // The bounded head read (S0): no row but the head's.
             ("actingledger.exe", _)
                 if doing == "export"
@@ -630,6 +644,52 @@ impl Host for FakeHost {
             }
             _ => panic!("an unexpected program: {} {words:?}", program.display()),
         })
+    }
+
+    /// Workflow #453 S10 fix 1: a program whose word is in `stall` never exits; it is ended at its
+    /// deadline, kept in `ended`, and left among no processes (unlike [`Self::run_program`]'s, which
+    /// is left running with `STALLED_PID`). Any other program answers as `run_program` does.
+    fn run_program_ending(
+        &self,
+        program: &Path,
+        arguments: &[OsString],
+        timeout_ms: u64,
+    ) -> Result<Ran, NotFinished> {
+        let doing = arguments
+            .first()
+            .map(|word| word.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if !self
+            .programs
+            .stall
+            .borrow()
+            .iter()
+            .any(|stalled| *stalled == doing)
+        {
+            return self.run_program(program, arguments, timeout_ms).map_err(
+                |not_ran| match not_ran {
+                    NotRan::Failed(cause) => NotFinished::Failed(cause),
+                    NotRan::StillRunning { .. } => panic!("only a stalled program runs on"),
+                },
+            );
+        }
+        let name = program
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        let words = arguments
+            .iter()
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        self.log
+            .borrow_mut()
+            .push(format!("{} {name} {}", build_of(program), words.join(" ")));
+        self.programs
+            .deadlines
+            .borrow_mut()
+            .push((doing.clone(), timeout_ms));
+        // It runs on to its deadline; there it is ended and reaped.
+        self.programs.ended.borrow_mut().push((doing, timeout_ms));
+        Err(NotFinished::Ended)
     }
 
     fn log_dirs(&self, root: &Path) -> Vec<PathBuf> {

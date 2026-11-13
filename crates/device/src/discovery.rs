@@ -175,14 +175,21 @@ fn mumu_process_adb_path(process: &DeviceDiscoveryProcess) -> DeviceResult<Optio
 }
 
 pub(crate) fn running_mumu_executable_paths() -> DeviceResult<Vec<PathBuf>> {
-    let mut paths = system_processes()?
+    Ok(mumu_executable_paths(system_processes()?))
+}
+
+/// The executables of the emulator's device processes in one process listing, sorted and without
+/// repeats: what the resolver's running-process rung reads (Workflow #453 S10 fix 1: also from a
+/// listing a caller made itself, `actingd discover`'s bounded one).
+pub(crate) fn mumu_executable_paths(processes: Vec<DeviceDiscoveryProcess>) -> Vec<PathBuf> {
+    let mut paths = processes
         .into_iter()
         .filter(is_mumu_device_process)
         .filter_map(|process| process.executable_path)
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
-    Ok(paths)
+    paths
 }
 
 pub(crate) fn running_mumu_executable_for_target(
@@ -412,8 +419,11 @@ fn powershell_executable() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("powershell.exe"))
 }
 
+/// One process listing without a bound of its own (the start's discovery and check-config's
+/// resolver; Workflow #453 S10 fix 1: `actingd discover` lists through
+/// [`system_processes_within`] instead).
 #[cfg(windows)]
-fn system_processes() -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+pub(crate) fn system_processes() -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
     // Discovery is process-metadata only because mixed ADB servers can disturb MuMu instances.
     let output = Command::new(powershell_executable())
         .args(PROCESS_LISTING_ARGS)
@@ -484,7 +494,7 @@ pub(crate) fn system_processes_within(
 }
 
 #[cfg(not(windows))]
-fn system_processes() -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+pub(crate) fn system_processes() -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
     Ok(Vec::new())
 }
 
