@@ -409,7 +409,7 @@ fn validate_tasks(
             diagnostics,
         );
         validate_queue_wait(task, &path, map, descriptor, diagnostics);
-        // Workflow #455 G-R2s (register §1.364): the composer's irreversible mark is a V2
+        // Workflow #455 G-R2s (register §1.365): the composer's irreversible mark is a V2
         // member; a V1 document that names it is refused as an unknown member.
         if task.irreversible_reach.is_some()
             && map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2)

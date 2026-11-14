@@ -472,7 +472,7 @@ pub struct GoalReferences {
     packages: IrreversiblePackages,
 }
 
-/// Workflow #455 G-R2s (register §1.364; contracts/standard-pack-goals.md, "Irreversibility"):
+/// Workflow #455 G-R2s (register §1.365; contracts/standard-pack-goals.md, "Irreversibility"):
 /// which packages of one game root can do something irreversible, by G-R1's rule over the whole
 /// root ([`IrreversiblePackages::new`]), and which packages of the root could not be read. The
 /// one copy of the rule: the goal check holds one in [`GoalReferences`], and the standard-pack

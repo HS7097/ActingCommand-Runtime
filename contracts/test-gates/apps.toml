@@ -2049,14 +2049,14 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_inst1_update::s11_an_update_and_a_rollback_leave_the_installation_identity_in_place",
 ]
 incident = ["#453 S11"]
-# Workflow #455 G-R2s (0.12.60; register §1.364; the coordinator's ruling 2 of 11-14; contracts/standard-pack-schedule.md, "The irreversible mark"): actingctl packs gives the composer the input of its own control.json reading through the contract crate's one rule: a package providing a capability another package of the root marks irreversible is irreversible, one nobody's is not; an unreadable control file makes its package unreadable, every package counts as irreversible, and the answer names the control file once as before (1)
+# Workflow #455 G-R2s (0.12.60; register §1.365; the coordinator's ruling 2 of 11-14; contracts/standard-pack-schedule.md, "The irreversible mark"): actingctl packs gives the composer the input of its own control.json reading through the contract crate's one rule: a package providing a capability another package of the root marks irreversible is irreversible, one nobody's is not; an unreadable control file makes its package unreadable, every package counts as irreversible, and the answer names the control file once as before (1)
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-lab-ops::lib::packs::tests::gr2s_the_offline_input_follows_the_whole_root_rule_and_an_unreadable_package",
 ]
 incident = ["#455 G-R2s"]
-# Workflow #455 G-R2s fix round 1 (0.12.60; register §1.364; the independent review, point 2; contracts/standard-pack-schedule.md, "The irreversible mark"): check-config in composer mode notes one standard_pack_package_unreadable per package of a composed game the package reader cannot read, naming the game and the package, each with the reader's refusal as its cause, so a game whose goals are all void is visible (1)
+# Workflow #455 G-R2s fix round 1 (0.12.60; register §1.365; the independent review, point 2; contracts/standard-pack-schedule.md, "The irreversible mark"): check-config in composer mode notes one standard_pack_package_unreadable per package of a composed game the package reader cannot read, naming the game and the package, each with the reader's refusal as its cause, so a game whose goals are all void is visible (1)
 [[gate]]
 coverage = "Y"
 tests = [

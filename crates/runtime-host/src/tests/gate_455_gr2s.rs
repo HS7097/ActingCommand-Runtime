@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #455 G-R2s gate tests, host half (0.12.60; register §1.364; coordinator work order
+// Workflow #455 G-R2s gate tests, host half (0.12.60; register §1.365; coordinator work order
 // `rd-1114/brief-455-gr2s-irreversible-line.md` and the coordinator's ruling 1 of 11-14;
 // contracts/standard-pack-schedule.md, "The irreversible mark"): the scheduler workbench reads
 // every package of a game root's `bundle.json` with the package reader the goal check uses and

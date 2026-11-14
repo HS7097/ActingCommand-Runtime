@@ -899,7 +899,7 @@ fn rl1a_t1_catalog_a_converted_by_the_as_is_rules_composes_back_and_decides_alik
     );
 }
 
-/// Workflow #455 G-R2s (register §1.364; work order tests 4, the last item): a root without an
+/// Workflow #455 G-R2s (register §1.365; work order tests 4, the last item): a root without an
 /// irreversible package composes the bytes and the catalog hash of before. T1's fixture, composed
 /// with every package of the root read and none irreversible, composes back to T1's as-is
 /// documents (catalog-a's example on disk in the as-is shape, built by this test file, not by the

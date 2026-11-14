@@ -126,7 +126,7 @@ pub(crate) fn readable_root(root: &StandardPackRoot) -> IrreversiblePackages {
 /// §1.299): and who wrote the game's fixed values and valuation blocks; #428 COV-1 (register
 /// §1.299): and the game's chain followers, each with the rule it rides with, in file order;
 /// #428 SCHED-C1f1 (register §1.303 SC1F-7): and the game's consumptions read from a fact, each
-/// with its key and fallback, in file order. Workflow #455 G-R2s (register §1.364): composed with
+/// with its key and fallback, in file order. Workflow #455 G-R2s (register §1.365): composed with
 /// `irreversible`, the root's packages as `root_irreversibility` read them; a package that could
 /// not be read is one `standard_pack_package_unreadable` among the composition's warnings.
 pub(crate) struct ScheduleReport {

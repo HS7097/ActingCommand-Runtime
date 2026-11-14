@@ -476,7 +476,7 @@ fn own_commands_print_the_cli_line() {
             .is_some_and(|digest| !digest.is_empty()),
         "{line}"
     );
-    // Workflow #455 G-R2s (register §1.364): the root holds no package files, so each registered
+    // Workflow #455 G-R2s (register §1.365): the root holds no package files, so each registered
     // package is one `standard_pack_package_unreadable`, in package order, and nothing else.
     assert_eq!(
         super::gate_386_rlt::unreadable_packages(&line["warnings"]).len(),

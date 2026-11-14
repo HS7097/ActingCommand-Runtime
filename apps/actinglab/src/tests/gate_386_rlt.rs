@@ -207,7 +207,7 @@ fn rlt_1_standard_pack_compose_receives_every_instance_of_its_command_line() {
         "directory": PACKAGE
     }]);
     assert_eq!(data["manifest"], procedures);
-    // Workflow #455 G-R2s (register §1.364): the root holds no package files, so no package's
+    // Workflow #455 G-R2s (register §1.365): the root holds no package files, so no package's
     // declaration reads: one `standard_pack_package_unreadable` per registered package, in
     // package order, and nothing else; fix round 1, point 4: each carries the package reader's
     // refusal as its cause.

@@ -1686,7 +1686,7 @@ fn sched_c1b_b_a_generation_without_values_records_no_fact() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Workflow #455 G-R2s round 2 (register §1.364; the coordinator's ruling of 11-14 on the
+// Workflow #455 G-R2s round 2 (register §1.365; the coordinator's ruling of 11-14 on the
 // workbench's early returns; contracts/resource-targets.md, "A task that can do something
 // irreversible"): while a game's root cannot be composed, every candidate of that game's instances
 // is computed as on an instance without a target record, until a composition of it succeeds

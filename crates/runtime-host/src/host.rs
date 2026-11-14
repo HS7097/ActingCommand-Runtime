@@ -2334,6 +2334,11 @@ impl RuntimeHost {
             mapp1c_off_for_test: AtomicBool::new(false),
             #[cfg(test)]
             mapp1d_off_for_test: AtomicBool::new(false),
+            expired_lease_closes: Mutex::new(BTreeSet::new()),
+            #[cfg(test)]
+            close_isolates_off_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            refused_close_record_failure_for_test: AtomicBool::new(false),
             #[cfg(test)]
             monitor_loop_held_for_test: AtomicBool::new(false),
             fact_refresh_bindings,
@@ -4472,6 +4477,14 @@ impl RuntimeHost {
             .expire_due_leases()
     }
 
+    /// Workflow #458 fix round 1: whether the resident lease sweep's thread still runs.
+    #[cfg(test)]
+    pub(crate) fn sweep_thread_runs_for_test(&self) -> bool {
+        self.sweep_thread
+            .as_ref()
+            .is_some_and(|thread| !thread.is_finished())
+    }
+
     /// #411 A64: holds the lease sweep's expiry scan (`expire_due_leases`) until the returned
     /// guard drops, so that a run's own lease end, not the sweep, meets the run's lapsed lease.
     #[cfg(test)]
@@ -6401,6 +6414,18 @@ struct HostShared {
     // before the slice.
     #[cfg(test)]
     mapp1d_off_for_test: AtomicBool,
+    // Workflow #458: the leases whose close at their expiry met the lapsed lease and fenced the
+    // instance, until the lease's end closes the session (`close_expired_lease_session_guarded`).
+    // A leaf lock. Memory only: a restart opens no session it would owe.
+    expired_lease_closes: Mutex<BTreeSet<LeaseId>>,
+    // Workflows #456 and #458, test only: nothing of the two slices applies while set (a refused
+    // close at a lease's expiry or after a capture failure ends the Runtime), as before them.
+    #[cfg(test)]
+    close_isolates_off_for_test: AtomicBool,
+    // Workflows #456 and #458, test only: while set, the record of a refused close that would
+    // fence its instance cannot be appended (the ledger's failure, the Runtime's own).
+    #[cfg(test)]
+    refused_close_record_failure_for_test: AtomicBool,
     // Workflow #437 MAPP-1d, test only: while set the resident monitor loop takes no probe, and a
     // test runs each round itself (`RuntimeHost::run_due_monitor_probe_for_test`).
     #[cfg(test)]
@@ -7018,16 +7043,34 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         if shared.fatal.is_shutdown_requested() {
             break;
         }
-        let Some(_work) = shared.begin_continuation()? else {
+        // Workflow #458 fix rounds 1 and 2: every step of the tick stops the Runtime loudly on any
+        // error it returns, whatever its severity, before the thread ends: the fatal mark refuses
+        // a failure that is not fatal, and the sweep's thread used to end then with nothing
+        // latched (no lease lapsed, no fence was handed on, the health read normal).
+        let work = match shared.begin_continuation() {
+            Ok(work) => work,
+            Err(error) => {
+                shared.fatal.mark(error.clone().into_fatal())?;
+                return Err(error);
+            }
+        };
+        let Some(_work) = work else {
             continue;
+        };
+        let draining = match shared.lifecycle_draining() {
+            Ok(draining) => draining,
+            Err(error) => {
+                shared.fatal.mark(error.clone().into_fatal())?;
+                return Err(error);
+            }
         };
         // Workflow #369 §5.2: while an install drains, every waiting entry except a holding
         // ladder's continuation is cancelled; holders finish or stop at their next check.
-        if shared.lifecycle_draining()?
+        if draining
             && !shared.fatal.is_shutdown_requested()
             && let Err(error) = shared.cancel_queues_for_drain()
         {
-            shared.fatal.mark(error.clone())?;
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
         // Workflow #403: every new resource fence goes to a recovery ladder or a person before
@@ -7056,11 +7099,11 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             return Err(error);
         }
         if let Err(error) = shared.expire_due_leases() {
-            shared.fatal.mark(error.clone())?;
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
         if let Err(error) = shared.expire_agent_sessions() {
-            shared.fatal.mark(error.clone())?;
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
         // #411 A67-R: a capture frame store's budget that entered the floor since the last tick
@@ -7072,13 +7115,13 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         // Workflow #398 RD-2: the device links' timers (the settle wait, the restore retries and
         // the watch's restarts), on the host clock.
         if let Err(error) = device_link::tick(&shared) {
-            shared.fatal.mark(error.clone())?;
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
         // IDLE-1: the idle check between policy cycles, so a planned wake comes on time. A
         // failure of one instance is contained to it; only the Runtime's own is returned.
         if let Err(error) = shared.check_idle_instances(true) {
-            shared.fatal.mark(error.clone())?;
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
     }

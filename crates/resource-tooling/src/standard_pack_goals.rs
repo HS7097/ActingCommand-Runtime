@@ -196,7 +196,7 @@ impl RootIrreversibility {
     }
 }
 
-/// Workflow #455 G-R2s (register §1.364; contracts/standard-pack-schedule.md, "The irreversible
+/// Workflow #455 G-R2s (register §1.365; contracts/standard-pack-schedule.md, "The irreversible
 /// mark"): the composer's required input for the game root `root`, every package its registry
 /// lists read below `pack_directory` by the reader the goal check uses ([`package_provides`]),
 /// through the one copy of the rule ([`IrreversiblePackages::new`]), with the reader's refusal of

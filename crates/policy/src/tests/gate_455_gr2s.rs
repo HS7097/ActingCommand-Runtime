@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #455 G-R2s gate tests, policy half (0.12.60; register §1.364; coordinator work order
+// Workflow #455 G-R2s gate tests, policy half (0.12.60; register §1.365; coordinator work order
 // `rd-1114/brief-455-gr2s-irreversible-line.md`, the coordinator's two rulings of 11-14 and its
 // fix round 1; contracts/resource-targets.md, "A task that can do something irreversible";
 // contracts/standard-pack-schedule.md, "The irreversible mark"): a goal never raises the weight
