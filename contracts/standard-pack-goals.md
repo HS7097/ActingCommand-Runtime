@@ -240,7 +240,8 @@ for that game, and a reader of the declaration says why.
 
 `package` revision 12 ([component-interfaces.md](component-interfaces.md)): a bundle that carries
 `goals.json` declares `package` [12, 12] (the contract crate's `GOALS_PACKAGE_REVISION`); a bundle
-without it keeps its revision, and the Runtime declares [3, 12]. This release's installer refuses a
+without it keeps its revision, and the Runtime declares [3, 12] (from Workflow #463 K1 on [3, 13],
+[component-interfaces.md](component-interfaces.md), the `package` row 13). This release's installer refuses a
 zip that carries the file and declares a maximum below 12 (`goal_undeclared`, "Who reads it"). An
 installer before 0.12.60 refuses such a zip in the plan, before the hold and any write: through its
 `package` edge (`interface_edge`) when the zip declares 12, at its layout check (`pack_invalid`

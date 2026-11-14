@@ -105,6 +105,9 @@ mod gate_453_s8;
 // Workflow #463 U1: a linear step's closing decision on a screen its package never recorded.
 #[cfg(test)]
 mod gate_463_u1;
+// Workflow #463 K1: a linear task runs a select step and ends empty normally.
+#[cfg(test)]
+mod gate_463_k1;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.
