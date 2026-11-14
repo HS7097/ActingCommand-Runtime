@@ -174,6 +174,10 @@ mod gate_434_lab6s2b1;
 // makes it active again.
 #[path = "gate_449_rec_arch.rs"]
 mod gate_449_rec_arch;
+// #463 L1: the one-call form of `do --capture --record` refuses a dry run, and its flags need
+// `--record`.
+#[path = "gate_463_l1.rs"]
+mod gate_463_l1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

@@ -3396,6 +3396,35 @@ impl HostShared {
                 reason: failure.code(),
             });
         }
+        let attempt = self.restart_assigned_application(
+            pending,
+            resolved,
+            stops,
+            entry_hold_ms.saturating_add(margin_ms),
+            key,
+        );
+        // Workflow #437 ORD-1c fix round 1 (`contracts/device-group.md`, "The member in front"): a
+        // rung that fails after it stopped the others leaves the device with none in front. Fix
+        // round 2: so does one that ends with a Runtime-level failure after the stop, forgotten
+        // before that error is returned as it is.
+        if stops && matches!(attempt, Err(_) | Ok(RungAttempt::Failed { .. })) {
+            self.forget_front(pending.instance_id, super::switch::FrontLoss::Member)?;
+        }
+        attempt
+    }
+
+    /// The application restart rung after its entry and, on a member of a device group of
+    /// several, after the member in front was stopped ([`Self::recovery_application_restart`]):
+    /// with `stops`, the assigned application stopped on the key and a fenced instance prepared
+    /// again (each step renewed to `hold_ms`), then the startup package's run.
+    fn restart_assigned_application(
+        &self,
+        pending: &PendingRecoveryLadder,
+        resolved: &RegisteredInstance,
+        stops: bool,
+        hold_ms: u64,
+        key: &mut HostKey,
+    ) -> RuntimeHostResult<RungAttempt> {
         if stops && let Err(reason) = self.stop_assigned_application(pending, resolved, key)? {
             return Ok(RungAttempt::Failed {
                 run_id: None,
@@ -3406,9 +3435,7 @@ impl HostShared {
         // passing self-check proves the close (the preparation lifts the fence) and lets the rung
         // go on to its startup run.
         if stops && self.resource_fenced(pending.instance_id)? {
-            if let Some(failed) =
-                self.ladder_step_renewal(key, entry_hold_ms.saturating_add(margin_ms))?
-            {
+            if let Some(failed) = self.ladder_step_renewal(key, hold_ms)? {
                 return Ok(failed);
             }
             let instance_guard = self
@@ -3635,6 +3662,9 @@ impl HostShared {
         key: &mut HostKey,
     ) -> RuntimeHostResult<RungAttempt> {
         let margin_ms = pending.config.hold.margin_ms;
+        // Workflow #437 ORD-1c fix round 1 (`contracts/device-group.md`, "The member in front"):
+        // an emulator restart stops every application of the device, so it has none in front.
+        self.forget_front(pending.instance_id, super::switch::FrontLoss::Device)?;
         let instance_guard = self
             .instance_guard(pending.instance_id)
             .map_err(|failure| *failure.error)?;

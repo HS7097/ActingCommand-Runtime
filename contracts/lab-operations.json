@@ -1340,6 +1340,10 @@
         {"name": "destructive", "form": "switch", "type": "boolean", "required": false},
         {"name": "record", "form": "switch", "type": "boolean", "required": false},
         {"name": "tap_rect", "form": "option", "type": "string", "required": false, "note": "x,y,w,h, with record"},
+        {"name": "mark_request", "form": "option", "type": "file", "required": false, "note": "#463 L1, with record: a file holding one actingcommand.lab-record-mark.v1 request for the open step, applied and self-tested as record mark applies it before the press (record mark's refusals, nothing pressed or written); not with mark_request_json; a request with step_action or transition, another step or a frame file that opens or replaces a step is validation_failed (record mark takes it)"},
+        {"name": "mark_request_json", "form": "option", "type": "string", "required": false, "note": "#463 L1, with record: the same request as JSON text; not with mark_request"},
+        {"name": "next_frame_after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 L1, with record: 0 to 60000; after a press performed without a failure, wait this long and take the next frame as capture --record does (it opens the next step); absent: no next frame"},
+        {"name": "next_frame_out", "form": "option", "type": "path", "required": false, "note": "#463 L1, with next_frame_after_ms: write the next frame's PNG to this file, as capture --record --out does"},
         {"name": "seed", "form": "option", "type": "unsigned", "required": false},
         {"name": "preview", "form": "switch", "type": "boolean", "required": false},
         {"name": "test_capture_delay_ms", "form": "option", "type": "integer", "required": false, "note": "test only"},
@@ -1348,17 +1352,17 @@
         {"name": "pretty", "form": "switch", "type": "boolean", "required": false},
         {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: offline on saved scenes only (with scene, not capture): each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused elsewhere"}
       ],
-      "help": "Acts once on an instance through the Runtime and answers the action and its after frame; offline it plans the action on a saved scene.",
-      "output": "as today's command: the action and its after frame",
+      "help": "Acts once on an instance through the Runtime, or plans on a saved scene; with record it can mark the step, press and take the next frame in one call.",
+      "output": "as today's command: the action and its after frame; with record its record (with mark_request record.mark) and, with next_frame_after_ms, next_frame",
       "writes": true,
       "irreversible": false,
       "runtime": "optional",
       "entries": ["lab"],
-      "requests": ["RunContainedLabOperation"],
+      "requests": ["RunContainedLabOperation", "CaptureSequence"],
       "source": ["actinglab do", "MCP ac_lab_do"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "offline replay works without the Runtime (today's capability table)"
+      "notes": "offline replay works without the Runtime (today's capability table). #463 L1 (contracts/lab-recording.md, One call per step): mark_request, mark_request_json, next_frame_after_ms and next_frame_out are read with record only; the next frame is one more capture through the Runtime, the CaptureSequence capture --record sends, not the operation's after frame; no request kind is new to the Runtime"
     },
     {
       "name": "ensure",
@@ -1857,7 +1861,7 @@
       "module": "authoring",
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
-        {"name": "request", "form": "option", "type": "file", "required": false, "note": "an actingcommand.lab-record-mark.v1 request file"},
+        {"name": "request", "form": "option", "type": "file", "required": false, "note": "an actingcommand.lab-record-mark.v1 request file; only a request declares a located-text mark (an OCR mark with locate), which a click may then follow"},
         {"name": "request_json", "form": "option", "type": "string", "required": false, "note": "the same request as JSON text"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"},
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
@@ -1872,8 +1876,8 @@
         {"name": "remove", "form": "option", "type": "string", "required": false, "repeat": true},
         {"name": "click", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
         {"name": "click_from", "form": "option", "type": "string", "required": false},
-        {"name": "click_follow", "form": "option", "type": "string", "required": false},
-        {"name": "click_guard", "form": "option", "type": "string", "required": false},
+        {"name": "click_follow", "form": "option", "type": "string", "required": false, "note": "a template mark or a located-text mark of the step"},
+        {"name": "click_guard", "form": "option", "type": "string", "required": false, "note": "a template, color, color digest, check or value-test mark of the step, or the located-text mark the click follows"},
         {"name": "click_retry", "form": "option", "type": "integer", "required": false},
         {"name": "replace_click", "form": "switch", "type": "boolean", "required": false},
         {"name": "transition", "form": "option", "type": "enum:none|page|window", "required": false},
@@ -1897,7 +1901,7 @@
         {"name": "duration_ms", "form": "option", "type": "integer", "required": false},
         {"name": "brake_corner", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"}
       ],
-      "help": "Adds marks, a click, samples or a transition to a recorded step and self-tests every mark on the step's frames.",
+      "help": "Adds marks, a click, samples or a transition to a recorded step and self-tests every mark on its frames; a click may follow a template or a name it finds.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
@@ -1969,9 +1973,10 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
-      "source": ["actinglab record candidates", "actinglab session record candidates"],
+      "source": ["actinglab record candidates", "actinglab session record candidates", "MCP ac_record_candidates"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#463 L1: MCP ac_record_candidates (author tier) runs this command, its arguments the command's flags"
     },
     {
       "name": "record amend",
@@ -2005,9 +2010,10 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
-      "source": ["actinglab record amend", "actinglab session record amend"],
+      "source": ["actinglab record amend", "actinglab session record amend", "MCP ac_record_amend"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#463 L1: MCP ac_record_amend (author tier) runs this command, its arguments the command's flags"
     },
     {
       "name": "record step",
@@ -2048,9 +2054,10 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["RunContainedLabOperation"],
-      "source": ["actinglab record step", "actinglab session record step"],
+      "source": ["actinglab record step", "actinglab session record step", "MCP ac_record_step"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#463 L1: MCP ac_record_step (author tier) runs this command, its arguments the command's flags; the tool records no client.action of its own"
     },
     {
       "name": "record draft",
@@ -2087,7 +2094,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
-      "source": ["actinglab record archive", "actinglab session record archive"],
+      "source": ["actinglab record archive", "actinglab session record archive", "MCP ac_record_archive"],
       "new": "#449",
       "slice": "REC-ARCH",
       "status": "planned",
@@ -2108,7 +2115,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
-      "source": ["actinglab record reopen", "actinglab session record reopen"],
+      "source": ["actinglab record reopen", "actinglab session record reopen", "MCP ac_record_reopen"],
       "new": "#449",
       "slice": "REC-ARCH",
       "status": "planned",

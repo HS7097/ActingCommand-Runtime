@@ -827,7 +827,10 @@ its count gains two general tools. Workflow #429 R-2 (since 0.12.31) adds one ge
 `ac_perf_preset` (observer until U-3): the build's observer tier gains one tool, and U-3's count
 gains one general tool. Workflow #429 R-12 (since 0.12.38) adds one general read,
 `ac_routine_summary` (observer until U-3): the build's observer tier gains one tool, and U-3's
-count gains one general tool.
+count gains one general tool. #463 L1 (since 0.12.60) adds five option-one tools, the recording
+family's rows that had none (`ac_record_candidates`, `ac_record_amend`, `ac_record_step`,
+`ac_record_archive`, `ac_record_reopen`, author until U-3): the build's author tier goes from 7 to
+12 tools, and U-3's option one gains five.
 
 | Tool | Class | Maps to | Parameters | Block |
 |---|---|---|---|---|
@@ -859,6 +862,7 @@ count gains one general tool.
 | `ac_task_offset` (new) | instruction | `actingctl task-offset` | as the CLI | general |
 | `ac_lab_observe` | read | actinglab `observe` | unchanged, without package reference parameters (M-PKG); `preview` ↔ `--preview` (#410 item 1: every answer states `frame_coordinates`, the preview is a JPEG file answered by its path and scale, never inlined; an exported answer keeps the frame parts inline while they fit); `sample_scenes` (1 to 4) ↔ the earlier `--scene` frames, before `scene`'s (#411 Lab B-2) | option one |
 | `ac_record_start`, `ac_record_mark`, `ac_record_stop`, `ac_record_status` | offline (recording files) | actinglab `record start`, `mark`, `stop`, `status` | unchanged | option one |
+| `ac_record_candidates`, `ac_record_amend`, `ac_record_step`, `ac_record_archive`, `ac_record_reopen` (new, #463 L1; author before U-3) | offline (recording files); `ac_record_step` with `capture` reads a frame through the Runtime | actinglab `record candidates`, `amend`, `step`, `archive`, `reopen` | each its command's flags by name (`step_id` ↔ `--step-id`, `from_drift_diagnostics` ↔ `--from-drift-diagnostics`, `copy_to` ↔ `--copy-to`, …; [lab-operations.json](lab-operations.json), the rows); `ac_record_step` requires `instance` and `kind`; actinglab's data verbatim and its errors as every Lab tool relays them; no `client.action` | option one |
 | `ac_binding_draft` | offline | actinglab `record binding-draft` (new composite) | `record_stop`, `record_stop_export` ↔ same flags | option one |
 | `ac_pack_check` | offline | actinglab `package check` (structural admission, M-PKG; #411 A5: answers `{status, package_id, entry_task_id}`) | `package` ↔ `--package` | option one |
 | `ac_catalog_check` | offline | actinglab `resource catalog` | unchanged | option one |
@@ -866,7 +870,7 @@ count gains one general tool.
 | `ac_stop_run` | operation | actinglab `run stop` (new) | `handle` ↔ `--request-id`; `wait_s` ↔ `--wait-s` (0–25); `--cancel-only` while this process's job still runs | option two |
 | `ac_emulator` | instruction | `actingctl emulator start`, `stop`, `restart` (stay) | `instance`, `action` ↔ `--instance` and the subcommand | general (Workflow #429 R-0; option two before) |
 | `ac_app` (new, #389 MCP-13a; operator before U-3) | instruction | actinglab `session app <launch\|restart\|stop\|force-stop>` | `action` ↔ the action word, `instance` ↔ `--instance` (both required); never `--record`; `force-stop` is the same action as `stop`; marked destructive; actinglab's data verbatim and its errors as every Lab tool relays them | general (Workflow #429 R-0; option two before) |
-| `ac_lab_do` | operation | actinglab `do` | unchanged, without package reference parameters (M-PKG); `preview` ↔ `--preview` (#410 item 1: every answer states `frame_coordinates`; after an action `after_attachment` is the known after page's projection or the after frame's path and preview path, never an image; an exported answer keeps the frame parts inline while they fit); `sample_scenes` (1 to 4) ↔ the earlier `--scene` frames, before `scene`'s (#411 Lab B-2); `operation` ↔ `--operation`, refused with an argument of another path or without `capture` (#412 Lab B-3 S2, [contained-lab-operation.md](contained-lab-operation.md)) | option two |
+| `ac_lab_do` | operation | actinglab `do` | unchanged, without package reference parameters (M-PKG); `preview` ↔ `--preview` (#410 item 1: every answer states `frame_coordinates`; after an action `after_attachment` is the known after page's projection or the after frame's path and preview path, never an image; an exported answer keeps the frame parts inline while they fit); `sample_scenes` (1 to 4) ↔ the earlier `--scene` frames, before `scene`'s (#411 Lab B-2); `operation` ↔ `--operation`, refused with an argument of another path or without `capture` (#412 Lab B-3 S2, [contained-lab-operation.md](contained-lab-operation.md)); #463 L1, a recorded step in one call ([lab-recording.md](lab-recording.md), "One call per step"): `mark` ↔ `--mark-request-json` (one `actingcommand.lab-record-mark.v1` request, as `ac_record_mark`'s `request`), `next_frame_after_ms` ↔ `--next-frame-after-ms`, `next_frame_out` ↔ `--next-frame-out`, read with `capture` and `record` only; `dry_run` with `record` reaches actinglab, which refuses it (`record_flag_unsupported`) | option two |
 | `ac_ladder_drill` (new, #390 DRILL-1; operator before U-3) | operation | `actingctl ladder-drill` | `instance` ↔ `--instance` (alias, `instance_id` or ADB port), `device` ↔ `--device` (a boolean, absent false); output as the CLI's; marked destructive (a device drill may stop the application or restart the emulator); answers at admission, before the drill climbs | option two |
 
 - The output budget of every MCP tool (#422 OV-24K) is counted on the bytes of the
