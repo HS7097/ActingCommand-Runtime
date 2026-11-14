@@ -1766,8 +1766,10 @@ impl PreparedContainedTask {
     /// package knows); a wait that ended on its loading allowance; an application entry; a
     /// package with sample consensus, whose observation gives no result of a frame by itself
     /// (rule 1 (b)); and a run whose time left, before its host deadline or the end of its
-    /// admitted runtime budget ([`ContainedTaskRuntime::run_time_left`]), is shorter than the
-    /// decision's bound, the step timeout (rule 6).
+    /// admitted runtime budget ([`ContainedTaskRuntime::run_time_left`]), is shorter than twice
+    /// the decision's bound, the step timeout (rule 6; fix round 3: the decision lasts its bound,
+    /// and the capture and recognition of its last frame, the evaluation of the package's other
+    /// pages and the work before the run's settlement come after it).
     fn linear_closing_pages<'p, R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -1788,7 +1790,10 @@ impl PreparedContainedTask {
             return None;
         };
         let bound = run.timing.pace().wall_span(run.step_timeout);
-        if runtime.run_time_left().is_some_and(|left| left < bound) {
+        if runtime
+            .run_time_left()
+            .is_some_and(|left| left < bound.saturating_mul(2))
+        {
             return None;
         }
         let mut pages = candidates.pages.clone();
@@ -1805,10 +1810,12 @@ impl PreparedContainedTask {
     /// is a transition frame (LOAD-4, under `on`); the decision's first and last frames, and its
     /// last two captures, are unchanged by the Runtime's one frame-change measure
     /// (`StillScreen::WHOLE_FRAME`); and on its last frame, the one the run pins, no other page of
-    /// the package passes. Every other end is `false`, and so is every task error inside it (the
-    /// task's deadline, a recognition or a capture that failed, a failed check of the shared
-    /// interrupt pages): the failed wait's end stands. A failure of the run's boundary or its
-    /// device is the run's, as anywhere else.
+    /// the package passes. Every other end is `false`, and so is every error raised by its own
+    /// capture, recognition or evaluation, whatever its kind (fix round 3: the task's deadline, a
+    /// capture or a recognition that failed as a task error or as an operation error of the
+    /// runtime, a failed check of the shared interrupt pages): the failed wait's end stands. The
+    /// one exception is a failure of the runtime's own bookkeeping, a record it could not write
+    /// ([`ContainedTaskRuntime::is_bookkeeping_failure`]), which ends the run as it ends any run.
     fn linear_closing_decision<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -1816,7 +1823,10 @@ impl PreparedContainedTask {
         pages: &[&str],
     ) -> Result<bool, ContainedTaskRunError<R::Error>> {
         match self.linear_closing_observation(runtime, (run, loading), pages) {
-            Err(ContainedTaskRunError::Task(_)) => Ok(false),
+            Err(ContainedTaskRunError::Boundary(error)) if R::is_bookkeeping_failure(&error) => {
+                Err(ContainedTaskRunError::Boundary(error))
+            }
+            Err(_) => Ok(false),
             observed => observed,
         }
     }

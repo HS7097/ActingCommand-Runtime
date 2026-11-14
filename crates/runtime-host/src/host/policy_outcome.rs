@@ -1965,6 +1965,19 @@ impl HostShared {
         &self,
         decision_id: &str,
     ) -> RuntimeHostResult<Option<u64>> {
+        // Workflow #463 U1, fix round 3 (item 4), test only: this read fails once, as a dispatch
+        // without a clock fails it.
+        #[cfg(test)]
+        if self
+            .fail_policy_run_budget_end_once_for_test
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(RuntimeHostError::fatal(
+                HostCode::PolicyDispatchClockMissing,
+                HostLocation::ReadPolicyDispatchStart,
+                RuntimeErrorCode::RuntimeHalted,
+            ));
+        }
         let clock = lock(
             &self.policy_dispatch_clocks,
             HostLocation::ReadPolicyDispatchStart,

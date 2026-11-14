@@ -46,8 +46,10 @@
 // (`with_shared_popup_from`): the recognising check finds it, and an offer of such a frame is
 // handled by pressing it, one more input; or its recognising check may fail with
 // `contained_task_recognition_failed` (`with_failing_popup_check_from`). It counts the
-// recognising checks. It may answer that it started the run itself (`as_host_started_run`) and
-// how much time the run has left (`with_time_left`).
+// recognising checks. It may answer that it started the run itself (`host_started`) and how much
+// time the run has left (`with_time_left`). Fix round 3: its capture may fail from a given capture
+// on (`with_failing_capture_from`), an operation error of the device; no error it gives is a
+// failure of its bookkeeping (it records every trace it is handed).
 
 use super::super::*;
 use actingcommand_device::CaptureBackendName;
@@ -173,7 +175,13 @@ pub(crate) struct ScriptedRuntime {
     popup_checks: usize,
     host_started: bool,
     time_left: Option<Duration>,
+    // Workflow #463 U1, fix round 3.
+    failing_capture_from: Option<usize>,
 }
+
+// Workflow #463 U1, fix round 3: the operation error of a capture that `with_failing_capture_from`
+// makes fail.
+pub(crate) const INJECTED_CAPTURE_FAILURE: &str = "injected capture failure";
 
 impl ScriptedRuntime {
     // A device that shows `screens[n]` after `n` inputs; its steps get no observe-only retry.
@@ -221,6 +229,7 @@ impl ScriptedRuntime {
             popup_checks: 0,
             host_started: false,
             time_left: None,
+            failing_capture_from: None,
         }
     }
 
@@ -250,9 +259,19 @@ impl ScriptedRuntime {
     }
 
     // Workflow #463 U1, fix round 2: the same device, answering that it started the run itself.
-    pub(crate) fn as_host_started_run(self) -> Self {
+    pub(crate) fn host_started(self) -> Self {
         Self {
             host_started: true,
+            ..self
+        }
+    }
+
+    // Workflow #463 U1, fix round 3: the same device, whose capture fails with
+    // `INJECTED_CAPTURE_FAILURE` from its `from`-th capture on (captures counted from 1, a failed
+    // one included); a failed capture shows no frame.
+    pub(crate) fn with_failing_capture_from(self, from: usize) -> Self {
+        Self {
+            failing_capture_from: Some(from),
             ..self
         }
     }
@@ -460,6 +479,13 @@ impl ContainedTaskRuntime for ScriptedRuntime {
     type Error = &'static str;
 
     fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
+        if self
+            .failing_capture_from
+            .is_some_and(|from| self.captures + 1 >= from)
+        {
+            self.captures += 1;
+            return Err(INJECTED_CAPTURE_FAILURE);
+        }
         let segment = self.effects().min(self.screens.len() - 1);
         let frames = &self.screens[segment];
         let shown = &mut self.shown[segment];
@@ -619,6 +645,10 @@ impl ContainedTaskRuntime for ScriptedRuntime {
 
     fn run_time_left(&mut self) -> Option<Duration> {
         self.time_left
+    }
+
+    fn is_bookkeeping_failure(_error: &Self::Error) -> bool {
+        false
     }
 
     fn observe_extra_wait_round(&mut self) {

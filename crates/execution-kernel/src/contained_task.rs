@@ -3002,9 +3002,18 @@ pub trait ContainedTaskRuntime {
     /// Workflow #463 U1, fix round 2 (rule 6): the runtime-clock time the run has left before the
     /// runtime would end it otherwise or find it over its budget: its own deadline, or the end of
     /// its admitted runtime budget, whichever comes first. `None` for a run with neither; a linear
-    /// step's closing decision is not made when less than its bound is left.
+    /// step's closing decision is not made when less than twice its bound is left (fix round 3).
     fn run_time_left(&mut self) -> Option<Duration> {
         None
+    }
+
+    /// Workflow #463 U1, fix round 3: whether `error`, a failure of this runtime's boundary, is a
+    /// failure of its own bookkeeping (a record it could not write), the failure that ends the
+    /// runtime's work wherever it meets it. A linear step's closing decision passes only such a
+    /// failure on; any other error of its capture, recognition or evaluation ends it with no
+    /// classification. A runtime that does not tell its failures apart answers `true`.
+    fn is_bookkeeping_failure(_error: &Self::Error) -> bool {
+        true
     }
 
     /// Workflow #357 DB-2 (M-357a v1.1 §2.4; register §1.65 TB7): the shared table at `path`
