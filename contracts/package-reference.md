@@ -442,9 +442,12 @@ without it, every package that carries a loading copy is refused (`loading_pack_
 LOAD-2 this check runs before the cross-check admits the packages, whose loader compiles a copy,
 so a stale copy is named as stale. Workflow #455 G-R1 (since 0.12.60): with `goals.json` (listed
 in `root_files` after `display-layout.json`), the file is read after the composition and held to
-the root and its tables; each problem of a refused file is one `standard_pack_root_invalid`
-warning, last, in file order, and the root is checked as without the file
-([standard-pack-goals.md](standard-pack-goals.md), "Who reads it"). It only
+the root (Workflow #463 V1: no table since); each problem of a refused file is one
+`standard_pack_root_invalid` warning, last, in file order, and the root is checked as without the
+file ([standard-pack-goals.md](standard-pack-goals.md), "Who reads it"). Workflow #463 V1 (since
+0.12.61, register §1.378): before it, the root check of the variables the packages' control
+declarations declare, each problem one `standard_pack_root_invalid` warning naming the package's
+`control.json` ([package-variables.md](package-variables.md), "The root check"). It only
 reads. Every package of the registry is admitted, once, by its directory, with or
 without the navigation files (Workflow #411 A25): a package a root file names first for its
 part, every other package of the registry after them. Its answer is `{status: "checked", root,
@@ -458,7 +461,13 @@ models their recognition packs' OCR and NN targets name (`model_ref`, `model_sha
 the packages the cross-check admitted, each `{model_ref, model_sha256, packages}`, a model several
 packs name listed once with each of them, in byte order of `model_ref`, then of `model_sha256`,
 each model's `packages` in byte order of `package_id`; `[]` for a root whose packs name none. It
-is an added member: every member before it and the exit code are as before. A root without any root file is
+is an added member: every member before it and the exit code are as before. Workflow #463 V1 (since
+0.12.61, register §1.378): after it, `variable_provenance` `{pack: [names], model: [names]}` when a
+package of the root declares variables, each variable that applies by who wrote its default, and
+(V1 fix round 1) `not_applying` `[{name, standard_pack_problem}]`, absent when empty, each
+variable a package that counts as irreversible by the whole root declares
+(`variable_irreversible_by_root`, [package-variables.md](package-variables.md)); absent otherwise, so a
+root without variables answers as before. A root without any root file is
 `standard_pack_root_invalid` `bundle_missing`; a `bundle.json` whose `packs` lists no pack is
 `package_bundle_packs_empty` with `path` `bundle.json` and `json_pointer` `/packs` (Workflow #411
 A40); a package a root file names that cannot be admitted (its directory missing too) is
@@ -750,7 +759,7 @@ data files beside its package directories, one directory per game below the conf
   schedule.json      actingcommand.schedule.v1: the game's schedule rules (ROUT-L RL-1a)
   display-layout.json  actingcommand.display-layout.v1: the game's display declaration (#392 DA-4)
   ui.json            actingcommand.ui.v1, optional: display metadata for clients (#429 R-11)
-  goals.json         actingcommand.goals.v1, optional: the goal entries the game offers (#455 G-R1)
+  goals.json         actingcommand.goals.v2, optional: the goal entries the game offers (#455 G-R1; v2 #463 V1)
   loading.json       actingcommand.loading.v1, optional: the game's loading pages, for audit (#407 LOAD-1)
   loading/           the templates loading.json declares (#407 LOAD-1)
   notices/           the package author's notice texts; no reader of the Runtime opens them (#444)
@@ -939,9 +948,9 @@ data files beside its package directories, one directory per game below the conf
     is not the directory's is `game_mismatch`.
   - **References.** A pack's `package_id` is a package of `bundle.json` (`package_not_listed`),
     its `group` an id of `groups` (`ui_group_unknown`), and each name under its `parameters` a
-    parameter the package declares (`ui_parameter_undeclared`). Package-level parameter
-    declarations (A.7.2) arrive with R-10; until then no package declares a parameter, so any
-    name under `parameters` is `ui_parameter_undeclared`. Group ids, the packs' `package_id`, one
+    parameter the package declares (`ui_parameter_undeclared`). A package's variables carry their
+    own texts ([package-variables.md](package-variables.md)); `parameters` names nothing, so any
+    name under it is `ui_parameter_undeclared`. Group ids, the packs' `package_id`, one
     pack's risk words and the aspect ratios are each listed once (`ui_duplicate`). A package
     without an entry is shown by its `package_id`; so is every package of a game root without
     the file.
@@ -975,15 +984,19 @@ data files beside its package directories, one directory per game below the conf
     for them. A real standard package's `ui.json` is the resource side's to write.
 - **`goals.json`** (Workflow #455 G-R1, since 0.12.60; `v012-register.md` §1.356;
   [standard-pack-goals.md](standard-pack-goals.md) is the contract). Optional. The goal entries the
-  game offers on one page, in file order: each entry's stable name, its type (one of eight), its
-  block, its texts and what it governs (a pool or rules of `schedule.json`, or packages of
-  `bundle.json`); no value is stored in it. `actinglab standard-pack check` and `package bundle
+  game offers on one page, in file order: each entry's stable name, its type (one of eight in
+  version 1; since Workflow #463 V1, 0.12.61, one of the five of version 2,
+  `actingcommand.goals.v2`, a version 1 file being `goal_version_retired`), its block, its texts
+  and what it governs (a pool or rules of `schedule.json`, or in version 1 packages of
+  `bundle.json`; in version 2 a placement names a variable a package declares instead); no value
+  is stored in it. `actinglab standard-pack check` and `package bundle
   --goals` read it after the composition they already run: the check reports each problem of a
   refused file as a `standard_pack_root_invalid` warning and never fails the root for it, and the
   bundle refuses a refused file. The installer's `place` places it as the last root file and sets it
   aside when a later bundle carries none; a bundle that carries it declares `package` [12, 12]
-  ([component-interfaces.md](component-interfaces.md), row 12), and `place` refuses one that declares
-  a maximum below 12 (`goal_undeclared`, G-R1 fix round 1). The Runtime's root reader, its
+  ([component-interfaces.md](component-interfaces.md), row 12), for version 2 [14, 14] (row 14),
+  and `place` refuses one that declares a maximum below 12 (`goal_undeclared`, G-R1 fix round 1;
+  below 14 since Workflow #463 V1 fix round 3). The Runtime's root reader, its
   startup, a run's preparation, the policy crate and check-config never read it in G-R1, so the
   file changes no run yet.
 - **`loading.json`** (Workflow #407 LOAD-1, since 0.12.37; [resource-declarations.md](resource-declarations.md),

@@ -134,9 +134,15 @@ mod gate_444_notices2;
 #[cfg(test)]
 mod gate_451_loadp;
 // Test-only: Workflow #455 G-R1, the rescue module's `place` of a bundle's root file `goals.json`
-// and the `package` revision 12 a bundle that carries it declares.
+// and the `package` revision a bundle that carries it declares (12; 14 since Workflow #463 V1 fix
+// round 3, the revision of version 2).
 #[cfg(test)]
 mod gate_455_gr1;
+// Test-only: Workflow #463 V1, the `package` revision 14 a bundle whose packages declare variables
+// (and, fix round 3, one that carries `goals.json` version 2) declares, at the installer's edge,
+// and this build's declaration of it.
+#[cfg(test)]
+mod gate_463_v1;
 // Test-only: Workflow #451 PLACE-PKG, the rescue module's `place` reads a bundle's declaration by
 // the bundle's own rule.
 #[cfg(test)]
