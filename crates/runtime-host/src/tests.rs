@@ -653,6 +653,9 @@ mod gate_epoch_close;
 // Workflow #453 S11 (0.12.60): the state root remembers its installation: the start's check
 // before anything is written, the claim under the owner lock, and the writers that only check.
 mod gate_453_s11;
+// Workflow #453 S12 (0.12.60): `actingd claim-state-root` hands a state root over, and the next
+// start records the new claim once.
+mod gate_453_s12;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
 // read, and of the epochs before a start that failed after appending its start event.
 mod gate_411_a65;
@@ -694,6 +697,9 @@ mod gate_rl1c_follow;
 // Workflow #442 REM-1 (register §1.326): in composer mode the remedy table the start builds reads
 // the composed packages, and every table says what it found.
 mod gate_442_rem1;
+// Workflow #455 G-R2s (register §1.369): the workbench marks the tasks of irreversible packages and
+// reads a package's declaration again when one of its declaration files changes.
+mod gate_455_gr2s;
 mod home_entry;
 mod input;
 mod input_failure;

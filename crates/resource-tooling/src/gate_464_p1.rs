@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #464 P1 (register §1.365; contracts/standard-pack-authoring.md; coordinator work order
+// Workflow #464 P1 (register §1.370; contracts/standard-pack-authoring.md; coordinator work order
 // `rd-1114/brief-464-p1-adopt.md`, the design's row "P1 adopt" of its section G): `actinglab
 // standard-pack adopt` on a made-up resource repository of the game `neutral`, server `test`,
 // which holds one package, its business rule and a valued pool.

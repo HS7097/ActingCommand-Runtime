@@ -1081,7 +1081,9 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   intermediates. `produce(k,p)` is the resource layer's own `r(k,p)` (`amount` or v2
   `expected_amount_milli`; [resource-targets.md](../resource-targets.md), "Resource weights (v2)"),
   `W(k,p)` its effective weight `B_p + Γ` (the base weight plus a covering goal's shortfall
-  weight), `consume(k,p)` the task's declared consumption of the pool (its `consumes` amounts;
+  weight; Workflow #455 G-R2s, since 0.12.60: `B_p` alone for a task that carries the irreversible
+  mark, [resource-targets.md](../resource-targets.md), "A task that can do something
+  irreversible"), `consume(k,p)` the task's declared consumption of the pool (its `consumes` amounts;
   SS-2g, since 0.12.34: in thousandths, `C/1000` exactly, an expected consumption included,
   "Expected quantities (v2)"; the reserve gate reads `⌈C/1000⌉`) and `Q_p` the pool's
   `valuation.scale`. `P(k,p)`, the cost of consuming pool `p`, is `W(k,p)`, whatever the pool's
@@ -1181,7 +1183,8 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   - *The zero tier.* A candidate within tolerance whose task carries `benefit_realization: true`
     ([v2/README.md](v2/README.md); the model's verdict that the task is a realization or
     conversion with a real downstream use, one more run wasting nothing), whose `B` is known, that
-    produces a pool weighed above 0 on its instance (a model price or a goal's shortfall; a pool
+    produces a pool weighed above 0 on its instance (a model price or a goal's shortfall, which
+    weighs no task that carries the irreversible mark, G-R2s; a pool
     verified worthless is weighed 0) and whose latest run there did not fail is *released*
     (`zero_tier: released`). It takes part in the allocation after every unjudged and every
     positive judged candidate of the business tier, of every instance, a promotion not lifting
@@ -1341,7 +1344,9 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
   allowance (the gate's own available amount, its projection less the consumption step 3
   counts as not shown yet, less `at_least`, at least 0), and a run cap from them (at most 1000);
   a task that produces a pool an active goal covers also carries the goal's gap
-  ([../remedies.md](../remedies.md), section 4, "Spend values"). An allowance below the task's
+  ([../remedies.md](../remedies.md), section 4, "Spend values"); since Workflow #455 G-R2s
+  (0.12.60) a task that carries the irreversible mark carries the values of an instance without a
+  record instead: no gap and no goal term in its run cap. An allowance below the task's
   declared consumption of the pool, 0 included, is never dispatched: the gate holds it.
 
 ## Shared Run Limits (Workflow #427-B)

@@ -8,7 +8,7 @@
 // `schedule_invalid` at the reference. Neutral fixtures only: game `game-a`, one package on
 // server `server-a`.
 
-use crate::standard_pack_schedule::check_schedule;
+use crate::standard_pack_schedule::{check_schedule, readable_root};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     LabErrorClass, StandardPackRoot, StandardPackRootBytes, read_standard_pack_root,
@@ -26,11 +26,13 @@ fn cf4_standard_pack_check_accepts_a_reference_its_requires_names_and_reports_on
     let root = root();
     let path = Path::new("schedule.json");
 
-    let warnings = check_schedule(GAME, &root, &[], &schedule(true), path)
+    // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+    let irreversible = readable_root(&root);
+    let warnings = check_schedule(GAME, &root, &[], &schedule(true), path, &irreversible)
         .unwrap_or_else(|error| panic!("the schedule with its requires entry is checked: {error}"));
     assert!(warnings.is_empty(), "{warnings:?}");
 
-    let error = check_schedule(GAME, &root, &[], &schedule(false), path)
+    let error = check_schedule(GAME, &root, &[], &schedule(false), path, &irreversible)
         .expect_err("a reference without its requires entry is reported");
     assert_eq!(
         error.code,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #464 P1 (`contracts/standard-pack-authoring.md`; register §1.365):
+//! Workflow #464 P1 (`contracts/standard-pack-authoring.md`; register §1.370):
 //! `actinglab standard-pack adopt` makes a recorded package a member of its game's standard pack
 //! in a resource repository's checkout, with a rule the Runtime's composer accepts.
 //!

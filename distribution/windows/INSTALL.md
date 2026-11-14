@@ -45,11 +45,13 @@ Ambiguous or unsuccessful runs, missing/extra files and failed verification stop
 the download. Keep the manifest and original source/run identity with the files.
 
 The Runtime manifest declares `runtime_payload_layout: "distribution-v1"`.
-The artifact root contains exactly these seven files:
+The artifact root contains exactly these eight files:
 
 - `actingcommand-actingd.exe`
 - `actingctl.exe`
 - `actingd.config.example.json`
+- `actingd.config.first.json` (Workflow #453 S4, from v0.12.60: the first
+  configuration's template, which the Lab's rescue row `new` fills)
 - `actingd.defaults.json` (Workflow #387 D1b, from v0.12.0: the defaults the
   program embeds; a configuration names only the keys it changes)
 - `INSTALL.md`

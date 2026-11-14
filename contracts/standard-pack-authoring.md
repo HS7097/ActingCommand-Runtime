@@ -1,6 +1,6 @@
 # Standard-pack authoring: `standard-pack adopt`
 
-Workflow #464, slice P1 (Runtime 0.12.60; [v012-register.md](v012-register.md) §1.365). A
+Workflow #464, slice P1 (Runtime 0.12.60; [v012-register.md](v012-register.md) §1.370). A
 recording ends in a package (`record stop`, [lab-recording.md](lab-recording.md)); before this
 slice a person copied it into a resource repository by hand and wrote its rule into
 `schedule.json` member by member. `actinglab standard-pack adopt` does it in one operation: it

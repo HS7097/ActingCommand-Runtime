@@ -10467,7 +10467,7 @@
       "since": "0.12.60",
       "description": "Workflow #453 S11 (contracts/state-root-installation.md): the state root's record installation.json names another installation than the one the Runtime, actingd unlock-owner or a ledger maintenance pass runs from, or this installation has no identity file install\\identity.json while the state root has a record; the developer text says which of the two. path is the state root and at_unix_ms the time the record's installation claimed it. Nothing was written; a start's refusal leaves the owner journal as it was, except after two starts raced, when the start that lost closes the owner epoch it opened. check-config refuses the same configuration at stage config_state_root.",
       "common_causes": "The configuration's state_root names the state root of another installation (a configuration copied from another installation root, or edited by hand), or this installation's identity file was removed.",
-      "handling": "Correct state_root in this installation's configuration so that it names this installation's own state root, or put the previous configuration file back. When this installation is meant to own that state root, a later release brings a command that hands it over; until then the only other way is by hand: with no Runtime running on it, rename installation.json in the state root aside (keep it), and this installation's next start claims the state root."
+      "handling": "Correct state_root in this installation's configuration so that it names this installation's own state root, or put the previous configuration file back. When this installation is meant to own that state root, hand it over with actingd claim-state-root --config <this installation's configuration> --actor <name> (the Lab's rescue row state-root claim) while no Runtime runs on it: it keeps the old record as installation.json.old-<ms> and writes this installation's (Workflow #453 S12; contracts/state-root-installation.md, Handing a state root over)."
     },
     "state_root_installation_record_invalid": {
       "category": "fatal",
@@ -10486,9 +10486,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.60",
-      "description": "Workflow #453 S11 (contracts/state-root-installation.md): the state root's record installation.json, the installation's identity file install\\identity.json or the installer's state file install\\state.json cannot be read or has another shape (not the document, another schema_version, an installation_id that is not 32 lowercase hexadecimal digits, larger than 64 KiB); path is the file and the read failure is the caused_by link. Nothing was written. check-config refuses the same configuration at stage config_state_root.",
+      "description": "Workflow #453 S11 (contracts/state-root-installation.md): the state root's record installation.json, the installation's identity file install\\identity.json or the installer's state file install\\state.json cannot be read or has another shape (not the document, another schema_version, an installation_id that is not 32 lowercase hexadecimal digits, larger than 64 KiB); path is the file and the read failure is the caused_by link. Nothing was written. check-config refuses the same configuration at stage config_state_root. Workflow #453 S12: actingd claim-state-root refuses an identity file that cannot be read the same way unless --new-identity is given, and replaces a record that cannot be read.",
       "common_causes": "A file damaged by a disk failure or edited by hand, or a file another program holds locked.",
-      "handling": "Read the caused_by link and free the file when another program holds it. Otherwise put the file back from a backup of the same installation or the same state root; a damaged installation.json can also be renamed aside by hand (keep it), with no Runtime running on the state root, and the next start claims the state root again."
+      "handling": "Read the caused_by link and free the file when another program holds it. Otherwise put the file back from a backup of the same installation or the same state root. With no Runtime running on the state root, actingd claim-state-root (the Lab's rescue row state-root claim) sets a damaged installation.json aside and writes this installation's record, and with --new-identity it also sets a damaged identity file aside and mints a new one (the installation is then a new one); every file it replaces is kept as <file>.old-<ms>."
     },
     "state_root_claim_failed": {
       "category": "fatal",
@@ -10507,9 +10507,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.60",
-      "description": "Workflow #453 S11 (contracts/state-root-installation.md): a start's claim of an unrecorded state root, under the owner lock, could not mint the installation's identity (the operating system's random source failed) or could not write install\\identity.json or the state root's installation.json (its .part file, its flush or its rename); path is the file and the operating system's failure is the caused_by link. The start fails and closes its owner epoch.",
-      "common_causes": "A full disk, a folder the Runtime may not write, or a file another program holds locked.",
-      "handling": "Read the caused_by link, free the disk or the file, and start again: the next start claims the state root."
+      "description": "Workflow #453 S11 (contracts/state-root-installation.md): a start's claim of an unrecorded state root, under the owner lock, could not mint the installation's identity (the operating system's random source failed) or could not write install\\identity.json or the state root's installation.json (its .part file, its flush or its rename); path is the file and the operating system's failure is the caused_by link. The start fails and closes its owner epoch. Workflow #453 S12: the same for actingd claim-state-root's hand-over, also when a file could not be set aside under its kept name <file>.old-<ms> (a kept name that is taken is never replaced), the set-aside file given its name back when the placement after it failed (a put-back that failed too is a note); and its refusal without an installation root (path the state root, no cause).",
+      "common_causes": "A full disk, a folder the Runtime may not write, or a file another program holds locked; for actingd claim-state-root, also a configuration whose folder holds no installer state file install\\state.json.",
+      "handling": "Read the caused_by link, free the disk or the file, and start again: the next start claims the state root. For actingd claim-state-root, run it again: it completes a hand-over a failure or a crash interrupted, and deletes nothing; run it with the configuration of an installation root."
     },
     "state_root_claimed": {
       "category": "info",
@@ -10528,8 +10528,8 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.60",
-      "description": "Workflow #453 S11 (contracts/state-root-installation.md): the start recorded in the state root (path) the installation it runs from, in installation.json, minting the installation's identity file first when it had none, and mirrored the claim once as the tagged runtime fact host.state_root_installation. actingd writes it as a daemon line. An existing installation's state root is recorded so by its first start of 0.12.60 or later.",
-      "common_causes": "The first start of this release on an installation, or the first start of a new installation.",
+      "description": "Workflow #453 S11 (contracts/state-root-installation.md): the start recorded in the state root (path) the installation it runs from, in installation.json, minting the installation's identity file first when it had none, and mirrored the claim once as the tagged runtime fact host.state_root_installation. actingd writes it as a daemon line. An existing installation's state root is recorded so by its first start of 0.12.60 or later. Workflow #453 S12: also the success of actingd claim-state-root, whose report says what it did (changed false when the record was already this installation's); the next start records the claim's fact.",
+      "common_causes": "The first start of this release on an installation, or the first start of a new installation; a hand-over by actingd claim-state-root.",
       "handling": "None."
     },
     "observation_evidence_encode_failed": {

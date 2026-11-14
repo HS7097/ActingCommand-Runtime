@@ -8,7 +8,7 @@
 // which pools on a declared valuation block, each by who wrote it, `pack` (no origin member) or
 // `model`, in file order. Neutral fixtures only: game `game-a`, packages on server `server-a`.
 
-use crate::standard_pack_schedule::report_schedule;
+use crate::standard_pack_schedule::{readable_root, report_schedule};
 use actingcommand_contract::{StandardPackRoot, StandardPackRootBytes, read_standard_pack_root};
 use actingcommand_policy::{BENEFIT_FIXED_VALUE_SUBSYSTEM, BenefitCoverage};
 use serde_json::{Value, json};
@@ -65,8 +65,16 @@ fn sched_c1a_t9_the_check_answers_coverage_and_provenance() {
     }))
     .expect("schedule bytes");
 
-    let report = report_schedule(GAME, &root, &[], &schedule, Path::new("schedule.json"))
-        .unwrap_or_else(|error| panic!("the schedule is checked: {error}"));
+    // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+    let report = report_schedule(
+        GAME,
+        &root,
+        &[],
+        &schedule,
+        Path::new("schedule.json"),
+        &readable_root(&root),
+    )
+    .unwrap_or_else(|error| panic!("the schedule is checked: {error}"));
     assert_eq!(
         report.benefit_coverage,
         BenefitCoverage {

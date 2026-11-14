@@ -7,7 +7,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::result_large_err)]
 
-// Workflow #464 P1 (register §1.365): `actinglab standard-pack adopt`.
+// Workflow #464 P1 (register §1.370): `actinglab standard-pack adopt`.
 mod adopt;
 mod api;
 mod authoring;
@@ -117,7 +117,11 @@ mod gate_453_s8;
 #[cfg(test)]
 mod gate_455_gr1;
 
-// Workflow #464 P1 (register §1.365): standard-pack adopt on a made-up resource repository.
+// Workflow #455 G-R2s fix round 3 (register §1.369): the goal check and the composer's input the
+// tools read, over real packages, follow every chain link and the remedies' capabilities.
+#[cfg(test)]
+mod gate_455_gr2s;
+// Workflow #464 P1 (register §1.370): standard-pack adopt on a made-up resource repository.
 #[cfg(test)]
 mod gate_464_p1;
 

@@ -298,6 +298,10 @@ pub use standard_pack_schedule::{
     ConfiguredStandardPackSchedule, StandardPackSchedulePreview, compose_configured_standard_packs,
     preview_standard_pack_schedule,
 };
+#[cfg(test)]
+pub(crate) use standard_pack_schedule::{
+    DECLARATION_METADATA_FAILS_FOR_TEST, REFUSALS_NAME_UNCOMPOSED_FOR_TEST,
+};
 mod startup_package;
 mod state_control;
 // Workflow #429 R-6: `StopInstanceRun`, a client's direct run stopped and reset by the Runtime.
@@ -1617,6 +1621,47 @@ impl RuntimeHost {
         )
     }
 
+    /// Workflow #453 S12: offline `actingd claim-state-root`, the hand-over of the configuration's
+    /// state root to the installation the command runs from; see
+    /// `contracts/state-root-installation.md`, "Handing a state root over". It reads no salt and
+    /// never opens the ledger.
+    pub fn claim_state_root(
+        config: RuntimeHostConfig,
+        new_identity: bool,
+    ) -> RuntimeHostResult<crate::StateRootHandOver> {
+        crate::state_root_claim::run(&crate::state_root_claim::ClaimStateRoot {
+            state_root: &config.state_root,
+            installation_root: config.installation_root.as_deref(),
+            clock: config.clock.as_ref(),
+            build_commit: config.runtime_commit.as_deref(),
+            new_identity,
+            #[cfg(test)]
+            crash_after: None,
+            #[cfg(test)]
+            hard_link_fails: config.hard_link_fails_for_test,
+        })
+    }
+
+    /// Workflow #453 S12, test only: [`Self::claim_state_root`] stopped right after the hand-over's
+    /// step `step`, as a process that died there leaves the two files; the command's owner epoch is
+    /// closed as after any failure of the command.
+    #[cfg(test)]
+    pub(crate) fn claim_state_root_stopped_for_test(
+        config: RuntimeHostConfig,
+        new_identity: bool,
+        step: crate::state_root_installation::HandOverStep,
+    ) -> RuntimeHostResult<crate::StateRootHandOver> {
+        crate::state_root_claim::run(&crate::state_root_claim::ClaimStateRoot {
+            state_root: &config.state_root,
+            installation_root: config.installation_root.as_deref(),
+            clock: config.clock.as_ref(),
+            build_commit: config.runtime_commit.as_deref(),
+            new_identity,
+            crash_after: Some(step),
+            hard_link_fails: config.hard_link_fails_for_test,
+        })
+    }
+
     pub fn start(
         config: RuntimeHostConfig,
         provider: Arc<dyn ExecutionBackendProvider>,
@@ -2423,9 +2468,13 @@ impl RuntimeHost {
             // `host.state_root_installation` (its time and who claimed); a record of this
             // installation that an earlier start placed is mirrored from the record, once, when
             // the fact store holds no such fact (that start failed between the record and the
-            // fact). Neither repeats the daemon line.
+            // fact). Neither repeats the daemon line. Workflow #453 S12 (ruling 5): the start
+            // compares the record's claim (its time and owner epoch) with the latest such fact and
+            // records the claim whenever they differ, so after a hand-over by `actingd
+            // claim-state-root` (the ledger still holding the old claim's fact) the next start
+            // records the new claim once, with the old claim's time, and a restart nothing more.
             if let Some(claim) = &state_root_claim {
-                let unrecorded = lock(
+                let stored = lock(
                     &shared.runtime_facts,
                     HostLocation::RecordStateRootInstallation,
                 )?
@@ -2433,10 +2482,11 @@ impl RuntimeHost {
                     &RuntimeFactScope::Runtime,
                     state_root_installation::STATE_ROOT_INSTALLATION_FACT_KEY,
                 )
-                .is_none();
-                if claim.placed || unrecorded {
-                    shared
-                        .record_runtime_fact(state_root_installation::claim_fact_record(claim))?;
+                .cloned();
+                if let Some(record) =
+                    state_root_installation::fact_for_start(claim, stored.as_ref())
+                {
+                    shared.record_runtime_fact(record)?;
                 }
             }
             if held_startup {

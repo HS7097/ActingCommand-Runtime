@@ -2049,3 +2049,89 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_inst1_update::s11_an_update_and_a_rollback_leave_the_installation_identity_in_place",
 ]
 incident = ["#453 S11"]
+# Workflow #455 G-R2s (0.12.60; register §1.369; the coordinator's ruling 2 of 11-14; contracts/standard-pack-schedule.md, "The irreversible mark"): actingctl packs gives the composer the input of its own control.json reading through the contract crate's one rule: a package providing a capability another package of the root marks irreversible is irreversible, one nobody's is not; an unreadable control file makes its package unreadable, every package counts as irreversible, and the answer names the control file once as before (1)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::packs::tests::gr2s_the_offline_input_follows_the_whole_root_rule_and_an_unreadable_package",
+]
+incident = ["#455 G-R2s"]
+# Workflow #455 G-R2s fix round 1 (0.12.60; register §1.369; the independent review, point 2; contracts/standard-pack-schedule.md, "The irreversible mark"): check-config in composer mode notes one standard_pack_package_unreadable per package of a composed game the package reader cannot read, naming the game and the package, each with the reader's refusal as its cause, so a game whose goals are all void is visible (1)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_rl1c::gr2s_check_config_notes_each_package_it_cannot_read",
+]
+incident = ["#455 G-R2s"]
+
+# Workflow #453 S3 (0.12.60; register §1.365; brief rd-1114/brief-453-s3-cold-instance-add.md; design survey rd-1113/fresh-root-design.md §1(c) 1b; contracts/install-cli.md, "Instances, the first slice" and "The Lab's rescue module"; contracts/scheduling-pause.md, "Pauses held at a first start"): on the fake host, the rescue module's instance add with no Runtime answering commits by the swap alone (install_command_done, runtime_running false, the steps check_config and swap, no pause_added), the new entry carrying the six members of before and start_paused true last and no other entry the member, the replaced file kept as actingd.config.json.prev-<ms> byte for byte, one config_replace journal with stage_file and swap_file, no hold and no S0, its input instance_add with start_paused true, nothing asked of a Runtime; before the candidate is written an actingd under the root refuses runtime_running, the state root's owner lock held owner_lock_held, an owner journal that cannot be read processes_unreadable, each with the root byte for byte as it was; a check-config refusal of the candidate is config_refused_by_target with check-config's refusal as its cause, nothing swapped, the candidate's part kept and listed by leftovers; config replace with no Runtime answering refuses the same three, nothing swapped, and with the Runtime stopped swaps as before; a cold add stopped after either of its two steps ends install_operation_interrupted and op resume finishes it to the tree a cold add without a crash leaves; the module's release-hold that the Runtime answers by holding an instance again with instance.added (as a Runtime with S2 answers for an entry its start left unapplied) answers count 1, release.resumed the instance resumed and release.held_again the other with instance.added and the revision answered, the journal's release step and hand-back saying the same; after a stop with a hold and a cold add, a start whose Runtime holds the new instance with instance.added passes the post-start row pauses, naming it in start_paused, with no post_check_mismatch, and the same start with another reason on it fails the row and is the caveat post_check_mismatch. Fix 1: op resume of a cold add stopped after its first step refuses owner_lock_held and runtime_running with the root and the journal as they were, then is done once stopped; undo of a cold add stopped between the swap's two renames (no live configuration) refuses the same two, nothing moved, then puts the kept file back byte for byte and sets the candidate aside; instance.added on an instance whose entry does not declare start_paused still fails the row pauses with the caveat; with a Runtime answering the answer's added and the journal's input carry no start_paused; config restore with no Runtime answering refuses the same three as config replace and swaps when stopped
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_cold_add_swaps_alone_and_only_the_new_entry_starts_paused",
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_cold_add_refuses_a_starting_runtime_a_held_owner_lock_or_an_undecided_probe",
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_cold_add_a_refused_candidate_is_kept_and_listed",
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_config_replace_with_no_runtime_applies_the_stopped_rule_then_swaps",
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_a_crash_after_each_step_resumes_to_the_same_tree",
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_a_hand_back_that_meets_an_unapplied_entry_records_it_held_again",
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_a_start_after_a_cold_add_expects_the_first_start_pause",
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_fix1_resume_of_a_cold_commit_applies_the_stopped_rule",
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_fix1_undo_of_a_cold_commit_applies_the_stopped_rule_and_restores_a_half_done_swap",
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_fix1_an_added_pause_on_an_entry_without_the_member_still_fails_the_row",
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_fix1_the_hot_path_records_no_start_paused",
+    "actingcommand-lab-rescue::lib::install::gate_453_s3::s3_fix1_config_restore_with_no_runtime_applies_the_stopped_rule_then_swaps",
+]
+incident = ["#453 S3"]
+
+# Workflow #453 S4 (0.12.60; register §1.366; brief rd-1114/brief-453-s4-install-new.md, fix round 1 after the review and the first CI run; contracts/install-cli.md, "Fresh root"): the rescue row new on the fake host, from a release folder of the neutral release fixture whose Runtime member carries the shipped template actingd.config.first.json, into temporary roots, no sleep and no clock read. Into an absent root: install_command_done of install_new (commit_sha, installation_changed true, install_operation_id), the tree exactly the build (live and kept, byte for byte), the kept build's release.json, actingd.config.json, install\state.json, the writer lock, the journal and its end marker, and the empty folder <new_root>\state; the configuration the template with state_root (absolute, that folder), the salt and lab_module_authoring true; one check-config of the live build with --config the part and --install-root before the rename; state.json the live build installed by the operation, the kept build local_build (no facts), no pack, the configuration's SHA-256; the journal of kind new with the initiator and its steps in order (copy_build, verify_tree, place_build, one stage_file and one swap_file per file, verify_tree, write_config, create_state_root, record_state), every one done; next names place, instance add and up. A given new_state_root: that folder, empty, absolute in the configuration, and none under the root. The salt: 64 lowercase hexadecimal digits, two runs two salts, its text in no other file of the root, not in the answer's line and not in any program line the host logged. A root holding a file refused root_not_empty and a state root holding a file refused state_root_not_empty, the whole tree (files and folders) before equal to after; a release with a file of other bytes refused release_check_failed with file_mismatch and the reader's failures, an actingd-config range [90, 99] beside the installer's refused interface_edge with the failed row, each with nothing written and no root made. A check-config of the live build that refuses: config_refused_by_target, the part actingd.config.json.new-<ms>.part kept, no configuration, no state file, no state folder, the operation ended with its write_config step started and next naming its undo. A crash after each step: install_operation_interrupted, next naming actingctl install resume, and install resume brings the root to the clean run's tree (the salt, the state root's path and the operation's ids and milliseconds aside); undo after each step: done, every byte still there under a name set aside (.rolledback- or .abandoned-), no configuration, state file, state folder or kept build left under its name, no unfinished operation. No install\identity.json and no state-root installation.json after new. With watchdog: watchdog install once, last, the fake Runtime never spawned, paused or closed. actingd: the template holds no salt and no state root, is composer mode with one host (each *_available_milli 1000) and no instance, and filled as new fills it passes load, assemble_or_refusal and check-config with --install-root; the example configuration is byte for byte what it was. Fix round 1: no assertion prints the generated salt (every compared document without it); the edge's refusal names the release's work folder, which is there; the step create_vision_root makes <new_root>\vision empty (after create_state_root, before record_state) and the undo of the finished operation sets it aside as vision.rolledback-<ms2>, empty; the undo after each step finds state.rolledback- and vision.rolledback- folders once their steps ran; actingd's check-config passes the filled template before the state folder exists and again with the empty state and vision folders
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_453_s4::s4_the_first_configuration_template_decodes_in_composer_mode_with_one_host_and_no_instance",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_453_s4::s4_the_example_configuration_is_unchanged",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_builds_exactly_the_build_the_configuration_the_state_folder_and_the_state_file",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_puts_a_given_state_root_where_it_is_named_and_none_under_the_root",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_salt_is_32_bytes_as_text_new_each_run_and_nowhere_else",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_refuses_a_root_or_a_state_root_that_is_not_empty_and_changes_nothing",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_refuses_a_build_that_does_not_verify_and_writes_nothing",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_refuses_an_empty_actingd_config_edge_and_writes_nothing",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_a_first_configuration_check_config_refuses_ends_refused_with_its_part_kept",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_a_crash_after_each_step_resumes_to_the_same_tree",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_undo_after_each_step_sets_the_written_items_aside_and_deletes_nothing",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_mints_no_identity_and_writes_no_state_root_record",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_creates_the_empty_default_vision_root_and_undo_sets_it_aside",
+    "actingcommand-lab-rescue::lib::install::gate_453_s4::s4_new_with_watchdog_registers_it_last_and_starts_nothing",
+]
+incident = ["#453 S4"]
+
+# Workflow #453 S9 (0.12.60; register §1.367; brief rd-1114/brief-453-s9-vision-place.md; contracts/install-cli.md, "The Lab's rescue module", vision place; contracts/vision-model-folders.md, "Placing a vision root from a folder"): the rescue row vision place --from <dir> on the fake host, whose live actingd's vision check answers from the vision root on disk against an injected pin table of made-up files. Missing files are placed and the post-check passes (the tree the manifest's files plus what was there; one vision_place journal, one vision_file step per file and post_check; watchdog row 7a″ stands aside after every step); a file of another SHA-256 is replaced and kept as .old-<ms> byte for byte; a complete root opens no operation and writes nothing; a --from file of another size, of another SHA-256 or missing refuses vision_source_invalid with its path before anything is written; a running Runtime, a held owner lock and an undecidable probe refuse with nothing written; a crash after each step and between the two renames resumes (op resume) to the same tree; undo sets the placed files aside and puts the replaced one back, deleting nothing; another model folder and a file the manifest does not name stay byte for byte. Closing round: undo after a crash between the two renames puts the old file back and sets the part aside; a failed check after the placement ends post_check_failed with the files placed and undo next; a report that lists a file unpinned refuses vision_report_unanswered with nothing copied.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_missing_files_are_placed_and_the_post_check_passes",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_differing_file_is_replaced_and_the_old_one_kept_byte_for_byte",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_complete_root_opens_no_operation_and_writes_nothing",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_wrong_or_missing_source_file_refuses_before_anything_is_written",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_running_runtime_a_held_owner_lock_or_an_undecidable_probe_refuses",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_crash_after_each_step_or_between_the_renames_resumes_to_the_same_tree",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_undo_sets_the_placed_files_aside_and_puts_the_replaced_file_back",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_another_model_folder_and_an_unnamed_file_are_untouched",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_undo_after_a_crash_between_the_two_renames_puts_the_old_file_back",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_failed_check_after_the_placement_ends_post_check_failed_with_the_files_placed",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_file_the_report_lists_unpinned_refuses_and_nothing_is_copied",
+]
+incident = ["#453 S9"]
+
+# Workflow #453 S12 (0.12.60; register §1.368; brief rd-1114/brief-453-s12-state-root-claim.md; contracts/state-root-installation.md, "Handing a state root over"; contracts/install-cli.md, "The Lab's rescue module"): on the fake host's single-location root (its actingd prints the line the test sets; no program spawned), the rescue row state-root claim runs the live build's actingd claim-state-root --config <the root's configuration> --actor Lab-救急 once and nothing else (with --new-identity when the switch is given); a replaced record answers install_command_done of install_state_root_claim, installation_changed true, actingd's report as report, the actor, previous {claimed_at_unix_ms} and actingd's state_root_claimed as its related link, with one note install_caveat_noted fingerprints_discontinuous; a written record and an unchanged one have no note and no previous, the unchanged one installation_changed false; actingd's refusal (owner_conflict) is the answer; the root and its state root byte for byte as before. With an actingd image running under the root the row refuses install_command_refused runtime_running with the image's pid before any program runs. op status with its switch state_root_installation answers state_root {path, installation}: the configured state root and claimed_by_this, unclaimed or not_installed as the live build's check-config with --install-root reports it; with check-config refusing state_root_installation_mismatch or state_root_installation_record_invalid at stage config_state_root, installation null and check_config that refusal; read only. Fix round 1 (the coordinator's rulings after the review): the caveat's path is actingd's kept_record; a written record with a kept_record has the caveat too, that record as its path, and no previous; op status without its switch runs no program (no log line, no deadline) and its line and exit equal those of install status --root <root> with the module's face (the answer before the slice), with no state_root; with its switch while install status names an unfinished operation (install\current.json), no program runs, no state_root, unfinished names the operation. The handed rows' gate takes a Written::Beside part (op status's switch, placed and written nowhere) anywhere in a constant
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::state_root_claim_answers_done_and_notes_a_replaced_record",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::state_root_claim_without_a_replaced_record_has_no_caveat",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::state_root_claim_is_refused_while_an_actingd_image_runs_under_the_root",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::op_status_names_the_state_root_and_its_installation_state",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::state_root_claim_fix1_notes_a_record_written_beside_a_kept_one",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::op_status_fix1_without_its_switch_starts_no_process_and_answers_as_before",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::op_status_fix1_with_its_switch_leaves_the_member_out_while_an_operation_is_unfinished",
+]
+incident = ["#453 S12"]

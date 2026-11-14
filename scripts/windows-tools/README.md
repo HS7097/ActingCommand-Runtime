@@ -16,8 +16,9 @@ MuMu/Nemu, model, provider, or Runtime binaries.
 
 - `actingcommand-runtime-<40-character-commit-sha>`: `actingcommand-actingd.exe`,
   `actingctl.exe`, `actingd.config.example.json`, `actingd.defaults.json` (from Workflow
-  #387 D1b on; the downloader accepts a Runtime artifact with or without it), `INSTALL.md`,
-  and `RELEASE-NOTES.md`;
+  #387 D1b on; the downloader accepts a Runtime artifact with or without it),
+  `actingd.config.first.json` (from Workflow #453 S4 on, likewise), `INSTALL.md`, and
+  `RELEASE-NOTES.md`;
 - `actingcommand-tools-<40-character-commit-sha>`: `actinglab.exe`,
   `actingledger.exe`,
   `actingcommand-vision-provider-check.exe`,

@@ -3894,3 +3894,51 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close458_a64s_owed_close_refused_by_a_held_claim_leaves_the_sweep_running",
 ]
 incident = ["#456", "#458"]
+# Workflow #455 G-R2s (0.12.60; register §1.369; contracts/standard-pack-schedule.md, "The irreversible mark"; coordinator work order rd-1114/brief-455-gr2s-irreversible-line.md and the coordinator's ruling 1 of 11-14), host half, a composer-mode host over one game root of two real packages whose declaration files' times the test sets: the first check composes both unmarked, a check with no file changed returns before reading the root, a same-length control file that marks the capability irreversible (bundle.json byte for byte unchanged) is read at the next check and marks its task, the reverse takes the mark away, an unreadable control file marks every task of the game and is recorded standard_pack_package_unreadable once with the reader's refusal as its cause, across two checks that read the root again (fix round 1), and readable again the marks follow the declarations (1); check-config's composition marks the same task (2); fix round 1: a declaration file whose metadata cannot be read is a mark of its own, the check goes on, the game is marked and the package named once, and once the metadata reads the marks follow the declarations (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2s_host_the_marks_follow_the_declaration_files_with_bundle_json_unchanged",
+    "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2s_host_check_config_composes_the_mark",
+    "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2s_host_a_declaration_file_whose_metadata_fails_marks_its_game_and_the_check_goes_on",
+]
+incident = ["#455 G-R2s"]
+# Workflow #455 G-R2s round 2 (0.12.60; register §1.369; the coordinator's ruling of 11-14 on the workbench's early returns; contracts/resource-targets.md, "A task that can do something irreversible"): a composer-mode host with two games on two instances, each instance's inventory read and a v2 goal on each pool applied through ApplyResourceTargets; while game A's bundle.json is damaged, game A's candidate has the rank and score-stage reasons of before any goal and carries resource_target_root_uncomposed, game B's keeps the goal's numbers, and repaired game A's goal applies again (1); the same when game A's schedule.json makes the composition refused as a whole (the catalog's pool limit exceeded by the two games together) (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r2_a_damaged_root_voids_the_goals_of_its_game_until_it_composes",
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r2_a_composition_refused_as_a_whole_voids_the_goals_of_the_changed_game",
+]
+incident = ["#455 G-R2s"]
+# Workflow #455 G-R2s fix round 3 (0.12.60; register §1.369; the coordinator's work order of 11-14, C.1, C.2 and C.4; contracts/standard-pack-schedule.md, "The irreversible mark"): on gate_rl1b's bench with two games, goals applied on both: while game A's schedule.json cannot be stat'ed (the gate tests' metadata seam), game A's candidate has the numbers of before any goal and carries resource_target_root_uncomposed, game B (after it in id order) keeps the goal's numbers, the failure is recorded once as standard_pack_root_unreadable naming game A, readable again game A's goal applies, and a second failure after game A composed is recorded again (1); a refusal that names a game no round composed (the gate tests' refusal seam; unreachable from files) records game A's refusal once, keeps the active generation, voids game A only and, game A restored, its goal applies again (2); after a restart with game A's bundle.json damaged, game A's candidate says why and game B's does not, and game B's numbers are those it has once game A's root composes again (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r3_a_root_whose_metadata_fails_voids_only_its_own_game",
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r3_a_refusal_no_round_can_narrow_voids_the_changed_game_only",
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r3_after_a_start_one_failing_root_voids_only_its_own_game",
+]
+incident = ["#455 G-R2s"]
+# Workflow #455 G-R2s fix round 4 (0.12.60; register §1.369; the coordinator's work order of 11-14, items 3 and 5; contracts/resource-targets.md, "A task that can do something irreversible"): on gate_rl1b's bench with two games, goals applied on both: while game A's bundle.json is damaged and game B's package comes to provide a capability marked irreversible (the composition the check makes and does not activate marks rule B, the active generation does not), game A's and game B's candidates say why, game B's has the numbers of before any goal, the check records one resource_target_root_uncomposed naming game B and none naming game A, and game A repaired, every game composes and nothing more is recorded (1); check-config's preview of a composition refused as a whole (the catalog's pool limit exceeded by the two games together) gives one standard_pack_root_invalid per composed game naming that game and its schedule.json, and leaves no game out (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r4_a_game_the_active_generation_holds_otherwise_is_voided_and_recorded",
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r4_check_configs_preview_names_each_game_of_a_composition_refused_as_a_whole",
+]
+incident = ["#455 G-R2s"]
+
+# Workflow #453 S12 (0.12.60; register §1.368; brief rd-1114/brief-453-s12-state-root-claim.md; contracts/state-root-installation.md, "Handing a state root over"): actingd claim-state-root (RuntimeHost::claim_state_root) on temporary state roots and installation roots (a folder whose install folder holds the installer's state.json), the start fixture, no sleep, no clock read by a test. Another installation's record (a start from another installation root claimed the state root and recorded its fact): the record is set aside as installation.json.old-<ms> byte for byte and this installation's written (its number, the command's claim time and pid), the answer read/replaced with the old claim's time as previous; the owner journal keeps its earlier records byte for byte and gains exactly the command's epoch, opened and closed, which the new record names; every other file of the state root (the ledger, the integrity key, the stores) byte for byte, the names those before and the kept one; this installation's next start passes, places nothing (no state_root_claimed) and records the new claim once (claimed_at_unix_ms, claimed_by_pid, claimed_by_owner_epoch, previous_claimed_at_unix_ms the old claim's time, four members, observed after the old fact); a restart records nothing more. No record: written, nothing kept, the state root holds the owner journal and the record; this installation's own record: unchanged, changed false, nothing written or renamed. A record that cannot be read: set aside byte for byte and replaced, no previous. The identity: absent, minted and placed (32 lowercase hexadecimal digits, no part file) and named by the record; unreadable without --new-identity, state_root_installation_record_invalid with the identity file as path and both folders byte for byte; unreadable with it, identity.json.old-<ms> and installation.json.old-<ms> kept byte for byte, a new number minted and recorded; readable with it, invalid_arguments, nothing written. A Runtime holding the owner: owner_conflict, the record and the identity as they were, nothing set aside. A command stopped after each step of the hand-over (a test-only stop: the record set aside, placed; the identity set aside, placed): every file keeps its bytes under its name or a kept name, and running the command again completes it (written or unchanged; with the identity placed, --new-identity is refused with nothing written and the command without it replaces the record), one kept record and one kept identity at the end. Fix round 1 (the coordinator's rulings after the review): every answer names the kept record the fingerprint caveat is about (kept_record: the record set aside when replaced, none when unchanged or when written on an empty state root, the record a stopped command kept when written after it); a record written on a state root holding two kept old records and no record names the newest of them, both kept byte for byte, nothing set aside now
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_453_s12::s12_another_installations_record_is_kept_and_the_next_start_records_the_new_claim_once",
+    "actingcommand-runtime-host::lib::tests::gate_453_s12::s12_no_record_is_written_and_its_own_record_changes_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_453_s12::s12_fix1_a_record_written_beside_a_kept_record_names_it",
+    "actingcommand-runtime-host::lib::tests::gate_453_s12::s12_an_unreadable_record_is_set_aside_and_replaced",
+    "actingcommand-runtime-host::lib::tests::gate_453_s12::s12_the_identity_is_minted_refused_renewed_or_kept",
+    "actingcommand-runtime-host::lib::tests::gate_453_s12::s12_a_runtime_holding_the_owner_refuses_the_claim_and_nothing_is_written",
+    "actingcommand-runtime-host::lib::tests::gate_453_s12::s12_a_command_stopped_after_each_step_is_completed_by_running_it_again",
+]
+incident = ["#453 S12"]
