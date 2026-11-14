@@ -1456,11 +1456,21 @@ instance alone on its device never reads any of it, and a catalog that declares
   one device named in front refuse the evaluation (`policy_evaluation_input_invalid`). **What the
   Runtime passes** (ORD-1c, register §1.365; the coordinator's rulings 1, 2 and 4 on board #437):
   - *The member in front* is the member the host holds in front of the device: the member whose
-    switch's own steps last ended with its application in front or started, and none once a
-    switch of the device was refused or failed (a Runtime-level failure included), once the member's
-    own application was stopped or failed to start, once a ladder rung or the idle action changed
-    what is in front, and none after a start ([device-group.md](../device-group.md), "The member in
-    front", "Who forgets it").
+    switch's own steps last ended with its application in front or started, or (since fix round 2)
+    whose run's own step last launched or restarted its application, and none once a switch of the
+    device was refused or failed (a Runtime-level failure included), once the member's own
+    application was stopped or failed to start (by a request or by a step of its run), once a
+    ladder rung (a Runtime-level failure of the application restart rung included) or the idle
+    action changed what is in front, and none after a start ([device-group.md](../device-group.md),
+    "The member in front", "Who forgets it").
+    *What it does not see* (register §1.365, fix round 2): an emulator or an application that
+    crashes, a person's work by hand on the device, a Lab raw input and a run's own inputs that
+    bring another package to the front leave a member named in front that is not. That costs at
+    most one switch more, which reads the real foreground, and lets a waiting task start at most
+    one run later; no task waits without end, since its wait still counts against its limit. A stop
+    command that failed and the ladder's emulator restart rung when it returns before its stop
+    forget a member whose application may still be in front; that costs at most one switch made
+    early.
   - *The default limit* is `scheduling.device_group.max_queue_wait_ms` in effect as the cycle
     starts (milliseconds `60000..=86400000`, default `1800000`; [runtime-config.md](../runtime-config.md)),
     so an instruction applies from the next round.

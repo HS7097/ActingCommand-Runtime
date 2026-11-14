@@ -41,7 +41,9 @@
 //! its one writer): the member once its application is in front or started, none once the switch
 //! was refused or failed. Fix round 1: one remover, [`HostShared::forget_front`], at a
 //! Runtime-level failure of the switch and where what is in front changes without a switch (a stop
-//! or a failed start of a member, a ladder rung, the idle action's close). A policy cycle reads
+//! or a failed start of a member, a ladder rung, the idle action's close). Fix round 2: a task
+//! step's own application effect by the same rule, a start of it that succeeded noting the member
+//! through the one writer ([`HostShared::front_after_own_application_effect`]). A policy cycle reads
 //! the map for the order within one device (`HostShared::policy_device_groups`); a start begins
 //! with none, and a stale entry costs at most one switch, which reads the real foreground.
 
@@ -472,6 +474,31 @@ impl HostShared {
             fronts.remove(&device);
         }
         Ok(())
+    }
+
+    /// Workflow #437 ORD-1c fix round 2 (the review on board #437; `contracts/device-group.md`,
+    /// "Who forgets it"): what a task step's own application effect on `member` (`stop`, `launch`
+    /// or `restart`, on its run's key) leaves in front of the member's device, by the rule of the
+    /// `ApplicationLifecycle` request (`host/input.rs`). A stop, and a launch or restart whose
+    /// command failed (`succeeded` false), forget the member ([`Self::forget_front`], member). A
+    /// launch or restart that succeeded leaves the member's own application in front or started,
+    /// so the member is noted in front as the switch's own steps note it ([`Self::note_front`]),
+    /// for a member the switch applies to: after a stop by an earlier step of the same run, the
+    /// device would otherwise keep none in front until the member's next switch. Nothing for an
+    /// instance alone on its device.
+    pub(super) fn front_after_own_application_effect(
+        &self,
+        member: InstanceId,
+        action: ApplicationLifecycleAction,
+        succeeded: bool,
+    ) -> RuntimeHostResult<()> {
+        if !succeeded || matches!(action, ApplicationLifecycleAction::Stop) {
+            return self.forget_front(member, FrontLoss::Member);
+        }
+        if !self.switch_applies(member) {
+            return Ok(());
+        }
+        self.note_front(member, true)
     }
 
     /// Workflow #437 ORD-1c (`contracts/device-group.md`, "The member in front"; the

@@ -5478,14 +5478,25 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         if !self.supports_application_effect() {
             return Ok(ApplicationEffectSupport::Unsupported);
         }
-        self.host.application_control(
+        let controlled = self.host.application_control(
             self.request,
             self.token,
             action,
             self.connection_id,
             Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
             super::input::ApplicationKey::Own,
-        )?;
+        );
+        // Workflow #437 ORD-1c fix round 2 (`contracts/device-group.md`, "Who forgets it"): what
+        // the step's own effect leaves in front of the member's device, noted before a failure is
+        // returned, by the rule of the `ApplicationLifecycle` request.
+        self.host
+            .front_after_own_application_effect(
+                self.control.instance_id,
+                action,
+                controlled.is_ok(),
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+        controlled?;
         self.ensure_active()?;
         Ok(ApplicationEffectSupport::Performed)
     }

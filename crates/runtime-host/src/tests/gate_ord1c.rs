@@ -28,6 +28,11 @@
 //! rung that fails after it stopped the others, an emulator restart by a rung, the idle action
 //! closing the application). The ladder's and the idle action's tests wait for their worker's end
 //! as their own gates do.
+//!
+//! Fix round 2 (the review of fix round 1 and CI): t15 pins that a task step whose restart command
+//! fails forgets the member in front; t14's fixture carries the `idle` section's keys and registers
+//! A with its emulator running; t8 replaces the machine's samples inside the performance summary
+//! records only.
 
 use super::gate_373_nav3a::StandardRoot;
 use super::instance_workers::wait_until;
@@ -294,7 +299,12 @@ fn parameter(key: &str, value: FactScalar, source: ConfigParameterSource) -> Con
 
 /// The configuration in effect: the expected runtime off, the switch cooldown `COOLDOWN_MS`, and
 /// `scheduling.device_group.max_queue_wait_ms` at the spec's limit by the file, else at its
-/// default; with the spec's `idle_close_a`, A's own `idle.action` `close_app` (`a`, A's id).
+/// default; with the spec's `idle_close_a`, A's own `idle.action` `close_app` (`a`, A's id) and the
+/// `idle` section's keys as the assembly renders them from the shipped defaults file. Fix round 2:
+/// the start's check of A's own idle keys reads each member A does not name from the section's key
+/// in the configuration, not from the defaults file, so without those rows the start refused
+/// `idle.min_gap_ms` (`config_value_invalid`, `wrong_type`: no value; CI's first run of t14 showed
+/// the code at `record_runtime_config`, the key is the check's first read).
 fn manifest(spec: Spec, a: InstanceId) -> RuntimeConfigManifest {
     let limit = match spec.limit_ms {
         Some(limit_ms) => parameter(
@@ -322,6 +332,14 @@ fn manifest(spec: Spec, a: InstanceId) -> RuntimeConfigManifest {
         limit,
     ];
     if spec.idle_close_a {
+        let (_, defaults) = DefaultsFile::shipped().expect("the shipped defaults file parses");
+        let section = actingcommand_runtime_config::idle::SECTION;
+        parameters.extend(
+            render_parameters(&mechanism_rows(), &[], &defaults, &json!({}), &|_| None)
+                .expect("every key resolves")
+                .into_iter()
+                .filter(|row| row.key.split('.').next() == Some(section)),
+        );
         parameters.push(parameter(
             &instance_key(
                 &crate::failure_identity::identifier_text(&a),
@@ -475,6 +493,12 @@ impl Bench {
                 state.physical_task_geometry.store(true, Ordering::Release);
                 *state.application_id.lock().expect("fake application id") =
                     Some(application.to_owned());
+                // Fix round 2: with an idle action, A is emulator-controlled from the start, so it
+                // registers with its emulator running; the idle check acts only on an instance
+                // whose emulator the Runtime read running.
+                if spec.idle_close_a && alias == A {
+                    state.emulator_control.store(true, Ordering::Release);
+                }
                 (alias, state)
             })
             .collect::<BTreeMap<_, _>>();
@@ -1068,7 +1092,11 @@ fn ord1c_t2_a_due_task_waits_from_its_first_queued_round_across_selected_and_hel
     let held = bench.evaluate(T0 + MINUTE_MS);
     assert!(intents(&held).is_empty(), "{:?}", intents(&held));
     let row = waiting(&held, TASK_B, B);
-    assert!(row.is(PolicyCode::DeviceGroupWaiting), "{row:?}");
+    assert_eq!(
+        row.value("alias"),
+        Some(&json!(A)),
+        "held by A's lease: {row:?}"
+    );
     assert_eq!(
         row.value(DEVICE_GROUP_WAIT),
         Some(&json!(DeviceGroupWait::Held.as_str())),
@@ -1212,7 +1240,11 @@ fn ord1c_t4_a_pause_a_player_hold_or_a_switch_cooldown_ends_the_wait_and_it_star
     let paused = bench.evaluate(T0 + MINUTE_MS);
     assert_eq!(intents(&paused), vec![pair(TASK_A, A)]);
     let row = waiting(&paused, TASK_B, B);
-    assert!(row.is(PolicyCode::DeviceGroupWaiting), "{row:?}");
+    assert_eq!(
+        row.value("alias"),
+        Some(&json!(A)),
+        "behind A's pick: {row:?}"
+    );
     assert_eq!(
         row.value(DEVICE_GROUP_WAIT),
         Some(&json!(DeviceGroupWait::Selected.as_str())),
@@ -1506,8 +1538,8 @@ fn ord1c_t7_front_tasks_run_until_a_waiting_task_would_pass_its_limit_then_the_d
         "nothing of A ends by TASK_B's limit: the switch"
     );
     let row = waiting(&third, TASK_A, A);
-    assert!(row.is(PolicyCode::DeviceGroupWaiting), "{row:?}");
     assert_eq!(row.value("alias"), Some(&json!(B)), "{row:?}");
+    assert_eq!(row.value("task_id"), Some(&json!(TASK_B)), "{row:?}");
     assert_eq!(number(row, REQUIRED_MS), Some(E_MS), "{row:?}");
     assert_eq!(number(row, REMAINING_MS), Some(0), "{row:?}");
     assert!(
@@ -1595,19 +1627,15 @@ fn root_texts(root: &TempDir) -> Vec<String> {
     texts
 }
 
-/// The members of a record whose value measures the machine, not the Runtime's work (fix round 1,
-/// point 2: named, not every number): the ledger open's phases (`ledger_opened`, measured on the
-/// process clock) and the sampled members of the performance summary record. An evaluation holds
-/// none of them, and its numbers are compared as they are.
-const MACHINE_MEASUREMENTS: [&str; 15] = [
-    "sql_read_ms",
-    "verify_ms",
-    "material_ms",
-    "restore_ms",
-    "meta_ms",
-    "tail_ms",
-    "index_ms",
-    "import_ms",
+/// The members of the performance summary record (`EventType::PerformanceSummary`) whose value
+/// samples the machine, not the Runtime's work (fix round 1, point 2: named, not every number). Fix
+/// round 2 (the review): replaced inside that record only, since the same names occur in other
+/// records (fact snapshots, timing, artifact failures), which are compared as they are. The ledger
+/// open's phases (`sql_read_ms` to `import_ms`), which fix round 1 named too, are in no record of
+/// the ledger: the start reports them as its `ledger_opened` daemon line and in its start report
+/// (`host.rs`, `ledger_open_outcome`), so nothing of them is replaced. An evaluation holds none of
+/// these members, and its numbers are compared as they are.
+const PERFORMANCE_SAMPLES: [&str; 7] = [
     "context",
     "foreground",
     "owned_processes",
@@ -1705,7 +1733,12 @@ fn lone_rounds(ids: &BTreeMap<&'static str, InstanceId>, off: bool) -> Rounds {
         .map(|event| {
             let mut payload =
                 serde_json::to_value(event.payload()).expect("a record's payload encodes");
-            normalised(&mut payload, &roots, &MACHINE_MEASUREMENTS);
+            let measured: &[&str] = if event.event_type() == EventType::PerformanceSummary {
+                &PERFORMANCE_SAMPLES
+            } else {
+                &[]
+            };
+            normalised(&mut payload, &roots, measured);
             Compared {
                 event_type: event.event_type(),
                 severity: event.severity(),
@@ -1743,10 +1776,10 @@ fn differing<T: std::fmt::Debug + PartialEq>(what: &str, with: &[T], without: &[
 /// entries of the slice return at once (the test-only switch, one function per build). The
 /// picks are equal as they are; each round's evaluation and every record of the ledger, record by
 /// record (type, severity and whole payload), are equal with ids, times, the evaluation's `seed`
-/// and the temporary root normalised, and in the records only the named machine measurements
-/// ([`MACHINE_MEASUREMENTS`]); every other number is compared as it is, and every differing one is
-/// named in one message. The two hosts are started alike with the same instance ids; nothing else
-/// is compared between them.
+/// and the temporary root normalised, and in the performance summary records only their named
+/// samples of the machine ([`PERFORMANCE_SAMPLES`], fix round 2: inside those records alone); every
+/// other number is compared as it is, and every differing one is named in one message. The two
+/// hosts are started alike with the same instance ids; nothing else is compared between them.
 ///
 /// What it proves (fix round 1, point 2): two starts of this build, one with the slice's entries
 /// reachable and one with them returning at once, evaluate and write the same. That a host
@@ -2053,7 +2086,10 @@ fn ord1c_t13_an_emulator_restart_by_a_rung_forgets_the_devices_front() {
 /// with A in front and its next work four hours away, the idle check closes A's application on the
 /// action's key, and the device has none in front. A member of a group of several names no idle
 /// action today (actingd refuses it at assembly, "Device-level actions"); the host is handed one
-/// here directly, so the forget is in place before the idle action is made group-aware.
+/// here directly, so the forget is in place before the idle action is made group-aware. Fix round
+/// 2: the configuration carries the `idle` section's keys, which the start's check of A's own keys
+/// reads, and A registers with its emulator running (emulator-controlled from the start), without
+/// which the idle check takes no step on A.
 #[test]
 fn ord1c_t14_the_idle_action_closing_the_member_in_front_forgets_it() {
     let bench = Bench::start(Spec {
@@ -2100,6 +2136,58 @@ fn ord1c_t14_the_idle_action_closing_the_member_in_front_forgets_it() {
         bench.front(B),
         None,
         "the idle action closed the member in front"
+    );
+    bench.close();
+}
+
+/// Fix round 2 (the review): a task step's own application effect follows the rule of the
+/// `ApplicationLifecycle` request. A direct run of A, whose package's one step restarts A's
+/// application, leaves A in front when the restart succeeds. In the next such run the switch finds
+/// A's own application in front and the step's restart command fails: the run fails, not at its
+/// switch, and the device has none in front.
+#[test]
+fn ord1c_t15_a_task_steps_failed_restart_forgets_the_member_in_front() {
+    let bench = Bench::start(GROUPED);
+    let receipt = bench.direct_run(A, 201);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert_eq!(
+        bench.actions(A).last(),
+        Some(&ApplicationLifecycleAction::Restart),
+        "the run's step restarted A's application"
+    );
+    assert_eq!(
+        bench.front(B).as_deref(),
+        Some(A),
+        "a run whose restart step succeeded"
+    );
+    let commands = bench.actions(A).len();
+
+    *bench.parts.states[A]
+        .application_error
+        .lock()
+        .expect("one-shot application error") =
+        Some(DeviceError::transient("fixture restart failed"));
+    let failed = bench.direct_run(A, 202);
+    assert_ne!(failed.state(), RuntimeReceiptState::Completed, "{failed:?}");
+    assert_ne!(
+        failed.outcome().code().as_str(),
+        HostCode::ApplicationSwitchFailed.as_str(),
+        "the switch passed and the step's restart failed: {failed:?}"
+    );
+    let after = bench.actions(A);
+    assert_eq!(
+        (after.len(), after.last()),
+        (commands + 1, Some(&ApplicationLifecycleAction::Restart)),
+        "the step's restart, and only it, reached the device"
+    );
+    assert_eq!(
+        bench.front(B),
+        None,
+        "a task step whose restart command failed"
     );
     bench.close();
 }

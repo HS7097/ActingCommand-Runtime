@@ -800,7 +800,11 @@ fact, a snapshot or a decision identity, and an instance alone on its device nev
   (its `Ok(Err)`), the device has none in front, since a stop may already have run. Both entries
   write it: the switch before a run (a policy run, a direct run) and the switch before a start
   outside a run (an `ApplicationLifecycle` `launch` or `restart`, the ladder's application restart
-  rung). A policy cycle reads it as it builds the device map (`policy_device_groups`,
+  rung). Since fix round 2 the writer is also called after a step of a member's own run launched
+  or restarted the member's application and its command succeeded
+  (`front_after_own_application_effect`, `host/switch.rs`, called by `control_application` in
+  `host/contained_task.rs`): the member's own application is then in front or started, as after
+  its switch. A policy cycle reads it as it builds the device map (`policy_device_groups`,
   `host/policy_dispatch.rs`) and names the member in front by its alias.
 - **Who forgets it** (register §1.365, fix round 1; the coordinator's ruling). One remover,
   `forget_front` (`host/switch.rs`), called in one line where what is in front changes without a
@@ -810,8 +814,12 @@ fact, a snapshot or a decision identity, and an instance alone on its device nev
     then too (device);
   - an `ApplicationLifecycle` `stop` of the member, and a `launch` or `restart` whose own command
     fails after the switch put the member in front (`host/input.rs`; member);
-  - the ladder's application restart rung when it fails after it stopped the others
-    (`host/recovery_ladder.rs`; member);
+  - by the same rule, a step of the member's own run: its `stop` of the member's application, and
+    its `launch` or `restart` whose command fails, before the failure is returned
+    (`host/contained_task.rs`, through `front_after_own_application_effect`; member; fix round 2);
+  - the ladder's application restart rung when it fails after it stopped the others, and (fix
+    round 2) when it ends with a Runtime-level failure after the stop, forgotten before that error
+    is returned as it is (`host/recovery_ladder.rs`; member);
   - the ladder's emulator restart rung, before its Stop (`host/recovery_ladder.rs`; device);
   - the idle action's close of the member's application, before the stop is sent
     (`host/idle.rs`; member).
@@ -841,13 +849,17 @@ pairs wait from the first evaluated cycle, so a task can wait up to one more lim
 limits the first pick of a device is the allocation order's, as MAPP-1's.
 
 **What a stale entry costs.** The member in front is only a preference of the order: a member
-named in front that is not (a person started another application by hand, a run's own steps
-brought another package to the front) is preferred while its tasks end by the waiting tasks'
-limits, and its next run's switch reads the real foreground, brings it to the front and writes
-what is in front. So a stale entry costs at most one switch, and lets a waiting task start at most
-one startup run late: the order counted the named member's next run as needing no switch, and that
-run's switch takes one startup run more. A device with none in front orders every member's pairs
-as waiting. Past a limit nothing is written: no record, no held-set rule, no code.
+named in front that is not (an emulator or an application crashed, a person worked on the device
+by hand, a Lab raw input or a run's own inputs brought another package to the front; register
+§1.365, fix round 2) is preferred while its tasks end by the waiting tasks' limits, and its next
+run's switch reads the real foreground, brings it to the front and writes what is in front. So a
+stale entry costs at most one switch, and lets a waiting task start at most one startup run late:
+the order counted the named member's next run as needing no switch, and that run's switch takes
+one startup run more; no task waits without end, since a waiting task's wait still counts against
+its limit. The other way round, a stop command that failed and the emulator restart rung when it
+returns before its Stop forget a member whose application may still be in front: that costs at
+most one switch made early. A device with none in front orders every member's pairs as waiting.
+Past a limit nothing is written: no record, no held-set rule, no code.
 
 **A device of one.** The host names only devices of several, so on a host without one the map is
 handed to the evaluator alone, exactly as before ORD-1c, the policy host stages no wait and the
@@ -1132,9 +1144,10 @@ of a device group of several:
   [scheduling/README.md](scheduling/README.md), "Order within one device"), and the host's slice,
   ORD-1c, passes the order's inputs ("The member in front"). The time a switch takes counts in no
   order and not in a run's own duration (board #437, 2026-11-13). Not built: a forgetting of the
-  member in front by the paths that change what is in front without a switch (a person's hold,
-  an emulator stop or restart, a ladder rung, a member's application stop; register §1.365
-  lists them), which the coordinator decides on.
+  member in front where the Runtime does not see what changed in front (an emulator or an
+  application that crashes, a person's work by hand, a Lab raw input, a run's own inputs that
+  bring another package to the front; register §1.365 lists them with what they cost, and "Who
+  forgets it" the places that forget since fix rounds 1 and 2).
 - **The normalized weight.** Superseded by the order within one device (ORD-1b, "Ranking across
   members" above): no weight is compared across the members of one device.
 - **Device-level actions by device.** It lifts the limits of slice 1 ("Device-level actions") and
