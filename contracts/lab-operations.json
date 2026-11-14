@@ -2477,8 +2477,8 @@
       "params": [
         {"name": "root", "form": "option", "type": "dir", "required": true, "note": "a game root, installed or a bundle laid out as one, its directory named as its game; not the installation's"}
       ],
-      "help": "Judges every pack of a game root by the twelve readiness items and answers each pack dispatchable, or waiting with every reason.",
-      "output": "root, game, installation (not_read: no installation is read), the counts dispatchable, waiting and not_judged, and packs, each {package_id, server, readiness, items}: the twelve items S1 to S6 and I1 to I6, each {id, item, state, basis?, models?, outcome?}",
+      "help": "Judges every pack of a game root by its thirteen readiness items: waiting with every reason, ready_to_place, dispatchable or not_scheduled.",
+      "output": "root, game, installation (not_read: no installation is read), the counts dispatchable, ready_to_place, waiting and not_scheduled, warnings (standard-pack check's), and packs, each {package_id, server, readiness, roles?, items}: the thirteen items S1 to S7 and I1 to I6, each {id, item, state, basis?, models?, outcome?}",
       "writes": false,
       "irreversible": false,
       "runtime": "offline",
@@ -2488,7 +2488,7 @@
       "new": "#464 P3 (whether a pack goes straight into scheduling, and what it waits for)",
       "slice": "464-P3",
       "status": "planned",
-      "notes": "#464 P3 (contracts/standard-pack-schedule.md, Readiness): the resource tooling's one function judge_standard_pack_readiness, which adopt's answer, build.json and the placement plan are to call with what each holds; this row gives it the game root only, so the six installation items are not_judged (installation_not_read) and I3 is information; it writes nothing, starts nothing and reads no installation, no secret and no Runtime"
+      "notes": "#464 P3 (contracts/standard-pack-schedule.md, Readiness): the resource tooling's one function judge_standard_pack_readiness, which adopt's answer, build.json and the placement plan are to call with what each holds; this row gives it the game root only, so the six installation items are not_judged (installation_not_read) and I3 is information, and a pack answers ready_to_place (or not_scheduled) at best; fix round 1: it runs standard-pack check on the root first, each refusal carried under S1, S4 or S7; it writes nothing, starts nothing (no child process) and reads no installation, no secret and no Runtime"
     },
     {
       "name": "scheduling compile",

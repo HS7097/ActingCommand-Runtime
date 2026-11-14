@@ -816,4 +816,7 @@ outcome_keys! {
     readiness_problem: vocab(readiness_problem),
     readiness_unjudged: vocab(readiness_unjudged),
     required_revision: integer,
+    // Workflow #464 P3 fix round 1: the pack whose problem keeps another waiting (a follower's
+    // head, a refused layer of a prerequisite chain, the pack the root check refused at).
+    blocking_package_id: name,
 }

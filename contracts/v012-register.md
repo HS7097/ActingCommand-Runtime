@@ -24180,17 +24180,18 @@ the resource tools and `gate_rl1b`, actingd's `gate_rl1c`) give each package its
 whole (`DeclaredCapabilities`, no remedy), pinning what they pinned. No golden changes; no test
 leaves the gate map.
 
-### 1.375 Slice #464 P3 (0.12.60): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`)
+### 1.375 Slice #464 P3 (0.12.60): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on the root check and the four answers, coordinator work order `rd-1114/brief-1718-fix1.md`, main `1e67d1c5` merged)
 
 This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364);
 merging main `155366bb`, whose train 0.12.60d took §1.365 to §1.368 (#453 S3, S4, S9 and S12),
-renumbered it 1.369; merging main `1e67d1c5`, whose #1708 (#455 G-R2s) holds §1.369, it
-takes 1.375, the number the coordinator assigned (the numbers between belong to other open
-pull requests). The sibling slices P1 (`standard-pack adopt`) and P2 (`standard-pack
+renumbered it 1.369; merging main `1e67d1c5` in fix round 1, whose #1708 (#455 G-R2s) holds
+§1.369, it takes 1.375, the number the coordinator assigned (the numbers between belong to other
+open pull requests). The sibling slices P1 (`standard-pack adopt`) and P2 (`standard-pack
 build`), written at the same time, take the numbers their merges give them.
 
 **What it is.** One function, `actingcommand_resource_tooling::judge_standard_pack_readiness`,
-judges the twelve readiness items of every pack of one game root, and the core row `standard-pack
+judges the readiness items of every pack of one game root (twelve as first built, thirteen since
+fix round 1), and the core row `standard-pack
 ready` (`actinglab standard-pack ready --root <game root>`, MCP `ac_standard_pack_ready`) answers it
 ([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness", which holds the item table).
 The function takes the root, the bundle's declared `package` range where the caller holds it, and
@@ -24225,7 +24226,9 @@ check`'s `required_models` (`present`, `identity_matches`): an installation keep
 `<vision root>\models\<model_ref>\` (the `vision` section's `root`, else `<install root>\vision`),
 whose identity is computed from its files at first use, so only `vision check` (which hashes) or
 the Runtime tells it. Read without a Runtime: I1, I2, I4, I5 and I6 (each through the configuration
-or a live build's offline child); with the Runtime only the game of I1 and the subsystems of I4.
+or a live build's offline child); while the Runtime runs, its status tells the game of I1 and the
+subsystems of I4, and `actingd suspended` (I5) and `vision check` (I6) can be read as well (fix
+round 1: the first text named only I1's game and I4).
 
 **What the row reads.** The game root only: it writes nothing, starts nothing (no child, no Runtime
 request) and reads no installation and no secret, so its installation items are `not_judged`
@@ -24235,14 +24238,17 @@ by another pull request tonight; the follow-up gives the function those readings
 
 **Codes, keys and words.** `package_dispatch_waiting` (warning, ladder class none; required
 `package_id`, `readiness_item`, `readiness_problem`; optional `game`, `server`, `task_id`,
-`pool_id`, `page_ids`, `required_revision`, `range_min`, `range_max`, `instance_id`, `model_name`;
-the other check's own outcome as its cause) and `package_readiness_unjudged` (info, ladder class
-none; required `package_id`, `readiness_item`, `readiness_unjudged`), both resource tooling's, both
-pending; one domain code each, the reason a vocabulary value (spec amendment of 10-24). Keys
-`readiness_item`, `readiness_problem`, `readiness_unjudged` (vocabularies of resource tooling's
-`codes.rs`: twelve items, fifteen problems, eight unjudged words) and `required_revision`
-(integer). No configuration key, record type, payload member, fact, wire shape or interface
-revision.
+`pool_id`, `page_ids`, `required_revision`, `range_min`, `range_max`, `instance_id`, `model_name`
+and, since fix round 1, `blocking_package_id`; the other check's own outcome as its cause) and
+`package_readiness_unjudged` (info, ladder class none; required `package_id`, `readiness_item`,
+`readiness_unjudged`), both resource tooling's, both pending; one domain code each, the reason a
+vocabulary value (spec amendment of 10-24). Keys `readiness_item`, `readiness_problem`,
+`readiness_unjudged` (vocabularies of resource tooling's `codes.rs`: thirteen items, nineteen
+problems, nine unjudged words since fix round 1; twelve, fifteen and eight as first built),
+`required_revision` (integer) and, since fix round 1, `blocking_package_id` (name). Fix round 1
+adds two vocabularies no key carries, the answer's own members: `readiness_state` (four words) and
+`readiness_role` (eight words). No configuration key, record type, payload member, fact, wire
+shape or interface revision.
 
 **The operation table.** One row, `standard-pack ready` (module `core`, offline, writes nothing,
 entries `lab`, slice `464-P3`, which actinglab's `BUILT_SLICES` and the MCP server's
@@ -24259,6 +24265,54 @@ fixture, named by its item and problem, with its values and cause; I3 is informa
 case. Adapted: `apps/actinglab/src/tests/gate_434_lab5a.rs`, whose router check named
 `standard-pack check` as the one core row actinglab's own command serves; the requirement adds a
 second, `standard-pack ready`.
+
+**Fix round 1** (the independent review's two findings and its suggestions, the coordinator's
+rulings in the work order). The principle: the answer never says more than is true, so no pack is
+answered dispatchable, or complete, that the Runtime would refuse or never dispatch.
+(1) S5 runs the pack's prerequisite chain through the kernel's own predicate,
+`actingcommand_execution_kernel::PrerequisiteChain` (`new`, `may_fall_back`, `next` with the
+registry's return-home package of the dependent's server, `begin`, `admit`, `finish`), as the host's
+`resolve_prerequisite_chain` does before a run, each layer the descriptor the loader admitted here;
+the kernel's rules are called, not copied. An unbound layer stays `prerequisite_unregistered`, now
+caused by the kernel's `contained_task_prerequisite_unbound`; any other refusal (another game,
+server or resolution, a layer that cannot be one, a cycle, too deep, the step limit) or a layer the
+loader refuses is the new `prerequisite_refused`, the kernel's code (or the layer's
+`package_invalid`) the cause; both name the layer in the new key `blocking_package_id`.
+(2) The function runs `standard-pack check` on the root first (`check_standard_pack_root`,
+called): each of its refusals (`details.issues`, else `details.outcome`, else its code alone) is
+carried by the pack it names (its `package_id`, else the pack whose directory its `path` is), or by
+every pack when it names none, as a failing item: under S1 for the `package_invalid` of a named pack,
+under S4 for `standard_pack_root_invalid` of `schedule.json`, otherwise under the new static item S7
+`root_checked` (`check_refused`); a pack the refusal does not name fails S7 `root_refused` naming the
+pack it does (the check judged nothing after its first refusal), and the pack whose S1 or S4
+carries it has S7 not judged (`check_stopped`). The check's warnings are the answer's new member
+`warnings` (ruling 7). (3) Four answers, the pack's `readiness` (vocabulary `readiness_state`):
+`waiting` (an item fails; an item of the root not judged never counts as holding), `ready_to_place`
+(every root item holds, no item fails, the installation's not all judged), `dispatchable` (every
+item holds, I3 information) and `not_scheduled` (a maintenance-role pack no rule schedules, with its
+`roles`, vocabulary `readiness_role`); the counts `dispatchable`, `ready_to_place`, `waiting` and
+`not_scheduled` replace `dispatchable`, `waiting` and `not_judged`. A pack whose every rule rides
+with another rule's chain waits, S3 `head_waiting` naming the head's pack, while that pack waits
+(repeated until nothing changes). (4) Tests, `gate_464_p3` (exec gate row "#464 P3"): a
+`linear_steps` pack whose unlisted entry its server's return-home package reaches holds S5
+`return_home` with the check's `package_bundle_entry_page_unlisted`, and without one fails
+`entry_unreachable` alone; S5 `navigation` and `application_entry` on the same kind of pack; the
+chain refused for a prerequisite of another server, a cycle and four declared layers, each with the
+kernel's code; a root the check refuses (a loading copy without `loading.json`) with no pack
+complete; each of the four answers; a follower behind a waiting head. Existing tests adapted
+because the requirement changes what they pin: the complete pack holds thirteen items with S7
+(`p3_a_complete_pack_answers_dispatchable`); without an installation the seven root items hold and
+the pack is `ready_to_place`, not `not_judged`
+(`p3_without_an_installation_only_the_root_items_are_answered`); a binding without its server
+leaves the pack `ready_to_place` (`p3_i1_…`); the unregistered prerequisite's cause and layer
+(`p3_s5_…`) and S7 `check_stopped` beside S1 (`p3_s1_…`) are pinned as well. (5) Texts: the
+catalog's handling of `package_readiness_unjudged` says that no caller hands an installation's
+readings yet; `composition_refused` is S4's only; the contract's section "Readiness" says what
+`dispatchable` does not include (a positive net benefit, judged at run time), the four answers,
+where the installation's items are judged, and what can be read while the Runtime runs. The
+merge of main `1e67d1c5` also gives `compose_per_server` the composer's input G-R2s made required
+(`IrreversiblePackages`), which the readiness reads as `standard-pack check` reads it
+(`root_irreversibility`). The row still reads the game root only and starts no child process.
 
 **At deploy.** Nothing to do: a new read-only command and tool. **Rollback** (below 0.12.60): the
 row and its tool are gone; nothing is persisted.

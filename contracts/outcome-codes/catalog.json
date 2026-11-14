@@ -2711,7 +2711,7 @@
     },
     "readiness_item": {
       "type": "vocab:readiness_item",
-      "description": "Which of the twelve readiness items of a pack waits or was not judged: S1 to S6 of the game root, I1 to I6 of an installation (Workflow #464 P3, since 0.12.60)."
+      "description": "Which of the thirteen readiness items of a pack waits or was not judged: S1 to S7 of the game root, I1 to I6 of an installation (Workflow #464 P3, since 0.12.60)."
     },
     "readiness_problem": {
       "type": "vocab:readiness_problem",
@@ -2724,6 +2724,10 @@
     "required_revision": {
       "type": "integer",
       "description": "The interface revision a content declares or needs: the package maximum a bundle declares, beside range_min and range_max of the range that does not hold it (Workflow #464 P3, since 0.12.60)."
+    },
+    "blocking_package_id": {
+      "type": "name",
+      "description": "The package whose problem keeps another pack waiting: the pack of a follower's head (head_waiting), the layer a prerequisite chain was refused at (prerequisite_unregistered, prerequisite_refused), the pack standard-pack check refused the root at (root_refused) (Workflow #464 P3 fix round 1, since 0.12.60)."
     }
   },
   "vocabularies": {
@@ -9452,7 +9456,7 @@
       }
     },
     "readiness_item": {
-      "description": "The twelve readiness items of a pack, the value readiness_item of package_dispatch_waiting and package_readiness_unjudged (Workflow #464 P3, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.60).",
+      "description": "The thirteen readiness items of a pack, the value readiness_item of package_dispatch_waiting and package_readiness_unjudged (Workflow #464 P3, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.60).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
@@ -9472,10 +9476,13 @@
           "description": "S4: the composer accepts the game's schedule.json with one instance per server."
         },
         "entry_reachable": {
-          "description": "S5: the pack's entry is reached: an application entry, no page entry to check, a registered prerequisite package, navigation data that lists it, or its server's return-home package."
+          "description": "S5: the pack's entry is reached: an application entry, no page entry to check, a registered prerequisite package, navigation data that lists it, or its server's return-home package; and its prerequisite chain (its declared prerequisite packages, or the return-home fallback) passes the kernel's own predicate, as the Runtime admits it before a run."
         },
         "models_named": {
           "description": "S6: the models the pack's recognition targets need are named (the loader refuses a target that names none)."
+        },
+        "root_checked": {
+          "description": "S7 (fix round 1): standard-pack check accepts the game root, beyond what S1 and S4 tell; a refusal of their kind (package_invalid of a pack, standard_pack_root_invalid of schedule.json) is answered under them."
         },
         "instance_bound": {
           "description": "I1: an instance of the installation is bound to the pack's game and server."
@@ -9523,14 +9530,26 @@
         "value_undeclared": {
           "description": "S3: a rule of the pack (task_id) declares no value, or touches a pool (pool_id) without a valuation; standard_pack_benefit_undeclared is the cause."
         },
+        "head_waiting": {
+          "description": "S3 (fix round 1): every rule of the pack rides with another rule's chain and the pack of each head waits; task_id the follower, blocking_package_id the head's pack. A follower is not ahead of its head."
+        },
         "composition_refused": {
-          "description": "S4: the composer refuses the game's schedule.json; standard_pack_root_invalid at the file's pointer is the cause."
+          "description": "S4: the composer refuses the game's schedule.json, or standard-pack check refuses that file; standard_pack_root_invalid at the file's pointer is the cause."
         },
         "prerequisite_unregistered": {
-          "description": "S5: the prerequisite package the pack declares is no package of the game root."
+          "description": "S5: the prerequisite package the pack declares is no package of the game root; the kernel's contained_task_prerequisite_unbound is the cause."
+        },
+        "prerequisite_refused": {
+          "description": "S5 (fix round 1): the kernel's prerequisite chain refuses the pack's chain as the Runtime would at its first run (a layer of another game, server or resolution or one that cannot be a layer, a cycle, more than three declared layers, the step limit), or a layer's admission fails; the kernel's code or the layer's package_invalid is the cause, blocking_package_id the layer."
         },
         "entry_unreachable": {
           "description": "S5: nothing reaches the pack's entry pages (page_ids): no prerequisite package, no navigation data that lists them, no return-home package of its server."
+        },
+        "check_refused": {
+          "description": "S7 (fix round 1): standard-pack check refuses the game root at this pack, or at no pack (then every pack carries it), for a reason S1 to S6 do not judge (a navigation role, a loading copy, the notices, a store update cooldown, a probe key); its refusal is the cause."
+        },
+        "root_refused": {
+          "description": "S7 (fix round 1): standard-pack check refuses the game root at another pack (blocking_package_id; its refusal is the cause) and judges nothing after it, so no pack of the root is complete until the check accepts it."
         },
         "instance_unbound": {
           "description": "I1: no instance of the installation is bound to the pack's game."
@@ -9561,7 +9580,7 @@
       },
       "tokens": {
         "installation_not_read": {
-          "description": "No installation was read: only the six items of the game root are judged."
+          "description": "No installation was read: only the seven items of the game root are judged. The installation's items are judged where an installation is read (the placement plan, a follow-up) and, once the pack is live, by the scheduler's own reasons."
         },
         "part_not_read": {
           "description": "The installation was read, but not the part this item needs."
@@ -9583,6 +9602,65 @@
         },
         "no_revision_tells": {
           "description": "Item I3: no interface revision tells whether the live Runtime has the code for an unrecorded screen (the coordinator's ruling 3 on board #464); an information line, never a refusal."
+        },
+        "check_stopped": {
+          "description": "S7 (fix round 1): standard-pack check stopped at this pack's refusal, which is answered under S1 or S4, and judged nothing after it."
+        }
+      }
+    },
+    "readiness_state": {
+      "description": "A pack's answer in the readiness (its member readiness; Workflow #464 P3 fix round 1, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.60).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "ReadinessState"
+      },
+      "tokens": {
+        "waiting": {
+          "description": "An item fails; every failing item is listed with its problem. An item of the game root that was not judged comes only with one that fails and never counts as holding."
+        },
+        "ready_to_place": {
+          "description": "Every item of the game root holds and no item of an installation fails, but not every installation item was judged (no installation was read, or not all of it): complete as far as the game root tells; the installation's items are judged where it is placed."
+        },
+        "dispatchable": {
+          "description": "Every item of the game root and every item of the installation holds (I3 is information). Not included: a positive net benefit, which the scheduler judges only at run time."
+        },
+        "not_scheduled": {
+          "description": "The pack plays a supporting part a root file gives it (its roles) and no rule dispatches it: other packs' runs use it."
+        }
+      }
+    },
+    "readiness_role": {
+      "description": "The supporting part a root file gives a pack, the parts of standard_pack_maintenance_packages (its member roles in the readiness; Workflow #464 P3 fix round 1, since 0.12.60).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "ReadinessRole"
+      },
+      "tokens": {
+        "startup": {
+          "description": "A bundle.json maintenance[] entry's use startup."
+        },
+        "return_home": {
+          "description": "A bundle.json maintenance[] entry's use return_home."
+        },
+        "recognition": {
+          "description": "A bundle.json maintenance[] entry's use recognition."
+        },
+        "features": {
+          "description": "A pages.json feature package."
+        },
+        "edge": {
+          "description": "A navigation.json edge's package."
+        },
+        "chain": {
+          "description": "A step of navigation.json's recovery chain."
+        },
+        "handler": {
+          "description": "An interrupts.json handler."
+        },
+        "then_run": {
+          "description": "A package an interrupts.json then.run names."
         }
       }
     }

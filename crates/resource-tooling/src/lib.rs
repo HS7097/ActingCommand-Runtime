@@ -147,8 +147,11 @@ pub use api::*;
 pub use authoring::*;
 pub use business_catalog::*;
 pub use codes::ResourceToolingCode;
-// Workflow #464 P3: the readiness items, problems and unjudged words.
-pub use codes::{ReadinessItem, ReadinessProblem, ReadinessUnjudged};
+// Workflow #464 P3: the readiness items, problems and unjudged words; fix round 1: a pack's four
+// answers and its supporting parts.
+pub use codes::{
+    ReadinessItem, ReadinessProblem, ReadinessRole, ReadinessState, ReadinessUnjudged,
+};
 pub use declaration_exclusions::{
     DECLARATION_EXCLUSIONS_FILE, DECLARATION_EXCLUSIONS_SCHEMA, DeclarationExclusions,
 };
@@ -172,9 +175,9 @@ pub use resource_convert::{
 pub use resource_restore::*;
 pub use standard_pack_check::check_standard_pack_root;
 pub use standard_pack_ready::{
-    InstallationRead, ItemState, PackReadiness, PackState, ReadinessAnswer, ReadinessBasis,
-    ReadinessBinding, ReadinessInstallation, ReadinessModel, ReadinessSuspension,
-    StandardPackReadiness, StandardPackReadyRequest, judge_standard_pack_readiness,
+    InstallationRead, ItemState, PackReadiness, ReadinessAnswer, ReadinessBasis, ReadinessBinding,
+    ReadinessInstallation, ReadinessModel, ReadinessSuspension, StandardPackReadiness,
+    StandardPackReadyRequest, judge_standard_pack_readiness,
 };
 pub use standard_pack_schedule::{
     StandardPackComposeRequest, StandardPackComposeResponse, compose_standard_packs,
