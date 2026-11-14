@@ -21548,10 +21548,12 @@ device; every id made up):
   a full store each producer's new key is refused, the run fails
   `contained_task_resource_reading_rejected` with the native detail
   `<list id>:fact_store_capacity_exceeded`, nothing is published or evicted, and the two receipts'
-  outcomes carry the same values. Each refused run, a `read_list`'s as a field list's, answers
-  before its lease ends (the refusal returns from its terminal before the release a completed run
-  makes): it still holds the device's key, nothing waiting, until its client's connection closes,
-  and the next run on the device waits for that end in the device's queue.
+  outcomes carry the same values. Each refused run, a `read_list`'s as a field list's, ends its
+  lease before it answers, as a failed run's lease ends, and the next run on the same open
+  connection starts at once (§1.363, defect #457). When this slice merged, the refused run
+  answered before its lease ended (the refusal returned from its terminal before its branch's
+  lease end) and held the device's key until its client's connection closed; this test pinned
+  that, and §1.363 changed it to the present truth.
 - `field_list_row_read_by_ledger_8`: the ledger reader of this build (`ledger` 8, `actingledger`'s
   task evidence) reads the `list_start_unseen` and `list_end_unseen` rows with `frame_indices` and
   relays their outcome's values unchanged.
@@ -22812,10 +22814,133 @@ member (the entry denies unknown members): remove the member first. It never rea
 `host.start_pause_applied`; a held pause stays a pause it restores as any other, and a person
 resumes it as any other.
 
-### 1.363 Slice #453 S3 (0.12.60): `instance add` while the Runtime is stopped writes an entry that starts paused (Workflow #453; the owner's approval of board #453 on 11-13: only instances added while the Runtime is stopped start paused, and they stay paused until a person resumes them; the design survey `rd-1113/fresh-root-design.md`, sections 0 and 1(c) "1b. The cold commit", the row S3 of 1(d), 1(e) and 5(e), (g), read on main `98924e28`, every place it names found again on main `e44fecb4`; the coordinator's rulings 1 to 6 on board #453, not the owner's words; coordinator work order `rd-1114/brief-453-s3-cold-instance-add.md`, read on main `e44fecb4`)
+### 1.363 Defect #457 (0.12.60): a direct run whose terminal step fails ends its lease before it answers (Workflow #457; found by FL-2's gate, §1.354, on CI and confirmed in the code by the coordinator, never seen on an installation; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-457-direct-run-lease.md`, read on main `f19756db`; fix 1, after an independent review, with the coordinator's ruling that a failed or cancelled direct run's lease ends as a failed run's, coordinator work order `rd-1114/brief-1706-fix1.md`, main `e44fecb4` merged)
 
-1.363 is the next free number on the base `e44fecb4` (after §1.362, S2); pull requests merged
-before this one take the next numbers, and the train renumbers. The installer's half of starting
+1.362 was the next free number on main `f19756db`; #453 S2 merged first and took §1.362, and
+merging main `e44fecb4` renumbered this section 1.363. Pull requests open beside this one may take
+numbers first, and a train renumbers it.
+
+**The defect.** A direct run (a `RunContainedTask` a person or an agent sends, not the
+scheduler's run) that ran its task and then met a failure in its terminal step answered that
+failure truthfully but kept the device's lease: in `execute_contained_task_with_lease`
+(`host/contained_task.rs`) the terminal step returned its failure with `?`, before the lease end
+its branch makes. The realistic case is the fact store's refusal of the list or reading the run
+publishes (stage 2 of "Publication" in [resource-readings.md](resource-readings.md): a full
+store, a version conflict, an invalid record); a store update package's refusal, a refused
+settlement projection and a terminal already committed take the same return. While the requesting
+connection stayed open the device stayed taken until the lease expired, and a run queued behind
+it waited out its queue time (`lease_queue_expired`). A run started from a command line lost its
+connection when its process exited, which ended the lease; a long-lived connection (an MCP
+server's) did not. A list over the byte bound is no such failure: it is a miss, and the run
+completes (§1.354).
+
+**The fix.** Each return from the terminal step of `execute_contained_task_with_lease` (its five
+calls of `append_contained_task_terminal`) ends a direct run's lease before the run answers, when
+the failure does not poison, as this same function ends the lease once that branch's terminal is
+written (the coordinator's ruling on #1706: a failed run's lease "ends as a failed run's", as
+[runtime-interface.md](runtime-interface.md) says it):
+
+- The two failed runs' returns, the capacity refusal's and the completed run's (whose terminal
+  step committed the run's terminal as failed: a refused publication, a store update's refusal, a
+  refused projection; or met a terminal already committed): `cleanup_composite_failure_with_run_links`,
+  the call those branches make after their terminal. A run on a borrowed key keeps the key for the
+  run that lent it (MAPP-2a); unconfirmed resources are settled; the lease ends with the
+  backend-failure reason (`cleanup_token`: under the instance's admission guard the queued entries
+  past their time expire and the lease's device use ends with `Keep`, the session kept or closed
+  where it must close; then, under the queue-order lock, the key goes to the first eligible
+  waiting claim, a transfer, or is released, and the guard's drop pumps the queue); then the ladder
+  after a direct run is decided as for every failed direct run, by the failure's own code under
+  `recovery_ladder.rules.direct_runs` (`ladder_after_direct_run`; nothing is added or removed by
+  hand); then a session a lapsed lease left open is closed.
+- The cancelled run's return: as the cancel path just below it ends the lease: when the Runtime's
+  reset of the stopped run failed, `cleanup_token` with the backend-failure reason and the lapsed
+  session's close; otherwise `release_lease`, and a release that fails ends the lease through
+  `cleanup_composite_failure_with_run_links`, as that path does.
+
+Every return can call its branch's lease end: none lacks what the call needs, and none would run it
+a second time (the function ends the lease once, at the end of each branch, which these returns
+skip). So no return keeps the success path's plain release; only the cancelled run's ends with a
+release, which is its own path's. The token is the run's current one (the end phase's; after a
+switch the renewed one, MAPP-2d). The answer is the run's failure as before: its code, category,
+values and terminal. A lease end that fails is the run failure's `cleanup` link
+(`RequestFailure::with_cleanup_failure`), and a fatal one poisons, as on every run path. The first
+round of this slice gave every return the success path's plain release, after the first work
+order's wording ("as the success path does"); the review found it, and the coordinator's ruling
+corrected it to the above. Left as they were: a failure that poisons (the request door contains
+it, as before); a policy run (its settlement releases its key,
+`ensure_scheduled_policy_lease_released`); a host run (a startup package, a ladder's rung: the
+key's holder releases it, `release_host_key`); the success path; the lease's length; the queue's
+order; the switch; the session rule.
+
+**The other settlement paths** (the work order asked for each):
+
+- The scheduler's run takes the same returns, and `complete_scheduled_policy_failure` then
+  releases its lease on the policy lane when the run wrote no `lease.released`
+  (`ensure_scheduled_policy_lease_released`): its terminal step's failure leaves no key held. Not
+  this defect; left. A known limit outside this slice, older than it, which the review found and a
+  separate board issue carries: for an instance alone whose run renewed its lease in its
+  wind-down, that fallback release takes the granted token, not the renewed one.
+- A Lab operation's run (`host/lab_operation.rs`) releases its lease in `finish_lab_operation`
+  before it writes its terminal record, so a failed terminal record holds no key. Three of its
+  early returns before that release, which the review confirmed as the same kind of defect, are
+  left: another board issue carries them.
+- A recovery ladder's rung runs on the ladder's key: a rung that returns early leaves the key
+  with the ladder, which releases it once at its end (`run_recovery_ladder`); a startup package's
+  run likewise (`run_startup_claim`). Not this defect; left.
+
+**Contracts.** [runtime-interface.md](runtime-interface.md) (the activity `direct_run`, where a
+direct run's time on its lease is described) says when a direct run's lease ends, the failure
+cases included; [resource-readings.md](resource-readings.md) ("Publication", after stage 2's
+refusal) notes the refused run's case and points to it.
+
+**Interface.** No revision moves; no outcome code, word, configuration key, record or wire shape
+is added. A test-only switch turns the fix off for the test that compares with the build before
+it (its test spelling exists only in test builds).
+
+Tests (host gate row "#457", in FL-2's gate file `gate_450_fl2.rs`, on its fake device and
+packages; no sleeps; each host reads once before its store is filled, as FL-2 test 4 does):
+`refused_run_gives_the_key_back_on_its_open_connection` (on a full store, the field list's and the
+`read_list` step's refused runs over one client connection that stays open: after each answer the
+device has no holder and nothing waits, and the run's lease has one `lease.released`, the failed
+run's lease end's, not under the run's request; the next run on the connection, the same package
+shown a list that is not whole, starts at once, with no `scheduler.queued`, and completes, its
+lease released by the explicit release under its request),
+`refused_runs_answer_is_the_answer_before_the_fix` (for each producer, on a host of its own, the
+refused run's answer with ids and times normalised is byte for byte the answer it gives with the
+fix turned off, which leaves the key held as before),
+`a_completed_direct_run_writes_the_same_records_on_two_hosts_of_this_build` (on two hosts started
+alike, a field list run read whole: the records linked to its run, its terminal and its release
+among them, are the same record by record, the base name of the host's state root replaced and
+ids, times, the stored documents' sizes and object keys and the sampling seeds normalised; every
+differing record is named in one message) and
+`refused_run_starts_the_ladder_a_failed_direct_run_starts` (under `rules.direct_runs = trigger`
+and one trigger item naming both codes, an ordinary failed direct run, `contained_task_state_invalid`,
+and a refused run, `contained_task_resource_reading_rejected`, each on a host of its own, each end
+their lease as a failed run's and start one ladder by that item, matched by its code, at the task
+stage, naming their own code). The third test compares two hosts of this build, not this build
+with the one before: the test-only switch is read only on a return from the terminal step, which a
+completed run never reaches. That a completed run's path is the one on main rests on reading the
+diff: the fix's closure is defined after the run's execution and called only on the terminal
+step's error. By reading, no record linked to the run names the state root (artifact references
+carry relative object keys, and the package lies outside both roots); the comparison replaces its
+base name all the same. `lease.released` has no member that names the reason of a lease end: the
+tests assert what the record shows of it, a failed run's lease end written under links of its own
+and a completed run's explicit release under the run's request. The borrowed key in the same failure
+is not reachable through these fixtures: only a member's startup run holds a borrowed key, and it is
+a host run, which this fix leaves as it was (MAPP-2a's tests pin its key). Adapted, keeping its name:
+`gate_450_fl2::field_list_full_store_refused` pinned the defect (the refused run still held the
+key, nothing waiting, until its client disconnected); it now sends both refused runs over one open
+connection and pins the key free after each answer, and the second run started at once (the first
+round's run follows runs of other connections, so only the second proves it). No golden changes;
+no test leaves the gate map.
+
+**At deploy.** Nothing to do: a device is no longer held after such a failure.
+
+### 1.364 Slice #453 S3 (0.12.60): `instance add` while the Runtime is stopped writes an entry that starts paused (Workflow #453; the owner's approval of board #453 on 11-13: only instances added while the Runtime is stopped start paused, and they stay paused until a person resumes them; the design survey `rd-1113/fresh-root-design.md`, sections 0 and 1(c) "1b. The cold commit", the row S3 of 1(d), 1(e) and 5(e), (g), read on main `98924e28`, every place it names found again on main `e44fecb4`; the coordinator's rulings 1 to 6 on board #453, not the owner's words; coordinator work order `rd-1114/brief-453-s3-cold-instance-add.md`, read on main `e44fecb4`)
+
+1.363 was the next free number on the base `e44fecb4` (after §1.362, S2); #457 (§1.363) merged
+first, and merging main `3d9d25e6` renumbered this section 1.364. Pull requests merged before this
+one take the next numbers, and the train renumbers. The installer's half of starting
 paused: S2 (§1.362) made the Runtime hold an entry that declares `start_paused` at its first
 start; this slice writes the member. [install-cli.md](install-cli.md), "Instances, the first
 slice" ("While the Runtime is stopped"), "The Lab's rescue module" ("The composites" and "A

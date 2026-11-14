@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S3 (register §1.363; contracts/install-cli.md, "Instances, the first slice" and
+// Workflow #453 S3 (register §1.364; contracts/install-cli.md, "Instances, the first slice" and
 // "The Lab's rescue module"; contracts/scheduling-pause.md, "Pauses held at a first start";
 // coordinator work order `rd-1114/brief-453-s3-cold-instance-add.md`; the design survey
 // `rd-1113/fresh-root-design.md` §1(c) "1b. The cold commit"): the rescue module's `instance add`

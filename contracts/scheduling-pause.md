@@ -359,7 +359,7 @@ instance added while the Runtime is stopped starts paused and stays paused until
 it; the coordinator's rulings 3 and 6 on it). An `instances[]` entry may declare `start_paused:
 true` ([runtime-config.md](runtime-config.md), "An entry that starts paused"); the installer writes
 it on an instance it adds while the Runtime is stopped (Workflow #453 S3, 0.12.60; register
-§1.363: the Lab's rescue module's `instance add` with no Runtime answering, on the new entry only,
+§1.364: the Lab's rescue module's `instance add` with no Runtime answering, on the new entry only,
 [install-cli.md](install-cli.md), "Instances, the first slice", "While the Runtime is stopped").
 
 - **Who holds it.** The Runtime itself, at every start, as the third kind of start hold beside the

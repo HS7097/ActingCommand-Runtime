@@ -867,7 +867,7 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     `application_id_from` included). A candidate refused after it was written (by check-config,
     or a Runtime gone) stays beside the live file, kept as every part: nothing deletes it, and
     `leftovers` lists it.
-  - **While the Runtime is stopped** (Workflow #453 S3, since 0.12.60; register §1.363; the
+  - **While the Runtime is stopped** (Workflow #453 S3, since 0.12.60; register §1.364; the
     coordinator's rulings on board #453, not the owner's words). With no Runtime answering the
     status read, `instance add` no longer refuses `runtime_not_running`. Before the candidate is
     written it applies the stopped rule the update applies after its close and `install start`
@@ -1009,7 +1009,7 @@ the rescue face:
   applies). A `release-hold` that finds no Runtime answering (or cannot read its status) refuses
   `runtime_not_running`, its hold kept: `kept: true`, `next` with `up` when none runs.
 - **A hand-back the Runtime answers by holding the instance again** (Workflow #453 S3, since
-  0.12.60; register §1.363; the coordinator's ruling 4 on board #453). From 0.12.60 the Runtime
+  0.12.60; register §1.364; the coordinator's ruling 4 on board #453). From 0.12.60 the Runtime
   answers the resume of an instance whose entry declares `start_paused` and that its start left
   unapplied (under the hold's pause) by lifting the hold's pause and holding the instance with
   `instance.added` ([scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start"):
@@ -1060,7 +1060,7 @@ the rescue face:
   swaps it in with the replaced file kept as `actingd.config.json.prev-<ms>`, starts, waits for
   `alive` and releases (the file's content is never printed, only its SHA-256); `config restore
   <prev>` does the same with a kept `.prev-<ms>`; with no Runtime answering both swap the file
-  alone, and (Workflow #453 S3, since 0.12.60; register §1.363) only after the stopped rule,
+  alone, and (Workflow #453 S3, since 0.12.60; register §1.364) only after the stopped rule,
   under the writer lock and before the operation opens: an `actingcommand-actingd.exe` under the
   root refuses `runtime_running` (`path`, `pid`), the state root's owner lock held
   `owner_lock_held` (`path`), a probe that cannot decide `processes_unreadable`, nothing swapped
