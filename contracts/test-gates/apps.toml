@@ -2107,3 +2107,17 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_file_the_report_lists_unpinned_refuses_and_nothing_is_copied",
 ]
 incident = ["#453 S9"]
+
+# Workflow #453 S12 (0.12.60; register §1.364; brief rd-1114/brief-453-s12-state-root-claim.md; contracts/state-root-installation.md, "Handing a state root over"; contracts/install-cli.md, "The Lab's rescue module"): on the fake host's single-location root (its actingd prints the line the test sets; no program spawned), the rescue row state-root claim runs the live build's actingd claim-state-root --config <the root's configuration> --actor Lab-救急 once and nothing else (with --new-identity when the switch is given); a replaced record answers install_command_done of install_state_root_claim, installation_changed true, actingd's report as report, the actor, previous {claimed_at_unix_ms} and actingd's state_root_claimed as its related link, with one note install_caveat_noted fingerprints_discontinuous; a written record and an unchanged one have no note and no previous, the unchanged one installation_changed false; actingd's refusal (owner_conflict) is the answer; the root and its state root byte for byte as before. With an actingd image running under the root the row refuses install_command_refused runtime_running with the image's pid before any program runs. op status with its switch state_root_installation answers state_root {path, installation}: the configured state root and claimed_by_this, unclaimed or not_installed as the live build's check-config with --install-root reports it; with check-config refusing state_root_installation_mismatch or state_root_installation_record_invalid at stage config_state_root, installation null and check_config that refusal; read only. Fix round 1 (the coordinator's rulings after the review): the caveat's path is actingd's kept_record; a written record with a kept_record has the caveat too, that record as its path, and no previous; op status without its switch runs no program (no log line, no deadline) and its line and exit equal those of install status --root <root> with the module's face (the answer before the slice), with no state_root; with its switch while install status names an unfinished operation (install\current.json), no program runs, no state_root, unfinished names the operation. The handed rows' gate takes a Written::Beside part (op status's switch, placed and written nowhere) anywhere in a constant
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::state_root_claim_answers_done_and_notes_a_replaced_record",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::state_root_claim_without_a_replaced_record_has_no_caveat",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::state_root_claim_is_refused_while_an_actingd_image_runs_under_the_root",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::op_status_names_the_state_root_and_its_installation_state",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::state_root_claim_fix1_notes_a_record_written_beside_a_kept_one",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::op_status_fix1_without_its_switch_starts_no_process_and_answers_as_before",
+    "actingcommand-lab-rescue::lib::install::gate_453_s12::op_status_fix1_with_its_switch_leaves_the_member_out_while_an_operation_is_unfinished",
+]
+incident = ["#453 S12"]

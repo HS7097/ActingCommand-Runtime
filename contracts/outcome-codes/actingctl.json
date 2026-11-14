@@ -3544,6 +3544,14 @@
       "status": "active",
       "since": "0.12.60",
       "description": "The operation of the Lab's rescue module's vision place --from <dir>: the live build's actingd vision check of the root's configuration names the vision root, its provider and the manifest's files; each file the root lacks or holds with another SHA-256 is verified below the folder given, then placed while the Runtime is stopped in one journalled operation (kind vision_place, a step vision_file per file, the replaced file kept as .old-<ms>), and checked by actingd vision check again; nothing is fetched or deleted (Workflow #453 S9; contracts/install-cli.md, The Lab's rescue module)."
+    },
+    "install_state_root_claim": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "The operation of the Lab's rescue module's state-root claim: while the Runtime is stopped (the update path's stopped rule), the live build's actingd claim-state-root of the root's configuration with the initiator as --actor, which hands the state root over to this installation and keeps every file it replaces (Workflow #453 S12; contracts/state-root-installation.md, Handing a state root over)."
     }
   }
 }

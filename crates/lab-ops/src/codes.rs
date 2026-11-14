@@ -509,6 +509,10 @@ actingcommand_contract::outcome_locations! {
         // Workflow #453 S9 (since 0.12.60): the rescue module's `vision place`, the files of the
         // configured vision root's manifest placed from a folder a person gives.
         VisionPlace => "install_vision_place",
+        // Workflow #453 S12 (since 0.12.60): the rescue module's `state-root claim`, the live
+        // build's `actingd claim-state-root` of the root's configuration while the Runtime is
+        // stopped.
+        StateRootClaim => "install_state_root_claim",
     }
 }
 
@@ -621,6 +625,10 @@ actingcommand_contract::outcome_vocabulary! {
         // or another SHA-256, or unreadable), or its copy or the placed file during the operation
         // (`path` the file).
         VisionSourceInvalid => "vision_source_invalid",
+        // Workflow #453 S12 (since 0.12.60): the rescue module's `state-root claim` got no report
+        // from the live build's `actingd claim-state-root`: it did not run, printed none, or was
+        // left running at its deadline.
+        StateRootClaimUnanswered => "state_root_claim_unanswered",
     }
 }
 
@@ -694,6 +702,10 @@ actingcommand_contract::outcome_vocabulary! {
         // Workflow #453 S7 (since 0.12.60): the rescue module's `vision check` found files of the
         // manifest or models that do not match (`count`).
         VisionIncomplete => "vision_incomplete",
+        // Workflow #453 S12 (since 0.12.60): the rescue module's `state-root claim` replaced a
+        // record of another installation, or one that could not be read: the ledger's records
+        // that carry fingerprints were made with the salt of the configuration that wrote them.
+        FingerprintsDiscontinuous => "fingerprints_discontinuous",
     }
 }
 

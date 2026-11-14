@@ -7864,6 +7864,9 @@
         },
         "vision_source_invalid": {
           "description": "A file the Lab's rescue module's vision place would place does not hold its pin, the size and SHA-256 the installed build's manifest gives it (contracts/install-cli.md, \"The Lab's rescue module\"): before anything is written, the file below the --from folder at the manifest's place is missing, of another size or of another SHA-256, or cannot be read (the OS failure as the caused_by link), or the --from folder does not resolve to a folder; path names it, and the answer's source names its place, its state and its pin. During the operation, the copy of such a file or the placed file that does not hold the pin is this refusal as the cause of install_operation_interrupted (path that copy or file): resume or undo. A file below --from the manifest does not name is never read or copied. (Workflow #453 S9, since 0.12.60)"
+        },
+        "state_root_claim_unanswered": {
+          "description": "The Lab's rescue module's state-root claim got no report from the live build's actingd claim-state-root (contracts/state-root-installation.md, \"Handing a state root over\"): it did not run (the child's failure as the caused_by link), printed no report (a build before 0.12.60 refuses the subcommand as a start's arguments: foreign_other_error with the exit code and stderr), or was still running at install.child.check_config_timeout_ms and was left running (pid and config_key). path is the state root. Whether actingd handed the state root over is then not known: run the row again once no actingd runs; a hand-over that was done answers that nothing changed. (Workflow #453 S12, since 0.12.60)"
         }
       }
     },
@@ -7983,6 +7986,9 @@
         },
         "vision_incomplete": {
           "description": "The Lab's rescue module's vision check found that the root's vision root does not hold what it must (contracts/vision-model-folders.md, \"The manifest\"): count is the manifest files whose state is not ok (missing, sha256_mismatch, unreadable) and the models, of the manifest and of the root's installed packs, each pair of model_ref and model_sha256 once, whose folder is missing, invalid or of another identity. The answer lists each; nothing was written, and placing the files is another command's. As the top of the answer, exit 0. (Workflow #453 S7, since 0.12.60)"
+        },
+        "fingerprints_discontinuous": {
+          "description": "The Lab's rescue module's state-root claim replaced a record of another installation, or one that could not be read (contracts/state-root-installation.md, \"Handing a state root over\"): the ledger's records that carry fingerprints were made with the salt of the configuration that wrote them, and the command cannot know whether this configuration's salt is the same, so a fingerprint recorded before the hand-over may not match one made after it. path is the kept old record, installation.json.old-<ms>: the one set aside now, or (fix round 1) when a record was written while the state root already held kept old records (a hand-over that was interrupted between setting the old record aside and placing the new one, or whose put-back failed), the newest of them. The hand-over is done; the ledger's records stay as they are. A note under install_command_done. (Workflow #453 S12, since 0.12.60)"
         }
       }
     },

@@ -379,6 +379,12 @@ pub(super) struct Programs {
     /// (`run_program_ending`) that exits takes on the fake clock (none by default); one that never
     /// exits takes its deadline.
     pub(super) run_ms: Cell<u64>,
+    /// Workflow #453 S12: the exit code of `actingd claim-state-root` and the line it prints
+    /// (`null`, no report, until a test sets one).
+    pub(super) claim: RefCell<(i32, Value)>,
+    /// Workflow #453 S12: the exit code and the line every check-config prints instead of the
+    /// default's, when a test sets one (none by default).
+    pub(super) check_config_line: RefCell<Option<(i32, Value)>>,
 }
 
 /// The process id of a fake program left running at its deadline.
@@ -420,6 +426,8 @@ impl FakeHost {
                 vision: RefCell::new(BTreeMap::new()),
                 standard_pack_checks: RefCell::new(BTreeMap::new()),
                 run_ms: Cell::new(0),
+                claim: RefCell::new((0, Value::Null)),
+                check_config_line: RefCell::new(None),
             },
             on_step: RefCell::new(None),
             log: RefCell::new(Vec::new()),
@@ -556,6 +564,23 @@ impl Host for FakeHost {
         }
         let head = self.programs.ledger_head.get();
         Ok(match (name.as_str(), words.first().map(String::as_str)) {
+            // Workflow #453 S12: the line the test set for every check-config.
+            ("actingcommand-actingd.exe", Some("check-config"))
+                if self.programs.check_config_line.borrow().is_some() =>
+            {
+                let (exit_code, line) = self
+                    .programs
+                    .check_config_line
+                    .borrow()
+                    .clone()
+                    .unwrap_or((0, Value::Null));
+                ran(exit_code, line)
+            }
+            // Workflow #453 S12: the line the test set.
+            ("actingcommand-actingd.exe", Some("claim-state-root")) => {
+                let (exit_code, line) = self.programs.claim.borrow().clone();
+                ran(exit_code, line)
+            }
             ("actingcommand-actingd.exe", Some("check-config"))
                 if words.iter().any(|word| word == "--install-root")
                     && self.programs.refuse_install_root.borrow().contains(&build) =>

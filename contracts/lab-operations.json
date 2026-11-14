@@ -2917,7 +2917,8 @@
       "module": "rescue",
       "params": [
         {"name": "op", "form": "positional", "type": "operation_id", "required": false, "note": "absent: the installation's state; on the command line also --op <op>, in place of the positional, or the installer's own --operation <op>"},
-        {"name": "check_rollback", "form": "switch", "type": "boolean", "required": false}
+        {"name": "check_rollback", "form": "switch", "type": "boolean", "required": false},
+        {"name": "state_root_installation", "form": "switch", "type": "boolean", "required": false, "note": "#453 S12: also answer state_root {path, installation}, the configured state root and its installation state as the live build's check-config reports it, which starts that program; off by default (no process is started); left out while an installer operation is unfinished"}
       ],
       "help": "Reads the installation's state of this root, or one installer operation's progress.",
       "output": "the installation's state, or one operation's progress",
@@ -2929,7 +2930,7 @@
       "source": ["actingctl install status"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: install status"
+      "notes": "LAB-3: install status. #453 S12 fix 1: the switch state_root_installation is the module's own, never handed to install status; without it the row starts no process and answers what install status answers; with it and no unfinished operation, also state_root from the live build's check-config --install-root <root> (contracts/install-cli.md, The Lab's rescue module)"
     },
     {
       "name": "op resume",
@@ -3382,6 +3383,25 @@
       "slice": "LAB-3",
       "status": "planned",
       "notes": "the caller passes no confirmation; the initiator is recorded (lab-two-entries.md section 5). LAB-3: the live build's actingd unlock-owner with the initiator as --actor and actingd's --confirm-resources-released, which goes with LAB-7"
+    },
+    {
+      "name": "state-root claim",
+      "module": "rescue",
+      "params": [
+        {"name": "new_identity", "form": "switch", "type": "boolean", "required": false, "note": "only when this installation's identity file cannot be read: it is set aside under a kept name and a new identity minted; refused while the identity file can be read"}
+      ],
+      "help": "Hands the state root of this root's configuration over to this installation with the live build's actingd, keeping the old record.",
+      "output": "actingd claim-state-root's report (actor, changed, identity, record, claimed_at_unix_ms, kept, kept_record) and, when a record was replaced, previous {claimed_at_unix_ms}; the caveat fingerprints_discontinuous with the kept record when one was replaced, or written beside an old record kept before",
+      "writes": true,
+      "irreversible": true,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actingd claim-state-root"],
+      "new": "#453 S12 (a state root another installation claimed, handed over to this one by a command instead of by hand)",
+      "slice": "S12",
+      "status": "planned",
+      "notes": "#453 S12: the live build's actingd claim-state-root --config <this root's configuration> --actor <initiator> (and --new-identity when given), within install.child.check_config_timeout_ms, only while the Runtime is stopped by the update path's stopped rule (owner_lock_held, runtime_running, processes_unreadable); actingd takes the owner as a start does (owner_conflict while a Runtime holds it), never opens the ledger, mints an identity only when there is none (or, with new_identity, when it cannot be read) and sets every replaced file aside as <file>.old-<ms>, deleting nothing (contracts/state-root-installation.md, Handing a state root over); install_command_done with actingd's report, previous {claimed_at_unix_ms} when a record was replaced, and the note install_caveat_noted fingerprints_discontinuous whenever a record of another installation or one that cannot be read was replaced, with that kept record as path (fix 1: also when a record was written while the state root holds an old record an earlier hand-over kept, the newest one as path); actingd's refusal is the answer as unlock's is; no report is install_command_refused with state_root_claim_unanswered. Not used on the production root until LAB-7, as every compound operation of the module"
     },
     {
       "name": "check-config",

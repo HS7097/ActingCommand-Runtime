@@ -23726,6 +23726,126 @@ sections and a test file. A vision root the row placed keeps its files and its `
 a build before this release does not read a `vision_place` journal (`resume` and `undo` of it are
 this build's).
 
+### 1.364 Slice #453 S12 (0.12.60): `state-root claim` hands a state root over to this installation (Workflow #453; the owner's answer on board #453 for a refused start (a command hands the state root over and keeps the old record) as the coordinator recorded it, not the owner's words; the coordinator's rulings 1 to 9 in the work order `rd-1114/brief-453-s12-state-root-claim.md`, read on main `e44fecb4`; the design survey `rd-1113/fresh-root-design.md` 6(c) "The way out" and the row S12 of 6(d), for the command's shape only, its identity having been replaced by S11's identity file; fix round 1, after an independent review, with the coordinator's rulings on `op status`, the caveat and the two points left open, main `3d9d25e6` merged)
+
+[state-root-installation.md](state-root-installation.md) ("Handing a state root over", and the
+passages it rewrites: the identity, the record, "The claim", "Who checks", "The installer", "When
+a start is refused", "Codes", "Interfaces") is the contract;
+[runtime-fact-store.md](runtime-fact-store.md) (`host.state_root_installation`),
+[install-cli.md](install-cli.md) ("The Lab's rescue module": `state-root claim` and `op status`'s
+member; "Outcome codes"), [lab-operations.json](lab-operations.json) (the row `state-root
+claim`) and the outcome catalog follow it. **No interface revision moves**
+([component-interfaces.md](component-interfaces.md)): a new actingd subcommand with its own report
+schema, which no older component reads; one optional member in the row of an existing runtime
+fact, whose `record_list` no reader checks; the owner journal, the identity file and the record
+keep their shapes; a rescue row, a location and two vocabulary words; a read-only member of the
+rescue module's `op status`. **No outcome code is new.** The number is the next free one on main
+`3d9d25e6`, merged in fix round 1 (§1.363 is defect #457; this section was 1.363 before);
+an integration train renumbers it.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S12-1 | `actingd claim-state-root --config <file> --actor <name> [--new-identity]`; report `actingcommand.actingd.claim-state-root.v1` `{schema_version, outcome, actor, changed, identity (read \| minted \| renewed), record (written \| unchanged \| replaced), claimed_at_unix_ms, kept, previous? {claimed_at_unix_ms}, kept_record?}` (`kept_record`: fix round 1) | actingd subcommand and report | S12 | actingd (`apps/actingd/src/state_root_claim.rs`; `crates/runtime-host/src/state_root_claim.rs`, `state_root_installation::hand_over`) | success `state_root_claimed` (existing, `path` the state root); refusals with existing codes: `invalid_arguments`, the configuration's at stage `config_load`, `state_root_installation_record_invalid`, `state_root_claim_failed`, `owner_conflict`, `owner_resource_unconfirmed`; exit by category |
+| S12-2 | `install\identity.json.old-<ms>`, `<state root>\installation.json.old-<ms>` | kept files | S12 | the command | a file set aside is never deleted and a kept name is never replaced (a hard link that fails when the name is taken, then the old name removed; without hard links a rename only while the name is free); `install leftovers` lists the identity's as kept |
+| S12-3 | `host.state_root_installation`: the optional row member `previous_claimed_at_unix_ms`; the start records the fact whenever the latest one is not of the record's claim | runtime fact member and the start's rule (ruling 5) | S12 | the next start after a hand-over | the record observed at the claim's time or one millisecond after the stored observation; S11's two cases are this rule's |
+| S12-4 | the rescue row `state-root claim` (switch `new_identity`; `writes`, `irreversible`, `runtime` `offline`) | operation table row | S12 | `crates/lab-rescue` (`rescue::state_root_claim`) | `rescue::SERVED` holds it (37 rows) and `rescue_reads::READ_HERE` its list (20 rows); the update path's stopped rule, then the live build's actingd with the initiator as `--actor`; `install_command_done` with `previous` and the caveat (`path` the kept record) when a record was replaced, and (fix round 1) when a record was written beside a kept old record |
+| S12-5 | location `install_state_root_claim`; `install_refusal` `state_root_claim_unanswered`; `install_caveat` `fingerprints_discontinuous` | outcome catalog (owner `actingctl`; vocabularies) | S12 | the row | `since` 0.12.60, pending; the index is regenerated |
+| S12-6 | `op status`'s switch `state_root_installation` (fix round 1; off by default, read by the module, `Written::Beside` in its handed constant, never handed to `install status`) and with it the member `state_root {path, installation, check_config?}` | operation table parameter and rescue answer member | S12 | `crates/lab-rescue` (`rescue::op_status`) | without the switch no process and the answer as before the slice; with it the live build's check-config with `--install-root`, except while `install status` names an unfinished operation (then the status without the member, no process); `actingctl install status` unchanged |
+
+**Settled here** (each the slice's; the coordinator may change them):
+- *The owner is taken as a start takes it* (`OwnerGuard::acquire` and its close), not as
+  `unlock-owner` takes it (which opens the journal without creating it and appends to the
+  retained epoch): the new record must name the claiming epoch "as its owner journal record spells
+  it", and a never-started state root has no journal to open. So the refusal while a Runtime holds
+  the lock is the acquire's `owner_conflict` (the survey's "existing code"), not `unlock-owner`'s
+  own `owner_unlock_daemon_active`; a previous owner that exited is released as a start releases
+  it, and the command's close leaves the next start nothing to take over, as a maintenance pass
+  does. Accepted in fix round 1; the contract says what it costs (a crashed earlier epoch taken
+  over and closed by the command, so no takeover cooldown at the next start; an exited owner
+  released with no ledger record).
+- *The actor is recorded in the command's report and the row's answer only*: the owner record has
+  no member for it, and the fact cannot carry what no file hands to the start. Accepted in fix
+  round 1; the contract says what a later reader can still find and that who did it is not
+  recorded.
+- *The comparison of ruling 5 is the claim time and the owner epoch* (one millisecond can hold two
+  claims), and the new fact is observed after the stored one, since the fact store refuses a
+  record observed no later than the one it holds (`runtime_fact_stale`), which would fail the
+  start on a clock set back.
+- *No installation root* is `state_root_claim_failed` with the state root as `path`: only an
+  installation claims. *`--new-identity` while the identity file can be read* is
+  `invalid_arguments` (ruling 3's refusal; no code says it better). *`--new-identity` with no
+  identity file* is not refused: the identity is minted as without it.
+- *A placement that fails after its file was set aside gives the set-aside file its name back*,
+  so a failure under the lock leaves the record (and the identity) where it was.
+- *The row runs actingd within `install.child.check_config_timeout_ms`*, as `unlock` does; actingd's
+  refusal is the row's answer as `unlock`'s is; no report is the new `state_root_claim_unanswered`.
+
+**The point first left open (ruling 5, the actor), settled in fix round 1.** `unlock-owner` records
+its act in the owner journal (`confirmed_closed`) and its actor in the ledger's `cli.command` fact
+(`actingd-unlock-owner.md`, step 5); the owner journal's record has no actor member and every
+reader before this build denies unknown members (`crates/ledger/src/owner_journal.rs`,
+`RuntimeOwnerRecord`), so an actor there would make a build before it refuse the journal
+(`owner_record_invalid`) after a rollback; and this command may not open the ledger (ruling 1).
+The slice records the act in the owner journal (the command's epoch, opened and closed, which the
+new record names) and gives the fact the previous claim's time, but no actor; the coordinator
+accepted that in fix round 1: the actor stays out of the journal and the fact, the record's shape
+is unchanged.
+
+**Fix round 1** (the coordinator's rulings after the independent review; main `3d9d25e6` merged):
+- *CI*: clippy's `cloned_ref_to_slice_refs` in the host gate (`[kept_name.clone()]` compared with a
+  list) is now `std::slice::from_ref`; no assertion changed.
+- *`op status` runs no actingd by default.* Before, every `op status` without `--operation` ran the
+  live build's check-config for the member, and the update path counts any actingd under the root
+  as a running Runtime (the stopped rule; the plan's running images) while a background
+  operation's answer tells its caller to poll `op status`. The member now comes only with the
+  row's switch `state_root_installation`; without it no process is started and the answer is the
+  one before the slice. With it, while `install status` names an unfinished operation, the answer
+  is the status without the member (not a refusal: the caller polling an operation keeps its
+  progress, and the answer's own `unfinished` says why), and no process is started.
+- *The caveat's new case.* A record written while the state root holds a kept old record
+  (`installation.json.old-*`, left by a crash between setting the old record aside and placing the
+  new one, or by a failed put-back) carries the caveat as well; actingd names the newest such
+  record as `kept_record` (looked for before anything is placed; a state root that cannot be listed
+  is `state_root_claim_failed`), and the row's caveat has the kept record as `path` in both cases
+  (it named the state root before).
+- *The register number* is 1.364: #457 took 1.363 on main.
+
+**What a refusal leaves** (the work order's second stop condition). Every refusal of the command
+line, the configuration, the installation root and the identity file comes before the owner is
+taken and writes nothing; `owner_conflict` and `owner_resource_unconfirmed` are refused by the
+acquire before it appends (a missing state root's folder is made first, as a start makes it). A
+refusal under the lock (an identity that became readable with the flag, or unreadable without it)
+comes before either file is set aside; the owner journal then holds the command's epoch, opened and
+closed. A failure after a set-aside puts the file back. No refusal leaves a state root without a
+record. Only a crash between a record's set-aside and the new record's placement does, and the
+command run again completes it (fix round 1: with the caveat, naming the record kept then); until
+then whichever installation's start names that state root claims it, as before S11's record
+existed.
+
+**Tests.** Host rows "#453 S12", `actingcommand-runtime-host::lib::tests::gate_453_s12` (seven
+tests, temporary state roots and installation roots with S11's fixtures, no sleep, no clock read by
+a test; a test-only stop after each step of the hand-over; fix round 1 adds the written record
+beside kept ones and the `kept_record` of every answer); apps rows "#453 S12",
+`actingcommand-lab-rescue::lib::install::gate_453_s12` (seven tests on the fake host, whose actingd
+answers `claim-state-root` and whose check-config may print a set line: two members of its
+`Programs`, added for the slice; fix round 1 adds the caveat's new case, `op status` without its
+switch (no program run, the line `install status` gives with the module's face) and with it during
+an unfinished operation). One existing test changes, keeping its name, because the requirement
+changes what it pins: `gate_434_lab5b1b::rescue_handed_rows_hand_what_they_declare` takes a
+`Written::Beside` part anywhere in a handed constant, a parameter the module reads itself and the
+builder places and writes nowhere (`op status`'s switch). No golden changes, no test leaves the gate
+map.
+
+**At deploy.** Nothing changes at a start until a state root is handed over: the start's rule
+records exactly what S11's did on every state root that was not handed over. The row `state-root
+claim`, like every compound operation of the rescue module until LAB-7 (install-cli.md, "Journals
+across versions"), is not used on the production root.
+
+**Rollback** (to a build of 0.12.60 before this slice, or below). The command is gone; a state
+root handed over keeps this installation's record, which such a build reads as its own; a build of
+0.12.60 before this slice records no fact of the new claim (it finds the old one), so the ledger's
+fact waits for a start of this slice. The kept files stay.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -23793,7 +23913,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.idle_state` (a record list: the instances the idle action closed or is closing, with their action and wake; since 0.12.25 its writer row names the start anchor, not the owner epoch (#405 N-2), and a woken instance stays in it, `woken`, until its startup package has run (#405 O-2); [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #405 IDLE-1P) | #405 IDLE-1P |
 | `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `host.capped_episodes` (a record list: the writer's start anchor, then per instance and pool with an open or waiting capped episode its episode row, consumer rows and member rows; [runtime-fact-store.md](runtime-fact-store.md); §1.299 SC1-11, C1D-1) | workbench | yes (added to `tag.workbench_patterns` by SCHED-C1d) | #428 SCHED-C1d |
-| `host.state_root_installation` (one row: the claim's time and who claimed, never the installation's number; [state-root-installation.md](state-root-installation.md); §1.358 S11-3) | workbench | yes (added to `tag.workbench_patterns` by S11) | #453 S11 |
+| `host.state_root_installation` (one row: the claim's time and who claimed, never the installation's number; since #453 S12 the optional `previous_claimed_at_unix_ms` after a hand-over, §1.364 S12-3; [state-root-installation.md](state-root-installation.md); §1.358 S11-3) | workbench | yes (added to `tag.workbench_patterns` by S11) | #453 S11 |
 | `host.start_pause_applied` (a record list: one row `{instance_id, applied_at_unix_ms}` per entry declaring `start_paused` whose first-start pause was applied; [runtime-fact-store.md](runtime-fact-store.md); [scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start"; §1.362) | workbench | yes (added to `tag.workbench_patterns` by #453 S2) | Workflow #453 S2 |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
