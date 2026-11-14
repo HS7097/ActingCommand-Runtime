@@ -69,7 +69,12 @@ pub(crate) enum StepState {
 pub(crate) struct Step {
     pub(crate) n: usize,
     pub(crate) kind: StepKind,
-    /// The path the step changes, relative to the root with `/` separators.
+    /// What the step changes: a program or installer file relative to the root with `/`
+    /// separators (`release stage` reads its own steps' back); the absolute path, in its ordinary
+    /// spelling, of a game root's item (`pack_item`) and (Workflow #453 S9) of a vision root's
+    /// file (`vision_file`), which may lie outside the root; for a step that changes no file of its
+    /// own, the part it acts on (`runtime`, or the vision root of a `vision place`'s
+    /// `post_check`).
     pub(crate) target: String,
     /// What the step is to do, by kind.
     pub(crate) intent: Value,

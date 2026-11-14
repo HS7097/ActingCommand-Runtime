@@ -28,7 +28,11 @@
 //! - **Only while stopped.** Under the writer lock, with no operation unfinished, the stopped rule
 //!   of the update path (`super::launch::refuse_running`: the state root's owner lock held
 //!   `owner_lock_held`, an actingd under the root `runtime_running`, a probe that cannot decide
-//!   `processes_unreadable`), each before anything is written.
+//!   `processes_unreadable`), each before anything is written. Then the files to place are taken
+//!   again from the vision root as it is under the lock, each compared with its pin as actingd
+//!   compares it ([`wanted_now`]): another run that placed them while this one waited for the lock
+//!   leaves none, and the answer is a complete root's, with no operation whose `undo` could set
+//!   aside what the other placed; a file found wrong only then is verified below `--from` first.
 //! - **The operation** (`kind` `vision_place`, off watchdog row 7a″'s pass list, so no Runtime
 //!   starts on a half-placed vision root): one `vision_file` step per file to place, in the
 //!   manifest's order (the file copied from `--from` to `<dst>.new-<ms>.part` and its SHA-256
@@ -186,20 +190,31 @@ pub(crate) fn row(context: &Context<'_>, params: Params<'_>) -> Exit {
         members.insert(FROM.to_owned(), json!(files::plain(&from)));
         members.insert(IGNORED.to_owned(), json!(ignored));
         if wanted.is_empty() {
-            // A complete root: nothing to place, no operation opened, nothing written.
-            members.insert("placed".to_owned(), json!([]));
-            members.insert("report".to_owned(), checked.report.clone());
-            let done = super::done(PLACE)
-                .installation_changed(false)
-                .link(CauseRelation::Related, checked.received.clone());
-            return Ok(cli_line::success(members, &done));
+            return Ok(complete(members, &checked));
         }
-        if let Some(refused) = refuse_source(&from, &wanted, members) {
+        if let Some(refused) = refuse_source(&from, &wanted, members.clone()) {
             return Ok(refused);
         }
         let _lock = WriterLock::take(&paths, loaded.settings.lock_wait_ms, PLACE)?;
         journal::refuse_unfinished(PLACE, &paths)?;
         super::launch::refuse_running(context.host, &paths, &loaded.state_root, PLACE)?;
+        // The files to place again, as the vision root is under the lock: another run that placed
+        // them while this one waited leaves none, and this run then opens no operation.
+        let now = wanted_now(&checked);
+        if now.is_empty() {
+            return Ok(complete(members, &checked));
+        }
+        let verified_before = wanted
+            .iter()
+            .map(|file| file.vision_root_path.as_str())
+            .collect::<BTreeSet<_>>();
+        let unverified = now
+            .iter()
+            .filter(|file| !verified_before.contains(file.vision_root_path.as_str()))
+            .collect::<Vec<_>>();
+        if let Some(refused) = refuse_source(&from, &unverified, members) {
+            return Ok(refused);
+        }
         let operation = open(
             context.host,
             context.initiator,
@@ -209,13 +224,43 @@ pub(crate) fn row(context: &Context<'_>, params: Params<'_>) -> Exit {
                 checked: &checked,
                 from: &from,
                 ignored,
-                wanted,
+                wanted: now.iter().collect(),
             },
         )?;
         let answer = super::update::run(operation, &loaded)?;
         Ok(super::print(crate::rescue::module_answer(context, answer)))
     };
     run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
+}
+
+/// The answer of a complete root: nothing to place, no operation opened, nothing written;
+/// `members` with `placed` empty and actingd's report as it read the root before the lock, its
+/// outcome the `related` link.
+fn complete(mut members: Map<String, Value>, checked: &Checked) -> Exit {
+    members.insert("placed".to_owned(), json!([]));
+    members.insert("report".to_owned(), checked.report.clone());
+    let done = super::done(PLACE)
+        .installation_changed(false)
+        .link(CauseRelation::Related, checked.received.clone());
+    cli_line::success(members, &done)
+}
+
+/// The manifest's files the vision root does not hold now, each compared with its pin at its
+/// place as actingd's check compares it (its size, then its SHA-256), with that state: what the
+/// operation places, taken under the writer lock.
+fn wanted_now(checked: &Checked) -> Vec<Pinned> {
+    checked
+        .files
+        .iter()
+        .filter_map(|file| {
+            let place = files::join_relative(&checked.vision_root, &file.vision_root_path);
+            let (state, _) = compare(&place, file.size, &file.sha256);
+            (state != FileState::Ok).then(|| Pinned {
+                state: state.as_str().to_owned(),
+                ..file.clone()
+            })
+        })
+        .collect()
 }
 
 /// The folder `--from` names, canonical; one that does not resolve, or is no folder, is

@@ -1208,9 +1208,10 @@ the rescue face:
   installation check or slot lock, `--install-root`, its command line, among them more than 64
   models the packs need or a model name no folder may have, its own registry), printed one
   without its lists, did not run, or was ended), its outcome or the child's failure as the cause;
-  `vision_root_unresolved` (only `vision check`; fix 2: decided by the stage actingd names, not by
-  what its refusal is not) when actingd refused at a stage, which it names only where it loads the
-  configuration (`config_load`), assembles its `vision` section (`config_assemble`) and resolves
+  `vision_root_unresolved` (of these two rows only `vision check`, and `vision place` below; fix 2:
+  decided by the stage actingd names, not by what its refusal is not) when actingd refused at a
+  stage, which it names only where it loads the configuration (`config_load`), assembles its
+  `vision` section (`config_assemble`) and resolves
   the vision root (`config_vision`): its outcome, for example `vision_root_unavailable`, as the
   cause;
   `config_unreadable` for a `standard_packs.root` that cannot be listed or a `bundle.json` whose
@@ -1232,6 +1233,15 @@ the rescue face:
     crate. A refusal of actingd at a stage is `vision_root_unresolved` (a vision root that does not
     exist yet included: actingd resolves it as a start does, so its folder must exist), any other
     failure `vision_report_unanswered`, as for `vision check`; both before anything is written.
+    **The row never creates the vision root** (the coordinator's ruling on board #453): to create
+    it, it would have to resolve the configured root itself, repeating actingd's resolution, or
+    write before it holds the writer lock; the slice that builds a fresh root creates the folder.
+    **A file in its place that cannot be read** (`unreadable`) is treated as one that differs (the
+    same ruling): renamed aside under its kept name `<dst>.old-<ms>` and replaced. When that rename
+    itself fails (another process holds the file), the step fails after the earlier steps wrote:
+    the command ends `install_operation_interrupted` with the OS failure as its cause, and the
+    operation is unfinished, so `op resume` (once the file is free) finishes it and `undo` reverses
+    what it placed.
   - **`--from`** is laid out as a vision root: each file at its `vision_root_path` below it. Before
     anything is written, each file to place is read from it and compared with its pin, its size
     and then its SHA-256: one missing, of another size or another SHA-256, or unreadable refuses the
@@ -1244,7 +1254,11 @@ the rescue face:
   - **While stopped.** Then, under the writer lock, with no operation unfinished, the stopped rule
     of the update path (as `place` applies it while no Runtime answers: `owner_lock_held`
     (`path`), `runtime_running` (`path`, `pid`), `processes_unreadable`), before anything is
-    written.
+    written. **The files to place are taken again under the lock**, each manifest file of the
+    vision root compared with its pin as actingd compares it (its size, then its SHA-256): another
+    run that placed them while this one waited for the lock leaves none, and the answer is then a
+    complete root's (no operation opened, so no `undo` of this run could set aside what the other
+    placed); a file found wrong only then is verified below `--from` first, as above.
   - **The operation** (kind `vision_place`; off row 7a″'s pass list, so the watchdog stands aside
     while it is unfinished): its inputs `commit`, `provider`, `vision_root`, `from`, `ignored` and
     `config_sha256`; no plan, no S0, no guards; one `vision_file` step per file to place, in the
@@ -1260,7 +1274,8 @@ the rescue face:
     `install_operation_interrupted`; a copy or a placed file that does not hold its pin is its
     cause as `vision_source_invalid` (`path` that file).
   - **A complete root** answers `install_command_done` with `installation_changed` false,
-    `placed` `[]` and actingd's `report`, and opens no operation.
+    `placed` `[]` and actingd's `report` (as actingd read the root before the lock), and opens no
+    operation.
   - **`resume` and `undo`** (`op resume`, `undo`) take the writer lock and apply the stopped rule
     again before anything is moved. A crash between the two renames of a step leaves the file of
     before renamed `.old-<ms>` and the part waiting: `resume` renames the part in, `undo` renames
@@ -2853,9 +2868,9 @@ the fragment registers, names the command.
   `processes_unreadable`, no longer `runtime_not_running`; no code, location, key or word is new.
 - **Workflow #453 S7** (since 0.12.60; "The Lab's rescue module", `vision manifest` and `vision
   check`): the locations `install_vision_manifest` and `install_vision_check`; `install_refusal`
-  `vision_report_unanswered` (fix 1: either row; actingd gave no usable report: its outcome or
+  `vision_report_unanswered` (fix 1: either row, and since S9 `vision place`; actingd gave no usable report: its outcome or
   the child's failure as the cause, or `timeout_ms` for a child ended at its bound or at the
-  `vision check` row's limit) and `vision_root_unresolved` (only `vision check`: actingd refused
+  `vision check` row's limit) and `vision_root_unresolved` (`vision check`, and since S9 `vision place`: actingd refused
   at a stage where it loads, assembles or resolves the vision configuration, `config_load`,
   `config_assemble` or `config_vision` (fix 2), its outcome as the cause), and `install_caveat`
   `vision_incomplete` (`count`), which only these rows answer; the existing `config_unreadable`

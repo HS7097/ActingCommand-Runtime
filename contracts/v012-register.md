@@ -22998,7 +22998,13 @@ stopped rule (`launch::refuse_running`, as `place` applies it without a Runtime,
 state root's owner lock held `owner_lock_held`, an `actingcommand-actingd.exe` under the root
 `runtime_running` (`path`, `pid`), a probe that cannot decide `processes_unreadable`; each before
 anything is written. No status read comes first (the rescue module's `running()` does not see a
-Runtime that is starting).
+Runtime that is starting). **Closing round: the files to place are taken again under the lock**
+(`vision::wanted_now`), each manifest file of the vision root compared with its pin as actingd
+compares it, its size and then its SHA-256: a run that read the root before another run placed the
+files, and then waited for the lock, finds none and answers as a complete root, opening no
+operation, so no `undo` of it can set aside what the other placed (before, its steps found the
+files right and recorded them done); a file found wrong only under the lock is verified below
+`--from` first.
 
 **What is written** (ruling 6). One `vision_place` operation: per file, in the manifest's order,
 `vision_file`: the step started; a file in its place that holds the pin is the step done (a
@@ -23017,8 +23023,16 @@ the operation (as Workflow #454 closes the post-start checks), `next` naming `un
 `vision_root`, `from`, `ignored`, `placed` (each step's evidence), `checks` and `next` (`undo`).
 Files the manifest does not name and every other folder under `models\` are never touched; nothing
 is deleted. **A complete root** (ruling 7): `install_command_done`, `installation_changed` false,
-`placed` `[]`, actingd's `report` and its outcome as the `related` link; no lock, no operation,
-nothing written.
+`placed` `[]`, actingd's `report` and its outcome as the `related` link; no operation, nothing
+written. **The coordinator's answers to the two open points** (closing round; both as built, now
+said in [install-cli.md](install-cli.md), `vision place`, and
+[vision-model-folders.md](vision-model-folders.md)): the row never creates the vision root (it
+would have to repeat actingd's resolution of the root, or write before it holds the writer lock;
+the slice that builds a fresh root creates the folder), so a root that does not exist yet is
+`vision_root_unresolved`; and a file in its place that cannot be read is treated as one that
+differs, renamed aside under its kept name and replaced, and when that rename itself fails the
+operation is interrupted, unfinished, so `resume` finishes it once the file is free and `undo`
+reverses what it placed.
 
 **Resume and undo.** `op resume` (`install resume`) and `undo` of a `vision_place` take the writer
 lock and apply the stopped rule again before any step runs (`update::resume`, `undo::undo`, as for a
@@ -23035,7 +23049,12 @@ through): `crates/watchdog/src/install_state.rs` (the kind), `install/state.rs` 
 `install/journal.rs` (the step), `install/update.rs` (the runner's step list, `resume`'s stopped rule,
 `live_changes`), `install/deploy.rs` (the step's dispatch, the post-check, the finished answer),
 `install/undo.rs` (the stopped rule and the reversal), `install/mod.rs` (`resume`), `rescue.rs` and
-`rescue_reads.rs` (the row), `crates/lab-ops/src/codes.rs` (the location and the token). The
+`rescue_reads.rs` (the row), `crates/lab-ops/src/codes.rs` (the location and the token); closing
+round, comments only: `install/host.rs` (`run_program_ending`'s rows name `vision place`) and
+`install/journal.rs` (a step's `target`: this slice keeps the absolute path, as `pack_item`
+writes a game root's, since a vision root may lie outside the root; the comment now says what the
+journal holds), and [component-interfaces.md](component-interfaces.md) names `vision_place`
+among the kinds a UI of `install-cli` 1 never starts. The
 manifest, the check, the script that downloads, `standard-pack check`, the Runtime's reading of a
 vision root, `actingctl install`'s revision-1 face (it resumes and undoes the new kind as it does
 `pack_place`, nothing else), `instance add`, `config replace` and the row `new` are unchanged.
@@ -23076,7 +23095,19 @@ row 7a″ standing aside, `op resume` done, the tree of an uninterrupted run but
 milliseconds), `s9_undo_sets_the_placed_files_aside_and_puts_the_replaced_file_back` (the vision
 root as before, the two placed files kept as `.rolledback-<ms2>`, nothing deleted) and
 `s9_another_model_folder_and_an_unnamed_file_are_untouched` (the root's own byte for byte,
-`--from`'s three not copied, `ignored` 3). The three gates that hold the operation table equal to
+`--from`'s three not copied, `ignored` 3). Closing round, after the independent review (the
+coordinator's message of 11-14): `s9_undo_after_a_crash_between_the_two_renames_puts_the_old_file_back`
+(the replacing step stopped with its place empty: `undo` renames the old file back, sets the part
+aside as `.abandoned-<ms2>` and the file step 1 placed as `.rolledback-<ms2>`, no `.old-` name
+left, nothing unfinished),
+`s9_a_failed_check_after_the_placement_ends_post_check_failed_with_the_files_placed` (the check
+after the placement finds the model of another identity: `post_check_failed`, `count` 1, the
+operation's id, the row `vision_check` failed with the model in `models_unmatched`, `next` its
+`undo`; the files placed, every step `done`, the journal's result recorded, no `current.json`) and
+`s9_a_file_the_report_lists_unpinned_refuses_and_nothing_is_copied` (a license file listed
+without a pin: `vision_report_unanswered` caused by `foreign_data_error`, the vision root and the
+installer folder unchanged, no journal; ruling 8's line); the test's `Host` can report a model of
+another identity and a file without a pin. The three gates that hold the operation table equal to
 the code (`rescue_read_here_rows_read_what_they_declare`, `every_table_driven_row_has_one_list`,
 `mcp_served_and_refused_partition`) cover the row as it comes, unchanged. No test is adapted,
 removed or renamed.

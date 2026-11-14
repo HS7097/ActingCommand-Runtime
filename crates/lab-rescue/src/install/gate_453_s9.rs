@@ -36,6 +36,19 @@
 // - `s9_another_model_folder_and_an_unnamed_file_are_untouched`: another folder under `models\`
 //   and a file the manifest does not name, in the vision root and (with other bytes) below
 //   `--from`: the vision root's own byte for byte, nothing of `--from`'s copied, `ignored` 3.
+// The closing round after the independent review (coordinator's message of 11-14):
+// - `s9_undo_after_a_crash_between_the_two_renames_puts_the_old_file_back`: the replacing step
+//   stopped with its file renamed `.old-<ms>` and its part waiting; `undo` renames the old file
+//   back, sets the part aside as `.abandoned-<ms2>` and the file placed before as
+//   `.rolledback-<ms2>`, deleting nothing;
+// - `s9_a_failed_check_after_the_placement_ends_post_check_failed_with_the_files_placed`: the
+//   check after the placement finds the manifest's model of another identity: the command ends
+//   `post_check_failed` (`count` 1) with the operation's id and `undo` as its next step, the files
+//   placed, the step closed with what it read, the operation ended, nothing unfinished;
+// - `s9_a_file_the_report_lists_unpinned_refuses_and_nothing_is_copied`: a report that lists a
+//   license file without a pin refuses `vision_report_unanswered`, caused by
+//   `foreign_data_error`, before anything is written: the vision root and the installer folder as
+//   before, no journal (the work order's ruling 8).
 // The machine is the fake host of `fixture.rs` seen through [`Machine`], whose live actingd's
 // `vision check` answers from the vision root on disk against an injected pin table of made-up
 // files ([`PINS`]), comparing each by its size and then its bytes as actingd's own check does: no
@@ -110,11 +123,15 @@ const REC: usize = 2;
 const MODEL: &str = "neutral.ocr";
 
 /// The fake host of `fixture.rs`, but for the live build's `actingd vision check`, which answers
-/// from the vision root on disk against [`PINS`]; how many times it ran.
+/// from the vision root on disk against [`PINS`]; how many times it ran. Its report can also say
+/// that the manifest's model folder is of another identity (`identity_differs`), and list one file
+/// of [`PINS`] without a pin (`unpinned`, its index).
 struct Machine {
     fake: FakeHost,
     vision_root: PathBuf,
     checks: Cell<usize>,
+    identity_differs: Cell<bool>,
+    unpinned: Cell<Option<usize>>,
 }
 
 /// The state of `pin` at `at`, as actingd's check states it: its size first, then its bytes.
@@ -152,23 +169,31 @@ impl Machine {
     fn check_line(&self) -> Value {
         let files = PINS
             .iter()
-            .map(|pin| {
+            .enumerate()
+            .map(|(index, pin)| {
+                let pinned = self.unpinned.get() != Some(index);
+                let (size, sha256) = if pinned {
+                    (json!(pin.bytes.len()), json!(sha256_hex(pin.bytes)))
+                } else {
+                    (Value::Null, Value::Null)
+                };
                 json!({
                     "vision_root_path": pin.path,
-                    "size": pin.bytes.len(),
-                    "sha256": sha256_hex(pin.bytes),
+                    "size": size,
+                    "sha256": sha256,
                     "component": "neutral-component",
                     "archive_path": null,
                     "license": pin.license,
-                    "pinned": true,
+                    "pinned": pinned,
                     "state": state_of(&below(&self.vision_root, pin.path), pin),
                 })
             })
             .collect::<Vec<_>>();
-        let model_ok = PINS
-            .iter()
-            .filter(|pin| pin.path.starts_with("models/"))
-            .all(|pin| state_of(&below(&self.vision_root, pin.path), pin) == "ok");
+        let model_ok = !self.identity_differs.get()
+            && PINS
+                .iter()
+                .filter(|pin| pin.path.starts_with("models/"))
+                .all(|pin| state_of(&below(&self.vision_root, pin.path), pin) == "ok");
         let identity = "a".repeat(64);
         let found = if model_ok {
             Value::from(identity.clone())
@@ -347,6 +372,8 @@ fn prepared(name: &str) -> Prepared {
             fake,
             vision_root: vision.clone(),
             checks: Cell::new(0),
+            identity_differs: Cell::new(false),
+            unpinned: Cell::new(None),
         },
         temp,
         root,
@@ -934,4 +961,197 @@ fn s9_another_model_folder_and_an_unnamed_file_are_untouched() {
     let mut expected = vision_before;
     expected.extend(pinned_tree());
     assert_eq!(tree(&prepared.vision), expected);
+}
+
+/// The outcome's links, each `(relation, code)`.
+fn links(line: &Value) -> Vec<(String, String)> {
+    line["outcome"]["causes"]
+        .as_array()
+        .map(|causes| {
+            causes
+                .iter()
+                .map(|cause| {
+                    (
+                        cause["relation"].as_str().unwrap_or_default().to_owned(),
+                        cause["code"].as_str().unwrap_or_default().to_owned(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// Closing round: a vision root that lacks the dictionary and holds another recognizer, stopped
+// between the two renames of step 2 (the old recognizer renamed `.old-<ms>`, its place empty, the
+// part waiting). `undo` of the unfinished operation renames the old recognizer back into its place,
+// sets the waiting part aside as `rec.onnx.abandoned-<ms2>` and the dictionary step 1 placed as
+// `keys.txt.rolledback-<ms2>`: the vision root is as before but for those two, nothing is deleted,
+// no `.old-` name is left and nothing is unfinished.
+#[test]
+fn s9_undo_after_a_crash_between_the_two_renames_puts_the_old_file_back() {
+    let (prepared, _) = half_placed("between-undo");
+    let vision_before = tree(&prepared.vision);
+    prepared.machine.fake.crash_between_renames.set(Some(2));
+    let before = journals(&prepared.root);
+    let (interrupted, exit) = vision_place(&prepared, &prepared.from);
+    assert_eq!(exit, 2, "{interrupted}");
+    assert_eq!(
+        top_code(&interrupted),
+        "install_operation_interrupted",
+        "{interrupted}"
+    );
+    let (operation_id, _) = new_journal(&prepared.root, &before);
+    assert!(
+        !below(&prepared.vision, PINS[REC].path).exists(),
+        "stopped between the renames: the recognizer's place is empty"
+    );
+
+    let (undone, exit) = rescue_line(&prepared, "undo", json!({"op": operation_id}));
+
+    assert_eq!(exit, 0, "{undone}");
+    assert_eq!(top_code(&undone), "install_command_done", "{undone}");
+    assert_eq!(top_value(&undone, "operation"), "install_undo");
+    let after = tree(&prepared.vision);
+    let set_aside = |marker: &str| {
+        after
+            .iter()
+            .filter(|(path, _)| path.contains(marker))
+            .map(|(path, bytes)| {
+                (
+                    path.split(marker).next().unwrap_or_default().to_owned(),
+                    bytes.clone(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let restored = after
+        .iter()
+        .filter(|(path, _)| !path.contains(".rolledback-") && !path.contains(".abandoned-"))
+        .map(|(path, bytes)| (path.clone(), bytes.clone()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(restored, vision_before);
+    assert_eq!(
+        set_aside(".rolledback-"),
+        BTreeMap::from([(PINS[KEYS].path.to_owned(), PINS[KEYS].bytes.to_vec())])
+    );
+    assert_eq!(
+        set_aside(".abandoned-"),
+        BTreeMap::from([(PINS[REC].path.to_owned(), PINS[REC].bytes.to_vec())])
+    );
+    assert!(
+        after.keys().all(|path| !path.contains(".old-")),
+        "{:?}",
+        after.keys()
+    );
+    assert_eq!(after.len(), vision_before.len() + 2, "{:?}", after.keys());
+    assert_eq!(super::unfinished_operation(&prepared.root), None);
+}
+
+// Closing round: an empty vision root, every file placed, and the check after the placement finds
+// the manifest's model folder of another identity. The command ends `post_check_failed` (`count`
+// 1, the operation's id), its answer's checks failing the row `vision_check` with the model in
+// `models_unmatched` and no file `not_ok`, and `next` naming the operation's `undo`. What is left:
+// the files placed, the operation ended (its result recorded, its `post_check` step closed with
+// what it read), no `current.json`, so nothing is unfinished.
+#[test]
+fn s9_a_failed_check_after_the_placement_ends_post_check_failed_with_the_files_placed() {
+    let prepared = prepared("failed-check");
+    prepared.machine.identity_differs.set(true);
+    let vision_before = tree(&prepared.vision);
+    let before = journals(&prepared.root);
+
+    let (refused, exit) = vision_place(&prepared, &prepared.from);
+
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(top_code(&refused), "install_command_refused", "{refused}");
+    assert_eq!(top_value(&refused, "operation"), "install_vision_place");
+    assert_eq!(
+        top_value(&refused, "install_refusal"),
+        "post_check_failed",
+        "{refused}"
+    );
+    assert_eq!(top_value(&refused, "count"), &json!(1), "{refused}");
+    let (operation_id, journal) = new_journal(&prepared.root, &before);
+    assert_eq!(
+        top_value(&refused, "install_operation_id"),
+        operation_id.as_str()
+    );
+    assert_eq!(
+        refused["checks"]["failed"],
+        json!(["vision_check"]),
+        "{refused}"
+    );
+    let row = &refused["checks"]["checks"][0];
+    assert_eq!(row["result"], "fail", "{row}");
+    assert_eq!(row["values"]["models_unmatched"], json!([MODEL]), "{row}");
+    assert_eq!(row["values"]["not_ok"], json!([]), "{row}");
+    assert_eq!(
+        refused["next"],
+        json!({"undo": ["undo", operation_id]}),
+        "{refused}"
+    );
+
+    let mut expected = vision_before;
+    expected.extend(pinned_tree());
+    assert_eq!(tree(&prepared.vision), expected);
+    assert!(journal["finished_at_unix_ms"].is_u64(), "{journal}");
+    assert_eq!(
+        journal["result"]["code"], "install_command_refused",
+        "{journal}"
+    );
+    let steps = journal["steps"].as_array().expect("the steps");
+    assert_eq!(steps.len(), PINS.len() + 1);
+    assert!(
+        steps.iter().all(|step| step["state"] == "done"),
+        "{journal}"
+    );
+    let check = steps.last().expect("the post_check step");
+    assert_eq!(check["kind"], "post_check");
+    assert_eq!(
+        check["evidence"]["failed"],
+        json!(["vision_check"]),
+        "{check}"
+    );
+    assert!(!prepared.root.join("install").join("current.json").exists());
+    assert_eq!(super::unfinished_operation(&prepared.root), None);
+    assert_eq!(prepared.machine.checks.get(), 2);
+}
+
+// Closing round (the work order's ruling 8): a report that lists the ONNX Runtime license file
+// without a pin (`pinned` false, no size, no SHA-256). The command refuses
+// `vision_report_unanswered`, caused by `foreign_data_error`, before anything is written: actingd's
+// check ran once, the vision root and the installer folder are as before, no journal, no
+// `current.json`, and nothing of `--from` was copied.
+#[test]
+fn s9_a_file_the_report_lists_unpinned_refuses_and_nothing_is_copied() {
+    let prepared = prepared("unpinned");
+    let license = PINS
+        .iter()
+        .position(|pin| pin.license)
+        .expect("a license file");
+    prepared.machine.unpinned.set(Some(license));
+    let vision_before = tree(&prepared.vision);
+    let install_before = tree(&prepared.root.join("install"));
+    let before = journals(&prepared.root);
+
+    let (refused, exit) = vision_place(&prepared, &prepared.from);
+
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(top_code(&refused), "install_command_refused", "{refused}");
+    assert_eq!(top_value(&refused, "operation"), "install_vision_place");
+    assert_eq!(
+        top_value(&refused, "install_refusal"),
+        "vision_report_unanswered",
+        "{refused}"
+    );
+    assert_eq!(
+        links(&refused),
+        [("caused_by".to_owned(), "foreign_data_error".to_owned())],
+        "{refused}"
+    );
+    assert_eq!(prepared.machine.checks.get(), 1);
+    assert_eq!(tree(&prepared.vision), vision_before);
+    assert_eq!(tree(&prepared.root.join("install")), install_before);
+    assert_eq!(journals(&prepared.root), before);
+    assert!(!prepared.root.join("install").join("current.json").exists());
 }

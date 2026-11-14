@@ -196,9 +196,10 @@ address, and `actingctl install` has no such command.
   (above) resolves the vision root and the provider and states each file: every file whose state
   is not `ok` is placed. A `directml` manifest holds every file of the `cpu` one, so a
   configuration that may fall back to the CPU (`gpu_fallback` `cpu`, "Fallback to the CPU" below)
-  is given what both need. The vision root must exist (it is resolved as a start resolves it); a
-  folder of it that the manifest does not name, and every other folder under `models\`, is never
-  touched.
+  is given what both need. The vision root must exist (it is resolved as a start resolves it), and
+  the row never creates it: it would have to repeat that resolution or write before it holds the
+  installer's writer lock, so the setup of a fresh root creates the folder. A file the manifest
+  does not name, and every other folder under `models\`, is never touched.
 - **The folder given** is laid out as a vision root: each file at its `vision_root_path` below it.
   Each file to place is read there and compared with its pin, its size first and then its
   SHA-256, before anything is written; one that is missing or differs refuses the whole command.
@@ -209,8 +210,10 @@ address, and `actingctl install` has no such command.
 - **When.** Only while the Runtime is stopped (a model file that changes under a running daemon is
   retired until restart, "Startup and first use"; a loaded library cannot be replaced), under the
   installer's writer lock, in one journalled operation that the watchdog stands aside for until it
-  ends. A file of another SHA-256 in its place is replaced, and kept beside it as
-  `<file>.old-<ms>`; nothing is deleted, and `undo` puts it back.
+  ends. A file of another SHA-256 in its place, or one that cannot be read, is replaced, and kept
+  beside it as `<file>.old-<ms>`; nothing is deleted, and `undo` puts it back. A file that cannot
+  even be renamed aside interrupts the operation, which `resume` finishes once the file is free
+  and `undo` reverses.
 - **After.** The same `actingd vision check` again: every manifest file `ok` and every manifest
   model's identity matching, else the command reports that check failed and names its `undo`.
 
