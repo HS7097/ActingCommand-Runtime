@@ -24478,7 +24478,8 @@ the page graph's `finish_success_with_key`, with no run state machine. The recor
 `select_retry` (any of `retryable`, `max_attempts`, `retry_interval_ms`, as `application_retry`),
 `expect_identity` (an `expect_identity` whose `choice_of` names a select step) and
 `select_on_empty_terminal` (the one keyed-terminal rule, `keyed_terminal_holds`, over the
-`no_designated_effect` mappings); `any_requires_application` covers a select step; `terminal_page`
+`no_designated_effect` mappings) and (fix round 1) `select_on_empty_target` (the `on_empty` page
+is not the task's target page); `any_requires_application` covers a select step; `terminal_page`
 admits the page of a select step that declares `on_empty`. A package with such a step stays no
 prerequisite and no return-home package (`select_on_empty`, unchanged).
 
@@ -24496,29 +24497,67 @@ derives from that `StepFinished`.
 compute the same values (the effect match, the window `step_timeout`, the boxed frame of
 `LinearStepEnd::Reached`, the click's tail moved into `linear_send_input` in its order).
 
-**Interface.** No revision moves: the new reasons are detail values of an existing code, the
-select step's members are the `package` members they were, and no record, member or configuration
-key is added ([component-interfaces.md](component-interfaces.md): an admission rule with no shape
-change, as #411 B12-4 admitted `input_recheck` under `linear_steps`). A build before this one
-refuses such a package with `reason=operation_effect`, loudly, before `PackageAdmitted`.
+**Interface: `package` 13** (the coordinator's ruling in fix round 1, after the review found two
+precedents that contradict each other: revision 6 rose for a linear task's `wait_page`, which older
+builds refuse only at admission, and #411 B12-4 did not rise for `input_recheck`). By
+[component-interfaces.md](component-interfaces.md) ("What a range means": a bundle's maximum is
+the revision its packs need), a `linear_steps` task with a select step needs `package` 13: every
+Runtime before this slice refuses such a package at admission (`reason=operation_effect`, before
+`PackageAdmitted`), so an installer must refuse to place it on such an installation instead of
+every run failing. The Runtime declares `package` [3, 13] (`distribution/windows/component-interfaces.json`;
+the architecture pin `the_runtime_declares_each_v0120_interface_revision_once`; the contract's row
+13). A pack without a select step under `linear_steps` keeps its revision; a bundle whose packs
+declare one declares [13, 13], which the `package` edge of an earlier installer (its range
+[3, 12]) refuses in the plan, before the hold and any write. The new reasons are detail values of
+an existing code; no record, member, code or configuration key is added, and `ledger`,
+`runtime-client`, `actingd-config` and `runtime-outcomes` do not move.
+
+**Fix round 1** (the coordinator's work order `rd-1114/brief-1720-fix1.md`, after an independent
+review and the first CI run).
+- *#1715's fix round 2 merged.* `linear.rs` is #1715's head `4d82081d` with this slice's additions
+  put back: the select branch of `run_linear_step`, `LinearStepEnd` and the boxed returns of the
+  gate branch, the empty end in `run_linear_steps` (before the restart segment's close), the
+  admission rules, `linear_select_input` and `linear_send_input`. A select step declares no retry,
+  so its one attempt is its last: where its arrival fails with `page_confirmation_failed`, #1715's
+  `linear_closing` runs exactly as for a click step's last attempt, and only a screen unknown and
+  still for the whole closing bound ends `contained_task_linear_unrecorded_screen`; nothing of
+  #1715's functions changed.
+- *The `on_empty` page is not the target page* (`select_on_empty_target`): otherwise the page's one
+  mapping is the `on_empty` key's, and the host, which keys a run by the page it finished on, would
+  record a run that reached the target as one that found nothing, without an error.
+- *`package` 13*, above.
+- *Texts*: [linear-steps.md](linear-steps.md) "Select steps" (the closing decision after the tap)
+  and "Tools" (a first select step's decision offline; an empty first step reports
+  `offline_simulation_executed_step_invariant`, as a page-graph task's does), "Older builds".
+- *Lint*: three `.err().expect()` of the first CI run became `.expect_err()`.
 
 Tests: kernel `gate_463_k1.rs` (exec gate rows "#463 K1"): admission of a fixed-slots select with
 `on_empty` and of a select over a scan; each refusal with its reason, the `input_recheck` refusal,
-the prerequisite and return-home refusal; a selected card tapped once after its confirmation and
-the next step run; an empty end Completed on the list with its key; an unreadable card
+the prerequisite and return-home refusal; (fix round 1) an `on_empty` page that is the target page
+(`select_on_empty_target`); a selected card tapped once after its confirmation and the next step
+run; an empty end Completed on the list with its key; an unreadable card
 (`selection_result_blocked`); `insufficient` and `ambiguous` (`selection_not_selected`); a changed
 confirmation frame (`selection_projection_mismatch`); a selection sampling timeout observed again
-without an input; a settled unknown screen after the select tap (U1's code). Host `gate_463_k1.rs`
-(host gate row "#463 K1"): a direct run that ends empty gets its `on_empty` key from the host's
-scheduling disposition. No existing test is adapted, no golden changes and no test leaves the gate
-map. Not tested here: a select over a scan in a run (the kernel's tests have no scan-capable device
-fixture; the scan's own runs are `gate_308_l4b`'s, through a fake source).
+without an input; an unknown still screen after the select tap (U1's code; adapted in fix round 1
+to #1715's closing decision, which observes to its bound: it also pins the arrival's timing and the
+closing decision's 101 frames after the arrival's 21); (fix round 1) with an action gap, the
+decision on the fresh frame after the gap; the sampling deadline passed before the press, observed
+again with a retry and `recognition_sample_deadline_exceeded` without one; a select over a scan
+run on the SEL-L6b list of six cards, which fits one screen, on a device that commits its frames
+as the host does (the fixtures of `gate_308_l3`'s kernel path and `gate_308_l6b`, its steps widened
+to the admission's static checks). Host `gate_463_k1.rs` (host gate row "#463 K1"): a direct run
+that ends empty gets its `on_empty` key from the host's scheduling disposition. The architecture
+pin holds `package` [3, 13]. No golden changes and no test leaves the gate map.
 
 **At deploy.** Nothing installed changes: no installed `linear_steps` package declares a select
-step (an older build refused one). The recording side that generates them is a later slice.
+step (an older build refused one). The Runtime declares `package` [3, 13]: a bundle that declares
+13 is placed only by this build's installer or a later one. The recording side that generates
+such packages is a later slice.
 
 **Rollback** (below 0.12.60). No record shape changes; a build below refuses a linear package with
-a select step at admission (`reason=operation_effect`), before any lease.
+a select step at admission (`reason=operation_effect`), before any lease, and its installer refuses
+a bundle that declares `package` 13 through its `package` edge. A rollback stays open while no root
+is placed from such a bundle.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

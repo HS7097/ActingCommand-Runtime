@@ -1054,6 +1054,12 @@ impl TaskProgram {
             // here: by the one keyed-terminal rule, exactly one mapping lists the step's page,
             // and its key is the step's `on_empty` key. The task has no designated effect.
             for (page, key, operation) in empty_ends {
+                // K1 fix round 1: nor is that page the target page. Its one mapping would be the
+                // `on_empty` key's, and the host, which keys a run by the page it finished on,
+                // would record a run that reached the target as one that found nothing.
+                if page == plan.target {
+                    return Err(invalid("select_on_empty_target", Some(operation)));
+                }
                 if !keyed_terminal_holds(
                     declaration,
                     SchedulingEffectCondition::NoDesignatedEffect,

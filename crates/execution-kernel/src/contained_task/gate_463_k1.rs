@@ -26,9 +26,9 @@
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
 use actingcommand_contract::{
-    InstanceFactContext, InstanceFactSnapshot, MaintenanceUse, TaskSelectionBlocking,
-    TaskSelectionConfirmation, TaskSelectionOutcome, TaskSelectionRecord,
-    TaskSelectionUnknownCheck, TaskSelectionUpperBound,
+    IdentifierIssuer, InputFrameReference, InstanceFactContext, InstanceFactSnapshot,
+    MaintenanceUse, TaskSelectionBlocking, TaskSelectionConfirmation, TaskSelectionOutcome,
+    TaskSelectionRecord, TaskSelectionUnknownCheck, TaskSelectionUpperBound,
 };
 use actingcommand_device::CaptureBackendName;
 use actingcommand_recognition_pack::{
@@ -438,17 +438,46 @@ fn linear_admission(control: Value, task: Value) -> Result<(), ContainedTaskErro
 }
 
 // The device of the runs: the kernel's scripted runtime, with the instance facts and instant a
-// select step asks for. With `jump`, the first decision record moves its clock that far.
+// select step asks for. With `jump`, the first decision record moves its clock that far; with
+// `draw_jump`, the first draw of a step's action seed (the draw of a tap, after its decision)
+// does. With `committed`, it commits every frame it captures, each with a frame reference of its
+// own, as the host does (HS-4's `gate_hs4`), so a select over a scan can bind its confirmation
+// frame.
 struct Device {
     script: ScriptedRuntime,
     jump: Option<Duration>,
+    draw_jump: Option<Duration>,
+    committed: Option<CommittedFrames>,
+}
+
+// The frame references a committing device minted, in capture order.
+struct CommittedFrames {
+    ids: IdentifierIssuer,
+    captured: Vec<InputFrameReference>,
 }
 
 impl Device {
     fn new(screens: Vec<Vec<ScriptedFrame>>) -> Self {
+        Self::on(ScriptedRuntime::new(screens))
+    }
+
+    fn on(script: ScriptedRuntime) -> Self {
         Self {
-            script: ScriptedRuntime::new(screens),
+            script,
             jump: None,
+            draw_jump: None,
+            committed: None,
+        }
+    }
+
+    // The same device, committing every frame it captures.
+    fn committing(screens: Vec<Vec<ScriptedFrame>>) -> Self {
+        Self {
+            committed: Some(CommittedFrames {
+                ids: IdentifierIssuer::new().expect("identifier issuer"),
+                captured: Vec::new(),
+            }),
+            ..Self::new(screens)
         }
     }
 
@@ -456,8 +485,17 @@ impl Device {
     // record moves its clock past the step's window.
     fn jumping_with_retries(screens: Vec<Vec<ScriptedFrame>>, retries: u32) -> Self {
         Self {
-            script: ScriptedRuntime::new(screens).with_sample_timeout_retries(retries),
             jump: Some(PAST_WINDOW),
+            ..Self::on(ScriptedRuntime::new(screens).with_sample_timeout_retries(retries))
+        }
+    }
+
+    // The same device, giving each step `retries` observe-only retries, whose first draw of an
+    // action seed moves its clock past the step's window.
+    fn jumping_at_the_draw(screens: Vec<Vec<ScriptedFrame>>, retries: u32) -> Self {
+        Self {
+            draw_jump: Some(PAST_WINDOW),
+            ..Self::on(ScriptedRuntime::new(screens).with_sample_timeout_retries(retries))
         }
     }
 
@@ -541,7 +579,33 @@ impl ContainedTaskRuntime for Device {
     type Error = &'static str;
 
     fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
-        self.script.capture()
+        let mut observed = self.script.capture()?;
+        if let Some(committed) = &mut self.committed {
+            let frame_id = *committed
+                .ids
+                .mint_frame_id()
+                .map_err(|_| "a frame id")?
+                .transport();
+            let reference = InputFrameReference {
+                frame_id,
+                width: observed.frame.width,
+                height: observed.frame.height,
+            };
+            observed.input_reference = Some(reference);
+            committed.captured.push(reference);
+        }
+        Ok(observed)
+    }
+
+    fn committed_input_frame(
+        &mut self,
+        reference: InputFrameReference,
+    ) -> Result<Option<InputFrameContext>, Self::Error> {
+        Ok(self
+            .committed
+            .as_ref()
+            .filter(|committed| committed.captured.contains(&reference))
+            .map(|_| InputFrameContext::for_test(reference)))
     }
 
     fn input(
@@ -571,6 +635,17 @@ impl ContainedTaskRuntime for Device {
 
     fn step_action_gap(&mut self) -> Result<Duration, Self::Error> {
         self.script.step_action_gap()
+    }
+
+    fn action_seed(
+        &mut self,
+        _step_index: u32,
+        _operation_label: &str,
+    ) -> Result<Option<u64>, Self::Error> {
+        if let Some(jump) = self.draw_jump.take() {
+            self.script.pause(jump);
+        }
+        Ok(None)
     }
 
     fn monotonic_now(&mut self) -> Instant {
@@ -751,8 +826,7 @@ fn k1_linear_admission_refuses_a_select_step_by_each_rule_with_its_reason() {
         .expect("mappings")
         .push(mapping(NOT_FOUND, "list"));
     let error = linear_admission(control(3), unmapped)
-        .err()
-        .expect("a list page without on_empty is refused");
+        .expect_err("a list page without on_empty is refused");
     assert_eq!(error.code().as_str(), LINEAR_INVALID, "{error}");
     assert_eq!(error.detail(), Some("reason=terminal_page"), "{error}");
 
@@ -769,9 +843,8 @@ fn k1_linear_admission_refuses_a_select_step_by_each_rule_with_its_reason() {
         "operations": [pick("layout/cards", false)]
     });
     from_any["operations"][0]["from"] = json!("any");
-    let error = linear_admission(control(1), from_any)
-        .err()
-        .expect("a select step from any is refused");
+    let error =
+        linear_admission(control(1), from_any).expect_err("a select step from any is refused");
     assert_eq!(error.code().as_str(), LINEAR_INVALID, "{error}");
     assert_eq!(
         error.detail(),
@@ -785,12 +858,34 @@ fn k1_linear_admission_refuses_a_select_step_by_each_rule_with_its_reason() {
         task["operations"][1]["input_recheck"] = json!({"kind": "fresh_frame"});
     });
     let error = linear_admission(control(3), recheck)
-        .err()
-        .expect("an input recheck beside a select is refused");
+        .expect_err("an input recheck beside a select is refused");
     assert_eq!(error.code().as_str(), OPERATION_INVALID, "{error}");
     assert_eq!(
         error.detail(),
         Some("operation=pick field=input_recheck"),
+        "{error}"
+    );
+}
+
+// Fix round 1 (the review's first finding): `close` leads from the detail page back to the list, so
+// the list is both the task's target page and the page `pick` ends empty on, and its one mapping is
+// the `on_empty` key's. A run that reached the target would then be recorded by its page as one
+// that found nothing: linear admission refuses the step with a reason of its own.
+#[test]
+fn k1_an_on_empty_page_that_is_the_target_page_is_refused() {
+    let mut task = base_task(true);
+    task["target_page"] = json!("list");
+    task["operations"][2]["to"] = json!("list");
+    task["operations"][2]["expect_after"]["page_id"] = json!("list");
+    task["scheduling_outcome"]["mappings"] = json!([mapping(NOT_FOUND, "list")]);
+
+    let error = linear_admission(control(3), task)
+        .expect_err("an on_empty page that is the target page is refused");
+
+    assert_eq!(error.code().as_str(), LINEAR_INVALID, "{error}");
+    assert_eq!(
+        error.detail(),
+        Some("reason=select_on_empty_target operation=pick"),
         "{error}"
     );
 }
@@ -1114,6 +1209,101 @@ fn k1_a_selection_sampling_timeout_is_observed_again_without_an_input() {
     assert!(device.inputs().is_empty(), "{:?}", device.inputs());
 }
 
+// Fix round 1, A.2 with ACT-2: the device answers every step's gap with `ACTION_GAP`, so `pick`,
+// as each tap does, waits its gap and takes a fresh frame of the list before it decides. The list
+// arrives with both cards closed, which would end the step empty, and shows the first card open on
+// the fresh frame: the decision is made on the fresh frame (`selected`), confirmed on the frame
+// after it, and the first card is tapped once. Each of the three steps asks for its gap once, and
+// the device shows the list on three frames: the arrival's, the fresh one and the confirmation.
+#[test]
+fn k1_with_an_action_gap_the_select_step_decides_on_the_fresh_frame_after_its_gap() {
+    const ACTION_GAP: Duration = Duration::from_millis(300);
+    let task = base_package();
+    let mut device = Device::on(
+        ScriptedRuntime::new(path(
+            vec![
+                list((ALPHA, false), (BRAVO, false)),
+                list((ALPHA, true), (BRAVO, false)),
+            ],
+            vec![plain(DETAIL)],
+        ))
+        .with_action_gap(ACTION_GAP),
+    );
+
+    let outcome = task
+        .run(&mut device)
+        .unwrap_or_else(|error| panic!("expected the run to end normally, got {error:?}"));
+
+    assert_eq!(outcome, completed(DONE_PAGE, 3, None));
+    assert_eq!(device.script.action_gap_draws(), 3);
+    let records = device.records();
+    let [(1, record)] = records.as_slice() else {
+        panic!("one decision record of step 1: {:?}", device.kinds());
+    };
+    assert_eq!(
+        record.selection_result,
+        TaskSelectionOutcome::Selected { count: 1 }
+    );
+    assert_eq!(device.inputs().len(), 3, "{:?}", device.inputs());
+    assert!(
+        matches!(device.inputs()[1], InputAction::Tap { x: 2..=3, y: 0 }),
+        "{:?}",
+        device.inputs()[1]
+    );
+    assert_eq!(device.script.captures_after(1), 3);
+}
+
+// Fix round 1, A.2 (Workflow #386 SR-1): the one sampling deadline check before the press. The
+// card's open mark is sampled on two frames, so the selection has a window; nothing runs past it
+// until the selection is decided, confirmed and recorded, and then the draw of the tap's action
+// seed moves the clock past the step's window. With one observe-only retry the selection is
+// observed again on a fresh frame and made again (a second record, one `StepStarted`), and the one
+// tap follows; with none the run ends with `recognition_sample_deadline_exceeded`, its attempts,
+// window and stage, after one record and with no input.
+#[test]
+fn k1_a_sampling_deadline_passed_before_the_press_observes_the_selection_again() {
+    let task = admitted(
+        "a sampled select step",
+        &control(1),
+        &sampled_task(),
+        &policy(
+            "layout/sampled",
+            false,
+            "exactly_one",
+            json!([{"kind": "candidate_id", "direction": "lowest_first"}]),
+        ),
+    );
+    let screens = || {
+        vec![
+            vec![list((ALPHA, true), (BRAVO, false))],
+            vec![plain(DETAIL)],
+        ]
+    };
+
+    let mut device = Device::jumping_at_the_draw(screens(), 1);
+    let outcome = task
+        .run(&mut device)
+        .unwrap_or_else(|error| panic!("expected the run to end normally, got {error:?}"));
+    assert_eq!(outcome, completed(DETAIL_PAGE, 1, None));
+    assert_eq!(device.count("selection_evaluated"), 2);
+    assert_eq!(device.count("step_started"), 1);
+    assert_eq!(device.inputs().len(), 1);
+
+    let mut device = Device::jumping_at_the_draw(screens(), 0);
+    let error = failed("no retry", task.run(&mut device));
+    assert_eq!(
+        error.code().as_str(),
+        ExecutionKernelCode::RecognitionSampleDeadlineExceeded.as_str(),
+        "{error}"
+    );
+    assert_eq!(
+        Value::Object(error.outcome().values().clone()),
+        json!({"attempts": 0, "timeout_ms": STEP_MS, "stage": "observation_before_input"})
+    );
+    assert_eq!(device.count("selection_evaluated"), 1);
+    assert!(device.inputs().is_empty(), "{:?}", device.inputs());
+}
+
 // A.2 with Workflow #463 U1 (its fix round 2): after `pick`'s tap the device shows a black
 // screen, neither the detail page nor the list, on every frame. The arrival is the click step's
 // and runs out; `pick` declares no retry, so that attempt is its last, and the closing decision
@@ -1393,4 +1583,367 @@ fn k1_a_scan_select_with_on_empty_is_admitted_under_linear_steps() {
     assert_eq!(select.identity_feature(), Some("member"));
     assert_eq!(operation.on_empty_key(), Some("card_empty"));
     assert_eq!(operation.scan_max_ms(), Some(SCAN_MAX_MS));
+}
+
+// Fix round 1: a select over a scan run in a linear task, on the list of the SEL-L6b gate
+// (`gate_308_l6b`): a 64 x 96 frame showing one column of six cards, card k a noise marker (the
+// anchor template, 8 x 6 px) at x 4 and y 10 + 12 k with a 4 x 4 patch of its own colour to its
+// right, which the card reader reads as the card's name. Pixel (0, 0) is red on the list and blue
+// on the detail page; pixels (1, 0) and (2, 0), green and blue, are the list's start and end marks,
+// both shown, so the list fits one screen; pixel (3, 0), green, is the select step's guard.
+const CARD_WIDTH: u32 = 64;
+const CARD_HEIGHT: u32 = 96;
+const CARD_NAMES: [&str; 6] = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"];
+const CARD_MEMBERS: [&str; 6] = [
+    "member-a", "member-b", "member-c", "member-d", "member-e", "member-f",
+];
+// The member the scan's policy wants: the third card, its anchor at (4, 34).
+const WANTED: &str = "member-c";
+
+// Deterministic pixel noise, the SEL-L6b gate's: a shifted copy of it correlates with it near
+// zero.
+fn noise(x: u32, y: u32) -> [u8; 3] {
+    let mut state = u64::from(y * 64 + x).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x2545_f491;
+    let mut next = || {
+        state ^= state >> 33;
+        state = state.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        state ^= state >> 33;
+        (state & 0xff) as u8
+    };
+    [next(), next(), next()]
+}
+
+// The red level of card k's patch; the green and blue follow from it.
+fn patch_level(card: u32) -> u8 {
+    u8::try_from(30 + 36 * card).expect("level")
+}
+
+// One pixel of the card list (`list`) or of the detail page.
+fn card_pixel(list: bool, x: u32, y: u32) -> [u8; 3] {
+    if y == 0 && x < 4 {
+        return match (list, x) {
+            (true, 0) => [255, 0, 0],
+            (false, 0) => [0, 0, 255],
+            (true, 1 | 3) => [0, 255, 0],
+            (true, _) => [0, 0, 255],
+            (false, _) => [30, 31, 32],
+        };
+    }
+    if list {
+        for card in 0..6 {
+            let top = 10 + 12 * card;
+            if (top..top + 6).contains(&y) && (4..12).contains(&x) {
+                return noise(x - 4, y - top);
+            }
+            if (top..top + 4).contains(&y) && (12..16).contains(&x) {
+                let red = patch_level(card);
+                return [red, 220 - red / 2, 90];
+            }
+        }
+    }
+    [30, 31, 32]
+}
+
+// The card list, or the detail page.
+fn card_screen(list: bool) -> ScriptedFrame {
+    let pixels = (0..CARD_HEIGHT)
+        .flat_map(|y| (0..CARD_WIDTH).map(move |x| card_pixel(list, x, y)))
+        .collect::<Vec<_>>();
+    ScriptedFrame::rgb(CARD_WIDTH, CARD_HEIGHT, &pixels)
+}
+
+// The anchor template: the noise marker, 8 x 6 px.
+fn marker_png() -> Vec<u8> {
+    let pixels = (0..6)
+        .flat_map(|y| (0..8).flat_map(move |x| noise(x, y)))
+        .collect::<Vec<u8>>();
+    Frame::from_pixels(
+        8,
+        6,
+        pixels,
+        PixelFormat::Rgb8,
+        CaptureBackendName::FixtureSimulation,
+    )
+    .expect("marker frame")
+    .png_for_artifact()
+    .expect("marker PNG")
+}
+
+// Reads a card's name from the colour of its patch, as the SEL-L6b gate's reader does: the name
+// region starts at the card's anchor, and the patch lies 8 px to its right.
+#[derive(Debug)]
+struct CardNames;
+
+impl VisionProvider for CardNames {
+    fn require_ocr_model(
+        &self,
+        _model_ref: &str,
+        _model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        Ok(())
+    }
+
+    fn require_nn_model(
+        &self,
+        _model_ref: &str,
+        _model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "no NN model in this fixture",
+        ))
+    }
+
+    fn read_text(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderResult, VisionProviderError> {
+        let x = usize::try_from(request.region.x + 9).expect("x");
+        let y = usize::try_from(request.region.y + 1).expect("y");
+        let width = usize::try_from(request.frame.width).expect("width");
+        let red = request.frame.rgb8_pixels[(y * width + x) * 3];
+        let text = (0..6)
+            .position(|card| patch_level(card) == red)
+            .map_or("", |card| CARD_NAMES[card]);
+        Ok(OcrProviderResult {
+            ppocr_diagnostics: Vec::new(),
+            text: text.to_owned(),
+            blocks: Vec::new(),
+            confidence: Some(0.99),
+            detection: None,
+        })
+    }
+
+    fn classify(
+        &self,
+        _request: NnProviderRequest<'_>,
+    ) -> Result<NnProviderResult, VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "no NN model in this fixture",
+        ))
+    }
+}
+
+// The cards as a `repeated_anchor` layout, each naming its member, readable inside the tracking
+// area.
+fn card_layout() -> Value {
+    let entries = CARD_MEMBERS
+        .iter()
+        .zip(CARD_NAMES)
+        .map(|(id, name)| json!({"id": id, "aliases": [name]}))
+        .collect::<Vec<_>>();
+    json!({
+        "id": "layout/cards", "page_id": LIST_PAGE, "kind": "repeated_anchor",
+        "anchor": "ui/card", "max_instances": 16, "order": "top_to_bottom",
+        "instance_rect": {"x": 0, "y": 0, "width": 16, "height": 8},
+        "click": {"x": 2, "y": 1, "width": 4, "height": 4},
+        "readable_band": {"x": 0, "y": 4, "width": CARD_WIDTH, "height": 92},
+        "unknown_identity": "reject",
+        "features": [{"name": "member", "value": "identity", "target": "card/name",
+                      "offset": {"x": 0, "y": 0},
+                      "identity": {
+                          "entries": entries,
+                          "recognition": {"kind": "ocr_aliases", "max_distance": 1,
+                                          "minimum_margin": 1,
+                                          "minimum_confidence_milli": 800}}}]
+    })
+}
+
+// The SEL-L6b gate's scan over the card list, its steps widened to the admission's static checks:
+// a drag forward, no rewind.
+fn card_list_scan() -> Value {
+    json!({
+        "identity_feature": "member",
+        "axis": "vertical",
+        "advance": {"kind": "drag",
+                    "from": {"x": 20, "y": 60, "width": 20, "height": 10},
+                    "to": {"x": 20, "y": 20, "width": 20, "height": 10},
+                    "duration_ms": 300, "min_content_step_px": 12, "max_content_step_px": 60},
+        "reposition": {"kind": "drag",
+                       "from": {"x": 20, "y": 70, "width": 20, "height": 10},
+                       "to": {"x": 20, "y": 10, "width": 20, "height": 10},
+                       "duration_ms": 300, "max_content_step_px": 80},
+        "settle": {"interval_ms": 1, "timeout_ms": 1000},
+        "track": {"area": {"x": 0, "y": 4, "width": CARD_WIDTH, "height": 92},
+                  "edge_margin_px": 2,
+                  "signature": {"rect": {"x": 8, "y": 0, "width": 4, "height": 4},
+                                "columns": 1, "rows": 1},
+                  "signature_max_distance_milli": 500,
+                  "position_tolerance_px": 1,
+                  "min_overlap_instances": 2,
+                  "spacing": {"max_axis_gap_px": 20, "columns": 1,
+                              "max_trailing_gap_px": 100, "max_cross_lead_px": 10,
+                              "max_cross_gap_px": 10}},
+        "start": {"check": "check/list_start", "rewind": false},
+        "end": {"check": "check/list_end"},
+        "bounds": {"max_viewports": 8, "max_reposition_viewports": 4, "max_ms": 120_000}
+    })
+}
+
+// The linear package of one select step `pick` over the card list's scan, from the list (the
+// entry) to the detail page, whose policy keeps only `WANTED`.
+fn card_list_package() -> Vec<u8> {
+    let control = json!({
+        "schema_version": "Lab-1y.control.v2",
+        "package_id": "neutral.linear.scan.run",
+        "execution_mode": "linear_steps",
+        "game": "neutral",
+        "server": "test",
+        "resolution": {"width": CARD_WIDTH, "height": CARD_HEIGHT},
+        "entry_task_id": "task",
+        "capture_interval_ms": 100,
+        "step_timeout_ms": 32_000,
+        "timeout_ms": 300_000,
+        "max_steps": 1
+    });
+    let task = json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": CARD_WIDTH, "height": CARD_HEIGHT},
+        "entry_page": "list",
+        "target_page": "detail",
+        "max_steps": 1,
+        "candidate_layouts": [card_layout()],
+        "operations": [{
+            "id": "pick", "from": "list", "to": "detail",
+            "expect_after": {"page_id": "detail", "timeout_ms": 5000, "interval_ms": 200},
+            "guard": {"page_id": "list", "target_id": "guard/list",
+                      "expected_rect": {"x": 3, "y": 0, "width": 1, "height": 1},
+                      "color_probe": "guard/list"},
+            "select": {"layout_id": "layout/cards", "policy": {"path": "policies/select.json"},
+                       "scan": card_list_scan()}
+        }]
+    });
+    let policy = json!({
+        "schema_version": "actingcommand.selection-policy.v1",
+        "policy_id": "cards-wanted",
+        "applies_to": {
+            "candidate_layout_id": "layout/cards",
+            "outcome_keys": {"selected": "card_selected", "empty": "card_empty",
+                             "insufficient": "card_insufficient",
+                             "ambiguous": "card_ambiguous", "unknown": "card_unknown"}
+        },
+        "fields": [{"name": "member",
+                    "value_type": {"type": "enum_string", "allowed": CARD_MEMBERS}}],
+        "facts": [],
+        "gates": [{"gate_id": "wanted",
+                   "predicate": {"kind": "string_in",
+                                 "value": {"source": "field", "field": "member"},
+                                 "allowed": [WANTED]},
+                   "on_unknown": {"kind": "drop_candidate"}}],
+        "scoring": [],
+        "selection": {"mode": "none_allowed", "required_count": 1},
+        "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+    });
+    let colour = |id: &str, x: u32, expected: [u8; 3]| {
+        json!({"type": "color", "id": id,
+               "region": {"x": x, "y": 0, "width": 1, "height": 1}, "expected": expected})
+    };
+    let pack = json!({
+        "schema_version": "0.7",
+        "game": "neutral",
+        "server": "test",
+        "coordinate_space": {"width": CARD_WIDTH, "height": CARD_HEIGHT},
+        "defaults": {"match_metric": "ccoeff_normed", "color_max_distance": 0.0},
+        "targets": [
+            colour("page/list", 0, [255, 0, 0]),
+            colour("page/detail", 0, [0, 0, 255]),
+            colour("check/list_start", 1, [0, 255, 0]),
+            colour("check/list_end", 2, [0, 0, 255]),
+            colour("guard/list", 3, [0, 255, 0]),
+            {"type": "template", "id": "ui/card", "template_path": "assets/card.png",
+             "region": "full_frame", "threshold": 0.95},
+            {"type": "ocr", "id": "card/name",
+             "region": {"x": 0, "y": 0, "width": 12, "height": 4},
+             "languages": ["en"], "timeout_ms": 2000, "match_mode": "exact",
+             "expected": ["alpha"], "case_sensitive": true, "minimum_confidence": 0.8,
+             "model_ref": "PP-OCRv6_medium", "model_sha256": MODEL_SHA256}
+        ],
+        "candidate_layouts": [card_layout()]
+    });
+    let pages = ["list", "detail"].map(|page| {
+        json!({"id": format!("neutral/{page}"), "required": [format!("page/{page}")],
+               "optional": [], "forbidden": []})
+    });
+    zip_entries(&[
+        ("control.json", bytes(&control)),
+        (
+            "resources/manifest.json",
+            bytes(&json!({"schema_version": "0.3", "entry_task_id": "task"})),
+        ),
+        ("resources/operations/task/task.json", bytes(&task)),
+        (
+            "resources/operations/task/policies/select.json",
+            bytes(&policy),
+        ),
+        ("resources/assets/card.png", marker_png()),
+        ("resources/recognition/neutral.test.pack.json", bytes(&pack)),
+        (
+            "resources/recognition/neutral.test.pages.json",
+            bytes(&json!({"schema_version": "0.3", "pages": pages})),
+        ),
+    ])
+}
+
+// Fix round 1, A.2 over a scan (the review's missing run): the linear package's one step selects
+// over the card list's scan, on a device that commits every frame as the host does. The list fits
+// one screen, so the scan covers it on its first viewport with no drag; its policy keeps `WANTED`
+// alone, every card is read and known, and the decision is `selected`, its identity confirmed on
+// the scan's settled frame. The one tap lands inside the wanted card's click box (the card's anchor
+// at (4, 34), the box 2 px right of it and 1 px down, 4 x 4 px), it is the step's one effect
+// intent, the detail page passes and the run is Completed on it after the one step, with no key.
+#[test]
+fn k1_a_scan_select_on_one_screen_taps_the_wanted_card_once() {
+    let task = PreparedContainedTask::load_with_vision_provider(
+        "neutral.instance",
+        &card_list_package(),
+        Arc::new(CardNames),
+    )
+    .unwrap_or_else(|error| panic!("the scan package: refused: {error}"));
+    let mut device = Device::committing(vec![vec![card_screen(true)], vec![card_screen(false)]]);
+
+    let outcome = task
+        .run(&mut device)
+        .unwrap_or_else(|error| panic!("expected the run to end normally, got {error:?}"));
+
+    assert_eq!(outcome, completed(DETAIL_PAGE, 1, None));
+    let records = device.records();
+    let [(0, record)] = records.as_slice() else {
+        panic!("one decision record of step 0: {:?}", device.kinds());
+    };
+    assert_eq!(
+        record.selection_result,
+        TaskSelectionOutcome::Selected { count: 1 }
+    );
+    assert_eq!(record.outcome_key, "card_selected");
+    assert!(
+        matches!(
+            record.confirmation,
+            TaskSelectionConfirmation::IdentityMatched { .. }
+        ),
+        "{:?}",
+        record.confirmation
+    );
+    let [tap] = device.inputs() else {
+        panic!("one input: {:?}", device.inputs());
+    };
+    assert!(
+        matches!(
+            tap,
+            InputAction::Tap {
+                x: 6..=9,
+                y: 35..=38
+            }
+        ),
+        "{tap:?}"
+    );
+    let intents = device.intents();
+    let [(0, "pick", intent)] = intents.as_slice() else {
+        panic!("one effect intent of pick: {intents:?}");
+    };
+    assert_eq!(*intent, tap);
+    assert_eq!(device.finished(), [(0, "pick", DETAIL_PAGE)]);
 }

@@ -89,7 +89,7 @@ one operation is at fault; an existing check keeps its existing code.
 | the application rules of "Application steps" below | `application_retry`, `any_from`, `any_requires_application`, `input_after_application_stop`, `application_without_home` |
 | an application entry declares no `prerequisite_package_id` ("Prerequisite packages" below) | `prerequisite_with_application_entry` |
 | the optional-step rules of "Optional steps" below | `optional_first_step`, `optional_application`, `optional_restart_segment_end`, `optional_settle`, `optional_candidates`, `transition_page` |
-| the select-step rules of "Select steps" below (Workflow #463 K1) | `select_optional`, `select_retry`, `expect_identity`, `any_requires_application`, `select_on_empty_terminal` |
+| the select-step rules of "Select steps" below (Workflow #463 K1) | `select_optional`, `select_retry`, `expect_identity`, `any_requires_application`, `select_on_empty_target`, `select_on_empty_terminal` |
 
 Every operation still passes the existing operation checks (guard or trusted coordinate, click
 shape, retry fields, `post_delay_ms`); operation ids are unique (`contained_task_program_invalid`).
@@ -342,6 +342,7 @@ and then by these rules (`contained_task_linear_invalid`, `operation=<id>`):
 | a select step declares no `retryable`, `max_attempts` or `retry_interval_ms`: a retry after a scan would scan again after its moves, and a swallowed tap ends as the tap of a click step without a retry ends ("Retries") | `select_retry` |
 | no operation's `expect_after` declares an `expect_identity` whose `choice_of` names a select step: a linear arrival does not read it | `expect_identity` |
 | a select step does not start from `any` ("Application steps") | `any_requires_application` |
+| the page of a select step that declares `on_empty` is not the task's target page: that page's one mapping would be the `on_empty` key's, and the host, which keys a run by the page it finished on ("Ledger"), would record a run that reached the target page as one that found nothing | `select_on_empty_target` |
 | a select step that declares `on_empty`: exactly one `scheduling_outcome` mapping lists its page, and that mapping's key is its `on_empty` key (the one keyed-terminal rule; the page-graph coverage check that gives a page graph this rule is not run) | `select_on_empty_terminal` |
 
 A step that declares `on_empty` in a task without `scheduling_outcome` is refused as on the page
@@ -368,8 +369,13 @@ confirmation frame (`selection_page_changed` otherwise). A select over a scan ob
 sampling timed out is made again on a fresh frame of the step's page, as a guard's is, never after
 an input; every other failure, and every failure of a select over a scan, whose moves may precede
 it, ends the run with its own code before any tap ("Failure codes"). After its tap the step goes
-on exactly as a click step goes on: the post-input wait, the intermediate state, the arrival over
-its candidates and, since a select step declares no retry, the closing decision of "Retries".
+on exactly as a click step goes on: the post-input wait, the intermediate state and the arrival over
+its candidates. A select step declares no retry, so its one attempt is its last: where that arrival
+ends with `page_confirmation_failed`, the closing decision of "Retries" follows it as it follows a
+click step's last attempt, and only a screen that stays still and shows nothing the package
+declares for the decision's whole bound ends the run with `contained_task_linear_unrecorded_screen`
+("A screen the package never recorded" under "Failure codes"); every other end of that decision
+keeps `page_confirmation_failed`.
 
 **Ending empty.** An `empty` decision of a step that declares `on_empty`, with nothing unknown
 ([selection-graph.md](selection-graph.md), "Ending empty"), taps nothing. After the step's record
@@ -1022,12 +1028,19 @@ compatibility). A build without optional steps
 same way, before `PackageAdmitted`: `resource_declaration_invalid`, `UnknownField` at
 `/operations/<k>/optional`; so does its `package build`. A build before Workflow #463 K1 (below
 0.12.60) refuses a select step under `linear_steps` before `PackageAdmitted`
-(`contained_task_linear_invalid`, `reason=operation_effect`).
+(`contained_task_linear_invalid`, `reason=operation_effect`); a bundle whose packs declare one
+declares `package` [13, 13], which the `package` edge of an earlier installer refuses before it
+places anything ([component-interfaces.md](component-interfaces.md), the `package` row 13).
 
 ## Tools
 
 The offline simulation runs the same interpreter: its first decision of a linear package is
-the first operation's click, or a refusal; the first operation is never optional. A package
+the first operation's click or, when the first operation is a select step (Workflow #463 K1), the
+first input its attempt makes on the frames given (its tap, or a scan's first move), as on the page
+graph, or a refusal; the first operation is never optional.
+A first select step that ends empty (`on_empty`) completes the run with its step counted, so its
+offline simulation reports `offline_simulation_executed_step_invariant`, as a page-graph task's
+empty end does. A package
 with an application operation is always
 refused, `application_effect_requires_assigned_application` with no capture, provided the frame
 list is not empty (an empty list is `offline_fixture_missing` before the interpreter). `package build --execution-mode linear_steps`,
