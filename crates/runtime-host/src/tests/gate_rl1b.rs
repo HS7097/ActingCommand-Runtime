@@ -1684,3 +1684,210 @@ fn sched_c1b_b_a_generation_without_values_records_no_fact() {
     assert!(catalog_provenance_fact(&bench).is_none());
     bench.close();
 }
+
+// ---------------------------------------------------------------------------------------------
+// Workflow #455 G-R2s round 2 (register §1.364; the coordinator's ruling of 11-14 on the
+// workbench's early returns; contracts/resource-targets.md, "A task that can do something
+// irreversible"): while a game's root cannot be composed, every candidate of that game's instances
+// is computed as on an instance without a target record, until a composition of it succeeds
+// ---------------------------------------------------------------------------------------------
+
+/// The reason of a candidate whose game's root cannot be composed.
+const ROOT_UNCOMPOSED: &str = "resource_target_root_uncomposed";
+
+/// Game A and game B, each on its own instance, with each instance's inventory of its pool read
+/// (catalog-a's pools observe `resource.primary`): 10 units, a minute before the fixture's time.
+fn gr2s_two_games() -> Bench {
+    let mut facts = facts(&[BOUND_A, BOUND_B]);
+    for (instance, _, _) in [BOUND_A, BOUND_B] {
+        facts.facts.push(actingcommand_policy::ObservedFact {
+            scope: actingcommand_policy::ScopeSelector::Instance {
+                instance_id: instance.to_owned(),
+            },
+            fact_key: "resource.primary".to_owned(),
+            value: actingcommand_policy::FactValue::Integer(10),
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS - 60_000,
+            expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 24 * HOUR_MS),
+            confidence_milli: 1000,
+        });
+    }
+    let bench = Bench::with_facts(&[BOUND_A, BOUND_B], &[POOL_A, POOL_B], true, None, facts);
+    bench.place(
+        GAME_A,
+        SERVER_A,
+        &[PACKAGE_1],
+        Some(&schedule_a(&[(RULE_1, PACKAGE_1, 100)])),
+    );
+    bench.place(GAME_B, SERVER_B, &[PACKAGE_B], Some(&schedule_b(100, true)));
+    bench
+}
+
+/// A candidate's numbers in `cycle`: its rank and its score-stage reasons (code and detail), and
+/// whether it carries [`ROOT_UNCOMPOSED`].
+type Numbers = (
+    Option<actingcommand_policy::TaskRank>,
+    Vec<(String, String)>,
+    bool,
+);
+
+fn gr2s_numbers(cycle: &PolicyCycle, task_id: &str, instance_id: &str) -> Numbers {
+    let decision = cycle
+        .evaluation
+        .as_ref()
+        .and_then(|evaluation| {
+            evaluation.decisions.iter().find(|decision| {
+                decision.task_id == task_id && decision.instance_id.as_deref() == Some(instance_id)
+            })
+        })
+        .unwrap_or_else(|| panic!("a decision of {task_id} on {instance_id}: {cycle:#?}"));
+    let reasons = decision
+        .reasons
+        .iter()
+        .filter(|reason| {
+            let code = reason.outcome.code().as_str();
+            code == "score_computed"
+                || code == "resource_weights"
+                || (code.starts_with("resource_target")
+                    && code != ROOT_UNCOMPOSED
+                    && code != "resource_target_package_irreversible")
+        })
+        .map(|reason| {
+            (
+                reason.outcome.code().as_str().to_owned(),
+                reason.detail.clone(),
+            )
+        })
+        .collect();
+    let uncomposed = decision
+        .reasons
+        .iter()
+        .any(|reason| reason.outcome.code().as_str() == ROOT_UNCOMPOSED);
+    (decision.rank.clone(), reasons, uncomposed)
+}
+
+/// The numbers of rule 1 on instance A and of rule B on instance B in `cycle`.
+fn gr2s_both(cycle: &PolicyCycle) -> (Numbers, Numbers) {
+    (
+        gr2s_numbers(cycle, RULE_1, INSTANCE_A),
+        gr2s_numbers(cycle, RULE_B, INSTANCE_B),
+    )
+}
+
+impl Bench {
+    /// `ApplyResourceTargets` of a v2 goal of `instance` on `pool`: at least 100 (its inventory
+    /// reads 10), step 1, importance 1000, for a day. The Runtime takes it.
+    fn apply_goal(&self, instance: &str, pool: &str) {
+        let document = json!({
+            "schema_version": "actingcommand.resource-targets.v2",
+            "instance": instance,
+            "valid_until_unix_ms": POLICY_NOW_UNIX_MS + 24 * HOUR_MS,
+            "targets": [{
+                "id": "neutral.floor",
+                "resource": pool,
+                "condition": {"kind": "at_least", "amount": 100},
+                "scale": 1,
+                "importance_milli": 1000,
+                "apply": {"mode": "adjust", "weight": "score_stage"}
+            }]
+        });
+        let mut client = TestClient::connect(&self.host);
+        let request = client.request(RuntimeOperation::ApplyResourceTargets {
+            document_json: document.to_string(),
+            expected_version: None,
+        });
+        let receipt = client.send(&request);
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "the goal is taken: {receipt:?}"
+        );
+    }
+}
+
+/// The two games composed and evaluated before any goal, then with a goal on each instance's
+/// pool: the numbers before, and with the goals (each goal moves its game's candidate).
+fn gr2s_goals_in_effect(bench: &Bench) -> ((Numbers, Numbers), (Numbers, Numbers)) {
+    let before = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 0));
+    bench.apply_goal(INSTANCE_A, POOL_A);
+    bench.apply_goal(INSTANCE_B, POOL_B);
+    let weighed = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, INTERVAL_MS));
+    assert_ne!(weighed.0.0, before.0.0, "the goal moves game A's candidate");
+    assert_ne!(weighed.1.0, before.1.0, "the goal moves game B's candidate");
+    assert!(!weighed.0.2 && !weighed.1.2, "no root is refused yet");
+    (before, weighed)
+}
+
+/// Round 2, a damaged root (the workbench's broken-root return): game A's `bundle.json` is
+/// damaged. While it is, game A's candidate is the one before any goal (rank and score-stage
+/// reasons) and carries `resource_target_root_uncomposed`; game B's candidate keeps every number
+/// the goal gives it. Repaired, game A composes again (the same rules digest, no new activation)
+/// and its goal applies as before. The root's metadata failure shares this path's code
+/// (`note_uncomposed` with the failing game).
+#[test]
+fn gr2s_r2_a_damaged_root_voids_the_goals_of_its_game_until_it_composes() {
+    let bench = gr2s_two_games();
+    let (before, weighed) = gr2s_goals_in_effect(&bench);
+    let activations = bench.events(EventType::CatalogActivated).len();
+
+    let bundle = bench.path(GAME_A, "bundle.json");
+    let good = fs::read(&bundle).expect("game A's bundle");
+    fs::write(&bundle, b"{").expect("damage game A's bundle");
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS));
+    assert_eq!(
+        (&a.0, &a.1),
+        (&before.0.0, &before.0.1),
+        "game A as without a goal"
+    );
+    assert!(a.2, "game A says why");
+    assert_eq!(b, weighed.1, "game B is what it was");
+
+    fs::write(&bundle, &good).expect("repair game A's bundle");
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 3 * INTERVAL_MS));
+    assert_eq!(a, weighed.0, "game A's goal applies again");
+    assert_eq!(b, weighed.1);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), activations);
+    bench.close();
+}
+
+/// Round 2, a composition refused as a whole (the workbench's whole-refusal return): game A's
+/// `schedule.json` gains 1 023 more pools, so game A alone holds the catalog's 1 024 pools and
+/// the two games together one too many (`limit_exceeded` at `/pools`, which names no game). While
+/// it is refused, game A's candidate is the one before any goal and says why; game B's root did
+/// not change, so the active generation composes it as it is and its candidate keeps the goal's
+/// numbers. Game A's file restored, the two compose again and game A's goal applies as before. The
+/// return where no refused game can be taken out shares this path's code (`note_uncomposed`
+/// without a failing game).
+#[test]
+fn gr2s_r2_a_composition_refused_as_a_whole_voids_the_goals_of_the_changed_game() {
+    let bench = gr2s_two_games();
+    let (before, weighed) = gr2s_goals_in_effect(&bench);
+    let activations = bench.events(EventType::CatalogActivated).len();
+
+    let schedule = bench.path(GAME_A, "schedule.json");
+    let good = fs::read(&schedule).expect("game A's schedule.json");
+    let mut crowded = schedule_a(&[(RULE_1, PACKAGE_1, 100)]);
+    let pools = crowded["pools"].as_array_mut().expect("game A's pools");
+    for index in 0..1023 {
+        pools.push(pool(&format!("fixture-pool-x{index:04}")));
+    }
+    write_json(&schedule, &crowded);
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS));
+    assert_eq!(
+        bench.events(EventType::CatalogActivated).len(),
+        activations,
+        "the composition is refused and the active generation kept"
+    );
+    assert_eq!(
+        (&a.0, &a.1),
+        (&before.0.0, &before.0.1),
+        "game A as without a goal"
+    );
+    assert!(a.2, "game A says why");
+    assert_eq!(b, weighed.1, "game B is what it was");
+
+    fs::write(&schedule, &good).expect("restore game A's schedule.json");
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 3 * INTERVAL_MS));
+    assert_eq!(a, weighed.0, "game A's goal applies again");
+    assert_eq!(b, weighed.1);
+    bench.close();
+}

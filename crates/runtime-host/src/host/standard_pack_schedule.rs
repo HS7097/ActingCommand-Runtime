@@ -222,6 +222,33 @@ struct WorkbenchState {
     unused_pools: BTreeSet<String>,
     /// How many times each game's `schedule.json` was opened (acceptance A4).
     schedule_reads: BTreeMap<String, u64>,
+    /// Workflow #455 G-R2s round 2: the games in use whose root a check could not compose, set
+    /// where the check keeps the active generation ([`note_uncomposed`]) and cleared by the
+    /// first composition that succeeds. Every instance of such a game has no goals in effect.
+    uncomposed: BTreeSet<String>,
+}
+
+/// Workflow #455 G-R2s round 2 (register §1.364; `contracts/resource-targets.md`, "A task that
+/// can do something irreversible"): at a check that keeps the active generation (the root's
+/// metadata cannot be read, the root is damaged, the composition is refused as a whole, or no
+/// refused game can be taken out), notes as uncomposed `failed`, the game whose root failed, and
+/// every game in use whose marks this check did not find equal to those of its last composed read
+/// (`state.marks`): a game whose files have not changed since is composed in the active generation
+/// as it is now, its marks those of its declarations; any other may have changed into something
+/// the active generation does not mark. A game this check did not reach has no marks here, so it
+/// is noted too.
+fn note_uncomposed(
+    state: &mut WorkbenchState,
+    games: &BTreeSet<String>,
+    marks: &BTreeMap<String, GameMarks>,
+    failed: Option<&str>,
+) {
+    for game in games {
+        let current = marks.get(game);
+        if failed == Some(game.as_str()) || current.is_none() || current != state.marks.get(game) {
+            state.uncomposed.insert(game.clone());
+        }
+    }
 }
 
 /// The composition record of a composed generation (`standard-packs.json`).
@@ -768,12 +795,21 @@ impl HostShared {
                             "root:metadata",
                             failure.outcome(Some(game.as_str())),
                         )?;
+                        // G-R2s round 2: the game, and every game not found unchanged, has no
+                        // goals in effect until a composition succeeds.
+                        note_uncomposed(state, &games, &marks, Some(game.as_str()));
                         return Ok(());
                     }
                 }
             }
         }
-        if state.active.is_some() && state.bound == bound && state.marks == marks {
+        // G-R2s round 2: while a game is noted uncomposed, the check reads and composes again
+        // even when nothing changed, so a root that reads again ends it.
+        if state.active.is_some()
+            && state.bound == bound
+            && state.marks == marks
+            && state.uncomposed.is_empty()
+        {
             return Ok(());
         }
 
@@ -790,6 +826,8 @@ impl HostShared {
                         // fixed: its registry is what every rule of the game is placed by.
                         let key = format!("root:{:?}", marks.get(game));
                         self.report_once(state, game, &key, failure.outcome(Some(game.as_str())))?;
+                        // G-R2s round 2: as at a metadata failure.
+                        note_uncomposed(state, &games, &marks, Some(game.as_str()));
                         return Ok(());
                     }
                 }
@@ -850,6 +888,9 @@ impl HostShared {
                     .outcome(None);
                     self.report_once(state, &game, &key, outcome)?;
                 }
+                // G-R2s round 2: every game not found unchanged has no goals in effect until a
+                // composition succeeds.
+                note_uncomposed(state, &games, &marks, None);
                 return Ok(());
             }
             // Each round takes out at least one refused game, so the loop ends; a refusal that
@@ -888,6 +929,8 @@ impl HostShared {
                 }
             }
             if !progressed {
+                // G-R2s round 2: as at a refusal as a whole.
+                note_uncomposed(state, &games, &marks, None);
                 return Ok(());
             }
         };
@@ -1076,7 +1119,24 @@ impl HostShared {
             state.packages.insert(game.clone(), directories);
         }
         state.marks = marks;
+        // G-R2s round 2: this composition succeeded, so every game in use is composed as it is
+        // now; the goals of a game noted uncomposed are in effect again.
+        state.uncomposed.clear();
         Ok(())
+    }
+
+    /// Workflow #455 G-R2s round 2 (register §1.364): the games in use whose root the
+    /// workbench's checks could not compose since the last composition that succeeded
+    /// ([`note_uncomposed`]); none in configured mode. The policy cycle reads them right after
+    /// the check and leaves out the resource target record of each of their instances
+    /// (`LeftOutFacts::void_targets`).
+    pub(super) fn uncomposed_standard_pack_games(&self) -> RuntimeHostResult<BTreeSet<String>> {
+        let Some(workbench) = self.standard_packs.schedule.as_ref() else {
+            return Ok(BTreeSet::new());
+        };
+        Ok(lock(&workbench.state, HostLocation::StandardPackRead)?
+            .uncomposed
+            .clone())
     }
 
     /// Records `outcome` once per (`game`, `key`).

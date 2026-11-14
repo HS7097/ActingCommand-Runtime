@@ -27,7 +27,7 @@ use actingcommand_contract::{
     StandardPackTableCell, StandardPackTableReadFailure, check_standard_pack_goal_references,
     parse_standard_pack_goals, parse_standard_pack_schedule, read_standard_pack_table,
 };
-use actingcommand_execution_kernel::PreparedContainedTask;
+use actingcommand_execution_kernel::{ContainedTaskError, PreparedContainedTask};
 use actingcommand_policy::standard_pack_rule_followers;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -140,17 +140,16 @@ pub(crate) fn goal_issues(
 /// naming its path.
 fn package_provides(path: &Path) -> LabResult<BTreeMap<String, bool>> {
     read_provides(path)
-        .map_err(|(error, _)| LabError::package_invalid(format!("{}: {error}", path.display())))
+        .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))
 }
 
-/// [`package_provides`]'s reading, or the reader's refusal: its text and its outcome.
-fn read_provides(path: &Path) -> Result<BTreeMap<String, bool>, (String, Outcome)> {
+/// [`package_provides`]'s reading, or the reader's refusal.
+fn read_provides(path: &Path) -> Result<BTreeMap<String, bool>, ContainedTaskError> {
     let declarations = PreparedContainedTask::read_remedy_declarations(
         CHECK_LABEL,
         path,
         Instant::now() + PACK_DEADLINE,
-    )
-    .map_err(|error| (error.to_string(), error.outcome()))?;
+    )?;
     let mut capabilities = BTreeMap::new();
     for provided in &declarations.provides {
         *capabilities
@@ -214,8 +213,8 @@ pub(crate) fn root_irreversibility(
         let capabilities = match root.registry.get(package_id) {
             Some(entry) => match read_provides(&pack_directory(&entry.directory)) {
                 Ok(capabilities) => Some(capabilities),
-                Err((_, refusal)) => {
-                    refusals.insert(package_id.to_owned(), refusal);
+                Err(error) => {
+                    refusals.insert(package_id.to_owned(), error.outcome());
                     None
                 }
             },

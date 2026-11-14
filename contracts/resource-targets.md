@@ -103,6 +103,24 @@ its place; its numbers are its own. Its dispatch's `decision_record` still names
 targets as they are (`targets=` the instance's record, fix round 1): that field says what the
 instance holds, not what weighed the candidate; the new reason says the record was left out.
 
+**A game whose root cannot be composed has no goals in effect until it composes** (round 2, the
+coordinator's ruling of 11-14). The active catalog generation carries the marks of the
+declarations it was composed from; while the Runtime's scheduler workbench cannot compose a game's
+root as it is now (the root's metadata cannot be read, the root is damaged, the composition is
+refused as a whole, or a refused composition cannot be narrowed to a game it composed), a package
+of that game may have changed into one the active generation does not mark. So every candidate of
+that game's instances is computed exactly as a marked candidate is, as on an instance without a
+target record, through the same code path, and carries `resource_target_root_uncomposed` (info, no
+key) in place of `resource_target_package_irreversible`, also when its task carries the mark. The
+workbench notes the game at the check that keeps the active generation (with it, every game in use
+whose files the check did not find unchanged since its last composed read: a game whose files have
+not changed is composed in the active generation as it is now) and forgets every note at the first
+composition that succeeds; until then each check reads and composes again. The Runtime tells the
+evaluator per instance, in memory only: never a fact, a snapshot or a decision identity. It also
+covers a current generation composed before 0.12.60, whose first check under this build meets a
+root it cannot compose. An instance of a game whose root composes is not touched, and an
+installation whose roots all compose computes exactly what it computes without this.
+
 ## Document `actingcommand.resource-targets.v1`
 
 The raw UTF-8 text is the request's `document_json` (`1..=65536` bytes); the Runtime parses it

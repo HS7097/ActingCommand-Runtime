@@ -235,12 +235,32 @@ pub struct EvaluationFacts {
 /// (`fact_missing`), and the key raises no fact refresh demand on that instance: a reading cannot
 /// shorten a list, so a refresh would be asked for at every evaluation and never served. Memory
 /// only: none of it enters a snapshot or decision identity.
+///
+/// Workflow #455 G-R2s round 2 (register §1.364; `contracts/resource-targets.md`, "A task that
+/// can do something irreversible"): also the instances whose resource target record the Runtime
+/// leaves out whole, because the scheduler workbench cannot compose their game's root
+/// ([`LeftOutFacts::void_targets`]): every candidate of such an instance is computed as a marked
+/// candidate is, as on an instance without a target record, with the reason
+/// `resource_target_root_uncomposed`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LeftOutFacts {
     keys: BTreeMap<String, BTreeSet<String>>,
+    /// G-R2s round 2: the instances whose target record is left out whole, by alias.
+    void_targets: BTreeSet<String>,
 }
 
 impl LeftOutFacts {
+    /// Workflow #455 G-R2s round 2: leaves out the resource target record of the instance
+    /// `instance_id` for every candidate of it, as long as its game's root cannot be composed.
+    pub fn void_targets(&mut self, instance_id: &str) {
+        self.void_targets.insert(instance_id.to_owned());
+    }
+
+    /// Whether the resource target record of the instance `instance_id` is left out whole.
+    pub fn targets_void(&self, instance_id: &str) -> bool {
+        self.void_targets.contains(instance_id)
+    }
+
     /// Notes `fact_key` as left out for the instance `instance_id`.
     pub fn insert(&mut self, instance_id: &str, fact_key: &str) {
         self.keys
@@ -258,7 +278,7 @@ impl LeftOutFacts {
 
     /// Whether nothing was left out.
     pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
+        self.keys.is_empty() && self.void_targets.is_empty()
     }
 }
 
@@ -4327,8 +4347,28 @@ struct StagedCandidate {
     /// SS-1: the base term without an active v2 policy (Alice's ruling 100).
     base: Option<crate::resource_targets::ResourceTerm>,
     /// Workflow #455 G-R2s: the instance's target record is left out for this candidate (its
-    /// task carries the irreversible mark): it reads its instance resolved without a record.
-    left_out: bool,
+    /// task carries the irreversible mark, or, round 2, its game's root cannot be composed), and
+    /// why: it reads its instance resolved without a record.
+    left_out: Option<LeftOutWhy>,
+}
+
+/// Workflow #455 G-R2s: why a candidate's instance's target record is left out for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeftOutWhy {
+    /// Its task carries the composer's irreversible mark.
+    Irreversible,
+    /// Round 2: the Runtime cannot compose its game's root ([`LeftOutFacts::targets_void`]).
+    RootUncomposed,
+}
+
+impl LeftOutWhy {
+    /// The candidate's one reason that says so.
+    fn reason(self) -> DecisionReason {
+        match self {
+            Self::Irreversible => irreversible_left_out_reason(),
+            Self::RootUncomposed => uncomposed_left_out_reason(),
+        }
+    }
 }
 
 /// The score stage between the predicate gate and ranking. Predicate outcomes are never
@@ -4455,8 +4495,10 @@ fn apply_priority_selection(
     // that holds a target record, reads its instance resolved once more as without the record
     // (its server- or game-scoped note kept), so every number of it is the one of an instance
     // without a record; the record's own resolution, which every other candidate reads, is left
-    // as it is.
-    let mut left_out = BTreeSet::<usize>::new();
+    // as it is. Round 2: every candidate of an instance whose game's root the Runtime cannot
+    // compose ([`LeftOutFacts::targets_void`]) is computed the same way, with its own reason; it
+    // takes that reason even when its task carries the mark too.
+    let mut left_out = BTreeMap::<usize, LeftOutWhy>::new();
     let mut unrecorded = BTreeMap::<&str, crate::resource_targets::InstanceTargets>::new();
     for candidate in &candidates {
         let Some(recorded) = target_policies
@@ -4465,10 +4507,14 @@ fn apply_priority_selection(
         else {
             continue;
         };
-        if !catalog_task(catalog, &candidate.task_id)?.is_irreversible_reach() {
+        let why = if context.left_out.targets_void(&candidate.instance_id) {
+            LeftOutWhy::RootUncomposed
+        } else if catalog_task(catalog, &candidate.task_id)?.is_irreversible_reach() {
+            LeftOutWhy::Irreversible
+        } else {
             continue;
-        }
-        left_out.insert(candidate.work_index);
+        };
+        left_out.insert(candidate.work_index, why);
         let instance = facts
             .instances
             .iter()
@@ -4499,7 +4545,7 @@ fn apply_priority_selection(
     // The resolution a candidate reads: its instance's, or, left out, its instance's without
     // the record.
     let targets_for = |work_index: usize, instance_id: &str| {
-        if left_out.contains(&work_index) {
+        if left_out.contains_key(&work_index) {
             unrecorded.get(instance_id)
         } else {
             instance_targets.get(instance_id)
@@ -4592,7 +4638,7 @@ fn apply_priority_selection(
             }
         }
         // G-R2s: a left-out candidate reads its instance as without the record.
-        let left = left_out.contains(&candidate.work_index);
+        let left = left_out.get(&candidate.work_index).copied();
         let targets = targets_for(candidate.work_index, candidate.instance_id.as_str());
         let target = targets.map_or(TargetEffect::None, |targets| {
             targets.effect(&candidate.task_id)
@@ -4620,8 +4666,8 @@ fn apply_priority_selection(
             if let Some(targets) = targets {
                 task_work.reasons.extend(targets.reasons(&target, None, 0));
             }
-            if left {
-                task_work.reasons.push(irreversible_left_out_reason());
+            if let Some(why) = left {
+                task_work.reasons.push(why.reason());
             }
             if let Some(base) = &base {
                 task_work.reasons.extend(base.reasons(None, 0));
@@ -4869,8 +4915,8 @@ fn apply_priority_selection(
                 .reasons
                 .extend(targets.reasons(&target, score_milli, offset_milli));
         }
-        if left {
-            task_work.reasons.push(irreversible_left_out_reason());
+        if let Some(why) = left {
+            task_work.reasons.push(why.reason());
         }
         if let Some(base) = &base {
             task_work
@@ -8042,6 +8088,20 @@ fn irreversible_left_out_reason() -> DecisionReason {
              an instance without a record",
             crate::IRREVERSIBLE_REACH_MEMBER
         ),
+    )
+}
+
+/// Workflow #455 G-R2s round 2 (register §1.364; `contracts/resource-targets.md`, "A task that
+/// can do something irreversible"): the reason of a candidate of an instance whose game's root the
+/// Runtime cannot compose ([`LeftOutFacts::targets_void`]), on an instance that holds a target
+/// record: the record is left out for it until a composition of its game succeeds. It stands
+/// where [`irreversible_left_out_reason`] stands.
+fn uncomposed_left_out_reason() -> DecisionReason {
+    reason(
+        PolicyCode::ResourceTargetRootUncomposed,
+        "the packs of the instance's game could not be read or composed as a whole; the \
+         instance's resource targets are left out and the candidate is weighed as on an instance \
+         without a record until a composition of its game succeeds",
     )
 }
 

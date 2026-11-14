@@ -620,7 +620,19 @@ can do something irreversible").
   `actinglab standard-pack check --root <game root>` over each game root and look for that
   warning. While a package's file is locked for a moment during its replacement, the check that
   meets it can mark the whole game for about one check interval (a minute by default) and activate
-  a generation twice (marked, then unmarked again).
+  a generation twice (marked, then unmarked again). During a hot placement a root can also be
+  refused for one check (up to a minute: `bundle.json` or `schedule.json` half written); its game's
+  goals are void for that long (round 2, below).
+- **A game whose root cannot be composed has no goals in effect until it composes** (round 2, the
+  coordinator's ruling of 11-14). Where the workbench keeps the active generation because a check
+  cannot compose (a root whose metadata cannot be read, a damaged root, a composition refused as a
+  whole, a refusal that cannot be narrowed to a game it composed), that generation may lack the
+  mark of a package changed since; so the game whose root failed, and every game in use whose files
+  the check did not find unchanged since its last composed read, are noted, and every candidate of
+  their instances is computed as on an instance without a target record
+  (`resource_target_root_uncomposed`, [resource-targets.md](resource-targets.md), "A task that can
+  do something irreversible"). The notes are memory only and end at the first composition that
+  succeeds; while one is held, each check reads and composes again even when nothing changed.
 
 ## Tools
 

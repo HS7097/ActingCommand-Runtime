@@ -178,9 +178,32 @@ fn without_the_new_reason(decision: &TaskDecision) -> TaskDecision {
     decision
 }
 
-/// The reasons of the round's dispatch chain of task A on instance A, without the one new reason:
-/// every reason but its `decision_record`, and that record's detail split into its `targets=`
-/// field and the rest.
+/// `reasons` without the one new reason and without the dispatch's `decision_record`, which they
+/// carry exactly once, and that record's detail split into its `targets=` field and the rest.
+fn without_the_decision_record(
+    reasons: &[DecisionReason],
+) -> (Vec<DecisionReason>, (String, String)) {
+    let records = reasons
+        .iter()
+        .filter(|reason| reason.outcome.is(PolicyCode::DecisionRecord))
+        .collect::<Vec<_>>();
+    let [record] = records.as_slice() else {
+        panic!("one decision record: {reasons:#?}");
+    };
+    let (targets, rest) = record
+        .detail
+        .split_once(" related=")
+        .unwrap_or_else(|| panic!("a targets field: {record:?}"));
+    let kept = reasons
+        .iter()
+        .filter(|reason| !reason.outcome.is(PolicyCode::DecisionRecord) && !left_out(reason))
+        .cloned()
+        .collect();
+    (kept, (targets.to_owned(), rest.to_owned()))
+}
+
+/// The reasons of the round's dispatch chain of task A on instance A, as
+/// [`without_the_decision_record`] gives them.
 fn dispatch_chain(evaluation: &PolicyEvaluation) -> (Vec<DecisionReason>, (String, String)) {
     let intent = evaluation
         .dispatch_intents
@@ -192,25 +215,17 @@ fn dispatch_chain(evaluation: &PolicyEvaluation) -> (Vec<DecisionReason>, (Strin
         .iter()
         .find(|chain| chain.id == intent.reason_chain_id)
         .unwrap_or_else(|| panic!("the dispatch's chain: {evaluation:#?}"));
-    let records = chain
-        .reasons
-        .iter()
-        .filter(|reason| reason.outcome.is(PolicyCode::DecisionRecord))
-        .collect::<Vec<_>>();
-    let [record] = records.as_slice() else {
-        panic!("one decision record: {chain:#?}");
-    };
-    let (targets, rest) = record
-        .detail
-        .split_once(" related=")
-        .unwrap_or_else(|| panic!("a targets field: {record:?}"));
-    let reasons = chain
-        .reasons
-        .iter()
-        .filter(|reason| !reason.outcome.is(PolicyCode::DecisionRecord) && !left_out(reason))
-        .cloned()
-        .collect();
-    (reasons, (targets.to_owned(), rest.to_owned()))
+    without_the_decision_record(&chain.reasons)
+}
+
+/// Task A's decision without the one new reason (which it carries once) and without its
+/// dispatch's `decision_record`, with that record's detail split as
+/// [`without_the_decision_record`] splits it.
+fn decision_apart(decision: &TaskDecision) -> (TaskDecision, (String, String)) {
+    let mut decision = without_the_new_reason(decision);
+    let (reasons, record) = without_the_decision_record(&decision.reasons);
+    decision.reasons = reasons;
+    (decision, record)
 }
 
 /// The reasons of the score stage, which carry a candidate's own numbers: its score, its target
@@ -262,10 +277,10 @@ fn effective(decision: &TaskDecision) -> i64 {
 // decision (state, rank with its effective score, every reason with its values and detail, the
 // benefit its `rank_breakdown` names, its dispatch's scheduling values and its own wake) equals the
 // one without a record, but for the one new reason, which it carries once; so does its dispatch's
-// reason chain, with one stated exception (fix round 1, point 3): the chain's `decision_record`
-// names the instance's targets as they are, its record (`targets=active…`, not `targets=none`),
-// and only that field of it differs. Without the mark the v2 and v3 records do weigh it (term
-// 2000, not 1000), so each record is one a goal would apply.
+// reason chain, with one stated exception (fix round 1, point 3): the `decision_record` the
+// decision and the chain carry names the instance's targets as they are, its record
+// (`targets=active…`, not `targets=none`), and only that field of it differs. Without the mark the
+// v2 and v3 records do weigh it (term 2000, not 1000), so each record is one a goal would apply.
 #[test]
 fn gr2s_t1_a_marked_candidate_under_each_record_equals_it_without_a_record() {
     let catalog = catalog(&[judged(marked(task_a()))]);
@@ -279,18 +294,31 @@ fn gr2s_t1_a_marked_candidate_under_each_record_equals_it_without_a_record() {
     assert_eq!(term(&without, TASK_A), 1000, "the base term alone");
     let (base_chain, (base_targets, base_rest)) = dispatch_chain(&without);
     assert_eq!(base_targets, "targets=none", "no record");
+    let mut base = base;
+    let (reasons, base_record) = without_the_decision_record(&base.reasons);
+    base.reasons = reasons;
+    assert_eq!(
+        base_record,
+        (base_targets.clone(), base_rest.clone()),
+        "the decision names the dispatch's record"
+    );
     for (label, document, unmarked_term) in [
         ("v1", v1_document(&[TASK_A], "adjust"), None),
         ("v2", v2_document(vec![goal_a()]), Some(2000)),
         ("v3", v3_document(vec![goal_a()]), Some(2000)),
     ] {
         let with = evaluate_with(&catalog, Some(record(&catalog, &document)));
+        let (marked_decision, decision_record) = decision_apart(decision(&with, TASK_A));
         assert_eq!(
-            without_the_new_reason(decision(&with, TASK_A)),
-            base,
+            marked_decision, base,
             "{label}: the marked candidate is the one without a record"
         );
         let (chain, (targets, rest)) = dispatch_chain(&with);
+        assert_eq!(
+            decision_record,
+            (targets.clone(), rest.clone()),
+            "{label}: the decision names the dispatch's record"
+        );
         assert_eq!(chain, base_chain, "{label}: its dispatch's reasons");
         assert!(
             targets.starts_with("targets=active") && targets != base_targets,

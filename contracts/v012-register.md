@@ -23009,6 +23009,29 @@ reader's refusal (`caused_by`); the scope sentence of resource-targets.md says t
 candidate is computed apart. (5) Tests below. (6) The limits at deploy below. (7) Renumbered to
 §1.364 after main's §1.363.
 
+**Round 2** (the coordinator's ruling of 11-14 on the four early returns of the workbench's
+check: the root's metadata cannot be read, the root is damaged, the composition is refused as a
+whole, no refused game can be taken out). **A game whose root cannot be composed has no goals in
+effect until it composes.** At each of the four returns the check notes, in the workbench's memory
+(`note_uncomposed`), the game whose root failed and every game in use whose marks it did not find
+equal to those of its last composed read (a game whose files have not changed is composed in the
+active generation as it is now; one the check did not reach has no marks and is noted); the first
+composition that succeeds clears every note, and while one is held each check reads and composes
+again even when nothing changed. The policy cycle reads the notes right after the check
+(`uncomposed_standard_pack_games`) and tells the evaluator, per instance of a noted game, through
+`LeftOutFacts::void_targets` (memory only; never a fact, a snapshot or a decision identity); the
+evaluator computes every candidate of such an instance that holds a record through the marked
+candidate's one code path, as on an instance without a record, with the new info code
+`resource_target_root_uncomposed` (no existing code says that a game's root cannot be composed)
+in place of `resource_target_package_irreversible`, also when its task carries the mark. It also
+covers a current generation composed before this slice whose first check under this build meets a
+root it cannot compose (the adoption at the start clears the marks, so every game is noted). An
+instance of a game whose root composes is not touched; an installation whose roots all compose
+holds no note and computes exactly what it computes without this. Not built: composing the active
+generation's old fragments with the new declarations (the ruling's first option). `actingd
+suspended`'s warnings do not list `standard_pack_package_unreadable` (its problem warnings say why
+a game has no rows; check-config notes it).
+
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | GR2S-1 | the V2 task member `irreversible_reach` (`TaskSpec::irreversible_reach`, `IRREVERSIBLE_REACH_MEMBER`) | catalog format addition | G-R2s | the standard-pack composer | absent when false: a catalog without it keeps its bytes and hash; refused in V1 (`unknown_field`) and on a `schedule.json` rule |
@@ -23019,6 +23042,8 @@ candidate is computed apart. (5) Tests below. (6) The limits at deploy below. (7
 | GR2S-6 | the workbench's per-package declaration marks | behaviour of the check | G-R2s | the host | memory only |
 | GR2S-7 | `standard_pack_rule_followers` (policy crate) and the meaning of `GoalRule::followers` | composer function, goal check input | G-R2s fix round 1 | the composer, the resource tools' goal check | every rule with a chain link to the rule, not only the riding followers; the goal check can refuse more `tier` entries, never fewer |
 | GR2S-8 | `standard_pack_package_unreadable` among check-config's `standard_pack_schedule.problems` and notes | check-config report | G-R2s fix round 1 | check-config | with the reader's refusal as its cause |
+| GR2S-9 | `LeftOutFacts::void_targets` and `targets_void` | evaluator input (memory only) | G-R2s round 2 | the policy cycle | none of it enters a snapshot or decision identity; empty, the evaluation is the one of before |
+| GR2S-10 | `resource_target_root_uncomposed` (policy, info, no key) | decision reason | G-R2s round 2 | the evaluator | a new code is no revision |
 
 **Interface.** No revision moves: no `package`, `ledger`, `runtime-client`, `actingd-config` or
 `runtime-outcomes` shape changes (a catalog member the composer writes, two codes).
@@ -23035,7 +23060,9 @@ that marks a capability irreversible without the `parameters` the reader require
 deploy, run `actinglab standard-pack check --root <game root>` over each game root and look for
 that warning (check-config notes it too). While a package's file is locked for a moment during its
 replacement, the check that meets it can mark the whole game for about one check interval (a
-minute by default) and activate a generation twice (marked, then unmarked).
+minute by default) and activate a generation twice (marked, then unmarked). During a hot
+placement a root can be refused for one check (up to a minute: `bundle.json` or `schedule.json`
+half written); its game's goals are void for that long (round 2).
 
 **Rollback** (below 0.12.60). After a marked generation has dispatched, a build before this slice
 refuses that generation at its start (it compiles every generation its dispatches and decision
@@ -23068,7 +23095,15 @@ the host's `gate_455_gr2s::gr2s_host_the_marks_follow_the_declaration_files_with
 `gr2s_host_a_declaration_file_whose_metadata_fails_marks_its_game_and_the_check_goes_on` (fix round
 1, through the gate tests' seam `DECLARATION_METADATA_FAILS_FOR_TEST`) and
 `gr2s_host_check_config_composes_the_mark` (packages written by `gate_442_rem1`'s
-`write_package`, now visible to its sibling); actingd's
+`write_package`, now visible to its sibling); (round 2, two of the four returns driven for real,
+on `gate_rl1b`'s bench with two games, each instance's inventory read and a v2 goal applied
+through `ApplyResourceTargets`) `gate_rl1b::gr2s_r2_a_damaged_root_voids_the_goals_of_its_game_until_it_composes`
+and `gr2s_r2_a_composition_refused_as_a_whole_voids_the_goals_of_the_changed_game` (game A alone
+holds the catalog's 1 024 pools, the two games together one too many): while refused, game A's
+candidate has the rank and score-stage reasons of before any goal and says why, game B's keeps the
+goal's numbers, and composed again game A's goal applies as before; the root-metadata return
+shares the damaged root's code (`note_uncomposed` with the failing game), the no-progress return
+the whole refusal's (without one); actingd's
 `gate_rl1c::gr2s_check_config_notes_each_package_it_cannot_read` (fix round 1); lab-ops's
 `packs::tests::gr2s_the_offline_input_follows_the_whole_root_rule_and_an_unreadable_package`.
 **What t1 and t2 prove.** t1 compares the marked candidate's whole decision and its dispatch's

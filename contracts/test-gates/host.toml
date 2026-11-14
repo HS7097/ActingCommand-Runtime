@@ -3889,3 +3889,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2s_host_a_declaration_file_whose_metadata_fails_marks_its_game_and_the_check_goes_on",
 ]
 incident = ["#455 G-R2s"]
+# Workflow #455 G-R2s round 2 (0.12.60; register §1.364; the coordinator's ruling of 11-14 on the workbench's early returns; contracts/resource-targets.md, "A task that can do something irreversible"): a composer-mode host with two games on two instances, each instance's inventory read and a v2 goal on each pool applied through ApplyResourceTargets; while game A's bundle.json is damaged, game A's candidate has the rank and score-stage reasons of before any goal and carries resource_target_root_uncomposed, game B's keeps the goal's numbers, and repaired game A's goal applies again (1); the same when game A's schedule.json makes the composition refused as a whole (the catalog's pool limit exceeded by the two games together) (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r2_a_damaged_root_voids_the_goals_of_its_game_until_it_composes",
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r2_a_composition_refused_as_a_whole_voids_the_goals_of_the_changed_game",
+]
+incident = ["#455 G-R2s"]
