@@ -15,7 +15,7 @@ every code of its fragment, retired ones included, sorted by code, with its cate
 `since`, status (a retired code with the code that replaces it, where it names one), review, text
 (`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
 at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1759 locations are not in it, and 10 of the header's 41 owners have no fragment file and so no file
+1760 locations are not in it, and 10 of the header's 41 owners have no fragment file and so no file
 here.
 
 ## Codes by status
