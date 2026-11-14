@@ -499,7 +499,7 @@ impl StandardPackComposition {
         &self.followers
     }
 
-    /// Workflow #464 P3 (register §1.365; `contracts/standard-pack-schedule.md`, "Readiness"): the
+    /// Workflow #464 P3 (register §1.369; `contracts/standard-pack-schedule.md`, "Readiness"): the
     /// judged rules of each game whose `schedule.json` was read that count as *pending*, by game
     /// id, each game's rule ids in file order: the rules [`Self::benefit_coverage`] counts in
     /// `pending`. A static reading of the file, as the coverage is; it decides nothing. Only the

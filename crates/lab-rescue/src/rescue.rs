@@ -42,6 +42,11 @@
 //!   Workflow #421 INST-5b: the hold also sets one global pause of its own before the close
 //!   (unless a global pause is in effect), which the Runtime restores at its start, so the new
 //!   instance is never unpaused; the release hands it back after the new instance's pause.
+//!   Workflow #453 S3: with no Runtime answering, after the update path's stopped rule
+//!   (`install::launch::refuse_running`), the candidate's new entry declares `start_paused: true`
+//!   and the swap alone commits it; the Runtime's next start holds the instance with
+//!   `instance.added`. `config replace` and `config restore` apply the same rule when no Runtime
+//!   answers.
 //! - **The binding** (Workflow #434 LAB-6S2-B1; §2.4, §4.3). A request the module sends to a
 //!   running Runtime keeps the CLI envelope `actingctl install`'s requests carry
 //!   (`crate::install::runtime`), and its connection binds the Lab channel with the module's word,
@@ -65,6 +70,10 @@
 //!   `contracts/vision-model-folders.md`, "The manifest"), read only, offline: the live build's
 //!   `actingd vision manifest|check`, each ended at its bound; `vision check` also joins the models
 //!   the packs of each game root need, from the Tools' `standard-pack check` of the root.
+//! - **`vision place --from <dir>`** (Workflow #453 S9; `crate::install::vision`): the files of the
+//!   configured vision root's manifest it lacks or holds with another SHA-256, verified below the
+//!   folder a person gives before anything is written and placed while the Runtime is stopped, in
+//!   one journalled operation; nothing is fetched.
 
 use crate::agent_channel::{self, Answer as Answered};
 use crate::cli_line::{self, Exit};
@@ -109,8 +118,9 @@ const USAGE: &str = "usage: actinglab [--json] <rescue operation> [<positionals>
 
 /// The rows of module `rescue` this slice serves, by the table's name (Workflow #421 INST-5: and
 /// `instance add`; Workflow #434 LAB-5G5b: and the three MCP rows; Workflow #453 S10: and
-/// `emulators`; Workflow #453 S7: and `vision manifest` and `vision check`).
-pub const SERVED: [&str; 36] = [
+/// `emulators`; Workflow #453 S7: and `vision manifest` and `vision check`; Workflow #453 S4: and
+/// `new`; Workflow #453 S9: and `vision place`; Workflow #453 S12: and `state-root claim`).
+pub const SERVED: [&str; 39] = [
     "up",
     "restart",
     "down",
@@ -126,16 +136,19 @@ pub const SERVED: [&str; 36] = [
     "release verify",
     "release stage",
     "adopt",
+    "new",
     "config replace",
     "config restore",
     "instance add",
     "place",
     "unlock",
+    "state-root claim",
     "check-config",
     "ledger verify",
     "emulators",
     "vision manifest",
     "vision check",
+    "vision place",
     "watchdog install",
     "watchdog uninstall",
     "agent add",
@@ -226,6 +239,10 @@ pub(crate) fn answer_with(
     name: &str,
     params: &Map<String, Value>,
 ) -> Answered {
+    // Workflow #453 S4: `new` acts on the root it names, not on this one.
+    if name == crate::install::new::ROW {
+        return answer_new(context.host, context.initiator, params);
+    }
     if let Some(refused) = refused_parameter(params) {
         return Answered::Line(cli_line::failure(&refused, Some(USAGE)));
     }
@@ -238,6 +255,7 @@ pub(crate) fn answer_with(
         return Answered::Line(match name {
             "up" => up(context, handed, params),
             "down" => down(context, handed, params),
+            "op status" => op_status(context, handed, params),
             _ => installer(context, handed, params),
         });
     }
@@ -254,11 +272,14 @@ pub(crate) fn answer_with(
         "instance add" => instance_add(context, params),
         "place" => place(context, params),
         "unlock" => unlock(context),
+        "state-root claim" => state_root_claim(context, params),
         "check-config" => check_config(context, params),
         "ledger verify" => ledger_verify(context),
         "emulators" => emulators(context),
         "vision manifest" => vision_manifest(context, params),
         "vision check" => vision_check(context),
+        // Workflow #453 S9: the files the vision root lacks, placed from a folder while stopped.
+        "vision place" => crate::install::vision::row(context, params),
         "watchdog install" => watchdog(context, crate::watchdog::Asked::Install),
         "watchdog uninstall" => watchdog(context, crate::watchdog::Asked::Uninstall),
         "mcp plan" => mcp_plan(context, params),
@@ -344,6 +365,93 @@ fn installer(context: &Context<'_>, handed: &'static Handed, params: &Map<String
     line(context, context.install(&words))
 }
 
+/// Workflow #453 S12: the member of `op status` that names the state root.
+const STATE_ROOT_MEMBER: &str = "state_root";
+/// Workflow #453 S12 fix round 1: `op status`'s switch that asks for that member.
+const STATE_ROOT_INSTALLATION: &str = "state_root_installation";
+/// The member of `install status` that names an unfinished operation (`null` when there is none).
+const UNFINISHED_MEMBER: &str = "unfinished";
+
+/// `op status`: the installer's `install status` with the module's face. Workflow #453 S12 fix
+/// round 1 (the coordinator's ruling after the review): only when the caller asks with the switch
+/// `state_root_installation` does it also answer the read-only member `state_root`
+/// ([`state_root_installation`]), which runs the live build's check-config. Without the switch it
+/// starts no process and answers exactly what it answered before the slice. With it, while
+/// `install status` names an unfinished operation, the answer is the status without the member,
+/// and no process is started: the update path counts any actingd under the root as a running
+/// Runtime (`install::launch::refuse_running`, the plan's running images), so a check-config
+/// started while an operation runs, which its answer tells the caller to follow with `op status`,
+/// could make its stop or its plan see a Runtime; the answer's own `unfinished` says why the member
+/// is not there. `actingctl install status` is unchanged.
+fn op_status(context: &Context<'_>, handed: &'static Handed, params: &Map<String, Value>) -> Exit {
+    if !switch(
+        rescue_reads::handing(handed, params),
+        STATE_ROOT_INSTALLATION,
+    ) {
+        return installer(context, handed, params);
+    }
+    let words = installer_line(handed, params, &context.root_word());
+    let mut answer = context.install(&words);
+    let unfinished = answer
+        .members
+        .get(UNFINISHED_MEMBER)
+        .is_some_and(|operation| !operation.is_null());
+    if !unfinished && answer.outcome.category() <= Category::Info {
+        answer.members.insert(
+            STATE_ROOT_MEMBER.to_owned(),
+            state_root_installation(context),
+        );
+    }
+    line(context, answer)
+}
+
+/// Workflow #453 S12: the state root of the root's configuration, `path`, and its installation
+/// state as the live build's check-config of that configuration (`--install-root <root>`) reports
+/// it, `installation`: its report member `state_root_installation` when it passes
+/// (`claimed_by_this`, `unclaimed`, `not_installed`; `null` from a build before 0.12.60, which
+/// reports none), else `null` with the check's refusal or failure as `check_config` (another
+/// installation's record is `state_root_installation_mismatch`, a file that cannot be read
+/// `state_root_installation_record_invalid`, each at stage `config_state_root`). Read only.
+fn state_root_installation(context: &Context<'_>) -> Value {
+    const STATUS: InstallLocation = InstallLocation::Status;
+    let path = files::plain(&context.location.state_root);
+    let checked = configuration(context, STATUS).and_then(|(_, settings)| {
+        programs::check_config(
+            context.host,
+            &context.location.root.join(Half::Runtime.dir()),
+            &context.location.config,
+            Some(&context.location.root),
+            Deadline::check_config(&settings),
+        )
+        .map_err(|failure| {
+            failure.onto(install::refusal(
+                STATUS,
+                InstallRefusal::CheckConfigUnanswered,
+            ))
+        })
+    });
+    match checked {
+        Ok(checked) if checked.passed() => json!({
+            "path": path,
+            "installation": checked
+                .report
+                .get("state_root_installation")
+                .cloned()
+                .unwrap_or(Value::Null),
+        }),
+        Ok(checked) => json!({
+            "path": path,
+            "installation": Value::Null,
+            "check_config": cli_line::warning(&checked.received),
+        }),
+        Err(failure) => json!({
+            "path": path,
+            "installation": Value::Null,
+            "check_config": cli_line::warning(&failure),
+        }),
+    }
+}
+
 /// Workflow #434 LAB-5B1b: the command line the installer row `handed` gives for `params`: its
 /// command's words, then each part in its place (`--root` and the root; a parameter under its flag
 /// when it is given as text), then, with `Part::Further`, every member no part placed, in the
@@ -372,6 +480,9 @@ fn installer_line(handed: &'static Handed, params: &Map<String, Value>, root: &s
                     words.push(value.to_owned());
                 }
             }
+            // Workflow #453 S12 fix round 1: a parameter the module reads itself (`op status`'s
+            // `state_root_installation`) is placed and never handed on.
+            Part::Param(name, Written::Beside) => placed.push(name),
             Part::Further => words.extend(further_flags(params, &placed)),
             // Written with `Part::Further`, in the order given; no installer row has another part.
             _ => {}
@@ -1328,7 +1439,8 @@ struct Commit<'a> {
 }
 
 /// Workflow #421 INST-5: what `instance add` commits beyond a file: its candidate is already the
-/// swap's part (`part`, a file name in the root), and what it added.
+/// swap's part (`part`, a file name in the root), and what it added (Workflow #453 S3: whether its
+/// entry starts paused, `added.start_paused`: the candidate composed while no Runtime answered).
 struct Adding {
     part: String,
     added: instance_add::Added,
@@ -1337,12 +1449,19 @@ struct Adding {
 /// The commit of `config replace`, `config restore` and `instance add`: the file checked with the
 /// live build's check-config before anything changes; then, while a Runtime runs, the hold, the
 /// close, the swap with the replaced file kept, the start and its checks (one `config_replace`
-/// operation), `alive` and the release; without one the swap alone. `instance add` needs a
-/// Runtime (it is refused `runtime_not_running` before anything changes) and pauses the added
-/// instance after the start, before `alive` ([`pause_added`]). Workflow #421 INST-5b: its hold's
-/// pause step also sets one global pause of its own (unless one is in effect), kept across the
-/// restart and on every failure, which only the release, after the added instance's pause, hands
-/// back with the hold's other pauses.
+/// operation), `alive` and the release; without one the swap alone. Workflow #453 S3 (rulings 1
+/// and 2 on board #453): without one, under the writer lock and before the operation opens, the
+/// update path's stopped rule (`install::launch::refuse_running`: an actingd under the root
+/// `runtime_running`, the state root's owner lock held `owner_lock_held`, a probe that cannot
+/// decide `processes_unreadable`), so no file is swapped under a Runtime that is starting.
+/// `instance add`'s candidate for a running Runtime needs one (it is refused `runtime_not_running`
+/// before anything changes, as before) and pauses the added instance after the start, before
+/// `alive` ([`pause_added`]); its candidate composed while none answered (`start_paused`) is
+/// committed by the swap alone, judged by the stopped rule whatever answers now, and pauses
+/// nothing: the next start does. Workflow #421 INST-5b: the hold's pause step of `instance add`
+/// also sets one global pause of its own (unless one is in effect), kept across the restart and
+/// on every failure, which only the release, after the added instance's pause, hands back with the
+/// hold's other pauses.
 fn commit(
     context: &Context<'_>,
     paths: &Paths,
@@ -1371,13 +1490,26 @@ fn commit(
     }
     let _lock = WriterLock::take(paths, loaded.settings.lock_wait_ms, command)?;
     journal::refuse_unfinished(command, paths)?;
-    let live = running(context, loaded, command)?;
-    // INST-5: the added instance is paused on the Runtime that starts with it; with none running
-    // nothing is committed (its next start would run the instance unpaused).
-    if commit.adding.is_some() && !live {
+    // Workflow #453 S3: a candidate whose new entry starts paused was composed while no Runtime
+    // answered; it is committed on that path whatever answers now, and the stopped rule below
+    // refuses a Runtime that came up since.
+    let starting_paused = commit
+        .adding
+        .is_some_and(|adding| adding.added.start_paused);
+    let live = !starting_paused && running(context, loaded, command)?;
+    // INST-5: the instance a candidate for a running Runtime adds is paused on the Runtime that
+    // starts with it; with none running that candidate is not committed (its next start would run
+    // the instance unpaused).
+    if commit.adding.is_some() && !starting_paused && !live {
         return Err(
             install::refusal(command, InstallRefusal::RuntimeNotRunning).path(&loaded.state_root)
         );
+    }
+    // Workflow #453 S3 (rulings 1 and 2): with no Runtime answering, the update path's stopped
+    // rule, under the writer lock and before the operation opens (a status read alone does not see
+    // a Runtime that is starting).
+    if !live {
+        crate::install::launch::refuse_running(context.host, paths, &loaded.state_root, command)?;
     }
     let begun = if live {
         // INST-5b: `instance add`'s hold also sets one global pause of its own before the close,
@@ -1420,11 +1552,12 @@ fn commit(
     let operation_id = operation.id().to_owned();
     let mut swapped = crate::install::update::run(operation, loaded)?;
     if stops(&swapped) {
-        // INST-5: a stop after the swap may leave a Runtime running the added instance.
+        // INST-5: a stop after the swap may leave a Runtime running the added instance (Workflow
+        // #453 S3: only on the path with a Runtime; the swap alone starts none).
         if let Some(adding) = commit.adding {
             let swapped_in = files::sha256_file(&paths.config())
                 .is_ok_and(|(sha256, _)| sha256 == candidate.sha256);
-            if swapped_in {
+            if live && swapped_in {
                 let paused = pause_added(context, loaded, &adding.added.asked.alias);
                 steps.push(step("pause_added", &paused.outcome, paused.result));
                 if let Some(refusal) = paused.refusal {
@@ -1443,7 +1576,8 @@ fn commit(
         return Ok(stopped(context, steps, swapped));
     }
     steps.push(answer_step(context, "swap", &swapped));
-    if let Some(adding) = commit.adding {
+    // Workflow #453 S3: with no Runtime, no step `pause_added`: the next start holds the instance.
+    if let Some(adding) = commit.adding.filter(|_| live) {
         let alias = &adding.added.asked.alias;
         let paused = pause_added(context, loaded, alias);
         steps.push(step("pause_added", &paused.outcome, paused.result));
@@ -1499,7 +1633,9 @@ fn commit(
 /// (`crate::install::instance_add`), committed by
 /// [`commit`] with the Runtime restarted under a hold; the new instance is paused with its own
 /// reason after the start. Every refusal before the candidate is written leaves the root as it
-/// was; a Runtime must run.
+/// was. Workflow #453 S3: with no Runtime answering, the update path's stopped rule first
+/// (`runtime_running`, `owner_lock_held`, `processes_unreadable`, before the candidate is
+/// written); then the candidate whose new entry starts paused, committed by the swap alone.
 fn instance_add(context: &Context<'_>, params: Params<'_>) -> Exit {
     const ADD: InstallLocation = instance_add::ADD;
     let run = || -> Result<Exit, Outcome> {
@@ -1507,12 +1643,12 @@ fn instance_add(context: &Context<'_>, params: Params<'_>) -> Exit {
         let paths = context.paths(ADD)?;
         journal::refuse_unfinished(ADD, &paths)?;
         let loaded = plan::load(&paths, ADD)?;
-        if !running(context, &loaded, ADD)? {
-            return Err(
-                install::refusal(ADD, InstallRefusal::RuntimeNotRunning).path(&loaded.state_root)
-            );
-        }
-        let composed = instance_add::compose(context.host, &paths, &loaded, &asked)?;
+        let composed = if running(context, &loaded, ADD)? {
+            instance_add::compose(context.host, &paths, &loaded, &asked)?
+        } else {
+            crate::install::launch::refuse_running(context.host, &paths, &loaded.state_root, ADD)?;
+            instance_add::compose_starting_paused(context.host, &paths, &loaded, &asked)?
+        };
         let part = instance_add::stage(context.host, &paths, &composed.bytes)?;
         let file = paths.root.join(&part);
         let adding = Adding {
@@ -1680,7 +1816,7 @@ fn pause_form(context: &Context<'_>, alias: &str) -> Value {
         "--instance",
         alias,
         "--reason",
-        instance_add::PAUSE_REASON
+        actingcommand_contract::INSTANCE_ADDED_PAUSE_REASON
     ])
 }
 
@@ -1977,6 +2113,110 @@ fn unlock(context: &Context<'_>) -> Exit {
             (_, Some(reported)) => cli_line::receipt(members, &reported, true),
             (_, None) => cli_line::receipt(members, &programs::exited(&ran), true),
         })
+    };
+    run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
+}
+
+/// Workflow #453 S12: the switch of `state-root claim` that renews an identity that cannot be read.
+const NEW_IDENTITY: &str = "new_identity";
+
+/// Workflow #453 S12 (`contracts/state-root-installation.md`, "Handing a state root over";
+/// `contracts/install-cli.md`, "The Lab's rescue module"): `state-root claim [--new-identity]`, the
+/// live build's `actingd claim-state-root --config <the root's configuration> --actor <initiator>`
+/// (and `--new-identity` when given), as `unlock` runs `unlock-owner`, within
+/// `install.child.check_config_timeout_ms`, and only while the Runtime is stopped by the update
+/// path's stopped rule (`launch::refuse_running`: the state root's owner lock held refuses
+/// `owner_lock_held`, an actingd running under the root `runtime_running`, a probe that cannot
+/// decide `processes_unreadable`). A completed claim is `install_command_done` (operation
+/// `install_state_root_claim`, `installation_changed` as actingd's `changed`, actingd's outcome its
+/// `related` link) with actingd's report as `report`, the initiator as `actor` and, when a record
+/// was replaced, its claim time as `previous {claimed_at_unix_ms}` (when it could be read) and the
+/// note `install_caveat_noted` `fingerprints_discontinuous` with the kept record as `path` (fix
+/// round 1: also when a record was written beside an old record an earlier hand-over kept, the
+/// newest such record as `path`): the ledger's records that carry
+/// fingerprints were made with the salt of the configuration that wrote them, and the command
+/// cannot know whether this configuration's salt is the same. actingd's refusal is the answer as
+/// `unlock`'s is; no report from actingd is `install_command_refused` with `install_refusal`
+/// `state_root_claim_unanswered`.
+fn state_root_claim(context: &Context<'_>, params: Params<'_>) -> Exit {
+    const CLAIM: InstallLocation = InstallLocation::StateRootClaim;
+    let state_root = &context.location.state_root;
+    let unanswered = || install::refusal(CLAIM, InstallRefusal::StateRootClaimUnanswered);
+    let run = || -> Result<Exit, Outcome> {
+        let (_, settings) = configuration(context, CLAIM)?;
+        let paths = context.paths(CLAIM)?;
+        crate::install::launch::refuse_running(context.host, &paths, state_root, CLAIM)?;
+        let program = context
+            .location
+            .root
+            .join(Half::Runtime.dir())
+            .join(programs::DAEMON);
+        let config = context.location.config.to_string_lossy().into_owned();
+        let mut arguments = vec![
+            "claim-state-root",
+            "--config",
+            config.as_str(),
+            "--actor",
+            context.initiator.as_str(),
+        ];
+        if switch(params, NEW_IDENTITY) {
+            arguments.push("--new-identity");
+        }
+        let ran = programs::run(
+            context.host,
+            &program,
+            &arguments,
+            Deadline::check_config(&settings),
+        )
+        .map_err(|failure| failure.onto(unanswered().path(state_root)))?;
+        let report = serde_json::from_slice::<Value>(files::without_bom(&ran.stdout)).ok();
+        let Some(reported) = report
+            .as_ref()
+            .and_then(|report| {
+                serde_json::from_value::<OutcomeEnvelope>(report["outcome"].clone()).ok()
+            })
+            .map(OutcomeEnvelope::into_outcome)
+        else {
+            return Err(unanswered()
+                .path(state_root)
+                .caused_by(programs::exited(&ran)));
+        };
+        let report = report.unwrap_or(Value::Null);
+        let mut members = Map::new();
+        members.insert(
+            "actor".to_owned(),
+            Value::String(context.initiator.as_str().to_owned()),
+        );
+        if ran.exit_code != Some(0) || reported.category() > Category::Info {
+            members.insert("report".to_owned(), report);
+            return Ok(cli_line::receipt(members, &reported, true));
+        }
+        // The caveat's record: the one this command set aside (`replaced`), or (fix round 1,
+        // ruling 3) the kept one an earlier hand-over left beside a record written now.
+        let kept_record = report["kept_record"].as_str().map(PathBuf::from);
+        let caveat_about = match (report["record"].as_str(), kept_record) {
+            (Some("replaced"), kept) => Some(kept.unwrap_or_else(|| state_root.clone())),
+            (Some("written"), Some(kept)) => Some(kept),
+            _ => None,
+        };
+        let mut done = install::done(CLAIM)
+            .path(state_root)
+            .installation_changed(report["changed"].as_bool().unwrap_or(true))
+            .link(CauseRelation::Related, reported);
+        if let Some(kept) = caveat_about {
+            done = done.link(
+                CauseRelation::Note,
+                install::caveat(CLAIM, InstallCaveat::FingerprintsDiscontinuous).path(&kept),
+            );
+        }
+        if let Some(previous) = report
+            .get("previous")
+            .filter(|previous| previous.is_object())
+        {
+            members.insert("previous".to_owned(), previous.clone());
+        }
+        members.insert("report".to_owned(), report);
+        Ok(cli_line::success(members, &done))
     };
     run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
 }
@@ -2626,10 +2866,36 @@ pub(crate) fn agent_words(
 /// The rescue module's answer of a row actinglab's parser gave, located from this process: the
 /// root of the running program ([`actingcommand_lab_ops::locate::locate`]).
 pub fn answer_here(name: &str, params: &Map<String, Value>, initiator: Initiator) -> Answered {
+    // Workflow #453 S4: `new` builds the root it names, so it runs wherever the program does (the
+    // release's own program, before any root exists); the one row served without a located root.
+    if name == crate::install::new::ROW {
+        return answer_new(&SystemHost::of(Some(initiator)), initiator, params);
+    }
     match actingcommand_lab_ops::locate::locate() {
         Ok(location) => answer(name, params, &location, initiator),
         Err(outcome) => Answered::Line(cli_line::failure(&outcome, None)),
     }
+}
+
+/// Workflow #453 S4: the row `new` (`crate::install::new`) on `host`, as `initiator`: the
+/// parameters the module refuses on every row refused first, then the row read through its
+/// constant; a usage refusal with the module's usage.
+pub(crate) fn answer_new(
+    host: &dyn Host,
+    initiator: Initiator,
+    params: &Map<String, Value>,
+) -> Answered {
+    let row = crate::install::new::ROW;
+    if let Some(refused) = refused_parameter(params) {
+        return Answered::Line(cli_line::failure(&refused, Some(USAGE)));
+    }
+    let Some(read) = rescue_reads::read_here(row, params) else {
+        return Answered::Line(unknown_row(row));
+    };
+    Answered::Line(match crate::install::new::row(host, initiator, read) {
+        Ok(answer) => install::print(answer),
+        Err(refused) => module_refusal(&refused),
+    })
 }
 
 /// Whether a path is the root of `location` (for the tests' fake roots).

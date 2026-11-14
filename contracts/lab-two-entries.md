@@ -406,8 +406,10 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 - **The list** is the table's `irreversible: true` rows: `deploy`, `rollback`, `convert`, `clean`,
   `undo`, `config replace`, `config restore`, `config file commit`, `instance add` (Workflow #421
   INST-5: its first slice commits the configuration it composes, as `config replace` does),
-  `place`, `pack remove`, `pack restore`, `unlock`, `kept clear` and `resource import-mpe` (the
-  last two reserved).
+  `place`, `pack remove`, `pack restore`, `unlock`, `state-root claim` (Workflow #453 S12: it
+  hands a state root over to this installation, the old record kept), `vision place` (Workflow
+  #453 S9: it replaces a vision root's files, the replaced ones kept), `kept clear` and
+  `resource import-mpe` (the last two reserved).
 - **The rule:** record the initiator (section 4.3), nothing more. No parameter, no second
   confirmation, no plan id carried back by the caller. A plan id is still computed and journalled,
   and an operation still applies only the plan it computed under the writer lock. MCP marks these
@@ -482,20 +484,24 @@ Alice's answer 4. From LAB-3, in the rescue module:
   the candidate, then `config replace`'s steps with the new instance paused after the start,
   before the release). The download stays outside the Lab.
 - **Without `--root` and `--state-root`:** every rescue operation acts on the root of the
-  `actinglab.exe` that runs it (section 9.3); `new <root>` names the new root. A rehearsal on
-  another root runs that root's own program.
+  `actinglab.exe` that runs it (section 9.3); `new <new_root>` names the new root. A rehearsal on
+  another root runs that root's own program. Workflow #453 S4 (since 0.12.60;
+  [install-cli.md](install-cli.md), "Fresh root"): `new` is the one row served without a located
+  root, so the release's own program and the Lab's MCP server run it before any root exists; its
+  positional is `new_root` and its state root's option `--new-state-root` (`new_state_root`), never
+  `--state-root`, since the module refuses a parameter named `root` or `state_root` on every row.
 - The configuration file's candidate (`install config …`) becomes `config file …`, distinct from
   the run-time settings `config set` and `config clear`.
 - **As built by LAB-3** (0.12.48; register §1.287, "Slice LAB-3"; [install-cli.md](install-cli.md),
   "The Lab's rescue module"): the module is `crates/lab-rescue`, which actingctl answers
   `install`, `start`, `restart`, `mcp-entry` and `agent-channel` from, unchanged, until LAB-7;
   actinglab runs from `<root>\tools\` until LAB-7 moves it, and the default location takes both;
-  a row whose source command is not built yet (`convert`, `clean`, `new`, `prepare`,
+  a row whose source command is not built yet (`convert`, `clean`, `prepare`,
   `config file …`, `instance remove`, `pack remove` and `restore`) is not offered until the
   slice that builds the source (Workflow #421 INST-5 opened `instance add` with the module's own
   command first, [install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh
-  root"); until LAB-6S2 the module's requests to a running Runtime go on the CLI channel, as
-  `actingctl install`'s do: the Runtime refused a pause, a resume and a shutdown from a Lab
+  root", and Workflow #453 S4 `new` the same way, "Fresh root"); until LAB-6S2 the module's
+  requests to a running Runtime go on the CLI channel, as `actingctl install`'s do: the Runtime refused a pause, a resume and a shutdown from a Lab
   envelope until LAB-6S1b deleted those origin gates (§2.4), and LAB-6S2 moves the module to the
   Lab channel with its word.
 - **The MCP rows** (Workflow #434 LAB-5G5b, 0.12.57; register §1.287, "Slice LAB-5G5b";

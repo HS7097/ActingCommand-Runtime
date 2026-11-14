@@ -48,6 +48,12 @@
 //!   the live file's; the swap takes it as its part and nothing else is staged. A candidate refused
 //!   afterwards (check-config, a Runtime gone) stays there, kept like every part; nothing deletes
 //!   it, and `leftovers` lists it.
+//! - **Starting paused** (Workflow #453 S3; `contracts/scheduling-pause.md`, "Pauses held at a
+//!   first start"): the candidate the module commits while no Runtime answers
+//!   ([`compose_starting_paused`]) gives the new entry, and no other, the member `start_paused:
+//!   true` ([`START_PAUSED`]), last; the Runtime's next start holds the instance with
+//!   `instance.added`. The candidate for a running Runtime ([`compose`]) is as before: no entry
+//!   gains the member, and the instance is paused after the start.
 
 use super::files;
 use super::host::Host;
@@ -58,11 +64,12 @@ use crate::cli_line;
 use crate::codes::{ArgumentProblem, InstallLocation, InstallRefusal};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    BundleIndex, IdentifierIssuer, MAX_INSTANCE_ALIAS_BYTES, STANDARD_PACK_BUNDLE_FILE,
-    SchedulingPauseReason, validate_instance_alias,
+    BundleIndex, INSTANCE_ADDED_PAUSE_REASON, IdentifierIssuer, MAX_INSTANCE_ALIAS_BYTES,
+    STANDARD_PACK_BUNDLE_FILE, SchedulingPauseReason, validate_instance_alias,
 };
 use actingcommand_lab_ops::core_reads::Params;
 use actingcommand_policy::STANDARD_PACK_OPERATION_ID;
+use actingcommand_runtime_config::START_PAUSED;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -70,9 +77,6 @@ use std::path::{Path, PathBuf};
 
 /// The command of every outcome here.
 pub(crate) const ADD: InstallLocation = InstallLocation::InstanceAdd;
-/// The reason of the added instance's own pause, set after the start (the coordinator's ruling of
-/// 11-11): a pause reason name (`contracts/scheduling-pause.md`, 1 to 64 bytes of `[a-z0-9_.-]`).
-pub(crate) const PAUSE_REASON: &str = "instance.added";
 /// The configuration's standard-pack root (`contracts/runtime-config.md`).
 const ROOT_KEY: &str = "standard_packs.root";
 /// The configuration's instance list.
@@ -90,9 +94,13 @@ const APPLICATIONS_FILE: &str = "applications.json";
 /// namespace is the clock, the process and a counter).
 const MINT_ATTEMPTS: usize = 8;
 
-/// The added instance's pause reason.
+/// The added instance's pause reason: the reason of its pause after the start (the coordinator's
+/// ruling of 11-11) and of the Runtime's hold at a first start (Workflow #453 S2), one constant,
+/// the contract crate's `INSTANCE_ADDED_PAUSE_REASON` (Workflow #453 S3; before it this module kept
+/// its own copy).
 pub(crate) fn pause_reason() -> Result<SchedulingPauseReason, Outcome> {
-    SchedulingPauseReason::new(PAUSE_REASON).map_err(|error| Outcome::new(error.code()))
+    SchedulingPauseReason::new(INSTANCE_ADDED_PAUSE_REASON)
+        .map_err(|error| Outcome::new(error.code()))
 }
 
 /// What the caller asked for: the row's parameters.
@@ -221,8 +229,8 @@ impl Asked {
 
 /// What the command added: what was asked, the minted id, the application id written and where it
 /// came from (Workflow #452), the alias whose policy row gave the host and the capabilities (none
-/// for a first row, Workflow #453 S1), and the reason the instance is paused with
-/// ([`PAUSE_REASON`]).
+/// for a first row, Workflow #453 S1), the reason the instance is paused with ([`pause_reason`]),
+/// and (Workflow #453 S3) whether its entry starts paused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Added {
     pub(crate) asked: Asked,
@@ -231,11 +239,15 @@ pub(crate) struct Added {
     pub(crate) application_id_from: ApplicationIdFrom,
     pub(crate) capabilities_from: Option<String>,
     pub(crate) pause_reason: SchedulingPauseReason,
+    pub(crate) start_paused: bool,
 }
 
 /// Workflow #421 INST-5 fix 1: [`Added`] as a record, its pause reason the name type as the hold's
 /// records keep a reason (`super::hold`). Workflow #452: and the application id with where it came
 /// from, two additive members. Workflow #453 S1: `capabilities_from` is `null` for a first row.
+/// Workflow #453 S3: `start_paused: true` when the entry carries the member (the candidate committed
+/// while no Runtime answers), absent otherwise, so the record of a candidate for a running Runtime
+/// is as before.
 #[derive(Serialize)]
 struct AddedRecord<'a> {
     alias: &'a str,
@@ -249,6 +261,8 @@ struct AddedRecord<'a> {
     pause_reason: &'a SchedulingPauseReason,
     application_id: &'a str,
     application_id_from: ApplicationIdFrom,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    start_paused: bool,
 }
 
 impl Added {
@@ -266,6 +280,7 @@ impl Added {
             pause_reason: &self.pause_reason,
             application_id: &self.application_id,
             application_id_from: self.application_id_from,
+            start_paused: self.start_paused,
         })
     }
 }
@@ -358,12 +373,36 @@ fn first_row_source(config: &Value) -> Result<RowSource, Outcome> {
 }
 
 /// Composes the candidate from the live configuration `loaded.config` (the selected one) for
-/// `asked`, refusing (`instance_invalid`) what the module description lists.
+/// `asked`, refusing (`instance_invalid`) what the module description lists: the candidate for a
+/// running Runtime, whose entries gain no `start_paused`.
 pub(crate) fn compose(
     host: &dyn Host,
     paths: &Paths,
     loaded: &Loaded,
     asked: &Asked,
+) -> Result<Composed, Outcome> {
+    composed(host, paths, loaded, asked, false)
+}
+
+/// Workflow #453 S3: the candidate [`compose`] composes, its new entry, and no other, carrying
+/// `start_paused: true` as its last member: the candidate committed while no Runtime answers,
+/// whose instance the Runtime's next start holds with `instance.added`.
+pub(crate) fn compose_starting_paused(
+    host: &dyn Host,
+    paths: &Paths,
+    loaded: &Loaded,
+    asked: &Asked,
+) -> Result<Composed, Outcome> {
+    composed(host, paths, loaded, asked, true)
+}
+
+/// The candidate for `asked`; its new entry declares `start_paused: true` when `start_paused`.
+fn composed(
+    host: &dyn Host,
+    paths: &Paths,
+    loaded: &Loaded,
+    asked: &Asked,
+    start_paused: bool,
 ) -> Result<Composed, Outcome> {
     let config = &loaded.config;
     let instances = list(config, "/instances", INSTANCES_KEY)?;
@@ -427,8 +466,9 @@ pub(crate) fn compose(
         application_id_from,
         capabilities_from,
         pause_reason: pause_reason()?,
+        start_paused,
     };
-    let entry = json!({
+    let mut entry = json!({
         "alias": asked.alias,
         "instance_id": added.instance_id,
         "application_id": added.application_id,
@@ -436,6 +476,11 @@ pub(crate) fn compose(
         "touch_backend": asked.touch_backend,
         "capture_backend": asked.capture_backend,
     });
+    // Workflow #453 S3: the entry of a candidate committed while no Runtime answers starts paused;
+    // the member comes last, after the six members of before.
+    if start_paused && let Value::Object(members) = &mut entry {
+        members.insert(START_PAUSED.to_owned(), Value::Bool(true));
+    }
     let row = json!({
         "instance_id": asked.alias,
         "server_id": asked.server,

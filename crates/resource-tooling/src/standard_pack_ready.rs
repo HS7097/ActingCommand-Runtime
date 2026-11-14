@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #464 P3 (register §1.365; `contracts/standard-pack-schedule.md`, "Readiness"; the
+//! Workflow #464 P3 (register §1.369; `contracts/standard-pack-schedule.md`, "Readiness"; the
 //! design `rd-1114/464-pack-build-design.md` F.1 with the coordinator's rulings on its questions):
 //! for every pack of one game root, whether the scheduler can dispatch it, or every reason it
 //! waits. One function judges the twelve items, [`judge_standard_pack_readiness`]; `actinglab

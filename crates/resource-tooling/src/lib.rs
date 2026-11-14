@@ -115,7 +115,7 @@ mod gate_453_s8;
 #[cfg(test)]
 mod gate_455_gr1;
 
-// Workflow #464 P3 (register §1.365): the readiness of every pack of a game root, item by item.
+// Workflow #464 P3 (register §1.369): the readiness of every pack of a game root, item by item.
 #[cfg(test)]
 mod gate_464_p3;
 

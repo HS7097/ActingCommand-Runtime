@@ -745,7 +745,7 @@ checks them), and the composer fills the scope:
 
 ## Readiness (Workflow #464 P3, since 0.12.60)
 
-Register §1.365; the coordinator's rulings on board #464, not the owner's words. A pack that lacks
+Register §1.369; the coordinator's rulings on board #464, not the owner's words. A pack that lacks
 one thing is not refused: it is never dispatched, and nobody is told. The readiness answers, for
 every pack of one game root, `dispatchable`, or `waiting` with every reason, item by item, in words
 a person and an agent can act on. It writes nothing, starts nothing and reads no secret.

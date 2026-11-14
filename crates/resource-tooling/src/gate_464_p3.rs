@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #464 P3 (register §1.365; contracts/standard-pack-schedule.md, "Readiness"; the design
+// Workflow #464 P3 (register §1.369; contracts/standard-pack-schedule.md, "Readiness"; the design
 // rd-1114/464-pack-build-design.md F.1 and G, row P3, with the coordinator's rulings 3 and 7;
 // coordinator work order rd-1114/brief-464-p3-ready.md): `judge_standard_pack_readiness`, the one
 // function that judges the twelve readiness items of every pack of a game root.
