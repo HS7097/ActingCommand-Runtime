@@ -42,6 +42,11 @@
 //!   Workflow #421 INST-5b: the hold also sets one global pause of its own before the close
 //!   (unless a global pause is in effect), which the Runtime restores at its start, so the new
 //!   instance is never unpaused; the release hands it back after the new instance's pause.
+//!   Workflow #453 S3: with no Runtime answering, after the update path's stopped rule
+//!   (`install::launch::refuse_running`), the candidate's new entry declares `start_paused: true`
+//!   and the swap alone commits it; the Runtime's next start holds the instance with
+//!   `instance.added`. `config replace` and `config restore` apply the same rule when no Runtime
+//!   answers.
 //! - **The binding** (Workflow #434 LAB-6S2-B1; §2.4, §4.3). A request the module sends to a
 //!   running Runtime keeps the CLI envelope `actingctl install`'s requests carry
 //!   (`crate::install::runtime`), and its connection binds the Lab channel with the module's word,
@@ -1328,7 +1333,8 @@ struct Commit<'a> {
 }
 
 /// Workflow #421 INST-5: what `instance add` commits beyond a file: its candidate is already the
-/// swap's part (`part`, a file name in the root), and what it added.
+/// swap's part (`part`, a file name in the root), and what it added (Workflow #453 S3: whether its
+/// entry starts paused, `added.start_paused`: the candidate composed while no Runtime answered).
 struct Adding {
     part: String,
     added: instance_add::Added,
@@ -1337,12 +1343,19 @@ struct Adding {
 /// The commit of `config replace`, `config restore` and `instance add`: the file checked with the
 /// live build's check-config before anything changes; then, while a Runtime runs, the hold, the
 /// close, the swap with the replaced file kept, the start and its checks (one `config_replace`
-/// operation), `alive` and the release; without one the swap alone. `instance add` needs a
-/// Runtime (it is refused `runtime_not_running` before anything changes) and pauses the added
-/// instance after the start, before `alive` ([`pause_added`]). Workflow #421 INST-5b: its hold's
-/// pause step also sets one global pause of its own (unless one is in effect), kept across the
-/// restart and on every failure, which only the release, after the added instance's pause, hands
-/// back with the hold's other pauses.
+/// operation), `alive` and the release; without one the swap alone. Workflow #453 S3 (rulings 1
+/// and 2 on board #453): without one, under the writer lock and before the operation opens, the
+/// update path's stopped rule (`install::launch::refuse_running`: an actingd under the root
+/// `runtime_running`, the state root's owner lock held `owner_lock_held`, a probe that cannot
+/// decide `processes_unreadable`), so no file is swapped under a Runtime that is starting.
+/// `instance add`'s candidate for a running Runtime needs one (it is refused `runtime_not_running`
+/// before anything changes, as before) and pauses the added instance after the start, before
+/// `alive` ([`pause_added`]); its candidate composed while none answered (`start_paused`) is
+/// committed by the swap alone, judged by the stopped rule whatever answers now, and pauses
+/// nothing: the next start does. Workflow #421 INST-5b: the hold's pause step of `instance add`
+/// also sets one global pause of its own (unless one is in effect), kept across the restart and
+/// on every failure, which only the release, after the added instance's pause, hands back with the
+/// hold's other pauses.
 fn commit(
     context: &Context<'_>,
     paths: &Paths,
@@ -1371,13 +1384,26 @@ fn commit(
     }
     let _lock = WriterLock::take(paths, loaded.settings.lock_wait_ms, command)?;
     journal::refuse_unfinished(command, paths)?;
-    let live = running(context, loaded, command)?;
-    // INST-5: the added instance is paused on the Runtime that starts with it; with none running
-    // nothing is committed (its next start would run the instance unpaused).
-    if commit.adding.is_some() && !live {
+    // Workflow #453 S3: a candidate whose new entry starts paused was composed while no Runtime
+    // answered; it is committed on that path whatever answers now, and the stopped rule below
+    // refuses a Runtime that came up since.
+    let starting_paused = commit
+        .adding
+        .is_some_and(|adding| adding.added.start_paused);
+    let live = !starting_paused && running(context, loaded, command)?;
+    // INST-5: the instance a candidate for a running Runtime adds is paused on the Runtime that
+    // starts with it; with none running that candidate is not committed (its next start would run
+    // the instance unpaused).
+    if commit.adding.is_some() && !starting_paused && !live {
         return Err(
             install::refusal(command, InstallRefusal::RuntimeNotRunning).path(&loaded.state_root)
         );
+    }
+    // Workflow #453 S3 (rulings 1 and 2): with no Runtime answering, the update path's stopped
+    // rule, under the writer lock and before the operation opens (a status read alone does not see
+    // a Runtime that is starting).
+    if !live {
+        crate::install::launch::refuse_running(context.host, paths, &loaded.state_root, command)?;
     }
     let begun = if live {
         // INST-5b: `instance add`'s hold also sets one global pause of its own before the close,
@@ -1420,11 +1446,12 @@ fn commit(
     let operation_id = operation.id().to_owned();
     let mut swapped = crate::install::update::run(operation, loaded)?;
     if stops(&swapped) {
-        // INST-5: a stop after the swap may leave a Runtime running the added instance.
+        // INST-5: a stop after the swap may leave a Runtime running the added instance (Workflow
+        // #453 S3: only on the path with a Runtime; the swap alone starts none).
         if let Some(adding) = commit.adding {
             let swapped_in = files::sha256_file(&paths.config())
                 .is_ok_and(|(sha256, _)| sha256 == candidate.sha256);
-            if swapped_in {
+            if live && swapped_in {
                 let paused = pause_added(context, loaded, &adding.added.asked.alias);
                 steps.push(step("pause_added", &paused.outcome, paused.result));
                 if let Some(refusal) = paused.refusal {
@@ -1443,7 +1470,8 @@ fn commit(
         return Ok(stopped(context, steps, swapped));
     }
     steps.push(answer_step(context, "swap", &swapped));
-    if let Some(adding) = commit.adding {
+    // Workflow #453 S3: with no Runtime, no step `pause_added`: the next start holds the instance.
+    if let Some(adding) = commit.adding.filter(|_| live) {
         let alias = &adding.added.asked.alias;
         let paused = pause_added(context, loaded, alias);
         steps.push(step("pause_added", &paused.outcome, paused.result));
@@ -1499,7 +1527,9 @@ fn commit(
 /// (`crate::install::instance_add`), committed by
 /// [`commit`] with the Runtime restarted under a hold; the new instance is paused with its own
 /// reason after the start. Every refusal before the candidate is written leaves the root as it
-/// was; a Runtime must run.
+/// was. Workflow #453 S3: with no Runtime answering, the update path's stopped rule first
+/// (`runtime_running`, `owner_lock_held`, `processes_unreadable`, before the candidate is
+/// written); then the candidate whose new entry starts paused, committed by the swap alone.
 fn instance_add(context: &Context<'_>, params: Params<'_>) -> Exit {
     const ADD: InstallLocation = instance_add::ADD;
     let run = || -> Result<Exit, Outcome> {
@@ -1507,12 +1537,12 @@ fn instance_add(context: &Context<'_>, params: Params<'_>) -> Exit {
         let paths = context.paths(ADD)?;
         journal::refuse_unfinished(ADD, &paths)?;
         let loaded = plan::load(&paths, ADD)?;
-        if !running(context, &loaded, ADD)? {
-            return Err(
-                install::refusal(ADD, InstallRefusal::RuntimeNotRunning).path(&loaded.state_root)
-            );
-        }
-        let composed = instance_add::compose(context.host, &paths, &loaded, &asked)?;
+        let composed = if running(context, &loaded, ADD)? {
+            instance_add::compose(context.host, &paths, &loaded, &asked)?
+        } else {
+            crate::install::launch::refuse_running(context.host, &paths, &loaded.state_root, ADD)?;
+            instance_add::compose_starting_paused(context.host, &paths, &loaded, &asked)?
+        };
         let part = instance_add::stage(context.host, &paths, &composed.bytes)?;
         let file = paths.root.join(&part);
         let adding = Adding {
@@ -1680,7 +1710,7 @@ fn pause_form(context: &Context<'_>, alias: &str) -> Value {
         "--instance",
         alias,
         "--reason",
-        instance_add::PAUSE_REASON
+        actingcommand_contract::INSTANCE_ADDED_PAUSE_REASON
     ])
 }
 

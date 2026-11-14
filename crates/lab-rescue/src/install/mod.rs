@@ -91,6 +91,11 @@ mod gate_434_lab3;
 // `instance add`.
 #[cfg(test)]
 mod gate_421_inst5;
+// Test-only: Workflow #453 S3, the rescue module's `instance add` while the Runtime is stopped,
+// `config replace` under the same stopped rule, a hand-back the Runtime answers by holding the
+// instance again, and the start after a cold add.
+#[cfg(test)]
+mod gate_453_s3;
 // Test-only: Workflow #434 LAB-5G6, the register's named test of a running MCP server under a
 // deploy.
 #[cfg(test)]

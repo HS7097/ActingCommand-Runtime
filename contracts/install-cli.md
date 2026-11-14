@@ -689,7 +689,7 @@ once more, or, where the Runtime is down, starts it with `install start` (the re
 | `no_seeding` | a root that ran before (an S0) loaded its tagged state, not seeded again (`{tagged_state}`); with the close's `first_epoch` (Workflow #454) `seed` passes as `load` does (`{tagged_state, first_epoch: true}`); without an S0 it passes (`{tagged_state, earlier_runtime: false}`) | yes |
 | `bindings` | every instance alias of the configuration the start was given bound: the root's file as the checks read it (Workflow #454, 0.12.59: after the swap of `config replace`, `config restore` and `instance add`, the new file; before, the file as the command read it before the swap) | yes |
 | `packs` | every game of the pack register registered, with its pack count | yes |
-| `pauses` | S0's pauses, plus the hold on every instance it took | yes |
+| `pauses` | S0's pauses, plus the hold on every instance it took; (Workflow #453 S3, since 0.12.60) an instance pause `instance.added` on an instance that S0 and the hold leave unpaused and whose entry of the configuration the start was given declares `start_paused: true` is the Runtime's own hold at a first start ([scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start") and is expected, those instances named in the row's `start_paused` (absent when none; any other extra pause still fails the row) | yes |
 | `instructions` | S0's run-time instructions in effect as S0 recorded them, and none the start did not restore (the report's `instructions_dropped`: dropped or superseded). An instruction kept over a default that changed (`instructions_base_changed`, `config_override_base_changed`) is restored: it is named in the row's `base_changed` and never fails it (#421 S2-IF) | yes |
 | `no_dispatch` | no dispatch admitted on a held instance since the start (report; else no lease on one) | yes |
 | `new_keys` | each key the update adds `default`, or `explicit` where the file names it (`config.parameters.*` sources) | yes |
@@ -775,9 +775,9 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     without the list `instances` or `policy.facts.instances` (`config_key`, the list's key);
     (Workflow #453 S1) a configuration without `policy`, absent or `null` (`config_key`
     `policy`); with `policy.facts.instances` empty, the refusals of a first row (below). A
-    parameter missing or malformed is `actingctl_usage_invalid`. With no Runtime running it
-    refuses `runtime_not_running`: the new instance's pause needs the Runtime that starts with
-    it.
+    parameter missing or malformed is `actingctl_usage_invalid`. With no Runtime answering, the
+    stopped rule refuses first ("While the Runtime is stopped", below; before Workflow #453 S3 it
+    refused `runtime_not_running`).
   - **The candidate**: the selected configuration with the entry `{alias, instance_id,
     application_id, instance_index, touch_backend, capture_backend}` appended to `instances` and
     the row
@@ -804,14 +804,15 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     `policy.facts.instances[].instance_id` equals the configured aliases, every `host_id` is a
     declared host) by construction. Nothing else differs: the candidate file, its place, the
     commit and every other refusal are those of a configuration with rows, and a configuration
-    with rows composes the same bytes as before (`runtime_not_running` stays: a commit while the
-    Runtime is stopped is a later slice). `install new` is what writes a first `policy`; this
-    slice writes none.
+    with rows composes the same bytes as before (a commit while the Runtime is stopped came with
+    Workflow #453 S3, below). `install new` is what writes a first `policy`; this slice writes
+    none.
   - **The commit** is `config replace`'s ("The Lab's rescue module"): the candidate, written
     beside the live file as `actingd.config.json.new-<ms>.part` (`<ms>` the command's own
     milliseconds) so that its relative paths resolve as the live file's, passes the live build's
     check-config (`--install-root`; a refusal is `config_refused_by_target` with check-config's
-    outcome as its cause, whole); then the hold of every unpaused instance (`lab-instance-<ms>`,
+    outcome as its cause, whole); then, while a Runtime runs (without one: "While the Runtime is
+    stopped", below), the hold of every unpaused instance (`lab-instance-<ms>`,
     every other pause kept) and its global pause (INST-5b, below), the close, the swap with the
     replaced file kept as
     `actingd.config.json.prev-<ms>` (the candidate is the swap's own part, so nothing else is
@@ -822,7 +823,8 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     Workflow #453 S1 `capabilities_from` is `null` for a first row, the member always present).
     The answer's `added` is the same record.
   - **The new instance starts paused** (the coordinator's ruling of 11-11, not Alice's words):
-    after the start, before `alive` and the release of the hold, it is paused with its own reason
+    with a Runtime running, after the start, before `alive` and the release of the hold, it is
+    paused with its own reason
     `instance.added`, a pause reason name ([scheduling-pause.md](scheduling-pause.md):
     `[a-z0-9_.-]`, 1 to 64 bytes), drained as every pause is; the release hands back only the
     hold's own pauses, so it stays paused until a person lifts it (the console's resume,
@@ -865,6 +867,39 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     `application_id_from` included). A candidate refused after it was written (by check-config,
     or a Runtime gone) stays beside the live file, kept as every part: nothing deletes it, and
     `leftovers` lists it.
+  - **While the Runtime is stopped** (Workflow #453 S3, since 0.12.60; register §1.363; the
+    coordinator's rulings on board #453, not the owner's words). With no Runtime answering the
+    status read, `instance add` no longer refuses `runtime_not_running`. Before the candidate is
+    written it applies the stopped rule the update applies after its close and `install start`
+    before it spawns (one function, `install::launch::refuse_running`, which `place` while the
+    Runtime is stopped applies too): an `actingcommand-actingd.exe` running under the root refuses
+    `runtime_running` (`path`, `pid`), the state root's owner lock held `owner_lock_held`
+    (`path`), a probe that cannot decide `processes_unreadable` (the failed read as the cause); a
+    status read that fails is `processes_unreadable` as before. Each leaves the root as it was.
+    The candidate is the one above with the new entry, and no other, carrying `start_paused: true`
+    as its last member ([runtime-config.md](runtime-config.md), "An entry that starts paused").
+    The live build's check-config judges it as above, so a live build before 0.12.60 (before
+    Workflow #453 S2), which does not know the member, refuses it: `config_refused_by_target`
+    with check-config's own refusal (`config_decode_failed`) as its cause, nothing swapped, the
+    part kept and listed by `leftovers`. The commit takes the writer lock, refuses an unfinished
+    operation and applies the stopped rule again (the candidate's member keeps it on this path, so
+    a Runtime that came up since the first read is refused here, never held), then opens one
+    `config_replace` operation without hold, S0 or guards: the steps `stage_file` (nothing to
+    copy: the candidate is the part) and `swap_file` (the live file kept as
+    `actingd.config.json.prev-<ms>`, the part renamed in, its SHA-256 checked), `current.json`
+    retired at the end; its input `instance_add` records `start_paused: true` (absent for a
+    candidate committed with a Runtime). Nothing is started and nothing is paused: the Runtime's
+    next start holds the instance with `instance.added` ([scheduling-pause.md](scheduling-pause.md),
+    "Pauses held at a first start") until a person resumes it, and the post-start row `pauses` of
+    `install start` expects that pause ("The post-start checks (INST-2)"). The answer:
+    `install_command_done` (`install_instance_add`, `install_operation_id`, `alias`, `game`), the
+    steps `check_config` and `swap` (no `pause_added`), `backup`, `runtime_running: false` and
+    `added`. A failure after the first rename is `install_operation_interrupted`, the journal and
+    `current.json` kept for `resume` and `undo` as for every `config_replace` (neither applies a
+    stopped rule of its own); while it is unfinished the watchdog stands aside (`config_replace`
+    is off row 7a″'s pass list). With a Runtime answering, the candidate, its commit and its answer
+    are as before: no entry gains the member. Not on the production root before LAB-7 ("Journals
+    across versions").
   - **Taking it back**: `config restore <backup>` puts the kept file back by the same path. Its
     post-start checks judge the pauses from before the restore, so the instance it removes shows
     as a `pauses` failure (the hold's pause on it is not restored): it ends `post_check_failed`
@@ -973,6 +1008,21 @@ the rescue face:
   `place`'s failed checks), with `kept: true`, `next` naming the ways out below (and `undo` where it
   applies). A `release-hold` that finds no Runtime answering (or cannot read its status) refuses
   `runtime_not_running`, its hold kept: `kept: true`, `next` with `up` when none runs.
+- **A hand-back the Runtime answers by holding the instance again** (Workflow #453 S3, since
+  0.12.60; register §1.363; the coordinator's ruling 4 on board #453). From 0.12.60 the Runtime
+  answers the resume of an instance whose entry declares `start_paused` and that its start left
+  unapplied (under the hold's pause) by lifting the hold's pause and holding the instance with
+  `instance.added` ([scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start"):
+  `SchedulingResumed` with the new pause's revision and the self-check's `failure_code`
+  `dispatch_paused_instance`. Every hand-back of the module's own hold (`release-hold`, a
+  composite's release, the hand-back after a refusal) reads that answer: the instance is not
+  among the release's `resumed` (so not in `release-hold`'s `count`, and its hand-back row says
+  `resumed: false`) but in `held_again`, `[{alias, reason, revision}]` as S0 records a pause, the
+  reason `instance.added` and the revision the Runtime answered: it stays paused as a newly added
+  instance and waits for a person's resume. `held_again` is absent when no instance was held
+  again, so every other release records and answers as before. No vocabulary word is added.
+  `actingctl install release-hold` (its revision-1 face) is unchanged and still lists such an
+  instance as resumed.
 - **Ways out of a kept hold** (fix 2). Every answer of the module whose own pauses stay says `hold`
   `kept: true` and gives in `next` only ways out that work today, none naming another party's
   hold: `release_hold`, the module's own `release-hold <reason>`; until LAB-7 deletes actingctl,
@@ -1009,7 +1059,13 @@ the rescue face:
   before anything changes, then stops with hold, stages it as `actingd.config.json.new-<ms>.part`,
   swaps it in with the replaced file kept as `actingd.config.json.prev-<ms>`, starts, waits for
   `alive` and releases (the file's content is never printed, only its SHA-256); `config restore
-  <prev>` does the same with a kept `.prev-<ms>`; `place <bundle.zip>` checks the `package` edge
+  <prev>` does the same with a kept `.prev-<ms>`; with no Runtime answering both swap the file
+  alone, and (Workflow #453 S3, since 0.12.60; register §1.363) only after the stopped rule,
+  under the writer lock and before the operation opens: an `actingcommand-actingd.exe` under the
+  root refuses `runtime_running` (`path`, `pid`), the state root's owner lock held
+  `owner_lock_held` (`path`), a probe that cannot decide `processes_unreadable`, nothing swapped
+  (before, one status read decided, and a Runtime that was starting, which answers none yet,
+  could have its file swapped under it); `place <bundle.zip>` checks the `package` edge
   first (of the zip's `interfaces.json` it reads `schema_version`, which must be
   `actingcommand.component-interfaces.v1`, and `speaks`, where, by the parse rules of
   [component-interfaces.md](component-interfaces.md), every value under any name must be a pair of
@@ -1055,8 +1111,10 @@ the rescue face:
   slice; "Configuration, instances, packs and a fresh root", "Instances, the first slice") composes
   the candidate and commits it as `config replace` does, with the new instance paused after the
   start (step `pause_added`) before the release, and its hold's global pause kept across the
-  restart until that release (INST-5b). `--detach` runs the module's own command again
-  through the WMI start with the same initiator. The download stays outside.
+  restart until that release (INST-5b); with no Runtime answering (Workflow #453 S3) after the
+  stopped rule, its new entry declaring `start_paused`, by the swap alone. `--detach` runs the
+  module's own command again through the WMI start with the same initiator. The download stays
+  outside.
 - **The composition after a placement** (Workflow #453 S5, since 0.12.59; register §1.345; the
   coordinator's rulings of 11-13 on board #453, not the owner's words). The journal of `place`
   records, as the input `bound`, the instances the running Runtime's status binds to the bundle's
@@ -1288,6 +1346,8 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 | `start` (INST-2) | stopped | unlocked | taken (or already held) + `run.lock` | configuration passes check-config |
 | `stop` (INST-2) | running | — | not taken alone; taken inside an update | its guards |
 | `new` (INST-6) | — | — | created | empty root and state root |
+| the rescue module's `config replace`, `config restore` (LAB-3; Workflow #453 S3) | running (stop with hold), or stopped: no actingd under the root | unlocked when stopped | taken | the file passes the live build's check-config; stopped judged under the writer lock before the operation opens |
+| the rescue module's `instance add` (INST-5; Workflow #453 S3) | running (stop with hold; the new instance paused after the start), or stopped: no actingd under the root (the new entry declares `start_paused`) | unlocked when stopped | taken | stopped judged before the candidate is written and again under the writer lock; the candidate passes the live build's check-config |
 
 ### Locks and the watchdog
 
@@ -2806,6 +2866,13 @@ the fragment registers, names the command.
   `install_instance_add`'s `instance_invalid` gives the existing key `config_key` two more
   values, `policy` and `policy.resources.hosts`, beside those it gave before; no code, location,
   key or word is new.
+- **Workflow #453 S3** (since 0.12.60; "Instances, the first slice", "While the Runtime is
+  stopped"; "The Lab's rescue module", "The composites" and "A hand-back the Runtime answers by
+  holding the instance again"): with no Runtime answering, `install_instance_add` refuses with the
+  existing `runtime_running` (`path`, `pid`), `owner_lock_held` (`path`) and
+  `processes_unreadable`, no longer `runtime_not_running` (which it still answers when a Runtime
+  ran at its first read and none answers at the commit), and `install_config_replace` and
+  `install_config_restore` refuse with the same three; no code, location, key or word is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,
