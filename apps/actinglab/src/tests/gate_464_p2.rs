@@ -1272,11 +1272,14 @@ fn p2_revision_7_track_px_of_a_select() {
     );
 }
 
+// Fix round 2: a layout names its anchor by the target id it derives, `page/<id>` for an
+// `anchors[]` entry, `<id>` for a `verify_templates[]` entry, and the parser resolves it among
+// every template target of the pack (the first of these tests adapted: its layout named `a`).
 #[test]
 fn p2_revision_7_masked_anchor_of_a_repeated_anchor_layout() {
     let layout = |anchor: Value| {
         task(&json!({
-            "candidate_layouts": [{"kind": "repeated_anchor", "anchor": "a"}],
+            "candidate_layouts": [{"kind": "repeated_anchor", "anchor": "page/a"}],
             "anchors": [anchor]
         }))
     };
@@ -1288,6 +1291,59 @@ fn p2_revision_7_masked_anchor_of_a_repeated_anchor_layout() {
     assert_row(
         7,
         &[layout(json!({"id": "a", "scales": [1000]}))],
+        &[layout(json!({"id": "a"}))],
+    );
+}
+
+#[test]
+fn p2_revision_7_masked_verify_template_as_a_layout_anchor() {
+    let layout = |template: Value| {
+        task(&json!({
+            "candidate_layouts": [{"kind": "repeated_anchor", "anchor": "ui/marker"}],
+            "verify_templates": [template]
+        }))
+    };
+    assert_row(
+        7,
+        &[layout(
+            json!({"id": "ui/marker", "mask": {"type": "range", "lower": 0, "upper": 128}}),
+        )],
+        &[layout(json!({"id": "ui/marker"}))],
+    );
+}
+
+#[test]
+fn p2_revision_7_masked_anchor_in_another_task_of_the_pack() {
+    let layout = task(&json!({
+        "candidate_layouts": [{"kind": "repeated_anchor", "anchor": "page/a"}]
+    }));
+    let other = |anchor: Value| {
+        in_row(
+            "resources/operations/other/task.json",
+            &json!({"anchors": [anchor]}),
+        )
+    };
+    assert_row(
+        7,
+        &[
+            layout.clone(),
+            other(json!({"id": "a", "scales": {"factors_milli": [1000, 750]}})),
+        ],
+        &[layout, other(json!({"id": "a"}))],
+    );
+}
+
+#[test]
+fn p2_revision_7_mask_range_alone_of_a_layout_anchor() {
+    let layout = |anchor: Value| {
+        task(&json!({
+            "candidate_layouts": [{"kind": "repeated_anchor", "anchor": "page/a"}],
+            "anchors": [anchor]
+        }))
+    };
+    assert_row(
+        7,
+        &[layout(json!({"id": "a", "maskRange": [0, 128]}))],
         &[layout(json!({"id": "a"}))],
     );
 }

@@ -22,7 +22,9 @@
 //!   (`resources/operations/<task>/policies/<name>.json`) or of the navigation projection
 //!   (`resources/navigation/`), by its name, the member that holds it and, where the row says,
 //!   the value it holds, the task schema of its file or the pack's execution mode; and a
-//!   `repeated_anchor` layout whose anchor declares a mask or scales ([`layout_anchor_masked`]).
+//!   `repeated_anchor` layout whose anchor is a template target of its pack that declares a mask
+//!   or scales, an `anchors[]` or `verify_templates[]` entry of any task file of the pack, as the
+//!   parser resolves the anchor (fix round 2: [`masked_templates`], [`layout_anchor_masked`]).
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
@@ -63,9 +65,13 @@ const LOADING_COPY_REVISION: u64 = 6;
 /// Revision 7: a `repeated_anchor` layout whose anchor declares a mask or scales (Workflow #404
 /// FS-1).
 const LAYOUT_ANCHOR_REVISION: u64 = 7;
-/// The members of an `anchors[]` target that declare a mask (`maskRange` is the template's other
-/// spelling of `mask`) or scales.
+/// The members of an `anchors[]` or `verify_templates[]` entry that declare a mask (`maskRange` is
+/// the template's other spelling of `mask`) or scales.
 const ANCHOR_MASK_MEMBERS: [&str; 3] = ["mask", "maskRange", "scales"];
+/// Fix round 2: the lists of a task file whose entries derive the pack's template targets, each
+/// with the prefix of the target id an entry derives from its `id`: an `anchors[]` entry derives
+/// `page/<id>` (pack-containment's `anchor_target_id`), a `verify_templates[]` entry `<id>`.
+const TEMPLATE_LISTS: [(&str, &str); 2] = [("anchors", "page/"), ("verify_templates", "")];
 const BYTE_ORDER_MARK: &[u8] = b"\xEF\xBB\xBF";
 
 /// The file a row's member stands in.
@@ -392,10 +398,50 @@ impl Row {
 /// entry needs, [`PACKAGE_REVISION`] when none needs a later one.
 pub(crate) fn content_revision(entries: &BTreeMap<String, Vec<u8>>) -> u64 {
     let linear = linear_packs(entries);
+    let masked = masked_templates(entries);
     entries
         .iter()
-        .map(|(name, bytes)| entry_revision(name, bytes, &linear))
+        .map(|(name, bytes)| entry_revision(name, bytes, &linear, &masked))
         .fold(PACKAGE_REVISION, u64::max)
+}
+
+/// Fix round 2: for each pack of `entries`, the ids of its template targets that declare a mask
+/// or scales: every `anchors[]` and `verify_templates[]` entry of every task file of the pack
+/// that holds a member of [`ANCHOR_MASK_MEMBERS`], by the target id it derives
+/// ([`TEMPLATE_LISTS`]). The parser resolves a `repeated_anchor` layout's anchor among every
+/// template target of the derived pack (pack-containment's `derive_candidate_layouts`), not among
+/// its own task's anchors only.
+fn masked_templates(entries: &BTreeMap<String, Vec<u8>>) -> BTreeMap<&str, BTreeSet<String>> {
+    let mut masked = BTreeMap::<&str, BTreeSet<String>>::new();
+    for (name, bytes) in entries {
+        let Some((pack, within)) = pack_entry(name) else {
+            continue;
+        };
+        if pack_file(within) != Some(File::Task) {
+            continue;
+        }
+        let Some(task) = read_json(bytes) else {
+            continue;
+        };
+        for (list, prefix) in TEMPLATE_LISTS {
+            let targets = task.get(list).and_then(Value::as_array);
+            for target in targets.into_iter().flatten() {
+                let Some(id) = target.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if ANCHOR_MASK_MEMBERS
+                    .iter()
+                    .any(|member| target.get(*member).is_some())
+                {
+                    masked
+                        .entry(pack)
+                        .or_default()
+                        .insert(format!("{prefix}{id}"));
+                }
+            }
+        }
+    }
+    masked
 }
 
 /// The packs of `entries` whose `control.json` names the execution mode `linear_steps`.
@@ -412,8 +458,13 @@ fn linear_packs(entries: &BTreeMap<String, Vec<u8>>) -> BTreeSet<&str> {
 }
 
 /// The revision the zip entry `name` with the bytes `bytes` needs; `linear` names the
-/// `linear_steps` packs.
-fn entry_revision(name: &str, bytes: &[u8], linear: &BTreeSet<&str>) -> u64 {
+/// `linear_steps` packs, `masked` each pack's template targets that declare a mask or scales.
+fn entry_revision(
+    name: &str,
+    bytes: &[u8],
+    linear: &BTreeSet<&str>,
+    masked: &BTreeMap<&str, BTreeSet<String>>,
+) -> u64 {
     if notice_relative_path(name).is_some() {
         return NOTICES_PACKAGE_REVISION;
     }
@@ -421,7 +472,7 @@ fn entry_revision(name: &str, bytes: &[u8], linear: &BTreeSet<&str>) -> u64 {
         return GOALS_PACKAGE_REVISION;
     }
     if name == STANDARD_PACK_INTERRUPTS_FILE {
-        return document_revision(bytes, File::Interrupts, false);
+        return document_revision(bytes, File::Interrupts, false, None);
     }
     let Some((pack, within)) = pack_entry(name) else {
         return PACKAGE_REVISION;
@@ -430,7 +481,7 @@ fn entry_revision(name: &str, bytes: &[u8], linear: &BTreeSet<&str>) -> u64 {
         return LOADING_COPY_REVISION;
     }
     match pack_file(within) {
-        Some(file) => document_revision(bytes, file, linear.contains(pack)),
+        Some(file) => document_revision(bytes, file, linear.contains(pack), masked.get(pack)),
         None => PACKAGE_REVISION,
     }
 }
@@ -465,9 +516,14 @@ fn read_json(bytes: &[u8]) -> Option<Value> {
     serde_json::from_slice(bytes.strip_prefix(BYTE_ORDER_MARK).unwrap_or(bytes)).ok()
 }
 
-/// The revision the document `bytes`, the file `file` of a pack that is `linear_steps` or not,
-/// needs.
-fn document_revision(bytes: &[u8], file: File, linear: bool) -> u64 {
+/// The revision the document `bytes`, the file `file` of a pack that is `linear_steps` or not and
+/// whose template targets `masked` declare a mask or scales, needs.
+fn document_revision(
+    bytes: &[u8],
+    file: File,
+    linear: bool,
+    masked: Option<&BTreeSet<String>>,
+) -> u64 {
     let Some(document) = read_json(bytes) else {
         return PACKAGE_REVISION;
     };
@@ -478,6 +534,11 @@ fn document_revision(bytes: &[u8], file: File, linear: bool) -> u64 {
     };
     let mut revision = PACKAGE_REVISION;
     walk(&context, &document, None, &mut revision);
+    if file == File::Task
+        && masked.is_some_and(|templates| layout_anchor_masked(&document, templates))
+    {
+        revision = revision.max(LAYOUT_ANCHOR_REVISION);
+    }
     revision
 }
 
@@ -485,9 +546,6 @@ fn document_revision(bytes: &[u8], file: File, linear: bool) -> u64 {
 fn walk(context: &Context<'_>, value: &Value, holder: Option<&str>, revision: &mut u64) {
     match value {
         Value::Object(members) => {
-            if context.file == File::Task && layout_anchor_masked(members) {
-                *revision = (*revision).max(LAYOUT_ANCHOR_REVISION);
-            }
             for (name, member) in members {
                 for row in &ROWS {
                     if row.needs(context, members, name, member, holder) {
@@ -506,27 +564,15 @@ fn walk(context: &Context<'_>, value: &Value, holder: Option<&str>, revision: &m
     }
 }
 
-/// Revision 7 (Workflow #404 FS-1, register §1.282 FS1-3): the object `members` (a task) declares
-/// a `repeated_anchor` layout whose anchor, a target of its `anchors`, declares a mask or scales.
-fn layout_anchor_masked(members: &Map<String, Value>) -> bool {
-    let Some(layouts) = members.get("candidate_layouts").and_then(Value::as_array) else {
-        return false;
-    };
-    let anchors = members
-        .get("anchors")
+/// Revision 7 (Workflow #404 FS-1, register §1.282 FS1-3): the task file `task` declares a
+/// `repeated_anchor` layout whose anchor names one of `masked`, the template targets of its pack
+/// that declare a mask or scales ([`masked_templates`]), wherever in the pack they stand.
+fn layout_anchor_masked(task: &Value, masked: &BTreeSet<String>) -> bool {
+    task.get("candidate_layouts")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    layouts
-        .iter()
+        .into_iter()
+        .flatten()
         .filter(|layout| layout.get("kind").and_then(Value::as_str) == Some("repeated_anchor"))
         .filter_map(|layout| layout.get("anchor").and_then(Value::as_str))
-        .any(|anchor| {
-            anchors.iter().any(|target| {
-                target.get("id").and_then(Value::as_str) == Some(anchor)
-                    && ANCHOR_MASK_MEMBERS
-                        .iter()
-                        .any(|member| target.get(*member).is_some())
-            })
-        })
+        .any(|anchor| masked.contains(anchor))
 }

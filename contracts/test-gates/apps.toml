@@ -2202,3 +2202,13 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_12_goals_json",
 ]
 incident = ["#464 P2"]
+
+# Workflow #464 P2 fix round 2 (0.12.60; register §1.376; brief rd-1114/brief-1719-fix2.md; contracts/resource-verify.md, "The package revision"): revision 7's repeated_anchor anchor is looked for, as the parser resolves it, among every template target of its pack that declares mask, maskRange or scales, an anchors entry (target page/<id>) or a verify_templates entry (target <id>) of any task file of the pack: over zip entries that need 6, a layout whose anchor is a verify_templates entry with a mask needs 7 and the same entry without it 6; a layout whose anchor stands, with scales, in another task file of the same pack needs 7 and the same anchor there without them 6; an anchor that declares maskRange alone needs 7 and the same anchor without it 6
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_7_masked_verify_template_as_a_layout_anchor",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_7_masked_anchor_in_another_task_of_the_pack",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_7_mask_range_alone_of_a_layout_anchor",
+]
+incident = ["#464 P2"]

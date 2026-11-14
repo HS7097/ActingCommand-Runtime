@@ -2793,7 +2793,7 @@ the end of the B train (plan §4); until then they are admitted by code. Gate: e
 | B12-1 | `input_recheck: {kind: "still_frames", frames, region?, max_distance_milli?}` | resource file format (task schema `0.9`, no version change) (exec 126) | BT-B12 | resource side | `frames` 2..=32 and `frames - 1` control capture intervals within the control step timeout; `region` `{x, y, width, height}` with a positive size inside the coordinate space; `max_distance_milli` an unsigned integer (Runtime admission, `contained_task_operation_invalid`); the declaration gate refuses a wrong shape (`resource_declaration_invalid`: `InvalidType`, `UnknownField`, `MissingField`) and an older task schema `UnconsumedField` |
 | B12-2 | the `still_frames` recheck | rule (no shape change) (exec 126) | BT-B12 | BT-B12 | fresh frames one control capture interval apart; the count restarts at 0 when the guard fails or no page passes, and at 1 when the region's frame change since the frame before exceeds the threshold (default 1500 milli, D8: the whole frame on a 16×9 grid); the input is drawn from and bound to the last frame |
 | B12-3 | `contained_task_input_still_unconfirmed` (error, `ladder_class` `pack_logic_mismatch`, values `pack_operation_id`, `timeout_ms`) | new code (pending) (exec 126) | BT-B12 | BT-B12 | the step timeout ended before the frames held and stayed still; the input is refused through the operation's failure decision (page graph) or ends the run (`linear_steps`) |
-| B12-4 | an `input_recheck` of any kind under `linear_steps` | admission rule (no shape change) (exec 126) | BT-B12 | resource side | `contained_task_linear_invalid` `reason=input_recheck` is retired; each fresh frame is evaluated against the step's page only; a refusal ends the run as a guard refusal does |
+| B12-4 | an `input_recheck` of any kind under `linear_steps` | admission rule (no shape change) (exec 126) | BT-B12 | resource side | `contained_task_linear_invalid` `reason=input_recheck` is retired; each fresh frame is evaluated against the step's page only; a refusal ends the run as a guard refusal does; within revision 6 |
 | B12-5 | `frame_change_digest`, `frame_change_milli`, `FRAME_CHANGE_MAX_MILLI` (`actingcommand_recognition::color_digest`, re-exported by the execution kernel) | Runtime-internal interface (memory only) | BT-B12 | BT-B12 | the one frame-change measure: the `color_digest.v1` digest of a region (the whole frame by default) on 16×9 cells, each axis at most the region's pixels; the change is the digests' `mean_milli`, no cell excluded; still at most 1500 by default |
 
 ### 1.156 Slice E4 (0.12.x): four refusals and warnings say what is wrong (#411 B27, B28, B34, B39 A part; B-train plan §6, Q15)
@@ -24180,7 +24180,7 @@ the resource tools and `gate_rl1b`, actingd's `gate_rl1c`) give each package its
 whole (`DeclaredCapabilities`, no remedy), pinning what they pinned. No golden changes; no test
 leaves the gate map.
 
-### 1.376 Slice #464 P2 (0.12.60): `standard-pack build`, a game's whole standard pack from one commit of its working root, on the steps of `resource verify` (Workflow #464; the owner asked on 11-14 that the Lab build a game's standard pack by itself, board #464; the design `rd-1114/464-pack-build-design.md`, its sections A, C.1, C.2, D and E and the row "P2 build" of its section G, read on main `17197d8e`, with the coordinator's rulings on its section H, not the owner's words; coordinator work orders `rd-1114/brief-464-p2-build.md`, read on main `17197d8e`, and `rd-1114/brief-1719-fix1.md` (fix round 1, after the independent review and CI); main `155366bb` merged, then main `1e67d1c5` in fix round 1; the number 1.376 is the coordinator's, the numbers between belong to other open pull requests)
+### 1.376 Slice #464 P2 (0.12.60): `standard-pack build`, a game's whole standard pack from one commit of its working root, on the steps of `resource verify` (Workflow #464; the owner asked on 11-14 that the Lab build a game's standard pack by itself, board #464; the design `rd-1114/464-pack-build-design.md`, its sections A, C.1, C.2, D and E and the row "P2 build" of its section G, read on main `17197d8e`, with the coordinator's rulings on its section H, not the owner's words; coordinator work orders `rd-1114/brief-464-p2-build.md`, read on main `17197d8e`, `rd-1114/brief-1719-fix1.md` (fix round 1, after the independent review and CI) and `rd-1114/brief-1719-fix2.md` (fix round 2, after the second review); main `155366bb` merged, then main `1e67d1c5` in fix round 1; the number 1.376 is the coordinator's, the numbers between belong to other open pull requests)
 
 **What it is.** A new authoring row of the operation table, `standard-pack build` (command `actinglab
 standard-pack build --repo <checkout> --source-repository <owner>/<name> --out <directory>
@@ -24266,6 +24266,22 @@ nothing is deleted.
   (`gate_434_lab5g2a::actinglab_built_slices`) finds the `[` after the `=` wherever the line breaks.
 - main `1e67d1c5` (§1.369 G-R2s) merged; this section moved from 1.369 to 1.376.
 
+**Fix round 2** (the second review; work order `rd-1114/brief-1719-fix2.md`).
+
+- **Revision 7's anchor.** The row looked for a `repeated_anchor` layout's anchor among the `anchors`
+  of its own task file only, while the parser resolves it among every template target of the
+  derived pack (§1.282 FS1-3; resource-declarations.md: `verify_templates[]` entries take `mask`,
+  `maskRange` and `scales` as `anchors[]` entries do), so a pack whose masked anchor stood in
+  `verify_templates` or in another task declared 6 where it needs 7. The table now collects, for
+  each pack, the target ids of every `anchors[]` (`page/<id>`) and `verify_templates[]` (`<id>`)
+  entry of every task file that declares one of the three members, and judges each layout's anchor
+  against that set.
+- **An input recheck under `linear_steps`** stays at revision 6 (the coordinator's ruling on the
+  question fix round 1 left): §1.155 B12-4 now says "within revision 6", as the table computes.
+- **Texts.** resource-verify.md says that a rename failing half way can leave the zip, or the zip
+  and `SHA256SUMS`, under their final names without `build.json`, the mark of a complete build, and
+  says what the table matches instead of "neither lower nor higher".
+
 **Codes.** Three, in the actinglab fragment, since 0.12.60, review pending:
 `resource_build_output_invalid` (`path`), `resource_build_failed` (`failed_step_count`,
 caused by the steps' outcome) and `resource_build_write_failed` (`path`). No key, word or
@@ -24277,10 +24293,10 @@ refused `ui.json` is `standard_pack_root_invalid`. The outcome code index is reg
 strict rows 31, the census's group (a) 62, the commands of actinglab's own rows
 (`engine::COMMANDS`) 64; the built slices 7.
 
-**Tests.** `apps/actinglab/src/tests/gate_464_p2.rs` (gate map `apps.toml`, "#464 P2" and "#464 P2
-fix round 1"), on a neutral fixture repository made with git (RV-1's files): `resource verify` of a
-commit reports what RV-1 pins and `standard-pack build` of it writes that zip byte for byte and the
-same `SHA256SUMS`; `notices/` gives 10 and `goals.json` 12 (and `resource verify` of that commit
+**Tests.** `apps/actinglab/src/tests/gate_464_p2.rs` (gate map `apps.toml`, "#464 P2", "#464 P2
+fix round 1" and "#464 P2 fix round 2"), on a neutral fixture repository made with git (RV-1's
+files): `resource verify` of a commit reports what RV-1 pins and `standard-pack build` of it
+writes that zip byte for byte and the same `SHA256SUMS`; `notices/` gives 10 and `goals.json` 12 (and `resource verify` of that commit
 still leaves `goals.json` out and declares 10); a tracked change and an untracked file are refused
 `resource_build_failed` caused by `resource_verify_checkout_dirty`, `--out` not made (fix round 1,
 adapted: it pinned an empty `--out`), and an `--out` that holds a file or lies inside the
@@ -24290,7 +24306,11 @@ fails the build with the reader's refusal; a commit's `ui.json` is carried and l
 refused one fails the build with `standard_pack_root_invalid`; one test per row of the revision
 table (47), each over entries one revision below the row: with the row's member, file or value the
 row's revision, without it one lower. `gate_434_lab5g2a::mcp_tools_from_op_table`'s reader of
-`BUILT_SLICES` is adapted (it finds the list wherever rustfmt breaks the line).
+`BUILT_SLICES` is adapted (it finds the list wherever rustfmt breaks the line). Fix round 2: three
+more of revision 7, each over entries needing 6 and differing only in what the row detects (a
+`verify_templates` entry with `mask` as the anchor; the masked anchor in another task file of the
+pack; `maskRange` alone), and `p2_revision_7_masked_anchor_of_a_repeated_anchor_layout` adapted (its
+layout names the anchor by its target id, `page/a`, as the parser resolves it).
 
 **What is not changed.** `package bundle`'s behaviour and flags; `place` and the rescue module;
 `resource verify`'s report and its fixed number; the recording and the kernel; no interface

@@ -283,10 +283,12 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
   `<out>/SHA256SUMS` (`<hex>  <name>\n`), and `<out>/build.json`. Fix round 1: each is written
   under its name with `.part` added, and only when all three are complete are they renamed, the
   zip, then `SHA256SUMS`, `build.json` last; a final name that exists is never replaced. A failure
-  while they are written leaves no file under a final name, and `build.json` is there only beside
-  the other two. For a commit whose repository holds no `goals.json`, no table and no `ui.json` and
-  whose packs need no revision above 3, the zip is `resource verify`'s zip of that commit, byte for
-  byte.
+  while they are written leaves no file under a final name. Fix round 2: a rename that fails half
+  way can leave the zip, or the zip and `SHA256SUMS`, under their final names without `build.json`.
+  `build.json` is the mark of a complete build: it is there only beside the other two, and a reader
+  takes a directory without it as incomplete. For a commit whose repository holds no
+  `goals.json`, no table and no `ui.json` and whose packs need no revision above 3, the zip is
+  `resource verify`'s zip of that commit, byte for byte.
 - **Steps that did not all pass** write no product: `resource_build_failed`
   (`failed_step_count`), caused by the steps' outcome (`resource_verify_failed` with each failed
   step's first failure, or the precondition's own code, `resource_verify_checkout_dirty` for a dirty
@@ -379,7 +381,7 @@ as an element of its array.
 | 6 | task | `preprocess` under `ocr_targets` or `shared_ocr` | CFL-2, §1.208 CFL2-1 |
 | 7 | task | a member `value` that holds `anchor_milli` under `features` | FS-2, §1.283 FS2-1 |
 | 7 | task | a member `confirm` that holds `track`, and `track_px`, under `select` | FS-3, §1.284 FS3-1 |
-| 7 | task | a `repeated_anchor` layout of `candidate_layouts` whose `anchor` names a target of the task's `anchors` that declares `mask`, `maskRange` or `scales` | FS-1, §1.282 FS1-3 |
+| 7 | task | a `repeated_anchor` layout of `candidate_layouts` whose `anchor` names a template target of its pack that declares `mask`, `maskRange` or `scales`: an entry of `anchors` (target `page/<id>`) or of `verify_templates` (target `<id>`) of any task file of the pack, as the parser resolves the anchor (fix round 2; it looked at the task's own `anchors` only) | FS-1, §1.282 FS1-3 |
 | 8 | task | `read_list` under `operations` | S168-4, §1.291 S168C-1 |
 | 8 | policy | a member `source` that holds `table_max_over_list` | S168-5a, §1.291 S168C-5 |
 | 9 | policy | `lower_bound_column` | S168-LB1b, §1.309 LB1-7, §1.312 |
@@ -389,11 +391,14 @@ as an element of its array.
 
 Nothing else needs a revision: a game root's `tables/` (row 6: no member of a pack reads them),
 `ui.json` (§1.240: no revision), the other root files and every other file of a pack need 3. A
-member is found by its name, its file and its place, not by the declaration reader; the generic
-names are held to their place and, where an older member of the same name exists, to the value
-or the condition that tells them apart, so the declaration is neither lower nor higher than the
-rows name. A JSON file that does not read needs nothing here (the `format` step refuses it). A
-feature that adds a `package` revision adds its row, in its own slice
+member is found by its name, its file and its place, not by the declaration reader, and where an
+older member of the same name exists, by the value or the condition that tells them apart. Fix
+round 2: a member the table counts under a holder is matched by the name of its direct holder
+(the member that holds its object, itself or through its array); a member it counts anywhere in
+its file is matched in the whole file, so a structure of another meaning that used the same
+member name there would raise the number. None is known that the readers accept. A JSON file
+that does not read needs nothing here (the `format` step refuses it). A feature that adds a
+`package` revision adds its row, in its own slice
 (`apps/actinglab/src/resource_verify/revision.rs`). `resource verify` keeps its rule: 3, or 10
 with `notices/`; the two rows can therefore declare different revisions for one commit (a follow-up
 slice on `resource verify`).
