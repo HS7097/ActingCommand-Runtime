@@ -24,7 +24,7 @@
 //! | `no_seeding` | a root that ran before loaded its tagged state, not seeded again (seeding passes after a first epoch) | yes |
 //! | `bindings` | every instance of the configuration the start was given bound | yes |
 //! | `packs` | every pack of the register registered, with its count | yes |
-//! | `pauses` | S0's pauses plus the hold on every instance it took | yes |
+//! | `pauses` | S0's pauses plus the hold on every instance it took (and, Workflow #453 S3, `instance.added` on an instance whose entry declares `start_paused`, as its `start_paused`) | yes |
 //! | `instructions` | S0's run-time instructions, none dropped or superseded (one kept over a changed default passes, named) | yes |
 //! | `no_dispatch` | no dispatch on a held instance since the start | yes |
 //! | `new_keys` | each key the update adds `default`, or `explicit` where the file names it | yes |
@@ -38,7 +38,9 @@ use super::host::Host;
 use super::journal::S0;
 use super::runtime::{ConfigSeen, RuntimeSeen};
 use super::state::InstallState;
+use actingcommand_contract::INSTANCE_ADDED_PAUSE_REASON;
 use actingcommand_contract::outcome::{Category, Outcome, OutcomeEnvelope};
+use actingcommand_runtime_config::START_PAUSED;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -190,6 +192,19 @@ fn configured_aliases(config: &Value) -> BTreeSet<String> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .filter_map(|instance| instance.get("alias")?.as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Workflow #453 S3: the aliases of the configured instances whose entry declares `start_paused:
+/// true`.
+fn start_paused_aliases(config: &Value) -> BTreeSet<String> {
+    config
+        .get("instances")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|instance| instance.get(START_PAUSED).and_then(Value::as_bool) == Some(true))
         .filter_map(|instance| instance.get("alias")?.as_str().map(str::to_owned))
         .collect()
 }
@@ -415,17 +430,38 @@ pub(crate) fn evaluate(
                     ))
                 })
                 .collect::<BTreeMap<_, _>>();
+            // Workflow #453 S3 (ruling 5): the Runtime's own hold at a first start
+            // (scheduling-pause.md, "Pauses held at a first start"), an instance pause
+            // `instance.added` on an instance that S0 and the hold expect unpaused and whose entry of
+            // the configuration the start was given declares `start_paused: true`, is expected; the
+            // row names those instances in `start_paused` (absent when none).
+            let start_paused = start_paused_aliases(inputs.config)
+                .into_iter()
+                .filter(|alias| {
+                    !expected.contains_key(alias)
+                        && actual.get(alias).map(String::as_str)
+                            == Some(INSTANCE_ADDED_PAUSE_REASON)
+                })
+                .collect::<Vec<_>>();
+            let mut judged = expected.clone();
+            for alias in &start_paused {
+                judged.insert(alias.clone(), INSTANCE_ADDED_PAUSE_REASON.to_owned());
+            }
             let global_expected = pauses["global"]["reason"].as_str().map(str::to_owned);
             let global_actual = seen
                 .global_pause
                 .as_ref()
                 .map(|pause| pause.reason.as_str().to_owned());
+            let mut values = json!({"expected": expected, "actual": actual,
+                "global_expected": global_expected, "global_actual": global_actual});
+            if !start_paused.is_empty() {
+                values[START_PAUSED] = json!(start_paused);
+            }
             check(
                 "pauses",
                 true,
-                verdict(expected == actual && global_expected == global_actual),
-                json!({"expected": expected, "actual": actual,
-                    "global_expected": global_expected, "global_actual": global_actual}),
+                verdict(judged == actual && global_expected == global_actual),
+                values,
             )
         }
         (None, _) => unread("pauses", true, "no_s0"),

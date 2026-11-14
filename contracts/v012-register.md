@@ -23181,6 +23181,216 @@ self-check, a resume or the fence's recheck lifts it.
 **Rollback** (below 0.12.60). Nothing is persisted by the fixes; a build before them reads every
 record they write, and halts again where they fence.
 
+### 1.364 Slice #453 S3 (0.12.60): `instance add` while the Runtime is stopped writes an entry that starts paused (Workflow #453; the owner's approval of board #453 on 11-13: only instances added while the Runtime is stopped start paused, and they stay paused until a person resumes them; the design survey `rd-1113/fresh-root-design.md`, sections 0 and 1(c) "1b. The cold commit", the row S3 of 1(d), 1(e) and 5(e), (g), read on main `98924e28`, every place it names found again on main `e44fecb4`; the coordinator's rulings 1 to 6 on board #453, not the owner's words; coordinator work order `rd-1114/brief-453-s3-cold-instance-add.md`, read on main `e44fecb4`)
+
+1.363 was the next free number on the base `e44fecb4` (after §1.362, S2); #457 (§1.363) merged
+first, and merging main `3d9d25e6` renumbered this section 1.364. Pull requests merged before this
+one take the next numbers, and the train renumbers. The installer's half of starting
+paused: S2 (§1.362) made the Runtime hold an entry that declares `start_paused` at its first
+start; this slice writes the member. [install-cli.md](install-cli.md), "Instances, the first
+slice" ("While the Runtime is stopped"), "The Lab's rescue module" ("The composites" and "A
+hand-back the Runtime answers by holding the instance again"), "The post-start checks (INST-2)"
+(the row `pauses`), the preconditions table and the list of codes and words;
+[scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start" (the installer's side);
+[runtime-config.md](runtime-config.md), "An entry that starts paused"; and the rows `instance add`,
+`config replace` and `config restore` of [lab-operations.json](lab-operations.json) are the
+contract. **What `actingctl install` sees** (fix 1, the coordinator's answer 2): its commands,
+options, codes and records are unchanged, and its `release-hold` still lists an instance the
+Runtime held again as resumed (the instance stays paused: the safe side). One thing reaches it
+through the shared post-start checks: on a root whose configuration has an entry that declares
+`start_paused`, `actingctl install start` (and its composite update's start) expects that
+instance's `instance.added` pause as the rescue module's start does, so its answer's `post_check`
+row `pauses` gains the value `start_paused` and the answer loses the caveat
+`post_check_mismatch` it gave for that pause before; with no such entry its answer is as before.
+And its `install resume` and `install undo` share the code of the module's `op resume` and `undo`:
+of a `config_replace` the module began while no Runtime answered they apply the stopped rule first
+(fix 1, below); of every other operation they are unchanged.
+
+**What was missing.** The rescue module's `instance add` (`crates/lab-rescue/src/rescue.rs`,
+`instance_add` and `commit`) refused `runtime_not_running` when no Runtime answered its status
+read, before anything was written and again under the writer lock, because nothing would have
+paused the instance at its next start. And `config replace` and `config restore`, with no Runtime
+answering, decided "stopped" from that one status read, which a Runtime that is starting does not
+answer yet (the machine's read answers "none" while the state root's owner lock is not held), so
+the file could be swapped under a Runtime coming up.
+
+| Part | Built | Where |
+|---|---|---|
+| the stopped rule (rulings 1 and 2) | yes, one function | `install::launch::refuse_running`: the state root's owner lock held `owner_lock_held` (`path`), an `actingcommand-actingd.exe` under the root `runtime_running` (`path`, `pid`), a probe that cannot decide (the owner journal or the process list) `processes_unreadable` with the failure as its cause. The update path calls it after its close before a file changes (`deploy::close`, also a rollback's close) and before it reverses files (`deploy::reverse_files`); `install start` before every spawn (`launch::start`) and at its begin (`deploy::start_command`); S6's `place` while stopped and its resume. Now also `rescue::instance_add` (no Runtime answering, before the candidate is written) and `rescue::commit` (no Runtime answering, under the writer lock, before the operation opens) for `instance add`, `config replace` and `config restore`. The update plan reads the same two tests itself for its document (`plan.rs`, `plan`, the running state at 925-938, its refusals at 1052-1063), as on main |
+| the cold candidate | yes | `install::instance_add::compose_starting_paused`: `compose`'s candidate (one private `composed`), its new entry, and no other, with `start_paused: true` (`actingcommand_runtime_config::START_PAUSED`) as its last member; `Added::start_paused`, recorded `start_paused: true` in the journal input `instance_add` and the answer's `added` (absent otherwise, `skip_serializing_if`) |
+| the cold commit | yes | `rescue::commit`: a candidate whose entry starts paused stays on the path without a Runtime whatever answers at the commit (no second status read; the stopped rule refuses a Runtime that came up), then `config_swap::open` without hold (the steps `stage_file`, `swap_file`) and `update::run`; no `pause_added`, no `alive`, no release. A candidate for a running Runtime still refuses `runtime_not_running` when none answers at the commit |
+| the hot path (ruling 3) | unchanged | with a Runtime answering: `instance_add::compose` (the candidate of before), the hold, INST-5b's global pause, the swap, the start, `pause_added` and the release, as on main |
+| one pause reason (ruling 4, first part) | yes | `instance_add::PAUSE_REASON` is gone; `instance_add::pause_reason` and `rescue::pause_form` read the contract crate's `INSTANCE_ADDED_PAUSE_REASON`. There is one constant, so no test compares two |
+| the hand-back's record (ruling 4, second part) | yes | `install::runtime::Resumed` (`Lifted`, `HeldAgain { revision }`): `RuntimeLink::resume` answers it; `SystemRuntime` reads `SchedulingResumed` with a self-check whose `failure_code` is `ControlGateCode::DispatchPausedInstance` (the contract crate's spelling of the host's code) as `HeldAgain` with the answer's revision (`resumed_of`). `hold::release_own` (every hand-back of the rescue module's own hold: `release-hold`, a composite's release, `deploy::hand_back_own` after a refusal) puts such an instance in `OwnRelease::held_again` (`hold::HeldAgain {alias, reason, revision}`, S0's pause row, the reason `instance.added`), not in `resumed`; `deploy::release_hold` records it in the release step's evidence (`ReleaseEvidence::held_again`), so `release-hold`'s answer (`count`, `release`) and the hand-back's rows (`resumed: false`) say it. Absent when none. `hold::release` (`actingctl install`'s face) is unchanged |
+| the start after a cold add (ruling 5) | yes, in the row | `postcheck::evaluate`, the row `pauses`: an instance pause `instance.added` on an instance that S0 and the hold expect unpaused and whose entry of the configuration the start was given (`given_config`, already an input) declares `start_paused: true` is expected; the row's values gain `start_paused`, those aliases (absent when none). No other row and no input changes |
+
+**The stopped rule is the update path's, in one function.** The survey's section 0 named the
+plan's two tests (`plan.rs` 925-938, 1052-1063) and the contract's "Running state"
+([install-cli.md](install-cli.md), 298-300 on this base). On this base the function every path
+that must find the Runtime stopped calls is `launch::refuse_running` (the update's close, the
+installer's start, S6's cold placement); the plan keeps its own reading of the same two tests for
+its document. S3 calls the function, so there is one copy of the rule for the cold paths.
+
+**`config replace` and `config restore` (ruling 2).** With no Runtime answering both now apply the
+rule under the writer lock before the operation opens; with the Runtime stopped they swap as
+before. `config restore` is `config replace`'s path (`rescue::commit`) and takes the rule with it.
+This changes what they refuse: a Runtime starting under the root (`runtime_running`), or one that
+took the owner lock since the status read (`owner_lock_held`), or a probe that cannot decide
+(`processes_unreadable`), where before the swap ran.
+
+**A Runtime that came up between the two reads.** `instance add` reads the status once before it
+composes; the candidate's member then decides the path. A Runtime that answers at the commit after
+none answered at the first read is refused by the stopped rule (it holds the owner lock, or its
+actingd runs under the root), never held and restarted with a candidate that names the member. A
+Runtime that ran at the first read and does not answer at the commit refuses
+`runtime_not_running`, as before.
+
+**Ruling 4: the word.** No vocabulary word is added: the record and the answer say it with a
+member of the free-form release evidence, `held_again`, whose rows are S0's pause rows and carry
+the existing reason `instance.added`; `release-hold`'s `count` and `resumed` no longer name such an
+instance. A hand-back that meets an unapplied entry can happen only with a Runtime with S2 (an
+entry that declares `start_paused` and whose start left it under the hold's pause): a person's
+entry with the member on an instance the hold took, or a cold add followed by a hold before the
+first start.
+
+**Ruling 5: how the start's answer names it.** `install start` (the module's `up`) after a cold
+add: the new instance shows `instance.added` and no S0 or hold names it; the row `pauses` passes
+with `start_paused: [<alias>]` beside `expected` and `actual` in the answer's
+`post_check.checks`, `post_check.failed` stays empty, and the answer carries no
+`post_check_mismatch`. Any other extra pause (another reason on that instance, a global pause, an
+instance whose entry does not declare the member) still fails the row and is the caveat. The row is
+shared by every post-start check: the same pause after the restart of a composite (a
+`config replace` whose new file adds an entry with the member, which only a person writes) now
+passes the row too, where it failed `post_check_failed` before; with a configuration that names
+the member nowhere the row is what it was.
+
+**The survey's places on this base.** Every place it names holds in substance; the lines moved:
+`rescue.rs` `running` 766-780 (733-749), `instance_add`'s refusal 1510-1514 (1477-1481), the
+commit's 1374-1381 (1344-1350), its hot path 1382-1405 (1351-1375), `pause_added` 1590-1669
+(1552-1636); `instance_add.rs` `PAUSE_REASON` 73-75 (58-60), `stage` 598-609 (426-437);
+`postcheck.rs`'s row `pauses` 399-433 (379-413); [install-cli.md](install-cli.md) "Running state"
+298-300 (297-299), a start's mismatch a caveat 532-535 (529-531). `config_swap.rs` 54-103 and
+118-175, `crates/watchdog/src/install_state.rs` 30-33 (the kind `config_replace`, off the pass
+list) and 55-86 (the pass list), and `fixture.rs`'s `tree` 274-295 and `FakeHost` from 297 are
+where the survey says.
+
+**The resume and the undo of a cold `config_replace`** (fix 1, the coordinator's answer 3, as S6
+fix 1 did for a placement begun while stopped). A `config_replace` operation is cold when its
+journal holds no hold and no S0 (`config_swap::is_cold`: `config replace`, `config restore` and
+`instance add` begun while no Runtime answered). Its `install resume` (`update::resume`, after the
+writer lock and before any step) and its `install undo` (`undo::undo`, which now takes the writer
+lock for it, then the rule, before anything is moved) apply the same stopped rule
+(`launch::refuse_running`): `owner_lock_held`, `runtime_running`, `processes_unreadable` of
+`install_resume` and `install_undo`, the journal and the files as they were. No status read comes
+first there, so a running Runtime is `owner_lock_held` (or `runtime_running`). The undo reads the
+state root and `install.lock_wait_ms` from the live configuration, and, when there is none, from the
+file the swap kept it as (the input `backup`; `config_swap::stopped_target`), so it still puts back
+a swap stopped between its two renames. The resume and the undo of a `config_replace` begun with a
+Runtime (its hold and S0 in the journal) are unchanged; while either is unfinished the watchdog
+stands aside (`config_replace` is off row 7a″'s pass list).
+
+**A known limit** (the coordinator's answer 3). A crash between the two renames of a configuration
+swap leaves no live configuration; `install resume` cannot load the root then (`plan::load` reads the
+configuration first: `config_unreadable`), as for every `config_replace` since LAB-3, hot or cold.
+`install undo` (the module's `undo`) puts the kept file back; a later slice makes `resume` complete
+the half-done swap. **Not in this slice:** a hot path that writes `start_paused` and drops INST-5b's
+global pause (the survey's optional later slice).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S3-1 | `start_paused: true` on the entry `instance add` adds while no Runtime answers | configuration member (`actingd-config` 31, §1.362) | #453 S3 | `install::instance_add::compose_starting_paused` | the new entry only, its last member; never with a Runtime |
+| S3-2 | `start_paused: true` in the journal input `instance_add` and the answer's `added` | journal input member (free `inputs`; INST5-3) | #453 S3 | `install::instance_add::Added::value` | absent with a Runtime, so that record is as before |
+| S3-3 | a release's `held_again` `[{alias, reason, revision}]` (the release step's evidence; `hold.release` of a hand-back after a refusal) | evidence member (free-form, `install-operation.v1`) | #453 S3 | `install::hold::release_own`, `install::deploy::release_hold` | rescue face only; absent when none; `resumed` no longer names such an instance |
+| S3-4 | the post-start row `pauses`'s value `start_paused` | check row value | #453 S3 | `install::postcheck::evaluate` | absent when none; the verdict accepts those pauses |
+| S3-5 | `install_instance_add`, `install_config_replace`, `install_config_restore` with no Runtime answering: `runtime_running`, `owner_lock_held`, `processes_unreadable` | refusal behaviour (existing tokens and keys) | #453 S3 | `rescue::instance_add`, `rescue::commit` | `instance add` no longer refuses `runtime_not_running` then |
+| S3-6 | the row `instance add`: `runtime` `optional`, its `help` and `notes`; the rows `config replace` and `config restore`: `notes` | operation table | #453 S3 | — | |
+| S3-7 | `install_resume` and `install_undo` of a `config_replace` begun while no Runtime answered (no hold, no S0): `owner_lock_held`, `runtime_running`, `processes_unreadable` before anything is moved; the undo takes the writer lock | refusal behaviour (existing tokens and keys) | #453 S3 fix 1 | `update::resume`, `undo::undo`, `config_swap::is_cold`, `config_swap::stopped_target` | the resume and the undo of one begun with a Runtime are unchanged |
+
+**The code.** No outcome code, location, value key, vocabulary word, configuration key, step kind,
+journal kind, wire shape, record or fact is added or moved, and no outcome code fragment changes,
+so the index is not regenerated. **Interfaces.** None moves: the member is `actingd-config` 31's
+(S2); a live build before it refuses the candidate through its own check-config, which is the
+intended refusal. `install-root`, `runtime-client`, `ledger`, `package`: untouched.
+
+**Tests** (apps gate row "#453 S3", `crates/lab-rescue/src/install/gate_453_s3.rs`, on the fake
+host and Runtime of `fixture.rs` and temporary roots, no sleep, no clock read):
+`s3_cold_add_swaps_alone_and_only_the_new_entry_starts_paused` (no Runtime: `install_command_done`,
+`runtime_running: false`, the steps `check_config` and `swap`, no `hold`; the new entry the six
+members of before and `start_paused: true` last, no other entry with the member, its row; the
+replaced file kept byte for byte, no part left; one `config_replace` journal, steps `stage_file`
+and `swap_file`, no hold and no S0, its input with `start_paused: true` and `instance.added`;
+nothing asked of the Runtime, nothing started);
+`s3_cold_add_refuses_a_starting_runtime_a_held_owner_lock_or_an_undecided_probe` (an actingd under
+the root `runtime_running` with its `pid`, the owner lock held `owner_lock_held`, an owner journal
+past the reader's limit `processes_unreadable` caused by `watchdog_journal_unreadable`; each with
+the root byte for byte as it was, no journal, nothing asked);
+`s3_cold_add_a_refused_candidate_is_kept_and_listed` (the live build's check-config refusing:
+`config_refused_by_target` with `config_decode_failed` inside, the live file and the journals as
+they were, the one new file the part, whose new entry starts paused, listed by `leftovers`);
+`s3_config_replace_with_no_runtime_applies_the_stopped_rule_then_swaps` (the same three refusals,
+nothing swapped and no journal; then stopped, the swap alone as before);
+`s3_a_crash_after_each_step_resumes_to_the_same_tree` (the fake host's crash after `stage_file` and
+after `swap_file`: `install_operation_interrupted`, then `op resume` done, the root outside
+`install\` the tree of a cold add without a crash, the live file the journal's candidate, the
+replaced one kept, the document without the added entry and row the old one; a crash between the
+swap's renames is not resumable, "Not in this slice");
+`s3_a_hand_back_that_meets_an_unapplied_entry_records_it_held_again` (ruling 4: `down`, `up`, then
+the fake Runtime holds one instance again at its resume: `release-hold`'s `count` 1, `release`
+`resumed` the other alone and `held_again` with `instance.added` and the revision answered, the
+journal's release step the same and its hand-back rows `resumed` true and false);
+`s3_a_start_after_a_cold_add_expects_the_first_start_pause` (ruling 5: `down` with a hold, a cold
+add, `up` whose Runtime holds the new instance with `instance.added`: the row `pauses` passes with
+`start_paused`, `failed` empty, no `post_check_mismatch`; with another reason the row fails,
+`failed` `["pauses"]`, and the caveat). The fake Runtime gains `pauses_at_start` (the pauses its
+next start holds) and `holds_at_release` (the aliases whose next resume it answers by holding the
+instance again), both empty by default, and its `resume` answers `Resumed`.
+Fix 1 (the coordinator's answers and the independent review; the same gate row):
+`s3_fix1_resume_of_a_cold_commit_applies_the_stopped_rule` (a cold add stopped after
+`stage_file`: `op resume` under a held owner lock `owner_lock_held`, with an actingd under the root
+`runtime_running` with its `pid`, the root and the journal as they were each time; stopped again,
+done); `s3_fix1_undo_of_a_cold_commit_applies_the_stopped_rule_and_restores_a_half_done_swap` (a
+cold add stopped between the swap's renames, no live configuration: `undo` refuses the same two,
+nothing moved; stopped, the kept file back byte for byte, the candidate set aside as
+`.abandoned-<ms2>`, no part); `s3_fix1_an_added_pause_on_an_entry_without_the_member_still_fails_the_row`
+(the cold-added entry rewritten without the member before `up`: the row fails with no
+`start_paused`, `failed` `["pauses"]`, the caveat); `s3_fix1_the_hot_path_records_no_start_paused`
+(with a Runtime: the answer's `added` and the journal's input `instance_add` without
+`start_paused`, the entry the six members, no entry with the member, the instance paused after the
+start); `s3_fix1_config_restore_with_no_runtime_applies_the_stopped_rule_then_swaps` (`config
+restore`'s three refusals and its swap when stopped, through the same helper as `config replace`'s
+test, `swap_while_stopped`).
+**Every existing test is unchanged.** The hot path's are `gate_421_inst5`'s INST-5, INST-5b, #452
+and #453 S1 tests and `gate_454_postcheck`'s `instance add` tests; what proves it writes no
+`start_paused`: `inst5_452_a_given_application_id_is_written_over_the_declared_one` and
+`inst5_452_without_the_option_the_declared_id_is_written` (the added entry's members are exactly
+the six of before), `inst5_452_compose_yields_the_fixtures_candidate` and
+`inst5_453_s1_a_configuration_with_rows_composes_the_bytes_of_before` (`compose`'s candidate is the
+checked-in fixture's, member for member and byte for byte), and
+`inst5_the_added_instance_is_registered_and_paused_after_the_restart` (its steps are still
+`check_config`, `swap`, `pause_added`, `alive`, `release`).
+
+**At deploy.** Nothing changes for an installation whose Runtime runs when the command is used:
+the candidate, its commit, its answer and its record are as before. The cold path needs a live
+build that carries S2 (0.12.60): an older live build's check-config refuses the member
+(`config_refused_by_target`), nothing swapped. `config replace` and `config restore` with no
+Runtime answering now refuse a Runtime that is starting, and so do the resume and the undo of what
+they began. A hand-back is answered "held again" only by a Runtime with S2. A configuration with an
+entry that declares `start_paused` (written by this path or by a person) changes the post-start
+row `pauses` for every start, `actingctl install start` included (above). Ruling 6: like every
+compound operation of the rescue module until LAB-7, `instance add`, `config replace` and
+`config restore` are not used on the production root
+([install-cli.md](install-cli.md), "Journals across versions"); production adds instances as
+before.
+
+**Rollback** (below 0.12.60). A build before this slice refuses `instance add` with no Runtime
+(`runtime_not_running`) and lists a hand-back's held-again instance as resumed. A configuration
+this slice wrote names `start_paused` on the entry it added, which a Runtime before S2 refuses at
+its start and in check-config (the entry denies unknown members, `config_decode_failed`): S2's
+rollback sentence applies, remove the member first, or keep the root on a build with S2. An
+installer before this slice reads the journals this slice writes (their new members are free-form)
+and reports the first-start pause after a cold add as the caveat `post_check_mismatch`, as §1.362
+says.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

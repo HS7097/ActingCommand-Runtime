@@ -6,7 +6,8 @@
 use super::host::{Host, Installer, NotFinished, NotRan, Ran, RunningImage};
 use super::manifest::{Speaks, parse_declaration};
 use super::runtime::{
-    Closed, ConfigSeen, Drained, InstanceSeen, PauseSeen, PlanSeen, RuntimeLink, RuntimeSeen,
+    Closed, ConfigSeen, Drained, InstanceSeen, PauseSeen, PlanSeen, Resumed, RuntimeLink,
+    RuntimeSeen,
 };
 use super::{Answer, execute};
 use crate::codes::ActingctlCode;
@@ -948,6 +949,14 @@ pub(super) struct FakeRuntime {
     /// Workflow #421 INST-5b: every status read of the running Runtime: how many calls `calls`
     /// listed then, and the reason of the global pause it showed.
     pub(super) status_reads: RefCell<Vec<(usize, Option<String>)>>,
+    /// Workflow #453 S3: the pauses the next start that comes ready holds, after it registered the
+    /// instances it gained, each `(alias, reason)` (a Runtime with Workflow #453 S2 holds an entry
+    /// that declares `start_paused` with `instance.added`); none by default.
+    pub(super) pauses_at_start: RefCell<Vec<(String, String)>>,
+    /// Workflow #453 S3: the aliases whose next resume the Runtime answers by holding the instance
+    /// again with `instance.added` at the next revision, as a Runtime with Workflow #453 S2 answers
+    /// for an entry its start left unapplied; none by default.
+    pub(super) holds_at_release: RefCell<Vec<String>>,
 }
 
 impl FakeRuntime {
@@ -987,6 +996,8 @@ impl FakeRuntime {
             on_report: RefCell::new(None),
             start_fact: RefCell::new(BTreeMap::new()),
             status_reads: RefCell::new(Vec::new()),
+            pauses_at_start: RefCell::new(Vec::new()),
+            holds_at_release: RefCell::new(Vec::new()),
         }
     }
 
@@ -1268,7 +1279,7 @@ impl RuntimeLink for FakeRuntime {
         alias: &str,
         owner_epoch: &str,
         revision: u64,
-    ) -> Result<(), Outcome> {
+    ) -> Result<Resumed, Outcome> {
         if !self.running.get() || self.owner.borrow().epoch != owner_epoch {
             return Err(refused());
         }
@@ -1281,8 +1292,24 @@ impl RuntimeLink for FakeRuntime {
         if instance.pause.as_ref().map(|pause| pause.revision) != Some(revision) {
             return Err(refused());
         }
+        // Workflow #453 S3: the release of an entry the start left unapplied: the old pause lifted
+        // and `instance.added` set at the next revision, which the answer carries.
+        let mut held = self.holds_at_release.borrow_mut();
+        if let Some(index) = held.iter().position(|known| known == alias) {
+            held.remove(index);
+            let revision = self.revisions.get() + 1;
+            self.revisions.set(revision);
+            instance.pause = Some(PauseSeen {
+                reason: SchedulingPauseReason::new(
+                    actingcommand_contract::INSTANCE_ADDED_PAUSE_REASON,
+                )
+                .expect("a pause reason"),
+                revision,
+            });
+            return Ok(Resumed::HeldAgain { revision });
+        }
         instance.pause = None;
-        Ok(())
+        Ok(Resumed::Lifted)
     }
 
     /// Workflow #421 INST-5b: a global pause already in effect refuses, as the Runtime's
@@ -1381,6 +1408,10 @@ impl RuntimeLink for FakeRuntime {
             let gained = std::mem::take(&mut *self.registers_at_start.borrow_mut());
             for alias in gained {
                 self.register(&alias);
+            }
+            let held = std::mem::take(&mut *self.pauses_at_start.borrow_mut());
+            for (alias, reason) in held {
+                self.pause_as(&alias, &reason);
             }
             let lost = std::mem::take(&mut *self.drops_at_start.borrow_mut());
             self.instances

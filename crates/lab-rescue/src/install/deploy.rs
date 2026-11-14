@@ -1260,6 +1260,7 @@ fn release_hold(
                     skipped: Some("post_check_failed"),
                     resumed: None,
                     global_resumed: false,
+                    held_again: None,
                     handed_back: None,
                 }
                 .value(),
@@ -1272,7 +1273,8 @@ fn release_hold(
     // Workflow #434 LAB-3 fix 1 and 2: the rescue module hands back only its own hold: the
     // instances its pause step paused, each while its pause shows the hold's reason, in whatever
     // owner epoch the Runtime runs now. Workflow #421 INST-5b: and first the global pause its
-    // pause step set (`global_resumed`).
+    // pause step set (`global_resumed`). Workflow #453 S3: an instance the Runtime held again
+    // instead is recorded as such (`held_again`), not as resumed.
     let released = if super::Face::of(operation.journal()).rescue() {
         let Some(owned) = owned_hold(host, &paths, &reason, Some(operation.journal()))? else {
             return Ok(StepEnd::Ends(
@@ -1280,24 +1282,22 @@ fn release_hold(
                 Map::new(),
             ));
         };
-        hold::release_own(runtime, &loaded.state_root, command, &reason, &owned).map(|released| {
-            if released.left.is_empty() {
-                Ok((released.resumed, released.global))
-            } else {
-                Err(released)
+        hold::release_own(runtime, &loaded.state_root, command, &reason, &owned)
+    } else {
+        hold::release(runtime, &loaded.state_root, command, &reason).map(|resumed| {
+            hold::OwnRelease {
+                resumed,
+                ..hold::OwnRelease::default()
             }
         })
-    } else {
-        hold::release(runtime, &loaded.state_root, command, &reason)
-            .map(|resumed| Ok((resumed, false)))
     };
-    let (resumed, global_resumed) = match released {
-        Ok(Ok(resumed)) => resumed,
+    let released = match released {
+        Ok(released) if released.left.is_empty() => released,
         // An instance that shows the hold's reason though its pause step did not pause it is not
         // the module's pause: left as it is, and the release says so. Every pause of the module's
         // own is handed back by then, so nothing of its own stays paused (`kept: false`) and no
         // `next` is owed.
-        Ok(Err(released)) => {
+        Ok(released) => {
             let refusal = hold::not_owned(command, &reason, released.left.clone());
             let release = json!(released);
             let mut members = Map::new();
@@ -1325,7 +1325,7 @@ fn release_hold(
     let handed_back = hold::hand_back(
         deferred.as_ref(),
         &drained,
-        &resumed,
+        &released.resumed,
         plan_after.as_ref(),
         released_at,
     );
@@ -1333,8 +1333,9 @@ fn release_hold(
         ReleaseEvidence {
             reason: &reason,
             skipped: None,
-            resumed: Some(&resumed),
-            global_resumed,
+            resumed: Some(&released.resumed),
+            global_resumed: released.global,
+            held_again: (!released.held_again.is_empty()).then_some(released.held_again.as_slice()),
             handed_back: Some(&handed_back),
         }
         .value(),

@@ -28,7 +28,7 @@ use std::path::PathBuf;
 
 pub(crate) const PLAN_SCHEMA: &str = "actingcommand.install-plan.v1";
 /// The configuration member that names the state root.
-const STATE_ROOT_MEMBER: &str = "state_root";
+pub(crate) const STATE_ROOT_MEMBER: &str = "state_root";
 const DEFAULTS_FILE: &str = "actingd.defaults.json";
 /// The images that may be renamed aside while they run, by file name, in `tools\` and `runtime\`
 /// alike: `actingctl.exe` and, Workflow #434 LAB-5G6 (the coordinator's ruling 5 on board #434),
