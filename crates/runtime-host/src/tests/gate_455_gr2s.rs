@@ -46,7 +46,11 @@ fn sink_control(marked: bool) -> Vec<u8> {
         "step_timeout_ms": 600,
         "timeout_ms": 8000,
         "max_steps": 2,
-        "provides": [{"capability": "cap_x", "irreversible": false}]
+        // An irreversible capability declares its parameters (the package reader refuses one
+        // without); the unmarked writing declares the same.
+        "provides": [{"capability": "cap_x", "irreversible": false, "parameters": [
+            {"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_1"}
+        ]}]
     }))
     .expect("control bytes");
     if marked {

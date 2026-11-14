@@ -1021,7 +1021,6 @@ impl HostShared {
         // G-R2s: each composed root's packages as read now, with the marks of their declaration
         // files taken just before each was read, so the next check marks exactly these files and
         // compares them with what this read saw; a root without `schedule.json` marks none.
-        let mut marks = marks;
         state.packages.clear();
         for (game, files) in &read {
             let mut read_marks = BTreeMap::new();
