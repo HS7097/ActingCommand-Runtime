@@ -108,8 +108,10 @@ pub(crate) trait Host {
     /// Workflow #453 S10 fix 1 (review): [`Self::run_program`] for a read-only child that is
     /// ended at its deadline instead of left running: killed, reaped and no longer read
     /// ([`NotFinished::Ended`]; the shared child helper's `run_captured_ending`). Only the rescue
-    /// rows `emulators`, `vision manifest` and `vision check` (Workflow #453 S7) run a program
-    /// this way, each a read-only one; every other child keeps the stall rule.
+    /// rows `emulators`, `vision manifest` and `vision check` (Workflow #453 S7) and `vision place`
+    /// (Workflow #453 S9: the same read-only `actingd vision check`, before its operation and as
+    /// its post-check) run a program this way, each a read-only one; every other child keeps the
+    /// stall rule.
     fn run_program_ending(
         &self,
         program: &Path,
