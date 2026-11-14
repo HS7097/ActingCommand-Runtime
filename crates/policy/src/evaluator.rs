@@ -235,12 +235,34 @@ pub struct EvaluationFacts {
 /// (`fact_missing`), and the key raises no fact refresh demand on that instance: a reading cannot
 /// shorten a list, so a refresh would be asked for at every evaluation and never served. Memory
 /// only: none of it enters a snapshot or decision identity.
+///
+/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
+/// can do something irreversible"): also the instances whose resource target record the Runtime
+/// leaves out whole, because the scheduler workbench cannot compose their game's root
+/// ([`LeftOutFacts::void_targets`]): every candidate of such an instance is computed as a marked
+/// candidate is, as on an instance without a target record, with the reason
+/// `resource_target_root_uncomposed`. Fix round 3: the void is part of the decision identity
+/// (`targets_void_decision_id`) of such a candidate on an instance that holds a target record
+/// (fix round 4: only there, where it changes the decision); it enters no snapshot.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LeftOutFacts {
     keys: BTreeMap<String, BTreeSet<String>>,
+    /// G-R2s round 2: the instances whose target record is left out whole, by alias.
+    void_targets: BTreeSet<String>,
 }
 
 impl LeftOutFacts {
+    /// Workflow #455 G-R2s round 2: leaves out the resource target record of the instance
+    /// `instance_id` for every candidate of it, as long as its game's root cannot be composed.
+    pub fn void_targets(&mut self, instance_id: &str) {
+        self.void_targets.insert(instance_id.to_owned());
+    }
+
+    /// Whether the resource target record of the instance `instance_id` is left out whole.
+    pub fn targets_void(&self, instance_id: &str) -> bool {
+        self.void_targets.contains(instance_id)
+    }
+
     /// Notes `fact_key` as left out for the instance `instance_id`.
     pub fn insert(&mut self, instance_id: &str, fact_key: &str) {
         self.keys
@@ -258,7 +280,7 @@ impl LeftOutFacts {
 
     /// Whether nothing was left out.
     pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
+        self.keys.is_empty() && self.void_targets.is_empty()
     }
 }
 
@@ -2579,6 +2601,19 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             time.unix_ms,
             seed,
         );
+        // Workflow #455 G-R2s fix round 3: the void of the instance's targets is part of what
+        // the identity covers ([`targets_void_decision_id`]); fix round 4: only on an instance
+        // that holds a target record, the one the void changes a decision on (the condition the
+        // score stage reads, `apply_priority_selection`), so an instance without a record keeps
+        // the identity it has when no game is voided.
+        let holds_record = target_policies
+            .get(&candidate.instance_id)
+            .is_some_and(|recorded| recorded.state.is_some());
+        let decision_id = if holds_record && left_out.targets_void(&candidate.instance_id) {
+            targets_void_decision_id(&decision_id)
+        } else {
+            decision_id
+        };
         let reason_chain_id = format!("reason:{decision_id}");
         let intent = DispatchIntent {
             decision_id,
@@ -4326,6 +4361,29 @@ struct StagedCandidate {
     target: TargetEffect,
     /// SS-1: the base term without an active v2 policy (Alice's ruling 100).
     base: Option<crate::resource_targets::ResourceTerm>,
+    /// Workflow #455 G-R2s: the instance's target record is left out for this candidate (its
+    /// task carries the irreversible mark, or, round 2, its game's root cannot be composed), and
+    /// why: it reads its instance resolved without a record.
+    left_out: Option<LeftOutWhy>,
+}
+
+/// Workflow #455 G-R2s: why a candidate's instance's target record is left out for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeftOutWhy {
+    /// Its task carries the composer's irreversible mark.
+    Irreversible,
+    /// Round 2: the Runtime cannot compose its game's root ([`LeftOutFacts::targets_void`]).
+    RootUncomposed,
+}
+
+impl LeftOutWhy {
+    /// The candidate's one reason that says so.
+    fn reason(self) -> DecisionReason {
+        match self {
+            Self::Irreversible => irreversible_left_out_reason(),
+            Self::RootUncomposed => uncomposed_left_out_reason(),
+        }
+    }
 }
 
 /// The score stage between the predicate gate and ranking. Predicate outcomes are never
@@ -4446,6 +4504,68 @@ fn apply_priority_selection(
         .map_err(PolicyEvaluationError::invalid)?;
         instance_targets.insert(instance_id.as_str(), resolved);
     }
+    // Workflow #455 G-R2s (register §1.369; `contracts/resource-targets.md`, "A task that can do
+    // something irreversible"): a goal never raises the weight of a task whose package can do
+    // something irreversible. A candidate whose task carries the composer's mark, on an instance
+    // that holds a target record, reads its instance resolved once more as without the record
+    // (its server- or game-scoped note kept), so every number of it is the one of an instance
+    // without a record; the record's own resolution, which every other candidate reads, is left
+    // as it is. Round 2: every candidate of an instance whose game's root the Runtime cannot
+    // compose ([`LeftOutFacts::targets_void`]) is computed the same way, with its own reason; it
+    // takes that reason even when its task carries the mark too.
+    let mut left_out = BTreeMap::<usize, LeftOutWhy>::new();
+    let mut unrecorded = BTreeMap::<&str, crate::resource_targets::InstanceTargets>::new();
+    for candidate in &candidates {
+        let Some(recorded) = target_policies
+            .get(&candidate.instance_id)
+            .filter(|recorded| recorded.state.is_some())
+        else {
+            continue;
+        };
+        let why = if context.left_out.targets_void(&candidate.instance_id) {
+            LeftOutWhy::RootUncomposed
+        } else if catalog_task(catalog, &candidate.task_id)?.is_irreversible_reach() {
+            LeftOutWhy::Irreversible
+        } else {
+            continue;
+        };
+        left_out.insert(candidate.work_index, why);
+        let instance = facts
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == candidate.instance_id)
+            .ok_or_else(|| {
+                PolicyEvaluationError::invalid(format!(
+                    "a candidate names the unknown instance '{}'",
+                    candidate.instance_id
+                ))
+            })?;
+        if unrecorded.contains_key(instance.instance_id.as_str()) {
+            continue;
+        }
+        let without_record = InstanceTargetPolicy {
+            state: None,
+            ignored: recorded.ignored,
+        };
+        let resolved = crate::resource_targets::resolve_instance_targets(
+            catalog,
+            facts,
+            instance,
+            &without_record,
+            time,
+        )
+        .map_err(PolicyEvaluationError::invalid)?;
+        unrecorded.insert(instance.instance_id.as_str(), resolved);
+    }
+    // The resolution a candidate reads: its instance's, or, left out, its instance's without
+    // the record.
+    let targets_for = |work_index: usize, instance_id: &str| {
+        if left_out.contains_key(&work_index) {
+            unrecorded.get(instance_id)
+        } else {
+            instance_targets.get(instance_id)
+        }
+    };
     let selection = catalog.catalog().tasks.priority_selection;
     let aging_ms_per_milli = selection.and_then(|selection| selection.aging_ms_per_milli);
     // Workflow #411 B16 part 2: each candidate's reserves, by work index.
@@ -4532,7 +4652,9 @@ fn apply_priority_selection(
                 task_work.next_wake_unix_ms = min_wake(task_work.next_wake_unix_ms, Some(wake));
             }
         }
-        let targets = instance_targets.get(candidate.instance_id.as_str());
+        // G-R2s: a left-out candidate reads its instance as without the record.
+        let left = left_out.get(&candidate.work_index).copied();
+        let targets = targets_for(candidate.work_index, candidate.instance_id.as_str());
         let target = targets.map_or(TargetEffect::None, |targets| {
             targets.effect(&candidate.task_id)
         });
@@ -4558,6 +4680,9 @@ fn apply_priority_selection(
             let task_work = &mut work[candidate.work_index];
             if let Some(targets) = targets {
                 task_work.reasons.extend(targets.reasons(&target, None, 0));
+            }
+            if let Some(why) = left {
+                task_work.reasons.push(why.reason());
             }
             if let Some(base) = &base {
                 task_work.reasons.extend(base.reasons(None, 0));
@@ -4643,6 +4768,7 @@ fn apply_priority_selection(
             effective_milli,
             target,
             base,
+            left_out: left,
         });
     }
     let thresholds = selection.map(|selection| {
@@ -4662,6 +4788,7 @@ fn apply_priority_selection(
         effective_milli,
         target,
         base,
+        left_out: left,
     } in staged
     {
         candidate.rank.total_score = candidate
@@ -4798,10 +4925,13 @@ fn apply_priority_selection(
                 "neither the last run duration nor the declared expected duration is above zero; the utility term is dropped",
             ));
         }
-        if let Some(targets) = instance_targets.get(candidate.instance_id.as_str()) {
+        if let Some(targets) = targets_for(candidate.work_index, candidate.instance_id.as_str()) {
             task_work
                 .reasons
                 .extend(targets.reasons(&target, score_milli, offset_milli));
+        }
+        if let Some(why) = left {
+            task_work.reasons.push(why.reason());
         }
         if let Some(base) = &base {
             task_work
@@ -4912,7 +5042,8 @@ fn apply_priority_selection(
     let mut spends = BTreeMap::new();
     for candidate in &ranked {
         let task = catalog_task(catalog, &candidate.task_id)?;
-        let targets = instance_targets.get(candidate.instance_id.as_str());
+        // G-R2s: a left-out candidate's gaps are those of an instance without a record.
+        let targets = targets_for(candidate.work_index, candidate.instance_id.as_str());
         let spend = crate::resource_targets::spend_values(
             task,
             // SCHED-C1f1: the views hold the candidate's consumption in effect on its instance,
@@ -7940,6 +8071,27 @@ fn deterministic_decision_id(
     format!("decision:{:x}", hasher.finalize())
 }
 
+/// Workflow #455 G-R2s fix round 3 (register §1.369): the part [`targets_void_decision_id`]
+/// hashes before the identity it extends.
+const TARGETS_VOID_IDENTITY_PART: &[u8] = b"targets-void";
+
+/// Workflow #455 G-R2s fix round 3 (register §1.369; `contracts/resource-targets.md`, "A task that
+/// can do something irreversible"): the decision identity of a candidate of an instance that
+/// holds a target record, the record left out whole because its game's root cannot be composed
+/// ([`LeftOutFacts::targets_void`]): its [`deterministic_decision_id`] `decision_id`
+/// hashed once more after [`TARGETS_VOID_IDENTITY_PART`]. The void changes the decision, and a
+/// root that heals appends nothing to the ledger, so without it two evaluations of one instant,
+/// ledger position and snapshot, one before and one after the heal, would give two decisions one
+/// identity (`policy_decision_identity_conflict`). Every other candidate's identity is
+/// [`deterministic_decision_id`]'s, unchanged; fix round 4: a voided instance's without a record
+/// too, whose decision the void does not change.
+fn targets_void_decision_id(decision_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hash_part(&mut hasher, TARGETS_VOID_IDENTITY_PART);
+    hash_part(&mut hasher, decision_id.as_bytes());
+    format!("decision:{:x}", hasher.finalize())
+}
+
 fn hash_part(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update((bytes.len() as u64).to_be_bytes());
     hasher.update(bytes);
@@ -7956,6 +8108,37 @@ fn reason_with(outcome: Outcome, detail: impl Into<String>) -> DecisionReason {
         outcome,
         detail: detail.into(),
     }
+}
+
+/// Workflow #455 G-R2s (register §1.369; `contracts/resource-targets.md`, "A task that can do
+/// something irreversible"): the reason of a candidate whose task carries the composer's
+/// irreversible mark, on an instance that holds a target record: the record is left out for it.
+/// It stands where the record's policy-level reason would, after the reasons of the instance's
+/// resolution without the record and before the base term's `resource_weights`.
+fn irreversible_left_out_reason() -> DecisionReason {
+    reason(
+        PolicyCode::ResourceTargetPackageIrreversible,
+        format!(
+            "task marked {}: its package, or a rule that follows it, can do something \
+             irreversible; the instance's resource targets are left out and it is weighed as on \
+             an instance without a record",
+            crate::IRREVERSIBLE_REACH_MEMBER
+        ),
+    )
+}
+
+/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
+/// can do something irreversible"): the reason of a candidate of an instance whose game's root the
+/// Runtime cannot compose ([`LeftOutFacts::targets_void`]), on an instance that holds a target
+/// record: the record is left out for it until a composition of its game succeeds. It stands
+/// where [`irreversible_left_out_reason`] stands.
+fn uncomposed_left_out_reason() -> DecisionReason {
+    reason(
+        PolicyCode::ResourceTargetRootUncomposed,
+        "the packs of the instance's game could not be read or composed as a whole; the \
+         instance's resource targets are left out and the candidate is weighed as on an instance \
+         without a record until a composition of its game succeeds",
+    )
 }
 
 /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per round"): the

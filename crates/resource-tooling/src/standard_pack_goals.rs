@@ -23,15 +23,17 @@
 
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{CHECK_LABEL, root_invalid, root_issue_outcome};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    GoalReferences, GoalRule, LabError, LabResult, MAX_STANDARD_PACK_GOALS_BYTES,
-    PACKAGE_CONTROL_FILE, RootPackageVariables, StandardPackRoot, StandardPackRootIssue,
-    VariableOrigins, check_root_variables, check_standard_pack_goal_references, goal_variables,
-    parse_standard_pack_goals, parse_standard_pack_schedule,
+    DeclaredCapabilities, GoalReferences, GoalRule, IrreversiblePackages, LabError, LabResult,
+    MAX_STANDARD_PACK_GOALS_BYTES, PACKAGE_CONTROL_FILE, RootPackageVariables, StandardPackRoot,
+    StandardPackRootIssue, VariableOrigins, check_root_variables,
+    check_standard_pack_goal_references, goal_variables, parse_standard_pack_goals,
+    parse_standard_pack_schedule,
 };
-use actingcommand_execution_kernel::PreparedContainedTask;
-use actingcommand_policy::BenefitFollower;
+use actingcommand_execution_kernel::{ContainedTaskError, PreparedContainedTask};
+use actingcommand_policy::standard_pack_rule_followers;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
@@ -60,9 +62,9 @@ pub(crate) fn read_goals_file(path: &Path) -> LabResult<Option<Vec<u8>>> {
 /// What every package of a game root declares, as the Runtime's metadata reader reads it, in
 /// registry order.
 struct PackageDeclarations {
-    /// Each package with the capabilities its control declaration provides, every one `true`
-    /// when it is marked irreversible (G-R1 fix round 1).
-    provides: BTreeMap<String, BTreeMap<String, bool>>,
+    /// Each package with what the rule of irreversibility judges of it (G-R1 fix round 1;
+    /// Workflow #455 G-R2s fix round 3: and every capability its remedies list).
+    capabilities: BTreeMap<String, DeclaredCapabilities>,
     /// Workflow #463 V1: each package with the variables it declares and the fact keys its
     /// designated effects read their caps from.
     variables: Vec<RootPackageVariables>,
@@ -76,7 +78,7 @@ fn package_declarations(
     pack_directory: &dyn Fn(&str) -> PathBuf,
 ) -> LabResult<PackageDeclarations> {
     let mut declarations = PackageDeclarations {
-        provides: BTreeMap::new(),
+        capabilities: BTreeMap::new(),
         variables: Vec::new(),
     };
     for package_id in root.registry.package_ids() {
@@ -90,15 +92,9 @@ fn package_declarations(
             Instant::now() + PACK_DEADLINE,
         )
         .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))?;
-        let mut capabilities = BTreeMap::new();
-        for provided in &read.provides {
-            *capabilities
-                .entry(provided.capability().to_owned())
-                .or_insert(false) |= provided.irreversible();
-        }
         declarations
-            .provides
-            .insert(package_id.to_owned(), capabilities);
+            .capabilities
+            .insert(package_id.to_owned(), read.declared_capabilities());
         declarations.variables.push(RootPackageVariables {
             package_id: package_id.to_owned(),
             variables: read.variables,
@@ -111,15 +107,15 @@ fn package_declarations(
 /// The problems of the goal declaration `goals` (the bytes of `goals.json`) of the game root
 /// `root` of `game`, in file order: the reader's, or, for a file the reader accepts, its
 /// references'. `schedule` is `schedule.json`'s bytes and path when the root holds one (the
-/// composition has accepted it), and `followers` the chain followers that composition listed
-/// (`benefit_followers`, G-R1 fix round 2; none without it); `pack_directory` is where a registry
-/// entry's directory lies. Empty for a file that keeps every rule. A package that cannot be read
-/// is the caller's error, not a problem of the file.
+/// composition has accepted it); each of its rules is held with the rules that follow it
+/// (`standard_pack_rule_followers`, G-R1 fix round 2, Workflow #455 G-R2s fix round 1);
+/// `pack_directory` is where a registry entry's directory lies. Workflow #463 V1: no entry takes
+/// a table any more, so no table is read. Empty for a file that keeps every rule. A package that
+/// cannot be read is the caller's error, not a problem of the file.
 pub(crate) fn goal_issues(
     game: &str,
     root: &StandardPackRoot,
     schedule: Option<(&[u8], &Path)>,
-    followers: &[BenefitFollower],
     goals: &[u8],
     pack_directory: &dyn Fn(&str) -> PathBuf,
 ) -> LabResult<Vec<StandardPackRootIssue>> {
@@ -130,8 +126,9 @@ pub(crate) fn goal_issues(
     // G-R1 fix round 1: what every package of the root provides, each capability with its
     // `irreversible` mark, in registry order as the remedy report reads them. The references
     // judge irreversibility per capability across the whole root (contracts/remedies.md §2.3).
+    // Workflow #455 G-R2s fix round 3: and every capability its remedies list.
     let declarations = package_declarations(root, pack_directory)?;
-    let mut references = GoalReferences::new(declarations.provides);
+    let mut references = GoalReferences::new(declarations.capabilities);
     // Workflow #463 V1: every variable a package declares, which a placement names.
     references.variables = goal_variables(&declarations.variables);
     if let Some((bytes, path)) = schedule {
@@ -146,15 +143,9 @@ pub(crate) fn goal_issues(
             );
             references.pools.insert(pool.id.clone(), valued);
         }
-        // G-R1 fix round 2: each rule's followers, as the composition lists them: a follower with
-        // the rule it rides with (a follower of a follower rides with the same rule).
-        let mut followers_of = BTreeMap::<&str, Vec<String>>::new();
-        for follower in followers {
-            followers_of
-                .entry(follower.rides_with.as_str())
-                .or_default()
-                .push(follower.task_id.clone());
-        }
+        // G-R1 fix round 2: each rule's followers; Workflow #455 G-R2s fix round 1: every rule
+        // that follows it by a chain link, the lists the composer's irreversible mark reads.
+        let mut followers_of = standard_pack_rule_followers(&schedule);
         for rule in &schedule.rules {
             // G-R1 fix round 1: with the package it runs, which a `tier` entry is held to; fix
             // round 2: and with the rules that follow it, whose packages it is held to as well.
@@ -169,6 +160,89 @@ pub(crate) fn goal_issues(
         }
     }
     Ok(check_standard_pack_goal_references(&declared, &references))
+}
+
+/// [`root_irreversibility`]'s reading of the package at `path`: what the Runtime's metadata reader
+/// (`read_remedy_declarations`) reads of it for the rule of irreversibility (each capability of
+/// its control declaration's `provides`, `true` when an entry marks it `irreversible`, and,
+/// Workflow #455 G-R2s fix round 3, every capability its remedies list,
+/// `RemedyDeclarations::declared_capabilities`), or the reader's refusal.
+fn read_provides(path: &Path) -> Result<DeclaredCapabilities, ContainedTaskError> {
+    PreparedContainedTask::read_remedy_declarations(
+        CHECK_LABEL,
+        path,
+        Instant::now() + PACK_DEADLINE,
+    )
+    .map(|declarations| declarations.declared_capabilities())
+}
+
+/// Workflow #455 G-R2s: one game root's packages as the composer takes them
+/// ([`root_irreversibility`]), with the reader's refusal of each package it could not read.
+pub(crate) struct RootIrreversibility {
+    /// The composer's required input.
+    pub(crate) packages: IrreversiblePackages,
+    /// The reader's refusal of each package it could not read, by package id.
+    refusals: BTreeMap<String, Outcome>,
+}
+
+impl RootIrreversibility {
+    /// G-R2s fix round 1 (the independent review, point 4): `warnings` with the reader's refusal
+    /// linked as the cause (`caused_by`) of each `standard_pack_package_unreadable` that names a
+    /// package of `game` the reader refused, so the warning says why the package could not be
+    /// read; every other warning as it is.
+    pub(crate) fn with_causes(&self, game: &str, warnings: Vec<Outcome>) -> Vec<Outcome> {
+        warnings
+            .into_iter()
+            .map(|warning| {
+                let unreadable = warning.is(SharedCode::StandardPackPackageUnreadable)
+                    && warning.value("game").and_then(Value::as_str) == Some(game);
+                let refusal = if unreadable {
+                    warning
+                        .value("package_id")
+                        .and_then(Value::as_str)
+                        .and_then(|package_id| self.refusals.get(package_id))
+                } else {
+                    None
+                };
+                match refusal {
+                    Some(refusal) => warning.caused_by(refusal.clone()),
+                    None => warning,
+                }
+            })
+            .collect()
+    }
+}
+
+/// Workflow #455 G-R2s (register §1.369; contracts/standard-pack-schedule.md, "The irreversible
+/// mark"): the composer's required input for the game root `root`, every package its registry
+/// lists read below `pack_directory` by the reader the goal check uses ([`read_provides`]),
+/// through the one copy of the rule ([`IrreversiblePackages::new`]), with the reader's refusal of
+/// each package it refused. A package the reader refuses could not be read: the composition then
+/// marks every task of the game and warns `standard_pack_package_unreadable`, which the tools
+/// list with that refusal as its cause ([`RootIrreversibility::with_causes`]).
+pub(crate) fn root_irreversibility(
+    root: &StandardPackRoot,
+    pack_directory: &dyn Fn(&str) -> PathBuf,
+) -> RootIrreversibility {
+    let mut declared = BTreeMap::new();
+    let mut refusals = BTreeMap::new();
+    for package_id in root.registry.package_ids() {
+        let capabilities = match root.registry.get(package_id) {
+            Some(entry) => match read_provides(&pack_directory(&entry.directory)) {
+                Ok(capabilities) => Some(capabilities),
+                Err(error) => {
+                    refusals.insert(package_id.to_owned(), error.outcome());
+                    None
+                }
+            },
+            None => None,
+        };
+        declared.insert(package_id.to_owned(), capabilities);
+    }
+    RootIrreversibility {
+        packages: IrreversiblePackages::new(declared),
+        refusals,
+    }
 }
 
 /// `standard-pack check`: one `standard_pack_root_invalid` warning per problem of the file at

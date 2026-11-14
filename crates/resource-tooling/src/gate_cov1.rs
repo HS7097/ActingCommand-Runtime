@@ -10,7 +10,7 @@
 // is the one of before. Neutral fixtures only: game `game-a`, packages on server `server-a`.
 
 use crate::StandardPackCheckResponse;
-use crate::standard_pack_schedule::{ScheduleReport, report_schedule};
+use crate::standard_pack_schedule::{ScheduleReport, readable_root, report_schedule};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     BundleMaintenance, MaintenanceUse, StandardPackRoot, StandardPackRootBytes,
@@ -299,12 +299,15 @@ fn check(rules: &[Value], requires: &[&str], maintenance: &[BundleMaintenance]) 
         "held": []
     }))
     .expect("schedule bytes");
+    let game_root = root(&packages);
     report_schedule(
         GAME,
-        &root(&packages),
+        &game_root,
         maintenance,
         &schedule,
         Path::new("schedule.json"),
+        // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+        &readable_root(&game_root),
     )
     .unwrap_or_else(|error| panic!("the schedule is checked: {error}"))
 }

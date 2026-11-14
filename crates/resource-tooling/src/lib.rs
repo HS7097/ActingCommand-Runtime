@@ -115,6 +115,11 @@ mod gate_453_s8;
 #[cfg(test)]
 mod gate_455_gr1;
 
+// Workflow #455 G-R2s fix round 3 (register §1.369): the goal check and the composer's input the
+// tools read, over real packages, follow every chain link and the remedies' capabilities.
+#[cfg(test)]
+mod gate_455_gr2s;
+
 // Workflow #463 V1 (register §1.378): standard-pack check's root check of the variables a game
 // root's packages declare.
 #[cfg(test)]

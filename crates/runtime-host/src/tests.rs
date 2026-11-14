@@ -697,6 +697,9 @@ mod gate_rl1c_follow;
 // Workflow #442 REM-1 (register §1.326): in composer mode the remedy table the start builds reads
 // the composed packages, and every table says what it found.
 mod gate_442_rem1;
+// Workflow #455 G-R2s (register §1.369): the workbench marks the tasks of irreversible packages and
+// reads a package's declaration again when one of its declaration files changes.
+mod gate_455_gr2s;
 mod home_entry;
 mod input;
 mod input_failure;

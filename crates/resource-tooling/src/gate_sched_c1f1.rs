@@ -9,7 +9,7 @@
 // `game-a`, packages on server `server-a`.
 
 use crate::StandardPackCheckResponse;
-use crate::standard_pack_schedule::{ScheduleReport, report_schedule};
+use crate::standard_pack_schedule::{ScheduleReport, readable_root, report_schedule};
 use actingcommand_contract::{StandardPackRoot, StandardPackRootBytes, read_standard_pack_root};
 use actingcommand_policy::{CONSUMPTION_FACT_SUBSYSTEM, ConsumptionFactRule};
 use serde_json::{Value, json};
@@ -127,12 +127,15 @@ fn check(rules: &[Value], requires: &[&str]) -> ScheduleReport {
         "held": []
     }))
     .expect("schedule bytes");
+    let game_root = root(&packages);
     report_schedule(
         GAME,
-        &root(&packages),
+        &game_root,
         &[],
         &schedule,
         Path::new("schedule.json"),
+        // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+        &readable_root(&game_root),
     )
     .unwrap_or_else(|error| panic!("the schedule is checked: {error}"))
 }

@@ -12,8 +12,8 @@
 
 use super::*;
 use crate::standard_pack_goals::{
-    DeclaredGoalKind, GoalReferences, StandardPackGoals, check_standard_pack_goal_references,
-    parse_standard_pack_goals,
+    DeclaredCapabilities, DeclaredGoalKind, GoalReferences, StandardPackGoals,
+    check_standard_pack_goal_references, parse_standard_pack_goals,
 };
 use serde_json::json;
 
@@ -662,9 +662,14 @@ fn v1_a_placement_is_held_to_the_variables_the_root_declares() {
             .iter()
             .all(|entry| entry.kind == DeclaredGoalKind::Variable)
     );
+    // Two packages that provide nothing and list no remedy.
+    let nothing = || DeclaredCapabilities {
+        provides: BTreeMap::new(),
+        remedies: BTreeSet::new(),
+    };
     let mut references = GoalReferences::new(BTreeMap::from([
-        ("neutral.a".to_owned(), BTreeMap::new()),
-        ("neutral.b".to_owned(), BTreeMap::new()),
+        ("neutral.a".to_owned(), nothing()),
+        ("neutral.b".to_owned(), nothing()),
     ]));
     references.variables = variables;
     let issue = |problem, pointer: &str| StandardPackRootIssue {

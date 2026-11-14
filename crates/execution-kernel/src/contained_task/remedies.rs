@@ -15,7 +15,7 @@
 
 use super::*;
 use actingcommand_contract::{
-    PackageVariable, ProvidedCapability, ProvidesProblem, RemedyDeclaration,
+    DeclaredCapabilities, PackageVariable, ProvidedCapability, ProvidesProblem, RemedyDeclaration,
     parse_package_variables, validate_provides,
 };
 // Workflow #411 B15 R5: a run's read-only parameters.
@@ -146,6 +146,31 @@ pub struct RemedyDeclarations {
     /// (`scheduling_outcome.designated_effects[].max_repeats.fact_key`), in declaration order,
     /// which the root check holds a variable read as a cap to.
     pub cap_fact_keys: Vec<String>,
+}
+
+impl RemedyDeclarations {
+    /// Workflow #455 G-R2s fix round 3 (contracts/standard-pack-schedule.md, "The irreversible
+    /// mark"): what the rule of irreversibility judges of this package ([`DeclaredCapabilities`]):
+    /// each capability it provides, `true` when an entry marks it `irreversible`, and every
+    /// capability a remedy of its mappings lists, the default or not. The one reading the
+    /// Runtime's workbench, check-config and the resource tools give the rule.
+    pub fn declared_capabilities(&self) -> DeclaredCapabilities {
+        let mut provides = BTreeMap::new();
+        for provided in &self.provides {
+            *provides
+                .entry(provided.capability().to_owned())
+                .or_insert(false) |= provided.irreversible();
+        }
+        DeclaredCapabilities {
+            provides,
+            remedies: self
+                .remedies
+                .iter()
+                .flat_map(|(_, remedy)| remedy.capabilities())
+                .cloned()
+                .collect(),
+        }
+    }
 }
 
 impl PreparedContainedTask {
