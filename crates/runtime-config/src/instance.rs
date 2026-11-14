@@ -92,6 +92,10 @@ pub const RECOGNITION_PACKAGE: &str = "recognition_package";
 /// entry's `start_emulator`; discovery-bound instances only, off unless the file names it.
 /// Workflow #429 R-3: settable; every automatic emulator start reads it in effect.
 pub const START_EMULATOR: &str = "start_emulator";
+/// Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"): whether the
+/// first start that sees the entry holds its instance with the pause `instance.added`, the entry's
+/// `start_paused`; absent is `false`. Read once at assembly, not settable.
+pub const START_PAUSED: &str = "start_paused";
 /// Workflow #398 RD-4 (model-398 v1.1 §6.2): the ladder profile the instance climbs by, the
 /// entry's `recovery_ladder_profile`; it comes before the `recovery_ladder` section's
 /// `kind_profiles` and must name one of its `profiles`.
@@ -303,6 +307,20 @@ pub(crate) static ROWS: &[KeyRow] = &[
     // Workflow #437 MAPP-1 (`contracts/device-group.md`, "The configuration form"): the entry's
     // device group, reported only for an entry that names it, read once at assembly.
     crate::device_group::ROW,
+    // Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start";
+    // `actingd-config` revision 31): whether the first start that sees the entry holds it paused;
+    // reported only for an entry that names it (no default row: absent is `false`), read once at
+    // assembly, so a configuration without it renders the rows it rendered before.
+    KeyRow {
+        name: KeyName::PerInstance(START_PAUSED),
+        file_path: FilePath::InstanceMember,
+        value_type: ValueType::Boolean,
+        range: KeyRange::Any,
+        default: DefaultSource::None,
+        settable: Settable::No(NotSettable::ReadAtAssembly),
+        reader: "#453 S2",
+        since: "0.12.60",
+    },
 ];
 
 /// Workflow #438 HELD-1: one instance's held-record member, named as the section-level key whose

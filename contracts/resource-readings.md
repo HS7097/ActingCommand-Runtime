@@ -352,11 +352,12 @@ readings or confirmed adjustments, runs the original terminal flow once, unchang
 A refusal in stage 2 rewrites the terminal as a refused projection does: outcome `Failure`
 with that code, no final page, no settlement, and the projection failure severity (`warning`
 for a policy run). The request fails as `Failed` with that code and the failure terminal; the
-detail is the failure's native detail. Workflow #457 (since 0.12.60): a direct run (a person's or
-an agent's `RunContainedTask`) gives its lease back before it answers, as a completed run does,
-with the same release (a run on a borrowed key leaves the key with the run that lent it); until
-0.12.60 it answered with the lease still held, until its client's connection closed or the lease
-expired. A policy run's lease is released by its settlement, as for any failed policy run.
+detail is the failure's native detail. Workflow #457 (since 0.12.60, register §1.363): a direct
+run (a person's or an agent's `RunContainedTask`) refused here ends its lease before it answers, as
+a failed direct run's lease ends ([runtime-interface.md](runtime-interface.md), the activity
+`direct_run`, says when a direct run's lease ends); until 0.12.60 it answered with the lease still
+held, until its client's connection closed or the lease expired. A policy run's lease is released
+by its settlement, as for any failed policy run.
 
 `publish_facts` takes `fact_write_gate` itself, so nothing is published under the gate, and the
 `policy` lock is never taken under it. Between stage 2 and stage 3 another path can commit the

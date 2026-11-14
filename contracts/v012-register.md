@@ -21548,12 +21548,12 @@ device; every id made up):
   a full store each producer's new key is refused, the run fails
   `contained_task_resource_reading_rejected` with the native detail
   `<list id>:fact_store_capacity_exceeded`, nothing is published or evicted, and the two receipts'
-  outcomes carry the same values. Each refused run, a `read_list`'s as a field list's, gives the
-  device's key back before it answers, as a completed run does, and the next run on the same open
-  connection starts at once (§1.362, defect #457). When this slice merged, the refused run
-  answered before its lease ended (the refusal returned from its terminal before the release a
-  completed run makes) and held the device's key until its client's connection closed; this test
-  pinned that, and §1.362 changed it to the present truth.
+  outcomes carry the same values. Each refused run, a `read_list`'s as a field list's, ends its
+  lease before it answers, as a failed run's lease ends, and the next run on the same open
+  connection starts at once (§1.363, defect #457). When this slice merged, the refused run
+  answered before its lease ended (the refusal returned from its terminal before its branch's
+  lease end) and held the device's key until its client's connection closed; this test pinned
+  that, and §1.363 changed it to the present truth.
 - `field_list_row_read_by_ledger_8`: the ledger reader of this build (`ledger` 8, `actingledger`'s
   task evidence) reads the `list_start_unseen` and `list_end_unseen` rows with `frame_indices` and
   relays their outcome's values unchanged.
@@ -22638,16 +22638,193 @@ slice changes and changes with it, keeping its name:
 wrote `actingcommand.resource-targets.v3` as "a version no reader takes" and now writes `.v4`. No
 golden changes; no test leaves the gate map.
 
-### 1.362 Defect #457 (0.12.60): a direct run whose terminal step fails gives its lease back before it answers (Workflow #457; found by FL-2's gate, §1.354, on CI and confirmed in the code by the coordinator, never seen on an installation; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-457-direct-run-lease.md`, read on main `f19756db`)
+### 1.362 Slice #453 S2 (0.12.60): an instance entry can declare that it starts paused; `actingd-config` revision 31 (Workflow #453; the owner's approval of board #453 on 11-13: only instances added while the Runtime is stopped start paused, and they stay paused until a person resumes them; the design survey `rd-1113/fresh-root-design.md`, sections 0 and 5 with "(g) A pause from the first start and the pause contract" and the row S2 of 5(d), read on main `98924e28`; the coordinator's rulings 3 and 6 on board #453, not the owner's words; coordinator work order `rd-1114/brief-453-s2-start-paused.md`, read on main `1ffb6c7f`; fix 1, after an independent review, with the coordinator's ruling that the member is applied only by its own pause, coordinator work order `rd-1114/brief-1704-fix1.md`, main `1ffb6c7f`)
 
-1.362 is the next free number on main `f19756db`, whose last section is §1.361; pull requests open
-beside this one may take numbers first, and a train renumbers it.
+1.362 is the next free number after §1.361: the slice took 1.357 on its base, and the train
+0.12.60c, merged before it, took §1.357 to §1.361. The Runtime's half of starting paused: a configuration member and
+the start's hold. The installer's half, the cold `instance add` that writes the member (S3), is not
+in this slice; nothing in this repository writes the member yet.
+
+| Part | Built | Where |
+|---|---|---|
+| the member | yes | `apps/actingd/src/config.rs`, `InstanceConfig::start_paused` (`Option<bool>`, absent `false`); the assembly hands the host the instance ids of the entries that declare `true` (`RuntimeHostConfig::with_start_paused`, `start_paused`) and reports the member in the file layer |
+| the key | yes | `instance.<instance id>.start_paused`, `crates/runtime-config/src/instance.rs`, `START_PAUSED` and its row of `instance::ROWS`: boolean, no default (no row for an entry that does not name it), `NotSettable::ReadAtAssembly`, console tier `hidden`; check-config reports it in the manifest as every instance key |
+| the hold | yes | `crates/runtime-host/src/host/start_pause.rs`, `HostShared::hold_start_paused_instances`, called by the start right after `hold_skipped_settlement_fact_instances` (so after `restore_scheduling_pauses`, an installer-held start's included, and the two existing start holds) and before `spawn_instance_workers` and `prepare_physical_instances_on_start` |
+| the hold at a release (fix 1) | yes | `HostShared::hold_start_pause_at_release` (`start_pause.rs`), called by `resume_scheduling` (`host/policy_dispatch.rs`) under the persist gate and on the reconnect claim's key, after the resume's refusals and before its lift; the entries the start left unapplied are `HostShared::start_pause_unapplied` (memory only) |
+| the pause | yes | an instance pause with the existing reason `instance.added` (`INSTANCE_ADDED_PAUSE_REASON`, `crates/actingcommand-contract/src/runtime.rs`; no new reason word), through `HostShared::hold_named_instance_pause_at_start` (`host/scheduling_pause.rs`) and `SchedulingPauseTable::hold_named_instance_at_start` (`host/policy_dispatch.rs`), the variant of the existing start hold that takes a pause reason name instead of a code; the code form now converts and calls it |
+| the fact | yes | `host.start_pause_applied`, scope Runtime, a record list of `{instance_id, applied_at_unix_ms}` ([runtime-fact-store.md](runtime-fact-store.md)); joins the default of `ledger_observer.tag.workbench_patterns` (`crates/ledger/src/global/capture.rs`, `DEFAULT_TAG_WORKBENCH_PATTERNS`, `[&str; 16]` after S11's key; `distribution/windows/actingd.defaults.json`) |
+| the note | yes | check-config (`apps/actingd/src/check_config.rs`, `summarize`; `actingcommand_runtime_host::start_pause_tag_note`; `actingcommand_ledger::workbench_patterns_tag`, the index's own pattern rule): an entry with the member and a list in effect that leaves the key out is the warning `ledger_tag_key_unclassified` with `fact_key` `host.start_pause_applied` |
+
+**The order.** For each entry that declares `true` and whose instance id no row of the fact names
+(the entries in the order of their instance ids; the global pause does not count as the
+instance's own): an instance not paused is held with `instance.added`, recording
+`host.scheduling_pause` as the existing start holds do, and applied; one its restored
+`instance.added` pause holds (a start that ended between the two records, or INST-5's pause) keeps
+it and is applied; one a pause of another reason holds keeps that pause exactly as it is and is
+not applied (fix 1). Then one record of the fact with the applied entries' rows. A refused record
+fails the start as the existing start holds fail. A start that ends between the two records finds
+the restored `instance.added` pause at the next start, keeps it and then records the row:
+idempotent. Once applied, a restart never holds the entry again, and the member may stay in the
+file. A record of the fact of another shape fails the start (`invalid_runtime_state_fact`, at
+`hold_start_instance_pause`), as a malformed `host.scheduling_pause` does
+(`scheduling_pause_fact_invalid`).
+
+**Applied only by its own pause (fix 1, the coordinator's ruling on the review's third
+suggestion).** Before fix 1 an entry first seen under another pause was recorded at once, so the
+release of a hold with a hand-back (the installer's `--hold`, a rescue operation's hold) or of a
+pause carried over on a reused alias let the instance run although nobody had looked at it. Now
+the start leaves it unapplied, and the release holds it. Every path that ends an instance pause
+while the Runtime runs is `resume_scheduling`'s instance scope (`host/policy_dispatch.rs`): the
+console's, `actingctl resume`'s and the Lab's resume, the installer's `release-hold` and its other
+hand-backs and the rescue module's hand-back (`resume_seen`, `crates/lab-rescue/src/install/runtime.rs`,
+a conditional resume); the only other `lift_instance`, `lift_failed_instance_pause`
+(`host/scheduling_pause.rs`), lifts only a pause its own failed request set on an instance that
+was not paused, which an unapplied entry never is, so it has no hook. In `resume_scheduling`'s
+lift step, under `scheduling_pause_persist_gate` and on the `ResumeReconnect` claim's key, after
+`resumable_instance_pauses`: with no unapplied entry the hook returns before anything else; for
+an unapplied entry it lifts the old pause and sets `instance.added` on the prospective table (each
+at the scope's next revision), records `host.scheduling_pause`, changes the live table from the old
+pause to the new one under one lock, then records the applied row. No moment leaves the instance
+without a pause, and the key is held throughout. No reconnect runs; the claim's key is released at
+once (`release_lease`), so a routine claim stays gated. The answer keeps its shape
+(`SchedulingResumed`, which `runtime-client`'s `resume_scheduling` and
+`resume_scheduling_expected` accept): `revision` is the new pause's, `selfcheck` both sides
+`ok: false` with no values and `failure_code` `dispatch_paused_instance` (`HostCode`, the
+instance's control gate), as R-7b's resume under a player hold answers `player_hold_active`. A
+refused record fails the request with `scheduling_pause_persist_failed` (the mapping is
+`scheduling_pause_persist_failure`, shared with `persist_scheduling_pauses`); after the live change
+the instance stays held and unapplied, so its next release holds it again.
+
+**Bounded rows (fix 1).** The review found the rows only ever added, a record list bounded at 256
+rows (`runtime_fact_record_list_too_large`), and the 257th instance id that ever declared the
+member would make every start fail. Each record of the fact (`record_start_pause_applied`) now
+keeps only the rows whose instance id the start's configuration names (any registered entry,
+with or without the member) and adds the new ones, so the list holds at most one row per
+configured instance. An instance id removed from the configuration loses its row at the next
+record and is held again if it comes back with the member.
+
+**Nothing for a configuration without the member.** The host receives no instance id: the hold
+returns before it reads the fact, so the start neither reads nor writes it and holds nothing;
+nothing is unapplied, so every release returns from the hook before anything else and is what it
+is on main; the manifest, `config.parameters.instance` and check-config's report carry no new row;
+check-config reads the tag list only for a configuration with the member. Every installation today
+is one.
+
+**The tag (fix 1).** The first round's texts said that a configuration whose own list leaves the
+key out would hold such an entry at every start. Today's start replays the program facts from the
+latest snapshot and every later record whatever the tags; the list decides only the index row and
+the synchronous write. The default list holds the key because the rule for program state is tagged
+records and a later ledger change is to load by tag; check-config's note says so and stays a note
+with the existing code (`start_pause.rs`, `start_pause_tag_note`; `check_config.rs`;
+[runtime-config.md](runtime-config.md); [runtime-fact-store.md](runtime-fact-store.md);
+[actingd-check-config.md](actingd-check-config.md)).
+
+**The installer's copy of the reason.** `crates/lab-rescue/src/install/instance_add.rs` keeps its
+own `PAUSE_REASON` string for INST-5's pause; it is left for S3, which writes the member there.
+
+**The code.** No code is added. The note reuses `ledger_tag_key_unclassified` (`ledger`, warning:
+a workbench key that no tag list classifies and that does not survive a restart; its handling is
+to add the key to the list), which fits exactly; the malformed fact reuses
+`invalid_runtime_state_fact`; a refused hold reuses the existing start-hold codes. No location is
+added: every failure of the hold is at `hold_start_instance_pause`. The index is not regenerated
+(no fragment under `contracts/outcome-codes/` changed). `runtime-outcomes` stays 1.
+
+**Interfaces.** `actingd-config` rises to 31 (30 is MAPP-2b's): an older Runtime refuses an entry
+that names the member, because the entry denies unknown members (`config_decode_failed`); a file
+that names it nowhere keeps its revision, so the Runtime reads revisions 5 to 30 and declares
+[5, 31] (`distribution/windows/component-interfaces.json`; the architecture test
+`tools/actinglab-architecture/tests/component_interfaces.rs`; [component-interfaces.md](component-interfaces.md),
+row 31). **No `ledger` revision**: the record is an existing `runtime.fact_recorded` of a record
+list, which an older Runtime replays at start as any program fact (fix 1 corrected the first
+round's reason, which said such a Runtime does not load it) and no code of it reads; the
+precedents are `host.agent_wake` (§1.245
+AGT1A-5) and `host.capped_episodes` (§1.299 C1D-2: "no key, no revision"), whose slices raised no
+`ledger` revision, and the `ledger` rows of [component-interfaces.md](component-interfaces.md) list
+none of them. `runtime-client`, `package`, `install-*`: untouched.
+
+**What the installer needs to know** ([scheduling-pause.md](scheduling-pause.md), "Pauses held at a
+first start"; the survey's 5(e) and (g), checked against [install-cli.md](install-cli.md) on this
+base): the pause is nobody's hand-back hold; `actingctl install stop` treats it as another party's
+pause and needs `--known-pause <alias>=instance.added`, as for INST-5's pause today; an
+`install start` that meets it for the first time reports the extra pause as the caveat
+`post_check_mismatch`; an update's stop meets an unapplied entry only under a pause of another
+reason, which it treats as today; a hand-back of the installer's or the rescue module's own hold
+that meets an unapplied entry gets the answer above and leaves the instance under `instance.added`,
+another party's pause for it from then on.
+
+**Tests.** `crates/runtime-host/src/tests/gate_453_s2.rs` (gate map `host.toml`, "#453 S2"): the
+first start of an entry with the member pauses it with `instance.added` (revision 1, released),
+leaves the other instance alone, records the pause before the applied row, and the daemon start's
+configured emulator start starts the other instance's emulator and not its own; fix 1 (review item
+4): on a fixture whose instances the start prepares (`with_device_endpoints`), nothing is opened on
+the held instance's device, which a hold moved after `prepare_physical_instances_on_start` would
+open, and the other's is opened (1); after the resume a restart holds nothing and the applied row
+is unchanged (2); fix 1, replacing the work order's "that pause is kept with its reason, and the
+applied row is still recorded": a pause of another reason is kept exactly and nothing is recorded
+(3); a start that ends between the two records is completed once by the next start, which finds
+the `instance.added` pause, and a third start writes no applied record (4); a configuration without
+the member holds and records nothing at a first start and a restart, and (fix 1, review item 5) its
+whole start, on a fixture with a configuration manifest, has the records of the same start on a
+host of this build whose start and release never enter the slice's code path (the test-only
+switch `START_PAUSE_OFF_FOR_TEST`, one function per build), record by record, type, severity and
+whole payload with ids, times (the evaluation's `seed` among them), numbers and the root path
+normalised, every differing record named in one message (5); 273 instance ids declare the member
+over 18 starts, 16 at a time beside one kept entry, each batch configured once: no start fails,
+the kept entry is never held again, and the rows are exactly the configured declaring instances
+(6); for a person's resume and for the installer's release (with its owner epoch and revision), an
+entry left unapplied under that party's pause is held with `instance.added` at the release, the
+answer `SchedulingResumed` with revision 3 and `failure_code` `dispatch_paused_instance`, one pause
+record then one applied record, and on the scheduler no active lease and the startup claim (W2-B,
+queued behind the pause) still gated, also after a sweep tick, with no task requested; resuming the
+`instance.added` pause runs the startup package once, and a restart holds nothing (7); a start that
+finds the other pause gone (the instance id configured under another alias) holds `instance.added`
+then (8); the release steps of a configuration without the member, a person's resume and the
+installer's release, have the records and receipts of the same steps on the switched host (9).
+**What the comparisons prove, and what rests on reading.** They compare two hosts of this build,
+one with the switch set: they prove that for a configuration without the member the start's hold
+and the release's hook add or change no record and no answer. That the switched host behaves as
+main rests on reading: the switch returns from exactly the two entries the slice adds
+(`hold_start_paused_instances`, `hold_start_pause_at_release`), and the slice's other changes on
+these paths are the same on both hosts (the default tag list's extra key, which this fixture's
+manifest does not carry; the shared `scheduling_pause_persist_failure` mapping; the code form of
+the start hold now calling the name form). `apps/actingd/src/config/gate_453_s2.rs` (gate map `apps.toml`, "#453
+S2"): a boolean taken and reported, only `true` handed to the host, no row without the member, the
+key table's row (1); a non-boolean refused as `start_emulator`'s is (2); check-config's row and
+its note, and no note with the defaults' list or without the member (3). Adapted because the
+requirement moves what they pin: the architecture test of the interface declarations now pins
+`actingd-config` [5, 31]; `ao1_keys_every_ledger_observer_key_has_its_contract_default`
+(`crates/runtime-config/src/ledger_observer_tests.rs`) pins the default list with the new key
+(`[&str; 16]`: S11, §1.358, merged first, had added its own key to the same default list; this slice adds the
+sixteenth).
+
+**At deploy.** Nothing changes for a configuration without the member: no pause, no record, no
+row (every installation today). The shipped defaults file's `ledger_observer.tag.workbench_patterns`
+gains `host.start_pause_applied`, so `config.parameters.ledger_observer` lists one entry more and
+the defaults file's digest in `config.selection` changes, as for SCHED-C1d; a configuration that
+names its own list should add the key before any entry carries the member (check-config notes it).
+The consoles and installers that read `actingd-config` must accept 31 before an installation is
+moved to a release that carries this slice (the UI repository's work): the console pins released
+Runtime commits, so its release that accepts 31 follows the Runtime's release and precedes that
+deployment. No program writes the member before S3, so until then a configuration file carries it
+only where a person wrote it; the installer's cold `instance add` (S3) needs a live build with this
+slice.
+
+**Rollback** (below 0.12.60). A build before this slice refuses a configuration that names the
+member (the entry denies unknown members): remove the member first. It never reads
+`host.start_pause_applied`; a held pause stays a pause it restores as any other, and a person
+resumes it as any other.
+
+### 1.363 Defect #457 (0.12.60): a direct run whose terminal step fails ends its lease before it answers (Workflow #457; found by FL-2's gate, §1.354, on CI and confirmed in the code by the coordinator, never seen on an installation; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-457-direct-run-lease.md`, read on main `f19756db`; fix 1, after an independent review, with the coordinator's ruling that a failed or cancelled direct run's lease ends as a failed run's, coordinator work order `rd-1114/brief-1706-fix1.md`, main `e44fecb4` merged)
+
+1.362 was the next free number on main `f19756db`; #453 S2 merged first and took §1.362, and
+merging main `e44fecb4` renumbered this section 1.363. Pull requests open beside this one may take
+numbers first, and a train renumbers it.
 
 **The defect.** A direct run (a `RunContainedTask` a person or an agent sends, not the
 scheduler's run) that ran its task and then met a failure in its terminal step answered that
 failure truthfully but kept the device's lease: in `execute_contained_task_with_lease`
-(`host/contained_task.rs`) the terminal step returned its failure with `?`, before the release its
-success path makes. The realistic case is the fact store's refusal of the list or reading the run
+(`host/contained_task.rs`) the terminal step returned its failure with `?`, before the lease end
+its branch makes. The realistic case is the fact store's refusal of the list or reading the run
 publishes (stage 2 of "Publication" in [resource-readings.md](resource-readings.md): a full
 store, a version conflict, an invalid record); a store update package's refusal, a refused
 settlement projection and a terminal already committed take the same return. While the requesting
@@ -22658,69 +22835,104 @@ server's) did not. A list over the byte bound is no such failure: it is a miss, 
 completes (§1.354).
 
 **The fix.** Each return from the terminal step of `execute_contained_task_with_lease` (its five
-calls of `append_contained_task_terminal`: the cancelled run's, the two failed runs', the capacity
-refusal's and the completed run's) gives a direct run's lease back before the run answers, when
-the failure does not poison, as the success path gives it back: `release_lease` with the run's
-current token (the one the success path releases with there: the end phase's, after a switch the
-renewed one, MAPP-2d) and the run's links. The order is therefore the success path's: under the
-instance's admission guard the queued entries past their time expire and the lease's device use
-ends (`end_lease_device_use` with `Keep`: the session is kept, or closed where it must close);
-then, under the queue-order lock, the key goes to the first eligible waiting claim (a transfer) or
-is released (`lease.released`), and the guard's drop pumps the queue. A run on a borrowed key
-(MAPP-2a) leaves the key with the run that lent it, as its success path does (a direct run never
-borrows one). The answer is the run's failure as before: its code, category, values and terminal.
-A release that fails ends the lease as the success path's failed release does
-(`cleanup_composite_failure_with_run_links`); its failure is recorded where the release records
-it (the scheduler's denial, or the release's failure record) and travels as the run failure's
-`cleanup` link (`RequestFailure::with_cleanup_failure`); a fatal one poisons, as at every lease
-end. Left as they were: a failure that poisons (the request door contains it, as before); a policy
-run (its settlement releases its key, `ensure_scheduled_policy_lease_released`); a host run (a
-startup package, a ladder's rung: the key's holder releases it, `release_host_key`); the success
-path; the lease's length; the queue's order; the switch; the session rule.
+calls of `append_contained_task_terminal`) ends a direct run's lease before the run answers, when
+the failure does not poison, as this same function ends the lease once that branch's terminal is
+written (the coordinator's ruling on #1706: a failed run's lease "ends as a failed run's", as
+[runtime-interface.md](runtime-interface.md) says it):
+
+- The two failed runs' returns, the capacity refusal's and the completed run's (whose terminal
+  step committed the run's terminal as failed: a refused publication, a store update's refusal, a
+  refused projection; or met a terminal already committed): `cleanup_composite_failure_with_run_links`,
+  the call those branches make after their terminal. A run on a borrowed key keeps the key for the
+  run that lent it (MAPP-2a); unconfirmed resources are settled; the lease ends with the
+  backend-failure reason (`cleanup_token`: under the instance's admission guard the queued entries
+  past their time expire and the lease's device use ends with `Keep`, the session kept or closed
+  where it must close; then, under the queue-order lock, the key goes to the first eligible
+  waiting claim, a transfer, or is released, and the guard's drop pumps the queue); then the ladder
+  after a direct run is decided as for every failed direct run, by the failure's own code under
+  `recovery_ladder.rules.direct_runs` (`ladder_after_direct_run`; nothing is added or removed by
+  hand); then a session a lapsed lease left open is closed.
+- The cancelled run's return: as the cancel path just below it ends the lease: when the Runtime's
+  reset of the stopped run failed, `cleanup_token` with the backend-failure reason and the lapsed
+  session's close; otherwise `release_lease`, and a release that fails ends the lease through
+  `cleanup_composite_failure_with_run_links`, as that path does.
+
+Every return can call its branch's lease end: none lacks what the call needs, and none would run it
+a second time (the function ends the lease once, at the end of each branch, which these returns
+skip). So no return keeps the success path's plain release; only the cancelled run's ends with a
+release, which is its own path's. The token is the run's current one (the end phase's; after a
+switch the renewed one, MAPP-2d). The answer is the run's failure as before: its code, category,
+values and terminal. A lease end that fails is the run failure's `cleanup` link
+(`RequestFailure::with_cleanup_failure`), and a fatal one poisons, as on every run path. The first
+round of this slice gave every return the success path's plain release, after the first work
+order's wording ("as the success path does"); the review found it, and the coordinator's ruling
+corrected it to the above. Left as they were: a failure that poisons (the request door contains
+it, as before); a policy run (its settlement releases its key,
+`ensure_scheduled_policy_lease_released`); a host run (a startup package, a ladder's rung: the
+key's holder releases it, `release_host_key`); the success path; the lease's length; the queue's
+order; the switch; the session rule.
 
 **The other settlement paths** (the work order asked for each):
 
 - The scheduler's run takes the same returns, and `complete_scheduled_policy_failure` then
   releases its lease on the policy lane when the run wrote no `lease.released`
-  (`ensure_scheduled_policy_lease_released`, with the token `run_token` resolves): no key stays
-  held. Not this defect; left.
+  (`ensure_scheduled_policy_lease_released`): its terminal step's failure leaves no key held. Not
+  this defect; left. A known limit outside this slice, older than it, which the review found and a
+  separate board issue carries: for an instance alone whose run renewed its lease in its
+  wind-down, that fallback release takes the granted token, not the renewed one.
 - A Lab operation's run (`host/lab_operation.rs`) releases its lease in `finish_lab_operation`
-  before it writes its terminal record, so a failed terminal record holds no key. Its other early
-  returns (the prepared record that could not be stored, an input's evidence that could not be
-  resolved) come before that release and are not a terminal step's; left, and named in the
-  report.
+  before it writes its terminal record, so a failed terminal record holds no key. Three of its
+  early returns before that release, which the review confirmed as the same kind of defect, are
+  left: another board issue carries them.
 - A recovery ladder's rung runs on the ladder's key: a rung that returns early leaves the key
   with the ladder, which releases it once at its end (`run_recovery_ladder`); a startup package's
   run likewise (`run_startup_claim`). Not this defect; left.
 
-**Contracts.** No contract said when a direct run's lease ends. [resource-readings.md](resource-readings.md)
-("Publication", after stage 2's refusal) now says that a direct run gives its lease back before it
-answers, and that a policy run's settlement releases its lease.
+**Contracts.** [runtime-interface.md](runtime-interface.md) (the activity `direct_run`, where a
+direct run's time on its lease is described) says when a direct run's lease ends, the failure
+cases included; [resource-readings.md](resource-readings.md) ("Publication", after stage 2's
+refusal) notes the refused run's case and points to it.
 
 **Interface.** No revision moves; no outcome code, word, configuration key, record or wire shape
-is added. A test-only switch turns the fix off for the tests that compare with the build before
+is added. A test-only switch turns the fix off for the test that compares with the build before
 it (its test spelling exists only in test builds).
 
 Tests (host gate row "#457", in FL-2's gate file `gate_450_fl2.rs`, on its fake device and
-packages; no sleeps):
+packages; no sleeps; each host reads once before its store is filled, as FL-2 test 4 does):
 `refused_run_gives_the_key_back_on_its_open_connection` (on a full store, the field list's and the
 `read_list` step's refused runs over one client connection that stays open: after each answer the
-device has no holder and nothing waits; the next run on the connection, the same package shown a
-list that is not whole, starts at once, with no `scheduler.queued`, and completes),
+device has no holder and nothing waits, and the run's lease has one `lease.released`, the failed
+run's lease end's, not under the run's request; the next run on the connection, the same package
+shown a list that is not whole, starts at once, with no `scheduler.queued`, and completes, its
+lease released by the explicit release under its request),
 `refused_runs_answer_is_the_answer_before_the_fix` (for each producer, on a host of its own, the
 refused run's answer with ids and times normalised is byte for byte the answer it gives with the
-fix turned off, which leaves the key held as before) and
-`a_completed_direct_run_writes_the_records_it_wrote_before_the_fix` (on two hosts started alike,
-fix off and on, a field list run read whole: the records linked to its run, its terminal and its
-release among them, are the same record by record, ids, times, the stored documents' sizes and
-object keys and the sampling seeds normalised; every differing record is named in one message).
-The borrowed key in the same failure is not reachable through these fixtures: only a member's
-startup run holds a borrowed key, and it is a host run, which this fix leaves as it was (MAPP-2a's
-tests pin its key). Adapted, keeping its name: `gate_450_fl2::field_list_full_store_refused`
-pinned the defect (the refused run still held the key, nothing waiting, until its client
-disconnected); it now sends both refused runs over one open connection and pins the key free
-after each answer and the second run started at once. No golden changes; no test leaves the gate
-map.
+fix turned off, which leaves the key held as before),
+`a_completed_direct_run_writes_the_same_records_on_two_hosts_of_this_build` (on two hosts started
+alike, a field list run read whole: the records linked to its run, its terminal and its release
+among them, are the same record by record, the base name of the host's state root replaced and
+ids, times, the stored documents' sizes and object keys and the sampling seeds normalised; every
+differing record is named in one message) and
+`refused_run_starts_the_ladder_a_failed_direct_run_starts` (under `rules.direct_runs = trigger`
+and one trigger item naming both codes, an ordinary failed direct run, `contained_task_state_invalid`,
+and a refused run, `contained_task_resource_reading_rejected`, each on a host of its own, each end
+their lease as a failed run's and start one ladder by that item, matched by its code, at the task
+stage, naming their own code). The third test compares two hosts of this build, not this build
+with the one before: the test-only switch is read only on a return from the terminal step, which a
+completed run never reaches. That a completed run's path is the one on main rests on reading the
+diff: the fix's closure is defined after the run's execution and called only on the terminal
+step's error. By reading, no record linked to the run names the state root (artifact references
+carry relative object keys, and the package lies outside both roots); the comparison replaces its
+base name all the same. `lease.released` has no member that names the reason of a lease end: the
+tests assert what the record shows of it, a failed run's lease end written under links of its own
+and a completed run's explicit release under the run's request. The borrowed key in the same failure
+is not reachable through these fixtures: only a member's startup run holds a borrowed key, and it is
+a host run, which this fix leaves as it was (MAPP-2a's tests pin its key). Adapted, keeping its name:
+`gate_450_fl2::field_list_full_store_refused` pinned the defect (the refused run still held the
+key, nothing waiting, until its client disconnected); it now sends both refused runs over one open
+connection and pins the key free after each answer, and the second run started at once (the first
+round's run follows runs of other connections, so only the second proves it). No golden changes;
+no test leaves the gate map.
 
 **At deploy.** Nothing to do: a device is no longer held after such a failure.
 
@@ -22792,6 +23004,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `host.capped_episodes` (a record list: the writer's start anchor, then per instance and pool with an open or waiting capped episode its episode row, consumer rows and member rows; [runtime-fact-store.md](runtime-fact-store.md); §1.299 SC1-11, C1D-1) | workbench | yes (added to `tag.workbench_patterns` by SCHED-C1d) | #428 SCHED-C1d |
 | `host.state_root_installation` (one row: the claim's time and who claimed, never the installation's number; [state-root-installation.md](state-root-installation.md); §1.358 S11-3) | workbench | yes (added to `tag.workbench_patterns` by S11) | #453 S11 |
+| `host.start_pause_applied` (a record list: one row `{instance_id, applied_at_unix_ms}` per entry declaring `start_paused` whose first-start pause was applied; [runtime-fact-store.md](runtime-fact-store.md); [scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start"; §1.362) | workbench | yes (added to `tag.workbench_patterns` by #453 S2) | Workflow #453 S2 |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
 | `config.catalog_provenance` (count and id rows of who wrote the active composed generation's fixed values and valuations; §1.299 SC1-7, C1B-1) | workbench | no (`config.` is re-observed) | #428 SCHED-C1b |

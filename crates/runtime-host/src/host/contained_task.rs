@@ -1643,6 +1643,17 @@ fn summary_unless_capacity_refused(
     }
 }
 
+/// Workflow #457: how a direct run's lease ends when its terminal step returned a failure, as the
+/// branch that wrote the terminal would end it (`HostShared::execute_contained_task_with_lease`).
+#[derive(Clone, Copy)]
+enum TerminalStepEnd {
+    /// A failed run's lease end (`cleanup_composite_failure_with_run_links`).
+    FailedRun,
+    /// A cancelled run's: the backend-failure lease end when the Runtime's reset failed, else the
+    /// release.
+    CancelledRun { reset_failed: bool },
+}
+
 pub(super) struct RuntimeContainedTask<'a> {
     pub(super) host: &'a HostShared,
     pub(super) request: &'a ValidatedRuntimeRequest<'a>,
@@ -8917,23 +8928,21 @@ impl HostShared {
         let token = end_token;
         // Workflow #457: a direct run whose terminal step returns a failure that does not poison
         // (the fact store refused a list or a reading it would publish, a store update's refusal,
-        // a refused settlement projection, a terminal already committed) gives its lease back
-        // before it answers, as its success path below does: `release_lease` with the run's
-        // current token (`token`, the end phase's) and its run links, so the session's end and the
-        // queue's pump come in the same order. A run on a borrowed key leaves the key with the run
-        // that lent it (Workflow #437 MAPP-2a). The run answers its own failure, unchanged. A
-        // release that fails ends the lease as the success path's failed release does
-        // (`cleanup_composite_failure_with_run_links`), and its failure becomes the run failure's
-        // `cleanup` link (`RequestFailure::with_cleanup_failure`; a fatal one poisons, as at every
-        // lease end). A policy run's or a host run's failure returns as before: its settlement
+        // a refused settlement projection, each committing a failed terminal; a terminal already
+        // committed) ends its lease before it answers, with the run's current token (`token`, the
+        // end phase's). The coordinator's ruling on #1706: a failed run's lease ends as this
+        // function ends it for a failed direct run whose terminal was written
+        // (`cleanup_composite_failure_with_run_links`: the backend-failure lease end, the ladder
+        // `rules.direct_runs` admits for the failure's own code, the lapsed session's close; a run
+        // on a borrowed key leaves the key with the run that lent it, Workflow #437 MAPP-2a); a
+        // cancelled run's as its cancel path below ends it. The run answers its own failure,
+        // unchanged; a lease end that fails is the failure's `cleanup` link
+        // (`RequestFailure::with_cleanup_failure`; a fatal one poisons, as at every lease end). A
+        // policy run's or a host run's failure returns as before: its settlement
         // (`ensure_scheduled_policy_lease_released`) or the key's holder (`release_host_key`) ends
         // its lease; a failure that poisons is left to the request door, as before.
-        let give_back = |held: LeaseToken, refused: RequestFailure| -> RequestFailure {
-            if scheduled
-                || refused.poison_runtime
-                || refused.error.is_fatal()
-                || control.borrows_key()
-            {
+        let give_back = |held: LeaseToken, refused: RequestFailure, end: TerminalStepEnd| {
+            if scheduled || refused.poison_runtime || refused.error.is_fatal() {
                 return refused;
             }
             #[cfg(test)]
@@ -8943,21 +8952,41 @@ impl HostShared {
             {
                 return refused;
             }
-            match self.release_lease(
-                request,
-                original.request_id(),
-                &held,
-                connection_id,
-                release_links,
-            ) {
-                Ok(_) => refused,
-                Err(release_failure) => self.cleanup_composite_failure_with_run_links(
+            match end {
+                TerminalStepEnd::FailedRun => self.cleanup_composite_failure_with_run_links(
                     request,
                     held,
                     connection_id,
                     run_links,
-                    refused.with_cleanup_failure(*release_failure.error),
+                    refused,
                 ),
+                // As the cancel path below: a reset that failed fenced the instance, and the
+                // lease ends as a failed run's lease end does without its ladder.
+                TerminalStepEnd::CancelledRun { reset_failed: true } => match self
+                    .cleanup_token(&held, connection_id, LeaseReleaseReason::BackendFailure)
+                    .and_then(|()| self.close_lapsed_run_session(&held))
+                {
+                    Ok(()) => refused,
+                    Err(error) => refused.with_cleanup_failure(error),
+                },
+                TerminalStepEnd::CancelledRun {
+                    reset_failed: false,
+                } => match self.release_lease(
+                    request,
+                    original.request_id(),
+                    &held,
+                    connection_id,
+                    release_links,
+                ) {
+                    Ok(_) => refused,
+                    Err(release_failure) => self.cleanup_composite_failure_with_run_links(
+                        request,
+                        held,
+                        connection_id,
+                        run_links,
+                        refused.with_cleanup_failure(*release_failure.error),
+                    ),
+                },
             }
         };
         let outcome = match execution {
@@ -9044,8 +9073,13 @@ impl HostShared {
                             store_update_alias: None,
                         },
                     );
-                    let task_terminal =
-                        task_terminal.map_err(|refused| give_back(token.clone(), refused))?;
+                    let task_terminal = task_terminal.map_err(|refused| {
+                        give_back(
+                            token.clone(),
+                            refused,
+                            TerminalStepEnd::CancelledRun { reset_failed },
+                        )
+                    })?;
                     if let Some(refusal) = &summary_refusal {
                         *failure.error = failure
                             .error
@@ -9190,7 +9224,9 @@ impl HostShared {
                             store_update_alias: None,
                         },
                     );
-                    let event = event.map_err(|refused| give_back(token.clone(), refused))?;
+                    let event = event.map_err(|refused| {
+                        give_back(token.clone(), refused, TerminalStepEnd::FailedRun)
+                    })?;
                     failure.terminal = Some(terminal(&event));
                     if failure.error.lifecycle.capacity.is_none()
                         && task_failure.as_ref().is_none_or(|evidence| {
@@ -9321,7 +9357,9 @@ impl HostShared {
                         store_update_alias: None,
                     },
                 );
-                let event = event.map_err(|refused| give_back(token.clone(), refused))?;
+                let event = event.map_err(|refused| {
+                    give_back(token.clone(), refused, TerminalStepEnd::FailedRun)
+                })?;
                 // Workflow #336 L2d: the page-graph home entry's refusal of a configured
                 // return-home package carries its detail as a linear failure does. Workflow
                 // #371-2: so does a page-graph step whose confirmation failed.
@@ -9454,7 +9492,9 @@ impl HostShared {
                             store_update_alias: None,
                         },
                     );
-                    let event = event.map_err(|refused| give_back(token.clone(), refused))?;
+                    let event = event.map_err(|refused| {
+                        give_back(token.clone(), refused, TerminalStepEnd::FailedRun)
+                    })?;
                     let task_failure = scheduled.then(|| TaskFailureEvidence {
                         outcome: refusal.outcome(),
                         severe: false,
@@ -9519,8 +9559,10 @@ impl HostShared {
                     .then(|| instance_alias.to_owned()),
             },
         );
-        // Workflow #457: a terminal step that failed gives the lease back before the answer.
-        let task_terminal = task_terminal.map_err(|refused| give_back(token.clone(), refused))?;
+        // Workflow #457: a terminal step that failed (its terminal rewritten as failed) ends the
+        // lease as a failed run's before the answer.
+        let task_terminal = task_terminal
+            .map_err(|refused| give_back(token.clone(), refused, TerminalStepEnd::FailedRun))?;
         let completed = OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&task_terminal)),

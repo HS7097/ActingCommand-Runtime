@@ -27,19 +27,23 @@
 // `gate_428_s168_lb1a`) are unchanged: a package without the member runs as before. Every id, key
 // and name is made up; nothing waits on a clock of its own.
 //
-// Workflow #457 (since 0.12.60): FL-2 test 4 found that a direct run the fact store refused at its
-// publication answered with the device's key still held, until its client's connection closed or
-// the lease expired. The run now gives the key back before it answers, as a completed run does;
-// the tests at the end of this file pin that, the answer unchanged and a completed run's records
-// unchanged.
+// Workflow #457 (since 0.12.60; register §1.363): FL-2 test 4 found that a direct run the fact
+// store refused at its publication answered with the device's key still held, until its client's
+// connection closed or the lease expired. The run now ends its lease before it answers, as a failed
+// direct run's lease ends (the ladder after a direct run included); the tests at the end of this
+// file pin that, the answer unchanged, and that a completed run's records are the same on two hosts
+// of this build.
 
 use super::gate_308_l4b::{ALIAS, CardNames, HEIGHT, WIDTH, member, single_frame_select_package};
+use super::gate_387_d1c::ladder_manifest;
+use super::instance_workers::{phases, wait_for_ladder_end};
 use super::*;
 use actingcommand_contract::outcome::StateProblem;
 use actingcommand_contract::{
-    ArtifactRedactionState, ContainedTaskCancellationReason, FactScalar, FrameId,
-    MAX_TASK_DIAGNOSTIC_PAGE_RECORDS, RequestId, TaskDiagnosticCursor, TaskDiagnosticErrorData,
-    TaskDiagnosticPayload, TaskDiagnosticRecord,
+    ArtifactRedactionState, ConfigSettingChange, ContainedTaskCancellationReason, FactScalar,
+    FrameId, MAX_TASK_DIAGNOSTIC_PAGE_RECORDS, RecoveryLadderTrigger, RecoveryTriggerMatch,
+    RecoveryTriggerStage, RequestId, RuntimeLifecyclePhase, TaskDiagnosticCursor,
+    TaskDiagnosticErrorData, TaskDiagnosticPayload, TaskDiagnosticRecord,
 };
 use actingcommand_ledger_forensics::{
     ForensicEventFilter, ForensicEventsRequest, ForensicOutput, ForensicReport, ForensicRequest,
@@ -490,8 +494,8 @@ fn client_of(host: &RuntimeHost) -> TestClient {
 }
 
 // One manual run of `package` on the device, sent on `client`'s connection. Workflow #457: a run
-// the fact store refused at its publication gives the device's key back before it answers, as a
-// completed run does, so the connection may stay open and the next run on it starts at once.
+// the fact store refused at its publication ends its lease before it answers, as a failed run's
+// lease ends, so the connection may stay open and the next run on it starts at once.
 fn run_on(client: &mut TestClient, package: &Path) -> ListRun {
     let (request, correlation_id) = run_request(package);
     let receipt = client.send(&request);
@@ -1724,10 +1728,11 @@ fn fill_store(host: &RuntimeHost) {
 // `<list id>:fact_store_capacity_exceeded` (as the contract keeps it), nothing is published or
 // evicted, and the two receipts' outcomes carry the same values (no value is added). Workflow
 // #457: both refused runs are sent on one client connection, which stays open; each, a
-// `read_list`'s as a field list's, gives the device's key back before its answer comes (no holder,
-// nothing waiting), and the next run on that connection starts at once, without waiting in the
-// device's queue. The row bound of a record list (1024) cannot be reached by a field list, whose
-// rows are at most its 256 frames.
+// `read_list`'s as a field list's, ends its lease as a failed run's before its answer comes (no
+// holder, nothing waiting), and the second run on that connection starts at once, without waiting
+// in the device's queue (only the second round proves it: the first follows runs of other
+// connections). The row bound of a record list (1024) cannot be reached by a field list, whose rows
+// are at most its 256 frames.
 #[test]
 fn field_list_full_store_refused() {
     const FIELD_BYTES_KEY: &str = "inventory.list.example_kind_f";
@@ -1804,10 +1809,13 @@ fn field_list_full_store_refused() {
     let mut refusals = Vec::new();
     // Workflow #457: both refused runs on one client connection, which stays open.
     let mut client = client_of(&host);
-    for (package, screens, key, id) in [
+    for (round, (package, screens, key, id)) in [
         (&field_new, six_items(), OTHER_KEY, LIST_ID),
         (&read_new, six_cards(), THIRD_KEY, READ_ID),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         device.shows(screens);
         let refused = run_on(&mut client, package);
         assert_eq!(
@@ -1832,14 +1840,17 @@ fn field_list_full_store_refused() {
         assert!(host.fatal_error().expect("runtime health").is_none());
         let outcome = serde_json::to_value(refused.receipt.outcome()).expect("outcome JSON");
         refusals.push(outcome["values"].clone());
-        // Workflow #457: the refused run gave the device's key back before it answered, as a
-        // completed run does, on a connection that stays open; the run on that connection after it
-        // (the `read_list` step's after the field list's) started at once.
+        // Workflow #457: the refused run ended its lease before it answered, as a failed run's, on
+        // a connection that stays open. Only the second round proves that the next run on the
+        // connection starts at once: the first round's run follows runs of other connections,
+        // whose keys were free anyway.
         assert_key_free(&host, key);
-        assert!(
-            !waited_in_queue(&host, refused.correlation_id),
-            "{key}: the run started at once"
-        );
+        if round > 0 {
+            assert!(
+                !waited_in_queue(&host, refused.correlation_id),
+                "{key}: the run after the first refusal on the connection started at once"
+            );
+        }
     }
     drop(client);
     assert_eq!(refusals[0], refusals[1], "no value is added");
@@ -2107,7 +2118,7 @@ fn field_list_read_by_the_lists_reader() {
     host.close().expect("close the host");
 }
 
-// ---- Workflow #457: a direct run whose terminal step returns a failure gives its key back.
+// ---- Workflow #457: a direct run whose terminal step returns a failure ends its lease first.
 
 // One producer of FL-2 test 4's refusals on a full store: its package, which publishes under a new
 // key, the screens on which the store refuses its list, and the screens on which its list is not
@@ -2237,31 +2248,115 @@ fn normalised_answer(receipt: &RuntimeReceipt) -> String {
     serde_json::to_string(&answer).expect("receipt text")
 }
 
-// The records of a run, each one's type, severity and whole payload, normalised.
-fn comparable(events: &[PersistedEvent]) -> Vec<(EventType, EventSeverity, Value)> {
+// The records of a run, each one's type, severity and whole payload: the base name of its host's
+// state root (`root_name`) replaced in every string, then normalised.
+fn comparable(
+    events: &[PersistedEvent],
+    root_name: &str,
+) -> Vec<(EventType, EventSeverity, Value)> {
     events
         .iter()
         .map(|event| {
             let mut payload =
                 serde_json::to_value(event.payload()).expect("a record's payload encodes");
+            without_root(&mut payload, root_name);
             normalised(&mut payload);
             (event.event_type(), event.severity(), payload)
         })
         .collect()
 }
 
+// `value` with every occurrence of `root_name` in its strings replaced by `<root>`.
+fn without_root(value: &mut Value, root_name: &str) {
+    match value {
+        Value::Object(members) => members
+            .values_mut()
+            .for_each(|member| without_root(member, root_name)),
+        Value::Array(entries) => entries
+            .iter_mut()
+            .for_each(|entry| without_root(entry, root_name)),
+        Value::String(text) => *text = text.replace(root_name, "<root>"),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+// The producer's package run once on the screens its list is not whole on (a miss: it completes and
+// publishes nothing), so the instance's own records exist before the store is filled, as FL-2 test
+// 4 and S168-4's test 9 read before they fill it.
+fn read_before_the_fill(host: &RuntimeHost, device: &Device, producer: &Producer) {
+    device.shows(producer.missed.clone());
+    let missed = run(host, &producer.package);
+    completed(host, &missed.receipt);
+    assert!(
+        ended_on_success(&missed.receipt),
+        "{}: {:?}",
+        producer.key,
+        missed.receipt
+    );
+}
+
+// The `lease.released` records of the lease the run `correlation_id` ran on (the lease its
+// terminal names), each with whether it is linked to the run's own request. The explicit release a
+// completed run makes is (`release_lease`, under the run's request and run links); a failed direct
+// run's lease end is not: it is written by the lease end itself
+// (`cleanup_composite_failure_with_run_links`, the backend-failure reason), under links of its own.
+// `lease.released` has no member that names the reason.
+fn lease_releases(host: &RuntimeHost, correlation_id: CorrelationId) -> Vec<bool> {
+    let lease_id = run_records(host, correlation_id)
+        .iter()
+        .find(|event| {
+            matches!(
+                event.event_type(),
+                EventType::TaskCompleted | EventType::TaskFailed
+            )
+        })
+        .and_then(|event| event.links().lease_id())
+        .copied()
+        .expect("the run's terminal names its lease");
+    host.query_persisted_events_for_test(EventQuery {
+        lease_id: Some(lease_id),
+        event_type: Some(EventType::LeaseReleased),
+        ..EventQuery::default()
+    })
+    .expect("the lease's releases")
+    .iter()
+    .map(|event| event.links().correlation_id() == Some(&correlation_id))
+    .collect()
+}
+
+// Every trigger of a `recovery_ladder_started` in the host's ledger.
+fn ladder_triggers(host: &RuntimeHost) -> Vec<RecoveryLadderTrigger> {
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("ledger events");
+    phases(&events)
+        .into_iter()
+        .filter_map(|(_, phase)| match phase {
+            RuntimeLifecyclePhase::RecoveryLadderStarted { trigger, .. } => Some(trigger),
+            _ => None,
+        })
+        .collect()
+}
+
 // Workflow #457 test 1, the defect FL-2 test 4 found: on a full store, a direct run of each
 // producer whose list the store refuses at its publication (the field list's and the `read_list`
-// step's, FL-2 test 4's two refusals) gives the device's key back before it answers. All runs go
-// over one client connection, which stays open. Once a refused run's answer is read the device has
-// no holder and nothing waits; the next run on the connection, of the same package shown a list
-// that is not whole (it publishes nothing), starts at once (no `scheduler.queued` among its
-// records) and completes, and the device is free after it too. Nothing is published.
+// step's, FL-2 test 4's two refusals) ends the device's lease before it answers, as a failed run's
+// lease ends (the coordinator's ruling on #1706). All runs go over one client connection, which
+// stays open. Once a refused run's answer is read the device has no holder and nothing waits, and
+// the run's lease has one `lease.released`, written by the failed run's lease end, not under the
+// run's request; the next run on the connection, of the same package shown a list that is not
+// whole (it publishes nothing), starts at once (no `scheduler.queued` among its records) and
+// completes, its lease released by its explicit release under its request, and the device is free
+// after it too. Nothing is published.
 #[test]
 fn refused_run_gives_the_key_back_on_its_open_connection() {
     let root = TempDir::new().expect("tempdir");
     let device = Device::new();
     let host = start(&root, &device);
+    let producers = producers(&root);
+    for producer in &producers {
+        read_before_the_fill(&host, &device, producer);
+    }
     fill_store(&host);
     let mut client = client_of(&host);
     for Producer {
@@ -2269,12 +2364,17 @@ fn refused_run_gives_the_key_back_on_its_open_connection() {
         key,
         refused: refused_screens,
         missed: missed_screens,
-    } in producers(&root)
+    } in producers
     {
         device.shows(refused_screens);
         let refused = run_on(&mut client, &package);
         assert_refused(&refused, key);
         assert_key_free(&host, key);
+        assert_eq!(
+            lease_releases(&host, refused.correlation_id),
+            [false],
+            "{key}: the refused run's lease ended as a failed run's"
+        );
         device.shows(missed_screens);
         let next = run_on(&mut client, &package);
         completed(&host, &next.receipt);
@@ -2284,6 +2384,11 @@ fn refused_run_gives_the_key_back_on_its_open_connection() {
             "{key}: the next run on the connection started at once"
         );
         assert_key_free(&host, key);
+        assert_eq!(
+            lease_releases(&host, next.correlation_id),
+            [true],
+            "{key}: the completed run's explicit release"
+        );
         assert!(publications(&host, key).is_empty(), "{key}");
     }
     assert!(host.fatal_error().expect("runtime health").is_none());
@@ -2300,26 +2405,22 @@ fn refused_run_gives_the_key_back_on_its_open_connection() {
 #[test]
 fn refused_runs_answer_is_the_answer_before_the_fix() {
     let packages = TempDir::new().expect("tempdir");
-    for Producer {
-        package,
-        key,
-        refused: screens,
-        ..
-    } in producers(&packages)
-    {
+    for producer in producers(&packages) {
+        let key = producer.key;
         let root = TempDir::new().expect("tempdir");
         let device = Device::new();
         let host = start(&root, &device);
+        read_before_the_fill(&host, &device, &producer);
         fill_store(&host);
         let mut client = client_of(&host);
-        device.shows(screens.clone());
-        let fixed = run_on(&mut client, &package);
+        device.shows(producer.refused.clone());
+        let fixed = run_on(&mut client, &producer.package);
         assert_refused(&fixed, key);
         assert_key_free(&host, key);
         host.direct_run_terminal_release_off_for_test(true)
             .expect("the fix turned off");
-        device.shows(screens);
-        let before = run_on(&mut client, &package);
+        device.shows(producer.refused.clone());
+        let before = run_on(&mut client, &producer.package);
         assert_refused(&before, key);
         assert_eq!(
             host.instance_claims_for_test(ALIAS).expect("claims"),
@@ -2339,15 +2440,19 @@ fn refused_runs_answer_is_the_answer_before_the_fix() {
     }
 }
 
-// Workflow #457 test 3: a direct run that completes writes the records it wrote before the fix. On
-// two hosts started alike, the fix turned off on the first (as a build before it) and on on the
-// second, the same field list run reads three items whole, completes and publishes its list. The
-// records linked to the run, its terminal and its lease's release among them, are the same on both
-// hosts record by record, each one's type, severity and payload compared with ids, times, the
-// stored documents' sizes and object keys and the sampling seeds normalised (`comparable`); every
-// differing record is named at once. Nothing else is compared between the two hosts.
+// Workflow #457 test 3: the records of a completed direct run are the same on two hosts of this
+// build. On two hosts started alike, the same field list run reads three items whole, completes
+// and publishes its list. The records linked to the run, its terminal and its lease's release among
+// them, are the same on both hosts record by record, each one's type, severity and payload compared
+// with the base name of the host's state root replaced and ids, times, the stored documents' sizes
+// and object keys and the sampling seeds normalised (`comparable`); every differing record is
+// named at once. Nothing else is compared between the two hosts. This test does not compare with
+// the build before the fix: the test-only switch is read only on a return from the terminal step,
+// which a completed run never reaches. That a completed run's path is the one on main rests on the
+// diff: the fix's closure is defined after the run's execution and called only on the error of the
+// terminal step.
 #[test]
-fn a_completed_direct_run_writes_the_records_it_wrote_before_the_fix() {
+fn a_completed_direct_run_writes_the_same_records_on_two_hosts_of_this_build() {
     let packages = TempDir::new().expect("tempdir");
     let list = write_package(
         &packages,
@@ -2355,12 +2460,16 @@ fn a_completed_direct_run_writes_the_records_it_wrote_before_the_fix() {
         fields_package(Fields::list(LIST_KEY)),
     );
     let mut runs = Vec::new();
-    for off in [true, false] {
+    for _ in 0..2 {
         let root = TempDir::new().expect("tempdir");
+        let root_name = root
+            .path()
+            .file_name()
+            .expect("the state root's base name")
+            .to_string_lossy()
+            .into_owned();
         let device = Device::new();
         let host = start(&root, &device);
-        host.direct_run_terminal_release_off_for_test(off)
-            .expect("the fix's switch");
         device.shows(three_items());
         let read = run(&host, &list);
         completed(&host, &read.receipt);
@@ -2384,27 +2493,149 @@ fn a_completed_direct_run_writes_the_records_it_wrote_before_the_fix() {
         );
         assert_key_free(&host, "after the completed run");
         assert!(host.fatal_error().expect("runtime health").is_none());
-        runs.push(comparable(&records));
+        runs.push(comparable(&records, &root_name));
         host.close().expect("close the host");
     }
-    let [before, fixed] = runs.as_slice() else {
+    let [first, second] = runs.as_slice() else {
         unreachable!("two runs")
     };
     assert_eq!(
-        before.len(),
-        fixed.len(),
-        "as many records: {before:#?} {fixed:#?}"
+        first.len(),
+        second.len(),
+        "as many records: {first:#?} {second:#?}"
     );
     // Every differing record at once: a comparison that stops at the first one hides the rest.
-    let differing = before
+    let differing = first
         .iter()
-        .zip(fixed)
+        .zip(second)
         .enumerate()
-        .filter(|(_, (was, is))| was != is)
+        .filter(|(_, (one, other))| one != other)
         .collect::<Vec<_>>();
     assert!(
         differing.is_empty(),
-        "the completed run's records are the ones it wrote before the fix; these differ: \
-         {differing:#?}"
+        "a completed run's records are the same on both hosts; these differ: {differing:#?}"
     );
+}
+
+// Workflow #457 test 4, the coordinator's ruling on #1706 (a failed direct run's lease ends as a
+// failed run's, the ladder after a direct run included): `recovery_ladder.rules.direct_runs` set to
+// `trigger`, one trigger item at the task stage naming the two codes below, no code excluded. On a
+// host of its own each, an ordinary failed direct run (FL-2 test 3's run that collects a frame after
+// its list's end, `contained_task_state_invalid`) and a direct run whose list the full store refused
+// (`contained_task_resource_reading_rejected`) each start exactly one ladder from their failed lease
+// end, by that item, matched by its code, at the task stage, naming their own code; each lease end
+// is the failed run's (`lease_releases`). The fake instance has no recovery package, no startup
+// package and no emulator control, so every rung is skipped and the ladder ends and gives the key
+// back.
+#[test]
+fn refused_run_starts_the_ladder_a_failed_direct_run_starts() {
+    const RULE: &str = "fl2_failures";
+    const STATE_INVALID: &str = "contained_task_state_invalid";
+    let packages = TempDir::new().expect("tempdir");
+    let back = write_package(
+        &packages,
+        "fields-back.zip",
+        fields_package(Fields {
+            back_after_end: true,
+            ..Fields::list(LIST_KEY)
+        }),
+    );
+    let [field_list, _] = producers(&packages);
+    // FL-2 test 3: decided whole on `last`, then a frame of the list after its end.
+    let past_end = vec![
+        Screen::Item(Item {
+            name: 0,
+            amount: 5,
+            ..SHOWN
+        }),
+        Screen::Item(Item {
+            last: true,
+            name: 1,
+            amount: 7,
+            previous: true,
+            final_mark: true,
+            ..SHOWN
+        }),
+        Screen::Item(Item {
+            name: 2,
+            amount: 9,
+            previous: true,
+            ..SHOWN
+        }),
+    ];
+    for (code, refused) in [
+        (STATE_INVALID, false),
+        ("contained_task_resource_reading_rejected", true),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let device = Device::new();
+        let provider = FakeProvider::one(ALIAS, device.id, Arc::clone(&device.state))
+            .with_vision_provider(Arc::new(ShownFields::default()));
+        let host = RuntimeHost::start(
+            config(&root).with_config_manifest(ladder_manifest(json!({
+                "exclude_codes": [],
+                "triggers": [{"id": RULE, "stages": ["task"],
+                              "codes": [STATE_INVALID, "contained_task_resource_reading_rejected"]}],
+            }))),
+            Arc::new(provider),
+        )
+        .expect("runtime host");
+        let configured = host
+            .process_request_for_test(
+                &runtime_request(
+                    &IdentifierIssuer::new().expect("identifier issuer"),
+                    RuntimeOperation::ConfigureSettings {
+                        expected_version: None,
+                        changes: vec![ConfigSettingChange {
+                            key: "recovery_ladder.rules.direct_runs".to_owned(),
+                            value: Some(json!("trigger")),
+                        }],
+                    },
+                ),
+                ConnectionId::new(4_570).expect("connection"),
+            )
+            .expect("configure receipt");
+        assert_eq!(
+            configured.state(),
+            RuntimeReceiptState::Completed,
+            "{configured:?}"
+        );
+        let failed = if refused {
+            read_before_the_fill(&host, &device, &field_list);
+            fill_store(&host);
+            device.shows(field_list.refused.clone());
+            run(&host, &field_list.package)
+        } else {
+            device.shows(past_end.clone());
+            run(&host, &back)
+        };
+        assert_eq!(
+            failed.receipt.state(),
+            RuntimeReceiptState::Failed,
+            "{code}: {:?}",
+            failed.receipt.outcome()
+        );
+        assert_eq!(
+            failed.receipt.outcome().code().as_str(),
+            code,
+            "{:?}",
+            failed.receipt.outcome()
+        );
+        assert_eq!(
+            lease_releases(&host, failed.correlation_id),
+            [false],
+            "{code}: the lease ended as a failed run's"
+        );
+        wait_for_ladder_end(&host, ALIAS);
+        let ladders = ladder_triggers(&host);
+        let [trigger] = ladders.as_slice() else {
+            panic!("{code}: one ladder: {ladders:#?}");
+        };
+        assert_eq!(trigger.stage, RecoveryTriggerStage::Task, "{code}");
+        assert_eq!(trigger.rule.as_deref(), Some(RULE), "{code}");
+        assert_eq!(trigger.matched, Some(RecoveryTriggerMatch::Code), "{code}");
+        assert_eq!(trigger.failure_code.as_str(), code);
+        assert!(host.fatal_error().expect("runtime health").is_none());
+        host.close().expect("close the host");
+    }
 }

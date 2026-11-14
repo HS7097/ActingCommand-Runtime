@@ -90,7 +90,8 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `device_group` and check-config's report member `device_group`; revisions 5 to 28 are still
 ///   read, so [5, 29]. Workflow #437 MAPP-2b (0.12.60, register §1.353) raises it to 30: the
 ///   member `device_group.switch_failure_cooldown_ms` of the `scheduling` section; revisions 5 to
-///   29 are still read, so [5, 30].
+///   29 are still read, so [5, 30]. Workflow #453 S2 (0.12.60, register §1.362) raises it to 31:
+///   the member `start_paused` of an instance entry; revisions 5 to 30 are still read, so [5, 31].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
@@ -151,7 +152,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   it, so [3, 8].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 30]),
+    ("actingd-config", [5, 31]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
