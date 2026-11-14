@@ -358,7 +358,9 @@ Workflow #453 S2 (0.12.60; register §1.362; the owner's approval of board #453 
 instance added while the Runtime is stopped starts paused and stays paused until a person resumes
 it; the coordinator's rulings 3 and 6 on it). An `instances[]` entry may declare `start_paused:
 true` ([runtime-config.md](runtime-config.md), "An entry that starts paused"); the installer writes
-it on an instance it adds while the Runtime is stopped (S3).
+it on an instance it adds while the Runtime is stopped (Workflow #453 S3, 0.12.60; register
+§1.365: the Lab's rescue module's `instance add` with no Runtime answering, on the new entry only,
+[install-cli.md](install-cli.md), "Instances, the first slice", "While the Runtime is stopped").
 
 - **Who holds it.** The Runtime itself, at every start, as the third kind of start hold beside the
   hold of an unsettled dispatch and of an instance whose settlement facts the start skipped: after
@@ -424,7 +426,13 @@ it on an instance it adds while the Runtime is stopped (S3).
   `lab-<op>-<ms>`: nothing hands it back by itself. The rescue module keeps and lists it as
   another party's pause and never lifts it. A hand-back of the installer's or the module's own
   hold that meets an unapplied entry is answered as above: its own pause is gone, and the
-  instance shows `instance.added`, another party's pause from then on.
+  instance shows `instance.added`, another party's pause from then on. The installer's side
+  (Workflow #453 S3): every hand-back of the rescue module's own hold reads that answer and
+  records the instance in its release's `held_again` (`{alias, reason, revision}`, the reason
+  `instance.added`, the revision answered), not among the instances `resumed`, in its journal and
+  its answer ([install-cli.md](install-cli.md), "A hand-back the Runtime answers by holding the
+  instance again"); `actingctl install release-hold`, whose face does not change, still lists it
+  as resumed while it stays paused: the safe side.
 - **Who lifts it, and how.** A person, by a resume of the instance: the console's resume,
   `actingctl resume --state-root <s> --instance <alias>` (below) or the Lab's `resume <alias>`.
   Once lifted, the applied row keeps it from coming back.
@@ -433,9 +441,12 @@ it on an instance it adds while the Runtime is stopped (S3).
   `--known-pause <alias>=instance.added` names it, as for the installer's own `instance.added`
   pause today ([install-cli.md](install-cli.md), "Formal stop, start and the hold (INST-2)");
   the start restores it as every pause. An `install start` whose Runtime holds the pause for the
-  first time (an instance added while stopped) finds one pause more than its S0, which the
-  post-start check reports as the caveat `post_check_mismatch` ("The post-start checks
-  (INST-2)"), not as a failure. An update's own stop meets an entry not yet applied only while a
+  first time (an instance added while stopped) finds one pause more than its S0; from Workflow
+  #453 S3 the post-start row `pauses` expects it (an `instance.added` pause on an instance that S0
+  and the hold leave unpaused and whose entry declares `start_paused`) and names the instance in
+  its `start_paused`, so the start answers no caveat for it; any other extra pause is still the
+  caveat `post_check_mismatch` ("The post-start checks (INST-2)"), not a failure. Before S3 that
+  pause too was the caveat. An update's own stop meets an entry not yet applied only while a
   pause of another reason holds it: the stop treats that pause as today, the next start restores
   it, and the entry stays unapplied until that pause is released.
 

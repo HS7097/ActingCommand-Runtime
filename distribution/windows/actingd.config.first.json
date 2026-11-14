@@ -1,0 +1,37 @@
+{
+  "schema_version": "actingcommand.actingd.config.v1",
+  "state_root": "",
+  "bind_host": "127.0.0.1",
+  "bind_port": 0,
+  "secret_fingerprint_salt": "",
+  "execution": {
+    "action_gap": {
+      "kind": "performance"
+    }
+  },
+  "instances": [],
+  "standard_packs": {
+    "root": "packages"
+  },
+  "policy": {
+    "facts": {
+      "ledger_position": 0,
+      "fact_snapshot_id": "first",
+      "facts": [],
+      "outcomes": [],
+      "tasks": [],
+      "instances": []
+    },
+    "resources": {
+      "pools": [],
+      "hosts": [
+        {
+          "host_id": "local",
+          "cpu_available_milli": 1000,
+          "gpu_available_milli": 1000,
+          "io_available_milli": 1000
+        }
+      ]
+    }
+  }
+}

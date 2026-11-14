@@ -18,6 +18,9 @@ publish = false
 # words are that crate's.
 actingcommand-agent-forward = { workspace = true }
 actingcommand-contract = { workspace = true }
+# Workflow #453 S4: the first configuration's fingerprint salt from the operating system's
+# generator (`fill_system_random`).
+actingcommand-host-metrics = { workspace = true }
 # actingctl's outcome codes, result line, child runner, process probe, shutdown wait, operation
 # table, initiator and default location (Workflow #434 LAB-1, LAB-1b, LAB-2).
 actingcommand-lab-ops = { workspace = true }
