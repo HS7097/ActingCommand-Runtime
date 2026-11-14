@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #437 ORD-1c (register §1.363; `contracts/scheduling/README.md`, "Order within one
+//! Workflow #437 ORD-1c (register §1.364; `contracts/scheduling/README.md`, "Order within one
 //! device"; `contracts/device-group.md`, "The member in front"; the coordinator's rulings 1 to 4
 //! on board #437, not the owner's words): the host passes the order within one device to the
 //! evaluator: the member it holds in front of each device of several, when each waiting pair's wait

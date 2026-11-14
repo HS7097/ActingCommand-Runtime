@@ -3,7 +3,7 @@
 Workflow #437 MAPP-C (contracts only; [v012-register.md](v012-register.md) §1.323). **Every rule of
 this file is (MAPP, not built yet)** unless its section names MAPP-1 ([v012-register.md](v012-register.md)
 §1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57), MAPP-2a (§1.342, Runtime 0.12.59),
-MAPP-2b (§1.353, Runtime 0.12.60), MAPP-2d (§1.360, Runtime 0.12.60) or ORD-1c (§1.363, Runtime
+MAPP-2b (§1.353, Runtime 0.12.60), MAPP-2d (§1.360, Runtime 0.12.60) or ORD-1c (§1.364, Runtime
 0.12.60):
 no code, key, code, value key or word named here exists until the code slices of §1.323 build it,
 and every code, value key and vocabulary word below is proposed but those MAPP-1 registers:
@@ -340,7 +340,7 @@ order's inputs beside the map, the members of one device are ordered as
   not in a run's own duration.
 
 Without the order's inputs the device's first candidate in the allocation order wins it, as MAPP-1
-built it. **From ORD-1c (Runtime 0.12.60, register §1.363) the Runtime passes them at every policy
+built it. **From ORD-1c (Runtime 0.12.60, register §1.364) the Runtime passes them at every policy
 cycle whose device map names a device of several**: the member it holds in front of each device,
 the start of each waiting pair's wait and `scheduling.device_group.max_queue_wait_ms` ("The member
 in front"); a cycle whose map names none is handed the map alone, as before. Until the release
@@ -787,7 +787,7 @@ position 2 of [scheduling-blackout.md](scheduling-blackout.md), "Order of the de
 
 The order within one device ("Ranking across members" above; [scheduling/README.md](scheduling/README.md),
 "Order within one device") reads three inputs beside the device map, which the host keeps and
-passes from ORD-1c on (register §1.363; the coordinator's rulings 1 to 4 on board #437, not the
+passes from ORD-1c on (register §1.364; the coordinator's rulings 1 to 4 on board #437, not the
 owner's words). All three live in the host's memory only: nothing of them enters the ledger, a
 fact, a snapshot or a decision identity, and an instance alone on its device never meets them.
 
@@ -1110,7 +1110,7 @@ of a device group of several:
   ORD-1c, passes the order's inputs ("The member in front"). The time a switch takes counts in no
   order and not in a run's own duration (board #437, 2026-11-13). Not built: a forgetting of the
   member in front by the paths that change what is in front without a switch (a person's hold,
-  an emulator stop or restart, a ladder rung, a member's application stop; register §1.363
+  an emulator stop or restart, a ladder rung, a member's application stop; register §1.364
   lists them), which the coordinator decides on.
 - **The normalized weight.** Superseded by the order within one device (ORD-1b, "Ranking across
   members" above): no weight is compared across the members of one device.
@@ -1165,7 +1165,7 @@ of a device group of several:
   added to the configuration or an interface.
 - ORD-1a and ORD-1b are built in Runtime 0.12.60 (register §1.352): a task's
   `max_queue_wait_ms` and the selection among a device's members, with no input passed by the
-  host. ORD-1c is built in Runtime 0.12.60 (register §1.363): the host keeps the member in front,
+  host. ORD-1c is built in Runtime 0.12.60 (register §1.364): the host keeps the member in front,
   the queue waits and passes them with `scheduling.device_group.max_queue_wait_ms`, in
   `actingd-config` revision 32 ("The member in front"); the load still refuses every group of
   several, so no installation reaches any of it, and a host without a device of several hands the

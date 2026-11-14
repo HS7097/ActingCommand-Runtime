@@ -35,7 +35,7 @@
 //! and replaces its token, so the run's later steps resolve the token the scheduler holds
 //! ([`HostShared::run_token`]).
 //!
-//! Workflow #437 ORD-1c (register §1.363; `contracts/device-group.md`, "The member in front"):
+//! Workflow #437 ORD-1c (register §1.364; `contracts/device-group.md`, "The member in front"):
 //! the member in front. The function the switch's two entries share notes what its own steps left
 //! in front of the member's device, in one in-memory map by device key (`HostShared::note_front`,
 //! its one writer): the member once its application is in front or started, none once the switch

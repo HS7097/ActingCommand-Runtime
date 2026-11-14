@@ -1438,7 +1438,7 @@ package included (register §1.215 UPD-16), meets the game's "client out of date
 
 ## Order within one device (Workflow #437 ORD-1b, since 0.12.60; the host's inputs: ORD-1c, since 0.12.60)
 
-Register §1.352 and §1.363; the owner's rulings on board #437 as the coordinator recorded them;
+Register §1.352 and §1.364; the owner's rulings on board #437 as the coordinator recorded them;
 [device-group.md](../device-group.md), "One pick per device per round" and "The member in front".
 It applies only to a device whose key the device map names for two or more members, and only when
 the Runtime passes the order's inputs beside the map (`DeviceGroups::with_order`); without them
@@ -1454,7 +1454,7 @@ instance alone on its device never reads any of it, and a catalog that declares
   wait began; a contender the Runtime gives no start waits from the evaluation's time. The longest
   wait of a task that declares none (1 800 000 ms when no configured one is passed). Two members of
   one device named in front refuse the evaluation (`policy_evaluation_input_invalid`). **What the
-  Runtime passes** (ORD-1c, register §1.363; the coordinator's rulings 1, 2 and 4 on board #437):
+  Runtime passes** (ORD-1c, register §1.364; the coordinator's rulings 1, 2 and 4 on board #437):
   - *The member in front* is the member the host holds in front of the device: the member whose
     switch's own steps last ended with its application in front or started, and none once a
     switch of the device was refused or failed, and none after a start ([device-group.md](../device-group.md),

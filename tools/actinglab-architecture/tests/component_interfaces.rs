@@ -92,7 +92,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   member `device_group.switch_failure_cooldown_ms` of the `scheduling` section; revisions 5 to
 ///   29 are still read, so [5, 30]. Workflow #453 S2 (0.12.60, register §1.362) raises it to 31:
 ///   the member `start_paused` of an instance entry; revisions 5 to 30 are still read, so [5, 31].
-///   Workflow #437 ORD-1c (0.12.60, register §1.363) raises it to 32: the member
+///   Workflow #437 ORD-1c (0.12.60, register §1.364) raises it to 32: the member
 ///   `device_group.max_queue_wait_ms` of the `scheduling` section; revisions 5 to 31 are still
 ///   read, so [5, 32].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).

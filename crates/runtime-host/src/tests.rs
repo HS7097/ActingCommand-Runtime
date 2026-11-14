@@ -251,7 +251,7 @@ mod gate_mapp2a;
 // Workflow #437 MAPP-2b (0.12.60; register §1.353): the switch's callers, the run's clock that
 // leaves the switch out, the member's lease, a failed switch and the member's switch cooldown.
 mod gate_mapp2b;
-// Workflow #437 ORD-1c (0.12.60; register §1.363): the host passes the order within one device: the
+// Workflow #437 ORD-1c (0.12.60; register §1.364): the host passes the order within one device: the
 // member in front, the queue waits and the configured default limit.
 mod gate_ord1c;
 // Workflow #453 S2 (0.12.60; register §1.362): an entry that declares `start_paused` is held by the
