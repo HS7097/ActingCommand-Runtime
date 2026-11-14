@@ -788,23 +788,46 @@ takes the row's parameters (`mark_request`, `mark_request_json`, `next_frame_aft
   --request-json` takes (marks, samples, page, the click, its guard and retry, optional, ...), read
   by the same parse, so a member it does not have is `validation_failed`. It is applied by `record
   mark`'s own code: every check `record mark` makes and its mark-time self-test, on the step's live
-  frames. The usual request names no step and no frame and so marks the open step; a member that
-  names another step, an offline frame, a transition or a step operation does there what `record
-  mark` does with it, as the two calls would. A refusal ends the call with `record mark`'s own code
-  and details: nothing is pressed and nothing is written.
-- **The press.** Then the press is planned on the step the request left open, by the rules `do
-  --capture --record` has (above): its click rectangle's centre, `--tap`, `--seed`, `--tap-rect`
-  (equal to a declared click), a declared drag or long press, `--swipe`; the gestures it refuses
-  stay refused (`record_gesture_execution_unsupported`), and a step without a click is
-  `record_step_click_missing`. Every check of both, and the command's own (the package, the
-  Runtime connection), runs before anything is captured, written or pressed.
+  frames. A refusal ends the call with `record mark`'s own code and details: nothing is pressed and
+  nothing is written.
+- **The open step and nothing else** (fix round 1). The request marks the open step, the step the
+  press is the click of. A request with `step_action` or `transition`, a request whose `step` is not
+  the open step, and a request whose `frame` (an offline file) opens or replaces a step are
+  refused, after `record mark`'s checks and the press's plan and before anything is written or
+  sent: `validation_failed`, `details{member, open_step}` (`member` is `step_action`,
+  `transition`, `step` or `frame`), its message saying to send that request with `record mark`
+  (MCP `ac_record_mark`) and then press with `do --capture --record`. A `frame` byte-identical to
+  the open step's frame, and `step` equal to the open step, are the open step and pass.
+- **The carrier package.** `--package` or `--zip` (MCP `package` or `zip`) is the carrier package
+  `do --capture` needs for every Lab operation, as above: any admissible package of the same game
+  and resolution, an earlier Lab package included. It carries the Runtime request only; the press
+  is the open step's, planned from the recording, never from the package's targets.
+- **The press.** Then the press is planned on the open step, by the rules `do --capture --record`
+  has (above): its click rectangle's centre, `--tap`, `--seed`, `--tap-rect` (equal to a declared
+  click), a declared drag or long press, `--swipe`; the gestures it refuses stay refused
+  (`record_gesture_execution_unsupported`), and a step without a click is
+  `record_step_click_missing`. Every check of both, and the command's own (with a next frame, its
+  device configuration; the package opened and read; the Runtime connection), runs before anything
+  is written or pressed. The Runtime's own admission of the operation does not: it answers the
+  press, after the marks are written, and a refusal there leaves the recording as a press that was
+  not performed leaves it (below).
 - **Order.** The marks are written once, as `record mark` writes them, right before the input is
   sent; then the press; then its outcome is recorded as the bullets of "`--record` on device
   commands" say. A press that fails leaves what `record mark` followed by `do --capture --record`
-  leaves: not performed, or no answer, the marks recorded with the click declared and the
-  operation's own error; performed with a failure, `record_click_performed_with_failure`;
-  indeterminate, `record_click_indeterminate`. Every error after the marks are written names them
-  in its details (`mark`, the `record mark` output).
+  leaves: not performed, refused by the Runtime, or no answer, the marks recorded with the click
+  declared and no outcome, and the operation's own error; performed with a failure,
+  `record_click_performed_with_failure`; indeterminate, `record_click_indeterminate`. Every error
+  after the marks are written names them in its details (`mark`, the `record mark` output).
+- **Repeating a press that was not performed** (fix round 1, the coordinator's ruling). The step
+  then holds its marks and its click. The same call sent again is refused by `record mark`'s own
+  check, `record_click_exists` for its click or `record_mark_id_conflict` for a mark it adds again,
+  and nothing is pressed a second time; its message says that the step holds its marks and its
+  click and that the press is repeated by the same call without the mark request. So repeat it
+  with the same command line without `--mark-request` and `--mark-request-json` (MCP: `ac_lab_do`
+  with the same arguments without `mark`), `--next-frame-after-ms` kept; do not take a frame first
+  (a device frame on that step is `record_step_click_not_executed`). To change the marks or the
+  click first, send a `record mark` request (`replace_click` replaces the click), then the call
+  without the request.
 - **The next frame.** `--next-frame-after-ms <ms>`, 0 to 60000 as a settle is (`validation_failed`
   otherwise; `--next-frame-out` needs it): after a press performed without a failure the command
   waits that long, takes one frame through the Runtime as `capture --record` takes it (its
@@ -814,17 +837,42 @@ takes the row's parameters (`mark_request`, `mark_request_json`, `next_frame_aft
   step just closed, so it opens the next step). A press not performed, performed with a failure or
   indeterminate takes no next frame; without the option nothing is captured after the press. A next
   frame that cannot be taken (its capture, its file or its arrival) answers that error, its own code
-  and class: the press and its closed step stand and nothing is rolled back; its details add
-  `record` (the click as recorded), `next_frame: {after_ms, taken: false}` and `mark`. Take the
-  frame with `capture --record`; do not press again.
+  and class: the press and its closed step stand and nothing is rolled back; its details begin with
+  `record` (the click as recorded) and `next_frame: {after_ms, taken: false}`, then the capture's
+  own members and `mark`. Take the frame with `capture --record` or `observe --capture --record`;
+  under an MCP server, with the tool that serves `observe --capture --record`, `ac_lab_observe`
+  with `capture` and `record` (today's server and the Lab's alike), not with a command line; do not
+  press again. The device configuration that capture uses (the user configuration's entry of the
+  instance the recording lock names, with the global backend options) is resolved before the press
+  (fix round 1): an error in it ends the call before anything is written or pressed.
+- **Telling the two device errors apart.** A press that was not performed and a next frame that was
+  not taken can both be `device_error`: the second's details have `record` (its `step_closed`
+  true) and `next_frame.taken` false, the first's have neither. actinglab's own line keeps the
+  details whole whatever `ACTINGCOMMAND_DETAIL` says, and so does the Lab's MCP server's refusal
+  (`{outcome, message?, details?}`). Today's MCP server (`actingctl mcp-serve`) carries them as the
+  `raw_text` of `lab_tool_failed`'s `foreign_other_error` link: with `--detail full` (the default)
+  its first 4096 bytes, where `record` and `next_frame` lead; `--detail codes` withholds every
+  foreign text, so there the two read alike (`lab_tool_failed` caused by `device_error`), and the
+  step's state is read with `ac_record_status` (the open step, its click's execution) before
+  anything is pressed again.
 - **Answer.** `do --capture --record`'s answer, whose `record` gains `mark` (the `record mark`
   output) with a mark request and which, with a next frame, gains `next_frame`: `capture
   --record`'s members (`width`, `height`, `capture_backend_used`, `adb_source`, `adb_warning`,
   `capture_backend_attempts`, `freshness`) with `after_ms`, `out` and its `record{status:
   "frame_recorded", record_id, record_started_at_unix_ms, step, step_opened, frame, closed_step}`.
   `arrival` stays the last member.
-- **Lock.** The recording lock is taken before the request is read and held across the whole call,
-  the marks, the press and the next frame ("Recording lock").
+- **Lock.** The command reads its flags first, the mark request among them (its file read, or its
+  JSON text, and parsed; a request that does not parse is refused before any lock), then takes the
+  recording lock as `do --capture --record` takes it ("Recording lock") and holds it across the
+  rest of the call: the next frame's device configuration, the request applied to the recording
+  and self-tested, the press planned, the marks written, the press and the next frame.
+- **The last screen.** A package ends on the screen its last press arrives at: a step of its own
+  with its recognition marks, its `page` and no click. The last press's next frame (or a capture)
+  opens it, and a `record mark` request with `page` and without a click marks it (the example's
+  last `record mark`); its `page` names the package's terminal page, `step_<nn>_<page>` (the
+  `terminal_pages` of its task, the page a binding or a following package names; only `step_<nn>`
+  without it). `record stop` refuses a last step that has a click (`record_final_step_has_click`)
+  and a step without a mark (`record_step_without_recognition`).
 - **Dry run.** `--dry-run` stays refused for the device form (`record_flag_unsupported`); `record
   mark --dry-run` with the same request is its preview.
 - **One rectangle, declared once.** `"click": {"from": "<a mark of the request>"}` copies that
@@ -844,21 +892,26 @@ with a press (its next frame the next screen), the final screen's marks, `record
 and `record stop`; for n steps with a press, n + 5 calls where three calls a step took 3n + 5.
 Pause the instance's scheduling first.
 
-```
-actinglab --json --instance emu-a record start --task-id daily_open
-actinglab --json --instance emu-a capture --record
-actinglab --json --instance emu-a do --capture --record --package C:\ActingCommand\carrier \
-  --mark-request-json "{\"schema_version\":\"actingcommand.lab-record-mark.v1\",\"page\":\"title\",
-    \"add\":[{\"id\":\"ui/start\",\"family\":\"template\",
-              \"region\":{\"x\":1180,\"y\":664,\"width\":73,\"height\":25}}],
-    \"click\":{\"from\":\"ui/start\"}}" \
-  --next-frame-after-ms 800 --next-frame-out C:\ActingCommand\frames\step-2.png
-actinglab --json --instance emu-a do --capture --record --package C:\ActingCommand\carrier \
-  --mark-request-json "{...the marks of the screen in step-2.png and its click...}" \
-  --next-frame-after-ms 800 --next-frame-out C:\ActingCommand\frames\step-3.png
-actinglab --json --instance emu-a record mark --request-json "{...the final screen's marks, no click...}"
-actinglab --json --instance emu-a record stop --dry-run
-actinglab --json --instance emu-a record stop
+In PowerShell 7.3 or later (the shell of [INSTALL.md](../distribution/windows/INSTALL.md), where a
+program receives a single-quoted argument's double quotes as typed), with the install root
+`C:\ActingCommand`, every path quoted and a backtick continuing a line. The first step's request is
+given as JSON text; the next ones as files the agent writes after reading each next frame, UTF-8
+without a byte order mark: `step-2.json` the marks of the screen in `step-2.png` and its click,
+`final.json` the final screen's marks and its `page`, no click.
+
+```powershell
+$lab = 'C:\ActingCommand\tools\actinglab.exe'
+& $lab --json --instance emu-a record start --task-id daily_open
+& $lab --json --instance emu-a capture --record
+& $lab --json --instance emu-a do --capture --record --package 'C:\ActingCommand\carrier' `
+  --mark-request-json '{"schema_version":"actingcommand.lab-record-mark.v1","page":"title","add":[{"id":"ui/start","family":"template","region":{"x":1180,"y":664,"width":73,"height":25}}],"click":{"from":"ui/start"}}' `
+  --next-frame-after-ms 800 --next-frame-out 'C:\ActingCommand\frames\step-2.png'
+& $lab --json --instance emu-a do --capture --record --package 'C:\ActingCommand\carrier' `
+  --mark-request 'C:\ActingCommand\requests\step-2.json' `
+  --next-frame-after-ms 800 --next-frame-out 'C:\ActingCommand\frames\step-3.png'
+& $lab --json --instance emu-a record mark --request 'C:\ActingCommand\requests\final.json'
+& $lab --json --instance emu-a record stop --dry-run
+& $lab --json --instance emu-a record stop
 ```
 
 Through MCP the same: `ac_record_start`, `ac_lab_observe` with `capture` and `record`, then for each

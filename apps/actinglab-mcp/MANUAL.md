@@ -214,7 +214,9 @@ naming this file.
   "One call per step"): `ac_do` with `capture` and `record` records a whole step in one call:
   `mark_request_json` (or `mark_request`, a file) is the `record mark` request of the open step,
   applied and self-tested as `ac_record_mark` applies it before the press (a refusal is its own, and
-  nothing is pressed or written), and `next_frame_after_ms` (0 to 60000) takes the next frame after
+  nothing is pressed or written; a request for anything but the open step, a step operation, a
+  transition, another step or a frame file, is `validation_failed`: send it with `ac_record_mark`),
+  and `next_frame_after_ms` (0 to 60000) takes the next frame after
   a press performed without a failure, as `capture --record` takes it, opening the next step
   (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while

@@ -13,6 +13,10 @@
 //   reaches actinglab beside `--record`, where the command refuses it as `do --capture --record
 //   --dry-run` (`record_flag_unsupported`, actinglab's gate_463_l1); with `operation` each of the
 //   three is refused as conflicting before any child; a recorded answer comes back verbatim.
+// - `l1_fix1_an_exported_ac_lab_do_answer_keeps_its_next_frame_inline` (fix round 1, item 3): a
+//   recorded ac_lab_do answer over the output budget is exported whole, and its `next_frame` (the
+//   next screen) stays inline verbatim beside `after_attachment`, the rows in the export only, the
+//   answer within the budget.
 // The actinglab child is never started: the tests read the command a tool would run, the answer a
 // job ends with, and the refusals given before the install is located.
 
@@ -20,7 +24,7 @@ use super::super::super::protocol::Era;
 use super::super::super::tools::{Tier, definition, find};
 use super::super::{
     DO, LabCommand, Program, RECORD_AMEND, RECORD_ARCHIVE, RECORD_CANDIDATES, RECORD_REOPEN,
-    RECORD_STEP, act, command_end, command_line, do_input, input_schema, interpret,
+    RECORD_STEP, act, command_end, command_line, do_input, fits_as_job, input_schema, interpret,
 };
 use crate::child::Captured;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -294,7 +298,10 @@ fn l1_ac_lab_do_hands_the_one_call_form_to_actinglab() {
             );
         }
     }
-    let dry_line = command_line(&DO, &dry).expect("the dry line");
+    let dry_line = match command_line(&DO, &dry) {
+        Ok(line) => line,
+        Err(error) => panic!("the dry line was refused: {}", error.to_value()),
+    };
     assert!(
         dry_line.iter().any(|word| word == "--dry-run")
             && dry_line.iter().any(|word| word == "--record"),
@@ -350,4 +357,63 @@ fn l1_ac_lab_do_hands_the_one_call_form_to_actinglab() {
         Err(error) => panic!("the recorded answer became an error: {}", error.to_value()),
     }
     assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn l1_fix1_an_exported_ac_lab_do_answer_keeps_its_next_frame_inline() {
+    // A recorded step's answer in one call, with rows far over the 11 KiB payload budget beside it.
+    let rows = (0..800)
+        .map(|index| format!("neutral-ledger-row-{index:04}"))
+        .collect::<Vec<_>>();
+    let next_frame = json!({
+        "width": 96,
+        "height": 64,
+        "capture_backend_used": "neutral_backend",
+        "after_ms": 800,
+        "out": "neutral-next.png",
+        "record": {"status": "frame_recorded", "step": 2, "step_opened": true},
+    });
+    let data = json!({
+        "req_id": "req-463-fix1",
+        "executed": true,
+        "frame_coordinates": {
+            "device_pixels": [96, 64],
+            "orientation": "landscape",
+            "applies_to": ["tap", "tap_rect", "swipe"],
+        },
+        "after_attachment": {"kind": "frame", "frame_path": "neutral-after.png"},
+        "record": {"status": "click_recorded", "step": 1, "step_closed": true},
+        "next_frame": next_frame.clone(),
+        "ledger": {"events": rows},
+    });
+    let handle = "lab_job_gate_463_fix1";
+    let (result, warnings) = command_end(
+        &DO,
+        handle,
+        Ok(data.clone()),
+        Some("req-463-fix1"),
+        Vec::new(),
+    );
+    let answer = match result {
+        Ok(answer) => answer,
+        Err(error) => panic!("the exported answer became an error: {}", error.to_value()),
+    };
+    assert_eq!(answer["overflowed"], json!(true), "{answer}");
+    assert!(answer["export"]["path"].is_string(), "no export: {answer}");
+    assert_eq!(
+        answer["next_frame"], next_frame,
+        "the next screen inline: {answer}"
+    );
+    assert_eq!(
+        answer["after_attachment"], data["after_attachment"],
+        "{answer}"
+    );
+    assert!(
+        answer.get("ledger").is_none(),
+        "the rows stay in the export: {answer}"
+    );
+    assert!(
+        fits_as_job(handle, &answer, &warnings),
+        "the answer is over the budget"
+    );
 }

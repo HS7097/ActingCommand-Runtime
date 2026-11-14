@@ -24,6 +24,17 @@
 // - `l1_a_whole_recording_in_the_fewest_calls_generates_the_three_call_package`: start, the first
 //   frame, one call for each of three steps, the final screen's marks and stop generate the package
 //   the same recording made with three calls a step generates (the generation time removed).
+// Fix round 1 (brief rd-1114/brief-1717-fix1.md, item 1): the mark request is for the open step and
+// nothing else. Each of these requests passes `record mark`'s checks and the press is planned, and
+// then it is `validation_failed`, its details' `member` naming what it took and its message naming
+// `record mark`; the fake Runtime saw no input and every file of the recording keeps its bytes:
+// - `l1_fix1_a_step_operation_is_refused`: a request with `step_action` (reopen the closed step 1);
+// - `l1_fix1_a_transition_is_refused`: a request with `transition` (none, on step 1, while step 2 is
+//   open);
+// - `l1_fix1_a_step_other_than_the_open_one_is_refused`: a request whose `step` is 1, a closed step,
+//   while step 2 is open;
+// - `l1_fix1_a_frame_file_is_refused`: a request whose `frame`, a file of another screen, replaced
+//   the open step's frame (its outcome carries the frame).
 // Frames are synthetic gray noise; no Runtime, no device; the tests read no clock and never sleep.
 
 use crate::recording::store::{lab_dir, old_record_path, recording_path};
@@ -31,9 +42,9 @@ use crate::{
     AttachFrameRequest, ClickEffect, ClickPlan, ClickSpec, CommitClickRequest,
     LAB_RECORD_MARK_SCHEMA, LabOcr, MarkFamily, MarkRequest, MarkSpec, OpaqueJson,
     PlanClickRequest, RecordRect, RecordStartOptions, RecordStepOutcome, RecordStepPorts,
-    RecordStepRequest, RecordStopOptions, RecordingLock, parse_mark_request, record_attach_frame,
-    record_commit_click, record_mark, record_plan_click, record_plan_step, record_start,
-    record_stop,
+    RecordStepRequest, RecordStopOptions, RecordingLock, StepAction, StepActionKind,
+    TransitionSpec, parse_mark_request, record_attach_frame, record_commit_click, record_mark,
+    record_plan_click, record_plan_step, record_start, record_stop,
 };
 use actingcommand_contract::{LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
@@ -769,4 +780,112 @@ fn l1_a_whole_recording_in_the_fewest_calls_generates_the_three_call_package() {
     assert_eq!(three_lab["lab_status"], "generated", "{three_lab}");
     assert_eq!(one_lab["click_steps"], 3, "{one_lab}");
     assert_eq!(package(&one_lab), package(&three_lab));
+}
+
+// Fix round 1, item 1: `request`, which `record mark`'s checks and the press's plan pass, is
+// refused because its mark request is not for the open step alone: `validation_failed`, its
+// details' `member` naming what it took, its message naming `record mark`; the fake Runtime saw no
+// input and every file of the recording keeps its bytes.
+#[track_caller]
+fn assert_held_to_the_open_step(bench: &Bench, request: &RecordStepRequest, member: &str) {
+    let before = bench.files();
+    let mut runtime = FakeRuntime::new(Answer::Performed, "req-held", Some(1));
+    let error = bench.one_call(request, &mut runtime).expect_err(member);
+    assert_eq!(
+        error.code,
+        LabError::usage("").code,
+        "{member}: {}",
+        error.message
+    );
+    let details = error.details.clone().unwrap_or(Value::Null);
+    assert_eq!(details["member"], member, "{member}: {details}");
+    assert!(
+        error.message.contains("record mark"),
+        "{member}: {}",
+        error.message
+    );
+    assert!(runtime.seen.is_empty(), "{member}: {:?}", runtime.seen);
+    assert_eq!(bench.files(), before, "{member}: a file changed");
+}
+
+// A recording whose step 1 was recorded with three calls (its click performed, the step closed)
+// and whose step 2, screen 1, is open without a click.
+fn second_step_open() -> Bench {
+    let bench = Bench::new();
+    bench.capture(0);
+    bench.three_calls(&step_request(0), "req-step-1");
+    bench.capture(1);
+    bench
+}
+
+// The press of step 2, declared by `--tap-rect` on screen 1's button.
+fn tap_rect_on_step_2(mark: MarkRequest) -> RecordStepRequest {
+    RecordStepRequest {
+        click: PlanClickRequest {
+            tap_rect: Some(BUTTONS[1]),
+            ..PlanClickRequest::default()
+        },
+        ..one_step(mark)
+    }
+}
+
+#[test]
+fn l1_fix1_a_step_operation_is_refused() {
+    // Step 1 closed and the only step: reopening it leaves an open step with its declared click,
+    // which the press would take.
+    let bench = Bench::new();
+    bench.capture(0);
+    bench.three_calls(&step_request(0), "req-step-1");
+    let request = one_step(MarkRequest {
+        schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+        step_action: Some(StepAction {
+            kind: StepActionKind::ReopenStep,
+            step: Some(1),
+        }),
+        ..MarkRequest::default()
+    });
+    assert_held_to_the_open_step(&bench, &request, "step_action");
+}
+
+#[test]
+fn l1_fix1_a_transition_is_refused() {
+    let bench = second_step_open();
+    let request = tap_rect_on_step_2(MarkRequest {
+        schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+        step: Some(1),
+        transition: Some(TransitionSpec::Clear),
+        ..MarkRequest::default()
+    });
+    assert_held_to_the_open_step(&bench, &request, "transition");
+}
+
+#[test]
+fn l1_fix1_a_step_other_than_the_open_one_is_refused() {
+    // A color mark of the background of step 1's screen, which passes its self-test there.
+    let bench = second_step_open();
+    let request = tap_rect_on_step_2(MarkRequest {
+        schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+        step: Some(1),
+        add: vec![MarkSpec::region_only(
+            "state/background".to_owned(),
+            MarkFamily::Color,
+            rect(0, 0, 8, 8),
+        )],
+        ..MarkRequest::default()
+    });
+    assert_held_to_the_open_step(&bench, &request, "step");
+}
+
+#[test]
+fn l1_fix1_a_frame_file_is_refused() {
+    // Step 1 open with screen 0 and nothing marked: a file of screen 1 replaces its frame, and the
+    // request marks and clicks screen 1's button on it.
+    let bench = Bench::new();
+    bench.capture(0);
+    let file = bench.frame_file("another-screen", &screen(1));
+    let request = one_step(MarkRequest {
+        frame: Some(file),
+        ..step_request(1)
+    });
+    assert_held_to_the_open_step(&bench, &request, "frame");
 }

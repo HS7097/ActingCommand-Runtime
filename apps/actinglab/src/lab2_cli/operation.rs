@@ -49,11 +49,14 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         None
     };
     let selection = match &recording {
-        Some((_, planned)) => recorded_click_selection(planned.plan())?,
+        Some(begun) => recorded_click_selection(begun.planned.plan())?,
         None => selection(flags)?,
     };
-    // The lock lives to the end of the command; the planned step is performed once, below.
-    let (record_lock, planned) = recording.unzip();
+    // The lock lives to the end of the command; the planned step is performed once, below, with
+    // the next frame's device configuration resolved before it.
+    let (record_lock, planned_step) = recording
+        .map(|begun| (begun.lock, (begun.planned, begun.next_frame_device)))
+        .unzip();
     let after = flags
         .optional("--after-page")
         .map(|page_id| {
@@ -109,7 +112,9 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         // `do --capture --record` (#463 L1): the planned step writes its marks, then sends the
         // input through the port below and records the Runtime's answer as before, and takes the
         // next frame when asked for.
-        if let (Some(lock), Some(planned)) = (record_lock.as_ref(), planned) {
+        if let (Some(lock), Some((planned, next_frame_device))) =
+            (record_lock.as_ref(), planned_step)
+        {
             let mut runtime = RuntimeStep {
                 global,
                 flags,
@@ -117,6 +122,7 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
                 session: &session,
                 request: Some(request),
                 frames: Some(frames),
+                next_frame_device,
                 answer: None,
                 next_frame: None,
             };
@@ -251,6 +257,9 @@ struct RuntimeStep<'a> {
     /// The request and its frames, sent once.
     request: Option<ContainedLabOperationRequest>,
     frames: Option<actingcommand_contract::ObservationFramePlan>,
+    /// The next frame's device configuration, resolved for the lock's instance before anything
+    /// was written or pressed (fix round 1); `None` without `--next-frame-after-ms`.
+    next_frame_device: Option<crate::DeviceRuntimeConfig>,
     /// The operation's answer, once the Runtime answered an input performed or of unknown
     /// outcome; the answer the command prints, with its `record`.
     answer: Option<Value>,
@@ -296,12 +305,17 @@ impl RecordStepPorts for RuntimeStep<'_> {
         std::thread::sleep(duration);
     }
 
-    /// One frame through the Runtime, as `capture --record` takes it without `--require-fresh`.
+    /// One frame through the Runtime, as `capture --record` takes it without `--require-fresh`, on
+    /// the device configuration `begin_record_step` resolved before the press.
     fn capture(&mut self) -> CliOutcome<AttachFrameRequest> {
-        let config = crate::read_user_config()?;
-        let device_config = crate::device_config(self.global, &config)?;
+        let device_config = self.next_frame_device.as_ref().ok_or_else(|| {
+            CliError::device(
+                "do --capture --record resolves the next frame's device configuration before the \
+                 press, and none was resolved",
+            )
+        })?;
         let captured = crate::commands::capture_for_command(
-            &device_config,
+            device_config,
             device_config.capture_backend,
             false,
             std::time::Duration::ZERO,
@@ -816,12 +830,14 @@ fn selection(flags: &FlagArgs) -> CliOutcome<LabOperationSelection> {
 /// `--mark-request-json <json>` the `record mark` request of the open step is applied and
 /// self-tested first, by `record mark`'s code, and with `--next-frame-after-ms <ms>` (and
 /// `--next-frame-out <png>`) the next frame is taken after a performed press; nothing is written
-/// before the input is sent.
+/// before the input is sent. Fix round 1: the next frame's device configuration is resolved here,
+/// for the instance the lock names, after the lock and before the step is planned; an error there
+/// ends the call before anything is written or pressed.
 fn begin_record_step(
     global: &GlobalOptions,
     flags: &FlagArgs,
     draw: Option<actingcommand_lab::DriveDraw>,
-) -> CliOutcome<(RecordingLock, PlannedStep)> {
+) -> CliOutcome<RecordStepBegun> {
     let instance = lab2_instance(global, flags);
     let mark = match (
         flags.optional("--mark-request"),
@@ -911,6 +927,9 @@ fn begin_record_step(
     }
     let lock =
         crate::commands::record_flag_begin(global, flags, &instance, "do --capture --record")?;
+    let next_frame_device = next_frame_after_ms
+        .map(|_| next_frame_device_config(global, lock.instance()))
+        .transpose()?;
     let planned = record_plan_step(
         &lock,
         &RecordStepRequest {
@@ -926,7 +945,35 @@ fn begin_record_step(
         },
         crate::offline_ocr::lab_ocr(),
     )?;
-    Ok((lock, planned))
+    Ok(RecordStepBegun {
+        lock,
+        planned,
+        next_frame_device,
+    })
+}
+
+/// `do --capture --record` planned under its recording lock: the lock, held to the end of the
+/// command; the planned step; and (#463 L1 fix round 1) the device configuration of the next
+/// frame's capture, when one is asked for.
+struct RecordStepBegun {
+    lock: RecordingLock,
+    planned: PlannedStep,
+    next_frame_device: Option<crate::DeviceRuntimeConfig>,
+}
+
+/// The device configuration `capture --record` would capture `instance`'s frame with: the user
+/// configuration's entry of the instance the recording lock names, with the global options'
+/// backend choices (#463 L1 fix round 1).
+fn next_frame_device_config(
+    global: &GlobalOptions,
+    instance: &str,
+) -> CliOutcome<crate::DeviceRuntimeConfig> {
+    let config = crate::read_user_config()?;
+    let named = GlobalOptions {
+        instance: Some(instance.to_owned()),
+        ..global.clone()
+    };
+    crate::device_config(&named, &config)
 }
 
 /// What the recording takes of the Runtime's answer to the planned click (its effect, its ids,

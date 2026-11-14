@@ -23907,6 +23907,9 @@ Lab's MCP server.
 | `session app --record`, `session instance app --record` | yes | none (`ac_app` never passes `--record`) | none (the rows `app launch\|restart\|stop` do not reach it) |
 | `replay`, `regression` | yes | none (a later slice) | `ac_replay`, `ac_regression` |
 
+`session app --record` has no MCP tool on either server, so an agent cannot record an application
+step through MCP; the coordinator takes it as the next small slice (fix round 1).
+
 **What differs from the three calls, and why it must.** Nothing in `recording.json`: the same
 steps, frames, marks, crops, clicks and executions, the times and the Runtime's ids aside; the
 package `record stop` generates is the same. The answer differs: `record.mark` and `next_frame`
@@ -23926,6 +23929,41 @@ option, and a failing capture leaves the closed step and answers its own error; 
 in the fewest calls generates the package of three calls a step; the command refuses `--dry-run`
 with the one-call form (`record_flag_unsupported`) and the four flags without `--record`; the five
 tools reach their commands and answer the envelope, and `ac_lab_do` hands the one-call form on.
+
+**Fix round 1** (after the independent review; coordinator work order
+`rd-1114/brief-1717-fix1.md`; main `155366bb` merged, this section renumbered 1.370):
+- *The open step and nothing else.* The mark request could write its marks to another step
+  (`step`), open a step from a file (`frame`) whose coordinates the device then pressed, or carry a
+  `transition` or a `step_action`, while the press was the open step's click. After `record mark`'s
+  checks and the press's plan, and before anything is written or sent, each is now
+  `validation_failed` with `details{member, open_step}` and a message naming `record mark`
+  (`hold_to_open_step`).
+- *The next frame's device configuration* is resolved in `begin_record_step`, after the lock, for
+  the instance the lock names, and before the step is planned (`next_frame_device_config`); it was
+  resolved after the press, so an error in it came only once the press was done.
+- *The exported MCP answer.* `next_frame` joined today's MCP server's frame parts, before
+  `after_attachment` (`FRAME_PARTS`, five): an answer exported over the budget keeps the next
+  screen inline, where before only the operation's own after frame stayed, which an agent took
+  for the next screen. The Lab's MCP server's own list (`after_child.rs`) is unchanged.
+- *A press that was not performed after the marks were written* (the coordinator's ruling: the
+  behaviour stays). The same call again is refused by `record mark`'s own check
+  (`record_click_exists`, or `record_mark_id_conflict` for a mark of the step it adds again), and
+  that refusal's message now says that the step holds its marks and its click and that the press is
+  repeated by the same call without the mark request (`repeat_without_mark`). A next frame's error
+  puts `record` and `next_frame` first in its details, before the capture's own members and `mark`:
+  today's MCP server keeps the first 4096 bytes of the details (`raw_text`) with `--detail full`;
+  with `--detail codes` it keeps no foreign text, so the two `device_error`s read alike there, and
+  `ac_record_status` (the step and its click's execution) tells them apart.
+- *Texts.* "One call per step" says the open-step rule, what a carrier package gives, that the
+  Runtime's admission answers the press after the marks are written, how a press that was not
+  performed is repeated, how the two errors are told apart, that the lock is taken after the flags
+  and the request are read, that the last screen needs its `page`, and that under MCP a missing
+  frame is taken with `ac_lab_observe`; its example runs as typed in PowerShell 7.3. Every tool the
+  slice's texts name exists under that name (today's server's table, the Lab's server's rows).
+- *CI*: a test of `ac_lab_do` took a `Result` whose error (`ToolError`) has no `Debug` with
+  `expect`; it matches the result as its neighbours do.
+- *Tests* (apps gate map): four refusals of the open-step rule, the device configuration resolved
+  before the press (actinglab's command line), an exported answer keeping `next_frame` inline.
 
 **At deploy.** Nothing to configure. Recordings, packages and the MCP registration stay as they
 are; `actingctl mcp-serve --tier author` lists the five new tools after a client reloads its tools

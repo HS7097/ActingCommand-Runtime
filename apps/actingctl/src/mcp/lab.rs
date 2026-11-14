@@ -82,11 +82,14 @@ const BINDING_PARTS: [&str; 4] = [
 const MAX_EXPORT_READ: u64 = 64 * 1024 * 1024;
 /// Workflow #410 item 1: the parts of an ac_lab_observe or ac_lab_do answer kept inline, in this
 /// order and each while the answer still fits, when the whole answer is exported: the frame's
-/// coordinate system, the paths of the frame files and the after-action attachment.
-const FRAME_PARTS: [&str; 4] = [
+/// coordinate system, the paths of the frame files and the after-action attachment. #463 L1 fix
+/// round 1: a recorded step's next frame (`next_frame`, the next screen, opening the next step)
+/// before the after-action attachment, so that what stays inline names the next screen.
+const FRAME_PARTS: [&str; 5] = [
     "frame_coordinates",
     "frame_path",
     "preview",
+    "next_frame",
     "after_attachment",
 ];
 /// #411 Lab L1: ac_lab_do's destructive guard arguments, which only offline and dry-run planning
@@ -1838,7 +1841,7 @@ pub(super) fn lab_result() -> Value {
 pub(super) fn frame_result() -> Value {
     let mut schema = lab_result();
     schema["description"] = json!(
-        "The actinglab envelope's data, unchanged: with frame_coordinates {device_pixels [width, height], orientation (landscape, portrait or square), applies_to [tap, tap_rect, swipe]}, the coordinate system of the frame (pixels counted from its top-left pixel) (ac_lab_do: of the frame the action was chosen on); preview {path, width, height, scale} when preview was asked; ac_lab_do after an action also after_attachment: {kind page_projection, observation} when the page after it is known, else {kind frame, frame_coordinates, frame_path, preview}. A part that could not be written is {failure {code lab_frame_export_failed, path, raw_text}} in its place. No image is inlined. Larger than the output budget: {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported (without export, and with the warning material_export_failed, when the export could not be written), keeping frame_coordinates, frame_path, preview and after_attachment inline, each while it fits. Beyond the call budget: {handle, job_phase}."
+        "The actinglab envelope's data, unchanged: with frame_coordinates {device_pixels [width, height], orientation (landscape, portrait or square), applies_to [tap, tap_rect, swipe]}, the coordinate system of the frame (pixels counted from its top-left pixel) (ac_lab_do: of the frame the action was chosen on); preview {path, width, height, scale} when preview was asked; ac_lab_do after an action also after_attachment: {kind page_projection, observation} when the page after it is known, else {kind frame, frame_coordinates, frame_path, preview}. A part that could not be written is {failure {code lab_frame_export_failed, path, raw_text}} in its place. ac_lab_do with record also record (with mark, record.mark) and, with next_frame_after_ms, next_frame {after_ms, out, record}: the next screen, which opens the next step; after_attachment is the operation's own after frame, not the next screen. No image is inlined. Larger than the output budget: {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported (without export, and with the warning material_export_failed, when the export could not be written), keeping frame_coordinates, frame_path, preview, next_frame and after_attachment inline, in this order, each while it fits. Beyond the call budget: {handle, job_phase}."
     );
     if let Some(properties) = schema["properties"].as_object_mut() {
         properties.insert("frame_coordinates".to_owned(), json!({"type": "object"}));
@@ -1847,6 +1850,7 @@ pub(super) fn frame_result() -> Value {
             json!({"type": ["string", "object"]}),
         );
         properties.insert("preview".to_owned(), json!({"type": "object"}));
+        properties.insert("next_frame".to_owned(), json!({"type": "object"}));
         properties.insert("after_attachment".to_owned(), json!({"type": "object"}));
     }
     schema
