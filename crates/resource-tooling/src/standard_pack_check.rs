@@ -88,13 +88,22 @@
 //! references held to the root (`standard_pack_goals`). Each problem of a refused file is one
 //! `standard_pack_root_invalid` warning, in file order, after the other warnings: the root is
 //! checked as without the file, and the answer is otherwise what it is without it.
+//!
+//! Workflow #463 V1 (register §1.378; contracts/package-variables.md): before the goal
+//! declaration, the root check of the variables the packages' control declarations declare: each
+//! problem (`variable_conflict`, `variable_out_of_limits`, `variable_cap_range` and, its fix round
+//! 1, `variable_irreversible_by_root`) is one `standard_pack_root_invalid` warning naming the
+//! package's `control.json`, and the answer's `variable_provenance` lists each variable that
+//! applies by its default's origin (and, fix round 1, under `not_applying` each variable of a
+//! package that counts as irreversible by the whole root). A root whose packages declare no
+//! variable answers as before.
 
 use crate::codes::ResourceToolingCode;
 use crate::notices_directory::game_root_notices;
 use crate::package_directory::{PACK_DEADLINE, packs_empty};
 use crate::package_loading::{check_loading, stale_copies};
 use crate::standard_pack_goals::{
-    goal_issues, goal_warnings, read_goals_file, root_irreversibility,
+    goal_issues, goal_warnings, read_goals_file, root_irreversibility, variable_report,
 };
 use crate::standard_pack_schedule::report_schedule;
 use crate::{
@@ -414,6 +423,15 @@ pub fn check_standard_pack_root(
             &|directory: &str| root.join(directory),
         )?;
     }
+    // Workflow #463 V1 (register §1.378): the root check of the variables the packages declare,
+    // before the goal declaration that places them. Each problem is one
+    // `standard_pack_root_invalid` warning naming the package's `control.json`; the root stays as
+    // valid as it is, and no variable of that name applies.
+    let (variable_warnings, variable_provenance) =
+        variable_report(&game, &checked, goals.as_deref(), &|directory: &str| {
+            root.join(directory)
+        })?;
+    warnings.extend(variable_warnings);
     // Workflow #455 G-R1 (register §1.356): the goal declaration, after the composition. Each
     // problem of a refused file is one `standard_pack_root_invalid` warning, in file order; the
     // root stays as valid as it is without the file.
@@ -425,7 +443,6 @@ pub fn check_standard_pack_root(
             bytes(STANDARD_PACK_SCHEDULE_FILE).map(|schedule| (schedule, schedule_path.as_path())),
             goals,
             &|directory: &str| root.join(directory),
-            Some(root.as_path()),
         )?;
         warnings.extend(goal_warnings(
             &game,
@@ -449,6 +466,7 @@ pub fn check_standard_pack_root(
         consumption_facts,
         notices,
         models,
+        variable_provenance,
     })
 }
 
