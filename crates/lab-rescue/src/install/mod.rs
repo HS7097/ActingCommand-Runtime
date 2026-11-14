@@ -56,6 +56,8 @@ pub(crate) mod state;
 pub(crate) mod status;
 pub(crate) mod undo;
 pub(crate) mod update;
+// Workflow #453 S9: the rescue module's `vision place`.
+pub(crate) mod vision;
 
 // Test-only: Workflow #421 INST-1, test rows IT-1 to IT-4 (frozen model INST-M §12), and the
 // neutral release fixture they share.
@@ -160,6 +162,9 @@ mod gate_454_postcheck;
 // Test-only: Workflow #453 S4, the rescue row `new` on the release fixture and temporary roots.
 #[cfg(test)]
 mod gate_453_s4;
+// Test-only: Workflow #453 S9, the rescue row `vision place` on the fake host's actingd.
+#[cfg(test)]
+mod gate_453_s9;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
@@ -564,7 +569,8 @@ fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
         | OperationKind::Start
         | OperationKind::ReleaseHold
         | OperationKind::ConfigReplace
-        | OperationKind::PackPlace => update::resume(operation)?,
+        | OperationKind::PackPlace
+        | OperationKind::VisionPlace => update::resume(operation)?,
         // Workflow #453 S4: the rescue module's `new`.
         OperationKind::New => new::resume(operation)?,
     };

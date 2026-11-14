@@ -315,7 +315,9 @@ Also planned by the same design (§5.2), outside the rows above:
   raise. They are optional members of the single-location journal `install-operation.v1`, which
   `install-root` does not cover, written only by the Lab's rescue module; the A/B journal v2 takes
   them when R-15c builds it, inside revision 1. `install-cli` stays 1 too: the rescue module's
-  operation kinds `config_replace` and `pack_place` are operations a UI of revision 1 never starts.
+  operation kinds `config_replace` and `pack_place`, and (Workflow #453 S9, 0.12.60; register
+  §1.364) `vision_place` with its step `vision_file`, are operations a UI of revision 1 never
+  starts.
 
 #428 S168-LB1a ([v012-register.md](v012-register.md) §1.309; "Planned: Workflow #428 S168-LB1"
 below; the coordinator's ruling 4 of 11-11, not Alice's words) takes `runtime-client` 7 and

@@ -34,7 +34,7 @@ const fn reads(row: &'static str, names: &'static [&'static str]) -> Reads {
 }
 
 /// The rows whose parameters the module reads in its process.
-pub static READ_HERE: [Reads; 20] = [
+pub static READ_HERE: [Reads; 21] = [
     reads("restart", &[]),
     reads("alive", &["wait"]),
     reads("deploy", &["target", "plan", "detach", "dir"]),
@@ -77,6 +77,8 @@ pub static READ_HERE: [Reads; 20] = [
     // `actingd vision check`, which declares no parameter.
     reads("vision manifest", &["provider"]),
     reads("vision check", &[]),
+    // Workflow #453 S9: the folder the files are placed from.
+    reads("vision place", &["from"]),
     reads("watchdog install", &[]),
     reads("watchdog uninstall", &[]),
     reads("mcp plan", &["entry_protocol", "current_build"]),

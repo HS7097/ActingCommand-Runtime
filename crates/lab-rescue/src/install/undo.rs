@@ -207,8 +207,11 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
     // `processes_unreadable`), before anything is moved; the undo of any other operation is
     // unchanged. Workflow #453 S3 fix 1: so does the undo of a `config_replace` begun while no
     // Runtime answered (no hold, no S0), judged by the live configuration or, after a swap stopped
-    // between its two renames, by the file the swap kept (`config_swap::stopped_target`).
-    let cold = kind == OperationKind::PackPlace && super::place::is_cold(&operation);
+    // between its two renames, by the file the swap kept (`config_swap::stopped_target`). Workflow
+    // #453 S9: so does the undo of a `vision place`, which always moved its files with the Runtime
+    // stopped.
+    let cold = (kind == OperationKind::PackPlace && super::place::is_cold(&operation))
+        || kind == OperationKind::VisionPlace;
     let cold_config =
         kind == OperationKind::ConfigReplace && super::config_swap::is_cold(&operation);
     let _lock = if changes_program || cold {
@@ -338,6 +341,8 @@ pub(crate) fn reverse_step(
         StepKind::WriteConfig | StepKind::CreateStateRoot | StepKind::CreateVisionRoot => {
             super::new::reverse_own(operation, step, ms2)?
         }
+        // Workflow #453 S9: a file of the rescue module's `vision place`, reversed as a swap.
+        StepKind::VisionFile => super::vision::reverse_file(step, ms2)?,
         // Workflow #421 INST-2: the hold, the close, the start, the checks, the release and
         // a rollback's reversal change no file; a pause stays until `release-hold`.
         StepKind::VerifyTree

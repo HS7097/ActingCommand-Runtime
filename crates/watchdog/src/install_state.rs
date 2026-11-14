@@ -36,6 +36,10 @@ pub enum OperationKind {
     // list: while one is unfinished the watchdog stands aside (a watchdog before this kind reads
     // the file as unreadable and stands aside as well).
     New,
+    // Workflow #453 S9: the Lab's rescue module's `vision place`, which places a vision root's
+    // files while the Runtime is stopped. Not on row 7a″'s pass list either: while one is
+    // unfinished the watchdog stands aside.
+    VisionPlace,
 }
 
 /// `install\current.json`: the one unfinished operation.
