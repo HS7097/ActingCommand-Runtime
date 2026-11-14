@@ -131,5 +131,112 @@ actingcommand_contract::outcome_codes! {
         RecognitionPackUndeclared => "recognition_pack_undeclared": warning / none,
         // Resource conversion source reads (`resource_convert`).
         SelectionPolicyLimitExceeded => "selection_policy_limit_exceeded": error / none,
+        /// Warning (Workflow #464 P3, `contracts/standard-pack-schedule.md` "Readiness"): a pack of
+        /// a game root is not dispatched yet for one readiness item (keys `package_id`,
+        /// `readiness_item`, `readiness_problem`, and the item's values; the check's own outcome
+        /// as its cause where one exists). `standard-pack ready` answers one per failing item.
+        PackageDispatchWaiting => "package_dispatch_waiting": warning / none,
+        /// Info (Workflow #464 P3): a readiness item of a pack that was not judged, from what the
+        /// readiness was given, or (item `unrecorded_screen_code`) an information line that never
+        /// stops a pack (keys `package_id`, `readiness_item`, `readiness_unjudged`).
+        PackageReadinessUnjudged => "package_readiness_unjudged": info / none,
     }
 }
+
+// ---- Workflow #464 P3 (`contracts/standard-pack-schedule.md`, "Readiness"): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// The twelve readiness items of a pack (the vocabulary `readiness_item`): the six a game root
+    /// tells (S1 to S6) and the six an installation tells (I1 to I6).
+    pub enum ReadinessItem: "readiness_item" {
+        /// S1: the Runtime's loader admits the pack.
+        Admitted => "admitted",
+        /// S2: a rule names the pack and it is not held, or the root files give it a maintenance
+        /// role.
+        Classified => "classified",
+        /// S3: every rule of the pack is in the maintenance tier or declares its value.
+        Valued => "valued",
+        /// S4: the composer accepts the game's `schedule.json` with one instance per server.
+        Composed => "composed",
+        /// S5: the pack's entry is reached: by an application entry, a registered prerequisite,
+        /// navigation that lists it or its server's return-home package.
+        EntryReachable => "entry_reachable",
+        /// S6: the models the pack's recognition targets need are named.
+        ModelsNamed => "models_named",
+        /// I1: an instance of the installation is bound to the pack's game and server.
+        InstanceBound => "instance_bound",
+        /// I2: the installation's `package` range holds the bundle's declared maximum.
+        PackageRevision => "package_revision",
+        /// I3: whether the live Runtime has the code for an unrecorded screen; an information line.
+        UnrecordedScreenCode => "unrecorded_screen_code",
+        /// I4: the live build names every `requires` word of the game's rules.
+        RequiresKnown => "requires_known",
+        /// I5: no pair of the pack is suspended.
+        PairUnsuspended => "pair_unsuspended",
+        /// I6: the installation holds the models of S6.
+        ModelsInstalled => "models_installed",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a readiness item keeps a pack waiting (the vocabulary `readiness_problem`), the value
+    /// `readiness_problem` of `package_dispatch_waiting`.
+    pub enum ReadinessProblem: "readiness_problem" {
+        /// S1: the loader refused the pack (its refusal is the cause).
+        AdmissionRefused => "admission_refused",
+        /// S2: the game root holds no `schedule.json` and no root file gives the pack a role.
+        ScheduleMissing => "schedule_missing",
+        /// S2: no rule names the pack and no root file gives it a role.
+        Unclassified => "unclassified",
+        /// S2: `schedule.json` holds the pack (`held`).
+        Held => "held",
+        /// S3: a rule of the pack lacks a value that is still the pending marker (`task_id`).
+        ValuePending => "value_pending",
+        /// S3: a rule of the pack declares no value (`task_id`, `pool_id` where a pool lacks one).
+        ValueUndeclared => "value_undeclared",
+        /// S4 or I4: the composer refuses the game's `schedule.json` (its refusal is the cause).
+        CompositionRefused => "composition_refused",
+        /// S5: the prerequisite package the pack declares is no package of the game root.
+        PrerequisiteUnregistered => "prerequisite_unregistered",
+        /// S5: nothing reaches the pack's entry pages (`server`, `page_ids`).
+        EntryUnreachable => "entry_unreachable",
+        /// I1: no instance of the installation is bound to the pack's game (`game`).
+        InstanceUnbound => "instance_unbound",
+        /// I1: the instances bound to the game are bound to other servers (`game`, `server`).
+        ServerUnbound => "server_unbound",
+        /// I2: the bundle's declared maximum is outside the installation's range
+        /// (`required_revision`, `range_min`, `range_max`).
+        RevisionOutside => "revision_outside",
+        /// I4: a `requires` word of the game's rules is one the live build does not name.
+        RequiresUnknown => "requires_unknown",
+        /// I5: a pair of the pack is suspended (`task_id`, `instance_id` where told).
+        PairSuspended => "pair_suspended",
+        /// I6: a model the pack needs is not installed with its identity (`model_name`).
+        ModelMissing => "model_missing",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a readiness item was not judged (the vocabulary `readiness_unjudged`), the value
+    /// `readiness_unjudged` of `package_readiness_unjudged`.
+    pub enum ReadinessUnjudged: "readiness_unjudged" {
+        /// No installation was read: only the six items of the game root are judged.
+        InstallationNotRead => "installation_not_read",
+        /// The installation was read, but not the part this item needs.
+        PartNotRead => "part_not_read",
+        /// The loader did not admit the pack, so what its content tells is unknown.
+        NotAdmitted => "not_admitted",
+        /// The composer refused the game's `schedule.json`, so no rule is classified or valued.
+        CompositionRefused => "composition_refused",
+        /// No rule of `schedule.json` names the pack, so it has no value to judge.
+        NoRule => "no_rule",
+        /// The installation's reading binds instances to the game without telling their servers.
+        ServerNotTold => "server_not_told",
+        /// The bundle's declared `package` range was not given (an installed game root keeps no
+        /// `interfaces.json`).
+        PackageUndeclared => "package_undeclared",
+        /// No interface revision tells whether the live Runtime has the code for an unrecorded
+        /// screen (the coordinator's ruling 3 on board #464): an information line.
+        NoRevisionTells => "no_revision_tells",
+    }
+}
+// ---- Workflow #464 P3: end ----

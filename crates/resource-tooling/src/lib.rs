@@ -115,6 +115,10 @@ mod gate_453_s8;
 #[cfg(test)]
 mod gate_455_gr1;
 
+// Workflow #464 P3 (register §1.365): the readiness of every pack of a game root, item by item.
+#[cfg(test)]
+mod gate_464_p3;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;
@@ -131,11 +135,15 @@ mod standard_pack_check;
 mod standard_pack_goals;
 // ROUT-L RL-1a: `schedule.json` in `package bundle`, `standard-pack check` and `compose`.
 mod standard_pack_schedule;
+// Workflow #464 P3: `standard-pack ready`, the one function that judges a pack's readiness.
+mod standard_pack_ready;
 
 pub use api::*;
 pub use authoring::*;
 pub use business_catalog::*;
 pub use codes::ResourceToolingCode;
+// Workflow #464 P3: the readiness items, problems and unjudged words.
+pub use codes::{ReadinessItem, ReadinessProblem, ReadinessUnjudged};
 pub use declaration_exclusions::{
     DECLARATION_EXCLUSIONS_FILE, DECLARATION_EXCLUSIONS_SCHEMA, DeclarationExclusions,
 };
@@ -158,6 +166,11 @@ pub use resource_convert::{
 };
 pub use resource_restore::*;
 pub use standard_pack_check::check_standard_pack_root;
+pub use standard_pack_ready::{
+    InstallationRead, ItemState, PackReadiness, PackState, ReadinessAnswer, ReadinessBasis,
+    ReadinessBinding, ReadinessInstallation, ReadinessModel, ReadinessSuspension,
+    StandardPackReadiness, StandardPackReadyRequest, judge_standard_pack_readiness,
+};
 pub use standard_pack_schedule::{
     StandardPackComposeRequest, StandardPackComposeResponse, compose_standard_packs,
 };

@@ -650,7 +650,9 @@ from their core rows.
   exactly the rows of module `authoring`. `standard-pack check`, which the rescue module's `place`
   runs as its post-check (section 7), is a row of the core module: it is listed and served
   wherever the Lab runs, whatever the key says, so that an installation without the authoring
-  module still places packages. `standard-pack compose` stays an authoring row.
+  module still places packages. `standard-pack compose` stays an authoring row. Workflow #464 P3
+  (0.12.60): `standard-pack ready`, the readiness of every pack of a game root, which only reads,
+  is a core row too ([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness").
 - `lab_module_debugging` retires (`actingd-config` 28): still accepted when a boolean, with no
   effect, noted with the caveat `config_key_retired` by the commands that read it, as
   `install.guard.blocked_windows` is. The debugging operations are always there.
@@ -954,14 +956,16 @@ sentence fails that test.
     "Slice LAB-5G2b" and "Slice LAB-5G2b, second part"; the coordinator's rulings on board #434,
     6775192250 points 1, 9, 11, 12, 17 and 18, 6784514298 and of 2026-11-12, not the owner's
     words).
-    - *Which.* A row `lab_ops::core_ops` serves (the core rows but `app launch|restart|stop` and
-      `standard-pack check`, and `run start`, `run stop`, `reset`, `drill`) is served by it in the
+    - *Which.* A row `lab_ops::core_ops` serves (the core rows but `app launch|restart|stop`,
+      `standard-pack check` and, since Workflow #464 P3, `standard-pack ready`, and `run start`,
+      `run stop`, `reset`, `drill`) is served by it in the
       server's process. Since the slice's second part (0.12.57), on Windows, where the rescue
       module runs, a rescue row the module serves (`lab_rescue::rescue::serves`; its MCP rows
       `mcp config`, `mcp entries` and `mcp plan` among them) is served by it in the server's
       process; since LAB-6S0 (0.12.58) so are the rows whose `detach` the front gives true
       (`tools::SUPPLIED`: `deploy` and `rollback`, section 5). Since LAB-5G4b every other offered
-      row (the three `app` rows and `standard-pack check`, the debugging and authoring rows
+      row (the three `app` rows, `standard-pack check` and `standard-pack ready`, the debugging
+      and authoring rows
       actinglab's own commands serve, `record draft` among them: actinglab's own command since
       LAB-5G4c, 0.12.57, MCP's `ac_binding_draft` ported; register §1.287, "Slice LAB-5G4c") is
       served by a `serve` child ("Calls served by `serve` children", below). Since LAB-6S0 no

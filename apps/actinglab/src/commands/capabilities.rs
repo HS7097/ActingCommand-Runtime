@@ -55,6 +55,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("standard-pack check", ["offline", "read_only"], "available"),
         // ROUT-L RL-1a: composes the schedule rules of bound games into a new directory.
         command_cap("standard-pack compose", ["offline"], "available"),
+        // Workflow #464 P3: the readiness of every pack of a game root; reads only.
+        command_cap("standard-pack ready", ["offline", "read_only"], "available"),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         command_cap("operation validate", ["offline"], "available"),

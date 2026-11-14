@@ -79,8 +79,10 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 /// The slices whose planned rows actinglab offers: its words' `BUILT_SLICES`
 /// (`apps/actinglab/src/cli_module/words.rs`), which this server's test holds equal. Workflow
 /// #449 REC-ARCH: its rows `record archive` and `record reopen`, served through a `serve` child.
-pub(crate) const ACTINGLAB_SLICES: [&str; 6] =
-    ["LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8", "REC-ARCH"];
+/// Workflow #464 P3: its row `standard-pack ready` (`ac_standard_pack_ready`), the same way.
+pub(crate) const ACTINGLAB_SLICES: [&str; 7] = [
+    "LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8", "REC-ARCH", "464-P3",
+];
 /// The slice whose planned rows this server offers itself (§9.2): `record draft`, `mcp config`,
 /// `mcp entries` and, since LAB-5G5b, `mcp plan` (Workflow #434 LAB-5G2b, second part: the three
 /// `mcp` rows served with the rescue module's others; Workflow #434 LAB-5G4b: `record draft`
@@ -241,7 +243,8 @@ pub(crate) enum Serving {
 /// (the marker of `lab_ops::initiator`, `DETACHED_RUN_VARIABLE`); a rescue row the module does
 /// not serve, or every one where it does not run, is [`Serving::Refused`]. Workflow #434
 /// LAB-5G4b: every other row, a row of no module this process serves itself, goes to a `serve`
-/// child ([`Serving::Child`]): the three `app` rows, `standard-pack check`, the debugging and
+/// child ([`Serving::Child`]): the three `app` rows, `standard-pack check` and (Workflow #464 P3)
+/// `standard-pack ready`, the debugging and
 /// authoring rows actinglab's own commands serve, `record draft` among them since LAB-5G4c gave
 /// it its command (a row no command serves is refused by the child; none is left).
 pub(crate) fn serving(operation: &Operation) -> Serving {

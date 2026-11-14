@@ -185,6 +185,22 @@ fn compose_check(
     schedule: &[u8],
     path: &Path,
 ) -> LabResult<StandardPackComposition> {
+    compose_per_server(game, root, maintenance, schedule, None)
+        .map_err(|failure| refused(&failure, game, &|_| path.to_owned()))
+}
+
+/// The composition of `schedule` with one bound instance per server of the registry of `root`
+/// (the alias `standard-pack-check.<server>`), as [`report_schedule`] reads it, or the composer's
+/// refusal as it is. Workflow #464 P3 (`crate::standard_pack_ready`): `subsystems`, when given, are
+/// the subsystems a live build's configuration manifest names, which `requires` must name, as the
+/// Runtime that loads the rules checks them; `None` (the tools) reports `requires` unchecked.
+pub(crate) fn compose_per_server(
+    game: &str,
+    root: &StandardPackRoot,
+    maintenance: &[BundleMaintenance],
+    schedule: &[u8],
+    subsystems: Option<&BTreeSet<String>>,
+) -> Result<StandardPackComposition, StandardPackComposeFailure> {
     let servers = root
         .registry
         .listed()
@@ -214,10 +230,9 @@ fn compose_check(
     compose_standard_pack_rules(&StandardPackComposeInput {
         instances: &instances,
         games: &games,
-        subsystems: None,
+        subsystems,
         catalog_version: TOOLS_CATALOG_VERSION,
     })
-    .map_err(|failure| refused(&failure, game, &|_| path.to_owned()))
 }
 
 /// `actinglab standard-pack compose` (module doc).

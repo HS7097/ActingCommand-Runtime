@@ -23181,6 +23181,86 @@ self-check, a resume or the fence's recheck lifts it.
 **Rollback** (below 0.12.60). Nothing is persisted by the fixes; a build before them reads every
 record they write, and halts again where they fence.
 
+### 1.365 Slice #464 P3 (0.12.60): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`)
+
+This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364); the
+sibling slices P1 (`standard-pack adopt`) and P2 (`standard-pack build`), written at the same time,
+take the numbers their merges give them.
+
+**What it is.** One function, `actingcommand_resource_tooling::judge_standard_pack_readiness`,
+judges the twelve readiness items of every pack of one game root, and the core row `standard-pack
+ready` (`actinglab standard-pack ready --root <game root>`, MCP `ac_standard_pack_ready`) answers it
+([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness", which holds the item table).
+The function takes the root, the bundle's declared `package` range where the caller holds it, and
+what the caller read of an installation, each part optional, so that adopt's answer (the check tree
+it lays out), the build's `build.json` (the root it lays out before the zip, and the range it
+computes) and the placement plan (the zip's `interfaces.json`, the configuration's instances, the
+installer's range, check-config, `actingd suspended`, `vision check`) can call it with what each
+holds; those three calls are a follow-up, and `place --plan` is not changed here (another pull
+request changes the rescue module).
+
+**Which existing function judges each item** (the work order's first step, established by reading):
+S1 the Runtime's loader (`PreparedContainedTask::describe_navigation_path`, the admission
+`standard-pack check` and `package bundle` run per pack); S2 the contract crate's
+`classify_standard_pack_packages` over `standard_pack_maintenance_packages`, as the composer
+classifies, once the composer accepted the file; S3 the composer's coverage
+(`benefit_warnings`, `benefit_followers` and, new, `benefit_pending`, a read-only accessor of the
+rules the coverage already counts pending: the composer decides nothing differently); S4 the
+composer, `compose_standard_pack_rules`, with one instance per server, as `standard-pack check`
+runs it (resource tooling's `compose_check` now calls a `compose_per_server` that also takes the
+subsystems; its answer is byte for byte the one of before); S5 the admitted descriptor
+(`entry_pages`, `prerequisite_package_id`, `navigation_entry_pages`) against the registry, the page
+list and `return_home_package`, the resolution of [linear-steps.md](linear-steps.md),
+"Return-home fallback"; S6 the descriptor's `recognition_models`, `standard-pack check`'s `models`
+(the loader's `validate_model_reference` refuses a target that names no model, so S6 fails only
+with S1); I1 the configuration's `policy.facts.instances` (game and server; the Runtime's status
+tells only the game); I2 the placing program's own `package` declaration against the zip's
+`interfaces.json`, the rule of `place` (an installed root keeps no `interfaces.json`); I3 nothing
+(ruling 3); I4 check-config's `config_manifest.subsystems` (or the Runtime's `config.subsystems`)
+given to the composer, which refuses a `requires` word they do not name; I5 `actingd suspended`
+(`suspended`, `packs`), which reads the state root's ledger read only; I6 the rescue row `vision
+check`'s `required_models` (`present`, `identity_matches`): an installation keeps a model in
+`<vision root>\models\<model_ref>\` (the `vision` section's `root`, else `<install root>\vision`),
+whose identity is computed from its files at first use, so only `vision check` (which hashes) or
+the Runtime tells it. Read without a Runtime: I1, I2, I4, I5 and I6 (each through the configuration
+or a live build's offline child); with the Runtime only the game of I1 and the subsystems of I4.
+
+**What the row reads.** The game root only: it writes nothing, starts nothing (no child, no Runtime
+request) and reads no installation and no secret, so its installation items are `not_judged`
+(`installation_not_read`) and the answer says `installation: not_read`. The rescue module, which
+reads the configuration and runs check-config, `actingd suspended` and `vision check`, is changed
+by another pull request tonight; the follow-up gives the function those readings.
+
+**Codes, keys and words.** `package_dispatch_waiting` (warning, ladder class none; required
+`package_id`, `readiness_item`, `readiness_problem`; optional `game`, `server`, `task_id`,
+`pool_id`, `page_ids`, `required_revision`, `range_min`, `range_max`, `instance_id`, `model_name`;
+the other check's own outcome as its cause) and `package_readiness_unjudged` (info, ladder class
+none; required `package_id`, `readiness_item`, `readiness_unjudged`), both resource tooling's, both
+pending; one domain code each, the reason a vocabulary value (spec amendment of 10-24). Keys
+`readiness_item`, `readiness_problem`, `readiness_unjudged` (vocabularies of resource tooling's
+`codes.rs`: twelve items, fifteen problems, eight unjudged words) and `required_revision`
+(integer). No configuration key, record type, payload member, fact, wire shape or interface
+revision.
+
+**The operation table.** One row, `standard-pack ready` (module `core`, offline, writes nothing,
+entries `lab`, slice `464-P3`, which actinglab's `BUILT_SLICES` and the MCP server's
+`ACTINGLAB_SLICES` name); served by actinglab's own command, as `standard-pack check` is (the
+engine's commands 64, the core strict rows 2, the command inventory 103 commands, the census's
+refusing commands 62), so `lab_ops::core_ops` does not serve it and MCP serves it through a `serve`
+child. Its capability entry is `offline`, `read_only`; under `--dry-run` it has no effect
+([actinglab-dry-run.md](actinglab-dry-run.md)).
+
+**Tests** (`crates/resource-tooling/src/gate_464_p3.rs`, gate map `contracts/test-gates/exec.toml`):
+a complete pack answers `dispatchable`; without an installation only the six root items are
+answered; each of S1 to S5 and I1, I2, I4, I5, I6 fails alone on one change of the complete
+fixture, named by its item and problem, with its values and cause; I3 is information in every
+case. Adapted: `apps/actinglab/src/tests/gate_434_lab5a.rs`, whose router check named
+`standard-pack check` as the one core row actinglab's own command serves; the requirement adds a
+second, `standard-pack ready`.
+
+**At deploy.** Nothing to do: a new read-only command and tool. **Rollback** (below 0.12.60): the
+row and its tool are gone; nothing is persisted.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

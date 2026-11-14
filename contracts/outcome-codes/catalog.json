@@ -2708,6 +2708,22 @@
     "application_switch_step": {
       "type": "vocab:application_switch_step",
       "description": "Which step of the switch that brings a member of a device group to the front before its run failed (Workflow #437 MAPP-2a, since 0.12.59)."
+    },
+    "readiness_item": {
+      "type": "vocab:readiness_item",
+      "description": "Which of the twelve readiness items of a pack waits or was not judged: S1 to S6 of the game root, I1 to I6 of an installation (Workflow #464 P3, since 0.12.60)."
+    },
+    "readiness_problem": {
+      "type": "vocab:readiness_problem",
+      "description": "Why a readiness item keeps a pack from being dispatched (Workflow #464 P3, since 0.12.60)."
+    },
+    "readiness_unjudged": {
+      "type": "vocab:readiness_unjudged",
+      "description": "Why a readiness item of a pack was not judged, or the information line of item I3 (Workflow #464 P3, since 0.12.60)."
+    },
+    "required_revision": {
+      "type": "integer",
+      "description": "The interface revision a content declares or needs: the package maximum a bundle declares, beside range_min and range_max of the range that does not hold it (Workflow #464 P3, since 0.12.60)."
     }
   },
   "vocabularies": {
@@ -9399,6 +9415,141 @@
         },
         "lease_renewal": {
           "description": "The run's renewal of its lease after the startup run handed the key back was refused or failed: the lease lost, lapsed or taken over (failure_code the scheduler's refusal). The member's application was started and no task of the run ran (Workflow #437 MAPP-2d, since 0.12.60)."
+        }
+      }
+    },
+    "readiness_item": {
+      "description": "The twelve readiness items of a pack, the value readiness_item of package_dispatch_waiting and package_readiness_unjudged (Workflow #464 P3, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.60).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "ReadinessItem"
+      },
+      "tokens": {
+        "admitted": {
+          "description": "S1: the Runtime's loader admits the pack."
+        },
+        "classified": {
+          "description": "S2: a rule names the pack and it is not held, or a root file gives it a maintenance role."
+        },
+        "valued": {
+          "description": "S3: every rule of the pack is in the maintenance tier or declares its value (complete, or a chain follower)."
+        },
+        "composed": {
+          "description": "S4: the composer accepts the game's schedule.json with one instance per server."
+        },
+        "entry_reachable": {
+          "description": "S5: the pack's entry is reached: an application entry, no page entry to check, a registered prerequisite package, navigation data that lists it, or its server's return-home package."
+        },
+        "models_named": {
+          "description": "S6: the models the pack's recognition targets need are named (the loader refuses a target that names none)."
+        },
+        "instance_bound": {
+          "description": "I1: an instance of the installation is bound to the pack's game and server."
+        },
+        "package_revision": {
+          "description": "I2: the installation's package range holds the bundle's declared maximum, as place holds a bundle at the edge."
+        },
+        "unrecorded_screen_code": {
+          "description": "I3: whether the live Runtime has the code for an unrecorded screen; an information line, never a refusal."
+        },
+        "requires_known": {
+          "description": "I4: the live build's configuration manifest names every requires word of the game's rules."
+        },
+        "pair_unsuspended": {
+          "description": "I5: no pair of the pack is suspended."
+        },
+        "models_installed": {
+          "description": "I6: the installation's vision root holds the models of S6 with the identity they are named by."
+        }
+      }
+    },
+    "readiness_problem": {
+      "description": "Why a readiness item keeps a pack waiting, the value readiness_problem of package_dispatch_waiting (Workflow #464 P3, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.60).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "ReadinessProblem"
+      },
+      "tokens": {
+        "admission_refused": {
+          "description": "S1: the loader refused the pack; package_invalid with the loader's refusal is the cause."
+        },
+        "schedule_missing": {
+          "description": "S2: the game root holds no schedule.json, and no root file gives the pack a maintenance role."
+        },
+        "unclassified": {
+          "description": "S2: no rule names the pack and no root file gives it a role; standard_pack_package_unclassified is the cause."
+        },
+        "held": {
+          "description": "S2: schedule.json lists the pack in held."
+        },
+        "value_pending": {
+          "description": "S3: a rule of the pack (task_id) lacks a value that is still the pending marker."
+        },
+        "value_undeclared": {
+          "description": "S3: a rule of the pack (task_id) declares no value, or touches a pool (pool_id) without a valuation; standard_pack_benefit_undeclared is the cause."
+        },
+        "composition_refused": {
+          "description": "S4: the composer refuses the game's schedule.json; standard_pack_root_invalid at the file's pointer is the cause."
+        },
+        "prerequisite_unregistered": {
+          "description": "S5: the prerequisite package the pack declares is no package of the game root."
+        },
+        "entry_unreachable": {
+          "description": "S5: nothing reaches the pack's entry pages (page_ids): no prerequisite package, no navigation data that lists them, no return-home package of its server."
+        },
+        "instance_unbound": {
+          "description": "I1: no instance of the installation is bound to the pack's game."
+        },
+        "server_unbound": {
+          "description": "I1: the instances bound to the pack's game are bound to other servers than the pack's."
+        },
+        "revision_outside": {
+          "description": "I2: the bundle's declared package maximum (required_revision) is outside the installation's range (range_min, range_max)."
+        },
+        "requires_unknown": {
+          "description": "I4: a requires word of the game's rules is one the live build does not name; standard_pack_root_invalid schedule_requires_missing at /requires/<index> is the cause."
+        },
+        "pair_suspended": {
+          "description": "I5: a pair of the pack (task_id, instance_id where told) is suspended."
+        },
+        "model_missing": {
+          "description": "I6: a model the pack needs (model_name) is not installed with the identity it is named by."
+        }
+      }
+    },
+    "readiness_unjudged": {
+      "description": "Why a readiness item was not judged, the value readiness_unjudged of package_readiness_unjudged; for item I3 the information line (Workflow #464 P3, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.60).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "ReadinessUnjudged"
+      },
+      "tokens": {
+        "installation_not_read": {
+          "description": "No installation was read: only the six items of the game root are judged."
+        },
+        "part_not_read": {
+          "description": "The installation was read, but not the part this item needs."
+        },
+        "not_admitted": {
+          "description": "The loader did not admit the pack, so what its content tells is unknown."
+        },
+        "composition_refused": {
+          "description": "The composer refused the game's schedule.json, so no rule is classified, valued or checked against the live build."
+        },
+        "no_rule": {
+          "description": "No rule of schedule.json composes for the pack (none names it, it is held, or the root holds no schedule.json), so it has no value to judge."
+        },
+        "server_not_told": {
+          "description": "The installation's reading binds instances to the pack's game without telling their servers."
+        },
+        "package_undeclared": {
+          "description": "The bundle's declared package range was not given: an installed game root keeps no interfaces.json."
+        },
+        "no_revision_tells": {
+          "description": "Item I3: no interface revision tells whether the live Runtime has the code for an unrecorded screen (the coordinator's ruling 3 on board #464); an information line, never a refusal."
         }
       }
     }

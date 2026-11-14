@@ -1208,6 +1208,52 @@
       "description": "Workflow #428 CFL-2 (contracts/recognition-preprocess.md, Hand-over; contracts/selection-graph.md, Shared OCR read): an OCR target that a fixed_slots layout's slots or features read lies inside the layout's shared read with its model and languages, but its preprocess chain differs from the shared read's (two chains are the same only step by step, colors in their declared order), so it reads on its own instead of taking its text from the shared read. json_pointer names the shared read in the package's recognition pack (/candidate_layouts/<i>/shared_ocr). package bundle and actinglab standard-pack check list one entry in warnings per package, target and shared read. Nothing is refused.",
       "common_causes": "The chain was edited on the shared read or on the slot target only, or copied with its colors in another order.",
       "handling": "Copy the shared read's preprocess to the target verbatim, or remove it from both, unless the target must read on its own."
+    },
+    "package_dispatch_waiting": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "readiness_item": "required",
+        "readiness_problem": "required",
+        "game": "optional",
+        "server": "optional",
+        "task_id": "optional",
+        "pool_id": "optional",
+        "page_ids": "optional",
+        "required_revision": "optional",
+        "range_min": "optional",
+        "range_max": "optional",
+        "instance_id": "optional",
+        "model_name": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #464 P3 (contracts/standard-pack-schedule.md, Readiness): a pack of a game root is not dispatched yet for one readiness item: readiness_item names the item (S1 to S6 of the game root, I1 to I6 of an installation), readiness_problem why. Its values make it actionable: game and server; task_id the rule (value_pending, value_undeclared, pair_suspended) and pool_id the pool without a valuation; page_ids the entry pages nothing reaches; required_revision the bundle's declared package maximum beside range_min and range_max, the installation's range (revision_outside); instance_id the suspended pair's instance; model_name the model not installed. The other check's own outcome is its caused_by link where one exists: package_invalid with the loader's refusal (admission_refused), standard_pack_package_unclassified (unclassified), standard_pack_benefit_undeclared (value_undeclared), standard_pack_root_invalid of schedule.json (composition_refused, requires_unknown). actinglab standard-pack ready answers one per failing item of each pack; nothing is refused.",
+      "common_causes": "The pack's value is not decided yet (pending), no rule names it or it is held, no instance is bound to its game, the Runtime is older than the pack needs, one of its pairs is suspended, a model it needs is not in the vision root.",
+      "handling": "Act on the named item: decide the rule's value, write or release its rule, bind an instance, place the bundle on a Runtime whose package range holds it, add the subsystem's Runtime, repair the pack so that its pair's pause lifts, install the model; then ask again."
+    },
+    "package_readiness_unjudged": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "readiness_item": "required",
+        "readiness_unjudged": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #464 P3 (contracts/standard-pack-schedule.md, Readiness): a readiness item of a pack that was not judged from what the readiness was given, readiness_unjudged saying why (installation_not_read: no installation was read; part_not_read; not_admitted; composition_refused; no_rule; server_not_told; package_undeclared), never guessed and never passed; or, item unrecorded_screen_code (I3) only, the information line no_revision_tells, which never makes a pack wait (the coordinator's ruling 3 on board #464). A pack with an item not judged and none failing answers not_judged, not dispatchable.",
+      "common_causes": "The readiness ran without an installation (actinglab standard-pack ready reads none), or a part of the installation was not read.",
+      "handling": "Judge the item where its reading is at hand (the placement plan holds the installation's), or act on the item it depends on."
     }
   }
 }

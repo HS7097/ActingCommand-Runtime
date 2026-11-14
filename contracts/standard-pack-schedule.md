@@ -743,6 +743,72 @@ checks them), and the composer fills the scope:
   `"maintenance": true` ("The maintenance declaration"); it is then not judged and runs as it
   did before SS-2b.
 
+## Readiness (Workflow #464 P3, since 0.12.60)
+
+Register §1.365; the coordinator's rulings on board #464, not the owner's words. A pack that lacks
+one thing is not refused: it is never dispatched, and nobody is told. The readiness answers, for
+every pack of one game root, `dispatchable`, or `waiting` with every reason, item by item, in words
+a person and an agent can act on. It writes nothing, starts nothing and reads no secret.
+
+**The one function.** `actingcommand_resource_tooling::judge_standard_pack_readiness` judges the
+twelve items. It takes `StandardPackReadyRequest {root, declared_package, installation}`: `root`
+a game root, installed (`<standard_packs.root>/<game>/`) or a bundle laid out as one (its
+directory named as its game); `declared_package` the `package` range `[min, max]` the bundle
+declares (`speaks.package` of the zip's `interfaces.json`), where the caller holds it; and
+`installation`, what the caller read of an installation, each part optional: `bound` (each
+instance with its game and, where the read tells it, its server), `package` (the range the
+installation holds a bundle to), `subsystems` (the live build's configuration manifest
+subsystems), `suspended` (each suspended pair by its package, with its task and instance where
+told) and `models` (the models the vision root holds with the identity they are named by). The
+root is read as `actinglab standard-pack check` reads it: a root that is no directory, that holds
+no `bundle.json` or whose root files the structure check refuses is refused as that check refuses
+it; nothing else refuses. Adopt's answer, the build's `build.json` and the placement plan are to
+call it with what each of them holds (a follow-up of P3); `place --plan` does not answer it yet.
+
+**The items.** Each item of each pack, in this order, is judged by the function that judges it
+elsewhere, and answered `holds` (with its `basis` where more than one way exists), `fails` (with
+`package_dispatch_waiting`), `not_judged` (with `package_readiness_unjudged`) or, I3 only,
+`information`:
+
+| Id | `readiness_item` | Judged by | Fails with `readiness_problem` |
+|---|---|---|---|
+| S1 | `admitted` | the Runtime's loader, the admission `standard-pack check` runs for every pack | `admission_refused`, caused by `package_invalid` with the loader's refusal |
+| S2 | `classified` | the composer's classification ("Classification"), after it accepted the file | `schedule_missing` (no `schedule.json` and no root file gives a role), `unclassified` (caused by `standard_pack_package_unclassified`), `held` |
+| S3 | `valued` | the composer's coverage of each rule of the pack ("Judged rules"): complete or a follower holds, the maintenance tier is exempt | `value_pending` (`task_id`), `value_undeclared` (`task_id`, `pool_id`; caused by `standard_pack_benefit_undeclared`) |
+| S4 | `composed` | the composer with one instance per server, as the tools compose ("Tools") | `composition_refused`, caused by `standard_pack_root_invalid` at the file's pointer |
+| S5 | `entry_reachable` | the admitted package's entry as the Runtime's gate resolves it ([linear-steps.md](linear-steps.md), "Return-home fallback"): an application entry or no page entry to check, else a declared prerequisite package of the root, else navigation data whose page list lists the entry, else the return-home package of its server (not the pack itself) | `prerequisite_unregistered`, `entry_unreachable` (`server`, `page_ids`) |
+| S6 | `models_named` | the admitted package's recognition models, what `standard-pack check` answers as `models` | never alone: the loader refuses a target that names no model (S1) |
+| I1 | `instance_bound` | `bound` | `instance_unbound` (`game`), `server_unbound` (`game`, `server`) |
+| I2 | `package_revision` | `package` against the declared maximum, `min <= max_declared <= max` as `place` holds a bundle at the edge ([install-cli.md](install-cli.md)) | `revision_outside` (`required_revision`, `range_min`, `range_max`) |
+| I3 | `unrecorded_screen_code` | nothing: an information line, never a refusal (ruling 3: the code for an unrecorded screen moves no interface, so no revision tells it) | never |
+| I4 | `requires_known` | the composer again with `subsystems`, as check-config and the Runtime check `requires` | `requires_unknown`, caused by `standard_pack_root_invalid` `schedule_requires_missing` at `/requires/<index>` |
+| I5 | `pair_unsuspended` | `suspended` | `pair_suspended` (`task_id`, `instance_id` where told) |
+| I6 | `models_installed` | `models` against S6's | `model_missing` (`model_name`) |
+
+An item is `not_judged`, never guessed and never passed, with `readiness_unjudged`:
+`installation_not_read` (no installation was given: I1, I2, I4, I5, I6), `part_not_read`,
+`not_admitted` (S5, S6, I6 of a pack S1 refused), `composition_refused` (S2, S3, I4 of a refused
+file), `no_rule` (S3 of a pack no rule composes for), `server_not_told` (I1 of a game whose bound
+instances' servers the read does not tell), `package_undeclared` (I2 without the declared range:
+an installed root keeps no `interfaces.json`). I3 is always `information`, `no_revision_tells`.
+A recorded entry page that `pages.json` does not list keeps its `package_bundle_entry_page_unlisted`
+warning, and the readiness requires S5 for it (ruling 7): a `return_home` entry for its server, or
+a prerequisite package.
+
+**The verdict.** A pack is `dispatchable` when every item but I3 holds, `waiting` when one fails,
+`not_judged` when none fails and one was not judged. When a dispatchable pack is due is then its
+trigger's; the schedule explanation tells why a candidate waits.
+
+**The row.** `actinglab standard-pack ready --root <game root>` (operation table row `standard-pack
+ready`, module `core`, offline; MCP `ac_standard_pack_ready`) answers the function for the game root
+alone: `{root, game, installation: "not_read", dispatchable, waiting, not_judged, packs: [{package_id,
+server, readiness, items: [{id, item, state, basis?, models?, outcome?}]}]}`, the packs in the
+registry's order, beside `lab_operation_completed`. It reads no installation (the status read tells
+an instance's game but not its server; the configuration's instances, check-config's subsystems,
+`actingd suspended` and the vision root's models are read where the placement plan reads them), so
+its five installation items are `not_judged`, `installation_not_read`, and its packs `not_judged`
+at best. Under `--dry-run` it answers the same (no effect).
+
 ## What does not change
 
 No ledger record type or member is added. A composed generation is activated with the existing

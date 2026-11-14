@@ -11,11 +11,18 @@
 //! <standard_packs.root> --instance <alias>=<game>/<server>... --out <new directory>` composes
 //! the schedule rules of the bound games as the Runtime composes them and writes the four V2
 //! documents and the manifest. It writes a new directory, so `--dry-run` refuses it.
+//!
+//! Workflow #464 P3 (contracts/standard-pack-schedule.md, "Readiness"): `actinglab standard-pack
+//! ready --root <game root>` answers, for every pack of the root, whether the scheduler can
+//! dispatch it or what it waits for, the twelve items judged by the resource tooling's one
+//! function. It reads the game root only: it writes nothing, starts nothing and reads no
+//! installation, so the six items of an installation are answered not judged and the answer says
+//! `installation: not_read`.
 
 use crate::{CliError, CliOutcome, FlagArgs, GlobalOptions};
 use actingcommand_resource_tooling::{
-    StandardPackCheckRequest, StandardPackComposeRequest, check_standard_pack_root,
-    compose_standard_packs,
+    StandardPackCheckRequest, StandardPackComposeRequest, StandardPackReadyRequest,
+    check_standard_pack_root, compose_standard_packs, judge_standard_pack_readiness,
 };
 use serde_json::Value;
 
@@ -24,9 +31,16 @@ pub(crate) const CHECK_FLAGS: [&str; 1] = ["--root"];
 /// Workflow #434 LAB-5B2: the flags `standard-pack compose` takes (its own `--instance`, given
 /// after the command's words, `cli_parse::COMMAND_OPTIONS`).
 pub(crate) const COMPOSE_FLAGS: [&str; 3] = ["--root", "--instance", "--out"];
+/// Workflow #464 P3: the flags `standard-pack ready` takes.
+pub(crate) const READY_FLAGS: [&str; 1] = ["--root"];
 
 pub(crate) fn options() -> [&'static str; 1] {
     ["--root <installed game root: <standard_packs.root>/<game>>"]
+}
+
+/// Workflow #464 P3: the flags of `standard-pack ready`.
+pub(crate) fn ready_options() -> [&'static str; 1] {
+    ["--root <a game root, installed or a bundle laid out as one: <standard_packs.root>/<game>>"]
 }
 
 /// ROUT-L RL-1a: the flags of `standard-pack compose`.
@@ -107,6 +121,28 @@ pub(crate) fn run_standard_pack(
             })?;
             serde_json::to_value(response).map_err(|error| {
                 CliError::device(format!("failed to serialize the composition: {error}"))
+            })
+        }
+        // Workflow #464 P3: the readiness of every pack of a game root; it only reads.
+        "ready" => {
+            let flags = FlagArgs::parse_values(args)?;
+            if let Some(flag) = flags
+                .flags
+                .keys()
+                .find(|flag| !READY_FLAGS.contains(&flag.as_str()))
+            {
+                return Err(CliError::usage(format!(
+                    "standard-pack ready does not accept {flag}"
+                )));
+            }
+            flags.expect_positionals("standard-pack ready", 0)?;
+            let response = judge_standard_pack_readiness(&StandardPackReadyRequest {
+                root: flags.required_path("--root")?,
+                declared_package: None,
+                installation: None,
+            })?;
+            serde_json::to_value(response).map_err(|error| {
+                CliError::device(format!("failed to serialize the readiness: {error}"))
             })
         }
         other => Err(CliError::usage(format!(
