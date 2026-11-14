@@ -24276,7 +24276,9 @@ tools reach their commands and answer the envelope, and `ac_lab_do` hands the on
 - *The exported MCP answer.* `next_frame` joined today's MCP server's frame parts, before
   `after_attachment` (`FRAME_PARTS`, five): an answer exported over the budget keeps the next
   screen inline, where before only the operation's own after frame stayed, which an agent took
-  for the next screen. The Lab's MCP server's own list (`after_child.rs`) is unchanged.
+  for the next screen. The Lab's MCP server's own list (`after_child.rs`, `FRAME_PARTS`, five)
+  gained `next_frame` in the same place, so both servers keep the same parts (the owner's rule:
+  whatever the Lab has, both faces have, and they behave alike).
 - *A press that was not performed after the marks were written* (the coordinator's ruling: the
   behaviour stays). The same call again is refused by `record mark`'s own check
   (`record_click_exists`, or `record_mark_id_conflict` for a mark of the step it adds again), and
@@ -24295,7 +24297,8 @@ tools reach their commands and answer the envelope, and `ac_lab_do` hands the on
 - *CI*: a test of `ac_lab_do` took a `Result` whose error (`ToolError`) has no `Debug` with
   `expect`; it matches the result as its neighbours do.
 - *Tests* (apps gate map): four refusals of the open-step rule, the device configuration resolved
-  before the press (actinglab's command line), an exported answer keeping `next_frame` inline.
+  before the press (actinglab's command line), an exported answer keeping `next_frame` inline on
+  today's MCP server and on the Lab's (`serve_calls::mcp_lab_overflow_rule_keeps_next_frame_inline`).
 
 **At deploy.** Nothing to configure. Recordings, packages and the MCP registration stay as they
 are; `actingctl mcp-serve --tier author` lists the five new tools after a client reloads its tools

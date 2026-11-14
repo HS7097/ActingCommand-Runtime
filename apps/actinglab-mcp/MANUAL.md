@@ -127,7 +127,7 @@ naming this file.
     and answered `{req_id, export, overflowed: true}`, `answer_exported` first among its
     `warnings`. `ac_record_stop` keeps its four binding parts together under `lab`, and
     `ac_lab_observe` and `ac_do` their frame parts (`frame_coordinates`, `frame_path`, `preview`,
-    `after_attachment`) each in turn, while the answer still fits. An exported `ac_record_stop`
+    `next_frame`, `after_attachment`) each in turn, while the answer still fits. An exported `ac_record_stop`
     answer goes to `ac_record_draft` as `record_stop_export` (`{path, sha256}`);
   - any other line, a refusal and a child's failure line too, that does not fit with its text
     repeated is sent in `structuredContent` alone, beside a summary text `{outcome,
