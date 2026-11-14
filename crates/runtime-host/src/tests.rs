@@ -249,6 +249,9 @@ mod gate_458_close_isolates;
 // Workflow #463 U1 (0.12.60; register §1.365): a linear step on a screen its package never
 // recorded ends with its own code, names its frame and pauses only its own pair, at once.
 mod gate_463_u1;
+// Workflow #463 K1 (0.12.60; register §1.366): a linear select step that ends empty gets its
+// `on_empty` key from the host's scheduling disposition.
+mod gate_463_k1;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
 // one worker per device, the group's occupancy, pause, gates, session rule and refusals.
 mod gate_mapp1b;

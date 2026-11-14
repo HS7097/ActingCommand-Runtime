@@ -3052,3 +3052,28 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_463_u1::u1_the_closing_decision_inputs_nothing_and_takes_the_captures_of_one_retry_decision",
 ]
 incident = ["#463 U1"]
+
+# Workflow #463 K1 (0.12.60; register §1.366; brief rd-1114/brief-463-k1-linear-select.md; design rd-1114/463-l3l5-design.md section A and the coordinator's rulings on board #463; contracts/linear-steps.md, "Select steps"), admission: a linear package whose second step is a single-frame select over two fixed slots, with on_empty and its page mapped to its key, is admitted by the whole admission with its layout, identity feature and key, and no scan limit (1); validate_linear refuses, each contained_task_linear_invalid with its reason and operation: an optional select (select_optional), retryable false and a declared retry (select_retry), the select step's own expect_identity and a later step's expect_identity of it (expect_identity), the on_empty page unmapped or mapped to another key (select_on_empty_terminal), a terminal page that is neither the target nor an on_empty page and the list page mapped without on_empty (terminal_page), a select from any (any_requires_application); an input_recheck beside the select stays contained_task_operation_invalid field=input_recheck (2); the package with on_empty is no prerequisite and no return-home package, configured or not (select_on_empty), without on_empty it is (3); a linear package whose one step is a select over a scan with on_empty is admitted with its identity feature, key and the scan's max_ms (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k1::k1_a_fixed_slots_select_with_on_empty_is_admitted_under_linear_steps",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k1::k1_linear_admission_refuses_a_select_step_by_each_rule_with_its_reason",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k1::k1_a_linear_package_with_on_empty_is_no_prerequisite_and_no_return_home_package",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k1::k1_a_scan_select_with_on_empty_is_admitted_under_linear_steps",
+]
+incident = ["#463 K1"]
+
+# Workflow #463 K1 (0.12.60; register §1.366), execution, on scripted frames and the scripted clock, a scripted OCR provider reading the cards' names, the path open (home to list), pick (the select, list to detail), close (detail to done): the first card open: one decision record selected and matched, one tap inside its click box after the confirmation frame, the detail page passes, close runs, Completed on done after 3 steps (1); both cards closed with on_empty: Completed on the list with task_not_found after 2 steps, the record empty with unknown_check none, no confirmation frame and no input of pick, its StepFinished naming the list (2); an unreadable open card: selection_result_blocked with selection_kind empty, selection_blocking unknown_instances and count 1, no input of pick (3); exactly_one without a tie-break and without on_empty: both closed insufficient, both open ambiguous, each selection_not_selected with its kind and key, no input of pick (4); a confirmation frame on which the second card opened: selection_projection_mismatch, the record mismatched, no input of pick (5); a sampled card whose first decision record passes the step's window: with one observe-only retry two records, one StepStarted and one tap; with none candidate_sample_deadline_exceeded with attempts 0, the step timeout and observation_before_input, no input (6); after pick's tap a settled black screen: pick declares no retry, its closing decision gives contained_task_linear_unrecorded_screen with page_confirmation_failed's detail, page_ids [neutral/detail, neutral/list] and attempts 1, two inputs (7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k1::k1_a_selected_card_is_tapped_once_after_its_confirmation_and_the_next_step_runs",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k1::k1_an_empty_decision_with_on_empty_completes_the_run_on_the_list_with_its_key",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k1::k1_an_unreadable_card_blocks_the_empty_end_with_no_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k1::k1_an_insufficient_or_ambiguous_decision_fails_selection_not_selected_with_no_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k1::k1_a_changed_confirmation_frame_fails_selection_projection_mismatch_with_no_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k1::k1_a_selection_sampling_timeout_is_observed_again_without_an_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k1::k1_after_the_select_tap_a_settled_unknown_screen_ends_with_the_unrecorded_screen_code",
+]
+incident = ["#463 K1"]

@@ -794,7 +794,10 @@ A select step of a contained task (see [the selection graph](selection-graph.md)
   `reject`, so the evaluator never meets an unknown key; admission and the parser refuse it
   otherwise (`contained_task_select_policy_mismatch`, `resource_declaration_invalid`).
 - `selection.required_count` is `1`: a step chooses exactly one candidate. Only a `selected`
-  outcome leads to an input; every other outcome fails the step (`selection_not_selected`).
+  outcome leads to an input; every other outcome fails the step (`selection_not_selected`),
+  except an `empty` decision of a step that declares `on_empty`, which ends the run normally
+  ([selection-graph.md](selection-graph.md), "Ending empty"), in a page-graph task and (Workflow
+  #463 K1) in a `linear_steps` task alike.
   The zero-padded candidate IDs make `candidate_id` a stable last tie-break key.
 - The decision is recorded whole in `task.selection_evaluated`, with `policy_sha256`,
   `input_sha256` and the document's package SHA-256.

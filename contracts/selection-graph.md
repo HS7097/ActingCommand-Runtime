@@ -596,10 +596,12 @@ A step that declares `on_empty` is admitted only when its policy's `selection.mo
 post-admission OCR is no comparison (a run would otherwise have two sources for its key), and,
 when the task declares `post_admission_fields`, their `page_ids` include the step's `from` page.
 The step's state is also a terminal of the task's route: exactly one mapping with the effect
-condition of that state lists the step's page, and its key is the `on_empty` key. A task without
-phases checks this in its scheduling-outcome coverage check
+condition of that state lists the step's page, and its key is the `on_empty` key. A page-graph
+task without phases checks this in its scheduling-outcome coverage check
 (`contained_task_outcome_declaration_incomplete`), a phased task in its route check
-(`task_phases_outcome_incomplete`; [README.md](README.md), phases). A package with an `on_empty`
+(`task_phases_outcome_incomplete`; [README.md](README.md), phases), and a `linear_steps` task in
+its linear admission (Workflow #463 K1: `contained_task_linear_invalid`,
+`reason=select_on_empty_terminal`; [linear-steps.md](linear-steps.md), "Select steps"). A package with an `on_empty`
 step serves neither as a prerequisite package (`contained_task_prerequisite_incompatible`,
 detail `reason=select_on_empty`) nor for return-home use, which reads the same reason, because
 an early end on the step's page would leave the dependent package short of its entry page.
@@ -993,7 +995,9 @@ no `task.effect_completed`. After the step's record, the kernel records the step
 `StepFinished` with `page_label` the step's page as recognized on its last frame (a scan's last
 viewport, a single-frame select's frame) and, for a phased task, `phase` with
 `completed: false`, because the step completes no stage. It moves the run to Completed on that
-page and finishes it with `executed_steps` including the step, `final_page` that page and
+page (a `linear_steps` task, which builds no run state machine, records the same `StepFinished` and
+finishes the same way; Workflow #463 K1, [linear-steps.md](linear-steps.md), "Select steps") and
+finishes it with `executed_steps` including the step, `final_page` that page and
 `selected_scheduling_outcome` the `on_empty` key. The host derives the scheduling disposition
 from that last `StepFinished` as for any end: the mapping of the run's effect condition that
 lists the page, whose key it checks against the kernel's. Of a select step's results this is the

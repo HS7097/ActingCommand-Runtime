@@ -36,28 +36,38 @@
 //! wait on the pages it awaited and its own page ([`LinearDecision`], one classification for
 //! both). It never inputs and never goes on with the attempt: only neither page on a settled
 //! screen changes its end, to the new code; every other end is the one it had.
+//!
+//! Workflow #463 K1 (`contracts/linear-steps.md`, "Select steps"): an operation's effect may be a
+//! select step. Its attempt is the page graph's ([`PreparedContainedTask::select_attempt`]): it
+//! decides on the step's frame by the step's policy, confirms the choice on a fresh frame and taps
+//! the chosen candidate once, bound to that frame; the step then goes on as a click step does. An
+//! empty decision of a step that declares `on_empty` taps nothing and ends the run Completed on
+//! the step's page with its key, as the page graph's keyed end finishes a run
+//! ([`LinearStepEnd::Empty`]). A select step declares no retry, is not optional and its page is
+//! mapped to its `on_empty` key; a task without a select step is admitted and run as before.
 
 use super::loading::{Charge, FrameRow, LoadingAllowance, LoadingFrame, LoadingLimit};
 use super::observation_window::StillScreen;
 use super::{
     ApplicationEffectSupport, CaptureBackoff, ColorDigest, ContainedTaskBoundaryTiming,
-    ContainedTaskError, ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime,
-    ContainedTaskTimingContext, ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, ExtraRounds,
-    InputRecheck, MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS,
-    PaceClock, PageCandidates, PageObservation, PostAdmissionOcrCollector, PreparedContainedTask,
-    RecheckedInput, SampleRetries, StepPacing, TaskControl, TaskOperation, TaskProgram,
-    budget_elapsed_since, budget_now, budget_observation_now, invariant_broken, is_geometry_change,
-    pace_pause, paced_step, resolve_page_reference, runtime_touch_choice, sample_budget_invalid,
-    selection, step_point_draw,
+    ContainedTaskError, ContainedTaskGuardOutcome, ContainedTaskOutcome, ContainedTaskRunError,
+    ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS,
+    ExtraRounds, InputRecheck, MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS,
+    MAX_TASK_TIMEOUT_MS, PaceClock, PageCandidates, PageObservation, PostAdmissionOcrCollector,
+    PreparedContainedTask, RecheckedInput, SampleRetries, StepPacing, TaskControl, TaskOperation,
+    TaskProgram, budget_elapsed_since, budget_now, budget_observation_now, invariant_broken,
+    is_geometry_change, pace_pause, paced_step, resolve_page_reference, runtime_touch_choice,
+    sample_budget_invalid, selection, step_point_draw,
 };
-use crate::RunOperationPolicy;
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
+use crate::{InputFrameContext, RunOperationPolicy};
 use actingcommand_contract::TaskSchema;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
-    ApplicationLifecycleAction, PHASED_CONTROL_SCHEMA, TaskTimingBoundary, TaskTimingCheckPosition,
-    TaskTimingFailure, TaskTimingScope, TaskTimingStage,
+    ApplicationLifecycleAction, InputAction, InputSamplingEvidence, PHASED_CONTROL_SCHEMA,
+    SchedulingEffectCondition, TaskTimingBoundary, TaskTimingCheckPosition, TaskTimingFailure,
+    TaskTimingScope, TaskTimingStage, keyed_terminal_holds,
 };
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition::Scene;
@@ -370,11 +380,41 @@ impl LinearFrom {
     }
 }
 
-/// A step's one effect: a click, or an application lifecycle action (Workflow #336 R24).
+/// A step's one effect: a click, an application lifecycle action (Workflow #336 R24), or
+/// (Workflow #463 K1) a select step's one tap on the candidate its attempt chose.
 #[derive(Clone, Copy)]
 enum LinearEffect {
     Click,
     Application(ApplicationLifecycleAction),
+    Select,
+}
+
+/// How one operation ended without a failure.
+enum LinearStepEnd {
+    /// A candidate passed on this frame: the next step's page, or a page of a run of optional
+    /// operations. Boxed: it holds the frame, and inline it would be the one large variant (clippy
+    /// `large_enum_variant`).
+    Reached(Box<PageObservation>),
+    /// Workflow #463 K1: a select step that declares `on_empty` ended empty.
+    Empty(LinearEmptyEnd),
+}
+
+/// Workflow #463 K1 (`contracts/linear-steps.md`, "Select steps"): a select step that declares
+/// `on_empty` decided `empty` with nothing unknown. No input was made; the step finished on
+/// `page_label`, its page as recognized on its last frame, and the run ends there, Completed, with
+/// `outcome_key`.
+struct LinearEmptyEnd {
+    page_label: String,
+    outcome_key: String,
+}
+
+/// The one input of a step whose decision held: its action and sampling, the guard outcome it
+/// was decided with and the input context of the frame that binds it.
+struct LinearInput {
+    action: InputAction,
+    sampling: Option<InputSamplingEvidence>,
+    guard: ContainedTaskGuardOutcome,
+    input_context: Option<InputFrameContext>,
 }
 
 const fn application_action_name(action: ApplicationLifecycleAction) -> &'static str {
@@ -820,13 +860,28 @@ impl TaskProgram {
             if operation.declares_expected_targets() {
                 return Err(invalid("expect_targets", Some(operation)));
             }
+            // Workflow #463 K1: so is an `expect_identity`, which reads a select step's choice
+            // back on the page-graph destination wait; a linear arrival does not run it.
+            if operation
+                .expect_after
+                .as_ref()
+                .and_then(|expectation| expectation.expect_identity.as_ref())
+                .is_some_and(|identity| {
+                    self.operations
+                        .iter()
+                        .any(|chooser| chooser.id == identity.choice_of && chooser.select.is_some())
+                })
+            {
+                return Err(invalid("expect_identity", Some(operation)));
+            }
             operation.validate(control, self.defaults, &self.schema_version)?;
             if !operation_ids.insert(operation.id.as_str()) {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::ContainedTaskProgramInvalid.code(),
                 ));
             }
-            if operation.select.is_some() || operation.on_error.is_some() {
+            // Workflow #463 K1: a select step is admitted; `on_error` is a page-graph declaration.
+            if operation.on_error.is_some() {
                 return Err(invalid("operation_effect", Some(operation)));
             }
             // Workflow #390 EXEC-2: the observation window is a page-graph declaration. Workflow
@@ -846,9 +901,10 @@ impl TaskProgram {
             if operation.max_runs.is_some() || operation.on_max_runs.is_some() {
                 return Err(invalid("max_runs", Some(operation)));
             }
-            let effect = match (&operation.click, &operation.application) {
-                (Some(_), None) => LinearEffect::Click,
-                (None, Some(application)) => LinearEffect::Application(application.action),
+            let effect = match (&operation.click, &operation.application, &operation.select) {
+                (Some(_), None, None) => LinearEffect::Click,
+                (None, Some(application), None) => LinearEffect::Application(application.action),
+                (None, None, Some(_)) => LinearEffect::Select,
                 _ => return Err(invalid("operation_effect", Some(operation))),
             };
             if matches!(effect, LinearEffect::Application(_))
@@ -858,11 +914,23 @@ impl TaskProgram {
             {
                 return Err(invalid("application_retry", Some(operation)));
             }
+            // Workflow #463 K1 (the coordinator's ruling 1 on board #463): nor a select step. A
+            // retry after a scan would scan again after its moves; a swallowed tap ends as a click
+            // step without a retry ends.
+            if matches!(effect, LinearEffect::Select)
+                && (operation.retryable.is_some()
+                    || operation.max_attempts.is_some()
+                    || operation.retry_interval_ms.is_some())
+            {
+                return Err(invalid("select_retry", Some(operation)));
+            }
             let from = if operation.from == ANY_PAGE {
                 if index != 0 {
                     return Err(invalid("any_from", Some(operation)));
                 }
-                if matches!(effect, LinearEffect::Click) {
+                // Workflow #463 K1: a select step chooses on a page, so it never starts from any
+                // screen either.
+                if matches!(effect, LinearEffect::Click | LinearEffect::Select) {
                     return Err(invalid("any_requires_application", Some(operation)));
                 }
                 LinearFrom::Any
@@ -931,6 +999,11 @@ impl TaskProgram {
                 }
                 Some(_) if matches!(effect, LinearEffect::Application(_)) => {
                     return Err(invalid("optional_application", Some(operation)));
+                }
+                // Workflow #463 K1: a select step's page is its list, which it reads whatever it
+                // shows; skipping it when absent would be no choice.
+                Some(_) if matches!(effect, LinearEffect::Select) => {
+                    return Err(invalid("select_optional", Some(operation)));
                 }
                 Some(optional) if optional.settle_ms > MAX_STEP_TIMEOUT_MS => {
                     return Err(invalid("optional_settle", Some(operation)));
@@ -1069,13 +1142,43 @@ impl TaskProgram {
             if declaration.has_designated_effect() {
                 return Err(invalid("designated_operation", None));
             }
+            // Workflow #463 K1: the page of each select step that declares `on_empty`, on which
+            // its empty decision ends the run.
+            let empty_ends = plan
+                .steps
+                .iter()
+                .zip(&self.operations)
+                .filter_map(
+                    |(step, operation)| match (&step.from, operation.on_empty_key()) {
+                        (LinearFrom::Page(page), Some(key)) => {
+                            Some((page.as_str(), key, operation))
+                        }
+                        _ => None,
+                    },
+                )
+                .collect::<Vec<_>>();
             for page in declaration
                 .mappings()
                 .iter()
                 .flat_map(|mapping| mapping.terminal_pages())
             {
-                if resolve(page.as_str())? != plan.target {
+                let page = resolve(page.as_str())?;
+                if page != plan.target && !empty_ends.iter().any(|(empty, ..)| *empty == page) {
                     return Err(invalid("terminal_page", None));
+                }
+            }
+            // Workflow #463 K1: the host derives a run's key from the page it finished on, and
+            // the page-graph coverage check that gives an `on_empty` page its key is not run
+            // here: by the one keyed-terminal rule, exactly one mapping lists the step's page,
+            // and its key is the step's `on_empty` key. The task has no designated effect.
+            for (page, key, operation) in empty_ends {
+                if !keyed_terminal_holds(
+                    declaration,
+                    SchedulingEffectCondition::NoDesignatedEffect,
+                    key,
+                    &|mapped: &str| crate::page_anchor_matches(&control.game, page, mapped),
+                ) {
+                    return Err(invalid("select_on_empty_terminal", Some(operation)));
                 }
             }
         }
@@ -1253,7 +1356,7 @@ impl PreparedContainedTask {
                 run.restart_segment = true;
             }
             let candidates = plan.candidates(current, &handled);
-            let reached = self.run_linear_step(
+            let reached = match self.run_linear_step(
                 runtime,
                 &mut run,
                 dispatched,
@@ -1261,7 +1364,23 @@ impl PreparedContainedTask {
                 step,
                 &candidates,
                 observation,
-            )?;
+            )? {
+                LinearStepEnd::Reached(reached) => *reached,
+                // Workflow #463 K1 (`contracts/linear-steps.md`, "Select steps"): the run ends
+                // Completed on the select step's page with its `on_empty` key, the step counted,
+                // as the page graph finishes a keyed end; no run state machine is needed.
+                LinearStepEnd::Empty(empty) => {
+                    let executed_steps = dispatched.checked_add(1).ok_or_else(state_invalid)?;
+                    return self.finish_success_with_key(
+                        runtime,
+                        ocr_collector,
+                        Some(empty.page_label),
+                        (executed_steps, &[]),
+                        Some(empty.outcome_key),
+                        run.timing.pace(),
+                    );
+                }
+            };
             // Workflow #463 U1 (R25-1): a step that arrived on the main interface closes it.
             if linear_main_interface(&self.control.game, &reached.page_label) {
                 run.restart_segment = false;
@@ -1327,7 +1446,8 @@ impl PreparedContainedTask {
     /// One operation (§5.3 a–h, §5.5), from the frame on which its own page passed (none for the
     /// application entry) to the frame on which one of its `candidates` passed (Workflow #339:
     /// the next step's page, or a page of a run of optional operations). #385 P-k: `run` takes
-    /// the step's pacing and budget clock, for this step and for the run after it.
+    /// the step's pacing and budget clock, for this step and for the run after it. Workflow #463
+    /// K1: or, for a select step that declares `on_empty`, to its empty end on its own page.
     #[allow(clippy::too_many_arguments)]
     fn run_linear_step<R: ContainedTaskRuntime>(
         &self,
@@ -1338,7 +1458,7 @@ impl PreparedContainedTask {
         step: &LinearStep,
         candidates: &LinearCandidates<'_>,
         mut observation: Option<PageObservation>,
-    ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
+    ) -> Result<LinearStepEnd, ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
         // Workflow #386 SR-1 (scheduling model §2.1 item 4): the step's pacing, taken once at
         // its start; its observation window opens on the observation clock. #385 P-k (§5.6 item
@@ -1351,9 +1471,15 @@ impl PreparedContainedTask {
             .with_pace(paced_step(runtime, run.timing.pace(), run.pacing)?);
         let run = *run;
         let pace = run.timing.pace();
+        // Workflow #463 K1: a select over a scan observes within its `max_ms`, capped by the
+        // task's, in place of the step timeout, as on the page-graph path (Workflow #308 SEL-L4b);
+        // every other step within the step timeout.
+        let step_window = operation
+            .scan_max_ms()
+            .map_or(run.step_timeout, Duration::from_millis);
         let step_timing = run
             .timing
-            .with_deadline(budget_observation_now(runtime, pace) + run.step_timeout);
+            .with_deadline(budget_observation_now(runtime, pace) + step_window);
         // The dispatched logical step, as the page-graph path counts it; a retry adds none.
         runtime.update_run_progress(step_index.saturating_add(1));
         let policy = operation.retry_policy(
@@ -1407,6 +1533,31 @@ impl PreparedContainedTask {
                         attempt,
                     )?;
                 }
+                // Workflow #463 K1: a select step's attempt replaces the guard and the click; its
+                // tap goes on as a click's does. A select step declares no retry, so this is its
+                // one attempt.
+                LinearEffect::Select => {
+                    let frame = observation.as_ref().ok_or_else(|| {
+                        ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code())
+                    })?;
+                    if let Some(empty) = self.linear_select_input(
+                        runtime,
+                        run,
+                        step_index,
+                        operation,
+                        frame,
+                        step_timing,
+                    )? {
+                        // No input was made: the step finishes on its page and the run ends.
+                        Self::linear_step_finished(
+                            runtime,
+                            step_index,
+                            operation,
+                            &empty.page_label,
+                        )?;
+                        return Ok(LinearStepEnd::Empty(empty));
+                    }
+                }
                 LinearEffect::Application(action) => {
                     self.linear_application(runtime, run, step_index, operation, action)?;
                 }
@@ -1435,7 +1586,7 @@ impl PreparedContainedTask {
                         operation,
                         &reached.page_label,
                     )?;
-                    return Ok(reached);
+                    return Ok(LinearStepEnd::Reached(Box::new(reached)));
                 }
                 Err(miss) => miss,
             };
@@ -1562,7 +1713,7 @@ impl PreparedContainedTask {
                                 operation,
                                 &frame.page_label,
                             )?;
-                            return Ok(frame);
+                            return Ok(LinearStepEnd::Reached(Box::new(frame)));
                         }
                     };
                     match continued {
@@ -1573,7 +1724,7 @@ impl PreparedContainedTask {
                                 operation,
                                 &reached.page_label,
                             )?;
-                            return Ok(reached);
+                            return Ok(LinearStepEnd::Reached(Box::new(reached)));
                         }
                         Err(miss) => {
                             Self::linear_step_finished(
@@ -1849,6 +2000,156 @@ impl PreparedContainedTask {
             }
             break (guard, action, sampling, frame.input_context.clone());
         };
+        self.linear_send_input(
+            runtime,
+            run,
+            step_index,
+            operation,
+            LinearInput {
+                action,
+                sampling,
+                guard,
+                input_context,
+            },
+        )
+    }
+
+    /// Workflow #463 K1 (`contracts/linear-steps.md`, "Select steps"): a select step's attempt on
+    /// the frame on which its page passed, the page graph's own
+    /// ([`PreparedContainedTask::select_attempt`]): the step's layout is projected and decided by
+    /// its policy, the choice is confirmed on a fresh frame, and one tap is drawn inside the chosen
+    /// candidate's click box, bound to that frame's input context; the tap is then sent as a
+    /// click's is ([`Self::linear_send_input`]). ACT-2: the step's gap and a fresh frame of its
+    /// page come first. An observation whose sampling timed out is made again on a fresh frame of
+    /// the step's page, never after an input; every other failure, and every failure of a select
+    /// over a scan, whose moves may precede it, ends the run with its own code before any tap. An
+    /// empty decision of a step that declares `on_empty` taps nothing and is returned.
+    fn linear_select_input<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        run: LinearRun,
+        step_index: u32,
+        operation: &TaskOperation,
+        observation: &PageObservation,
+        step_timing: ContainedTaskTimingContext,
+    ) -> Result<Option<LinearEmptyEnd>, ContainedTaskRunError<R::Error>> {
+        let pace = run.timing.pace();
+        // As on the page-graph path: a select over a scan observes within its `max_ms` (capped by
+        // the task's), and its sampling deadline is checked by the scan itself.
+        let window = operation
+            .scan_max_ms()
+            .map_or(run.step_timeout, Duration::from_millis);
+        let sampled = operation.scan_max_ms().is_none()
+            && selection::sampling_budget_ms(operation, &self.evaluator, &self.detector)?.is_some();
+        let mut retries =
+            SampleRetries::new(run.pacing, ExecutionKernelLocation::ObservationBeforeInput);
+        let mut step_timing = step_timing;
+        let mut again: Option<PageObservation> = None;
+        let gap = runtime
+            .step_action_gap()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
+        if !gap.is_zero() {
+            self.wait_pre_input(runtime, gap, pace, run.timing.deadline())?;
+            let (frame, _) = self.linear_observe_before_input(
+                runtime,
+                run,
+                &observation.page_label,
+                &mut retries,
+            )?;
+            step_timing = run
+                .timing
+                .with_deadline(budget_observation_now(runtime, pace) + window);
+            again = Some(frame);
+        }
+        let input = loop {
+            let frame = again.as_ref().unwrap_or(observation);
+            let page = frame.page_label.clone();
+            let selected = match self.select_attempt(
+                runtime,
+                operation,
+                frame,
+                step_index,
+                step_timing,
+                (&retries, run.step_timeout),
+            ) {
+                Ok(selection::SelectAttempt::Selected(selected)) => *selected,
+                Ok(selection::SelectAttempt::Empty {
+                    outcome_key,
+                    page_label,
+                }) => {
+                    return Ok(Some(LinearEmptyEnd {
+                        page_label,
+                        outcome_key,
+                    }));
+                }
+                // A scan's failure may follow its own moves: it is never observed again.
+                Err(failure) if operation.scan_max_ms().is_some() => return Err(failure),
+                Err(failure) => {
+                    retries.retry(runtime, failure, run.step_timeout)?;
+                    let (frame, timing) =
+                        self.linear_observe_before_input(runtime, run, &page, &mut retries)?;
+                    again = Some(frame);
+                    step_timing = timing;
+                    continue;
+                }
+            };
+            // Workflow #308 SEL-L4b: a scan drew the step's seed for its moves; its tap reuses
+            // it. Workflow #406 T12: with the touch keys in effect.
+            let draw = match selected.draw {
+                Some(draw) => draw,
+                None => step_point_draw(runtime, step_index, &operation.id)?,
+            };
+            let (action, sampling) = selected.draw_input::<R::Error>(
+                &self.control.resolution,
+                draw,
+                &mut runtime_touch_choice(runtime),
+            )?;
+            if sampled
+                && budget_observation_now(runtime, step_timing.pace()) >= step_timing.deadline()
+            {
+                let timeout = ContainedTaskError::new(
+                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+                );
+                retries.retry(
+                    runtime,
+                    ContainedTaskRunError::<R::Error>::Task(timeout),
+                    run.step_timeout,
+                )?;
+                let (frame, timing) =
+                    self.linear_observe_before_input(runtime, run, &page, &mut retries)?;
+                again = Some(frame);
+                step_timing = timing;
+                continue;
+            }
+            break LinearInput {
+                action,
+                sampling,
+                guard: selected.guard,
+                input_context: selected.frame.input_context,
+            };
+        };
+        self.linear_send_input(runtime, run, step_index, operation, input)?;
+        Ok(None)
+    }
+
+    /// A step's one input once its decision held: the step's pre-input wait, the effect intent,
+    /// the input bound to `input`'s frame context and the effect completion, in the order of the
+    /// page-graph path.
+    fn linear_send_input<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        run: LinearRun,
+        step_index: u32,
+        operation: &TaskOperation,
+        input: LinearInput,
+    ) -> Result<(), ContainedTaskRunError<R::Error>> {
+        let deadline = run.timing.deadline();
+        let LinearInput {
+            action,
+            sampling,
+            guard,
+            input_context,
+        } = input;
         // #385 P-k (performance model v1.4.2 §5.2): the step's pre-input wait, after the action
         // and its sampling check, before the effect intent; nothing is recognized again after it.
         self.wait_pre_input(

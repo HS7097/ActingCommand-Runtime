@@ -23340,6 +23340,92 @@ next due evaluation after the lift check's interval (60 s by default), with no r
 existing member); a pause the ledger recorded is rebuilt from its execution record and lifts by
 the same package change.
 
+### 1.366 Slice #463 K1 (0.12.60): a `linear_steps` task runs a select step, and an empty decision with `on_empty` ends it normally (Workflow #463; the owner's requirement on board #463 that an item of a list is chosen by what the screen shows, and the coordinator's rulings on the design note `rd-1114/463-l3l5-design.md`, not the owner's words; coordinator work order `rd-1114/brief-463-k1-linear-select.md`, read on the head `e045e3ae` of #1715)
+
+1.366 is the number after #1715's §1.365; this pull request is stacked on #1715, which merges
+first. Pull requests open beside these may take numbers first, and a train renumbers them.
+
+**What it is.** The kernel's half of the design's L3: a recorded (`linear_steps`) package may
+declare the select step a page-graph package has ([linear-steps.md](linear-steps.md), "Select
+steps"). Its attempt is the page graph's `select_attempt`: the decision on the step's frame by its
+policy, the confirmation on a fresh frame, one tap inside the chosen candidate's click box bound to
+that frame; the step then goes on as a click step does (U1's closing decision included, since a
+select step declares no retry). An `empty` decision of a step that declares `on_empty`, with
+nothing unknown, taps nothing and ends the run Completed on the step's page with its key, through
+the page graph's `finish_success_with_key`, with no run state machine. The recording side, endings
+(L5), the variable and the Lab are later slices; page-graph tasks are unchanged.
+
+**Where, by reading (the design's points it did not verify).**
+- `TaskOperation::validate`, which `validate_linear` calls before its own rules, treats a select
+  step under `linear_steps` as the page graph does (a guard and an `expect_after` required, no
+  trusted coordinate, the declaration's shape); and it already refuses an `input_recheck` beside
+  `select` in every mode (`contained_task_operation_invalid`, `field=input_recheck`,
+  `observation_window::validate_operation`), so the design's reason `select_recheck` would never
+  be reached and is not added.
+- The page graph gives a scan select no helper of its own: the step's window is
+  `scan_max_ms().map_or(step_timeout, ..)`, the deadline `with_deadline(now + window)` capped by
+  the task's. The linear step computes the same window (`run_linear_step`); for every other step it
+  is the step timeout, as before.
+- A `scheduling_outcome` mapping's terminal page enters a source package's page set by itself
+  (`build_pages` adds the mappings' pages), and linear admission resolves it against the detector;
+  no linear wait evaluates it unless a step names it. The `on_empty` page is the select step's own
+  `from`, already on the path, so K1 adds no page to any wait.
+- The selection-policy document is read for a linear task by the same reader
+  (`prepare_select_steps`, `read_policy`, run for every mode before the second `validate_linear`).
+- `declaration.validate()` already refuses a page in two mappings of one effect condition
+  (`mapping_overlap`); a linear task has only `no_designated_effect` mappings.
+- Not in the design: the select step's confirmation frame and a sampled layout's frames are
+  captured and recognized as on the page graph, against the package's whole page set, not only the
+  step's page; a confirmation frame on which another page of the package also passes fails
+  `selection_page_changed`, loudly, before any tap.
+
+**Admission** (`contained_task_linear_invalid`, `operation=<id>`): the effect `select` beside
+`click` and `application` (`on_error` stays `operation_effect`); new reasons `select_optional`,
+`select_retry` (any of `retryable`, `max_attempts`, `retry_interval_ms`, as `application_retry`),
+`expect_identity` (an `expect_identity` whose `choice_of` names a select step) and
+`select_on_empty_terminal` (the one keyed-terminal rule, `keyed_terminal_holds`, over the
+`no_designated_effect` mappings); `any_requires_application` covers a select step; `terminal_page`
+admits the page of a select step that declares `on_empty`. A package with such a step stays no
+prerequisite and no return-home package (`select_on_empty`, unchanged).
+
+**Execution and records.** `run_linear_step` returns `LinearStepEnd` (the frame reached, or the
+empty end); `linear_select_input` makes the attempt and sends the tap through
+`linear_send_input`, the click's former tail, now shared. An observation whose sampling timed out
+is made again on a fresh frame of the step's page (Workflow #386 SR-1); any other failure, and every
+failure of a scan, ends the run with its own code before any tap. The select codes keep their
+catalog classes (the coordinator's ruling 2). Records are the page graph's: `task.selection_evaluated`,
+then the tap's `EffectIntent` and `EffectCompleted`, or, on an empty end, the step's `StepFinished`
+on its page, `Finalizing` and a terminal Completed on that page whose key the host's existing rule
+derives from that `StepFinished`.
+
+**A task without a select step** is admitted, run and recorded as before: the lines it executes
+compute the same values (the effect match, the window `step_timeout`, the boxed frame of
+`LinearStepEnd::Reached`, the click's tail moved into `linear_send_input` in its order).
+
+**Interface.** No revision moves: the new reasons are detail values of an existing code, the
+select step's members are the `package` members they were, and no record, member or configuration
+key is added ([component-interfaces.md](component-interfaces.md): an admission rule with no shape
+change, as #411 B12-4 admitted `input_recheck` under `linear_steps`). A build before this one
+refuses such a package with `reason=operation_effect`, loudly, before `PackageAdmitted`.
+
+Tests: kernel `gate_463_k1.rs` (exec gate rows "#463 K1"): admission of a fixed-slots select with
+`on_empty` and of a select over a scan; each refusal with its reason, the `input_recheck` refusal,
+the prerequisite and return-home refusal; a selected card tapped once after its confirmation and
+the next step run; an empty end Completed on the list with its key; an unreadable card
+(`selection_result_blocked`); `insufficient` and `ambiguous` (`selection_not_selected`); a changed
+confirmation frame (`selection_projection_mismatch`); a selection sampling timeout observed again
+without an input; a settled unknown screen after the select tap (U1's code). Host `gate_463_k1.rs`
+(host gate row "#463 K1"): a direct run that ends empty gets its `on_empty` key from the host's
+scheduling disposition. No existing test is adapted, no golden changes and no test leaves the gate
+map. Not tested here: a select over a scan in a run (the kernel's tests have no scan-capable device
+fixture; the scan's own runs are `gate_308_l4b`'s, through a fake source).
+
+**At deploy.** Nothing installed changes: no installed `linear_steps` package declares a select
+step (an older build refused one). The recording side that generates them is a later slice.
+
+**Rollback** (below 0.12.60). No record shape changes; a build below refuses a linear package with
+a select step at admission (`reason=operation_effect`), before any lease.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
