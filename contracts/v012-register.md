@@ -25487,6 +25487,154 @@ module's `gate_455_gr1` goal bytes), `goals_reader_is_strict`'s "another version
 read `GOALS_PACKAGE_REVISION`, so their installer declares [3, 14] and their goals bundle [14, 14]
 (the gate row gains the incident `#463 V1`). No golden changes; no test leaves the gate map.
 
+### 1.380 Slice #463 K2 (0.12.61): a `linear_steps` task ends normally on a declared ending page (Workflow #463; the owner's requirement on board #463 that the business is done with its last press, that every declared ending is a normal end and never a failure, and that a rare ending can be added later without recording again; the coordinator's rulings 4 and 5 on the design note `rd-1114/463-l3l5-design.md` and the rulings of the work order, not the owner's words; coordinator work order `rd-1115/brief-463-k2-linear-endings.md`, read on main `60c28e64`, which holds the train of K1 and V1)
+
+The coordinator gave this slice 1.380: main `60c28e64` holds the sections up to §1.378; 1.375 to
+1.377 and 1.379 belong to open pull requests, 1.381 and 1.382 to slices dispatched with this one.
+The slice ships in 0.12.61.
+
+**What it is.** The kernel's half of the design's L5 ([linear-steps.md](linear-steps.md),
+"Endings"): no new task member. A `scheduling_outcome` mapping whose terminal page is neither the
+target page nor the page of a select step that declares `on_empty` names an ending page, a page no
+operation leaves or reaches. Wherever the target page is a candidate at the path's end (the last
+operation's, and those of a run of optional steps whose skip target is the target page), the ending
+pages are candidates right before it, in mapping order; one that passes passes at once, never after
+a settle, and the run finishes Completed on it through `finish_success`. The last `StepFinished` and
+the terminal's final page name it; the kernel gives no key of its own and the host keys the run by
+the page's one mapping, as it keys the target page. The retry decision and U1's closing decision
+await the same list, then the step's own page. Adding an ending to a recording after its stop (R2)
+and every part of the Lab are later slices.
+
+**Where, by reading (the work order's five points).**
+- *The page set.* A `scheduling_outcome` terminal page enters a source package's page set by itself
+  (`build_pages`, `declared_scheduling_outcome_page_ids`, as §1.374 read); a contained package's page
+  set is its pages file; linear admission resolves each terminal page against the detector
+  (`resolve_page_reference`) and refuses one that resolves to none or several
+  (`contained_task_page_set_invalid`). `declaration.validate()` refuses a page that two mappings of one
+  effect condition write alike (`mapping_overlap`, so `contained_task_outcome_declaration_invalid`; a
+  linear task's mappings are all `no_designated_effect`), but it compares pages as written: one
+  detector page written with and without the game prefix passes it, and the host would fail the run
+  at its end with `contained_task_outcome_mapping_conflict` (it matches mapped pages by anchor).
+  `terminal_page_duplicate` is the word for that situation alone, after the resolution: the same
+  writing stays the declaration's own refusal, so no situation has two words.
+- *K1's rules after an ending.* A page that is a select step's `on_empty` page is never an ending: a
+  mapping that lists it is held by `select_on_empty_terminal` (no mapping or another key), and two
+  mappings that list it by `terminal_page_duplicate` (written two ways) or the declaration's
+  `mapping_overlap` (written alike), checked first, since the one keyed-terminal rule's "exactly one"
+  covers the duplicate too. `select_on_empty_target` is unchanged (that page is the target page). A
+  select step's page without `on_empty`, or its destination, named as a terminal page is a page of the
+  path, `terminal_page` as K1's tests pin. An `on_empty` page is the select step's own `from`, so an
+  ending is never one.
+- *The host.* `select_scheduling_disposition` (`crates/runtime-host/src/host/contained_task.rs`)
+  takes the last attempt's `StepFinished` of the run's last dispatched step, requires it to name the
+  final page (by anchor), takes the one `no_designated_effect` mapping that lists that page and
+  compares its key with the kernel's only when the kernel gives one. An ending's run has that
+  `StepFinished`, that final page and one mapping, so it is keyed by its mapping with no host change;
+  the host test pins it.
+- *The `package` revision.* Row 13's reasoning holds: every Runtime before this slice refuses a
+  terminal page other than the target page or an `on_empty` page at admission
+  (`contained_task_linear_invalid`, `reason=terminal_page`, before `PackageAdmitted`), so every run of
+  such a package would fail, and the installer must refuse the bundle instead. **`package` 15**
+  (Interface, below).
+- *The scheduler.* The catalog's `outcome` predicate and metric read the pair's latest settled
+  success (the host's projection of completed runs, `policy_dispatch.rs`): the key it produced is
+  `true`, with `<key>.duration_ms` and `<key>.completed_at_unix_ms`, and every other key the catalog
+  references for the task `false`, so a rule tells which end the last run reached; nothing counts the
+  ends over several runs.
+
+**Admission** (`contained_task_linear_invalid`, no `operation=`):
+
+| Rule | `reason` |
+|---|---|
+| every terminal page is the target page, an `on_empty` page or a page no operation leaves or reaches (widened; a page of the path stays refused) | `terminal_page` |
+| an ending page is no operation's intermediate page and no page an operation's confirmation adds as a loading page or waits on | `ending_page` (new) |
+| no detector page is a terminal page of two mappings, after resolution | `terminal_page_duplicate` (new) |
+| a package with an ending page is no prerequisite and no return-home package (`contained_task_prerequisite_incompatible`, after `select_on_empty` in `scheduling_outcome_incompatibility`) | `linear_endings` (new) |
+
+The design's `ending_page` also named the steps' own pages and optional pages. Those are pages of
+the path, which `terminal_page` already refuses and K1's and Workflow #336's tests pin
+(`gate_463_k1`, `gate_e5_linear`); the work order changes no existing test, so they keep that word,
+and `ending_page` is the one word for an ending page the step's intermediate or loading waits
+evaluate apart from its candidates. The three new words are detail values of existing codes,
+registered where their family's words are, in the admission tables of
+[linear-steps.md](linear-steps.md) ("Admission", "Endings", "Prerequisite packages"); no outcome
+code, no key and no vocabulary changes, so the outcome code index does not change (its `--check`
+still reads "is current"). `declares_linear_endings` (the prerequisite check, on the admitted
+package) compares the declared pages by canonical anchor, which name one detector page each once
+admission resolved them, so it finds the plan's endings.
+
+**Execution and records.** `LinearPlan` gains `endings`, filled once the scheduling outcome is
+checked, after the loading pages are held to the candidates they held before. `candidates` puts the
+endings before the target page where it ends the path; `LinearCandidates.run_set` keeps a run's
+candidates of more than one page on `linear_wait_set` (skip target last, settle), and the endings and
+the target page of a last operation outside a run go to one `linear_wait`, as one page did, so its
+geometry and consensus-window handling stay those of the last step's wait (the design did not say
+which wait; a run's set would have settled nothing and been slower to tolerate a moved display).
+`validate_sampling_budget` counts the endings in every candidate list and asks the continued wait's
+budget only of a run's set, the one list that continued wait watches. `run_linear_steps` finishes on a
+passing ending page before the optional-run matching. Records are the ordinary success's: no event
+type, payload member or enum value is added.
+
+**A task without an ending** is admitted, run and recorded as before: its plan's endings are empty,
+`candidates` computes the lists it computed, `run_set` is true exactly where the list was a run's of
+more than one page (the old routing and the old budget check), and the details are the same.
+`terminal_page_duplicate` refuses only declarations refused before: an `on_empty` page in two
+mappings written two ways was `select_on_empty_terminal` at admission, and the target page written
+so failed every run at its end (`contained_task_outcome_mapping_conflict`).
+
+**Known limit** (a question for the coordinator, not decided here): the last operation's resource
+adjustments (Workflow #384 D2-S3) are confirmed on the frame it arrived on, an ending page included,
+as the design's place of the ending check (after the confirmation, before the optional-run matching)
+gives; a package whose last press may end without its effect declares no adjustment on it.
+
+**Interface: `package` 15**, by row 13's reasoning ([component-interfaces.md](component-interfaces.md),
+"What a range means": a bundle's maximum is the revision its packs need). The Runtime declares
+`package` [3, 15] (13 is Workflow #463 K1's, 14 V1's, 15 this slice's, the same release;
+`distribution/windows/component-interfaces.json`; the architecture pin
+`the_runtime_declares_each_v0120_interface_revision_once` and its comment; row 15; the statements of
+rows 13 and 14, [package-variables.md](package-variables.md) and
+[standard-pack-goals.md](standard-pack-goals.md); §1.374 and §1.378 keep the [3, 14] their slices
+declared). A pack without an ending page keeps its revision; a bundle whose packs declare one
+declares [15, 15], which the `package` edge of an earlier installer refuses in the plan, before the
+hold and any write. **Nobody checks the 15**: it is written by the resource repository's packaging
+(the bundle's `interfaces.json`; `record stop` generates no ending yet), and `place` holds a bundle's
+maximum to its own range and asks 10 only of a bundle with the notices directory and 14 only of one
+with `goals.json` or one whose packs declare `variables` (`crates/lab-rescue/src/install/place.rs`,
+`check_notices`, `check_goals_declared`, `check_variables_declared`), never 15 of an ending, and the
+Runtime does not check a package's declared range at admission. So an earlier installer places a
+bundle whose packs declare an ending and that declares less than 15, and an earlier Runtime refuses
+that package at every run (`reason=terminal_page`). `ledger`, `runtime-client`, `actingd-config` and
+`runtime-outcomes` do not move.
+
+**At deploy.** Nothing installed changes: no installed `linear_steps` package names a terminal page
+other than its target page or an `on_empty` page (an earlier build refused one). The Runtime declares
+`package` [3, 15]; a bundle that declares 15 is placed only by this build's installer or a later one.
+The recording side that adds endings is a later slice.
+
+**Rollback** (below 0.12.61). No record shape changes; a build below refuses a linear package with
+an ending page at admission (`reason=terminal_page`), before any lease, and its installer refuses a
+bundle that declares `package` 15 through its `package` edge. A rollback stays open while no root is
+placed from such a bundle; a bundle with such a package that declares less than 15 is placed by an
+earlier installer too, and every run of that package is refused.
+
+Tests: kernel `gate_463_k2.rs` (exec gate rows "#463 K2"): one and two endings admitted; each refusal
+with its code and detail (`ending_page` for an intermediate page; `terminal_page_duplicate` for an
+ending page and for the target page written two ways; the declaration's own refusal written alike;
+`terminal_page` for an optional step's page); `linear_endings` for the prerequisite, return-home and
+entry recovery checks, none without endings; the last input reaching an ending (Completed on it,
+no kernel key, the arrival awaiting the endings then the target page) and the usual ending; an ending
+and the target page on one frame; endings after a run of optional steps that ends the path, from the
+operation before the run and from its member; a late ending under a retry (continued, no second
+input) and under the closing decision (still `page_confirmation_failed`); U1's code on a still
+screen with `awaited=` listing the endings; the same package without endings (no `awaited=`, the
+target page awaited alone); a select step whose tap reaches an ending. Host `gate_463_k2.rs` (host
+gate row "#463 K2"): a direct run that ends on the ending gets its mapping's key, and one that ends on
+the target page the usual key. Adapted because the requirement changes what it pins (the build's
+`package` range), name kept: the rescue module's
+`install::gate_463_v1::v1_the_build_declares_package_through_revision_14` holds [3, 15] and 14 within
+it (its gate row gains the incident `#463 K2`), and the architecture pin. No golden changes; no test
+leaves the gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

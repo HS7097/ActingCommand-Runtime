@@ -8,8 +8,10 @@ launch, restart or stop the instance's assigned application (rulings R24 and R25
 steps" below). A step whose page does not always appear may be declared optional and is then
 skipped when its page does not appear ([Workflow #339](https://github.com/HS7097/ActingCommand-Workflow/issues/339),
 "Optional steps" below). A step may instead choose one item of a list by what its frame shows
-and tap it once (Workflow #463 K1, "Select steps" below). Packages that do not declare the mode
-keep their page-graph execution unchanged. No game-specific values are part of this contract.
+and tap it once (Workflow #463 K1, "Select steps" below). Besides its target page, a task may name
+pages its path ends on after its last press, its ending pages, each a normal end (Workflow #463 K2,
+"Endings" below). Packages that do not declare the mode keep their page-graph execution unchanged.
+No game-specific values are part of this contract.
 
 A Lab recording generates such packages (`record stop`, [Lab recording](lab-recording.md)).
 How a scheduled linear task's failures are rerun, pause it and are lifted by a package update
@@ -85,7 +87,9 @@ one operation is at fault; an existing check keeps its existing code.
 | a `page` transition's `interval_ms` is in `1..=1800000`; a run refuses one above the configured ceiling `execution.capture.max_interval_ms` (default 60000) before its first capture, with the same reason (PERF-B1, [resource-declarations.md](resource-declarations.md), "Capture cadence") | `transition_interval` |
 | a `window` has `0 <= min_ms <= max_ms`, `1 <= max_ms <= 1800000`, and `min_ms` below the task timeout | `transition_window` |
 | a `scheduling_outcome`, when declared, has no designated operation and no designated effect set (Workflow #390 OUT-2) | `designated_operation` |
-| every terminal page of that outcome is the target page or (Workflow #463 K1) the page of a select step that declares `on_empty` | `terminal_page` |
+| every terminal page of that outcome is the target page, (Workflow #463 K1) the page of a select step that declares `on_empty`, or (Workflow #463 K2, since 0.12.61) a page no operation leaves or reaches, an ending page ("Endings" below) | `terminal_page` |
+| (Workflow #463 K2) an ending page is no operation's intermediate page and no page an operation's confirmation adds as a loading page or waits on ("Endings" below) | `ending_page` |
+| (Workflow #463 K2) no detector page is a terminal page of two mappings ("Endings" below) | `terminal_page_duplicate` |
 | the application rules of "Application steps" below | `application_retry`, `any_from`, `any_requires_application`, `input_after_application_stop`, `application_without_home` |
 | an application entry declares no `prerequisite_package_id` ("Prerequisite packages" below) | `prerequisite_with_application_entry` |
 | the optional-step rules of "Optional steps" below | `optional_first_step`, `optional_application`, `optional_restart_segment_end`, `optional_settle`, `optional_candidates`, `transition_page` |
@@ -170,9 +174,10 @@ operation dispatched, with `step_index` `d` the number of operations dispatched 
 6. `StepFinished` names the page that passed (the next step's page, or a page of a run of
    optional steps), and that frame is the next dispatched operation's decision frame.
 
-When no operation follows, the run finishes with the target page and `executed_steps` equal
-to the number of operations dispatched; a select step that ends empty finishes it on its own page
-("Select steps" below). A package without optional steps dispatches every
+When no operation follows, the run finishes with the page that passed, the target page or
+(Workflow #463 K2) an ending page ("Endings" below), and `executed_steps` equal to the number of
+operations dispatched; a select step that ends empty finishes it on its own page ("Select steps"
+below). A package without optional steps dispatches every
 operation in order, so its `step_index` is the operation index and its `executed_steps` the
 operation count. The next operation is always the one the passing page selects (below), never
 the result of a comparison with the target page: a path that passes the target page before its
@@ -208,7 +213,8 @@ The arrival budget `T` of an operation is its `expect_after.timeout_ms`, or the 
 A retry exists only for a swallowed input; the existing `retryable`, `max_attempts` and
 `retry_interval_ms` declare it, and an operation without them is not retried. The gate of an
 operation is the first page or pages awaited after its input: its intermediate page, or the
-next step's page (every candidate of "Optional steps" below).
+next step's page (every candidate of "Optional steps" below, and at the path's end the ending
+pages before the target page, "Endings" below).
 
 - Once an attempt has seen its intermediate page, a next step's page that does not follow
   fails the task (`page_confirmation_failed`, `intermediate_seen=true`), with no retry
@@ -398,6 +404,80 @@ package does not know or cannot read, which could change the decision, fails
 "Record per path"); each before any tap.
 
 A task without a select step is admitted, run and recorded as before.
+
+## Endings
+
+Workflow #463 K2 (since 0.12.61, [v012-register.md](v012-register.md) §1.380; the owner's
+requirement on board #463 that the business is done with its last press and every declared ending
+is a normal end, never a failure, and the coordinator's rulings 4 and 5 on the design of board
+#463). A recorded path has one usual ending, its target page. A business may end otherwise after
+its last press (too little balance, nothing to collect): the task names each such end as an
+**ending page**, with no new member. An ending is a `scheduling_outcome` mapping whose terminal page
+is neither the target page nor the page of a select step that declares `on_empty`:
+
+```json
+"scheduling_outcome": {"mappings": [
+  {"outcome_key": "task_done", "effect": "no_designated_effect", "terminal_pages": ["step_03"]},
+  {"outcome_key": "task_short", "effect": "no_designated_effect", "terminal_pages": ["ending_01"]}]}
+```
+
+The page is declared as every page of the task is (the source parser takes a terminal page into
+the task's page set by itself, as it takes a destination) and resolved to one detector page. An
+ending that the target page or an `on_empty` page already is, is none. Admission
+(`contained_task_linear_invalid`, no `operation=`):
+
+| Rule | `reason` |
+|---|---|
+| an ending page is a page no operation leaves or reaches; a terminal page on the path that is neither the target page nor an `on_empty` page is refused as before | `terminal_page` |
+| an ending page is no operation's intermediate page (its `page` transition's) and no page an operation's confirmation adds as a loading page or waits on (`expect_after.loading.add`, its wait page): those waits evaluate it apart from the step's candidates | `ending_page` |
+| no detector page is a terminal page of two mappings, since the host keys a run by the one mapping of the page it finished on (`contained_task_outcome_mapping_conflict` at the run's end otherwise). Two mappings that write a page alike are refused first by the declaration's own check (`contained_task_outcome_declaration_invalid`); this rule finds one page written two ways, with and without the game prefix | `terminal_page_duplicate` |
+
+`terminal_page_duplicate` holds every terminal page, the target page and an `on_empty` page
+included; K1's `select_on_empty_terminal` then answers an `on_empty` page that no mapping lists or
+whose mapping has another key. A select step's page without `on_empty`, or a select step's
+destination, named as a terminal page is a page of the path (`terminal_page`). A package with an
+ending page is no prerequisite and no return-home package (`contained_task_prerequisite_incompatible`,
+`reason=linear_endings`, "Prerequisite packages" below): its run may end short of its target page.
+
+**Where endings stand** (the coordinator's ruling 5): only at the path's end. Wherever the target
+page is a candidate at the end of the path, the ending pages are candidates right before it, in the
+order of their mappings: the last operation's candidates, and the candidates of a run of optional
+steps that ends the path (the operation before the run and its members, "Optional steps"), whose
+skip target is the target page. The target page stays the last candidate, so a run's settle still
+counts from its skip target. No other operation awaits an ending page: a rare result after an
+earlier press stays a screen the package never recorded.
+
+**Execution.** After the last input: the post-input wait; the intermediate page, when declared;
+the arrival, where on each frame the first passing candidate wins: a run's optional pages in path
+order, the endings in mapping order, the target page (the coordinator's ruling 4: an ending that
+passes on the frame the target page passes on wins); a loading frame counts as LOAD-4 says. An
+ending page passes at once, as an optional page does, never after a settle; the endings and the
+target page of a last operation outside a run are awaited as one page is. The run finishes
+Completed on the page that passed: the last `StepFinished` names it, the terminal's final page is
+that page and `executed_steps` counts every operation dispatched. The kernel gives no key of its
+own, as for the target page; the host keys the run by the one mapping of that page ("Ledger"). For
+the policy the run is a success ([policy-suspension.md](policy-suspension.md)). The run still
+waits for one of its ends after the press, so a swallowed press is no success, the run's key
+names the end the screen showed, and the next task starts on a screen the run saw.
+
+When nothing passes in the arrival's budget, the retry decision (a declared retry) and the closing
+decision of "Retries" await the same list, then the step's own page. An ending that passes late in
+the retry decision lets the attempt go on without another input, and the run finishes on it; one
+that passes in the closing decision leaves the task failed with `page_confirmation_failed`, never
+a success. So `contained_task_linear_unrecorded_screen` never names a frame on which a declared
+ending passes, and an ending added from the frame it names makes that screen a normal end of the
+next run. A failure's `awaited=` lists the endings before the target page ("Failure codes").
+
+**The scheduler** tells the ends apart by their keys: the catalog's `outcome` predicate and metric
+(`task_id`, `outcome_key`) read the pair's latest settled success, in which the key that run
+produced is `true` and every other key the catalog references for the task `false`, so a rule sees
+which end the last run reached (bought, or too little balance); nothing counts the ends over
+several runs.
+
+Known limit: the last operation's resource adjustments (Workflow #384 D2-S3) are confirmed on the
+frame it arrived on, an ending page included, as on every arrival; a package whose last press may
+end without its effect declares no adjustment on it. A task without an ending page has the
+candidate lists, the details and the records it had.
 
 ## Loading pages
 
@@ -589,7 +669,7 @@ one does. Layer by layer, in this order:
 | at most three prerequisite packages besides the dependent package | `contained_task_prerequisite_depth_exceeded` |
 | the package is admitted by its path (the loader's code is attached as the related failure, a resource declaration rejection travels with it) | `contained_task_prerequisite_admission_failed` |
 | the admitted package's `package_id` is the registry's | `contained_task_prerequisite_mismatch` |
-| the package declares no `store_update` (STORE-FG-1, since 0.12.29: a store update package is never a layer), is no `recognize_only` package and declares no stability termination, post-admission OCR, OCR fields, resource readings, resource adjustments (Workflow #384 D2-S3), designated scheduling operation, select step with `on_empty` (Workflow #308 SEL-L4b: its early end on its own page would leave the dependent package short of its entry page), stage `end_pages` (Workflow #411 B5: an end page ends the run short of its target pages too), a keyed `on_max_runs` or a keyed `on_guard_refused` (Workflow #411 B16 part 1, B22: a keyed end stops the run on the operation's page, short of its target pages); its game, server and resolution are those of the package that names it | `contained_task_prerequisite_incompatible`, detail `reason=<store_update\|recognize_only\|stability_termination\|post_admission_ocr\|resource_readings\|resource_adjustments\|select_on_empty\|phase_end_pages\|max_runs_end\|guard_refused_end\|designated_operation\|game\|server\|resolution>` |
+| the package declares no `store_update` (STORE-FG-1, since 0.12.29: a store update package is never a layer), is no `recognize_only` package and declares no stability termination, post-admission OCR, OCR fields, resource readings, resource adjustments (Workflow #384 D2-S3), designated scheduling operation, select step with `on_empty` (Workflow #308 SEL-L4b: its early end on its own page would leave the dependent package short of its entry page), ending page of a `linear_steps` task (Workflow #463 K2, since 0.12.61, "Endings": a run that ends on it ends short of its target page), stage `end_pages` (Workflow #411 B5: an end page ends the run short of its target pages too), a keyed `on_max_runs` or a keyed `on_guard_refused` (Workflow #411 B16 part 1, B22: a keyed end stops the run on the operation's page, short of its target pages); its game, server and resolution are those of the package that names it | `contained_task_prerequisite_incompatible`, detail `reason=<store_update\|recognize_only\|stability_termination\|post_admission_ocr\|resource_readings\|resource_adjustments\|select_on_empty\|linear_endings\|phase_end_pages\|max_runs_end\|guard_refused_end\|designated_operation\|game\|server\|resolution>` |
 | the maximum steps of the whole chain and the dependent package add up to at most 1000 | `contained_task_prerequisite_step_limit` |
 
 Each refusal is denied (`package_invalid`) with detail `layer=<n> package_id=<id>` (plus
@@ -808,8 +888,9 @@ entry runs in place of the registry's, is judged by the same rule (#433 RH-1, si
 [v012-register.md](v012-register.md) §1.269): its `scheduling_outcome` is allowed and ignored
 exactly when a return-home layer's is, without a designated operation and without the other
 declarations admission accepts only with a `scheduling_outcome` that the table refuses (resource
-readings or adjustments, a select step with `on_empty`, stage `end_pages`, a keyed `on_max_runs`
-or `on_guard_refused`); its other checks are unchanged (no stability termination, post-admission
+readings or adjustments, a select step with `on_empty`, a `linear_steps` task's ending pages
+(Workflow #463 K2, "Endings"), stage `end_pages`, a keyed `on_max_runs` or `on_guard_refused`); its
+other checks are unchanged (no stability termination, post-admission
 OCR, OCR fields or `prerequisite_package_id`). Otherwise it is refused before it runs, as before,
 with `contained_task_home_recovery_package_incompatible`, with no input and no
 `EntryRecoveryPackageAdmitted`, as `EntryTargetDisposition { FailClosed }` and the task terminal.
@@ -902,7 +983,8 @@ starts the stuck-recovery ladder.
 | The prerequisite gate ("Prerequisite packages" above) | `contained_task_prerequisite_*` | `page_recognition` / `entry_recognition` for `contained_task_prerequisite_entry_unmatched` |
 | The return-home package ran and the first step's page did not pass ("Return-home fallback" above) | `contained_task_return_home_entry_unmatched` | `page_recognition` / `entry_recognition` |
 
-When the operation awaited more than one candidate (a run of optional steps), the detail of
+When the operation awaited more than one candidate (a run of optional steps, or (Workflow #463
+K2) the ending pages and the target page, "Endings"), the detail of
 `page_confirmation_failed` and `contained_task_linear_application_unconfirmed` ends with
 ` awaited=<the candidates' detector page ids, comma-separated>`, followed by
 ` skip_target_seen=true` when the skip target had passed; with one candidate the detail is
@@ -995,21 +1077,22 @@ linear run is read by older builds.
 |---|---|---|
 | Admission | `PackageAdmitted` | the package's `package_id` (`package_label`) and entry task (Workflow #336 PKG-S2: no package digest) |
 | Each capture | the capture records and their evidence | unchanged |
-| Each recognition | `RecognitionStarted`, `RecognitionCompleted` | `candidate_pages` the detector page ids awaited: one or two, or the candidates of a run of optional steps (its optional pages in path order, the skip target last), with the retry decision's own page after them; `matched_page` the passing one, or none (the targets of a frame without a passing page are those of the first candidate, as before) |
+| Each recognition | `RecognitionStarted`, `RecognitionCompleted` | `candidate_pages` the detector page ids awaited: one or two, or the candidates of a run of optional steps (its optional pages in path order, the skip target last), at the path's end with the ending pages before the target page (Workflow #463 K2), with the retry decision's own page after them; `matched_page` the passing one, or none (the targets of a frame without a passing page are those of the first candidate, as before) |
 | Step start | `StepStarted` | `step_index` the dispatch index `d`, the operation id, `from_page` the step's detector page id (`<unrecognized>` for the application entry), no phase |
 | Skipped optional step | none | a skip shows as the preceding `StepFinished` naming the skip target instead of its declared destination, and as no `StepStarted` of that operation in the run |
 | Input | `EffectIntent`, `EffectCompleted` | unchanged |
 | Select step (Workflow #463 K1) | `task.selection_evaluated`, then its tap's `EffectIntent` and `EffectCompleted`, or none of them after an empty decision | its one decision record, as on the page graph ([selection-graph.md](selection-graph.md), "Record per path") |
 | Application effect | `application.intent`, then `application.completed` followed by `EffectCompleted`, or `application.failed`, which ends the step and the task with no `EffectCompleted` (the `application.*` records are written by the host, with the task and run ids and their own action id); no `EffectIntent` | unchanged |
 | Intermediate page | `RecognitionStarted`, `RecognitionCompleted` | the intermediate page as the only candidate; it is seen when it is the matched page |
-| Attempt end | `StepFinished` | the page that passed (the next step's page, or a candidate of a run of optional steps), the step's own page (a swallowed input, or a select step's empty decision) or `<unrecognized>` |
+| Attempt end | `StepFinished` | the page that passed (the next step's page, a candidate of a run of optional steps, or (Workflow #463 K2) an ending page), the step's own page (a swallowed input, or a select step's empty decision) or `<unrecognized>` |
 | Waits | the task timing boundaries `PostInputWait`, `PostconditionWait` (also the sleeps of a settle), `PageRecognitionWait`, `RetryWait`, `CapturePage`; `limit_ms` of a timing failure | existing values only |
-| End | `Finalizing`, `TerminalCommitted` | the final page is the page the run finished on: the target page, or the page of a select step that ended empty (Workflow #463 K1); `executed_steps` the operations dispatched, on success and on failure (the operation count when the package has no optional step and no select step ended it) |
+| End | `Finalizing`, `TerminalCommitted` | the final page is the page the run finished on: the target page, an ending page (Workflow #463 K2) or the page of a select step that ended empty (Workflow #463 K1); `executed_steps` the operations dispatched, on success and on failure (the operation count when the package has no optional step and no select step ended it) |
 | A failure with a kernel detail | a runtime lifecycle failure record (`runtime.failed`) after the terminal, naming it, at the terminal's severity | the detail as its native detail ("Failure detail" above) |
 | Scheduling outcome | the host's existing rule on the last attempt's `StepFinished` of the run's own last dispatched operation (never another layer's, Workflow #411 A23), which names that page | unchanged |
 
 Candidate pages are never duplicated, since the admission rules keep an operation's own page,
-its intermediate page, its destination and the candidates of a run distinct. Phase evidence is
+its intermediate page, its destination and the candidates of a run distinct, and (Workflow #463
+K2) an ending page off the path and named by one mapping. Phase evidence is
 not used.
 
 The ledger cannot tell that a run was linear, which window it declared, that it declared an
@@ -1040,7 +1123,13 @@ declares `package` [13, 13], which the `package` edge of an earlier installer re
 places anything ([component-interfaces.md](component-interfaces.md), the `package` row 13). That
 13 is written by the resource repository's packaging and checked by no component, so an earlier
 installer places such a bundle that declares less, and an earlier Runtime refuses its package at
-every run.
+every run. A build before Workflow #463 K2 (below 0.12.61) refuses an ending page, a terminal
+page other than the target page or an `on_empty` page, before `PackageAdmitted`
+(`contained_task_linear_invalid`, `reason=terminal_page`); a bundle whose packs declare one declares
+`package` [15, 15], which the `package` edge of an earlier installer (its range ending below 15)
+refuses before it places anything ([component-interfaces.md](component-interfaces.md), the
+`package` row 15). That 15 too is written by the resource repository's packaging and checked by no
+component.
 
 ## Tools
 
@@ -1064,7 +1153,8 @@ provider, before it writes it.
 ## What a linear task cannot express
 
 Branches and loops of variable length: only the declared path runs, a run of optional steps only
-skips steps of it, and a select step only chooses what its one tap presses. A run of a package
+skips steps of it, a select step only chooses what its one tap presses, and endings only name the
+page the path ends on after its last press (Workflow #463 K2). A run of a package
 without a prerequisite package or return-home
 fallback that does not start on the first step's page, including one already on the target
 page, fails with `contained_task_linear_entry_unmatched`, so a path whose first page does not

@@ -43,6 +43,14 @@
 //! the step's page with its key, as the page graph's keyed end finishes a run
 //! ([`LinearStepEnd::Empty`]). A select step declares no retry, is not optional and its page is
 //! mapped to its `on_empty` key; a task without a select step is admitted and run as before.
+//!
+//! Workflow #463 K2 (`contracts/linear-steps.md`, "Endings"; the coordinator's rulings 4 and 5 on
+//! board #463): a `scheduling_outcome` mapping whose terminal page is neither the target page nor a
+//! select step's `on_empty` page names an ending page, a page no operation leaves or reaches.
+//! Wherever the target page is a candidate at the path's end, the ending pages are candidates
+//! before it, in mapping order; one that passes passes at once, and the run finishes Completed on
+//! it, keyed by the host from its mapping. A task without an ending has the candidate lists, the
+//! details and the records it had.
 
 use super::loading::{Charge, FrameRow, LoadingAllowance, LoadingFrame, LoadingLimit};
 use super::observation_window::StillScreen;
@@ -120,6 +128,9 @@ pub(super) struct LinearPlan {
     steps: Vec<LinearStep>,
     /// The runs of optional operations (Workflow #339), in path order.
     runs: Vec<OptionalRun>,
+    /// Workflow #463 K2: the ending pages, in the order of the mappings that name them; empty for
+    /// a task without an ending.
+    endings: Vec<String>,
 }
 
 /// One operation of the path: its own page, the next step's page, its effect and its
@@ -153,11 +164,18 @@ struct OptionalRun {
 /// The pages an input may reach (Workflow #339 §3.1), in evaluation order: the next step's
 /// page; or, for the operation before a run and its members, the run's optional pages not run
 /// yet in path order, then the run's skip target. An optional page that passes on the same frame
-/// as the skip target wins.
+/// as the skip target wins. Workflow #463 K2: where the target page ends the path (the last
+/// operation's destination, or the skip target of a run that ends the path), the ending pages
+/// come right before it, in mapping order, so an ending that passes on the same frame wins too.
 struct LinearCandidates<'p> {
     pages: Vec<&'p str>,
     /// The largest settle of the optional pages among `pages`; zero without one.
     settle: Duration,
+    /// Workflow #463 K2: the candidates of a run of optional operations (Workflow #339) that hold
+    /// more than one page, its skip target last, which `linear_wait_set` awaits. Every other list,
+    /// one page, or the endings and the target page of a last operation outside a run, is awaited
+    /// by one `linear_wait`, its first passing page winning.
+    run_set: bool,
 }
 
 impl LinearCandidates<'_> {
@@ -263,7 +281,10 @@ impl LinearPlan {
                     )?
                     .is_some_and(|policy| policy.max_attempts() > 1)
             {
-                if candidates.pages.len() > 1
+                // Workflow #463 K2: the continued wait after a late gate watches a run's skip
+                // target; the endings and the target page of a last operation outside a run need
+                // no such wait.
+                if candidates.run_set
                     && matches!(step.transition, Some(LinearTransition::Window { .. }))
                 {
                     check(
@@ -335,15 +356,23 @@ impl LinearPlan {
     }
 
     /// The candidates of operation `index` once the members `handled` of its run have run.
+    /// Workflow #463 K2: where the target page ends the path, the ending pages before it.
     fn candidates(&self, index: usize, handled: &BTreeSet<usize>) -> LinearCandidates<'_> {
         let step = &self.steps[index];
+        let endings = self.endings.iter().map(String::as_str);
         let Some(run) = step.run.map(|run| &self.runs[run]) else {
+            let mut pages = Vec::with_capacity(self.endings.len() + 1);
+            if index + 1 == self.steps.len() {
+                pages.extend(endings);
+            }
+            pages.push(step.to.as_str());
             return LinearCandidates {
-                pages: vec![step.to.as_str()],
+                pages,
                 settle: Duration::ZERO,
+                run_set: false,
             };
         };
-        let mut pages = Vec::with_capacity(run.members.len() + 1);
+        let mut pages = Vec::with_capacity(run.members.len() + self.endings.len() + 1);
         let mut settle = Duration::ZERO;
         for member in run
             .members
@@ -354,8 +383,22 @@ impl LinearPlan {
             pages.push(member.from.label());
             settle = settle.max(member.optional.unwrap_or_default());
         }
+        // The run ends the path: its skip target is the target page.
+        if run.next.is_none() {
+            pages.extend(endings);
+        }
         pages.push(run.skip_page.as_str());
-        LinearCandidates { pages, settle }
+        let run_set = pages.len() > 1;
+        LinearCandidates {
+            pages,
+            settle,
+            run_set,
+        }
+    }
+
+    /// Workflow #463 K2: whether `page`, a candidate that passed, is an ending page.
+    fn is_ending(&self, page: &str) -> bool {
+        self.endings.iter().any(|ending| ending == page)
     }
 }
 
@@ -993,10 +1036,13 @@ impl TaskProgram {
         }
         let runs = optional_runs(&mut steps)
             .map_err(|(reason, index)| invalid(reason, Some(&self.operations[index])))?;
-        let plan = LinearPlan {
+        // Workflow #463 K2: the endings are added once the scheduling outcome is checked below, so
+        // the loading pages are held to the candidates they held before.
+        let mut plan = LinearPlan {
             target,
             steps,
             runs,
+            endings: Vec::new(),
         };
         // Workflow #407 LOAD-4b (register §1.265): nor any other page the step's waits await, an
         // optional page of its run (Workflow #339) or the run's skip target, in the largest
@@ -1039,14 +1085,58 @@ impl TaskProgram {
                     },
                 )
                 .collect::<Vec<_>>();
-            for page in declaration
-                .mappings()
-                .iter()
-                .flat_map(|mapping| mapping.terminal_pages())
-            {
-                let page = resolve(page.as_str())?;
-                if page != plan.target && !empty_ends.iter().any(|(empty, ..)| *empty == page) {
-                    return Err(invalid("terminal_page", None));
+            // Workflow #463 K2 (`contracts/linear-steps.md`, "Endings"): every other terminal page
+            // is an ending page, a page no operation leaves or reaches (a page of the path is
+            // `terminal_page`, as before), and no operation's intermediate page or a page its
+            // confirmation's loading adds, which its waits evaluate apart from its candidates
+            // (`ending_page`). The host keys a run by the one mapping that lists the page it
+            // finished on: one detector page that two mappings list, in two spellings the
+            // declaration's own check (`mapping_overlap`, which compares them as written) does
+            // not see, is `terminal_page_duplicate`.
+            let on_path = |page: &str| {
+                plan.steps.iter().any(|step| {
+                    step.to == page
+                        || matches!(&step.from, LinearFrom::Page(from) if from.as_str() == page)
+                })
+            };
+            let in_waits = |page: &str| {
+                plan.steps.iter().any(|step| {
+                    let intermediate = match &step.transition {
+                        Some(LinearTransition::Page { page: passed, .. }) => {
+                            passed.as_str() == page
+                        }
+                        _ => false,
+                    };
+                    intermediate
+                        || step
+                            .loading_added
+                            .iter()
+                            .any(|added| added.as_str() == page)
+                })
+            };
+            let mut listed = std::collections::BTreeMap::new();
+            let mut endings = Vec::new();
+            for (index, mapping) in declaration.mappings().iter().enumerate() {
+                for page in mapping.terminal_pages() {
+                    let page = resolve(page.as_str())?;
+                    if listed
+                        .insert(page.clone(), index)
+                        .is_some_and(|other| other != index)
+                    {
+                        return Err(invalid("terminal_page_duplicate", None));
+                    }
+                    if page == plan.target || empty_ends.iter().any(|(empty, ..)| *empty == page) {
+                        continue;
+                    }
+                    if on_path(&page) {
+                        return Err(invalid("terminal_page", None));
+                    }
+                    if in_waits(&page) {
+                        return Err(invalid("ending_page", None));
+                    }
+                    if !endings.contains(&page) {
+                        endings.push(page);
+                    }
                 }
             }
             // Workflow #463 K1: the host derives a run's key from the page it finished on, and
@@ -1069,8 +1159,40 @@ impl TaskProgram {
                     return Err(invalid("select_on_empty_terminal", Some(operation)));
                 }
             }
+            plan.endings = endings;
         }
         Ok(plan)
+    }
+}
+
+impl PreparedContainedTask {
+    /// Workflow #463 K2 (`contracts/linear-steps.md`, "Endings", "Prerequisite packages"): whether
+    /// this admitted `linear_steps` package declares an ending page, a terminal page of its
+    /// `scheduling_outcome` that names neither its target page nor the page of a select step that
+    /// declares `on_empty`. Pages are compared by their canonical anchors, which name one detector
+    /// page each once admission resolved them, so these are the plan's endings. Such a package may
+    /// end its run on its ending page, short of a dependent package's entry page.
+    pub(super) fn declares_linear_endings(&self) -> bool {
+        if self.control.execution_mode != LINEAR_STEPS {
+            return false;
+        }
+        let Some(declaration) = &self.scheduling_outcome else {
+            return false;
+        };
+        let game = self.control.game.as_str();
+        let mut usual = self.terminal_page_anchors();
+        usual.extend(
+            self.program
+                .operations
+                .iter()
+                .filter(|operation| operation.on_empty_key().is_some())
+                .map(|operation| crate::canonical_page_anchor(game, &operation.from)),
+        );
+        declaration
+            .mappings()
+            .iter()
+            .flat_map(|mapping| mapping.terminal_pages())
+            .any(|page| !usual.contains(&crate::canonical_page_anchor(game, page)))
     }
 }
 
@@ -1288,6 +1410,19 @@ impl PreparedContainedTask {
             // it arrived on.
             self.confirm_resource_adjustments(runtime, ocr_collector, &operation.id, &reached)?;
             dispatched = dispatched.checked_add(1).ok_or_else(state_invalid)?;
+            // Workflow #463 K2 (`contracts/linear-steps.md`, "Endings"): an ending page passed, a
+            // candidate only where the target page ends the path. The run finishes Completed on
+            // it, every operation dispatched counted; the kernel gives no key of its own, and the
+            // host keys the run by the one mapping of that page, as it keys the target page.
+            if plan.is_ending(&reached.page_label) {
+                return self.finish_success(
+                    runtime,
+                    ocr_collector,
+                    Some(reached.page_label),
+                    (dispatched, &[]),
+                    run.timing.pace(),
+                );
+            }
             let next = match step.run.map(|run| &plan.runs[run]) {
                 None => Some(current + 1).filter(|next| *next < plan.steps.len()),
                 Some(optional_run) => {
@@ -2481,8 +2616,10 @@ impl PreparedContainedTask {
         }
     }
 
-    /// The wait for the next step's page; several candidates (Workflow #339) are awaited by
-    /// `linear_wait_set`. Workflow #407 LOAD-4: it spends `loading`, the attempt's allowance.
+    /// The wait for the next step's page; several candidates of a run (Workflow #339) are awaited
+    /// by `linear_wait_set`. Workflow #407 LOAD-4: it spends `loading`, the attempt's allowance.
+    /// Workflow #463 K2: the endings and the target page of a last operation outside a run are
+    /// awaited as one page is, the first that passes on a frame winning at once.
     fn linear_arrival<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -2492,7 +2629,7 @@ impl PreparedContainedTask {
         interval: Duration,
         miss: LinearMissKind,
     ) -> LinearAttemptResult<R::Error> {
-        let &[page] = candidates.pages.as_slice() else {
+        if candidates.run_set {
             return self.linear_wait_set(
                 runtime,
                 (run, loading),
@@ -2502,11 +2639,11 @@ impl PreparedContainedTask {
                 miss,
                 None,
             );
-        };
+        }
         let started = budget_now(runtime, run.timing.pace());
         let waited = self.linear_wait(
             runtime,
-            &[page],
+            &candidates.pages,
             budget,
             interval,
             LinearWaitPurpose::AfterInput,

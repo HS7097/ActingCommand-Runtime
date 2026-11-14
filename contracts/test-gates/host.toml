@@ -4011,3 +4011,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_k1::k1_a_linear_select_that_ends_empty_gets_its_on_empty_key_from_the_host",
 ]
 incident = ["#463 K1"]
+
+# Workflow #463 K2 (0.12.61; register §1.380; brief rd-1115/brief-463-k2-linear-endings.md; contracts/linear-steps.md, "Endings"), the host's half, a fake device on the manual clock: a linear_steps source package whose one tap buy leads from shop to done, its scheduling outcome mapping done to task_bought and the ending page short to task_short_balance, run directly twice: with short after the tap the receipt is Completed on neutral/short after one step and one tap and the terminal's scheduling disposition carries task_short_balance; with done after the tap, Completed on neutral/done with task_bought; each with no designated effect and no contained_task_outcome_* refusal, the host's rule unchanged
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_k2::k2_the_host_keys_a_run_that_ends_on_an_ending_by_its_mapping",
+]
+incident = ["#463 K2"]

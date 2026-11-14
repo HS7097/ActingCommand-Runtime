@@ -8,7 +8,8 @@
 // nothing held or written.
 // - `v1_the_build_declares_package_through_revision_14`: the declaration this build copies into
 //   its manifests (`distribution/windows/component-interfaces.json`) reads `package` from 3 to the
-//   contract crate's `VARIABLES_PACKAGE_REVISION`, 14;
+//   contract crate's `VARIABLES_PACKAGE_REVISION`, 14 (Workflow #463 K2, register §1.380: to 15
+//   since, the same release, 14 still read);
 // - `v1_a_bundle_at_revision_14_is_planned_here_and_refused_by_an_earlier_installer`: on an
 //   installer of [3, 14] the bundle that declares [14, 14] is planned (its pack and `bundle.json`
 //   new, exit 0, no pause); on one of [3, 13] the same bundle is refused `interface_edge` at its
@@ -78,10 +79,14 @@ fn v1_the_build_declares_package_through_revision_14() {
     let declared: Value =
         serde_json::from_str(OWN_DECLARATION).expect("the build's declaration is JSON");
     let speaks = parse_declaration(&declared).expect("the build's declaration follows the rules");
-    assert_eq!(speaks.get("package"), Some(&[3, 14]));
-    assert_eq!(
-        speaks.get("package").map(|range| range[1]),
-        Some(VARIABLES_PACKAGE_REVISION)
+    // Workflow #463 K2 (register §1.380) raises `max` to 15 in the same release; the revision
+    // this test is about, 14, stays read.
+    assert_eq!(speaks.get("package"), Some(&[3, 15]));
+    assert!(
+        speaks
+            .get("package")
+            .is_some_and(|range| (range[0]..=range[1]).contains(&VARIABLES_PACKAGE_REVISION)),
+        "{speaks:?}"
     );
 }
 
