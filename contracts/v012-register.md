@@ -25121,19 +25121,21 @@ builds refuse only at admission, and #411 B12-4 did not rise for `input_recheck`
 the revision its packs need), a `linear_steps` task with a select step needs `package` 13: every
 Runtime before this slice refuses such a package at admission (`reason=operation_effect`, before
 `PackageAdmitted`), so an installer must refuse to place it on such an installation instead of
-every run failing. The Runtime declares `package` [3, 13] (`distribution/windows/component-interfaces.json`;
-the architecture pin `the_runtime_declares_each_v0120_interface_revision_once`; the contract's row
-13). A pack without a select step under `linear_steps` keeps its revision; a bundle whose packs
-declare one declares [13, 13], which the `package` edge of an earlier installer (its range
-[3, 12]) refuses in the plan, before the hold and any write. The new reasons are detail values of
+every run failing. The Runtime declares `package` [3, 14] (13 is this slice's, 14 Workflow #463
+V1's, the same train; `distribution/windows/component-interfaces.json`; the architecture pin
+`the_runtime_declares_each_v0120_interface_revision_once`; the contract's row 13). A pack without
+a select step under `linear_steps` keeps its revision; a bundle whose packs declare one declares
+[13, 13], which the `package` edge of an earlier installer (its range [3, 12]) refuses in the
+plan, before the hold and any write. The new reasons are detail values of
 an existing code; no record, member, code or configuration key is added, and `ledger`,
 `runtime-client`, `actingd-config` and `runtime-outcomes` do not move.
 
 **Nobody checks the 13** (closing round). That 13 is written by the resource repository's
 packaging (the bundle's `interfaces.json`); no component checks it: `place` holds a bundle's
-maximum to its own range and asks 10 only of a bundle with the notices directory and 12 only of
-one with `goals.json` (`crates/lab-rescue/src/install/place.rs`, `check_notices` and
-`check_goals_declared`), never 13 of a select step, and the Runtime does not check a package's
+maximum to its own range and asks 10 only of a bundle with the notices directory and 14 only of
+one with `goals.json` or one whose packs declare `variables`
+(`crates/lab-rescue/src/install/place.rs`, `check_notices`, `check_goals_declared` and
+`check_variables_declared`), never 13 of a select step, and the Runtime does not check a package's
 declared range at admission (as for revision 11, §1.343). So an earlier installer places a bundle
 whose packs declare a select step and that declares less than 13, and an earlier Runtime then
 refuses that package at every run (`contained_task_linear_invalid`, `reason=operation_effect`).
@@ -25197,11 +25199,13 @@ run on the SEL-L6b list of six cards, which fits one screen, on a device that co
 as the host does (the fixtures of `gate_308_l3`'s kernel path and `gate_308_l6b`, its steps widened
 to the admission's static checks). Host `gate_463_k1.rs` (host gate row "#463 K1"): a direct run
 that ends empty gets its `on_empty` key from the host's scheduling disposition. The architecture
-pin holds `package` [3, 13]. No golden changes and no test leaves the gate map.
+pin holds `package` [3, 14] (13 is this slice's, 14 Workflow #463 V1's, the same train). No golden
+changes and no test leaves the gate map.
 
 **At deploy.** Nothing installed changes: no installed `linear_steps` package declares a select
-step (an older build refused one). The Runtime declares `package` [3, 13]: a bundle that declares
-13 is placed only by this build's installer or a later one. The recording side that generates
+step (an older build refused one). The Runtime declares `package` [3, 14] (13 is this slice's, 14
+Workflow #463 V1's, the same train): a bundle that declares 13 is placed only by this build's
+installer or a later one. The recording side that generates
 such packages is a later slice.
 
 **Rollback** (below 0.12.61). No record shape changes; a build below refuses a linear package with
