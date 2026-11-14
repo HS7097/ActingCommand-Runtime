@@ -23402,7 +23402,7 @@ fixes #456 and #458, and the train 0.12.60d renumbered it 1.366, after #453 S3 (
 precondition row, row 7a″, "Secrets", the journal's kinds, the step table and "Outcome codes"
 ("Workflow #453 S4") are the contract; [lab-two-entries.md](lab-two-entries.md) §7 and the row
 `new` of [lab-operations.json](lab-operations.json) follow it. **No interface revision moves**
-and no outcome code or key is new: two `install_refusal` tokens, one operation kind and two step
+and no outcome code or key is new: two `install_refusal` tokens, one operation kind and three step
 kinds of the installer's journal, one file of the Runtime member.
 
 **What was missing.** Nothing built a fresh root: `install new` (INST-6) was contract text only,
@@ -23465,8 +23465,8 @@ builds the root, so an installer only calls the row.
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | S4-1 | `distribution/windows/actingd.config.first.json` | file of the Runtime member (`distribution-v1`) | #453 S4 | the release build | in `$runtimeFiles` and the copy list of `.github/workflows/windows-remote-build.yml`; `scripts/windows-tools/Get-ExactBuildArtifact.ps1` requires it when a Runtime manifest declares it (an earlier artifact does not), and `Test-WindowsRemoteBuildTools.ps1`'s Runtime fixture carries it (seven payloads) |
-| S4-2 | operation kind `new` | installer journal and `current.json` kind | #453 S4 | `install::new::row` | `OperationKind::New` (`crates/watchdog`), location `install_new`; off the pass list |
-| S4-3 | step kinds `write_config`, `create_state_root`, `create_vision_root` (fix round 1) | installer journal step kinds | #453 S4 | `install::new::run` | their undo: the configuration `.rolledback-<ms2>` and its part `.abandoned-<ms2>`; the state root's folder `.rolledback-<ms2>` when the operation made it; `vision.rolledback-<ms2>` |
+| S4-2 | operation kind `new` | installer journal and `current.json` kind | #453 S4 | `install::new::row` | `OperationKind::New` (`crates/watchdog`), location `install_new`; off the pass list; vocabulary `install_operation_kind` (registered in the train 0.12.60d's review fixes) |
+| S4-3 | step kinds `write_config`, `create_state_root`, `create_vision_root` (fix round 1) | installer journal step kinds | #453 S4 | `install::new::run` | their undo: the configuration `.rolledback-<ms2>` and its part `.abandoned-<ms2>`; the state root's folder `.rolledback-<ms2>` when the operation made it; `vision.rolledback-<ms2>`; vocabulary `install_step_kind` (registered in the train 0.12.60d's review fixes) |
 | S4-4 | `install_refusal` `root_not_empty`, `state_root_not_empty` | vocabulary tokens | #453 S4 | `install::new::row` | `path`; `root_not_empty` also `install_operation_id` and `next` for a root holding an unfinished `new` |
 | S4-5 | the journal input of `new` (`build`, `source`, `commit`, `origin`, `tag`, `release_record`, `state_root`, `state_root_existed`, `mumu_root`, `lab_authoring`, `watchdog`) | journal input (free `inputs`) | #453 S4 | `install::new::row` | never the salt |
 
@@ -23739,9 +23739,10 @@ claim`) and the outcome catalog follow it. **No interface revision moves**
 schema, which no older component reads; one optional member in the row of an existing runtime
 fact, whose `record_list` no reader checks; the owner journal, the identity file and the record
 keep their shapes; a rescue row, a location and two vocabulary words; a read-only member of the
-rescue module's `op status`. **No outcome code is new.** The number is the next free one on main
-`3d9d25e6`, merged in fix round 1 (§1.363 is defect #457; this section was 1.363 before);
-an integration train renumbers it.
+rescue module's `op status`. **No outcome code is new.** 1.364 was the next free number on main
+`3d9d25e6`, merged in fix round 1 (§1.363 is defect #457; this section was 1.363 before); main
+`17197d8e` then gave §1.364 to the fixes #456 and #458, and the train 0.12.60d gave this section
+1.368, after #453 S3, S4 and S9 (§1.365 to §1.367).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|

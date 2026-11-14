@@ -406,9 +406,10 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 - **The list** is the table's `irreversible: true` rows: `deploy`, `rollback`, `convert`, `clean`,
   `undo`, `config replace`, `config restore`, `config file commit`, `instance add` (Workflow #421
   INST-5: its first slice commits the configuration it composes, as `config replace` does),
-  `place`, `pack remove`, `pack restore`, `unlock`, `vision place` (Workflow #453 S9: it replaces
-  a vision root's files, the replaced ones kept), `kept clear` and `resource import-mpe` (the last
-  two reserved).
+  `place`, `pack remove`, `pack restore`, `unlock`, `state-root claim` (Workflow #453 S12: it
+  hands a state root over to this installation, the old record kept), `vision place` (Workflow
+  #453 S9: it replaces a vision root's files, the replaced ones kept), `kept clear` and
+  `resource import-mpe` (the last two reserved).
 - **The rule:** record the initiator (section 4.3), nothing more. No parameter, no second
   confirmation, no plan id carried back by the caller. A plan id is still computed and journalled,
   and an operation still applies only the plan it computed under the writer lock. MCP marks these

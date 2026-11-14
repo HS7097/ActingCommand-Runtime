@@ -1762,8 +1762,9 @@ ledger edge it applied; absent otherwise); its undo record carries `"initiator"`
 `config_replace` and `pack_place` are the module's, and (Workflow #453 S4) `new`, whose inputs
 record the build, the folder it is copied from, the state root and the options, never the salt;
 its `record_state` step's undo sets `state.json` aside (there is no previous state); and (Workflow
-#453 S9, since 0.12.60) `vision_place` with its step `vision_file`. An older reader that refuses unknown members
-does not read such a journal; `install-root` does not change (lab-two-entries.md, open point 5).
+#453 S9, since 0.12.60) `vision_place` with its step `vision_file`. An older reader that refuses
+unknown members does not read such a journal; `install-root` does not change (lab-two-entries.md,
+open point 5).
 LAB-3 fix 1: the evidence of the module's `pause` step carries `"own_pauses": {"reason",
 "owner_epoch", "revisions": {"<alias>": <revision>}}`, the pauses it set; with the step's
 `drained` it names the instances the module's release may hand back, matched by reason and alias
@@ -3006,8 +3007,9 @@ fragments and this build's enums; the forwarder's codes are in
 - vocabulary `install_rollback_build_material` (new): `kept`, `cleaned`.
 - vocabulary `install_operation_kind` (new): `release_stage`, `adopt`, `update`, `rollback`,
   `stop`, `start`, `release_hold`, `prepare`, `convert`, `clean`, `restart`; the rescue module's
-  composites add (Workflow #434 LAB-3, since 0.12.48) `config_replace`, `pack_place`, and its
-  vision place row (Workflow #453 S9, since 0.12.60) `vision_place`.
+  composites add (Workflow #434 LAB-3, since 0.12.48) `config_replace`, `pack_place`, its new
+  row (Workflow #453 S4, since 0.12.60) `new`, and its vision place row (Workflow #453 S9, since
+  0.12.60) `vision_place`.
 - vocabulary `install_step_kind` (new): `extract`, `copy_build`, `verify_tree`, `place_build`,
   `materialize_part`, `verify_part`, `pause`, `close`, `ledger_verify`, `place_slot`,
   `stage_file`, `swap_file`, `retire_live_files`, `place_entries`, `refresh_entries`,
@@ -3015,7 +3017,9 @@ fragments and this build's enums; the forwarder's codes are in
   `start`, `post_check`, `record_health`, `release_hold`, `reverse_files`, `revert_selection`,
   `clean_check`, `clean_slot`, `clean_builds`, `clean_converted`, `delete_cleaning`,
   `record_cleanup`; the rescue module's place composite adds (Workflow #434 LAB-3, since
-  0.12.48) `pack_item`, and its vision place row (Workflow #453 S9, since 0.12.60) `vision_file`.
+  0.12.48) `pack_item`, its new row (Workflow #453 S4, since 0.12.60) `write_config`,
+  `create_state_root` and (fix round 1) `create_vision_root`, and its vision place row (Workflow
+  #453 S9, since 0.12.60) `vision_file`.
 - vocabulary `install_member` (new): `runtime`, `tools`, `ui`.
 - vocabulary `install_row_reason` (new): `target_restores_player_holds`, `no_player_hold_support`,
   `ui_drives_no_installer`.

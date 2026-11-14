@@ -8572,6 +8572,9 @@
         "pack_place": {
           "description": "The Lab's rescue module's place: one game's bundle placed into the standard-pack root. (Workflow #434 LAB-3, since 0.12.48)"
         },
+        "new": {
+          "description": "The Lab's rescue module's new: a fresh installation root built from a release folder or a kept build folder, with its first configuration, its empty state root and, when the template names no vision root of its own, its empty vision root; off the watchdog's pass list. (Workflow #453 S4, since 0.12.60)"
+        },
         "vision_place": {
           "description": "The Lab's rescue module's vision place: the files of the configured vision root's manifest it lacks or holds wrong, placed from a folder a person gives while the Runtime is stopped; off the watchdog's pass list. (Workflow #453 S9, since 0.12.60)"
         }
@@ -8679,6 +8682,15 @@
         },
         "pack_item": {
           "description": "One item of a single-location root's placement (the rescue module's place): a pack, a table or a root file placed, or a root file set aside. (Workflow #434 LAB-3, since 0.12.48)"
+        },
+        "write_config": {
+          "description": "The first configuration of the rescue module's new: the template filled into its part, checked by the new live build's check-config, then renamed into place. (Workflow #453 S4, since 0.12.60)"
+        },
+        "create_state_root": {
+          "description": "The state root's folder of the rescue module's new, created empty. (Workflow #453 S4, since 0.12.60)"
+        },
+        "create_vision_root": {
+          "description": "The default vision root of the rescue module's new, the folder vision below the new root, created empty when the template names no vision root of its own. (Workflow #453 S4 fix round 1, since 0.12.60)"
         },
         "vision_file": {
           "description": "One file of the rescue module's vision place: copied from the folder given to its part and checked, a file in its place kept as .old-<ms>, the part renamed in and checked again. (Workflow #453 S9, since 0.12.60)"
