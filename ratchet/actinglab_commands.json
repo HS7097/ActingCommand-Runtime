@@ -53,7 +53,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 102,
+  "command_count": 103,
   "commands": [
     "help",
     "version",
@@ -134,6 +134,7 @@
     "resource verify",
     "standard-pack check",
     "standard-pack compose",
+    "standard-pack ready",
     "runtime reset",
     "runtime observe",
     "session status",

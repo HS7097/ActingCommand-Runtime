@@ -391,6 +391,9 @@ pub struct StandardPackComposition {
     /// #428 COV-1: each game whose `schedule.json` was read, by game id, with its chain followers
     /// in file order.
     followers: Vec<(String, Vec<BenefitFollower>)>,
+    /// Workflow #464 P3: each game whose `schedule.json` was read, by game id, with the ids of its
+    /// judged rules that count as pending, in file order.
+    pending: Vec<(String, Vec<String>)>,
     /// SCHED-C1f1: each game whose `schedule.json` was read, by game id, with its consumptions
     /// read from a fact in file order.
     consumption_facts: Vec<(String, Vec<ConsumptionFactRule>)>,
@@ -528,6 +531,15 @@ impl StandardPackComposition {
     /// them.
     pub fn benefit_followers(&self) -> &[(String, Vec<BenefitFollower>)] {
         &self.followers
+    }
+
+    /// Workflow #464 P3 (register §1.375; `contracts/standard-pack-schedule.md`, "Readiness"): the
+    /// judged rules of each game whose `schedule.json` was read that count as *pending*, by game
+    /// id, each game's rule ids in file order: the rules [`Self::benefit_coverage`] counts in
+    /// `pending`. A static reading of the file, as the coverage is; it decides nothing. Only the
+    /// resource tools read it.
+    pub fn benefit_pending(&self) -> &[(String, Vec<String>)] {
+        &self.pending
     }
 
     /// SCHED-C1f1 (register §1.303 SC1F-7; `contracts/standard-pack-schedule.md`, "A run's
@@ -754,11 +766,17 @@ fn judged(rule: &ScheduleRule, classification: &StandardPackClassification) -> b
 /// writes a fixed value is judged by the pools it consumes alone, and with no consumption it is
 /// complete; it is also counted in `fixed_value`. #428 COV-1 (register §1.299): a rule that
 /// declares no value and only rides with its chain is a follower ([`chain_followers`]), not
-/// undeclared; the followers are returned in file order.
+/// undeclared; the followers are returned in file order. Workflow #464 P3: and the ids of the
+/// rules counted as pending, in file order.
 fn benefit_coverage(
     schedule: &StandardPackSchedule,
     classification: &StandardPackClassification,
-) -> (BenefitCoverage, Vec<UndeclaredRule>, Vec<BenefitFollower>) {
+) -> (
+    BenefitCoverage,
+    Vec<UndeclaredRule>,
+    Vec<BenefitFollower>,
+    Vec<String>,
+) {
     let valuations = schedule
         .pools
         .iter()
@@ -766,6 +784,8 @@ fn benefit_coverage(
         .collect::<BTreeMap<_, _>>();
     let mut coverage = BenefitCoverage::default();
     let mut undeclared = Vec::new();
+    // Workflow #464 P3: the rules counted as pending, by id.
+    let mut pending_rules = Vec::new();
     // #428 COV-1: the complete rules, and the rules with no entry and no fixed value.
     let mut complete = BTreeSet::new();
     let mut bare = BTreeSet::new();
@@ -828,7 +848,10 @@ fn benefit_coverage(
                     pool_id: Some(pool_id),
                 });
             }
-            None if pending => coverage.pending += 1,
+            None if pending => {
+                coverage.pending += 1;
+                pending_rules.push(rule.id.clone());
+            }
             None => {
                 coverage.complete += 1;
                 complete.insert(rule.id.as_str());
@@ -846,7 +869,7 @@ fn benefit_coverage(
         coverage.undeclared = undeclared.len();
         coverage.follower = followers.len();
     }
-    (coverage, undeclared, followers)
+    (coverage, undeclared, followers, pending_rules)
 }
 
 /// #428 COV-1 (register §1.299; `contracts/standard-pack-schedule.md`, "Coverage"): the chain
@@ -1196,6 +1219,7 @@ pub fn compose_standard_pack_rules(
     let mut benefit = Vec::new();
     let mut provenance = Vec::new();
     let mut followers = Vec::new();
+    let mut pending = Vec::new();
     let mut consumption_facts = Vec::new();
     let mut mismatches = Vec::new();
     let mut escalations = Vec::new();
@@ -1208,7 +1232,8 @@ pub fn compose_standard_pack_rules(
         let marked = irreversible_rules(game);
         instantiate(game, &marked, &mut composed, &mut manifest, &mut issues);
         // SS-2b: how far the game's judged rules declare their values, counted once per rule.
-        let (coverage, undeclared, riding) = benefit_coverage(&game.schedule, &game.classification);
+        let (coverage, undeclared, riding, waiting) =
+            benefit_coverage(&game.schedule, &game.classification);
         let unread = game.files.irreversible.unreadable();
         if !unread.is_empty() {
             unreadable.push((
@@ -1219,6 +1244,8 @@ pub fn compose_standard_pack_rules(
         benefit.push((game.game_id.to_owned(), coverage, undeclared));
         // #428 COV-1: the rules that ride with their chain, each with the rule it rides with.
         followers.push((game.game_id.to_owned(), riding));
+        // Workflow #464 P3: the rules that count as pending.
+        pending.push((game.game_id.to_owned(), waiting));
         // SCHED-C1a: who wrote its fixed values and its valuation blocks.
         provenance.push((game.game_id.to_owned(), benefit_provenance(&game.schedule)));
         // SCHED-C1f1: its consumptions read from a fact, with their keys and fallbacks.
@@ -1323,6 +1350,7 @@ pub fn compose_standard_pack_rules(
     benefit.sort_by(|left, right| left.0.cmp(&right.0));
     provenance.sort_by(|left, right| left.0.cmp(&right.0));
     followers.sort_by(|left, right| left.0.cmp(&right.0));
+    pending.sort_by(|left, right| left.0.cmp(&right.0));
     consumption_facts.sort_by(|left, right| left.0.cmp(&right.0));
     mismatches.sort_by(|left, right| left.0.cmp(&right.0));
     escalations.sort_by(|left, right| left.0.cmp(&right.0));
@@ -1338,6 +1366,7 @@ pub fn compose_standard_pack_rules(
         benefit,
         provenance,
         followers,
+        pending,
         consumption_facts,
         tier_mismatches: mismatches,
         escalations,
