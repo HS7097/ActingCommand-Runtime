@@ -33,7 +33,10 @@
 // `goal_variable_unknown` among them; the safety line of the irreversible package is kept by
 // admission (such a package declaring a variable fails the check and the bundle), and a
 // placement whose variable a package providing the irreversible capability unmarked declares is
-// `goal_governs_irreversible` at the placement's `name`.
+// `goal_governs_irreversible` at the placement's `name`. V1 fix round 1
+// (`rd-1114/brief-1723-fix1.md`): the refusal of the irreversible package's variable names
+// `variables_on_irreversible`, and the root check reports the unmarked provider's variable
+// `variable_on_irreversible`.
 // A made-up game `neutral`, server `test`, 16x9; every package, pool, rule, variable and text is a
 // placeholder.
 
@@ -42,7 +45,7 @@ use crate::{
     StandardPackRootFiles, check_standard_pack_root, package_bundle,
 };
 use actingcommand_contract::outcome::Outcome;
-use actingcommand_contract::{LabError, LabResult};
+use actingcommand_contract::{LabError, LabResult, StandardPackProblem, VariablesProblem};
 use actingcommand_policy::BENEFIT_FIXED_VALUE_SUBSYSTEM;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -703,9 +706,10 @@ fn files_below(directory: &Path) -> BTreeMap<String, Vec<u8>> {
 // The safety line kept out at the check and the bundle (Workflow #463 V1: an entry governs no
 // package any more; a placement reaches the packages that declare its variable): a package whose
 // control declaration provides an irreversible capability declares no variable, so a root, and a
-// bundle, in which it declares one is refused, naming that package, for `standard-pack check` and
-// for `package bundle --goals` (`--out` not written); the same root and bundle, in which only the
-// packages whose capabilities are not irreversible declare variables, pass with the valid file.
+// bundle, in which it declares one is refused, naming that package and (fix round 1) the word
+// `variables_on_irreversible`, for `standard-pack check` and for `package bundle --goals` (`--out`
+// not written); the same root and bundle, in which only the packages whose capabilities are not
+// irreversible declare variables, pass with the valid file.
 #[test]
 fn gr1_governs_irreversible_is_refused_by_the_check_and_the_bundle() {
     let declaring = || {
@@ -730,7 +734,10 @@ fn gr1_governs_irreversible_is_refused_by_the_check_and_the_bundle() {
     })
     .expect_err("a package of the irreversible capability that declares a variable");
     assert_eq!(error.code, "package_invalid", "{}", error.message);
+    // Workflow #463 V1 fix round 1: the refusal names its rule, not only the package.
+    let word = VariablesProblem::VariablesOnIrreversible.as_str();
     assert!(error.message.contains(DISCARD), "{}", error.message);
+    assert!(error.message.contains(word), "{}", error.message);
 
     let (temp, request) = bundle_inputs();
     let (_, accepted) = bundle_with_goals(&temp, &request, &goals());
@@ -740,7 +747,7 @@ fn gr1_governs_irreversible_is_refused_by_the_check_and_the_bundle() {
     let (_, refused) = bundle_with_goals(&temp, &request, &goals());
     let error = refused.expect_err("the package of the irreversible capability refuses the bundle");
     assert!(
-        error.message.contains(DISCARD) || error.message.contains("variables"),
+        error.message.contains(word),
         "{}: {}",
         error.code,
         error.message
@@ -904,10 +911,13 @@ fn gr1_a_tier_over_a_rule_of_an_irreversible_package_is_refused() {
 // any package of the root marks it so. The valid file's placement `route` (Workflow #463 V1, in
 // place of the `choice` entry that governed `neutral.keep`) places the variable `neutral.keep`
 // declares; when `neutral.keep` provides, without the mark, the capability `neutral.discard` marks
-// irreversible, that placement is `goal_governs_irreversible` at `/entries/4/name` and nothing
-// else, for the check (a warning, the root checked) and for `package bundle --goals` (the bundle
-// refused, `--out` not written); with a capability of its own the same file passes the check (and
-// the bundle, `gr1_package_bundle_lays_the_file_and_refuses_a_refused_one`).
+// irreversible, that placement is `goal_governs_irreversible` at `/entries/4/name`, for the check
+// (a warning, the root checked) and for `package bundle --goals` (the bundle refused, `--out` not
+// written); with a capability of its own the same file passes the check (and the bundle,
+// `gr1_package_bundle_lays_the_file_and_refuses_a_refused_one`). Workflow #463 V1 fix round 1:
+// the check's root check judges `neutral.keep` by the same rule, so its variable is
+// `variable_on_irreversible` at its declaration, before the goal warning and beside it nothing
+// else, and the provenance listing marks it as not applying.
 #[test]
 fn gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused() {
     let (_plain, plain_root) = installed();
@@ -924,13 +934,38 @@ fn gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused() 
     write_json(&game_root.join("goals.json"), &goals());
     let refused = check(&game_root);
     assert_eq!(refused.status, "checked");
+    // Workflow #463 V1 fix round 1: the root check, before the goal declaration, judges the same
+    // package by the same rule: its variable `route` is `variable_on_irreversible` at its
+    // declaration and is listed as not applying.
+    let control = std::path::absolute(&game_root)
+        .expect("absolute game root")
+        .join(KEEP)
+        .join("control.json");
     assert_eq!(
         root_invalid_warnings(&refused.warnings),
-        [goal_warning(
-            &game_root,
-            "goal_governs_irreversible",
-            "/entries/4/name"
-        )]
+        [
+            json!({
+                "code": ROOT_INVALID,
+                "values": {
+                    "game": GAME,
+                    "path": control.to_string_lossy(),
+                    "standard_pack_problem": StandardPackProblem::VariableOnIrreversible.as_str(),
+                    "json_pointer": "/variables/0"
+                }
+            }),
+            goal_warning(&game_root, "goal_governs_irreversible", "/entries/4/name"),
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(&refused.variable_provenance).expect("the listing"),
+        json!({
+            "pack": ["keep", "order", "enabled"],
+            "model": [],
+            "not_applying": [{
+                "name": "route",
+                "standard_pack_problem": StandardPackProblem::VariableOnIrreversible.as_str()
+            }]
+        })
     );
     assert_bundle_refuses_irreversible(
         packs_sharing_the_irreversible_capability(),

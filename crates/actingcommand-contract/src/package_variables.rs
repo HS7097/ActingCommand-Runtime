@@ -19,8 +19,10 @@
 //! The root check, [`check_root_variables`], holds the variables of a game root's packages to each
 //! other and to its `goals.json`: a name several packages declare is one variable only when their
 //! declarations are byte-identical, no entry of `goals.json` uses it for anything but its
-//! placement, the root declares at most [`MAX_ROOT_VARIABLES`] names, and an `integer` variable a
-//! package reads as a designated effect's cap declares a `max` of [`MAX_VARIABLE_CAP`] at most. A
+//! placement, the root declares at most [`MAX_ROOT_VARIABLES`] names, no package that counts as
+//! able to do something irreversible by the whole root declares it (fix round 1: the rule of
+//! [`IrreversiblePackages`], the one the goal check holds a placement to), and a variable a package
+//! reads as a designated effect's cap is an `integer` from 0 to at most [`MAX_VARIABLE_CAP`]. A
 //! name that breaks one of these is reported and does not apply; the root still runs.
 //!
 //! Only the declaration is built here: nothing resolves a value, nothing overlays
@@ -30,8 +32,8 @@
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
 use crate::standard_pack_goals::{
     Check, GoalBlock, GoalOption, GoalText, GoalTimeUnit, GoalUnit, GoalVariable,
-    MAX_GOAL_CHOICE_OPTIONS, MAX_GOAL_ENTRIES, MAX_GOAL_LIST_VALUES, MAX_GOAL_NAME_BYTES,
-    MAX_GOAL_ORDERED_COUNT, MIN_GOAL_CHOICE_OPTIONS, bounded,
+    IrreversiblePackages, MAX_GOAL_CHOICE_OPTIONS, MAX_GOAL_ENTRIES, MAX_GOAL_LIST_VALUES,
+    MAX_GOAL_NAME_BYTES, MAX_GOAL_ORDERED_COUNT, MIN_GOAL_CHOICE_OPTIONS, bounded,
 };
 use crate::standard_pack_ui::{MAX_PACK_UI_TITLE_BYTES, at};
 use crate::{MAX_DESIGNATED_EFFECT_REPEATS, ProvidedCapability, remedy_token_valid};
@@ -682,19 +684,25 @@ pub struct AppliedVariable {
 }
 
 /// What the root check found: the variables that apply, each once in the order the root first
-/// declares it, and the problems, name by name in that order, each declaration in registry
-/// order.
+/// declares it; the problems, name by name in that order, each declaration in registry order;
+/// and (fix round 1) the variables that do not apply because a package that counts as able to do
+/// something irreversible by the whole root declares them, each once in that order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RootVariables {
     pub applied: Vec<AppliedVariable>,
     pub issues: Vec<RootVariableIssue>,
+    pub not_applying: Vec<NotApplyingVariable>,
 }
 
 impl RootVariables {
     /// The provenance listing of `standard-pack check`: each variable that applies by who wrote
-    /// its default, in the order of [`Self::applied`].
+    /// its default, in the order of [`Self::applied`], and (fix round 1) each variable of
+    /// [`Self::not_applying`] with the word that says why it does not apply.
     pub fn provenance(&self) -> VariableOrigins {
-        let mut origins = VariableOrigins::default();
+        let mut origins = VariableOrigins {
+            not_applying: self.not_applying.clone(),
+            ..VariableOrigins::default()
+        };
         for variable in &self.applied {
             match variable.default_origin {
                 DefaultOrigin::Pack => origins.pack.push(variable.name.clone()),
@@ -706,11 +714,33 @@ impl RootVariables {
 }
 
 /// The names of a game root's variables by who wrote their default, each list in the root's
-/// order: no `default_origin` (`pack`), or `"model"` (`model`).
+/// order: no `default_origin` (`pack`), or `"model"` (`model`); and (fix round 1) under
+/// `not_applying`, absent when empty, each variable that a package which counts as able to do
+/// something irreversible by the whole root declares, which does not apply although its
+/// declarations agree.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct VariableOrigins {
     pub pack: Vec<String>,
     pub model: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_applying: Vec<NotApplyingVariable>,
+}
+
+/// Fix round 1: a variable of the provenance listing that does not apply, by its name, and the
+/// word of the root check's warning that says why (`variable_on_irreversible`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NotApplyingVariable {
+    pub name: String,
+    #[serde(serialize_with = "problem_word")]
+    pub standard_pack_problem: StandardPackProblem,
+}
+
+/// A problem as its word.
+fn problem_word<S: serde::Serializer>(
+    problem: &StandardPackProblem,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(problem.as_str())
 }
 
 /// The root check of the variables `packages` declare (the root's packages in registry order),
@@ -722,12 +752,20 @@ pub struct VariableOrigins {
 /// - `variable_conflict`: the declarations of the name are not byte-identical (compared as written,
 ///   member order included, in compact JSON), at each declaration; or an entry of `goals.json`
 ///   uses the name, at each declaration's `name`;
-/// - `variable_cap_range`: the variable is an `integer` whose `max` is above
-///   [`MAX_VARIABLE_CAP`] and a package that declares it reads a designated effect's cap from its
-///   fact key ([`PackageVariable::fact_key`]), at that package's declaration's `max`.
+/// - `variable_on_irreversible` (fix round 1): a package that declares it counts as able to do
+///   something irreversible by the whole root, as `irreversible` judges it
+///   ([`IrreversiblePackages::counts_irreversible`], the one copy of the rule the goal check holds
+///   a placement to; a package it was not told of counts), at each such package's declaration;
+///   the name is listed in [`RootVariables::not_applying`];
+/// - `variable_cap_range`: a package that declares it reads a designated effect's cap from its
+///   fact key ([`PackageVariable::fact_key`]) and the variable is no `integer` from 0 to at most
+///   [`MAX_VARIABLE_CAP`], at that package's declaration's `type` (fix round 1: another type; a
+///   cap is read from an `integer` only), `min` (fix round 1: below 0) or `max` (above
+///   [`MAX_VARIABLE_CAP`]), the first of these that holds.
 pub fn check_root_variables(
     packages: &[RootPackageVariables],
     goal_names: &BTreeSet<&str>,
+    irreversible: &IrreversiblePackages,
 ) -> RootVariables {
     let root = RootDeclarations::of(packages);
     let mut checked = RootVariables::default();
@@ -739,8 +777,15 @@ pub fn check_root_variables(
             continue;
         };
         let first = variable_at(packages, first_at);
-        let Some(refusal) = refusal_of(packages, position, name, declarations, first, goal_names)
-        else {
+        let Some(refusal) = refusal_of(
+            packages,
+            position,
+            name,
+            declarations,
+            first,
+            goal_names,
+            irreversible,
+        ) else {
             checked.applied.push(AppliedVariable {
                 name: (*name).to_owned(),
                 packages: declarations
@@ -751,6 +796,13 @@ pub fn check_root_variables(
             });
             continue;
         };
+        // Fix round 1: the provenance listing marks such a variable as not applying, with why.
+        if refusal.problem == StandardPackProblem::VariableOnIrreversible {
+            checked.not_applying.push(NotApplyingVariable {
+                name: (*name).to_owned(),
+                standard_pack_problem: refusal.problem,
+            });
+        }
         for (package, variable) in refusal.declarations {
             let at_variable = format!("{VARIABLES_POINTER}/{variable}");
             let pointer = match refusal.member {
@@ -784,7 +836,8 @@ fn variable_at(
 }
 
 /// The first rule of [`check_root_variables`] the name `name`, the root's `position`th
-/// (from 0), breaks with its `declarations`, the first of them `first`; `None` when it applies.
+/// (from 0), breaks with its `declarations`, the first of them `first`, against `goal_names` and
+/// the root's judgement of irreversibility `irreversible`; `None` when it applies.
 fn refusal_of(
     packages: &[RootPackageVariables],
     position: usize,
@@ -792,6 +845,7 @@ fn refusal_of(
     declarations: &[(usize, usize)],
     first: &PackageVariable,
     goal_names: &BTreeSet<&str>,
+    irreversible: &IrreversiblePackages,
 ) -> Option<Refusal> {
     let every = |problem, member| {
         Some(Refusal {
@@ -813,22 +867,43 @@ fn refusal_of(
     if goal_names.contains(name) {
         return every(StandardPackProblem::VariableConflict, Some("name"));
     }
-    // A designated effect's cap reads a value from 0 to 1000 before the run's first step.
-    let VariableKind::Integer { max, .. } = &first.kind else {
-        return None;
-    };
-    if *max <= MAX_VARIABLE_CAP {
-        return None;
+    // Fix round 1: the whole root's judgement, the one copy the goal check holds a placement to.
+    // Admission keeps variables off a package that marks an irreversible capability itself; a
+    // package that provides one unmarked, or whose remedies list one, is judged here.
+    let on_irreversible = declarations
+        .iter()
+        .copied()
+        .filter(|(package, _)| irreversible.counts_irreversible(&packages[*package].package_id))
+        .collect::<Vec<_>>();
+    if !on_irreversible.is_empty() {
+        return Some(Refusal {
+            problem: StandardPackProblem::VariableOnIrreversible,
+            member: None,
+            declarations: on_irreversible,
+        });
     }
+    // A designated effect's cap reads a whole number from 0 to 1000 before the run's first step,
+    // from an `integer` variable only (fix round 1: its `min` and any other type too).
     let key = first.fact_key();
     let readers = declarations
         .iter()
         .copied()
         .filter(|(package, _)| packages[*package].cap_fact_keys.contains(&key))
         .collect::<Vec<_>>();
-    (!readers.is_empty()).then_some(Refusal {
+    if readers.is_empty() {
+        return None;
+    }
+    let member = match &first.kind {
+        VariableKind::Integer { min, .. } if *min < 0 => "min",
+        VariableKind::Integer { max, .. } if *max > MAX_VARIABLE_CAP => "max",
+        VariableKind::Integer { .. } => return None,
+        VariableKind::Choice { .. }
+        | VariableKind::Switch { .. }
+        | VariableKind::Ordered { .. } => "type",
+    };
+    Some(Refusal {
         problem: StandardPackProblem::VariableCapRange,
-        member: Some("max"),
+        member: Some(member),
         declarations: readers,
     })
 }

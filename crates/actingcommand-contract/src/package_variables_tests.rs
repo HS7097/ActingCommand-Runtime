@@ -8,7 +8,9 @@
 //! differing one, a name a `goals.json` entry uses, a 97th name and an `integer` read as a cap
 //! above 1000 do not apply, each reported at its pointer; the provenance listing names each
 //! variable that applies by its default's origin. A placement is held to the variables the root
-//! declares. Every package, name, option and text is made up.
+//! declares. Fix round 1: a variable of a package that counts as irreversible by the whole root
+//! does not apply and is listed so, and a cap read from a negative `min` or from a variable of
+//! another type is reported. Every package, name, option and text is made up.
 
 use super::*;
 use crate::standard_pack_goals::{
@@ -473,13 +475,36 @@ fn applied(checked: &RootVariables) -> Vec<(&str, Vec<&str>)> {
         .collect()
 }
 
+/// Fix round 1: the rule of irreversibility over the root of `packages`, every one of them read,
+/// providing nothing and listing no remedy.
+fn nothing_irreversible(packages: &[RootPackageVariables]) -> IrreversiblePackages {
+    IrreversiblePackages::new(
+        packages
+            .iter()
+            .map(|package| {
+                let nothing = DeclaredCapabilities {
+                    provides: BTreeMap::new(),
+                    remedies: BTreeSet::new(),
+                };
+                (package.package_id.clone(), Some(nothing))
+            })
+            .collect(),
+    )
+}
+
+/// [`check_root_variables`] of `packages` against `goal_names` on a root where no package can do
+/// something irreversible ([`nothing_irreversible`]).
+fn root_check(packages: &[RootPackageVariables], goal_names: &BTreeSet<&str>) -> RootVariables {
+    check_root_variables(packages, goal_names, &nothing_irreversible(packages))
+}
+
 #[test]
 fn v1_root_check_shares_identical_declarations_and_refuses_the_rest() {
     use StandardPackProblem::{VariableCapRange, VariableConflict, VariableOutOfLimits};
     let none = BTreeSet::new();
 
     // Identical declarations in two packages are one variable with both packages.
-    let shared = check_root_variables(
+    let shared = root_check(
         &[
             package("neutral.a", json!([floor(200)]), &[]),
             package("neutral.b", json!([floor(200), switch("extra")]), &[]),
@@ -507,7 +532,7 @@ fn v1_root_check_shares_identical_declarations_and_refuses_the_rest() {
         ("another max", floor(100)),
         ("another member order", Value::Object(reordered)),
     ] {
-        let differing = check_root_variables(
+        let differing = root_check(
             &[
                 package("neutral.a", json!([switch("extra"), floor(200)]), &[]),
                 package("neutral.b", json!([other]), &[]),
@@ -530,7 +555,7 @@ fn v1_root_check_shares_identical_declarations_and_refuses_the_rest() {
     }
 
     // A name an entry of goals.json uses for anything but its placement.
-    let colliding = check_root_variables(
+    let colliding = root_check(
         &[package("neutral.a", json!([floor(200)]), &[])],
         &BTreeSet::from(["floor"]),
     );
@@ -554,7 +579,7 @@ fn v1_root_check_shares_identical_declarations_and_refuses_the_rest() {
         })
         .collect::<Vec<_>>();
     packages.push(package("neutral.p6", json!([switch("v096")]), &[]));
-    let crowded = check_root_variables(&packages, &none);
+    let crowded = root_check(&packages, &none);
     assert_eq!(
         crowded.issues,
         [root_issue(
@@ -568,7 +593,7 @@ fn v1_root_check_shares_identical_declarations_and_refuses_the_rest() {
     // An integer read as a designated effect's cap declares a max of 1000 at most; one above is
     // reported at the reading package's max, and the variable applies in no package.
     let cap = "session.dispatch.parameter.floor";
-    let capped = check_root_variables(
+    let capped = root_check(
         &[
             package("neutral.a", json!([floor(2000)]), &[cap]),
             package("neutral.b", json!([floor(2000)]), &[]),
@@ -594,7 +619,7 @@ fn v1_root_check_shares_identical_declarations_and_refuses_the_rest() {
             vec![package("neutral.a", json!([floor(2000)]), &[])],
         ),
     ] {
-        let passed = check_root_variables(&root, &none);
+        let passed = root_check(&root, &none);
         assert!(passed.issues.is_empty(), "{case}: {:?}", passed.issues);
         assert_eq!(applied(&passed), [("floor", vec!["neutral.a"])], "{case}");
     }
@@ -602,7 +627,7 @@ fn v1_root_check_shares_identical_declarations_and_refuses_the_rest() {
 
 #[test]
 fn v1_provenance_lists_each_variable_by_its_default_s_origin() {
-    let checked = check_root_variables(
+    let checked = root_check(
         &[
             package("neutral.a", declared(), &[]),
             package(
@@ -620,12 +645,185 @@ fn v1_provenance_lists_each_variable_by_its_default_s_origin() {
         VariableOrigins {
             pack: owned(&["floor", "order", "extra", "other"]),
             model: owned(&["pick"]),
+            not_applying: Vec::new(),
         }
     );
     assert_eq!(
         serde_json::to_value(&provenance).expect("the listing"),
         json!({"pack": ["floor", "order", "extra", "other"], "model": ["pick"]})
     );
+}
+
+// Fix round 1 (the coordinator's ruling of 11-14 on the review's suggestions 2 to 4): the root
+// check judges irreversibility over the whole root with the goal check's rule. `neutral.marks`
+// marks `cap_x` irreversible and declares no variable (admission keeps it so); `neutral.provides`
+// provides `cap_x` unmarked and declares `floor` and `extra`; a remedy of `neutral.blocked` lists
+// `cap_x` and it declares `other`; `neutral.keeps` provides `cap_y` and declares `extra`, as
+// `neutral.provides` does, and `own`. Each variable of the two packages that count is
+// `variable_on_irreversible` at its declaration there and nothing else, `extra` at
+// `neutral.provides` only, and none of them applies in any package: only `own` applies, and the
+// provenance listing marks the three as not applying with the word. A package the judgement was
+// not told of counts as irreversible.
+#[test]
+fn v1_root_check_holds_a_variable_of_a_package_irreversible_by_the_root() {
+    use StandardPackProblem::VariableOnIrreversible;
+    let none = BTreeSet::new();
+    let read = |provides: &[(&str, bool)], remedies: &[&str]| {
+        Some(DeclaredCapabilities {
+            provides: provides
+                .iter()
+                .map(|(capability, marked)| ((*capability).to_owned(), *marked))
+                .collect(),
+            remedies: remedies
+                .iter()
+                .map(|capability| (*capability).to_owned())
+                .collect(),
+        })
+    };
+    let packages = [
+        RootPackageVariables {
+            package_id: "neutral.marks".to_owned(),
+            variables: Vec::new(),
+            cap_fact_keys: Vec::new(),
+        },
+        package(
+            "neutral.provides",
+            json!([floor(200), switch("extra")]),
+            &[],
+        ),
+        package("neutral.blocked", json!([switch("other")]), &[]),
+        package(
+            "neutral.keeps",
+            json!([switch("extra"), switch("own")]),
+            &[],
+        ),
+    ];
+    let irreversible = IrreversiblePackages::new(BTreeMap::from([
+        ("neutral.marks".to_owned(), read(&[("cap_x", true)], &[])),
+        (
+            "neutral.provides".to_owned(),
+            read(&[("cap_x", false)], &[]),
+        ),
+        ("neutral.blocked".to_owned(), read(&[], &["cap_x"])),
+        ("neutral.keeps".to_owned(), read(&[("cap_y", false)], &[])),
+    ]));
+    let checked = check_root_variables(&packages, &none, &irreversible);
+    assert_eq!(
+        checked.issues,
+        [
+            root_issue("neutral.provides", VariableOnIrreversible, "/variables/0"),
+            root_issue("neutral.provides", VariableOnIrreversible, "/variables/1"),
+            root_issue("neutral.blocked", VariableOnIrreversible, "/variables/0"),
+        ]
+    );
+    assert_eq!(applied(&checked), [("own", vec!["neutral.keeps"])]);
+    let not_applying = |name: &str| NotApplyingVariable {
+        name: name.to_owned(),
+        standard_pack_problem: VariableOnIrreversible,
+    };
+    let provenance = checked.provenance();
+    assert_eq!(
+        provenance,
+        VariableOrigins {
+            pack: owned(&["own"]),
+            model: Vec::new(),
+            not_applying: vec![
+                not_applying("floor"),
+                not_applying("extra"),
+                not_applying("other"),
+            ],
+        }
+    );
+    let word = VariableOnIrreversible.as_str();
+    assert_eq!(
+        serde_json::to_value(&provenance).expect("the listing"),
+        json!({
+            "pack": ["own"],
+            "model": [],
+            "not_applying": [
+                {"name": "floor", "standard_pack_problem": word},
+                {"name": "extra", "standard_pack_problem": word},
+                {"name": "other", "standard_pack_problem": word}
+            ]
+        })
+    );
+
+    // The safe side: a package the judgement was not told of counts as irreversible.
+    let untold = [package("neutral.keeps", json!([switch("own")]), &[])];
+    let told_nothing =
+        check_root_variables(&untold, &none, &IrreversiblePackages::new(BTreeMap::new()));
+    assert_eq!(
+        told_nothing.issues,
+        [root_issue(
+            "neutral.keeps",
+            VariableOnIrreversible,
+            "/variables/0"
+        )]
+    );
+    assert!(told_nothing.applied.is_empty());
+}
+
+// Fix round 1 (the review's suggestion 6): a designated effect's cap is not negative, so an
+// `integer` read as a cap whose `min` is below 0 is `variable_cap_range` at the reading package's
+// `min` only, and the variable applies in no package; the same variable read by no package as a
+// cap applies.
+#[test]
+fn v1_a_cap_variable_with_a_negative_min_is_reported_at_its_min() {
+    use StandardPackProblem::VariableCapRange;
+    let none = BTreeSet::new();
+    let negative = || {
+        json!({"name": "floor", "type": "integer", "title": {"en": "Keep at least"},
+               "min": -10, "max": 200, "step": 10, "default": 0})
+    };
+    let cap = "session.dispatch.parameter.floor";
+    let capped = root_check(
+        &[
+            package("neutral.a", json!([negative()]), &[cap]),
+            package("neutral.b", json!([negative()]), &[]),
+        ],
+        &none,
+    );
+    assert_eq!(
+        capped.issues,
+        [root_issue(
+            "neutral.a",
+            VariableCapRange,
+            "/variables/0/min"
+        )]
+    );
+    assert!(capped.applied.is_empty());
+    let unread = root_check(&[package("neutral.a", json!([negative()]), &[])], &none);
+    assert!(unread.issues.is_empty(), "{:?}", unread.issues);
+    assert_eq!(applied(&unread), [("floor", vec!["neutral.a"])]);
+}
+
+// Fix round 1 (the review's suggestion 6): a cap is read from an `integer` variable only, so a
+// choice, an ordered list and a switch read as a designated effect's cap are each
+// `variable_cap_range` at the declaration's `type`, and none applies.
+#[test]
+fn v1_a_cap_read_from_a_variable_of_another_type_is_reported_at_its_type() {
+    use StandardPackProblem::VariableCapRange;
+    let none = BTreeSet::new();
+    // The choice, the ordered list and the switch of [`declared`].
+    for index in [0, 2, 3] {
+        let variable = declared()[index].clone();
+        let name = variable["name"].as_str().expect("a name").to_owned();
+        let cap = format!("session.dispatch.parameter.{name}");
+        let checked = root_check(
+            &[package("neutral.a", json!([variable]), &[cap.as_str()])],
+            &none,
+        );
+        assert_eq!(
+            checked.issues,
+            [root_issue(
+                "neutral.a",
+                VariableCapRange,
+                "/variables/0/type"
+            )],
+            "{name}"
+        );
+        assert!(checked.applied.is_empty(), "{name}");
+    }
 }
 
 #[test]

@@ -12,16 +12,21 @@
 // - `v1_a_bundle_at_revision_14_is_planned_here_and_refused_by_an_earlier_installer`: on an
 //   installer of [3, 14] the bundle that declares [14, 14] is planned (its pack and `bundle.json`
 //   new, exit 0, no pause); on one of [3, 13] the same bundle is refused `interface_edge` at its
-//   `interfaces.json` before the hold: no pause, no journal, nothing in the game root.
+//   `interfaces.json` before the hold: no pause, no journal, nothing in the game root;
+// - fix round 1 (`rd-1114/brief-1723-fix1.md`, item 4),
+//   `v1_a_bundle_whose_packs_declare_variables_below_revision_14_is_refused_variable_undeclared`:
+//   on this build's installer, the same bundle declaring [3, 13] is refused `pack_invalid` caused
+//   by `variable_undeclared` at its `interfaces.json`, naming the pack, before the hold, as a
+//   bundle that carries `goals.json` and declares less than 12 is refused `goal_undeclared`.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
-// sleep; every root is a temporary folder with neutral files. `place` reads a pack's files by
-// name only: the variables the pack's control declares are admission's.
+// sleep; every root is a temporary folder with neutral files. `place` reads of a pack's control
+// only whether it declares `variables` (fix round 1): what the variables declare is admission's.
 
 use super::fixture::{BuildSpec, C1, FakeHost, code, live_root, run, speaks, word, write_json};
 use super::manifest::parse_declaration;
 use crate::agent_channel::Answer as Answered;
 use crate::rescue::{self, Context};
-use actingcommand_contract::VARIABLES_PACKAGE_REVISION;
+use actingcommand_contract::{StandardPackProblem, VARIABLES_PACKAGE_REVISION};
 use actingcommand_lab_ops::initiator::Initiator;
 use serde_json::{Map, Value, json};
 use std::fs;
@@ -44,7 +49,11 @@ const INSTALLER_PACKAGE: [u64; 2] = [3, VARIABLES_PACKAGE_REVISION];
 const EARLIER_INSTALLER_PACKAGE: [u64; 2] = [3, VARIABLES_PACKAGE_REVISION - 1];
 /// What a bundle whose packages declare variables declares.
 const VARIABLES_BUNDLE_PACKAGE: [u64; 2] = [VARIABLES_PACKAGE_REVISION, VARIABLES_PACKAGE_REVISION];
-/// A made-up control declaration with one variable; `place` does not read it.
+/// Fix round 1: what a bundle whose packages declare variables and that does not declare their
+/// revision declares, within this build's installer's range.
+const UNDECLARED_BUNDLE_PACKAGE: [u64; 2] = [3, VARIABLES_PACKAGE_REVISION - 1];
+/// A made-up control declaration with one variable; `place` reads only that it declares
+/// `variables` (fix round 1).
 const CONTROL: &[u8] = br#"{"package_id": "neutral.pack", "variables": [{"name": "extra", "type": "switch", "title": {"en": "Extra"}, "default": false}]}"#;
 
 #[test]
@@ -60,11 +69,11 @@ fn v1_the_build_declares_package_through_revision_14() {
 }
 
 /// Writes the neutral bundle zip of [`GAME`] to `path`: its `bundle.json`, an `interfaces.json`
-/// that declares `package` [`VARIABLES_BUNDLE_PACKAGE`], and the pack [`PACK`], every member
-/// stored.
-fn write_bundle(path: &Path) {
+/// that declares `package` `package` ([`VARIABLES_BUNDLE_PACKAGE`] for a bundle that declares
+/// the revision), and the pack [`PACK`], every member stored.
+fn write_bundle(path: &Path, package: [u64; 2]) {
     let mut declared = speaks();
-    declared["package"] = json!(VARIABLES_BUNDLE_PACKAGE);
+    declared["package"] = json!(package);
     let interfaces = serde_json::to_vec(&json!({
         "schema_version": "actingcommand.component-interfaces.v1",
         "speaks": declared,
@@ -199,7 +208,7 @@ fn v1_a_bundle_at_revision_14_is_planned_here_and_refused_by_an_earlier_installe
     let host = FakeHost::new(&temp.path().join("work"));
     let (root, _game_root) = prepared(temp.path(), &host, INSTALLER_PACKAGE);
     let zip = temp.path().join("neutral-variables.zip");
-    write_bundle(&zip);
+    write_bundle(&zip, VARIABLES_BUNDLE_PACKAGE);
     let (planned, exit) = place(&host, &root, &zip, true);
     assert_eq!(exit, 0, "{planned}");
     assert_eq!(
@@ -214,7 +223,7 @@ fn v1_a_bundle_at_revision_14_is_planned_here_and_refused_by_an_earlier_installe
     let (root, game_root) = prepared(earlier.path(), &host, EARLIER_INSTALLER_PACKAGE);
     let before = journal_count(&root);
     let zip = earlier.path().join("neutral-variables.zip");
-    write_bundle(&zip);
+    write_bundle(&zip, VARIABLES_BUNDLE_PACKAGE);
     let (refused, exit) = place(&host, &root, &zip, false);
     assert_eq!(exit, 1, "{refused}");
     assert_eq!(
@@ -230,6 +239,76 @@ fn v1_a_bundle_at_revision_14_is_planned_here_and_refused_by_an_earlier_installe
         refused["outcome"]["values"]["path"],
         json!(canonical.join("interfaces.json").to_string_lossy())
     );
+    assert!(
+        calls_of(&host, "pause ").is_empty(),
+        "{:?}",
+        host.runtime.calls.borrow()
+    );
+    assert_eq!(journal_count(&root), before);
+    assert!(
+        fs::read_dir(&game_root)
+            .expect("the game root")
+            .next()
+            .is_none(),
+        "the game root holds nothing"
+    );
+}
+
+/// The values of the first outcome with `code` anywhere in `line` (an outcome or one of its
+/// causes).
+fn values_of<'a>(line: &'a Value, code: &str) -> Option<&'a Value> {
+    match line {
+        Value::Object(members) => {
+            if members.get("code").and_then(Value::as_str) == Some(code) {
+                return members.get("values");
+            }
+            members.values().find_map(|inner| values_of(inner, code))
+        }
+        Value::Array(items) => items.iter().find_map(|inner| values_of(inner, code)),
+        _ => None,
+    }
+}
+
+// Fix round 1 (`rd-1114/brief-1723-fix1.md`, item 4), as
+// `goals_bundle_that_does_not_declare_revision_12_is_refused_goal_undeclared` holds
+// `goal_undeclared`: on this build's installer ([3, 14]) the bundle whose pack declares variables
+// and that declares [3, 13], within the installer's range, is refused `pack_invalid` caused by
+// `standard_pack_root_invalid` with `variable_undeclared` at its `interfaces.json`, the pointer
+// empty, naming the pack, in the plan: no pause, no journal, nothing in the game root.
+#[test]
+fn v1_a_bundle_whose_packs_declare_variables_below_revision_14_is_refused_variable_undeclared() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, game_root) = prepared(temp.path(), &host, INSTALLER_PACKAGE);
+    let before = journal_count(&root);
+    let zip = temp.path().join("neutral-undeclared.zip");
+    write_bundle(&zip, UNDECLARED_BUNDLE_PACKAGE);
+    let (refused, exit) = place(&host, &root, &zip, false);
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(
+        refused["outcome"]["code"], "install_command_refused",
+        "{refused}"
+    );
+    assert_eq!(
+        refused["outcome"]["values"]["install_refusal"], "pack_invalid",
+        "{refused}"
+    );
+    let cause = values_of(&refused, "standard_pack_root_invalid")
+        .unwrap_or_else(|| panic!("no standard_pack_root_invalid in {refused}"));
+    let canonical = fs::canonicalize(&zip).expect("the canonical bundle");
+    assert_eq!(
+        cause["standard_pack_problem"],
+        StandardPackProblem::VariableUndeclared.as_str(),
+        "{cause}"
+    );
+    assert_eq!(
+        cause["path"],
+        json!(canonical.join("interfaces.json").to_string_lossy()),
+        "{cause}"
+    );
+    assert_eq!(cause["json_pointer"], "", "{cause}");
+    assert_eq!(cause["game"], GAME, "{cause}");
+    assert_eq!(cause["package_id"], PACK, "{cause}");
     assert!(
         calls_of(&host, "pause ").is_empty(),
         "{:?}",

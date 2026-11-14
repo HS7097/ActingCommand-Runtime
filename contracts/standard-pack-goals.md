@@ -320,8 +320,16 @@ whose packages declare the variables a placement names declares `package` [14, 1
      `goal_governs_irreversible` too.
   2. **No entry kind writes anything else**: not a remedy choice or a capability's parameter
      (those stay in the remedy layer), not a configuration key, not a pack switch. The one run value
-     an entry sets is a package's variable ([package-variables.md](package-variables.md)), and a
-     package that can do something irreversible declares none. Packages keep their own refusals of
+     an entry sets is a package's variable ([package-variables.md](package-variables.md)). Kernel
+     admission refuses `variables` on a package whose own `provides` marks a capability
+     irreversible (`variables_on_irreversible`); a package that counts as irreversible only by the
+     whole root (it provides such a capability unmarked, or its remedies list one) may declare
+     them, and then (Workflow #463 V1 fix round 1) `standard-pack check` reports each of its
+     variables `variable_on_irreversible`, the variable does not apply, and a placement of it is
+     `goal_governs_irreversible` (item 1). In V1 "does not apply" is a warning only: no run reads a
+     variable, and the slice that hands values to a run enforces it in the Runtime
+     ([package-variables.md](package-variables.md), "What is built now, and what is not").
+     Packages keep their own refusals of
      premium-currency and real-money buttons, and no package reads a goal for them.
   3. **Resource-side review**: the Runtime is game-neutral and cannot know which pool is a premium
      currency, so no `goals.json` of version 1 declares a premium-currency pool or an entry about

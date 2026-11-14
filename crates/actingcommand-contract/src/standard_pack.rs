@@ -76,7 +76,9 @@ crate::outcome_vocabulary! {
     /// fourteenth, `goal_out_of_limits`, since its fix round 1), and a bundle zip that carries it
     /// `goal_undeclared`. Workflow #463 V1 (since 0.12.60; [`crate::package_variables`]): the
     /// file's fifteenth, `goal_variable_unknown`, and the root check's three words of a package's
-    /// declared variables, `variable_conflict`, `variable_out_of_limits` and `variable_cap_range`.
+    /// declared variables, `variable_conflict`, `variable_out_of_limits` and `variable_cap_range`;
+    /// its fix round 1, the root check's fourth, `variable_on_irreversible`, and a bundle zip whose
+    /// packs declare variables `variable_undeclared`.
     pub enum StandardPackProblem: "standard_pack_problem" {
         /// The file is not JSON of the file's shape and version (for a table: not canonical
         /// JSON either, that is with a floating point number, an unsafe integer or a duplicate
@@ -282,8 +284,19 @@ crate::outcome_vocabulary! {
         VariableOutOfLimits => "variable_out_of_limits",
         /// Workflow #463 V1: an `integer` variable a package reads as the cap of a designated
         /// effect (`max_repeats` `{fact_key: "session.dispatch.parameter.<name>"}`) declares a
-        /// `max` above 1000 (at that package's declaration's `max`); it does not apply.
+        /// `max` above 1000 (at that package's declaration's `max`); fix round 1: or a `min`
+        /// below 0 (at its `min`), or a variable of another type is read as a cap (at its `type`:
+        /// a cap is read from an `integer` variable only); it does not apply.
         VariableCapRange => "variable_cap_range",
+        /// Workflow #463 V1 fix round 1: a variable a package declares that counts as able to do
+        /// something irreversible by the whole game root (it provides, unmarked, a capability
+        /// another package marks irreversible, or its remedies list one; the rule of
+        /// [`crate::IrreversiblePackages`]), at the declaration; no variable of that name applies.
+        VariableOnIrreversible => "variable_on_irreversible",
+        /// Workflow #463 V1 fix round 1: a bundle zip whose packs declare `variables` declares a
+        /// `package` interface maximum below 14. Refused by the installer's `place` at
+        /// `interfaces.json`, as `goal_undeclared` is.
+        VariableUndeclared => "variable_undeclared",
     }
 }
 

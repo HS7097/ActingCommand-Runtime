@@ -20,6 +20,9 @@
 //! runs the root check of the variables the root's packages declare ([`variable_report`]): each
 //! problem is a `standard_pack_root_invalid` warning naming the package's `control.json`, the root
 //! is checked as before, and the answer lists each variable that applies by its default's origin.
+//! Its fix round 1: the packages are judged by the rule of irreversibility over the whole root, the
+//! one the goal check uses, and a variable of a package that counts as irreversible is listed as
+//! not applying.
 
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{CHECK_LABEL, root_invalid, root_issue_outcome};
@@ -289,6 +292,10 @@ pub(crate) fn refuse_goals(
 /// order; and the provenance listing of the variables that apply, `None` when no package declares
 /// one. `goals` is the root's `goals.json` when it holds one: the names an accepted file uses for
 /// anything but a placement are no variable's (a refused file applies no entry, so it takes none).
+/// Fix round 1: the packages are judged by the rule of irreversibility over the whole root, from
+/// what the reader read of every package (`IrreversiblePackages::new`, the one copy the goal
+/// check holds a placement to), so a variable of a package that counts as irreversible is
+/// `variable_on_irreversible` and the listing marks it as not applying.
 pub(crate) fn variable_report(
     game: &str,
     root: &StandardPackRoot,
@@ -301,7 +308,15 @@ pub(crate) fn variable_report(
         .as_ref()
         .map(|goals| goals.names_besides_placements())
         .unwrap_or_default();
-    let checked = check_root_variables(&declarations.variables, &goal_names);
+    // Every package of the root was read (one the reader refuses is the check's error).
+    let irreversible = IrreversiblePackages::new(
+        declarations
+            .capabilities
+            .into_iter()
+            .map(|(package_id, declared)| (package_id, Some(declared)))
+            .collect(),
+    );
+    let checked = check_root_variables(&declarations.variables, &goal_names, &irreversible);
     let mut warnings = Vec::with_capacity(checked.issues.len());
     for found in &checked.issues {
         let entry = root

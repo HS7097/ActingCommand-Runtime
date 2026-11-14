@@ -91,10 +91,11 @@
 //!
 //! Workflow #463 V1 (register §1.378; contracts/package-variables.md): before the goal
 //! declaration, the root check of the variables the packages' control declarations declare: each
-//! problem (`variable_conflict`, `variable_out_of_limits`, `variable_cap_range`) is one
-//! `standard_pack_root_invalid` warning naming the package's `control.json`, and the answer's
-//! `variable_provenance` lists each variable that applies by its default's origin. A root whose
-//! packages declare no variable answers as before.
+//! problem (`variable_conflict`, `variable_out_of_limits`, `variable_cap_range` and, its fix round
+//! 1, `variable_on_irreversible`) is one `standard_pack_root_invalid` warning naming the package's
+//! `control.json`, and the answer's `variable_provenance` lists each variable that applies by its
+//! default's origin (and, fix round 1, under `not_applying` each variable of a package that counts
+//! as irreversible by the whole root). A root whose packages declare no variable answers as before.
 
 use crate::codes::ResourceToolingCode;
 use crate::notices_directory::game_root_notices;
