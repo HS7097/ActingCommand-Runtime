@@ -52,7 +52,7 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     APPLICATION_UPDATE_REQUIRED_FACT_KEY, BundleMaintenance, CatalogCompileWarning,
-    SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER, SCHEDULE_RULE_FIXED_VALUE_MEMBER,
+    IrreversiblePackages, SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER, SCHEDULE_RULE_FIXED_VALUE_MEMBER,
     SCHEDULE_RULE_REALIZATION_MEMBER, STANDARD_PACK_SCHEDULE_FILE, ScheduleItem, ScheduleMember,
     ScheduleRule, ScheduleValueOrigin, StandardPackClassification, StandardPackProblem,
     StandardPackRoot, StandardPackRootIssue, StandardPackSchedule, classify_standard_pack_packages,
@@ -96,6 +96,10 @@ pub struct StandardPackGameFiles<'a> {
     pub root: &'a StandardPackRoot,
     /// The bundle's `maintenance[]` entries.
     pub maintenance: &'a [BundleMaintenance],
+    /// Workflow #455 G-R2s (register §1.369): which packages of the root can do something
+    /// irreversible, by the whole root's declarations as the caller's reader read every package
+    /// `bundle.json` registers, and which could not be read. Required: no caller can leave it out.
+    pub irreversible: &'a IrreversiblePackages,
 }
 
 /// What [`compose_standard_pack_rules`] composes.
@@ -234,6 +238,16 @@ pub const POOL_TRIGGER_LINE_MEMBER: &str = "trigger_line";
 /// which a rule writes as any V2 member and the composer passes through, and which requires
 /// [`crate::QUEUE_WAIT_SUBSYSTEM`].
 pub const MAX_QUEUE_WAIT_MEMBER: &str = "max_queue_wait_ms";
+
+/// Workflow #455 G-R2s (register §1.369; `contracts/standard-pack-schedule.md`, "The irreversible
+/// mark"): the task member the composer writes, `true`, on a rule whose package can do something
+/// irreversible by its game root's declarations ([`IrreversiblePackages::counts_irreversible`],
+/// every task of a game whose root has a package that could not be read included), and on a rule
+/// that a rule running such a package follows by a chain link, directly or further down
+/// ([`standard_pack_rule_followers`]). Absent otherwise, so a root without such a package composes
+/// the bytes of before.
+/// A rule never writes it itself.
+pub const IRREVERSIBLE_REACH_MEMBER: &str = "irreversible_reach";
 
 /// SS-2b (register §1.225; Alice's ruling 116, 「业务覆盖完整」): how far one game's judged rules
 /// (those whose package is not maintenance-role and that do not declare themselves maintenance,
@@ -397,6 +411,9 @@ pub struct StandardPackComposition {
     redundant_triggers: Vec<(String, Vec<(String, String)>)>,
     /// #428 CW-1: the compiled catalog's warnings, placed and each once.
     compile_warnings: Vec<StandardPackCompileWarning>,
+    /// Workflow #455 G-R2s: each game whose `schedule.json` was read and whose root has a package
+    /// that could not be read, by game id, with those packages by id.
+    unreadable: Vec<(String, Vec<String>)>,
 }
 
 impl StandardPackComposition {
@@ -436,7 +453,10 @@ impl StandardPackComposition {
     /// One `standard_pack_package_unclassified` warning per unclassified package of a game in
     /// use (keys `game`, `package_id`); then, SS-2, one `standard_pack_priority_tiers_exceeded`
     /// per game whose composed rules use more than two distinct priority values (keys `game`,
-    /// `count` the number of values, `limit_count` 2), by game id.
+    /// `count` the number of values, `limit_count` 2), by game id; then, Workflow #455 G-R2s
+    /// (register §1.369), one `standard_pack_package_unreadable` per package whose declaration
+    /// could not be read, of a game whose `schedule.json` was read (keys `game`, `package_id`), by
+    /// game id, then package id: every composed task of that game carries the irreversible mark.
     pub fn warnings(&self) -> Vec<Outcome> {
         let unclassified = self.games.iter().flat_map(|game| {
             game.unclassified.iter().map(|package_id| {
@@ -451,7 +471,21 @@ impl StandardPackComposition {
                 .count(*count)
                 .limit_count(STANDARD_PACK_PRIORITY_TIERS)
         });
-        unclassified.chain(tiers).collect()
+        let unreadable = self.unreadable.iter().flat_map(|(game_id, packages)| {
+            packages.iter().map(move |package_id| {
+                Outcome::new(SharedCode::StandardPackPackageUnreadable)
+                    .game(game_id.as_str())
+                    .package_id(package_id.as_str())
+            })
+        });
+        unclassified.chain(tiers).chain(unreadable).collect()
+    }
+
+    /// Workflow #455 G-R2s (register §1.369): each game whose `schedule.json` was read and whose
+    /// root has a package that could not be read, by game id, with those packages by id. Every
+    /// composed task of such a game carries [`IRREVERSIBLE_REACH_MEMBER`].
+    pub fn unreadable_packages(&self) -> &[(String, Vec<String>)] {
+        &self.unreadable
     }
 
     /// SS-2b (register §1.225): one `standard_pack_benefit_undeclared` per judged rule that
@@ -499,7 +533,7 @@ impl StandardPackComposition {
         &self.followers
     }
 
-    /// Workflow #464 P3 (register §1.369; `contracts/standard-pack-schedule.md`, "Readiness"): the
+    /// Workflow #464 P3 (register §1.375; `contracts/standard-pack-schedule.md`, "Readiness"): the
     /// judged rules of each game whose `schedule.json` was read that count as *pending*, by game
     /// id, each game's rule ids in file order: the rules [`Self::benefit_coverage`] counts in
     /// `pending`. A static reading of the file, as the coverage is; it decides nothing. Only the
@@ -1190,12 +1224,23 @@ pub fn compose_standard_pack_rules(
     let mut mismatches = Vec::new();
     let mut escalations = Vec::new();
     let mut redundant = Vec::new();
+    let mut unreadable = Vec::new();
     for game in &read {
         let before = composed.tasks.len();
-        instantiate(game, &mut composed, &mut manifest, &mut issues);
+        // G-R2s: the rules a goal never weighs, by the whole root's declarations and every rule
+        // that follows them by a chain link.
+        let marked = irreversible_rules(game);
+        instantiate(game, &marked, &mut composed, &mut manifest, &mut issues);
         // SS-2b: how far the game's judged rules declare their values, counted once per rule.
         let (coverage, undeclared, riding, waiting) =
             benefit_coverage(&game.schedule, &game.classification);
+        let unread = game.files.irreversible.unreadable();
+        if !unread.is_empty() {
+            unreadable.push((
+                game.game_id.to_owned(),
+                unread.iter().cloned().collect::<Vec<_>>(),
+            ));
+        }
         benefit.push((game.game_id.to_owned(), coverage, undeclared));
         // #428 COV-1: the rules that ride with their chain, each with the rule it rides with.
         followers.push((game.game_id.to_owned(), riding));
@@ -1310,6 +1355,7 @@ pub fn compose_standard_pack_rules(
     mismatches.sort_by(|left, right| left.0.cmp(&right.0));
     escalations.sort_by(|left, right| left.0.cmp(&right.0));
     redundant.sort_by(|left, right| left.0.cmp(&right.0));
+    unreadable.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(StandardPackComposition {
         sources,
         compiled,
@@ -1326,7 +1372,93 @@ pub fn compose_standard_pack_rules(
         escalations,
         redundant_triggers: redundant,
         compile_warnings,
+        unreadable,
     })
+}
+
+/// Workflow #455 G-R2s (register §1.369; `contracts/standard-pack-schedule.md`, "The irreversible
+/// mark"): the ids of the rules of one game, not held, that carry [`IRREVERSIBLE_REACH_MEMBER`]:
+/// a rule whose package counts as irreversible by the game root's declarations
+/// ([`IrreversiblePackages::counts_irreversible`]: every rule while a package of the root could
+/// not be read), and a rule that a rule running such a package follows, directly or further down
+/// ([`standard_pack_rule_followers`]), by the walk the goal check runs
+/// ([`IrreversiblePackages::followers_irreversible`]). A follower the walk cannot place counts as
+/// irreversible.
+fn irreversible_rules<'a>(game: &'a ReadGame<'_>) -> BTreeSet<&'a str> {
+    let irreversible = game.files.irreversible;
+    let followers = standard_pack_rule_followers(&game.schedule);
+    let rules = game
+        .schedule
+        .rules
+        .iter()
+        .filter(|rule| !game.schedule.holds(&rule.package_id))
+        .map(|rule| (rule.id.as_str(), rule))
+        .collect::<BTreeMap<&'a str, &'a ScheduleRule>>();
+    let none: &[String] = &[];
+    let mut marked = BTreeSet::new();
+    for (rule_id, rule) in &rules {
+        let own = followers.get(*rule_id).map_or(none, Vec::as_slice);
+        let reaches = irreversible.counts_irreversible(&rule.package_id)
+            || irreversible.followers_irreversible(own, |follower_id| {
+                rules.get(follower_id).map(|follower| {
+                    (
+                        follower.package_id.as_str(),
+                        followers.get(follower_id).map_or(none, Vec::as_slice),
+                    )
+                })
+            });
+        if reaches {
+            marked.insert(*rule_id);
+        }
+    }
+    marked
+}
+
+/// Workflow #455 G-R2s fix round 1 (register §1.369; `contracts/standard-pack-schedule.md`, "The
+/// irreversible mark"): the rules that follow each rule of one game's `schedule.json`, by the
+/// rule's file id, each list in file order. A rule follows another when its trigger has a chain
+/// link to it as the evaluator reads one (`required_predecessors`, `contracts/scheduling/README.md`,
+/// "Ties and chain heads"): a `dependency_completed` reached from the trigger's root only through
+/// `all` whose `terminal_states` holds `succeeded`, whatever else it accepts and whether it writes
+/// `since_own_run`, a link to the rule itself excepted; both rules not held (a held rule is no task
+/// of the catalog, and the evaluator's walk passes no link to one). A rule with its own `produces`
+/// or its own value follows as any other.
+///
+/// Which of these rules rides with which head the evaluator decides by each run's state (the link
+/// whose latest run succeeded and is not served yet, its dispatch against the next link's), which
+/// no composition knows; so every link counts, the safe side: walked through further followers
+/// ([`IrreversiblePackages::followers_irreversible`]), these lists name every rule that can ride
+/// with a rule or run after it. The composer's mark and the goal check (`GoalRule::followers`)
+/// read these same lists.
+pub fn standard_pack_rule_followers(
+    schedule: &StandardPackSchedule,
+) -> BTreeMap<String, Vec<String>> {
+    let composed = schedule
+        .rules
+        .iter()
+        .filter(|rule| !schedule.holds(&rule.package_id))
+        .map(|rule| rule.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut followers = BTreeMap::<String, Vec<String>>::new();
+    for rule in &schedule.rules {
+        if !composed.contains(rule.id.as_str()) {
+            continue;
+        }
+        let mut required = Vec::new();
+        if let Some(trigger) = rule.body.get("trigger") {
+            required_nodes(trigger, &mut required);
+        }
+        let mut linked = BTreeSet::new();
+        for (task_id, _) in required.into_iter().filter_map(chain_link) {
+            if task_id != rule.id
+                && composed.contains(task_id.as_str())
+                && linked.insert(task_id.clone())
+            {
+                followers.entry(task_id).or_default().push(rule.id.clone());
+            }
+        }
+    }
+    followers
 }
 
 /// Reads one game's `schedule.json` (step 2): the contract reader, `requires` against
@@ -1591,6 +1723,26 @@ fn read_game(
             format!(
                 "{BENEFIT_FIXED_VALUE_MEMBER} is the composer's: a rule writes its value as \
                  {SCHEDULE_RULE_FIXED_VALUE_MEMBER}"
+            ),
+        ));
+    }
+    // Workflow #455 G-R2s (register §1.369): likewise the irreversible mark is the composer's,
+    // written from the game root's package declarations; a rule that wrote it would decide its
+    // own safety line.
+    if let Some(index) = schedule
+        .rules
+        .iter()
+        .position(|rule| rule.body.contains_key(IRREVERSIBLE_REACH_MEMBER))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}/{IRREVERSIBLE_REACH_MEMBER}"),
+            ),
+            format!(
+                "{IRREVERSIBLE_REACH_MEMBER} is the composer's: it marks every rule whose package, \
+                 or a rule that follows it, can do something irreversible by the game root's \
+                 declarations"
             ),
         ));
     }
@@ -1971,9 +2123,11 @@ fn fact_reference_in(node: &Value, pointer: &str, kind: &str) -> Option<String> 
 
 /// Instantiates one game per bound instance (steps 3 and 4), adding each composed rule's
 /// procedure to `manifest`; a package id another game's composed rules already use is
-/// `rule_id_conflict` at the rule's `package_id`.
+/// `rule_id_conflict` at the rule's `package_id`. G-R2s: each rule of `marked` carries
+/// [`IRREVERSIBLE_REACH_MEMBER`] in every copy.
 fn instantiate(
     game: &ReadGame<'_>,
+    marked: &BTreeSet<&str>,
     composed: &mut Composed,
     manifest: &mut BTreeMap<String, ComposedProcedure>,
     issues: &mut Vec<StandardPackRuleIssue>,
@@ -2048,7 +2202,13 @@ fn instantiate(
             // SS-2b: a rule whose package is not maintenance-role is judged by its net benefit;
             // SS-2c: unless it declares itself maintenance.
             composed.tasks.push((
-                compose_task(rule, alias, &copies, judged(rule, &game.classification)),
+                compose_task(
+                    rule,
+                    alias,
+                    &copies,
+                    judged(rule, &game.classification),
+                    marked.contains(rule.id.as_str()),
+                ),
                 origin(ScheduleMember::Rules, *index),
             ));
         }
@@ -2099,8 +2259,14 @@ fn instance_scope(alias: &str) -> Value {
 }
 
 /// One rule's task for the instance `alias` (steps 3 and 4); SS-2b: with `judged`, marked
-/// `benefit_judged: true`.
-fn compose_task(rule: &ScheduleRule, alias: &str, copies: &Copies<'_>, judged: bool) -> Value {
+/// `benefit_judged: true`; G-R2s: with `irreversible`, marked `irreversible_reach: true`.
+fn compose_task(
+    rule: &ScheduleRule,
+    alias: &str,
+    copies: &Copies<'_>,
+    judged: bool,
+    irreversible: bool,
+) -> Value {
     let mut task = Map::new();
     task.insert(
         "id".to_owned(),
@@ -2149,6 +2315,10 @@ fn compose_task(rule: &ScheduleRule, alias: &str, copies: &Copies<'_>, judged: b
         if let Some(value) = &rule.fixed_value_milli {
             task.insert(BENEFIT_FIXED_VALUE_MEMBER.to_owned(), value.clone());
         }
+    }
+    // G-R2s: absent when false, so a task the mark does not reach keeps its bytes.
+    if irreversible {
+        task.insert(IRREVERSIBLE_REACH_MEMBER.to_owned(), Value::Bool(true));
     }
     if copies
         .tasks

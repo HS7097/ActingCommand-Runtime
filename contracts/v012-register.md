@@ -23849,11 +23849,344 @@ root handed over keeps this installation's record, which such a build reads as i
 0.12.60 before this slice records no fact of the new claim (it finds the old one), so the ledger's
 fact waits for a start of this slice. The kept files stay.
 
-### 1.369 Slice #464 P3 (0.12.60): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`)
+### 1.369 Slice G-R2s (0.12.60): a goal never raises the weight of a task whose package can do something irreversible (Workflow #455; the design `rd-1114/455-goals-design-final.md` §1.4 and §3.11 items 4 and 5 with the paragraph "Re-sliced by the coordinator"; the read-only survey `rd-1114/455-gr2a-irreversible-input.md`; the coordinator's rulings on board #455, comment 6863374335, the two rulings of 11-14 on the workbench's re-read and on lab-ops's reading, and the coordinator's fix round 1 after the independent review, not the owner's words; coordinator work order `rd-1114/brief-455-gr2s-irreversible-line.md`, read on main `f19756db38`)
+
+[resource-targets.md](resource-targets.md) ("A task that can do something irreversible") and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The irreversible mark") are the contract;
+[scheduling/README.md](scheduling/README.md) (the net benefit's `W`, the zero tier, the spend
+values), [scheduling/v2/README.md](scheduling/v2/README.md) (the task member),
+[instance-fact-store.md](instance-fact-store.md) and [remedies.md](remedies.md) (`gap_remaining`
+and `run_cap`) and [standard-pack-goals.md](standard-pack-goals.md) (the one copy of the rule)
+follow it. The base (`f19756db38`) ended at §1.361; main then took §1.362 (#453 S2) and §1.363
+(#1706), and the merge of main `17197d8e86` (fix round 3) brought §1.364 (#456 and #458); the
+merge of main `155366bbfc` (fix round 4) brought §1.365 to §1.368 (#453 S3, S4, S9 and S12, the
+train 0.12.60d), so this section is 1.369; a train renumbers it.
+
+**What.** The goal check (G-R1) refuses an entry that governs an irreversible package but not a
+goal on an ordinary pool such a package also produces; the scheduler keeps the line itself.
+
+- **One copy of the rule.** `actingcommand_contract::IrreversiblePackages` (made only by `new`,
+  from every package of a root, each with its provided capabilities and marks or "could not be
+  read"; no default): a capability is irreversible when any package of the root marks it, a package
+  when it provides such a capability; `counts_irreversible` is the safe side (true for every
+  package while one could not be read, and for a package no reader read); `followers_irreversible`
+  is G-R1 fix round 2's walk over the rules that follow a rule. `GoalReferences` holds one; the
+  composer takes one per game root. Fix round 1: the lists the walk takes are one copy too, the
+  policy crate's `standard_pack_rule_followers` (each rule with the rules whose trigger has a chain
+  link to it), which the composer and the goal check (`GoalRule::followers`) both read.
+- **The composer's input** `StandardPackGameFiles.irreversible`, required. Its six callers read
+  every package of the root's `bundle.json`: the workbench and check-config's two compositions
+  (`compose_configured_standard_packs`, `preview_standard_pack_schedule`) and the resource tools'
+  two (`report_schedule` for `standard-pack check` and `package bundle --schedule`,
+  `compose_standard_packs`) with the reader the goal check uses (`read_remedy_declarations`);
+  `actingctl packs` with its own reading of each `control.json` (ruling 2: lab-ops gains no
+  dependency on `execution-kernel`, whose architecture guard stays; the limit is the contract's).
+- **The mark** `irreversible_reach: true`, a composer-only task member, on a task whose package
+  counts as irreversible and on a rule that a rule running such a package follows by a chain link,
+  directly or further down; absent when false; a rule that writes it is refused (`schedule_invalid`
+  at it). While a package of a root could not be read, every task of the game is marked and the
+  composition warns `standard_pack_package_unreadable` (new contract code, warning; keys `game`,
+  `package_id`), which the workbench records once while the package stays unreadable (with the
+  reader's refusal as its cause), check-config notes and the tools list (both with that cause, fix
+  round 1).
+- **The evaluator**: a marked candidate on an instance that holds a record reads its instance
+  resolved as without the record: no target term (v1 effect, override and wakes dropped, base term
+  kept; v2 and v3 term dropped, base-valuation term computed and used), the benefit on base weights,
+  no `gap_remaining` and no goal term in `run_cap`, none of the record's policy-level reasons, and
+  one new reason `resource_target_package_irreversible` (info, no key). Its dispatch's
+  `decision_record` keeps `targets=` the instance's record (fix round 1: the field says what the
+  instance holds). Every other candidate reads the record's own resolution, unchanged (a v1 `U`
+  keeps the marked task's yield).
+- **The workbench's re-read** (ruling 1): the marks it compares per game gain, for each package the
+  root registered at its last read, the length and modification time of `control.json` and
+  `resources/operations/resources.json` (the reader opens the package's whole content directory, a
+  set that follows the listing, so the two files it opens by name are marked); a changed mark
+  re-reads the root as a changed `bundle.json` does; a metadata failure there is a mark of its own,
+  never stops the check, and leaves that package unreadable. The files are marked just before the
+  reader reads each package, and those marks are the ones compared. A check stats 2 + 2N files for
+  a root of N packages, once per `standard_packs.check_interval_ms` (default 60 000); the N package
+  reads happen only when a mark changed.
+
+**Fix round 1** (the independent review; the coordinator's message of 11-14). (1) The mark
+followed only the coverage's riding followers (`benefit_followers`), while the evaluator lets more
+rules ride with a head: a follower with its own `produces`, one whose link also accepts a `failed`
+end, one behind a complete rule. Which rule rides with which head the evaluator decides by each
+run's state (`chain_head`: the link whose latest run succeeded and is not served, its dispatch
+against the next link's), which no composition knows, so the composer takes the safe side: a head
+is marked when any rule reachable from it by any chain link the evaluator reads (required through
+`all`, `dependency_completed` accepting `succeeded`, self excluded, both rules not held) runs an
+irreversible package. The evaluator's own walk is not shared (it reads compiled predicates and run
+state; a `schedule.json` predicate is not one before the composer fills its scopes); its link
+definition is read the same way (`required_nodes`, `chain_link`, as COV-1 reads it). (2)
+check-config notes each `standard_pack_package_unreadable`, with its cause. (3) The dispatch's
+`decision_record` keeps the instance's real `targets=`. (4) The tools' warning carries the
+reader's refusal (`caused_by`); the scope sentence of resource-targets.md says the marked
+candidate is computed apart. (5) Tests below. (6) The limits at deploy below. (7) Renumbered to
+§1.364 after main's §1.363 (and to §1.365 in fix round 3, after main's §1.364, and to §1.369 in
+fix round 4, after main's §1.365 to §1.368).
+
+**Round 2** (the coordinator's ruling of 11-14 on the four early returns of the workbench's
+check: the root's metadata cannot be read, the root is damaged, the composition is refused as a
+whole, no refused game can be taken out). **A game whose root cannot be composed has no goals in
+effect until it composes.** At each of the four returns the check notes, in the workbench's memory
+(`note_uncomposed`), the game whose root failed and every game in use whose marks it did not find
+equal to those of its last composed read (a game whose files have not changed is composed in the
+active generation as it is now; one the check did not reach has no marks and is noted); the first
+composition that succeeds clears every note, and while one is held each check reads and composes
+again even when nothing changed. The policy cycle reads the notes right after the check
+(`uncomposed_standard_pack_games`) and tells the evaluator, per instance of a noted game, through
+`LeftOutFacts::void_targets` (memory only; never a fact, a snapshot or a decision identity); the
+evaluator computes every candidate of such an instance that holds a record through the marked
+candidate's one code path, as on an instance without a record, with the new info code
+`resource_target_root_uncomposed` (no existing code says that a game's root cannot be composed)
+in place of `resource_target_package_irreversible`, also when its task carries the mark. It also
+covers a current generation composed before this slice whose first check under this build meets a
+root it cannot compose (the adoption at the start clears the marks, so every game is noted). An
+instance of a game whose root composes is not touched; an installation whose roots all compose
+holds no note and computes exactly what it computes without this. Not built: composing the active
+generation's old fragments with the new declarations (the ruling's first option). `actingd
+suspended`'s warnings do not list `standard_pack_package_unreadable` (its problem warnings say why
+a game has no rows; check-config notes it). Fix round 3 changes which games a failing root notes
+and puts the void into the decision identity (below).
+
+**Fix round 3** (the coordinator's work order of 11-14, after CI on `d0bb57cff9` and an
+independent review; main `17197d8e86` merged, which took §1.364). (A.1) The workbench's record of
+a composition refused as a whole named no game, so its `standard_pack_root_invalid` broke its
+catalog entry (`game` required); the line was main's (`RootFailure::Invalid { .. }.outcome(None)`
+in the whole-refusal branch, on main since `cca348127d`), and the catalog check that caught it
+(`debug_assert_well_formed`) runs only in a build with debug assertions: a release build writes
+the record without `game` and goes on. It now records one refusal per composed game naming that
+game and its `schedule.json`, as `compose_configured_standard_packs` already did; check-config's
+preview, which had the same line, does too. (A.2) A void changed a decision without changing what
+its identity is computed from (`deterministic_decision_id`: catalog hash, task, instance, ledger
+position, snapshot, evaluation instant, seed), and a root that heals appends nothing to the
+ledger, so two evaluations of one instant, position and snapshot, one before and one after the
+heal, gave two decisions one identity (`policy_decision_identity_conflict`, fatal, at
+`record_trusted_policy_dispatch`). The test's fixed instant made it certain; on an installation it
+needs two cycles in one millisecond across a heal, or a system clock set back, which nothing
+excludes. Fixed in the product: the identity of a candidate of a voided instance is its identity hashed once more with
+the void (`targets_void_decision_id`); every other identity is unchanged, so an installation whose
+roots compose mints the identities of before. (B, the coordinator's ruling) The mark followed chain
+links only; a package can also lead to something irreversible through a remedy. The rule's input
+per package is now `DeclaredCapabilities` (`provides` with their marks and `remedies`, every
+capability a remedy of its mappings lists, its default or not, both required), and a package is
+irreversible also when a capability its remedies list is one some package of the root provides
+marked; one copy still, for the composer's mark and the goal check, read by the Runtime's reader
+through `RemedyDeclarations::declared_capabilities` (the workbench, check-config, the tools);
+lab-ops gives no remedy (it reads `control.json` only; the contract's limit). The mark then spreads
+up the chain by the walk that exists. **Its cost, in the worst realistic case** (every package of a
+root whose run can end blocked on a need an irreversible capability serves declares that remedy):
+every rule that runs such a package, and every rule a chain link leads from to one of them, is
+marked; a root of R rules with S such rules and H such chain heads gets S + H more marked rules (at
+most R), none of which a goal raises until the owner opens the irreversible capability; the other
+rules keep their goals. (C.1) A failing root (its metadata or its read) no longer returns in the
+middle of the check: it is recorded, the other games are marked, read and composed, and that
+composition is not activated (the failed game keeps the active generation's rules); the failed
+games, and only the other games whose tasks the active generation does not hold as that composition
+gives them (`held_otherwise`: a task the composition does not compose with the same id and
+procedure, or one it marks and the active generation does not), are noted. One failing root voids
+only its own game, at the first check after a start too. A refusal as a whole and the return
+without progress note as round 2 did, with the failed games. (C.2) The metadata failure's key is
+cleared when the game's root composes, so a second failure in one process is recorded too. (C.3,
+not built: stopped and reported) the forward projection does not read the voided games: making it
+compute them as the dispatch does needs an input the projection's own inputs do not give
+(`project_forward` takes no `LeftOutFacts`), and its answer (`ForwardProjection`, which the
+runtime client decodes strictly) has no member for a candidate's reason. (C.4) Tests below. (C.5)
+"At deploy" below. Texts: standard-pack-schedule.md ("The irreversible mark": what the mark
+follows and what it does not, the remedy rule, the offline rows' limit, the failing root),
+resource-targets.md, standard-pack-goals.md, and the code `resource_target_root_uncomposed`'s
+description (the index regenerated).
+
+**Fix round 4** (the coordinator's work order of 11-14, after CI on `d829dd427b` and the review
+of round 3; main `155366bbfc` merged, the train 0.12.60d, which took §1.365 to §1.368, so this
+section is §1.369). (1) Round 3 did
+not compile: in the resource tools' `goal_issues` the map of every package's declarations was
+named `declared` and shadowed the parsed goal declaration, so its tables and the reference check
+met the map; it is `provides` again. The other files round 3 touched were read for another error
+of the kind; none was found (the crates CI did build, the contract crate, the policy crate and the
+execution kernel, built and passed their tests). (2) The void entered the decision identity of
+every candidate of a voided instance, with or without a target record, so an installation without
+goals minted other identities than main while a root was broken, for the same content. It now
+enters only where it changes the decision: on an instance that holds a target record (the
+condition the score stage reads); every other identity is `deterministic_decision_id`'s, a voided
+instance's without a record included. (3) The coordinator's ruling on round 3's addition: kept.
+While a game's own root fails and so nothing is activated, a game for which the active generation
+lacks the marks the present composition would give it, or holds a task that composition does not
+compose with the same id and procedure, is voided too (`held_otherwise`); without it a task newly marked in a composition that cannot be activated would
+still take a goal's boost. The contracts state it as the rule, and it is recorded: of the two
+shapes the ruling offered (one info record per such game and check, or one member on the failing
+root's record listing them) the first is the smaller, so it is built: the check records one
+`resource_target_root_uncomposed` (info), now with the optional key `game`, as a
+`standard_pack_read` record, per game it voids this way, at each check that voids it; a game whose
+own root fails is named by that root's own record. The other shape needed a new list key on two
+codes and the failing root's record written after the composition, and that record is written
+once while the set it would list can change from check to check. (4) Texts: the forward
+projection's limit (below) in resource-targets.md and in the code's description; "At deploy" says
+that a refusal as a whole at the first check after a restart voids every game; a comment of the
+policy gate counted five rules of six. (5) check-config's preview of a refusal as a whole (one
+`standard_pack_root_invalid` per composed game naming it, round 3) had no test; it has one now.
+`runtime-outcomes` stays 1: one optional value on an existing code (the index regenerated).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GR2S-1 | the V2 task member `irreversible_reach` (`TaskSpec::irreversible_reach`, `IRREVERSIBLE_REACH_MEMBER`) | catalog format addition | G-R2s | the standard-pack composer | absent when false: a catalog without it keeps its bytes and hash; refused in V1 (`unknown_field`) and on a `schedule.json` rule |
+| GR2S-2 | `IrreversiblePackages` (`new`, `package`, `unreadable`, `counts_irreversible`, `followers_irreversible`) | contract crate type | G-R2s | the tools, the workbench, lab-ops | the one copy of G-R1's rule; `GoalReferences` holds it |
+| GR2S-3 | `StandardPackGameFiles.irreversible` and `StandardPackComposition::unreadable_packages` | composer input and output | G-R2s | its six callers | required, no default |
+| GR2S-4 | `resource_target_package_irreversible` (policy, info, no key) | decision reason | G-R2s | the evaluator | a new code is no revision |
+| GR2S-5 | `standard_pack_package_unreadable` (contract, warning; `game`, `package_id`) | composition warning, `standard_pack_read` lifecycle record | G-R2s | the composer, the workbench | a new code is no revision |
+| GR2S-6 | the workbench's per-package declaration marks | behaviour of the check | G-R2s | the host | memory only |
+| GR2S-7 | `standard_pack_rule_followers` (policy crate) and the meaning of `GoalRule::followers` | composer function, goal check input | G-R2s fix round 1 | the composer, the resource tools' goal check | every rule with a chain link to the rule, not only the riding followers; the goal check can refuse more `tier` entries, never fewer |
+| GR2S-8 | `standard_pack_package_unreadable` among check-config's `standard_pack_schedule.problems` and notes | check-config report | G-R2s fix round 1 | check-config | with the reader's refusal as its cause |
+| GR2S-9 | `LeftOutFacts::void_targets` and `targets_void` | evaluator input (memory only) | G-R2s round 2 | the policy cycle | none of it enters a snapshot; fix round 3: it enters the decision identity of a voided instance's candidates (`targets_void_decision_id`), fix round 4: only on an instance that holds a target record; empty, the evaluation and its identities are the ones of before |
+| GR2S-10 | `resource_target_root_uncomposed` (policy, info; fix round 4: optional `game`) | decision reason (no key); fix round 4: also a `standard_pack_read` record with `game` | G-R2s round 2 | the evaluator; fix round 4: the workbench | a new code is no revision; an optional value keeps `runtime-outcomes` 1 |
+| GR2S-11 | `DeclaredCapabilities` (contract crate; `provides`, `remedies`), the input of `IrreversiblePackages::new` and `GoalReferences::new`; `RemedyDeclarations::declared_capabilities` (execution kernel) | contract crate type, reader method | G-R2s fix round 3 | the tools, the workbench, lab-ops | a package whose remedies list an irreversible capability counts as irreversible; the goal check can refuse more entries, never fewer |
+| GR2S-12 | the workbench's check while a game's root fails (`held_otherwise`) and the record of a refusal as a whole (one per composed game) | behaviour of the check | G-R2s fix round 3 | the host | memory only, no new record type or code; fix round 4: one `resource_target_root_uncomposed` record per game voided as held otherwise, at each such check |
+
+**Interface.** No revision moves: no `package`, `ledger`, `runtime-client`, `actingd-config` or
+`runtime-outcomes` shape changes (a catalog member the composer writes, two codes; fix round 4: an
+optional value `game` on one of them).
+
+**At deploy.** A root that holds an irreversible package (by the whole root's declarations, a
+following rule included, or a package that cannot be read) composes one new catalog generation
+whose tasks of it carry the mark; nothing else changes. A root without one composes the bytes, the
+catalog hash and the rules digest of before. The first workbench check after the start reads each
+root's packages once more (its marks start empty, as before). **Limits at deploy** (fix round 1):
+any package `bundle.json` registers that the reader cannot read marks every task of its game and
+voids every goal of that game until it reads, with one `standard_pack_package_unreadable` per
+package: a held package left half made, a package registered but not placed yet, and a package
+that marks a capability irreversible without the `parameters` the reader requires. Before a
+deploy, run `actinglab standard-pack check --root <game root>` over each game root and look for
+that warning (check-config notes it too). While a package's file is locked for a moment during its
+replacement, the check that meets it can mark the whole game for about one check interval (a
+minute by default) and activate a generation twice (marked, then unmarked). During a hot
+placement a root can be refused for one check (up to a minute: `bundle.json` or `schedule.json`
+half written); its game's goals are void for that long (round 2). **Before this version goes
+live** (fix round 3, C.5), besides the unreadable packages: run the composer-mode check-config
+(`actingd check-config` on the installation's configuration) and confirm that every game's root
+composes and nothing is refused as a whole: among its notes and in `standard_pack_schedule`
+(`problems`, `left_out`) no `standard_pack_root_invalid` and no `standard_pack_root_unreadable`.
+When one does not compose, he sees its `standard_pack_root_invalid` naming the game, the refused
+file, its problem and its pointer (or `standard_pack_root_unreadable` naming the file it cannot
+read), and the game in `left_out` for a broken root; a composition refused as a whole is one
+`standard_pack_root_invalid` per composed game naming that game's `schedule.json`
+(`schedule_invalid`, an empty pointer). That game's goals (for a refusal as a whole, every game
+whose files changed since their last composed read) are void until it composes: the Runtime
+records the same refusal once, and each of its candidates carries
+`resource_target_root_uncomposed`. A deploy is a restart: the first check after it holds no
+marks, so a refusal as a whole there voids **every** game in use, not only the games whose files
+changed, until the composition succeeds (fix round 4). A release that carries the remedy rule (fix round 3) marks, at
+its first check, every rule whose package's remedy lists a capability some package of the root
+provides marked irreversible, and the chain heads above them: one new generation for such a root.
+
+**Rollback** (below 0.12.60). After a marked generation has dispatched, a build before this slice
+refuses that generation at its start (it compiles every generation its dispatches and decision
+memories name, and its reader refuses the member, `unknown_field`), as for SCHED-C1a (§1.299): before
+rolling back, hold the marked rules (their packages) and let the pairs dispatch under an unmarked
+generation. A rollback inside a deployment's own hold, nothing dispatched under the marked
+generation yet, needs nothing.
+
+**Limits.** A catalog written by hand is not covered: no composer writes it, and only a task that
+carries the member is left out. The offline pack rows read `control.json` only (the contract's
+limit; fix round 3: so they see no remedy). The workbench's marks are length and modification time.
+The mark counts every chain link the evaluator reads, so it can mark a head a follower of which
+never rides with it in a run (the safe side). Not followed, each another dispatch the evaluator
+judges by its own weight: a rule that depends on a head's completion only through a node the
+evaluator reads as no chain link (under `any` or `not`, or not accepting `succeeded`), and a
+trigger on a fact or a capacity. A declared `prerequisite_package_id` is not followed either
+(known limit, fix round 3: it runs inside the dependent run; the resource side declares no
+irreversible package as a prerequisite, and the review of resource pull requests holds that line
+until a later slice checks it). The forward projection does not read the voided games (C.3, not
+built; the coordinator's ruling in fix round 4: a known limit, left to a later slice, written in
+resource-targets.md and in the description of `resource_target_root_uncomposed`): while a game is
+voided, its steps still weigh that game's candidates with their goals. While a game's own root
+fails, another game whose files changed in a way that does not touch its marks keeps the active
+generation's older rules and its goals (only the irreversible mark is compared).
+
+Tests (policy, host and apps gate rows "#455 G-R2s"): the policy crate's
+`gate_455_gr2s::gr2s_t1_a_marked_candidate_under_each_record_equals_it_without_a_record`,
+`gr2s_t2_every_unmarked_candidate_keeps_its_numbers`,
+`gr2s_t3_named_tasks_and_an_override_are_void_for_the_marked_task_only`,
+`gr2s_t4_the_composer_marks_irreversible_packages_and_the_chain_heads_they_ride_with`,
+`gr2s_t5_an_unreadable_package_marks_every_task_of_its_game_and_warns_once`,
+`gr2s_t6_the_forward_projection_reads_the_mark`, (fix round 1)
+`gr2s_t7_the_mark_follows_every_chain_link_the_evaluator_reads` (the three shapes, each head
+marked; a head whose only follower is reversible unmarked; fix round 3: its goal check half moved
+to the resource tools, through `goal_issues`) and `gr2s_t8_the_run_caps_goal_term_reads_the_mark`,
+(fix round 3) `gr2s_t9_a_remedy_that_lists_an_irreversible_capability_marks_its_package_and_its_chain`
+(a package whose remedy lists a capability another package provides marked is marked, a chain
+head above one too, a remedy listing only an unmarked capability marks nothing), (fix round 4)
+`gr2s_t10_a_voided_instance_without_a_record_keeps_its_decision_identity` (an instance without a
+record, its targets void, has byte for byte the dispatch identities of the round with no game
+voided, and is that round whole), and
+`gate_rl1a::gr2s_a_root_without_an_irreversible_package_composes_the_bytes_and_hash_of_before`
+(unchanged, it still holds);
+the host's `gate_455_gr2s::gr2s_host_the_marks_follow_the_declaration_files_with_bundle_json_unchanged`
+(fix round 1: the warning once across two checks that read the root again, with its cause),
+`gr2s_host_a_declaration_file_whose_metadata_fails_marks_its_game_and_the_check_goes_on` (fix round
+1, through the gate tests' seam `DECLARATION_METADATA_FAILS_FOR_TEST`) and
+`gr2s_host_check_config_composes_the_mark` (packages written by `gate_442_rem1`'s
+`write_package`, now visible to its sibling); (round 2, two of the four returns driven for real,
+on `gate_rl1b`'s bench with two games, each instance's inventory read and a v2 goal applied
+through `ApplyResourceTargets`) `gate_rl1b::gr2s_r2_a_damaged_root_voids_the_goals_of_its_game_until_it_composes`
+and `gr2s_r2_a_composition_refused_as_a_whole_voids_the_goals_of_the_changed_game` (game A alone
+holds the catalog's 1 024 pools, the two games together one too many): while refused, game A's
+candidate has the rank and score-stage reasons of before any goal and says why, game B's keeps the
+goal's numbers, and composed again game A's goal applies as before (fix round 3: the refusal as a
+whole recorded once per composed game naming its `schedule.json`); (fix round 3)
+`gr2s_r3_a_root_whose_metadata_fails_voids_only_its_own_game` (the metadata return through the
+seam `DECLARATION_METADATA_FAILS_FOR_TEST`, now also read for the root files: game A void, game B,
+after it in id order, keeps its goal, the failure recorded once, and again after game A composed
+in between), `gr2s_r3_a_refusal_no_round_can_narrow_voids_the_changed_game_only` (the return
+without progress, unreachable from files, through the seam `REFUSALS_NAME_UNCOMPOSED_FOR_TEST`)
+and `gr2s_r3_after_a_start_one_failing_root_voids_only_its_own_game` (a restart with game A's
+root damaged: game A void, game B not, and game B's numbers those of every root composed); (fix
+round 4) `gr2s_r4_a_game_the_active_generation_holds_otherwise_is_voided_and_recorded` (game A's
+root damaged while game B's package comes to provide an irreversible capability: game B void too,
+with the numbers of before any goal, one `resource_target_root_uncomposed` record naming game B and
+none naming game A, and nothing more once every root composes) and
+`gr2s_r4_check_configs_preview_names_each_game_of_a_composition_refused_as_a_whole` (the preview's
+problems are `standard_pack_root_invalid` only, each naming a composed game and its
+`schedule.json`, both games named, none left out); the resource tools' `gate_455_gr2s::gr2s_t7_the_goal_check_reads_the_same_chain_links` (t7's goal half
+through `goal_issues` over real packages) and
+`gr2s_r3_a_remedy_that_lists_an_irreversible_capability_makes_its_package_irreversible` (the goal
+check and the composer's input the tools read, over packages whose remedies are declared);
+actingd's
+`gate_rl1c::gr2s_check_config_notes_each_package_it_cannot_read` (fix round 1); lab-ops's
+`packs::tests::gr2s_the_offline_input_follows_the_whole_root_rule_and_an_unreadable_package`.
+**What t1 and t2 prove.** t1 compares the marked candidate's whole decision and its dispatch's
+reason chain under each record with the same build's evaluation without a record, but for the new
+reason and one stated exception, the chain's `decision_record` `targets=` field (fix round 1). t2
+compares every unmarked candidate with the same build's evaluation of the catalog without the
+mark, not with the build of main: it proves that the mark changes no other candidate's numbers;
+that the code an unmarked candidate runs is main's rests on reading the diff (every new branch in
+the evaluator reads `left_out`, which holds marked candidates only).
+Existing tests adapted because the composer's input is now required, pinning what they pinned:
+the policy gates that compose (`gate_386_cf4`, `gate_386_cf5`, `gate_411_p19`, `gate_ord1`,
+`gate_rl1a`, `gate_sched_c1a`, `gate_sched_c1c`, `gate_sched_c1f1`, `gate_ss2b`, `gate_ss2c`,
+`gate_ss2d`, `gate_ss2h`, `gate_ss4`, `gate_ss5`) pass every package read and none irreversible;
+the host's `gate_rl1b` bench now places a readable package, providing nothing, for each package it
+registers (fix round 1, so its workbench tests no longer run with every task marked), and composes
+with every package read for `compose_a` and A9's configured catalog; actingd's `gate_rl1c` builds
+C-3's configured catalog with every package read; the resource tools' `report_schedule`
+and `check_schedule` callers (`gate_386_cf4`, `gate_386_cf5`, `gate_cov1`, `gate_sched_c1a`,
+`gate_sched_c1f1`, `gate_ss2b`, `gate_ss2c`) pass every package read; `gate_ss6`'s fixture
+helpers are visible to the sibling t8. Two tests pinned what this
+slice changes: actinglab's `gate_386_rlt::rlt_1_standard_pack_compose_receives_every_instance_of_its_command_line`
+and `gate_434_lab2b::own_commands_print_the_cli_line` (its `standard-pack compose` line) composed a root with no package files and
+pinned no warning; they now pin one `standard_pack_package_unreadable` per registered package
+(rlt_1, fix round 1: each with the reader's refusal as its cause). Fix round 3: the contract
+crate's goal-reference tests and the composing gates' helpers (`readable_root` of the policy crate,
+the resource tools and `gate_rl1b`, actingd's `gate_rl1c`) give each package its declarations
+whole (`DeclaredCapabilities`, no remedy), pinning what they pinned. No golden changes; no test
+leaves the gate map.
+
+### 1.375 Slice #464 P3 (0.12.60): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`)
 
 This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364);
 merging main `155366bb`, whose train 0.12.60d took §1.365 to §1.368 (#453 S3, S4, S9 and S12),
-renumbered it 1.369. The sibling slices P1 (`standard-pack adopt`) and P2 (`standard-pack
+renumbered it 1.369; merging main `1e67d1c5`, whose #1708 (#455 G-R2s) holds §1.369, it
+takes 1.375, the number the coordinator assigned (the numbers between belong to other open
+pull requests). The sibling slices P1 (`standard-pack adopt`) and P2 (`standard-pack
 build`), written at the same time, take the numbers their merges give them.
 
 **What it is.** One function, `actingcommand_resource_tooling::judge_standard_pack_readiness`,

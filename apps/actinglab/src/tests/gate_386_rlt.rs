@@ -14,6 +14,7 @@
 // the rule's package, a return-home package and one held package, all on `server-a`.
 
 use super::*;
+use actingcommand_contract::codes::SharedCode;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
@@ -122,6 +123,24 @@ fn copy_id(id: &str, alias: &str) -> String {
     format!("{id}@{alias}")
 }
 
+/// Workflow #455 G-R2s: the `package_id` of each warning of `warnings`, each of which must be
+/// `standard_pack_package_unreadable`, in order.
+pub(super) fn unreadable_packages(warnings: &Value) -> Vec<Value> {
+    warnings
+        .as_array()
+        .expect("the warnings")
+        .iter()
+        .map(|warning| {
+            assert_eq!(
+                warning["code"],
+                json!(SharedCode::StandardPackPackageUnreadable.as_str()),
+                "{warning}"
+            );
+            warning["values"]["package_id"].clone()
+        })
+        .collect()
+}
+
 /// `standard-pack compose` with two `--instance` bindings of one game and server, as the RL-1a
 /// contract writes its command line: the command receives both, and the composition holds one
 /// copy of the rule and of each item per instance, each in that instance's scope.
@@ -188,7 +207,25 @@ fn rlt_1_standard_pack_compose_receives_every_instance_of_its_command_line() {
         "directory": PACKAGE
     }]);
     assert_eq!(data["manifest"], procedures);
-    assert_eq!(data["warnings"], json!([]));
+    // Workflow #455 G-R2s (register §1.369): the root holds no package files, so no package's
+    // declaration reads: one `standard_pack_package_unreadable` per registered package, in
+    // package order, and nothing else; fix round 1, point 4: each carries the package reader's
+    // refusal as its cause.
+    assert_eq!(
+        unreadable_packages(&data["warnings"]),
+        [HELD_PACKAGE, PACKAGE, RETURN_PACKAGE].map(|package| json!(package)),
+        "{}",
+        data["warnings"]
+    );
+    for warning in data["warnings"].as_array().expect("the warnings") {
+        let causes = warning["causes"].as_array().map(Vec::as_slice);
+        assert!(
+            causes.is_some_and(|causes| causes
+                .iter()
+                .any(|cause| cause["relation"] == json!("caused_by"))),
+            "the reader's refusal: {warning}"
+        );
+    }
 
     let read = |name: &str| -> Value {
         serde_json::from_slice(&fs::read(out.join(name)).expect("a composed file"))

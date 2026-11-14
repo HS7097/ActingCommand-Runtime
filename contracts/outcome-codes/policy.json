@@ -2578,6 +2578,47 @@
       "description": "Scheduling decision reason (Workflow #437 MAPP-1, contracts/device-group.md, \"One pick per device per round\"): a candidate of a member of a device group does not run because another member of its device has the device. instance_id is the candidate's alias, alias the member that has the device, and device_group_wait why: selected (that member's candidate, task_id, won the device this round), held (a claim or run of that member holds the device or waits for it first; task_id with a run, holder_kind the claim kind), player_hold (a person holds the device through that member) or fenced (that member is fenced). It takes the place of the code a lone instance's candidate would give (instance_already_selected, dispatch_instance_held, a control gate's code) and has no wake of its own: the other member's settlement, release or lifting wakes the next evaluation. A group of one never gives it. Workflow #437 ORD-1b (since 0.12.60, contracts/scheduling/README.md \"Order within one device\"): with selected, under the order within one device, a waiting candidate carries limit_ms, the longest time its task may wait in the queue, and remaining_ms, the time it has left before that limit (0 once past it); a candidate of the member in front, when another member's task switches the device because nothing of the front ends in time, carries required_ms, the duration its run needs, and remaining_ms, the time the waiting task that goes has left.",
       "common_causes": "Several applications on one device, each due at once; a run, a ladder, a person's hold or a fence of another application of the same device.",
       "handling": "None: the candidate runs once the device is free and it wins a round. A member's own holder or gate keeps its own code."
+    },
+    "resource_target_package_irreversible": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Scheduling decision reason (Workflow #455 G-R2s, register section 1.369; contracts/resource-targets.md \"A task that can do something irreversible\"): the candidate's task carries the composer's mark irreversible_reach, because its package, or a rule that follows it by a chain link (directly or further down), can do something irreversible by the whole game root's declarations, or a package of its game root could not be read, and its instance holds a resource target record (v1, v2 or v3, active, expired or unreadable). A goal never raises such a task's weight: the record's targets are left out for this candidate, which is computed exactly as on an instance without a record (the base valuation term, its benefit's base weights, its gap_remaining facts and run cap without a goal, the normal thresholds; a target's explicit tasks and its override are void for it). The record's policy-level reasons are not attached to it; every other candidate of the instance keeps its numbers and reasons.",
+      "common_causes": "A target of the instance covers a pool the task produces, or names the task, while the task's package can retire, scrap or spend what cannot be had back; or a package of the game root is unreadable.",
+      "handling": "None: the safety line holds by design. Set goals on what reversible tasks produce; an unreadable package marks every task of its game until it reads."
+    },
+    "resource_target_root_uncomposed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "game": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Scheduling decision reason (Workflow #455 G-R2s round 2, register section 1.369; contracts/resource-targets.md \"A task that can do something irreversible\"): the Runtime's scheduler workbench cannot compose the root of the candidate's game (its metadata cannot be read, it is damaged, the composition is refused as a whole, or a refused composition cannot be narrowed to a game it composed), so the active catalog generation may lack the irreversible mark of a package that changed since it was composed, and the instance holds a resource target record. A game whose root cannot be composed has no goals in effect until it composes: the record's targets are left out for every candidate of the game's instances, each computed exactly as on an instance without a record, as a marked candidate is. Which games are voided: a game whose own root fails; while a game's own root fails, also every other game the active generation holds otherwise (it lacks a mark the present composition of that game's files gives, or holds a task of the game that composition does not compose with the same id and procedure), so that a task newly marked in a composition that cannot be activated takes no goal's boost; a composition refused as a whole voids every game whose files changed since their last composed read, which at the first check after a start is every game in use. It ends at the first successful composition of every game. Memory only: the Runtime tells the evaluator per instance, never through a fact or a snapshot; the void is part of the decision identity of each candidate of a voided instance that holds a target record (fix rounds 3 and 4), so one identity never names two decisions when a root breaks or heals, and an instance without a record keeps the identity it has when no game is voided. Fix round 4: also the workbench's info record (standard_pack_read lifecycle record), with game, one per game a check voids because the active generation holds it otherwise, at each such check; a game whose own root fails is named by that root's own record. Known limit: the forward projection does not read the void, so while a game is voided its steps still weigh that game's candidates with their goals (it would need the voided instances as an input, and its answer has no member for a candidate's reason); left to a later slice.",
+      "common_causes": "A game root's bundle.json or schedule.json is damaged, mid-write during a placement, or cannot be stat'ed; or the composed catalog of every game in use exceeds a catalog limit.",
+      "handling": "Fix the root the workbench's standard_pack_root_invalid or standard_pack_root_unreadable record names; the next check that composes ends it. During a hot placement it lasts at most one check interval."
     }
   }
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #464 P3 (register §1.369; `contracts/standard-pack-schedule.md`, "Readiness"; the
+//! Workflow #464 P3 (register §1.375; `contracts/standard-pack-schedule.md`, "Readiness"; the
 //! design `rd-1114/464-pack-build-design.md` F.1 with the coordinator's rulings on its questions):
 //! for every pack of one game root, whether the scheduler can dispatch it, or every reason it
 //! waits. One function judges the twelve items, [`judge_standard_pack_readiness`]; `actinglab
@@ -45,6 +45,7 @@
 use crate::codes::{ReadinessItem, ReadinessProblem, ReadinessUnjudged, ResourceToolingCode};
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{CHECK_LABEL, read_bounded, root_invalid, root_issue_outcome};
+use crate::standard_pack_goals::root_irreversibility;
 use crate::standard_pack_schedule::compose_per_server;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
@@ -490,11 +491,21 @@ impl Rules {
                 .standard_pack_problem(StandardPackProblem::ScheduleInvalid)
                 .json_pointer(String::new()),
         };
-        let composition =
-            match compose_per_server(game, &checked.root, &checked.maintenance, &bytes, None) {
-                Ok(composition) => composition,
-                Err(failure) => return Ok(Self::Refused(refusal(&failure))),
-            };
+        // Workflow #455 G-R2s (merge of main): with every package of the root read as
+        // `standard-pack check` reads it, so the composition is the one the check runs.
+        let irreversible =
+            root_irreversibility(&checked.root, &|directory: &str| root.join(directory));
+        let composition = match compose_per_server(
+            game,
+            &checked.root,
+            &checked.maintenance,
+            &bytes,
+            &irreversible.packages,
+            None,
+        ) {
+            Ok(composition) => composition,
+            Err(failure) => return Ok(Self::Refused(refusal(&failure))),
+        };
         // The composer read the file; read again here, it is the reader the composer runs.
         let schedule = parse_standard_pack_schedule(&bytes)
             .map_err(|issue| root_invalid(game, &path, &issue))?;
@@ -530,6 +541,7 @@ impl Rules {
                     &checked.root,
                     &checked.maintenance,
                     &bytes,
+                    &irreversible.packages,
                     Some(subsystems),
                 )
                 .map(|_| ())
