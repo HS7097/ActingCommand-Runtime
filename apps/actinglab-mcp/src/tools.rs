@@ -79,8 +79,10 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 /// The slices whose planned rows actinglab offers: its words' `BUILT_SLICES`
 /// (`apps/actinglab/src/cli_module/words.rs`), which this server's test holds equal. Workflow
 /// #449 REC-ARCH: its rows `record archive` and `record reopen`, served through a `serve` child.
-pub(crate) const ACTINGLAB_SLICES: [&str; 6] =
-    ["LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8", "REC-ARCH"];
+/// Workflow #467 RPT-1: its row `report export`, a core row served in this process.
+pub(crate) const ACTINGLAB_SLICES: [&str; 7] = [
+    "LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8", "REC-ARCH", "RPT-1",
+];
 /// The slice whose planned rows this server offers itself (§9.2): `record draft`, `mcp config`,
 /// `mcp entries` and, since LAB-5G5b, `mcp plan` (Workflow #434 LAB-5G2b, second part: the three
 /// `mcp` rows served with the rescue module's others; Workflow #434 LAB-5G4b: `record draft`
@@ -121,7 +123,8 @@ const OPERATION_ID_PATTERN: &str = "^op-[0-9]+$";
 /// leaves out of its schema and refuses as an argument it does not know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Supplied {
-    /// This server's export directory, always: one frame is written there.
+    /// This server's export directory, always: one frame (Workflow #467 RPT-1: or one problem
+    /// report archive) is written there.
     ExportDirectory,
     /// This server's export directory when the tool's [`EXPORT`] is true: the whole material is
     /// written there, and the answer names the file.
@@ -135,11 +138,14 @@ pub(crate) enum Supplied {
 /// 6775192250; contract §5): the front's own members, in one place. Each entry is a row, its
 /// parameter the front gives itself and what it gives. A row with
 /// [`Supplied::ExportDirectoryOnExport`] also takes the boolean [`EXPORT`] beside its parameters.
-pub(crate) const SUPPLIED: [(&str, &str, Supplied); 4] = [
+/// Workflow #467 RPT-1 (the coordinator's ruling Q7): `report export` writes its archive into
+/// the export directory too.
+pub(crate) const SUPPLIED: [(&str, &str, Supplied); 5] = [
     ("material", "out", Supplied::ExportDirectoryOnExport),
     ("frame", "out", Supplied::ExportDirectory),
     ("deploy", "detach", Supplied::True),
     ("rollback", "detach", Supplied::True),
+    ("report export", "out", Supplied::ExportDirectory),
 ];
 /// Workflow #434 LAB-5G2b: the tool's own member of a row whose parameter is
 /// [`Supplied::ExportDirectoryOnExport`].

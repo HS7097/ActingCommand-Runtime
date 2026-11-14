@@ -275,6 +275,9 @@ fn mcp_front_members_in_one_place() {
             ("frame", "out", Supplied::ExportDirectory),
             ("deploy", "detach", Supplied::True),
             ("rollback", "detach", Supplied::True),
+            // Workflow #467 RPT-1 (adapted: the ruling Q7 gives the row's out the export
+            // directory, as for material and frame).
+            ("report export", "out", Supplied::ExportDirectory),
         ],
         "the front's own members, in one place"
     );
@@ -310,6 +313,16 @@ fn mcp_front_members_in_one_place() {
     let frame = properties("ac_frame");
     assert!(frame.get("out").is_none(), "frame: no out: {frame}");
     assert!(frame.get("export").is_none(), "frame: no export: {frame}");
+    // Workflow #467 RPT-1: no out either, the row's other parameters kept.
+    let report = properties("ac_report_export");
+    assert!(
+        report.get("out").is_none(),
+        "report export: no out: {report}"
+    );
+    assert!(
+        report.get("view").is_some() && report.get("no_frames").is_some(),
+        "report export: its parameters stay: {report}"
+    );
     if cfg!(windows) {
         for tool in ["ac_deploy", "ac_rollback"] {
             let detached = properties(tool);
@@ -376,6 +389,16 @@ fn mcp_front_members_in_one_place() {
             "frame",
             json!({"instance": "neutral.frame", "out": directory})
         ),
+        (json!("out"), json!("unknown"))
+    );
+    // Workflow #467 RPT-1: the report is always written to the export directory.
+    assert_eq!(
+        given("report export", json!({"view": "errors"})),
+        object(json!({"view": "errors", "out": directory})),
+        "report export: written to the export directory"
+    );
+    assert_eq!(
+        problem("report export", json!({"out": directory})),
         (json!("out"), json!("unknown"))
     );
     if cfg!(windows) {

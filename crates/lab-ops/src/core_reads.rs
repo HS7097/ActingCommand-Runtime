@@ -141,7 +141,7 @@ const fn reads(row: &'static str, names: &'static [&'static str]) -> Reads {
 }
 
 /// The rows whose parameters `core_ops` reads in this process.
-pub static READ_HERE: [Reads; 30] = [
+pub static READ_HERE: [Reads; 31] = [
     reads("facts", &["instance", "program", "config", "prefix"]),
     reads("schedule", &["instance"]),
     reads("run show", &["id"]),
@@ -184,6 +184,20 @@ pub static READ_HERE: [Reads; 30] = [
     reads("run stop", &["id", "cancel_only"]),
     reads("reset", &["instance"]),
     reads("drill", &["instance", "device"]),
+    // Workflow #467 RPT-1: the problem report of the errors view.
+    reads(
+        "report export",
+        &[
+            "instance",
+            "view",
+            "out",
+            "since",
+            "until_unix_ms",
+            "max_runs",
+            "max_mib",
+            "no_frames",
+        ],
+    ),
 ];
 
 const fn word(name: &'static str) -> Part {

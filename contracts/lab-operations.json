@@ -293,6 +293,32 @@
       "status": "planned"
     },
     {
+      "name": "report export",
+      "module": "core",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"},
+        {"name": "view", "form": "option", "type": "enum:errors", "required": false, "default": "errors", "note": "the view exported: errors, the failed and unfinished runs and the rows of the ledger's errors view in the window; the views package and run come with a later slice"},
+        {"name": "out", "form": "option", "type": "dir", "required": false, "required_in": ["cli", "serve"], "note": "the directory the archive is written into, made when missing; refused inside the installation root or the state root; required on the command line and in serve (refused as --out required when absent); MCP gives its export directory"},
+        {"name": "since", "form": "option", "type": "duration", "required": false, "default": "24h", "note": "how far back the window reaches, at most 7 days (168h)"},
+        {"name": "until_unix_ms", "form": "option", "type": "unsigned", "required": false, "note": "the window's end, unix ms; absent: now"},
+        {"name": "max_runs", "form": "option", "type": "integer", "required": false, "default": "5", "note": "the failed and unfinished runs kept, newest first, 1 to 10; at most 2 of one package that ended with one code"},
+        {"name": "max_mib", "form": "option", "type": "integer", "required": false, "default": "24", "note": "the archive's bound in MiB, 4 to 64; frames are left out first"},
+        {"name": "no_frames", "form": "switch", "type": "boolean", "required": false, "note": "no frame and no text OCR read in the archive; the summary says what is missing"}
+      ],
+      "help": "Writes one problem report of the errors view into the directory it names: the newest failed or unfinished runs with steps, scores, frames, and the error rows.",
+      "output": "the archive written: its path, sha256 and size, the view, the instances and the window, the runs, the frames and what was left out",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "required",
+      "entries": ["lab", "ui"],
+      "requests": ["Status", "QueryEvents", "ReadMaterial"],
+      "source": ["actinglab report export --last-error"],
+      "new": "#467 RPT-1 (contracts/problem-report.md)",
+      "slice": "RPT-1",
+      "status": "planned",
+      "notes": "RPT-1 builds the view errors while the Runtime runs; the views package and run (RPT-2), the part that needs no Runtime with the log tails, the configuration and the plan (RPT-3) and the tool on actingctl mcp-serve (RPT-4) come later. It replaces actinglab's placeholder report export --last-error, which RPT-1 deleted. writes is false: it changes nothing of the Runtime or the installation and writes one archive into out, as material with out writes its file"
+    },
+    {
       "name": "targets",
       "module": "core",
       "params": [

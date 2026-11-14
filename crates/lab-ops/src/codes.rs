@@ -251,6 +251,16 @@ actingcommand_contract::outcome_codes! {
         // own commands).
         LabOperationCompleted => "lab_operation_completed": success / none,
         // ---- end of LAB-2
+        // ---- Workflow #467 RPT-1 (contracts/problem-report.md): `report export`, the archive
+        // of the errors view written, its output refused inside the installation root or the
+        // state root, its write failed, a part of it that could not be read, and the parts its
+        // size bound left out.
+        ReportExported => "report_exported": success / none,
+        ReportOutputRefused => "report_output_refused": error / none,
+        ReportWriteFailed => "report_write_failed": error / none,
+        ReportPartMissing => "report_part_missing": warning / none,
+        ReportTrimmed => "report_trimmed": warning / none,
+        // ---- end of RPT-1
     }
 }
 

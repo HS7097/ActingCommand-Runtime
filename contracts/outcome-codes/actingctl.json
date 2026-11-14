@@ -3134,6 +3134,91 @@
       "description": "Workflow #434 LAB-2: an operation of actinglab's CLI module (or of actinglab serve --stdio) whose source has no success code of its own ran to its end: an operation whose only source was an MCP tool (run show, material, targets, run stop), and since Workflow #434 LAB-2b every one of actinglab's own commands (resource validate, package preflight, observe, do and the rest) that succeeded. The line carries the answer beside this outcome, its members flat at the top level (a result that is no JSON object under result; the two results whose top level has a member named outcome whole, resource verify's under report and run summary's under summary); warnings a result carries stay its member warnings in their own shape {code, values}, the category stays success; exit 0. A command line with --via (MCP's actinglab child) still answers the envelope, not this code, until LAB-5.",
       "common_causes": "The operation succeeded.",
       "handling": "None."
+    },
+    "report_exported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #467 RPT-1: report export wrote one problem report archive of the errors view (the newest failed and unfinished runs of the window with their steps, scores, frames and display map, the rows of the ledger's errors view of each instance, the versions) into the directory it was given; path is the archive. The line names its sha256 and size, the instances, the window, the runs, the frames and what was left out; warnings name the parts that could not be read. Nothing was sent anywhere. Exit 0.",
+      "common_causes": "The report was written.",
+      "handling": "Send the archive to whoever asked for it; its first entry, report/SUMMARY.md, is the page to read first."
+    },
+    "report_output_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "install_root": "optional",
+        "state_root": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #467 RPT-1: report export refused its output directory path because it lies inside the installation root (install_root) or the Runtime's state root (state_root), junctions and letter case resolved; nothing was read and nothing was written. Exit 1.",
+      "common_causes": "An output directory chosen inside the installation, such as its tools or state folder.",
+      "handling": "Name a directory outside the installation root and the state root, for example a folder in the user's documents."
+    },
+    "report_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "from_path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #467 RPT-1: report export could not write its archive at path (the directory, the partial file, or the archive itself; from_path is the partial file left behind when moving it into place failed); an archive of the same name already there is never replaced. The operating system's failure is the caused_by link. Exit 1.",
+      "common_causes": "A directory that cannot be written, a full disk, or a file of the same name.",
+      "handling": "Fix the cause, or name another directory, and run the export again."
+    },
+    "report_part_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "file": "required",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #467 RPT-1: a part of the problem report could not be read and is missing from the archive: file names the archive entry (for a run, under report/runs/), request_id the run. The read's own failure is the caused_by link (material_too_large for a diagnostic stream above 8 MiB, call_budget_exhausted when the report's read budget ended first); a run without a diagnostic stream has no cause. The rest of the report was written.",
+      "common_causes": "A frame the Runtime's cleaner already removed, a long run's large diagnostic stream, a run whose stream was abandoned, or a slow Runtime.",
+      "handling": "Read the rest of the report; export again soon after a failure to keep its frames."
+    },
+    "report_trimmed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "limit_bytes": "required",
+        "count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #467 RPT-1: the problem report was kept within its size bound limit_bytes by leaving count parts out, in order: frames of the older runs, then the newest run's, then stream excerpts, then errors view files; the summary, the manifest, the runs' statuses, steps and scores are never left out. The manifest's left_out names each part.",
+      "common_causes": "Many large frames.",
+      "handling": "Raise max_mib, or name fewer runs, and export again when the parts left out are needed."
     }
   },
   "locations": {

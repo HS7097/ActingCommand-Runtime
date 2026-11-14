@@ -51,8 +51,8 @@ use crate::wait::{Waited, wait_at_most};
 use crate::{
     capability_gap, code_lookup, configure, devices, diagnose, emulators, events, evidence_read,
     fact_publish, facts, frames, ladder_drill, material, material_export, observe_export, overview,
-    packs, perf_preset, remedy, routine_summary, run_evidence, run_list, run_show, schedule,
-    scheduling, shutdown, targets, wait, wake_test,
+    packs, perf_preset, remedy, report, routine_summary, run_evidence, run_list, run_show,
+    schedule, scheduling, shutdown, targets, wait, wake_test,
 };
 use actingcommand_contract::codes::{ContractLocation, ReceiptCode};
 use actingcommand_contract::outcome::{Detail, Outcome};
@@ -174,6 +174,12 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
     if let Some(word) = list_of(params, MORE_WORDS).and_then(|words| words.first().cloned()) {
         return usage(&word, ArgumentProblem::Unknown);
     }
+    // Workflow #467 RPT-1: the report refuses its output before it connects.
+    if name == report::ROW {
+        return match report_line(params, &located, &state_root, caller.connection) {
+            Ok(exit) | Err(exit) => exit,
+        };
+    }
     let client = match connect(&state_root, caller.connection) {
         Ok(client) => client,
         Err(exit) => return exit,
@@ -215,6 +221,94 @@ fn shutdown_line(params: Params<'_>, client: Reached<'_>, state_root: &Path) -> 
     Ok(cli_line::success(
         members,
         &Outcome::new(ActingctlCode::RuntimeShutdownCompleted),
+    ))
+}
+
+/// Workflow #467 RPT-1 (`contracts/problem-report.md`): `report export [<inst>] --out <dir>
+/// [--view errors] [--since <d>] [--until-unix-ms <ms>] [--max-runs <n>] [--max-mib <n>]
+/// [--no-frames]`. Its parameters are read and its output is refused inside the installation
+/// root or the state root before anything is read or the Runtime is reached; then the report is
+/// read on `connection` and written. A Runtime that does not answer is the client's failure:
+/// the part that needs no Runtime comes with a later slice.
+fn report_line(
+    params: Params<'_>,
+    place: &Place,
+    state_root: &Path,
+    connection: Connection<'_>,
+) -> Result<Exit, Exit> {
+    if text(params, "view").is_some_and(|view| view != report::VIEW_ERRORS) {
+        return Err(usage("--view", ArgumentProblem::NotRecognised));
+    }
+    let out = text(params, "out").ok_or_else(|| usage("--out", ArgumentProblem::Required))?;
+    let out = std::path::absolute(out).map_err(|_| usage("--out", ArgumentProblem::Unusable))?;
+    let max_runs = within(
+        params,
+        "max_runs",
+        (1, report::MAX_RUNS),
+        report::DEFAULT_RUNS,
+    )?;
+    let max_mib = within(
+        params,
+        "max_mib",
+        (report::MIN_MIB, report::MAX_MIB),
+        report::DEFAULT_MIB,
+    )?;
+    let now_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(millis)
+        .map_err(|_| cli_line::refused(&Outcome::new(ActingctlCode::ClockUnavailable), None))?;
+    let since = duration(params, "since")?.unwrap_or(report::DEFAULT_WINDOW);
+    if since > report::MAX_WINDOW {
+        let oldest_unix_ms = now_unix_ms.saturating_sub(millis(report::MAX_WINDOW));
+        return Err(cli_line::failure(
+            &Outcome::new(ActingctlCode::SinceOutOfRange).range_min(oldest_unix_ms),
+            None,
+        ));
+    }
+    let since_unix_ms = now_unix_ms.saturating_sub(millis(since));
+    let until_unix_ms = unsigned(params, "until_unix_ms")?;
+    if until_unix_ms.is_some_and(|until| until < since_unix_ms) {
+        return Err(usage("--until-unix-ms", ArgumentProblem::Conflicting));
+    }
+    let request = report::Request {
+        instance: text(params, "instance").map(str::to_owned),
+        out,
+        since_unix_ms,
+        until_unix_ms,
+        now_unix_ms,
+        max_runs: usize::try_from(max_runs).unwrap_or(usize::MAX),
+        max_bytes: max_mib.saturating_mul(report::MIB),
+        frames: !switch(params, "no_frames"),
+    };
+    report::refuse_output(&request.out, place.root.as_deref(), state_root)
+        .map_err(|outcome| cli_line::refused(&outcome, None))?;
+    let client = connect(state_root, connection)?;
+    let source = report::RuntimeSource::new(&client, Instant::now() + report::READ_BUDGET);
+    let installed = report::installed(place.root.as_deref());
+    let exported = report::export(
+        &source,
+        &request,
+        &installed,
+        &report::Mask::of_this_process(),
+    )
+    .map_err(|outcome| cli_line::refused(&outcome, None))?;
+    Ok(report::line(&exported))
+}
+
+/// Workflow #467 RPT-1: the whole-number parameter `name`, `default` when it is absent, within
+/// `range` (`out_of_range` with the range otherwise).
+fn within(params: Params<'_>, name: &str, range: (u64, u64), default: u64) -> Result<u64, Exit> {
+    let (minimum, maximum) = range;
+    let value = unsigned(params, name)?.unwrap_or(default);
+    if (minimum..=maximum).contains(&value) {
+        return Ok(value);
+    }
+    let flag = flag_name(name);
+    Err(cli_line::failure(
+        &cli_line::usage_invalid(Some(flag.as_str()), ArgumentProblem::OutOfRange)
+            .range_min(minimum)
+            .range_max(maximum),
+        None,
     ))
 }
 

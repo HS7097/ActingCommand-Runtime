@@ -116,7 +116,7 @@ use resource_runtime_support::{
     effective_adb_path_for_instance, effective_resource_root, effective_run_root,
     effective_runtime_endpoint, enforce_path_adb_target_boundary, exit_code_table, find_files,
     list_resource_kind, list_runs, match_metric_name, path_string, process_env_overrides,
-    resolved_adb_json, resolved_adb_json_from, run_explain_run, run_report, run_resource,
+    resolved_adb_json, resolved_adb_json_from, run_explain_run, run_resource,
     scene_from_frame, validate_json_file, validate_operation_dir,
 };
 #[cfg(test)]
@@ -386,7 +386,9 @@ const OWN_COMMANDS: [&str; 34] = [
 
 /// actinglab's command groups whose every subcommand word is theirs, as [`execute`] dispatches
 /// them: the group answers a word it does not know with its own refusal, as before LAB-2.
-const OWN_GROUPS: [&str; 11] = [
+/// Workflow #467 RPT-1: `report` is no group of its own any more; `report export` is the
+/// operation table's row.
+const OWN_GROUPS: [&str; 10] = [
     "env",
     "lab",
     "package",
@@ -397,7 +399,6 @@ const OWN_GROUPS: [&str; 11] = [
     "standard-pack",
     "runtime",
     "session",
-    "report",
 ];
 
 /// The groups whose other words the operation table holds: only these subcommands are
@@ -623,7 +624,8 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [group, sub] if group == "run" => {
             run_summary::dispatch(sub, &invocation.global, &invocation.args)
         }
-        [group, sub] if group == "report" => run_report(sub, &invocation.global, &invocation.args),
+        // Workflow #467 RPT-1: the placeholder `report export --last-error` is gone; `report
+        // export` is the operation table's row, which the CLI module serves.
         _ => Err(CliError::usage(format!(
             "unknown actinglab command: {}",
             invocation.command.join(" ")

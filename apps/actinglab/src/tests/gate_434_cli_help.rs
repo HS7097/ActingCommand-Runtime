@@ -221,8 +221,13 @@ fn cli_help_the_list_has_every_offered_row_and_own_command_once() {
         "the own commands without a row are the inventory's commands no row names"
     );
     // Workflow #434 CLI-COMP (register §1.318): its two own commands, `completion` and
-    // `__complete`, have no row either.
-    assert_eq!(own.len(), 36, "the survey's 34 and CLI-COMP's two");
+    // `__complete`, have no row either. Workflow #467 RPT-1 (adapted): `report export`'s
+    // placeholder went for the table's row of those words, so the survey's 34 are 33.
+    assert_eq!(
+        own.len(),
+        35,
+        "the survey's 34 less report export, and CLI-COMP's two"
+    );
 
     // The text for people: each entry once, its sentence beside it; plain ASCII, 100 columns.
     let text = people_of(&["help"]);

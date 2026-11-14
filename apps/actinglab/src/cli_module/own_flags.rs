@@ -535,7 +535,7 @@ pub(crate) type CommandReads = (&'static str, &'static [&'static FlagReads]);
 /// by name (or their words by position) and ignored the rest, each with the read lists its command
 /// line is parsed by since the slice (`FlagArgs::parse_reading`), which refuse a flag or a word
 /// the list does not hold, as LAB-5B4's.
-pub(crate) const WORK_LIST: [CommandReads; 38] = [
+pub(crate) const WORK_LIST: [CommandReads; 37] = [
     ("help", &[&cli_information::HELP_READS]),
     ("version", &[&cli_information::VERSION_READS]),
     ("paths", &[&cli_information::PATHS_READS]),
@@ -631,10 +631,7 @@ pub(crate) const WORK_LIST: [CommandReads; 38] = [
     ("session stream", &[&runtime_stream_adapter::STREAM_READS]),
     ("run open", &[&crate::run_summary::RUN_OPEN_READS]),
     ("run export", &[&crate::run_summary::RUN_EXPORT_READS]),
-    (
-        "report export",
-        &[&resource_runtime_support::REPORT_EXPORT_READS],
-    ),
+    // Workflow #467 RPT-1: `report export`'s placeholder is gone; the words are the table's row.
 ];
 
 /// Workflow #434 LAB-5B5: group (d), the commands that take no flag and no word (but the flags
