@@ -1123,14 +1123,61 @@ impl RuntimeContainedTask<'_> {
         verdict
     }
 
+    /// Workflow #463 U1, fix round 2 (rule 3): whether one or more of the run's interrupt pages
+    /// that its package does not declare itself match `frame`, by the check the kernel's offer
+    /// makes ([`Self::offered_shared_interrupt`]), with nothing handled or counted and no record
+    /// but the feature package's admission at its first use, as for an offer: a linear step's
+    /// closing decision asks it and never presses.
+    pub(super) fn shown_shared_interrupt(
+        &mut self,
+        frame: SharedInterruptFrame<'_>,
+    ) -> Result<bool, ContainedTaskRunError<RequestFailure>> {
+        let Some(mut interrupts) = self.interrupts.take() else {
+            return Ok(false);
+        };
+        let matched = self.matched_shared_interrupts(&mut interrupts, &frame);
+        self.interrupts = Some(interrupts);
+        matched.map(|matched| !matched.is_empty())
+    }
+
     fn check_shared_interrupt(
         &mut self,
         interrupts: &mut RunInterrupts,
         frame: &SharedInterruptFrame<'_>,
     ) -> Result<SharedInterruptVerdict, ContainedTaskRunError<RequestFailure>> {
+        let matched = self.matched_shared_interrupts(interrupts, frame)?;
+        match matched.as_slice() {
+            [] => Ok(SharedInterruptVerdict::NotHandled),
+            [index] => self.handle_shared_interrupt(interrupts, *index),
+            _ => {
+                let page_ids = matched
+                    .iter()
+                    .map(|index| interrupts.entries[*index].page.clone())
+                    .collect::<Vec<_>>();
+                self.record_entry_fact(TaskSemanticFact::InterruptAmbiguous {
+                    outcome: Outcome::new(HostCode::ContainedTaskInterruptAmbiguous)
+                        .operation(HostLocation::InterruptCheck)
+                        .page_ids(page_ids.clone()),
+                    page_ids,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+                Ok(SharedInterruptVerdict::NotHandled)
+            }
+        }
+    }
+
+    /// The indexes of the run's interrupts the running package does not declare itself whose
+    /// page matches `frame` on the run's feature package, admitted on its first use, in
+    /// `interrupts.json` order; none, and the feature package not admitted, when the package
+    /// declares every interrupt page itself.
+    fn matched_shared_interrupts(
+        &mut self,
+        interrupts: &mut RunInterrupts,
+        frame: &SharedInterruptFrame<'_>,
+    ) -> Result<Vec<usize>, ContainedTaskRunError<RequestFailure>> {
         let candidates = interrupts.candidates(frame);
         if candidates.is_empty() {
-            return Ok(SharedInterruptVerdict::NotHandled);
+            return Ok(Vec::new());
         }
         self.admit_features(interrupts)?;
         let features = interrupts
@@ -1159,28 +1206,10 @@ impl RuntimeContainedTask<'_> {
             .into_iter()
             .map(|page| canonical_page_anchor(features.game(), &page))
             .collect::<BTreeSet<_>>();
-        let matched = candidates
+        Ok(candidates
             .into_iter()
             .filter(|index| matched.contains(&interrupts.entries[*index].page))
-            .collect::<Vec<_>>();
-        match matched.as_slice() {
-            [] => Ok(SharedInterruptVerdict::NotHandled),
-            [index] => self.handle_shared_interrupt(interrupts, *index),
-            _ => {
-                let page_ids = matched
-                    .iter()
-                    .map(|index| interrupts.entries[*index].page.clone())
-                    .collect::<Vec<_>>();
-                self.record_entry_fact(TaskSemanticFact::InterruptAmbiguous {
-                    outcome: Outcome::new(HostCode::ContainedTaskInterruptAmbiguous)
-                        .operation(HostLocation::InterruptCheck)
-                        .page_ids(page_ids.clone()),
-                    page_ids,
-                })
-                .map_err(ContainedTaskRunError::Boundary)?;
-                Ok(SharedInterruptVerdict::NotHandled)
-            }
-        }
+            .collect())
     }
 
     /// The run's feature package, admitted on its first use (§7) and checked for its part: a
