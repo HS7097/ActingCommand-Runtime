@@ -692,8 +692,22 @@ pub(super) struct ContainedRunControl {
     borrowed_key: std::sync::OnceLock<()>,
     /// Workflow #463 U1, fix round 2 (rule 6): set once, before a scheduled run executes, when
     /// its admission carries a runtime budget: the Runtime-clock instant (ms) at which the run's
-    /// own time reaches the largest runtime that budget still admits.
-    runtime_budget_end: std::sync::OnceLock<u64>,
+    /// own time reaches the largest runtime that budget still admits; fix round 3 (item 4): or
+    /// that the budget's end could not be read.
+    runtime_budget_end: std::sync::OnceLock<RuntimeBudgetEnd>,
+}
+
+/// Workflow #463 U1, fix round 3 (item 4): what a scheduled run noted, before it executed, of the
+/// end of its admitted runtime budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeBudgetEnd {
+    /// The Runtime-clock instant (ms) at which the run's own time reaches the largest runtime its
+    /// admission still admits.
+    At(u64),
+    /// The end could not be read: the run goes on as it would without the note, and a linear
+    /// step's closing decision, which has no time left to compare with its bound, is not made in
+    /// it.
+    Unread,
 }
 
 /// Workflow #429 R-6 (register §1.302): how the Runtime's own reset after a `StopInstanceRun`
@@ -1078,13 +1092,14 @@ impl ContainedRunControl {
     }
 
     /// Workflow #463 U1, fix round 2 (rule 6): the Runtime-clock instant (ms) at which a
-    /// scheduled run's own time reaches its admitted runtime budget, noted before it executes.
-    fn note_runtime_budget_end(&self, end_monotonic_ms: u64) {
-        let _ = self.runtime_budget_end.set(end_monotonic_ms);
+    /// scheduled run's own time reaches its admitted runtime budget, noted before it executes;
+    /// fix round 3 (item 4): or that it could not be read.
+    fn note_runtime_budget_end(&self, end: RuntimeBudgetEnd) {
+        let _ = self.runtime_budget_end.set(end);
     }
 
-    /// Workflow #463 U1, fix round 2: the instant [`Self::note_runtime_budget_end`] noted.
-    fn runtime_budget_end(&self) -> Option<u64> {
+    /// Workflow #463 U1, fix round 2: what [`Self::note_runtime_budget_end`] noted.
+    fn runtime_budget_end(&self) -> Option<RuntimeBudgetEnd> {
         self.runtime_budget_end.get().copied()
     }
 
@@ -4636,15 +4651,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     /// Workflow #463 U1, fix round 2 (rule 6): the Runtime-clock time left before the earlier of
     /// the run's host deadline and the end of its admitted runtime budget (a scheduled run's,
     /// `ContainedRunControl::runtime_budget_end`); none for a run with neither. A failed clock
-    /// read is kept, as the kernel's own reads keep theirs, and leaves no time.
+    /// read is kept, as the kernel's own reads keep theirs, and leaves no time. Fix round 3 (item
+    /// 4): a scheduled run whose budget's end could not be read has no time left to compare, so
+    /// none is left: its closing decision is not made.
     fn run_time_left(&mut self) -> Option<std::time::Duration> {
-        let end = [
-            self.control.deadline(),
-            self.control.runtime_budget_end().unwrap_or(0),
-        ]
-        .into_iter()
-        .filter(|end| *end != 0)
-        .min()?;
+        let budget_end = match self.control.runtime_budget_end() {
+            Some(RuntimeBudgetEnd::Unread) => return Some(std::time::Duration::ZERO),
+            Some(RuntimeBudgetEnd::At(end_monotonic_ms)) => end_monotonic_ms,
+            None => 0,
+        };
+        let end = [self.control.deadline(), budget_end]
+            .into_iter()
+            .filter(|end| *end != 0)
+            .min()?;
         match self.host.monotonic_ms() {
             Ok(now_ms) => Some(std::time::Duration::from_millis(end.saturating_sub(now_ms))),
             Err(error) => {
@@ -4654,6 +4673,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 Some(std::time::Duration::ZERO)
             }
         }
+    }
+
+    /// Workflow #463 U1, fix round 3 (item 3): a failure that poisons the Runtime (a record that
+    /// cannot be written, a clock or identifier read the Runtime's own bookkeeping needs) is the
+    /// one error a linear step's closing decision passes on; a capture, recognition or device
+    /// failure that does not poison it ends the decision with no classification.
+    fn is_bookkeeping_failure(error: &Self::Error) -> bool {
+        error.poison_runtime
     }
 
     fn record_candidate_evaluation(
@@ -8503,12 +8530,18 @@ impl HostShared {
         // Workflow #463 U1, fix round 2 (rule 6): where the run's admitted runtime budget ends, so
         // that a linear step's closing decision that would outlast it is not made
         // (`RuntimeContainedTask::run_time_left`); read after the switch, which the run's own
-        // time leaves out.
-        if let Some(end_monotonic_ms) = self
-            .policy_run_budget_end_ms(context.decision_id())
-            .map_err(RequestFailure::poison_without_terminal)?
-        {
-            active_run.control.note_runtime_budget_end(end_monotonic_ms);
+        // time leaves out. Fix round 3 (item 4): a read that fails is no failure of the run: the
+        // run goes on as it would without the note, nothing is poisoned or recorded, and no
+        // closing decision is made in it; the settlement reads the same budget by its own rule
+        // and reports what it meets there, as on a Runtime without this read.
+        match self.policy_run_budget_end_ms(context.decision_id()) {
+            Ok(Some(end_monotonic_ms)) => active_run
+                .control
+                .note_runtime_budget_end(RuntimeBudgetEnd::At(end_monotonic_ms)),
+            Ok(None) => {}
+            Err(_) => active_run
+                .control
+                .note_runtime_budget_end(RuntimeBudgetEnd::Unread),
         }
         // Workflow #429 R-0b (register §1.238): the policy run shows while it executes, with the
         // request it runs as (the one `contained_runs` tracks) and its package; its guard drops

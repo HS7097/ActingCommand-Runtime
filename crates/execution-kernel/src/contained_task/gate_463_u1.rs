@@ -2,7 +2,8 @@
 
 // Workflow #463 U1 (register §1.372; contracts/linear-steps.md, "Failure codes" and "A screen the
 // package never recorded"; coordinator work orders `rd-1114/brief-463-u1-unrecorded-screen.md`,
-// `rd-1114/brief-1715-fix1.md` and `rd-1114/brief-1715-fix2.md`): where a linear step's failed wait
+// `rd-1114/brief-1715-fix1.md`, `rd-1114/brief-1715-fix2.md` and `rd-1114/brief-1715-fix3.md`):
+// where a linear step's failed wait
 // ends the run with `page_confirmation_failed`, a task's own run outside a restart segment first
 // makes one closing decision. It observes for the step timeout and only classifies: no input, no
 // further attempt, no frame handed to the shared interrupt pages, and a page that passes on it
@@ -16,10 +17,12 @@
 // - a screen still changing, or whose last two captures, or whose first and last frames, differ;
 // - another page of the package on the last frame;
 // - a shared interrupt page on a frame of the decision, recognised and never pressed, and an error
-//   of the decision (its recognising check of those pages failed, the task's deadline);
+//   of the decision (its recognising check of those pages failed, its capture failed, the task's
+//   deadline; fix round 3: whatever its kind, a failure of the runtime's bookkeeping alone passed
+//   on);
 // - no closing decision at all after a missed intermediate page (rule 1 (a)), after a wait that
 //   ended on its loading allowance, in a run the host starts itself (rule 5), and when the run's
-//   time left is shorter than the decision's bound (rule 6).
+//   time left is shorter than twice the decision's bound (rule 6, fix round 3).
 // A retry decision that sees neither page raises nothing itself: the closing decision follows it
 // (rule 2); the last attempt of a step that declares retries gets one too (rule 4).
 //
@@ -57,6 +60,11 @@ const TASK_FILE: &str = "resources/operations/task/task.json";
 // The frames a wait of 600 ms and one of 1 000 ms take, one every 50 ms from its first at once.
 const ARRIVAL_FRAMES: usize = 13;
 const DECISION_FRAMES: usize = 21;
+// Fix round 3: the frames the wait of 300 ms for the intermediate page takes, likewise.
+const INTERMEDIATE_FRAMES: usize = 7;
+// Fix round 3: the frames the arrival takes on the spinner under `on`: its first at once, one every
+// 50 ms; the allowance of 200 ms is spent at its fifth, so its sixth, a transition frame, ends it.
+const LOADING_ARRIVAL_FRAMES: usize = 6;
 // The capture number of the closing decision's first frame after the arrival of a step without a
 // retry: the run's first frame, then the arrival's.
 const FIRST_CLOSING_CAPTURE: usize = 1 + ARRIVAL_FRAMES + 1;
@@ -426,11 +434,14 @@ fn u1_the_last_attempt_of_a_step_with_retries_gets_the_code_from_its_closing_dec
     assert_eq!(runtime.captures_after(2), ARRIVAL_FRAMES + DECISION_FRAMES);
 }
 
-// Rule 1 (a): `open` declares the intermediate page `wait` (300 ms) and a retry. After the tap the
-// device shows `result` at once: `wait` flashed past between two frames, onto a page the package
-// knows. The intermediate wait misses it, and the retry decision on `wait` and `home` sees neither;
-// a missed intermediate page is never classified, so no closing decision follows: the run fails
-// `page_confirmation_failed` with the retry decision's detail and timing, no values, one input.
+// Rule 1 (a): `open` declares the intermediate page `wait` (300 ms) and a retry. After the tap
+// `wait` flashed past between two frames and the device rests on a dark screen, no page of the
+// package, unchanged on every frame (fix round 3: a screen a closing decision would name). The
+// intermediate wait misses `wait` in its 7 frames, and the retry decision on `wait` and `home` sees
+// neither in its 21; a missed intermediate page is never classified, so no closing decision follows:
+// the run fails `page_confirmation_failed` with the retry decision's detail and timing, no values,
+// one input, and no frame after the retry decision's (a closing decision would take 21 more and
+// name the dark screen).
 #[test]
 fn u1_an_intermediate_page_that_flashed_past_keeps_page_confirmation_failed() {
     let task = plan_of(
@@ -441,7 +452,7 @@ fn u1_an_intermediate_page_that_flashed_past_keeps_page_confirmation_failed() {
     );
     let (result, runtime) = run(
         &task,
-        vec![vec![plain(HOME)], vec![plain(RESULT)]],
+        vec![vec![plain(HOME)], vec![plain(DARK)]],
         LoadingMode::Off,
     );
     let error = failed("a missed intermediate page", result);
@@ -456,6 +467,11 @@ fn u1_an_intermediate_page_that_flashed_past_keeps_page_confirmation_failed() {
     assert_eq!(timing(&error), postcondition(STEP_MS));
     assert_eq!(value(&error, "page_ids"), Value::Null, "{error}");
     assert_eq!(runtime.inputs().len(), 1);
+    assert_eq!(
+        runtime.captures_after(1),
+        INTERMEDIATE_FRAMES + DECISION_FRAMES,
+        "no closing decision"
+    );
     assert_eq!(runtime.popup_checks(), 0, "no closing decision");
 }
 
@@ -524,6 +540,21 @@ fn u1_a_recognition_error_inside_the_closing_decision_keeps_page_confirmation_fa
     assert_eq!(runtime.captures_after(1), ARRIVAL_FRAMES + 1);
 }
 
+// Fix round 3 (item 3): the closing decision's first capture fails with an operation error of the
+// device, which the runtime does not count as a failure of its bookkeeping. An error of the closing
+// decision's own capture ends it with nothing, whatever its kind: the run fails as the arrival
+// ended it, a task failure, never the capture's error; the device showed the arrival's frames only.
+#[test]
+fn u1_a_capture_error_inside_the_closing_decision_keeps_page_confirmation_failed() {
+    let device =
+        device_without_retry(vec![plain(DARK)]).with_failing_capture_from(FIRST_CLOSING_CAPTURE);
+    let (result, runtime) = run_without_retry_on(device, TASK_MS);
+    assert_ends_as_the_arrival("a failed capture", result, &runtime);
+    assert_eq!(runtime.captures(), FIRST_CLOSING_CAPTURE);
+    assert_eq!(runtime.captures_after(1), ARRIVAL_FRAMES);
+    assert_eq!(runtime.popup_checks(), 0);
+}
+
 // Rule 3: the task's deadline 500 ms into the closing decision (a task timeout of 1 100 ms) on the
 // still dark screen. The deadline that cuts the closing decision leaves the end the arrival gave,
 // neither the new code nor the task timeout, after fewer frames than a whole decision.
@@ -544,28 +575,32 @@ fn u1_the_task_deadline_inside_the_closing_decision_keeps_page_confirmation_fail
 // decision is made, and the run fails as the arrival ended it after the arrival's frames alone.
 #[test]
 fn u1_a_run_the_runtime_started_itself_makes_no_closing_decision() {
-    let device = device_without_retry(vec![plain(DARK)]).as_host_started_run();
+    let device = device_without_retry(vec![plain(DARK)]).host_started();
     let (result, runtime) = run_without_retry_on(device, TASK_MS);
     assert_ends_as_the_arrival("a run the runtime started", result, &runtime);
     assert_eq!(runtime.captures_after(1), ARRIVAL_FRAMES);
     assert_eq!(runtime.popup_checks(), 0);
 }
 
-// Rule 6: the same still dark screen when the runtime answers that the run has 999 ms left, less
-// than the closing decision's bound of 1 000 ms: no closing decision, the arrival's end and frames.
-// With 1 000 ms left the closing decision is made and the run gets the new code.
+// Rule 6, fix round 3 (item 1): the closing decision runs only when the run has at least twice its
+// bound left (it lasts its bound, and the capture and recognition of its last frame, the evaluation
+// of the package's other pages and the work before the settlement come after it). The same still
+// dark screen when the runtime answers that the run has 1 999 ms left, just below twice the bound
+// of 1 000 ms: no closing decision, the arrival's end and frames. With 2 000 ms left, just at twice
+// the bound, the closing decision is made and the run gets the new code.
 #[test]
 fn u1_a_run_with_less_time_left_than_the_closing_bound_makes_no_closing_decision() {
-    let short = device_without_retry(vec![plain(DARK)]).with_time_left(Duration::from_millis(999));
+    let short = device_without_retry(vec![plain(DARK)])
+        .with_time_left(Duration::from_millis(2 * STEP_MS - 1));
     let (result, runtime) = run_without_retry_on(short, TASK_MS);
-    assert_ends_as_the_arrival("999 ms left", result, &runtime);
+    assert_ends_as_the_arrival("1 999 ms left", result, &runtime);
     assert_eq!(runtime.captures_after(1), ARRIVAL_FRAMES);
     assert_eq!(runtime.popup_checks(), 0);
 
     let enough =
-        device_without_retry(vec![plain(DARK)]).with_time_left(Duration::from_millis(STEP_MS));
+        device_without_retry(vec![plain(DARK)]).with_time_left(Duration::from_millis(2 * STEP_MS));
     let (result, runtime) = run_without_retry_on(enough, TASK_MS);
-    let error = failed("1 000 ms left", result);
+    let error = failed("2 000 ms left", result);
     assert_eq!(error.code().as_str(), UNRECORDED_SCREEN, "{error}");
     assert_eq!(runtime.captures_after(1), ARRIVAL_FRAMES + DECISION_FRAMES);
 }
@@ -598,10 +633,12 @@ fn u1_the_own_page_still_shown_with_no_attempt_left_keeps_page_confirmation_fail
 }
 
 // Not raised, as before: under `execution.loading.mode` `on`, the spinner over a dark screen after
-// the tap and an allowance of 200 ms (`loading.max_ms`). The arrival spends the allowance and ends;
-// the retry decision shares it, and its first frame, a transition frame after the allowance is
-// spent, ends it: `page_confirmation_failed` with the loading values and the same detail, one
-// input, and no closing decision after a decision that ended on its loading allowance.
+// the tap and an allowance of 200 ms (`loading.max_ms`). The arrival spends the allowance and ends
+// in its 6 frames; the retry decision shares it, and its first frame, a transition frame after the
+// allowance is spent, ends it: `page_confirmation_failed` with the loading values and the same
+// detail, one input, and no closing decision after a decision that ended on its loading allowance:
+// no frame after the retry decision's one (fix round 3: a closing decision would take one more, its
+// first, a transition frame, before it ended).
 #[test]
 fn u1_a_decision_ended_on_its_loading_allowance_keeps_page_confirmation_failed() {
     let task = plan(json!({"loading": {"max_ms": LOADING_MS}}));
@@ -622,6 +659,11 @@ fn u1_a_decision_ended_on_its_loading_allowance_keeps_page_confirmation_failed()
         (json!("spinner"), json!(LOADING_MS), json!(LOADING_MS))
     );
     assert_eq!(runtime.inputs().len(), 1);
+    assert_eq!(
+        runtime.captures_after(1),
+        LOADING_ARRIVAL_FRAMES + 1,
+        "no closing decision"
+    );
     assert_eq!(runtime.popup_checks(), 0, "no closing decision");
 }
 

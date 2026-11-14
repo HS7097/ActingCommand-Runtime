@@ -52,6 +52,8 @@ enum AfterTap {
     Unrecorded,
     // `home` on every frame: the tap is swallowed.
     OwnPage,
+    // Fix round 3: `list` (a blue first pixel) on every frame: the step is confirmed.
+    Reached,
 }
 
 // Writes the package as a source package directory at `directory`, its taps
@@ -134,13 +136,18 @@ fn write_package_with(directory: &Path, retry_interval_ms: Option<u64>) {
 // The fake device: after the tap, the screen `after`.
 fn device(after: AfterTap) -> Arc<FakeState> {
     let state = Arc::new(FakeState::default());
-    if matches!(after, AfterTap::Unrecorded) {
+    let first_pixel = match after {
+        AfterTap::Unrecorded => Some([0_u8, 0, 0]),
+        AfterTap::OwnPage => None,
+        AfterTap::Reached => Some([0_u8, 0, 255]),
+    };
+    if let Some(first_pixel) = first_pixel {
         *state.pixel_script.lock().expect("pixel script") =
-            Some(Arc::new(|_: usize, inputs: usize| {
+            Some(Arc::new(move |_: usize, inputs: usize| {
                 if inputs == 0 {
                     Vec::<(usize, [u8; 3])>::new()
                 } else {
-                    vec![(0_usize, [0_u8, 0, 0])]
+                    vec![(0_usize, first_pixel)]
                 }
             }));
     }
@@ -798,8 +805,9 @@ fn u1_a_startup_package_with_an_entry_page_never_gets_the_code_and_pauses_nothin
 // Fix round 2 (rule 6): the task's admitted runtime budget is 1 300 ms, its expected duration
 // 1 300 ms, so the run may take 1 300 ms of its own time. The scheduled run on the screen of
 // neither page spends 200 ms on its arrival, 10 ms on its retry delay and 600 ms on its retry
-// decision; the 490 ms its budget has left are less than the closing decision's bound of 600 ms,
-// so no closing decision is made: the run fails `page_confirmation_failed` after one tap, and its
+// decision; the 490 ms its budget has left are less than twice the closing decision's bound of
+// 600 ms (fix round 3: 1 200 ms), so no closing decision is made: the run fails
+// `page_confirmation_failed` after one tap, and its
 // settlement records that code (neither the new code nor `policy_runtime_budget_exceeded`), class
 // recoverable, and follows `on_failure` (`continue`).
 #[test]
@@ -819,6 +827,86 @@ fn u1_a_scheduled_run_whose_budget_ends_before_the_closing_bound_keeps_its_failu
     catalog.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("policy task bytes");
     host.activate_policy_catalog(&catalog)
         .expect("activate policy catalog");
+    let (context, error) = failed_scheduled_run(&host, &clock, &request, POLICY_NOW_UNIX_MS, 7);
+    assert_eq!(error.code(), CONFIRMATION_FAILED);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let failure = recorded_failure(&host, context.run_id());
+    assert_eq!(failure.outcome.code().as_str(), CONFIRMATION_FAILED);
+    assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
+    assert_eq!(failure.disposition, PolicyFailureDisposition::Continue);
+    host.close().expect("close runtime host");
+}
+
+// Fix round 3 (item 4; `rd-1114/brief-1715-fix3.md`): a scheduled run that cannot read where its
+// admitted runtime budget ends (the fixture task's budget of 300 000 ms, the read made to fail once)
+// goes on as it would without that read, poisoned by nothing, and makes no closing decision. With
+// `list` after the tap it succeeds after one tap, and its settlement records the success. On the
+// screen of neither page, unchanged, where a run that reads its budget's end gets the new code
+// (above), it fails `page_confirmation_failed` after one tap, not fatal, unclassified: its
+// settlement records that code, class recoverable, disposition `continue`, and pauses nothing.
+#[test]
+fn u1_a_scheduled_run_whose_budget_end_cannot_be_read_ends_as_without_the_closing_decision() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("u1-open");
+    write_package(&package, 10);
+    let request = ContainedTaskRequest::new(package.to_string_lossy().into_owned())
+        .expect("contained task request");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let state = device(AfterTap::Reached);
+    let host = start(&root, &clock, &package, &state);
+    host.activate_policy_catalog(&sources(Some(continue_without_retry()), false))
+        .expect("activate policy catalog");
+    host.fail_next_policy_run_budget_end_for_test()
+        .expect("fail the next budget end read");
+    advance_manual_clock_to(&clock, POLICY_NOW_UNIX_MS);
+    host.capacity_sampler_for_test().expect("capacity owner")()
+        .expect("capacity sample at the admission time");
+    let (_, intent, reasons) =
+        evaluated_policy_dispatch_at(&host, PolicyTrigger::FactsChanged, POLICY_NOW_UNIX_MS, 7);
+    assert_eq!(intent.task_id, TASK);
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_scheduled_policy_dispatch(
+            &intent,
+            &reasons,
+            &policy_context(&host, &intent),
+            &request,
+        )
+        .expect("policy admission")
+    else {
+        panic!("expected one policy run context")
+    };
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("the scheduled run succeeds");
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let (settled, _) = host
+        .complete_scheduled_policy_run(&context, &receipt)
+        .expect("the run settles");
+    assert!(
+        matches!(settled.outcome, PolicyExecutionOutcome::Succeeded { .. }),
+        "{:?}",
+        settled.outcome
+    );
+    host.close().expect("close runtime host");
+
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("u1-open");
+    write_package(&package, 10);
+    let request = ContainedTaskRequest::new(package.to_string_lossy().into_owned())
+        .expect("contained task request");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let state = device(AfterTap::Unrecorded);
+    let host = start(&root, &clock, &package, &state);
+    host.activate_policy_catalog(&sources(Some(continue_without_retry()), false))
+        .expect("activate policy catalog");
+    host.fail_next_policy_run_budget_end_for_test()
+        .expect("fail the next budget end read");
     let (context, error) = failed_scheduled_run(&host, &clock, &request, POLICY_NOW_UNIX_MS, 7);
     assert_eq!(error.code(), CONFIRMATION_FAILED);
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);

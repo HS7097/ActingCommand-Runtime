@@ -24359,7 +24359,8 @@ screen stood still and nothing the package declares was on it ([linear-steps.md]
   `check_shared_interrupt` with no change to the offer), handling, counting and recording nothing.
   Every task error inside the closing decision (the deadline, a capture or recognition that failed,
   that check failing) ends it with the failed wait's code, detail and timing; a failure of the
-  run's boundary or device is the run's, as anywhere.
+  run's boundary or device is the run's, as anywhere (fix round 3 narrows that exception to the
+  Runtime's own bookkeeping, below).
 - **Rule 4**: the closing decision runs wherever main ends a step `page_confirmation_failed` after a
   wait: the last attempt's arrival of a step with or without retries, the next page after a seen
   intermediate page, a seen skip target's candidates (main ends there at once, as after a seen
@@ -24386,8 +24387,9 @@ screen stood still and nothing the package declares was on it ([linear-steps.md]
   admission still admits (`policy_control::runtime_budget_allowance_ms`, the same rule; the
   dispatch clock's start plus the switch), and `ContainedTaskRuntime::run_time_left` (default
   `None`) answers the time left before the earlier of that instant and the run's host deadline;
-  with less than the closing bound left no closing decision is made. A paced run's settlement
-  compares its budget time, never more than this wall time.
+  with less than the closing bound left no closing decision is made (fix round 3: less than twice
+  the bound, below). A paced run's settlement compares its budget time, never more than this wall
+  time.
 - **Time**: a failing step can now take up to one step timeout longer than on main, once per run
   (the run ends there); a step with a retry whose retry decision saw neither page takes it after
   that decision.
@@ -24413,6 +24415,50 @@ screen stood still and nothing the package declares was on it ([linear-steps.md]
   step's own page. Round 1's adaptations of `gate_e5_linear::gate_linear_only_a_swallowed_input_is_retried`
   and `gate_load4::linear_loading_pauses_the_arrival_budget` still hold.
 
+**Fix round 3** (the closing points of the second review, the coordinator's rulings, read in
+`rd-1114/brief-1715-fix3.md`; no merge of main, the section keeps its number).
+- **The budget's edge** (item 1): the closing decision lasts at least its bound, and the capture
+  and recognition of its last frame, the evaluation of the package's other pages and the work
+  before the settlement come after it, so a run with between one and two bounds left could still
+  be rewritten to `policy_runtime_budget_exceeded`. It now runs only when the run has at least
+  twice its bound left (`linear_closing_pages` in `contained_task/linear.rs`); the contract
+  ("Retries" and "A screen the package never recorded") and the catalog entry say so.
+- **Errors inside the closing decision** (item 3): an error raised by its own capture, recognition
+  or evaluation ends it with no classification whatever its kind, a task error or an operation
+  error of the device or the runtime (`ContainedTaskRunError::operation` made such a capture
+  failure a boundary error the decision passed on): the failed wait's code, detail and timing. The
+  one exception is a failure of the Runtime's own bookkeeping, a record it cannot write, which ends
+  the run as it ends any run: the new seam `ContainedTaskRuntime::is_bookkeeping_failure` (default
+  `true`, every boundary failure passed on) tells it, and the host answers it from the failure's
+  poison mark (`RequestFailure::poison_runtime`, what poisons the Runtime anywhere else). The
+  contract, the catalog entry and this section's rule 3 bullet name that exception.
+- **The budget's end unread** (item 4): a scheduled run read where its admitted runtime budget ends
+  before it executed, and a failed read poisoned the Runtime, a new way for every scheduled run to
+  fail. Now a failed read is noted (`RuntimeBudgetEnd::Unread` on the run's control) and nothing
+  else: the run goes on as on main, nothing is poisoned or recorded, and
+  `RuntimeContainedTask::run_time_left` answers no time left, so no closing decision is made in
+  that run. A reservation before the run already above its limit, which the settlement judges over
+  budget, is refused by `policy_control::runtime_budget_allowance_ms` as before, so such a run goes
+  on with its budget's end unread. The code `policy_budget_receipt_invalid` at
+  `read_policy_runtime_budget` stays in that function; its catalog entry names no locations, so
+  the pair is admitted.
+- **Tests.** Kernel `gate_463_u1.rs` (exec gate row "#463 U1 with fix rounds 1, 2 and 3"):
+  `u1_an_intermediate_page_that_flashed_past_keeps_page_confirmation_failed` now rests on a dark
+  screen after the flash and counts 7 + 21 frames after the tap (a closing decision would take 21
+  more and name the screen); `u1_a_decision_ended_on_its_loading_allowance_keeps_page_confirmation_failed`
+  counts 6 + 1 frames (a closing decision would take one more); `u1_a_run_with_less_time_left_than_the_closing_bound_makes_no_closing_decision`
+  leaves 1 999 ms (no closing decision) and 2 000 ms (the code) of a bound of 1 000 ms; new,
+  `u1_a_capture_error_inside_the_closing_decision_keeps_page_confirmation_failed` (an operation
+  error of the device's capture on the closing decision's first frame). The scripted runtime's
+  `as_host_started_run` is renamed `host_started` (clippy `wrong_self_convention`, which failed
+  `lint` on the round 2 head), and it may fail its captures from a given one on. Host (host gate
+  row "#463 U1 fix round 3"): `gate_463_u1::u1_a_scheduled_run_whose_budget_end_cannot_be_read_ends_as_without_the_closing_decision`
+  (a success settles succeeded; the unknown screen fails `page_confirmation_failed`, recoverable,
+  `continue`), with a test-only failure of the read; and `gate_373_nav6::u1_the_recognise_only_entry_answers_shown_and_presses_counts_and_records_nothing`
+  (a notice, or a notice and an alert at once, recognised by the closing decision: one frame
+  taken, one input, no handler, no `InterruptHandled`, no `InterruptAmbiguous`; the same frames
+  through the usual entry: the notice handled once, the pair recorded `InterruptAmbiguous`).
+
 **At deploy.** Installed `linear_steps` packages change behaviour with this version, with no
 change to any package: a run of a task (scheduled, direct or Lab) whose step ends
 `page_confirmation_failed` after a wait and whose screen then stays still, with nothing the package
@@ -24420,7 +24466,7 @@ declares on it, for one more step timeout ends `contained_task_linear_unrecorded
 pauses its pair at the first occurrence and starts the ladder as before (`pack_logic`); then the
 instance goes on with its other tasks. A startup package or a ladder rung never ends so. A failing
 step takes up to one step timeout longer before the run ends, unless the run's deadline or its
-runtime budget leaves less. A slow static screen nobody declared can now pause its task: declare it
+runtime budget leaves less than two step timeouts. A slow static screen nobody declared can now pause its task: declare it
 (a page or a loading page). List paused pairs with `actingd suspended` (`suspended[]`: the code in
 `failure`, its `artifact_id`, `lifts_when` `content_hash_changes`) or `ac_diagnose` (its
 `suspended` rows; `failures_grouped`). A pause lifts when the package's content changes (add the
