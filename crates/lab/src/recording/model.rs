@@ -11,6 +11,7 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::DriveDraw;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 pub const LAB_RECORDING_SCHEMA: &str = "actingcommand.lab-recording.v1";
 pub const LAB_RECORD_MARK_SCHEMA: &str = "actingcommand.lab-record-mark.v1";
@@ -21,6 +22,9 @@ pub const LAB_RECORDING_DEFAULT_MATCH_METRIC: &str = "ccoeff_normed";
 pub const LAB_RECORDING_DEFAULT_SETTLE_MS: u64 = 2_000;
 /// The largest settle of an optional step (the package's largest step timeout).
 pub const LAB_RECORDING_MAX_SETTLE_MS: u64 = 60_000;
+/// #463 L1: the longest wait between a one-call step's performed press and its next frame, the
+/// bound a settle has.
+pub const LAB_RECORDING_MAX_NEXT_FRAME_MS: u64 = LAB_RECORDING_MAX_SETTLE_MS;
 /// Workflow #390 LAB-2: the largest duration of a recorded drag or long press (the Runtime's
 /// largest input duration).
 pub const LAB_RECORDING_MAX_GESTURE_MS: u64 = 60_000;
@@ -1272,6 +1276,48 @@ pub struct CommitClickOutcome {
     pub step: u32,
     pub step_closed: bool,
     pub click: StepClick,
+}
+
+/// #463 L1 (`contracts/lab-recording.md`, "One call per step"): `do --capture --record` that
+/// records a whole step: the `record mark` request of the open step, the press, and the next
+/// frame after it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RecordStepRequest {
+    /// The `actingcommand.lab-record-mark.v1` request `record mark --request-json` takes, applied
+    /// first, as `record mark` applies it; `None` is today's `do --capture --record`.
+    pub mark: Option<MarkRequest>,
+    /// How the press is planned on the open step, as `do --capture --record` plans it.
+    pub click: PlanClickRequest,
+    /// After a performed press without a failure, wait this many milliseconds (0 to
+    /// [`LAB_RECORDING_MAX_NEXT_FRAME_MS`]) and take the next frame as `capture --record` takes
+    /// it; `None` takes none.
+    pub next_frame_after_ms: Option<u64>,
+    /// The file the next frame's PNG is written to, as `capture --record --out` writes it.
+    pub next_frame_out: Option<PathBuf>,
+}
+
+/// #463 L1: the next frame a one-call step took after its press.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NextFrameOutcome {
+    /// The wait before it, in milliseconds.
+    pub after_ms: u64,
+    /// The file its PNG was written to.
+    pub out: Option<String>,
+    /// The frame as the recording took it, `capture --record`'s `record`.
+    pub record: AttachFrameOutcome,
+}
+
+/// #463 L1: what a one-call step recorded.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordStepOutcome {
+    /// The `record mark` output of the request, when one was given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mark: Option<MarkOutcome>,
+    /// The press as `do --capture --record` records it.
+    pub click: CommitClickOutcome,
+    /// The next frame, when one was asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_frame: Option<NextFrameOutcome>,
 }
 
 /// `session app <verb> --record`: the verb as given (`launch`, `restart`, `stop`,

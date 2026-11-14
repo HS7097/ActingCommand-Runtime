@@ -22,15 +22,16 @@ use crate::recording::marks::match_metric;
 use crate::recording::model::{
     ApplicationPlan, AttachFrameOutcome, AttachFrameRequest, ClickEffect, ClickPlan, ClickView,
     CommitApplicationOutcome, CommitApplicationRequest, CommitClickOutcome, CommitClickRequest,
-    FrameView, LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_MAX_SETTLE_MS, LabRecording,
-    LabRecordingStart, LabStatus, LabStatusView, MarkOutcome, MarkRequest, MarkStatusView,
-    MarkView, OpaqueJson, PlanApplicationRequest, PlanClickRequest, RecordStartOptions,
-    RecordStopOptions, RecordStopOutcome, RecordedFrame, RecordingArtifact, RecordingDefaults,
-    RecordingStep, SelfTestStatus, StepClick, StepOptionalView, StepStateView, StepTransition,
-    StepView, TransitionSpec, TransitionView,
+    FrameView, LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_MAX_NEXT_FRAME_MS,
+    LAB_RECORDING_MAX_SETTLE_MS, LabRecording, LabRecordingStart, LabStatus, LabStatusView,
+    MarkOutcome, MarkRequest, MarkStatusView, MarkView, NextFrameOutcome, OpaqueJson,
+    PlanApplicationRequest, PlanClickRequest, RecordStartOptions, RecordStepOutcome,
+    RecordStepRequest, RecordStopOptions, RecordStopOutcome, RecordedFrame, RecordingArtifact,
+    RecordingDefaults, RecordingStep, SelfTestStatus, StepClick, StepOptionalView, StepStateView,
+    StepTransition, StepView, TransitionSpec, TransitionView,
 };
 use crate::recording::steps::{
-    ArrivalMode, FrameMeta, application_action, application_with_click, apply_marks,
+    ArrivalMode, FrameMeta, Session, application_action, application_with_click, apply_marks,
     apply_step_action, apply_transition, arrive, check_device_arrival, commit_application,
     commit_click, default_recording_defaults, effective_indices, new_recording, not_active,
     open_session, open_session_for_marks, open_step, plan_application, plan_click, save,
@@ -48,7 +49,8 @@ use crate::recording::{
 use actingcommand_contract::{LabError, LabErrorClass, LabResult};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Defaults of a new recording from `record start` options (validated before any write).
 pub fn record_start_defaults(options: &RecordStartOptions) -> LabResult<RecordingDefaults> {
@@ -1096,6 +1098,25 @@ pub fn record_mark(
             return Err(stopped_change("an application operation"));
         }
     }
+    let outcome = mark_session(&mut session, request, dry_run, ocr)?;
+    if !dry_run {
+        if session.stopped {
+            session.recording.amended_at_unix_ms = Some(now_unix_ms());
+        }
+        save(&mut session)?;
+    }
+    Ok(outcome)
+}
+
+/// `record mark`'s work on an opened session: every check and the self-test, the session changed
+/// in memory only; the caller writes it. #463 L1: the one-call form of `do --capture --record`
+/// ([`record_plan_step`]) applies its mark request with it, the same code.
+fn mark_session(
+    session: &mut Session,
+    request: &MarkRequest,
+    dry_run: bool,
+    ocr: &LabOcr,
+) -> LabResult<MarkOutcome> {
     let mut outcome = MarkOutcome {
         status: if dry_run {
             "marks_validated"
@@ -1121,16 +1142,16 @@ pub fn record_mark(
         after_stop: session.stopped,
     };
     let step = if let Some(action) = &request.step_action {
-        let (status, step) = apply_step_action(&mut session, action)?;
+        let (status, step) = apply_step_action(session, action)?;
         outcome.status = status.to_string();
         step
     } else if let Some(spec) = &request.transition {
-        let applied = apply_transition(&mut session, request, spec, ocr)?;
+        let applied = apply_transition(session, request, spec, ocr)?;
         outcome.marks = applied.marks;
         outcome.reused = applied.reused;
         applied.step
     } else {
-        let applied = apply_marks(&mut session, request, ocr)?;
+        let applied = apply_marks(session, request, ocr)?;
         outcome.step_opened = applied.opened;
         outcome.closed_step = applied.closed_step;
         outcome.frame = applied.frame;
@@ -1152,12 +1173,6 @@ pub fn record_mark(
         outcome.application = recorded.application.clone();
         outcome.transition = recorded.transition.as_ref().map(transition_view);
         outcome.step_state = Some(step_state(recorded));
-    }
-    if !dry_run {
-        if session.stopped {
-            session.recording.amended_at_unix_ms = Some(now_unix_ms());
-        }
-        save(&mut session)?;
     }
     Ok(outcome)
 }
@@ -1293,6 +1308,218 @@ pub fn record_commit_click(
         .with_details(json!({"record": to_json(&outcome)})));
     }
     Ok(outcome)
+}
+
+/// The `actingcommand.lab-record-mark.v1` request in `text`, as `record mark --request` and
+/// `--request-json` read it: text that does not decode into one (an unknown member at any level, a
+/// member of the wrong type) is `validation_failed`. #463 L1: `do --capture --record
+/// --mark-request` and `--mark-request-json` read theirs with it.
+pub fn parse_mark_request(text: &str) -> LabResult<MarkRequest> {
+    serde_json::from_str::<MarkRequest>(text)
+        .map_err(|error| LabError::usage(format!("invalid record mark request: {error}")))
+}
+
+/// #463 L1 (`contracts/lab-recording.md`, "One call per step"): what the one-call form of `do
+/// --capture --record` asks of its caller: the Runtime's press and capture, and the caller's
+/// clock. actinglab gives the Runtime's ("`--record` on device commands"); a test gives fakes.
+pub trait RecordStepPorts {
+    /// Sends the planned input to the Runtime once, as `do --capture --record` sends it. `Ok`: the
+    /// Runtime performed it, with or without a failure, or its outcome is unknown; what the
+    /// recording takes of the answer. `Err`: it was not performed, or no answer came: the
+    /// operation's own error, and nothing of the press is recorded.
+    fn press(&mut self, plan: &ClickPlan) -> LabResult<CommitClickRequest>;
+
+    /// Waits `duration` on the caller's clock.
+    fn wait(&mut self, duration: Duration);
+
+    /// Takes one frame through the Runtime, as `capture --record` takes it.
+    fn capture(&mut self) -> LabResult<AttachFrameRequest>;
+}
+
+/// #463 L1: a one-call step planned under its recording lock: the mark request applied to the
+/// open recording in memory by `record mark`'s own code and self-tested, and the press planned on
+/// the open step by `do --capture --record`'s; nothing is written and nothing is sent until
+/// [`PlannedStep::perform`].
+pub struct PlannedStep {
+    session: Session,
+    mark: Option<MarkOutcome>,
+    plan: ClickPlan,
+    next_frame_after_ms: Option<u64>,
+    next_frame_out: Option<PathBuf>,
+}
+
+/// #463 L1: plans a one-call step. In order: the next frame's bounds; the mark request's checks
+/// and `record mark`'s work on the open recording, with its self-test on the step's live frames;
+/// then the press, by `do --capture --record`'s rules (its point, `--tap`, `--seed`, a declared
+/// drag or long press; the gestures it refuses stay refused). A refusal is the code of the check
+/// that refused, `record mark`'s or `do --capture --record`'s, and nothing is written or sent. A
+/// stopped recording takes no device command (`record_session_not_active`).
+pub fn record_plan_step(
+    lock: &RecordingLock,
+    request: &RecordStepRequest,
+    ocr: &LabOcr,
+) -> LabResult<PlannedStep> {
+    validate_next_frame(request)?;
+    if let Some(mark) = &request.mark {
+        validate_mark_request(mark)?;
+    }
+    let mut session = open_session(lock)?;
+    let mark = request
+        .mark
+        .as_ref()
+        .map(|mark| mark_session(&mut session, mark, false, ocr))
+        .transpose()?;
+    let plan = plan_click(&session.recording, &request.click)?;
+    Ok(PlannedStep {
+        session,
+        mark,
+        plan,
+        next_frame_after_ms: request.next_frame_after_ms,
+        next_frame_out: request.next_frame_out.clone(),
+    })
+}
+
+impl PlannedStep {
+    /// The press this step plans: the input the caller sends.
+    pub fn plan(&self) -> &ClickPlan {
+        &self.plan
+    }
+
+    /// #463 L1: performs the planned step under the same lock: the marks written once, as `record
+    /// mark` writes them; the press sent through `ports` and recorded as `do --capture --record`
+    /// records it; then, only after a performed press without a failure and only when asked for,
+    /// the wait and the next frame, which arrives as `capture --record`'s does (it opens the next
+    /// step). A press that was not performed leaves the marks recorded and answers the operation's
+    /// own error; one performed with a failure or indeterminate answers as `do --capture --record`
+    /// does; neither takes a next frame. A next frame that cannot be taken answers the capture's
+    /// own error, and the press and its closed step stand: nothing is rolled back. Every error
+    /// after the marks are written names them in its details (`mark`).
+    pub fn perform(
+        mut self,
+        lock: &RecordingLock,
+        ports: &mut impl RecordStepPorts,
+    ) -> LabResult<RecordStepOutcome> {
+        if self.mark.is_some() {
+            save(&mut self.session)?;
+        }
+        let mark = self.mark;
+        let pressed = ports
+            .press(&self.plan)
+            .map_err(|error| with_detail(error, "mark", mark.as_ref().map(to_json)))?;
+        let click = record_commit_click(lock, &self.plan, &pressed)
+            .map_err(|error| with_detail(error, "mark", mark.as_ref().map(to_json)))?;
+        let Some(after_ms) = self.next_frame_after_ms else {
+            return Ok(RecordStepOutcome {
+                mark,
+                click,
+                next_frame: None,
+            });
+        };
+        ports.wait(Duration::from_millis(after_ms));
+        let (record, out) = next_frame(lock, ports, self.next_frame_out.as_deref())
+            .map_err(|error| next_frame_failed(error, after_ms, &click, mark.as_ref()))?;
+        Ok(RecordStepOutcome {
+            mark,
+            click,
+            next_frame: Some(NextFrameOutcome {
+                after_ms,
+                out,
+                record,
+            }),
+        })
+    }
+}
+
+/// #463 L1: the next frame's wait is 0 to [`LAB_RECORDING_MAX_NEXT_FRAME_MS`] milliseconds, and its
+/// file is named only with a wait: `validation_failed` otherwise, before anything is read.
+fn validate_next_frame(request: &RecordStepRequest) -> LabResult<()> {
+    match request.next_frame_after_ms {
+        Some(after_ms) if after_ms > LAB_RECORDING_MAX_NEXT_FRAME_MS => {
+            Err(LabError::usage(format!(
+                "--next-frame-after-ms must be in 0..={LAB_RECORDING_MAX_NEXT_FRAME_MS}, got \
+                 {after_ms}"
+            ))
+            .with_details(json!({
+                "next_frame_after_ms": after_ms,
+                "max_next_frame_after_ms": LAB_RECORDING_MAX_NEXT_FRAME_MS
+            })))
+        }
+        None if request.next_frame_out.is_some() => Err(LabError::usage(
+            "--next-frame-out names the file of the next frame: give --next-frame-after-ms with it",
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// #463 L1: the next frame after a performed press, as `capture --record` takes it: the open
+/// recording must accept a device frame, then the capture, its PNG written to `out` when that is
+/// named, then the frame recorded. Answers the recorded frame and the file written.
+fn next_frame(
+    lock: &RecordingLock,
+    ports: &mut impl RecordStepPorts,
+    out: Option<&Path>,
+) -> LabResult<(AttachFrameOutcome, Option<String>)> {
+    record_frame_preflight(lock)?;
+    let frame = ports.capture()?;
+    let written = out
+        .map(|path| write_next_frame(path, &frame.png))
+        .transpose()?;
+    Ok((record_attach_frame(lock, frame)?, written))
+}
+
+/// The next frame's PNG written to `path`, its directory made first, as `capture --record --out`
+/// writes its frame (a failure is a device error there too).
+fn write_next_frame(path: &Path, png: &[u8]) -> LabResult<String> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            LabError::device(format!("failed to create {}: {error}", parent.display()))
+        })?;
+    }
+    std::fs::write(path, png).map_err(|error| {
+        LabError::device(format!("failed to write {}: {error}", path.display()))
+    })?;
+    Ok(path.display().to_string())
+}
+
+/// #463 L1: the error of a next frame that could not be taken: the capture's own code and class,
+/// its message saying that the press stands, its details naming the recorded press (`record`), the
+/// wait (`next_frame`) and the marks (`mark`).
+fn next_frame_failed(
+    mut error: LabError,
+    after_ms: u64,
+    click: &CommitClickOutcome,
+    mark: Option<&MarkOutcome>,
+) -> LabError {
+    error.message = format!(
+        "{}; the press of step {} was performed and recorded and the step is closed: take the \
+         next frame with capture --record, do not press again",
+        error.message, click.step
+    );
+    let error = with_detail(error, "record", Some(to_json(click)));
+    let error = with_detail(
+        error,
+        "next_frame",
+        Some(json!({"after_ms": after_ms, "taken": false})),
+    );
+    with_detail(error, "mark", mark.map(to_json))
+}
+
+/// `error` with `value`, when there is one, as the member `name` of its details: the members of
+/// object details are kept, other details move to `details`.
+fn with_detail(mut error: LabError, name: &str, value: Option<Value>) -> LabError {
+    let Some(value) = value else {
+        return error;
+    };
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        Some(other) => Map::from_iter([("details".to_owned(), other)]),
+        None => Map::new(),
+    };
+    details.insert(name.to_owned(), value);
+    error.with_details(Value::Object(details))
 }
 
 /// Before `session app <verb> --record` sends anything: the step the application operation

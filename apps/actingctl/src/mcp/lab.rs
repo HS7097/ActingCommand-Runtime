@@ -96,8 +96,8 @@ const DESTRUCTIVE_GUARD: [&str; 2] = ["allow_destructive", "destructive"];
 /// (actinglab `do --operation`).
 const OPERATION: &str = "operation";
 /// The arguments of the other paths of actinglab `do`, which `do --operation` does not read, in
-/// the order a refusal names the first one given.
-const OPERATION_CONFLICTS: [&str; 12] = [
+/// the order a refusal names the first one given. #463 L1: the one-call form's three arguments.
+const OPERATION_CONFLICTS: [&str; 15] = [
     "target",
     "tap",
     "swipe",
@@ -110,6 +110,9 @@ const OPERATION_CONFLICTS: [&str; 12] = [
     "scene",
     "sample_scenes",
     "dry_run",
+    "mark",
+    "next_frame_after_ms",
+    "next_frame_out",
 ];
 
 // ---------------------------------------------------------------- command tables
@@ -331,7 +334,7 @@ static DO: LabCommand = LabCommand {
             OPERATION,
             "--operation",
             Kind::Text,
-            "--operation: with capture and without dry_run, the id of an operation of the package's entry task, which the Runtime runs as a run runs it (its when, guard, input recheck, point, gesture, post_delay, expect_after and retries) and records with every attempt and frame; seed draws attempt 1's point. It takes none of target, tap, swipe, after_page, after_timeout_ms, record, tap_rect, projection_sequence, projection_hash, scene, sample_scenes or dry_run: each is refused before actinglab runs, arguments_invalid {argument, argument_problem: conflicting}, as is operation without capture. The answer adds operation, end (confirmed, run_completed, passed_over, recovery_requested or failed) and attempts.",
+            "--operation: with capture and without dry_run, the id of an operation of the package's entry task, which the Runtime runs as a run runs it (its when, guard, input recheck, point, gesture, post_delay, expect_after and retries) and records with every attempt and frame; seed draws attempt 1's point. It takes none of target, tap, swipe, after_page, after_timeout_ms, record, tap_rect, projection_sequence, projection_hash, scene, sample_scenes, dry_run, mark, next_frame_after_ms or next_frame_out: each is refused before actinglab runs, arguments_invalid {argument, argument_problem: conflicting}, as is operation without capture. The answer adds operation, end (confirmed, run_completed, passed_over, recovery_requested or failed) and attempts.",
         ),
         flag(
             "projection_sequence",
@@ -382,6 +385,25 @@ static DO: LabCommand = LabCommand {
             "--tap-rect",
             Kind::Text,
             "--tap-rect: x,y,w,h, only with record: the step's click rectangle.",
+        ),
+        // #463 L1 (contracts/lab-recording.md, "One call per step"): a whole step in one call.
+        flag(
+            "mark",
+            "--mark-request-json",
+            Kind::MarkRequest,
+            "--mark-request-json: only with capture and record: one actingcommand.lab-record-mark.v1 request for the open step, as ac_record_mark's request (marks, samples, page, the click, its guard and retry), which actinglab applies and self-tests as record mark does before the press: a refusal is record mark's own, and nothing is pressed or written. One rectangle given once serves as a template's crop and as the click: add the template mark and give click {from: <its id>}.",
+        ),
+        flag(
+            "next_frame_after_ms",
+            "--next-frame-after-ms",
+            Kind::Integer,
+            "--next-frame-after-ms: only with capture and record, 0 to 60000: after a press performed without a failure, wait this long and take the next frame as capture --record does; it opens the next step, and next_frame answers it. Without it no frame is taken after the press. A capture that fails answers the capture's error; the press and its closed step stand.",
+        ),
+        flag(
+            "next_frame_out",
+            "--next-frame-out",
+            Kind::Text,
+            "--next-frame-out: with next_frame_after_ms, the PNG file the next frame is written to.",
         ),
         // Workflow #406 T4: the seed the Lab draws the pressed point from.
         flag(
@@ -497,6 +519,261 @@ static RECORD_STATUS: LabCommand = LabCommand {
     keeps_binding: false,
     keeps_frame: false,
 };
+
+// ---- #463 L1 (begin): the recording family's rows without a tool (contracts/lab-operations.json,
+// `record candidates`, `record amend`, `record step`, `record archive`, `record reopen`), each the
+// command its row names with the flags its read list reads (`session_record.rs`, `RECORD_*_READS`).
+
+/// `--step-id`: the step of the session's own step list a step action names.
+const STEP_ID: Flag = flag(
+    "step_id",
+    "--step-id",
+    Kind::Text,
+    "--step-id: the step of the recording session's own step list.",
+);
+/// The backtest of a resource step's frame (`RECORD_BACKTEST_READS`).
+const CONTRAST_FRAME: Flag = flag(
+    "contrast_frame",
+    "--contrast-frame",
+    Kind::Text,
+    "--contrast-frame: a PNG frame the region must not match, for the backtest.",
+);
+const NEGATIVE_FRAME: Flag = flag(
+    "negative_frame",
+    "--negative-frame",
+    Kind::Text,
+    "--negative-frame: read when contrast_frame is absent.",
+);
+const BACKTEST_METRIC: Flag = flag(
+    "metric",
+    "--metric",
+    Kind::Text,
+    "--metric: ccorr_normed (the default) or ccoeff_normed, the backtest's match metric.",
+);
+const RESOURCE_ID: Flag = flag("id", "--id", Kind::Text, "--id: the resource's id.");
+const REGION: Flag = flag("region", "--region", Kind::Text, "--region: x,y,w,h.");
+const THRESHOLD: Flag = flag(
+    "threshold",
+    "--threshold",
+    Kind::Number,
+    "--threshold: a number 0 to 1.",
+);
+const COLOR_CHECK: Flag = flag(
+    "color_check",
+    "--color-check",
+    Kind::Switch,
+    "--color-check.",
+);
+const FROM_PAGE: Flag = flag(
+    "from",
+    "--from",
+    Kind::Text,
+    "--from: an operation's page before.",
+);
+const TO_PAGE: Flag = flag("to", "--to", Kind::Text, "--to: an operation's page after.");
+const STEP_CLICK: Flag = flag("click", "--click", Kind::Text, "--click: x,y,w,h.");
+const DESTRUCTIVE: Flag = flag(
+    "destructive",
+    "--destructive",
+    Kind::Switch,
+    "--destructive: the operation is destructive.",
+);
+const RECORD_ID: Flag = flag(
+    "record_id",
+    "--record-id",
+    Kind::Text,
+    "--record-id: the recording named by its record_id.",
+);
+
+static RECORD_CANDIDATES: LabCommand = LabCommand {
+    words: &["record", "candidates"],
+    flags: &[RECORD_INSTANCE, STEP_ID, STATE_DIR],
+    required: &["step_id"],
+    capture_is_lab_request: false,
+    keeps_binding: false,
+    keeps_frame: false,
+};
+
+static RECORD_AMEND: LabCommand = LabCommand {
+    words: &["record", "amend"],
+    flags: &[
+        RECORD_INSTANCE,
+        STEP_ID,
+        STATE_DIR,
+        flag(
+            "from_drift_diagnostics",
+            "--from-drift-diagnostics",
+            Kind::Text,
+            "--from-drift-diagnostics: a drift diagnostics file whose changes are applied to its step.",
+        ),
+        flag(
+            "candidate_index",
+            "--candidate-index",
+            Kind::Integer,
+            "--candidate-index: the candidate of the step's candidate report to take.",
+        ),
+        flag(
+            "auto_candidate",
+            "--auto-candidate",
+            Kind::Integer,
+            "--auto-candidate: the candidate to take, as candidate_index; not with it.",
+        ),
+        CONTRAST_FRAME,
+        RESOURCE_ID,
+        REGION,
+        COLOR_CHECK,
+        flag(
+            "no_color_check",
+            "--no-color-check",
+            Kind::Switch,
+            "--no-color-check.",
+        ),
+        THRESHOLD,
+        flag(
+            "clear_threshold",
+            "--clear-threshold",
+            Kind::Switch,
+            "--clear-threshold.",
+        ),
+        FROM_PAGE,
+        TO_PAGE,
+        STEP_CLICK,
+        DESTRUCTIVE,
+        flag(
+            "non_destructive",
+            "--non-destructive",
+            Kind::Switch,
+            "--non-destructive.",
+        ),
+        NEGATIVE_FRAME,
+        BACKTEST_METRIC,
+    ],
+    required: &[],
+    capture_is_lab_request: false,
+    keeps_binding: false,
+    keeps_frame: false,
+};
+
+static RECORD_STEP: LabCommand = LabCommand {
+    words: &["record", "step"],
+    flags: &[
+        RECORD_INSTANCE,
+        flag(
+            "kind",
+            "--kind",
+            Kind::Text,
+            "--kind: the kind of step recorded (a resource or an operation).",
+        ),
+        STEP_ID,
+        RESOURCE_ID,
+        REGION,
+        THRESHOLD,
+        COLOR_CHECK,
+        FROM_PAGE,
+        TO_PAGE,
+        DESTRUCTIVE,
+        flag("frame", "--frame", Kind::Text, "--frame: a PNG frame file."),
+        flag(
+            "source_frame",
+            "--source-frame",
+            Kind::Text,
+            "--source-frame: a PNG frame file.",
+        ),
+        flag(
+            "capture",
+            "--capture",
+            Kind::Switch,
+            "--capture: take the frame through the Runtime.",
+        ),
+        flag(
+            "current_frame",
+            "--current-frame",
+            Kind::Switch,
+            "--current-frame.",
+        ),
+        flag(
+            "artifact_dir",
+            "--artifact-dir",
+            Kind::Text,
+            "--artifact-dir: where the step's artifacts are written.",
+        ),
+        flag(
+            "fresh_delay_ms",
+            "--fresh-delay-ms",
+            Kind::Integer,
+            "--fresh-delay-ms.",
+        ),
+        flag(
+            "require_fresh",
+            "--require-fresh",
+            Kind::Switch,
+            "--require-fresh.",
+        ),
+        CONTRAST_FRAME,
+        NEGATIVE_FRAME,
+        STEP_CLICK,
+        flag(
+            "swipe",
+            "--swipe",
+            Kind::Text,
+            "--swipe: an operation's swipe.",
+        ),
+        flag("drag", "--drag", Kind::Text, "--drag: an operation's drag."),
+        flag(
+            "long_press",
+            "--long-press",
+            Kind::Text,
+            "--long-press: an operation's long press.",
+        ),
+        flag(
+            "long_tap",
+            "--long-tap",
+            Kind::Text,
+            "--long-tap: an operation's long tap.",
+        ),
+        STATE_DIR,
+        BACKTEST_METRIC,
+        flag(
+            "duration_ms",
+            "--duration-ms",
+            Kind::Integer,
+            "--duration-ms: a swipe or drag's duration (default 500) or a long press's (default 700).",
+        ),
+    ],
+    required: &["instance", "kind"],
+    capture_is_lab_request: false,
+    keeps_binding: false,
+    keeps_frame: false,
+};
+
+static RECORD_ARCHIVE: LabCommand = LabCommand {
+    words: &["record", "archive"],
+    flags: &[
+        RECORD_INSTANCE,
+        RECORD_ID,
+        flag(
+            "copy_to",
+            "--copy-to",
+            Kind::Text,
+            "--copy-to: an absolute path of a directory that does not exist or is empty; the frames, the step table and the manifest are copied there and checked.",
+        ),
+        STATE_DIR,
+    ],
+    required: &[],
+    capture_is_lab_request: false,
+    keeps_binding: false,
+    keeps_frame: false,
+};
+
+static RECORD_REOPEN: LabCommand = LabCommand {
+    words: &["record", "reopen"],
+    flags: &[RECORD_INSTANCE, RECORD_ID, STATE_DIR],
+    required: &[],
+    capture_is_lab_request: false,
+    keeps_binding: false,
+    keeps_frame: false,
+};
+// ---- #463 L1 (end) ----
 
 // ---- Workflow #389 MCP-13a (begin): ac_app, actinglab `session app` (MCP-0 command table v1.1
 // §4.14), operator before U-3 and option two after it (FCM:116). ----
@@ -1205,6 +1482,48 @@ pub(super) fn record_status(
     author(context, arguments, &RECORD_STATUS, "ac_record_status")
 }
 
+// #463 L1: the recording family's rows that had no tool, each its command, as the four above.
+
+pub(super) fn record_candidates(
+    context: &ToolContext<'_>,
+    arguments: &Map<String, Value>,
+) -> ToolOutcome {
+    author(
+        context,
+        arguments,
+        &RECORD_CANDIDATES,
+        "ac_record_candidates",
+    )
+}
+
+pub(super) fn record_amend(
+    context: &ToolContext<'_>,
+    arguments: &Map<String, Value>,
+) -> ToolOutcome {
+    author(context, arguments, &RECORD_AMEND, "ac_record_amend")
+}
+
+pub(super) fn record_step(
+    context: &ToolContext<'_>,
+    arguments: &Map<String, Value>,
+) -> ToolOutcome {
+    author(context, arguments, &RECORD_STEP, "ac_record_step")
+}
+
+pub(super) fn record_archive(
+    context: &ToolContext<'_>,
+    arguments: &Map<String, Value>,
+) -> ToolOutcome {
+    author(context, arguments, &RECORD_ARCHIVE, "ac_record_archive")
+}
+
+pub(super) fn record_reopen(
+    context: &ToolContext<'_>,
+    arguments: &Map<String, Value>,
+) -> ToolOutcome {
+    author(context, arguments, &RECORD_REOPEN, "ac_record_reopen")
+}
+
 /// ac_app (Workflow #389 MCP-13a): actinglab `session app <action> --instance <alias>`, its data
 /// verbatim. An action that is none of `APP_ACTIONS` is refused before actinglab runs. Workflow
 /// #434 LAB-1b: the operation is `lab-ops`' `apps::run` (its command line and its child), which
@@ -1664,6 +1983,26 @@ pub(super) fn record_status_input() -> Value {
     input_schema(&RECORD_STATUS)
 }
 
+pub(super) fn record_candidates_input() -> Value {
+    input_schema(&RECORD_CANDIDATES)
+}
+
+pub(super) fn record_amend_input() -> Value {
+    input_schema(&RECORD_AMEND)
+}
+
+pub(super) fn record_step_input() -> Value {
+    input_schema(&RECORD_STEP)
+}
+
+pub(super) fn record_archive_input() -> Value {
+    input_schema(&RECORD_ARCHIVE)
+}
+
+pub(super) fn record_reopen_input() -> Value {
+    input_schema(&RECORD_REOPEN)
+}
+
 /// ac_app's input: `action` names one of `APP_ACTIONS`.
 pub(super) fn app_input() -> Value {
     let mut schema = input_schema(&APP);
@@ -1710,4 +2049,8 @@ mod tests {
     // Workflow #433 LABDO-1: a Lab operation the Runtime answered whose client check then failed
     // reaches ac_lab_do class runtime, with its req_id, details and actinglab's message.
     mod gate_433_labdo1;
+
+    // #463 L1: the recording family's new tools reach their commands and answer their envelope;
+    // ac_lab_do hands the one-call form to actinglab as its flags.
+    mod gate_463_l1;
 }
