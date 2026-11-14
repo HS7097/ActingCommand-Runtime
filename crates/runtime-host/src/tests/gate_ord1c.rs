@@ -33,6 +33,13 @@
 //! fails forgets the member in front; t14's fixture carries the `idle` section's keys and registers
 //! A with its emulator running; t8 replaces the machine's samples inside the performance summary
 //! records only.
+//!
+//! Fix round 3 (CI on the head of fix round 2): t14's start moves the manual clock by one
+//! millisecond inside A's first capture, its start preparation's, as a real open takes time (A,
+//! bound to its emulator, is a device self-checked policy instance: the start withdraws its
+//! availability and its passing self-check republishes the seed, which the fact store refused at
+//! the withdrawal's instant). t15's runs take a first frame that shows no page of the package, so
+//! the package's restart step runs.
 
 use super::gate_373_nav3a::StandardRoot;
 use super::instance_workers::wait_until;
@@ -74,6 +81,8 @@ const APP_B: &str = "neutral.member.b";
 const APP_C: &str = "neutral.member.c";
 /// The fake device's first pixel before any input: the startup package's home.
 const HOME: [u8; 3] = [255, 0, 0];
+/// A first pixel that shows no page of the startup package (the fake device's unknown frame).
+const NO_PAGE: [u8; 3] = [1, 2, 3];
 const PACKAGE_ID: &str = "neutral.test.startup";
 /// The response deadline of every run.
 const RUN_DEADLINE_MS: u64 = 600_000;
@@ -444,6 +453,16 @@ impl Parts {
             .with_config_manifest(manifest(self.spec, ids[A]));
         if self.spec.idle_close_a {
             host_config = host_config.with_standard_packs_root(Some(idle_packs(&self.root)));
+            // Fix round 3: A, bound to its emulator, is a device self-checked policy instance. The
+            // start withdraws its availability (`backend_selfcheck:unchecked`) at the clock, then
+            // prepares it; the preparation's open takes A's first frame, and once both opens are
+            // recorded the passing self-check republishes the seed at the clock. On a clock that
+            // did not move between the two the fact store refused the seed as not newer than the
+            // withdrawal, and the start failed. A's first frame takes the clock's millisecond, as a
+            // real open takes time.
+            let clock = Arc::clone(&self.clock);
+            *self.states[A].capture_hook.lock().expect("capture hook") =
+                Some(Box::new(move || clock.advance(1)));
         }
         if self.spec.grouped {
             let device = ids[A].min(ids[B]);
@@ -685,6 +704,27 @@ impl Bench {
             .expect("foreground script") = Some(Arc::new(move |_: usize, commands: usize| {
             Some(if commands == 0 { before } else { own }.to_owned())
         }));
+    }
+
+    /// `alias`'s frames show no page of the startup package until the next application command
+    /// reaches its device, and the package's home from then on: a task's run takes its first frame
+    /// first and runs the package's restart step only on a frame that shows no page of the
+    /// package (the kernel's `ApplicationEntryRun::AfterInitialFrame`).
+    fn no_page_until_next_command(&self, alias: &str) {
+        let state = &self.parts.states[alias];
+        let before = state.application_count.load(Ordering::Acquire);
+        let device = Arc::downgrade(state);
+        *state.pixel_script.lock().expect("pixel script") =
+            Some(Arc::new(move |_: usize, _: usize| {
+                let commands = device.upgrade().map_or(before, |live| {
+                    live.application_count.load(Ordering::Acquire)
+                });
+                if commands == before {
+                    vec![(0, NO_PAGE)]
+                } else {
+                    Vec::new()
+                }
+            }));
     }
 
     /// A person's device drill of `alias`'s recovery ladder (`DrillRecoveryLadder`, mode
@@ -2089,7 +2129,8 @@ fn ord1c_t13_an_emulator_restart_by_a_rung_forgets_the_devices_front() {
 /// here directly, so the forget is in place before the idle action is made group-aware. Fix round
 /// 2: the configuration carries the `idle` section's keys, which the start's check of A's own keys
 /// reads, and A registers with its emulator running (emulator-controlled from the start), without
-/// which the idle check takes no step on A.
+/// which the idle check takes no step on A. Fix round 3: so A is a device self-checked policy
+/// instance, whose start preparation takes the clock's millisecond ([`Parts::start_host`]).
 #[test]
 fn ord1c_t14_the_idle_action_closing_the_member_in_front_forgets_it() {
     let bench = Bench::start(Spec {
@@ -2141,13 +2182,21 @@ fn ord1c_t14_the_idle_action_closing_the_member_in_front_forgets_it() {
 }
 
 /// Fix round 2 (the review): a task step's own application effect follows the rule of the
-/// `ApplicationLifecycle` request. A direct run of A, whose package's one step restarts A's
-/// application, leaves A in front when the restart succeeds. In the next such run the switch finds
-/// A's own application in front and the step's restart command fails: the run fails, not at its
-/// switch, and the device has none in front.
+/// `ApplicationLifecycle` request (`HostShared::front_after_own_application_effect`, called by the
+/// run's `control_application`). A direct run of A whose first frame shows no page of its package
+/// runs the package's one step, a restart of A's application, and the frames show the package's
+/// home once the restart reached the device: the restart succeeds, the run completes and A is in
+/// front. In the next such run the switch finds A's own application in front and the step's
+/// restart command fails (the fake device records the command, then fails it): the run fails, not
+/// at its switch, and the device has none in front. The switch before each run has already noted
+/// A in front (its own application was in front), so the first run pins that a successful restart
+/// leaves A there and the second that a failed one forgets it. Fix round 3: the first frames;
+/// before, they showed the home, so each run ended there without a step and no restart reached
+/// the device.
 #[test]
 fn ord1c_t15_a_task_steps_failed_restart_forgets_the_member_in_front() {
     let bench = Bench::start(GROUPED);
+    bench.no_page_until_next_command(A);
     let receipt = bench.direct_run(A, 201);
     assert_eq!(
         receipt.state(),
@@ -2166,6 +2215,7 @@ fn ord1c_t15_a_task_steps_failed_restart_forgets_the_member_in_front() {
     );
     let commands = bench.actions(A).len();
 
+    bench.no_page_until_next_command(A);
     *bench.parts.states[A]
         .application_error
         .lock()
