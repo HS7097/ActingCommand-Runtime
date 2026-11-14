@@ -23536,11 +23536,12 @@ module's compound operations stay off the production root until LAB-7.
 single-location root: an older installer reads its `state.json`, and a journal of kind `new` is
 read only by this release's installer (an older one refuses the kind, as LAB-3's kinds).
 
-### 1.364 Slice #453 S9 (0.12.60): the rescue row `vision place --from <dir>` verifies a folder a person gives against the installed build's manifest and places what the configured vision root lacks or holds wrong (Workflow #453, thing 3 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0, 3(a), 3(c) "3c", the row S9 of 3(d) and 3(e), read on main `e44fecb4`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-453-s9-vision-place.md`, read on main `e44fecb4`)
+### 1.367 Slice #453 S9 (0.12.60): the rescue row `vision place --from <dir>` verifies a folder a person gives against the installed build's manifest and places what the configured vision root lacks or holds wrong (Workflow #453, thing 3 of a fresh root, approved by the owner on 11-13 on board #453; the design survey `rd-1113/fresh-root-design.md`, its §0, 3(a), 3(c) "3c", the row S9 of 3(d) and 3(e), read on main `e44fecb4`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-453-s9-vision-place.md`, read on main `e44fecb4`)
 
 1.363 was the next free number on main `e44fecb4`; merging main `3d9d25e6`, which holds §1.363
-(#457), renumbered it 1.364. Other slices of this release add sections at the end of section 1
-too, so a train may renumber it again. No configuration key, no interface
+(#457), renumbered it 1.364. Main `17197d8e` then gave §1.364 to the fixes #456 and #458, and the
+train 0.12.60d renumbered this section 1.367, after #453 S3 (§1.365) and S4 (§1.366). No
+configuration key, no interface
 revision, no outcome code and no key is added; one location, one refusal token, one operation kind
 and one step kind are.
 

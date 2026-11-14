@@ -1391,7 +1391,7 @@ the rescue face:
   `config_unreadable` for a `standard_packs.root` that cannot be listed or a `bundle.json` whose
   kind cannot be read; `pack_invalid` (`game`, `path`) for a game root whose check gives no
   models. Nothing is written, downloaded or placed; placing the files is `vision place`'s (below).
-- **`vision place --from <dir>`** (Workflow #453 S9, since 0.12.60; register §1.364;
+- **`vision place --from <dir>`** (Workflow #453 S9, since 0.12.60; register §1.367;
   [vision-model-folders.md](vision-model-folders.md), "Placing a vision root from a folder"; the
   coordinator's rulings on board #453, not the owner's words). A row of this module only
   (`writes` true, `runtime` `offline`); `actingctl install` has no such command. It fetches
