@@ -135,8 +135,9 @@ pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS, RUN_END_GRACE_MS};
 pub use idle::{AutoGaps, IdleAction, IdleConfig, IdleFile};
 pub use instance::{
     BackendKindRules, CAPTURE_BACKEND, CAPTURE_BACKEND_TOKENS, DEVICE_KIND, DEVICE_KIND_TOKENS,
-    DeviceBackends, RECOGNITION_PACKAGE, RECOVERY_LADDER_PROFILE, START_EMULATOR, STUCK_RECOVERY,
-    STUCK_RECOVERY_COOLDOWN_SECS, TOUCH_BACKEND, TOUCH_BACKEND_TOKENS, backend_switch_instance,
+    DeviceBackends, RECOGNITION_PACKAGE, RECOVERY_LADDER_PROFILE, START_EMULATOR, START_PAUSED,
+    STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS, TOUCH_BACKEND, TOUCH_BACKEND_TOKENS,
+    backend_switch_instance,
 };
 pub use ledger_observer::{CaptureTiers, LedgerObserverConfig, LedgerObserverFile};
 pub use performance::PerformanceFile;

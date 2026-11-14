@@ -1240,7 +1240,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `history_scan_rows` | 65 536 | integer | sequences one history statement of a view page (its selection and its runs' recovery context) spans at most, so a page its budget stops has always gone on; `1024..=1048576` (#422 LN-WS) | LN-WS, 0.12.15 |
 | `frame_query_steps_per_second` | 500 000 | integer | SQLite virtual-machine steps a second the frame cleaner's statements take: a statement starts no earlier than the one before plus its steps at this rate; `1000..=100000000`, settable, read after each statement (#422 LN-7c Q) | LN-7c Q, 0.12.17 |
 | `frame_query_chunk_frames` | 256 | integer | frames of one statement L or K of the frame cleaner; `1..=4096`, read at start (#422 LN-7c Q) | LN-7c Q, 0.12.17 |
-| `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement`, `host.idle_state`, `host.agent_wake`, `host.capped_episodes`, `host.state_root_installation` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
+| `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement`, `host.idle_state`, `host.agent_wake`, `host.capped_episodes`, `host.state_root_installation`, `host.start_pause_applied` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
 - `settable` as fixed by AO-1: `flush_lag_warn_ms`, `probe_interval_ms`, `probe_sample_keys` and
@@ -1525,9 +1525,11 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   #405 IDLE-1P (0.12.20;
   the idle planner's closed instances, [runtime-config.md](runtime-config.md), "The `idle`
   section"), `host.capped_episodes` in #428 SCHED-C1d (0.12.53; the capped spending order's
-  episodes, [scheduling/README.md](scheduling/README.md), "Episodes survive"), and
+  episodes, [scheduling/README.md](scheduling/README.md), "Episodes survive"),
   `host.state_root_installation` in Workflow #453 S11 (0.12.60; the claim of the state root by an
-  installation, mirrored once, [state-root-installation.md](state-root-installation.md));
+  installation, mirrored once, [state-root-installation.md](state-root-installation.md)), and
+  `host.start_pause_applied` in Workflow #453 S2 (0.12.60; the entries whose first-start pause was
+  applied, [scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start");
   `host.pack_registry.` joins `tag.reobserve_prefixes` (Workflow #389 §6.5); `config.selection`
   (#387), `config.catalog` (MCP-9a) and `config.start` (Workflow #454, 0.12.59: what a start
   found, recorded by every start, [runtime-fact-store.md](runtime-fact-store.md)) fall under the

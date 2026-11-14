@@ -1624,6 +1624,16 @@ tests = [
 ]
 incident = ["#437 MAPP-1"]
 
+# Workflow #453 S2 (0.12.60; register §1.362; brief rd-1114/brief-453-s2-start-paused.md; contracts/runtime-config.md, "An entry that starts paused"): an entry's start_paused. true and false are taken and reported as the row instance.<id>.start_paused (explicit, not settable), only true hands the host the entry's instance id, an entry without the member has no row, hands the host nothing and its manifest is the one with the member less that row, and the key table lists the key (boolean, no default, read at assembly) (1); a string, a number, an object and a list are refused as start_emulator with the same value is (the entry does not decode) (2); check-config lists the row, notes ledger_tag_key_unclassified with fact_key host.start_pause_applied once for an entry with the member and an own tag.workbench_patterns that leaves the fact out, and nothing of it with the defaults' list or without the member (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_453_s2::s2_config_a_boolean_start_paused_is_reported_and_only_true_reaches_the_host",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_453_s2::s2_config_a_non_boolean_start_paused_is_refused_as_the_entrys_other_members_are",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_453_s2::s2_config_check_config_reports_the_row_and_notes_a_tag_list_that_leaves_the_fact_out",
+]
+incident = ["#453 S2"]
+
 # Workflow #434 LAB-5G5a (0.12.57; register §1.287, "Slice LAB-5G5a"; briefs rd-1112/brief-lab5g5a.md and rd-1112/brief-lab5g-common.md; contracts/install-cli.md, "The MCP entry"): the MCP entry's second generation is a program of its own, actingcommand-mcp-entry-g2, copied from the first (apps/mcp-entry, unchanged), whose copied tests E-1 to E-25 hold for it with its child, plan, codes and generation (E-11: the status file says generation 2 and entry_protocol 2); it starts actinglab-mcp.exe, looked for under runtime\ then tools\ again at each fresh start, with the words after -- unchanged (mcp_entry_g2_child, the register's named test); --client stays the entry's, in its status file and given to no child, every word after -- reaches the server unchanged, and none is allowed; the stamp watches runtime\BUILD-MANIFEST.json and the server program it would start now, not runtime\actingctl.exe; the plan is actinglab.exe --json mcp plan --entry-protocol 2 [--current-build <commit>], found as the server is, with no --root and no server words; an answer of another entry_protocol is a refusal (no build taken, no candidate), and of protocol 2 its switch, build, child[0] (the rest unread), tunables and outcome are read; the real binary prints generation 2, gives the fake server the words after -- and not --client, writes a status file of generation 2 and switches once (process)
 [[gate]]
 coverage = "Y"
