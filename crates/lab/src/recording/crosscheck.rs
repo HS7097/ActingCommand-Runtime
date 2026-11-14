@@ -273,8 +273,9 @@ pub(crate) fn first_decision(
             warning,
         });
     }
+    // #463 L2 fix 1: a guard on located text reads OCR though its page does not.
     if ocr.ocr_provider().is_none()
-        && (plan.involves_ocr(&first.required)? || plan.involves_ocr(&first.forbidden)?)
+        && (plan.involves_ocr(&first.required)? || plan.involves_ocr(&first.forbidden)? || rechecks)
     {
         let reason = LabCode::LabOcrUnavailable.as_str();
         return Ok(FirstDecision {
@@ -1046,6 +1047,27 @@ fn optional_checks(
     Ok(checks)
 }
 
+/// #463 L2 fix 1: every step whose click follows a located-text mark whose names were changed
+/// after the click was executed, with the followed mark and the recorded press.
+fn names_changed_after_press(plan: &Plan) -> Vec<Value> {
+    plan.steps
+        .iter()
+        .filter_map(|step| {
+            let click = step.step.click.as_ref()?;
+            let follow = click
+                .follow
+                .as_ref()
+                .filter(|follow| follow.names_changed_after_press)?;
+            Some(json!({
+                "step": step.number,
+                "record_index": step.step.index,
+                "mark_id": follow.mark_id,
+                "recorded_point": click.execution.as_ref().map(|execution| execution.point)
+            }))
+        })
+        .collect()
+}
+
 /// Section 4.6 item 4 (self and arrival gates) and a15 item 5 (entry overlay).
 pub(crate) fn cross_check(
     plan: &Plan,
@@ -1281,6 +1303,13 @@ pub(crate) fn cross_check(
     cross_check.insert("gates".to_string(), json!(gates));
     cross_check.insert("margins".to_string(), json!(margins));
     cross_check.insert("single_sample_steps".to_string(), json!(single_sample));
+    // #463 L2 fix 1: a step whose located-text names were changed after its press is judged by
+    // the box the new names give on its frames, never by the recorded press, which the package
+    // does not repeat; the result names each such step.
+    let renamed = names_changed_after_press(plan);
+    if !renamed.is_empty() {
+        cross_check.insert("names_changed_after_press".to_string(), json!(renamed));
+    }
     Ok(CrossCheck {
         warnings,
         arrival_by_time_window,

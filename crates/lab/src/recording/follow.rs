@@ -15,7 +15,10 @@
 //! frame (`offset`). Its frames are checked with the Lab's OCR provider: the click box lies inside
 //! every frame (`click_outside_frame`) and, once the step's click was executed, its press lies in
 //! the box on the primary frame (`press_outside_found_box`). A frame on which the names are not
-//! found is the mark's own self-test refusal.
+//! found is the mark's own self-test refusal. #463 L2 fix 1: the followed located-text mark is the
+//! click's guard and no mark of the step's page, which another mark recognizes
+//! (`page_needs_followed_text` otherwise); a command that changes only its names is not held to
+//! the recorded press.
 
 use super::marks::{EvalFrame, MarkRejection, ocr_frame_evaluations, template_frame_evaluations};
 use super::model::{
@@ -108,9 +111,10 @@ pub(crate) fn followed_template(
 }
 
 /// The declaration rules a step with a following click keeps after every `record mark`: the
-/// followed template is a required mark of the page (not only a member of an `any_of` check
-/// among `marks`, the step's own and reused marks), and the click guard is absent or the
-/// followed template.
+/// followed mark is not only a member of an `any_of` check among `marks`, the step's own and
+/// reused marks (a followed template is a required mark of the page), and the click guard is
+/// absent or the followed mark. #463 L2 fix 1: a followed located-text mark is the click's guard
+/// and no mark of the page, so the page stands without it ([`located_page_problem`]).
 pub(crate) fn check_follow_declaration(
     step: &RecordingStep,
     follow: &ClickFollow,
@@ -129,9 +133,24 @@ pub(crate) fn check_follow_declaration(
             ClickFollowProblem::NotRequired,
             format!(
                 "the click follows '{id}', which only an any_of check of the step names; the \
-                 package's guard is the followed mark and must be a required mark of the page"
+                 package's guard is the followed mark, and a followed template must be a required \
+                 mark of the page"
             ),
         ));
+    }
+    if marks
+        .iter()
+        .any(|mark| mark.id == id && mark.locates_text())
+    {
+        let step_marks = marks.iter().collect::<Vec<_>>();
+        if let Some(message) = located_page_problem(id, &step_marks) {
+            return Err(follow_invalid(
+                step.index,
+                id,
+                ClickFollowProblem::PageNeedsFollowedText,
+                message,
+            ));
+        }
     }
     if let Some(guard) = step.click_guard.as_deref()
         && guard != id
@@ -142,12 +161,47 @@ pub(crate) fn check_follow_declaration(
             ClickFollowProblem::GuardConflict,
             format!(
                 "the click follows '{id}' but its guard is '{guard}'; the guard of a following \
-                 click is the followed mark: leave --click-guard out (or name '{id}' when it is a \
-                 template)"
+                 click is the followed mark: leave --click-guard out or name '{id}'"
             ),
         ));
     }
     Ok(())
+}
+
+/// #463 L2 fix 1: why the page of a step whose click follows the located-text mark `id` would
+/// need that mark to be recognized, among `marks` (every own and reused mark of the step, the
+/// followed one too): a check of the page names it, or no other mark recognizes the page (a
+/// member of an `any_of` check recognizes nothing on its own; the check does). `None` when the
+/// page stands without it: a screen on which the name is missing is then still the step's page,
+/// and the guard, not the page, refuses it.
+pub(crate) fn located_page_problem(id: &str, marks: &[&RecordedMark]) -> Option<String> {
+    if let Some(check) = marks
+        .iter()
+        .find(|mark| mark.id != id && mark.check_members().iter().any(|member| member == id))
+    {
+        return Some(format!(
+            "the click follows the located-text mark '{id}', which is its guard and no mark of the \
+             step's page, but the check '{}' of the page names it: the page would not be \
+             recognized on a screen without the name; take '{id}' out of the check",
+            check.id
+        ));
+    }
+    let any_of_members = marks
+        .iter()
+        .filter_map(|mark| mark.any_of.as_ref())
+        .flatten()
+        .collect::<Vec<_>>();
+    let recognized = marks
+        .iter()
+        .any(|mark| mark.id != id && !any_of_members.contains(&&mark.id));
+    (!recognized).then(|| {
+        format!(
+            "the click follows the located-text mark '{id}', which is its guard and no mark of the \
+             step's page, and the step has no other mark that recognizes its page: add a \
+             template, color, color digest, check or another OCR mark that holds on the step's \
+             frames"
+        )
+    })
 }
 
 /// The box the package clicks when the followed template matched at `template`: the match box,
@@ -265,6 +319,9 @@ pub(crate) struct LocatedClick {
     /// An `offset` click's offset from the found box's top-left corner, fixed when the click is
     /// declared; `None` for a `target` click.
     pub(crate) offset: Option<RecordRect>,
+    /// #463 L2 fix 1: the follow's [`ClickFollow::names_changed_after_press`] after this command;
+    /// the caller sets it, from how the command changed the followed mark.
+    pub(crate) names_changed_after_press: bool,
 }
 
 /// #463 L2: every live frame of a step whose click follows the located-text mark `mark`,
@@ -272,9 +329,12 @@ pub(crate) struct LocatedClick {
 /// which the names are not found (or lie in no cell, or not uniquely) is already the mark's own
 /// self-test refusal, with the kernel's typed reason, and gives nothing here. Otherwise the click
 /// box on each frame lies inside it (`click_outside_frame`) and, when the step's click was
-/// executed, the press lies in the box on the primary frame (`press_outside_found_box`); the first
-/// frame that does not hold gives the rejection. An `offset` click declared by this command takes
-/// its offset from the declared rectangle and the found box on the primary frame.
+/// executed and `press_check` holds, the press lies in the box on the primary frame
+/// (`press_outside_found_box`); the first frame that does not hold gives the rejection. #463 L2
+/// fix 1: `press_check` is false for a command that changes only the mark's names, and for one
+/// that leaves the mark as it is after its names were changed after the press. An `offset` click
+/// declared by this command takes its offset from the declared rectangle and the found box on the
+/// primary frame.
 pub(crate) fn check_located_follow_frames(
     follow: &ClickFollow,
     click: &StepClick,
@@ -282,6 +342,7 @@ pub(crate) fn check_located_follow_frames(
     live: &[RecordedFrame],
     frames: &[EvalFrame<'_>],
     provider: Arc<dyn VisionProvider>,
+    press_check: bool,
 ) -> LabResult<FollowFrames> {
     let id = follow.mark_id.as_str();
     let evaluations = ocr_frame_evaluations(mark, frames, provider)?;
@@ -327,7 +388,7 @@ pub(crate) fn check_located_follow_frames(
     let executed = click
         .execution
         .as_ref()
-        .filter(|_| click.executed())
+        .filter(|_| press_check && click.executed())
         .map(|execution| execution.point);
     let mut primary_box = None;
     for ((entry, frame), base) in live.iter().zip(&evaluations).zip(&found) {
@@ -371,7 +432,11 @@ pub(crate) fn check_located_follow_frames(
     }
     Ok(FollowFrames {
         rejection: None,
-        located: primary_box.map(|rect| LocatedClick { rect, offset }),
+        located: primary_box.map(|rect| LocatedClick {
+            rect,
+            offset,
+            names_changed_after_press: follow.names_changed_after_press,
+        }),
     })
 }
 

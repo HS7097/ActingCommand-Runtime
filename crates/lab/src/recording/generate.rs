@@ -5,7 +5,7 @@
 //! task, control and resources documents, the guard of every click, and the timeouts with
 //! their clamp warnings. Everything here is computed in memory; nothing is written.
 
-use super::follow::follow_invalid;
+use super::follow::{follow_invalid, located_page_problem};
 use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
     ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame,
@@ -61,6 +61,8 @@ pub(crate) struct PlanStep {
     pub(crate) step: RecordingStep,
     /// `None` for the application entry step (`from:"any"`).
     pub(crate) page: Option<String>,
+    /// The marks the step's page requires; #463 L2 fix 1: never the located-text mark its click
+    /// follows, which is the click's guard only.
     pub(crate) required: Vec<String>,
     /// Workflow #390 LAB-2: the marks the step's page forbids (mark ids).
     pub(crate) forbidden: Vec<String>,
@@ -713,7 +715,18 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
             Some(name) => format!("step_{}_{name}", numbered(number)),
             None => format!("step_{}", numbered(number)),
         });
-        let required = required_ids(&step.marks, &step.reused, &marks);
+        // #463 L2 fix 1: the located-text mark a click follows is the click's guard and target,
+        // and no mark of the step's page, which its other marks recognize.
+        let followed_text = step
+            .click
+            .as_ref()
+            .and_then(|click| click.follow.as_ref())
+            .map(|follow| follow.mark_id.as_str())
+            .filter(|id| marks.get(*id).is_some_and(RecordedMark::locates_text));
+        let required = required_ids(&step.marks, &step.reused, &marks)
+            .into_iter()
+            .filter(|id| Some(id.as_str()) != followed_text)
+            .collect::<Vec<_>>();
         let (transition_page, transition_required) = match &step.transition {
             Some(StepTransition::Page {
                 marks: transition_marks,
@@ -1106,7 +1119,9 @@ pub(crate) fn follows_located_text(plan: &Plan, step: &PlanStep) -> LabResult<bo
 /// or color digest, the first check. `None` when the page has only OCR marks: the click is
 /// then a trusted coordinate. Workflow #396 REC-4: a click that follows a template is guarded
 /// by that template, which the kernel requires of a `target` or `offset` click; #463 L2: one that
-/// follows a located-text mark by that mark (`verify_text`).
+/// follows a located-text mark by that mark (`verify_text`), which (fix 1) is a mark of the step
+/// but none of its page: the page stands on the step's other marks (`page_needs_followed_text`
+/// otherwise).
 pub(crate) fn guard_target<'p>(
     plan: &'p Plan,
     step: &PlanStep,
@@ -1123,10 +1138,43 @@ pub(crate) fn guard_target<'p>(
         .and_then(|click| click.follow.as_ref())
     {
         let id = follow.mark_id.as_str();
-        return match required.iter().copied().find(|mark| mark.id == id) {
-            Some(mark) if mark.family == MarkFamily::Template || mark.locates_text() => {
-                Ok(Some(mark))
+        // #463 L2 fix 1: a followed located-text mark of the step is no mark of its page; the
+        // page stands on the step's other marks.
+        let of_step = step.step.marks.iter().any(|mark| mark.id == id)
+            || step.step.reused.iter().any(|reused| reused == id);
+        if of_step && plan.mark(id)?.locates_text() {
+            let mut step_marks = step.step.marks.iter().collect::<Vec<_>>();
+            for reused in &step.step.reused {
+                step_marks.push(plan.mark(reused)?);
             }
+            let any_of_member = step_marks.iter().any(|mark| {
+                mark.any_of
+                    .as_ref()
+                    .is_some_and(|members| members.iter().any(|member| member == id))
+            });
+            if any_of_member {
+                return Err(follow_invalid(
+                    step.step.index,
+                    id,
+                    ClickFollowProblem::NotRequired,
+                    format!(
+                        "step {} follows '{id}', which only an any_of check of its page names",
+                        step.step.index
+                    ),
+                ));
+            }
+            if let Some(message) = located_page_problem(id, &step_marks) {
+                return Err(follow_invalid(
+                    step.step.index,
+                    id,
+                    ClickFollowProblem::PageNeedsFollowedText,
+                    format!("step {}: {message}", step.step.index),
+                ));
+            }
+            return Ok(Some(plan.mark(id)?));
+        }
+        return match required.iter().copied().find(|mark| mark.id == id) {
+            Some(mark) if mark.family == MarkFamily::Template => Ok(Some(mark)),
             Some(_) => Err(follow_invalid(
                 step.step.index,
                 id,

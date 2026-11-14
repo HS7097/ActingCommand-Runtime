@@ -4942,7 +4942,7 @@
           "description": "The followed mark is neither a template mark nor a located-text mark of the step."
         },
         "not_required": {
-          "description": "The followed mark is only a member of an any_of check, not a required mark of the step's page."
+          "description": "The followed mark is only a member of an any_of check of the step's page."
         },
         "guard_conflict": {
           "description": "The click guard names another mark than the followed one."
@@ -4958,6 +4958,9 @@
         },
         "press_outside_found_box": {
           "description": "On the primary frame the press of the step's executed click lies outside the box the followed located text gives there (#463 L2)."
+        },
+        "page_needs_followed_text": {
+          "description": "The step's page would need the followed located text to be recognized: no other mark of the step recognizes it, or a check of the page names the located text (#463 L2 fix 1)."
         }
       }
     },

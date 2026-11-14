@@ -1873,7 +1873,7 @@
         {"name": "click", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
         {"name": "click_from", "form": "option", "type": "string", "required": false},
         {"name": "click_follow", "form": "option", "type": "string", "required": false, "note": "a template mark or a located-text mark of the step"},
-        {"name": "click_guard", "form": "option", "type": "string", "required": false},
+        {"name": "click_guard", "form": "option", "type": "string", "required": false, "note": "a template, color, color digest, check or value-test mark of the step, or the located-text mark the click follows"},
         {"name": "click_retry", "form": "option", "type": "integer", "required": false},
         {"name": "replace_click", "form": "switch", "type": "boolean", "required": false},
         {"name": "transition", "form": "option", "type": "enum:none|page|window", "required": false},

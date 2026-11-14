@@ -1465,12 +1465,16 @@ pub(crate) fn apply_marks(
                     .add
                     .iter()
                     .any(|spec| &spec.id == id && spec.locate.is_some());
-            let guard = step.click_guard.as_deref() == Some(id.as_str())
-                || step
-                    .click
-                    .as_ref()
-                    .and_then(|click| click.follow.as_ref())
-                    .is_some_and(|follow| &follow.mark_id == id && !declared_again)
+            let follows_it = step
+                .click
+                .as_ref()
+                .and_then(|click| click.follow.as_ref())
+                .is_some_and(|follow| &follow.mark_id == id);
+            // #463 L2 fix 1: a click guard that names the followed located-text mark names the
+            // guard the package has anyway; declared again, the mark is released as both.
+            let released = follows_it && declared_again;
+            let guard = (!released
+                && (step.click_guard.as_deref() == Some(id.as_str()) || follows_it))
                 || anchor.as_ref() == Some(id);
             if elsewhere.contains(id) || named_by_check || guard {
                 return Err(with_details(
@@ -1478,8 +1482,9 @@ pub(crate) fn apply_marks(
                         "record_mark_in_use",
                         format!(
                             "mark '{id}' is reused or forbidden by another step, named by a check, \
-                             is the click guard, is the template the click follows or anchors the \
-                             page"
+                             is the click guard, is the mark the click follows or anchors the page \
+                             (a located-text mark the click follows is declared again by removing \
+                             and adding it in one request)"
                         ),
                     ),
                     json!({"id": id}),
@@ -1596,11 +1601,13 @@ pub(crate) fn apply_marks(
     step.frames.extend(samples.iter().cloned());
     step.forbidden = forbidden;
     step.anchor = anchor;
-    // #463 L2: a click that follows a located-text mark is the box the primary frame gives it.
+    // #463 L2: a click that follows a located-text mark is the box the primary frame gives it;
+    // fix 1: and it says whether its names were changed after its press.
     if let (Some(located), Some(click)) = (followed.located, step.click.as_mut()) {
         click.rect = located.rect;
         if let Some(follow) = click.follow.as_mut() {
             follow.offset = located.offset;
+            follow.names_changed_after_press = located.names_changed_after_press;
         }
     }
     removed.extend(removed_forbidden);
@@ -1907,6 +1914,7 @@ fn apply_click(
                         mark_id: id.clone(),
                         form,
                         offset,
+                        names_changed_after_press: false,
                     };
                     match region {
                         None => (
@@ -1964,6 +1972,15 @@ fn apply_click(
             Some((rect, source, from, follow, None))
         }
     };
+    // #463 L2 fix 1: the mark the click follows after this command, if it follows one.
+    let followed_after = match &declared {
+        Some((_, _, _, follow, _)) => follow.as_ref().map(|follow| follow.mark_id.clone()),
+        None => effective_step(&session.recording, target)?
+            .click
+            .as_ref()
+            .and_then(|click| click.follow.as_ref())
+            .map(|follow| follow.mark_id.clone()),
+    };
     let guard = match &request.click_guard {
         None => None,
         Some(id) => {
@@ -1973,13 +1990,25 @@ fn apply_click(
                     format!("click guard '{id}' is not a mark of this step"),
                 )
             })?;
-            // #411 Lab B-9: a value test guards the click as a check does.
-            if mark.family == MarkFamily::Ocr {
+            // #411 Lab B-9: a value test guards the click as a check does. #463 L2 fix 1: the
+            // located-text mark the click follows names the guard the package has anyway.
+            let followed_text =
+                mark.locates_text() && followed_after.as_deref() == Some(id.as_str());
+            if mark.family == MarkFamily::Ocr && !followed_text {
+                let note = followed_after
+                    .as_deref()
+                    .map_or_else(String::new, |followed| {
+                        format!(
+                            "; this click follows '{followed}', which is its guard: leave \
+                         --click-guard out or name '{followed}'"
+                        )
+                    });
                 return Err(blocked(
                     "record_guard_family_invalid",
                     format!(
                         "click guard '{id}' is an OCR mark; a guard must be a template, color, \
-                         color_digest, check or value_test mark"
+                         color_digest, check or value_test mark, or the located-text mark the \
+                         click follows{note}"
                     ),
                 ));
             }
@@ -2092,6 +2121,24 @@ fn apply_click(
             marks.iter().find(|mark| mark.id == follow.mark_id).cloned(),
         )?;
         check_follow_declaration(step, follow, &marks)?;
+    } else if let Some(guard) = step.click_guard.as_deref() {
+        // #463 L2 fix 1: a click guard names an OCR mark only as the located-text mark the click
+        // follows; a click that no longer follows it cannot keep it.
+        let family = match batch.own.iter().find(|mark| mark.id == guard) {
+            Some(mark) => Some(mark.family),
+            None => find_step_mark(&session.recording, guard)
+                .filter(|_| batch.reused.iter().any(|id| id == guard))
+                .map(|mark| mark.family),
+        };
+        if family == Some(MarkFamily::Ocr) {
+            return Err(blocked(
+                "record_guard_family_invalid",
+                format!(
+                    "the click guard '{guard}' is an OCR mark, which guards only a click that \
+                     follows it; name another guard with --click-guard"
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -2150,7 +2197,24 @@ fn follow_frames(
                 )
             }));
         };
-        let checked = check_located_follow_frames(follow, click, mark, live, &frames, provider)?;
+        // #463 L2 fix 1: a command that changes only the names is the change of the wanted value,
+        // not held to the recorded press; nor is one that leaves the mark as it is after such a
+        // change. Any other declaration or change is.
+        let change = followed_change(step, follow, mark);
+        let press_check = match change {
+            FollowedChange::NamesOnly => false,
+            FollowedChange::Unchanged => !follow.names_changed_after_press,
+            FollowedChange::Other => true,
+        };
+        let mut checked =
+            check_located_follow_frames(follow, click, mark, live, &frames, provider, press_check)?;
+        if let Some(located) = checked.located.as_mut() {
+            located.names_changed_after_press = match change {
+                FollowedChange::NamesOnly => click.executed(),
+                FollowedChange::Unchanged => follow.names_changed_after_press,
+                FollowedChange::Other => false,
+            };
+        }
         // A frame without the located text gives nothing here: the mark's own self-test refused
         // it, with its typed reason. A click without its box is never recorded.
         if checked.rejection.is_none()
@@ -2191,6 +2255,49 @@ fn follow_frames(
         )?,
         located: None,
     })
+}
+
+/// #463 L2 fix 1: what a `record mark` does to the located-text mark a step's click follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FollowedChange {
+    /// The mark is as it was, or it is reused from another step, which alone changes it.
+    Unchanged,
+    /// Only its `expected` names differ: the request removed it and added it again with the same
+    /// id, region, `locate`, `unique` and other members.
+    NamesOnly,
+    /// The mark is new to the step, or another member differs.
+    Other,
+}
+
+/// #463 L2 fix 1: how `mark`, the followed mark after this command, differs from the step's own
+/// mark of that id before it, its self-test, creation time and initiator aside.
+fn followed_change(
+    step: &RecordingStep,
+    follow: &ClickFollow,
+    mark: &RecordedMark,
+) -> FollowedChange {
+    let Some(old) = step.marks.iter().find(|old| old.id == follow.mark_id) else {
+        return if step.reused.contains(&follow.mark_id) {
+            FollowedChange::Unchanged
+        } else {
+            FollowedChange::Other
+        };
+    };
+    let mut new = mark.clone();
+    new.self_test = old.self_test.clone();
+    new.created_at_unix_ms = old.created_at_unix_ms;
+    new.initiator = old.initiator.clone();
+    if new == *old {
+        return FollowedChange::Unchanged;
+    }
+    if let (Some(names), Some(before)) = (new.ocr.as_mut(), old.ocr.as_ref()) {
+        names.expected = before.expected.clone();
+    }
+    if new == *old {
+        FollowedChange::NamesOnly
+    } else {
+        FollowedChange::Other
+    }
 }
 
 /// `launch`, `restart` and `stop` as given; `force-stop` is recorded as `stop` (R24 section
@@ -2653,6 +2760,10 @@ pub(crate) fn apply_step_action(
             {
                 click.attempts.push(execution);
                 click.needs_review = false;
+                // #463 L2 fix 1: the press the names were changed after is an attempt now.
+                if let Some(follow) = click.follow.as_mut() {
+                    follow.names_changed_after_press = false;
+                }
             }
             if let Some(application) = step.application.as_mut()
                 && let Some(executed) = application.executed.take()

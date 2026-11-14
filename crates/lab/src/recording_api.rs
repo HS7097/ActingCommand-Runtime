@@ -1515,6 +1515,10 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
             attempts: click.attempts.len(),
             needs_review: click.needs_review,
             gesture: click.gesture,
+            names_changed_after_press: click
+                .follow
+                .as_ref()
+                .is_some_and(|follow| follow.names_changed_after_press),
         }),
         application: step.application.clone(),
         optional: optional_view(step),

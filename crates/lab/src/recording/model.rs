@@ -727,6 +727,11 @@ pub struct ClickFollow {
     pub form: ClickFollowForm,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<RecordRect>,
+    /// #463 L2 fix 1: the `expected` names of the followed located-text mark were changed after
+    /// the step's click was executed, so the recorded press is not what the package presses: the
+    /// package presses where the new names are found. Absent (false) on every other click.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub names_changed_after_press: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1214,6 +1219,10 @@ pub struct ClickView {
     /// Workflow #390 LAB-2: a drag or a long press.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gesture: Option<ClickGesture>,
+    /// #463 L2 fix 1: the names of the located-text mark the click follows were changed after its
+    /// press, so the recorded press is not what the package presses.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub names_changed_after_press: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
