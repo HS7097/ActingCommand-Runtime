@@ -1460,7 +1460,7 @@ the rescue face:
     none of a game root.
   - It falls under the operating rule until LAB-7 ("Journals across versions" below): not used on
     the production root.
-- **`state-root claim [--new-identity]`** (Workflow #453 S12, since 0.12.60; register §1.364;
+- **`state-root claim [--new-identity]`** (Workflow #453 S12, since 0.12.60; register §1.368;
   [state-root-installation.md](state-root-installation.md), "Handing a state root over"; the
   coordinator's rulings on board #453, not the owner's words). `writes`, `irreversible`, `runtime`
   `offline`; no `actingctl install` command. It reads the root's configuration as every row does,

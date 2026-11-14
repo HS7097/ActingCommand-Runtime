@@ -23726,7 +23726,7 @@ sections and a test file. A vision root the row placed keeps its files and its `
 a build before this release does not read a `vision_place` journal (`resume` and `undo` of it are
 this build's).
 
-### 1.364 Slice #453 S12 (0.12.60): `state-root claim` hands a state root over to this installation (Workflow #453; the owner's answer on board #453 for a refused start (a command hands the state root over and keeps the old record) as the coordinator recorded it, not the owner's words; the coordinator's rulings 1 to 9 in the work order `rd-1114/brief-453-s12-state-root-claim.md`, read on main `e44fecb4`; the design survey `rd-1113/fresh-root-design.md` 6(c) "The way out" and the row S12 of 6(d), for the command's shape only, its identity having been replaced by S11's identity file; fix round 1, after an independent review, with the coordinator's rulings on `op status`, the caveat and the two points left open, main `3d9d25e6` merged)
+### 1.368 Slice #453 S12 (0.12.60): `state-root claim` hands a state root over to this installation (Workflow #453; the owner's answer on board #453 for a refused start (a command hands the state root over and keeps the old record) as the coordinator recorded it, not the owner's words; the coordinator's rulings 1 to 9 in the work order `rd-1114/brief-453-s12-state-root-claim.md`, read on main `e44fecb4`; the design survey `rd-1113/fresh-root-design.md` 6(c) "The way out" and the row S12 of 6(d), for the command's shape only, its identity having been replaced by S11's identity file; fix round 1, after an independent review, with the coordinator's rulings on `op status`, the caveat and the two points left open, main `3d9d25e6` merged)
 
 [state-root-installation.md](state-root-installation.md) ("Handing a state root over", and the
 passages it rewrites: the identity, the record, "The claim", "Who checks", "The installer", "When
@@ -23808,7 +23808,9 @@ is unchanged.
   record as `kept_record` (looked for before anything is placed; a state root that cannot be listed
   is `state_root_claim_failed`), and the row's caveat has the kept record as `path` in both cases
   (it named the state root before).
-- *The register number* is 1.364: #457 took 1.363 on main.
+- *The register number* is 1.368: #457 took 1.363 on main and the fixes #456 and #458 took 1.364
+  (main `17197d8e`); the train 0.12.60d, which merges this slice with #453 S3, S4 and S9, gave
+  them 1.365 to 1.367 and this section 1.368.
 
 **What a refusal leaves** (the work order's second stop condition). Every refusal of the command
 line, the configuration, the installation root and the identity file comes before the owner is
@@ -23913,7 +23915,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.idle_state` (a record list: the instances the idle action closed or is closing, with their action and wake; since 0.12.25 its writer row names the start anchor, not the owner epoch (#405 N-2), and a woken instance stays in it, `woken`, until its startup package has run (#405 O-2); [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #405 IDLE-1P) | #405 IDLE-1P |
 | `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `host.capped_episodes` (a record list: the writer's start anchor, then per instance and pool with an open or waiting capped episode its episode row, consumer rows and member rows; [runtime-fact-store.md](runtime-fact-store.md); §1.299 SC1-11, C1D-1) | workbench | yes (added to `tag.workbench_patterns` by SCHED-C1d) | #428 SCHED-C1d |
-| `host.state_root_installation` (one row: the claim's time and who claimed, never the installation's number; since #453 S12 the optional `previous_claimed_at_unix_ms` after a hand-over, §1.364 S12-3; [state-root-installation.md](state-root-installation.md); §1.358 S11-3) | workbench | yes (added to `tag.workbench_patterns` by S11) | #453 S11 |
+| `host.state_root_installation` (one row: the claim's time and who claimed, never the installation's number; since #453 S12 the optional `previous_claimed_at_unix_ms` after a hand-over, §1.368 S12-3; [state-root-installation.md](state-root-installation.md); §1.358 S11-3) | workbench | yes (added to `tag.workbench_patterns` by S11) | #453 S11 |
 | `host.start_pause_applied` (a record list: one row `{instance_id, applied_at_unix_ms}` per entry declaring `start_paused` whose first-start pause was applied; [runtime-fact-store.md](runtime-fact-store.md); [scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start"; §1.362) | workbench | yes (added to `tag.workbench_patterns` by #453 S2) | Workflow #453 S2 |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
