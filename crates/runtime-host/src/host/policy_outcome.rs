@@ -1954,6 +1954,55 @@ impl HostShared {
         Ok(())
     }
 
+    /// Workflow #463 U1, fix round 2 (rule 6): the Runtime-clock instant (ms) at which the run of
+    /// the dispatch `decision_id` has taken the whole runtime its admission still admits: its
+    /// dispatch clock's start, plus the switch before it (which its own time leaves out), plus
+    /// that runtime (`PolicyHost::runtime_budget_allowance_ms`). `None` when its admission
+    /// carries no runtime budget or its clock has no start (a recovered dispatch). The run's own
+    /// time is compared on the wall clock here, which a paced run's settlement only shortens. A
+    /// dispatch without a clock is fatal, as at its settlement.
+    pub(super) fn policy_run_budget_end_ms(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<u64>> {
+        // Workflow #463 U1, fix round 3 (item 4), test only: this read fails once, as a dispatch
+        // without a clock fails it.
+        #[cfg(test)]
+        if self
+            .fail_policy_run_budget_end_once_for_test
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(RuntimeHostError::fatal(
+                HostCode::PolicyDispatchClockMissing,
+                HostLocation::ReadPolicyDispatchStart,
+                RuntimeErrorCode::RuntimeHalted,
+            ));
+        }
+        let clock = lock(
+            &self.policy_dispatch_clocks,
+            HostLocation::ReadPolicyDispatchStart,
+        )?
+        .get(decision_id)
+        .copied()
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::PolicyDispatchClockMissing,
+                HostLocation::ReadPolicyDispatchStart,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let Some(started_at_monotonic_ms) = clock.started_at_monotonic_ms else {
+            return Ok(None);
+        };
+        let allowance_ms = lock(self.policy()?, HostLocation::ReadPolicyRuntimeBudget)?
+            .runtime_budget_allowance_ms(decision_id)?;
+        Ok(allowance_ms.map(|allowance_ms| {
+            started_at_monotonic_ms
+                .saturating_add(clock.switch_ms)
+                .saturating_add(allowance_ms)
+        }))
+    }
+
     #[cfg(test)]
     pub(super) fn record_policy_dispatch_outcome(
         &self,

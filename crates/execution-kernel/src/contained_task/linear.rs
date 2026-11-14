@@ -24,14 +24,25 @@
 //! allowance, which the attempt's waits and its retry decision's share, and one after the
 //! allowance is spent ends the wait with the loading values. The entry wait has an allowance of
 //! its own. Under `off` and `shadow` every decision is the one before LOAD-4.
+//!
+//! Workflow #463 U1 (`contracts/linear-steps.md`, "A screen the package never recorded"; fix
+//! round 2, the coordinator's rulings on board #463): where a step's failed wait ends the run with
+//! `page_confirmation_failed` (the last attempt's arrival, the next page after a seen
+//! intermediate page or skip target, the continued wait after a late gate, a retry decision that
+//! saw neither page), a task's own run outside a restart segment first makes one closing
+//! decision: it observes for the step timeout, never inputs and never hands a frame to the shared
+//! interrupt pages. Only a screen that stayed one the package never recorded for the whole
+//! decision changes the end, to `contained_task_linear_unrecorded_screen` with the same detail
+//! and timing; every other end, an error of the decision included, is the one it had.
 
 use super::loading::{Charge, FrameRow, LoadingAllowance, LoadingFrame, LoadingLimit};
+use super::observation_window::StillScreen;
 use super::{
-    ApplicationEffectSupport, CaptureBackoff, ContainedTaskBoundaryTiming, ContainedTaskError,
-    ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
-    ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, ExtraRounds, InputRecheck,
-    MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock,
-    PageCandidates, PageObservation, PostAdmissionOcrCollector, PreparedContainedTask,
+    ApplicationEffectSupport, CaptureBackoff, ColorDigest, ContainedTaskBoundaryTiming,
+    ContainedTaskError, ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime,
+    ContainedTaskTimingContext, ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, ExtraRounds,
+    InputRecheck, MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS,
+    PaceClock, PageCandidates, PageObservation, PostAdmissionOcrCollector, PreparedContainedTask,
     RecheckedInput, SampleRetries, StepPacing, TaskControl, TaskOperation, TaskProgram,
     budget_elapsed_since, budget_now, budget_observation_now, invariant_broken, is_geometry_change,
     pace_pause, paced_step, resolve_page_reference, runtime_touch_choice, sample_budget_invalid,
@@ -41,7 +52,7 @@ use crate::RunOperationPolicy;
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use actingcommand_contract::TaskSchema;
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
     ApplicationLifecycleAction, PHASED_CONTROL_SCHEMA, TaskTimingBoundary, TaskTimingCheckPosition,
     TaskTimingFailure, TaskTimingScope, TaskTimingStage,
@@ -62,6 +73,7 @@ const INTERMEDIATE_UNOBSERVED: Code =
 const APPLICATION_UNCONFIRMED: Code =
     ExecutionKernelCode::ContainedTaskLinearApplicationUnconfirmed.code();
 const PAGE_CONFIRMATION_FAILED: Code = ExecutionKernelCode::PageConfirmationFailed.code();
+const UNRECORDED_SCREEN: Code = ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.code();
 const UNRECOGNIZED_PAGE: &str = "<unrecognized>";
 /// The `from` / `entry_page` of an application entry: any screen, never a detector page.
 pub(super) const ANY_PAGE: &str = "any";
@@ -410,6 +422,16 @@ pub(super) struct LinearRun {
     /// STORE-FG-1 (design §2.3, §2.7): whether the run's declared store steps tap in the store:
     /// the package's own run, not a layer or a declared operation's run.
     pub(super) store_routing: bool,
+    /// Workflow #463 U1: the run is a task's own run (a scheduled or a direct run of the
+    /// package, or a Lab run of it), not a layer's, a recovery entry's or a run the host starts
+    /// itself (a startup package, a ladder rung: fix round 2,
+    /// [`ContainedTaskRuntime::host_started_run`]); only such a run ends on a screen its package
+    /// never recorded with `contained_task_linear_unrecorded_screen`.
+    pub(super) own_task_run: bool,
+    /// Workflow #463 U1 (R25-1, `contracts/policy-suspension.md`, "Which failures accumulate"):
+    /// the run made a `launch` or `restart` effect and no step after it arrived on the main
+    /// interface yet; false at the run's start.
+    pub(super) restart_segment: bool,
 }
 
 /// What a wait is for: its sleep boundary and the stage of a task timeout inside it.
@@ -498,7 +520,28 @@ fn postcondition_timing(elapsed: Duration, limit: Duration) -> Option<TaskTiming
     })
 }
 
-/// `awaited` is the suffix of `LinearCandidates::awaited` (Workflow #339), empty for one page.
+/// The detail of a step whose next page did not pass: `page_confirmation_failed`'s, which
+/// `contained_task_linear_unrecorded_screen` keeps (Workflow #463 U1). `awaited` is the suffix of
+/// `LinearCandidates::awaited` (Workflow #339), empty for one page.
+fn confirmation_detail(
+    operation: &TaskOperation,
+    step: &LinearStep,
+    attempt: u32,
+    intermediate_seen: bool,
+    awaited: &str,
+) -> String {
+    format!(
+        "operation={} attempts={attempt} after_page={UNRECOGNIZED_PAGE} hit_error_page=false {}{}{awaited}",
+        operation.id,
+        step.transition_detail(),
+        if intermediate_seen {
+            " intermediate_seen=true"
+        } else {
+            ""
+        }
+    )
+}
+
 fn page_confirmation_failed(
     operation: &TaskOperation,
     step: &LinearStep,
@@ -510,17 +553,34 @@ fn page_confirmation_failed(
 ) -> ContainedTaskError {
     ContainedTaskError::with_detail(
         PAGE_CONFIRMATION_FAILED,
-        format!(
-            "operation={} attempts={attempt} after_page={UNRECOGNIZED_PAGE} hit_error_page=false {}{}{awaited}",
-            operation.id,
-            step.transition_detail(),
-            if intermediate_seen {
-                " intermediate_seen=true"
-            } else {
-                ""
-            }
-        ),
+        confirmation_detail(operation, step, attempt, intermediate_seen, awaited),
     )
+    .with_timing(postcondition_timing(elapsed, limit))
+}
+
+/// Workflow #463 U1: the closing decision after attempt `attempt` found a screen the package never
+/// recorded on `pages` (the pages the failed wait awaited, then the step's own page). The detail
+/// and the timing are those `page_confirmation_failed` gives the same end; the values name the
+/// operation, the pages and the attempts, and the host adds the frame of the run's `Failure` pin
+/// (`artifact_id`).
+fn unrecorded_screen(
+    operation: &TaskOperation,
+    step: &LinearStep,
+    (attempt, intermediate_seen): (u32, bool),
+    awaited: &str,
+    pages: &[&str],
+    elapsed: Duration,
+    limit: Duration,
+) -> ContainedTaskError {
+    let values = Outcome::new(UNRECORDED_SCREEN)
+        .pack_operation_id(operation.id.as_str())
+        .page_ids(pages.iter().copied())
+        .attempts(attempt);
+    ContainedTaskError::with_detail(
+        UNRECORDED_SCREEN,
+        confirmation_detail(operation, step, attempt, intermediate_seen, awaited),
+    )
+    .with_values(values)
     .with_timing(postcondition_timing(elapsed, limit))
 }
 
@@ -1065,6 +1125,15 @@ impl PreparedContainedTask {
                 .get(current)
                 .zip(plan.steps.get(current))
                 .ok_or_else(state_invalid)?;
+            // Workflow #463 U1 (R25-1): a `launch` or a `restart` opens the restart segment.
+            if matches!(
+                step.effect,
+                LinearEffect::Application(
+                    ApplicationLifecycleAction::Launch | ApplicationLifecycleAction::Restart
+                )
+            ) {
+                run.restart_segment = true;
+            }
             let candidates = plan.candidates(current, &handled);
             let reached = self.run_linear_step(
                 runtime,
@@ -1075,6 +1144,10 @@ impl PreparedContainedTask {
                 &candidates,
                 observation,
             )?;
+            // Workflow #463 U1 (R25-1): a step that arrived on the main interface closes it.
+            if linear_main_interface(&self.control.game, &reached.page_label) {
+                run.restart_segment = false;
+            }
             // Workflow #384 D2-S2 (model §3.5): the frame the step arrived on goes to
             // recognition when its page carries marks the run reads.
             self.hand_off_reading_frame(
@@ -1262,7 +1335,29 @@ impl PreparedContainedTask {
                 || miss.skip_target_seen
                 || attempt >= max_attempts
             {
+                // Workflow #463 U1 (fix round 2, rule 4): where the end here is
+                // `page_confirmation_failed` (the last attempt's arrival, after a seen
+                // intermediate page or skip target), the closing decision classifies it first.
+                let unrecorded = self.linear_closing(
+                    runtime,
+                    (run, &mut loading),
+                    step,
+                    candidates,
+                    (miss.kind, miss.loading_limit.is_some()),
+                )?;
                 Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
+                if let Some(pages) = unrecorded {
+                    return Err(unrecorded_screen(
+                        operation,
+                        step,
+                        (attempt, miss.kind == LinearMissKind::AfterIntermediate),
+                        &awaited,
+                        &pages,
+                        miss.elapsed,
+                        miss.limit,
+                    )
+                    .into());
+                }
                 return Err(match (miss.kind, &step.transition, miss.loading_limit) {
                     // Workflow #407 LOAD-4 (§5): a wait that ended on the attempt's loading
                     // allowance, the intermediate page's included, is the confirmation's failure
@@ -1369,18 +1464,42 @@ impl PreparedContainedTask {
                             return Ok(reached);
                         }
                         Err(miss) => {
+                            // Workflow #463 U1 (fix round 2, rule 4): the continued wait after a
+                            // late gate ends with `page_confirmation_failed`; the closing decision
+                            // classifies that end first.
+                            let unrecorded = self.linear_closing(
+                                runtime,
+                                (run, &mut loading),
+                                step,
+                                candidates,
+                                (miss.kind, miss.loading_limit.is_some()),
+                            )?;
                             Self::linear_step_finished(
                                 runtime,
                                 step_index,
                                 operation,
                                 UNRECOGNIZED_PAGE,
                             )?;
+                            let awaited = candidates.awaited(miss.skip_target_seen);
+                            let intermediate_seen = miss.kind == LinearMissKind::AfterIntermediate;
+                            if let Some(pages) = unrecorded {
+                                return Err(unrecorded_screen(
+                                    operation,
+                                    step,
+                                    (attempt, intermediate_seen),
+                                    &awaited,
+                                    &pages,
+                                    miss.elapsed,
+                                    miss.limit,
+                                )
+                                .into());
+                            }
                             return Err(page_confirmation_failed(
                                 operation,
                                 step,
                                 attempt,
-                                miss.kind == LinearMissKind::AfterIntermediate,
-                                &candidates.awaited(miss.skip_target_seen),
+                                intermediate_seen,
+                                &awaited,
                                 miss.elapsed,
                                 miss.limit,
                             )
@@ -1396,20 +1515,292 @@ impl PreparedContainedTask {
                     observation = Some(frame);
                 }
                 Err(loading_limit) => {
-                    Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
+                    // Workflow #463 U1 (fix round 2, rules 1 and 2): a retry decision that saw
+                    // neither page raises nothing itself. Unless the failed wait missed the
+                    // intermediate page (rule 1 (a)) or this decision ended on the attempt's
+                    // loading allowance, the closing decision classifies the end first; the
+                    // decision's time is read before it, so the end keeps its timing.
+                    let closing = self.linear_closing_pages(
+                        runtime,
+                        run,
+                        step,
+                        candidates,
+                        (miss.kind, loading_limit.is_some()),
+                    );
+                    let (elapsed, unrecorded) = match closing {
+                        Some(pages) => {
+                            let elapsed = budget_elapsed_since(runtime, pace, decision_started);
+                            let unrecorded =
+                                self.linear_closing_decision(runtime, (run, &mut loading), &pages)?;
+                            Self::linear_step_finished(
+                                runtime,
+                                step_index,
+                                operation,
+                                UNRECOGNIZED_PAGE,
+                            )?;
+                            (elapsed, unrecorded.then_some(pages))
+                        }
+                        None => {
+                            Self::linear_step_finished(
+                                runtime,
+                                step_index,
+                                operation,
+                                UNRECOGNIZED_PAGE,
+                            )?;
+                            (budget_elapsed_since(runtime, pace, decision_started), None)
+                        }
+                    };
+                    if let Some(pages) = unrecorded {
+                        return Err(unrecorded_screen(
+                            operation,
+                            step,
+                            (attempt, false),
+                            &candidates.awaited(false),
+                            &pages,
+                            elapsed,
+                            run.step_timeout,
+                        )
+                        .into());
+                    }
                     return Err(page_confirmation_failed(
                         operation,
                         step,
                         attempt,
                         false,
                         &candidates.awaited(false),
-                        budget_elapsed_since(runtime, pace, decision_started),
+                        elapsed,
                         run.step_timeout,
                     )
                     .with_loading_limit(loading_limit)
                     .into());
                 }
             }
+        }
+    }
+
+    /// Workflow #463 U1, fix round 2 (`contracts/linear-steps.md`, "A screen the package never
+    /// recorded"): the closing decision of a step whose failed wait of kind `kind` (ended on the
+    /// attempt's loading allowance when `loading_ended`) ends the run with
+    /// `page_confirmation_failed` ([`Self::linear_closing_pages`],
+    /// [`Self::linear_closing_decision`]): its pages when it found a screen the package never
+    /// recorded, `None` when that end stands.
+    fn linear_closing<'p, R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        (run, loading): (LinearRun, &mut LoadingAllowance),
+        step: &'p LinearStep,
+        candidates: &LinearCandidates<'p>,
+        miss: (LinearMissKind, bool),
+    ) -> Result<Option<Vec<&'p str>>, ContainedTaskRunError<R::Error>> {
+        let Some(pages) = self.linear_closing_pages(runtime, run, step, candidates, miss) else {
+            return Ok(None);
+        };
+        Ok(self
+            .linear_closing_decision(runtime, (run, loading), &pages)?
+            .then_some(pages))
+    }
+
+    /// Workflow #463 U1, fix round 2: the pages of the closing decision after a failed wait of
+    /// kind `kind` (ended on the attempt's loading allowance when `loading_ended`): every page
+    /// the wait awaited, then the step's own page. `None` where the decision is not made and the
+    /// end stands as it is: a run that is not a task's own run (a layer's, a recovery entry's, or
+    /// one the host starts itself, rule 5); a run inside a restart segment (R25-1); a wait that
+    /// missed the intermediate page (rule 1 (a): the page may have flashed past onto one the
+    /// package knows); a wait that ended on its loading allowance; an application entry; a
+    /// package with sample consensus, whose observation gives no result of a frame by itself
+    /// (rule 1 (b)); and a run whose time left, before its host deadline or the end of its
+    /// admitted runtime budget ([`ContainedTaskRuntime::run_time_left`]), is shorter than twice
+    /// the decision's bound, the step timeout (rule 6; fix round 3: the decision lasts its bound,
+    /// and the capture and recognition of its last frame, the evaluation of the package's other
+    /// pages and the work before the run's settlement come after it).
+    fn linear_closing_pages<'p, R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        run: LinearRun,
+        step: &'p LinearStep,
+        candidates: &LinearCandidates<'p>,
+        (kind, loading_ended): (LinearMissKind, bool),
+    ) -> Option<Vec<&'p str>> {
+        if !run.own_task_run
+            || run.restart_segment
+            || kind == LinearMissKind::Intermediate
+            || loading_ended
+            || !self.evaluator.pack().target_consensus.is_empty()
+        {
+            return None;
+        }
+        let LinearFrom::Page(own_page) = &step.from else {
+            return None;
+        };
+        let bound = run.timing.pace().wall_span(run.step_timeout);
+        if runtime
+            .run_time_left()
+            .is_some_and(|left| left < bound.saturating_mul(2))
+        {
+            return None;
+        }
+        let mut pages = candidates.pages.clone();
+        pages.push(own_page.as_str());
+        Some(pages)
+    }
+
+    /// Workflow #463 U1, fix round 2 (rules 1 to 3): the closing decision on `pages`. It observes
+    /// for the step timeout at the capture interval from a first frame taken at once, as a retry
+    /// decision observes, and only classifies: it never inputs, never goes on with the attempt
+    /// and never hands a frame to the shared interrupt pages. `true` for a screen the package
+    /// never recorded, which needs all of these: on every frame up to the bound's end none of
+    /// `pages` passed and no shared interrupt page is shown (recognised, never handled); no frame
+    /// is a transition frame (LOAD-4, under `on`); the decision's first and last frames, and its
+    /// last two captures, are unchanged by the Runtime's one frame-change measure
+    /// (`StillScreen::WHOLE_FRAME`); and on its last frame, the one the run pins, no other page of
+    /// the package passes. Every other end is `false`, and so is every error raised by its own
+    /// capture, recognition or evaluation, whatever its kind (fix round 3: the task's deadline, a
+    /// capture or a recognition that failed as a task error or as an operation error of the
+    /// runtime, a failed check of the shared interrupt pages): the failed wait's end stands. The
+    /// one exception is a failure of the runtime's own bookkeeping, a record it could not write
+    /// ([`ContainedTaskRuntime::is_bookkeeping_failure`]), which ends the run as it ends any run.
+    fn linear_closing_decision<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        (run, loading): (LinearRun, &mut LoadingAllowance),
+        pages: &[&str],
+    ) -> Result<bool, ContainedTaskRunError<R::Error>> {
+        match self.linear_closing_observation(runtime, (run, loading), pages) {
+            Err(ContainedTaskRunError::Boundary(error)) if R::is_bookkeeping_failure(&error) => {
+                Err(ContainedTaskRunError::Boundary(error))
+            }
+            Err(_) => Ok(false),
+            observed => observed,
+        }
+    }
+
+    /// The observation of [`Self::linear_closing_decision`].
+    fn linear_closing_observation<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        (run, loading): (LinearRun, &mut LoadingAllowance),
+        pages: &[&str],
+    ) -> Result<bool, ContainedTaskRunError<R::Error>> {
+        let deadline = run.timing.deadline();
+        let pace = run.timing.pace();
+        let game = self.control.game.as_str();
+        let bound = run.step_timeout;
+        // PERF-B1 (R3): the pause before the decision's next frame, as a retry decision's.
+        let mut backoff = CaptureBackoff::new(run.capture_interval, run.pacing);
+        let started = budget_now(runtime, pace);
+        // Workflow #407 LOAD-4: the budget instant of the decision's latest frame, its start
+        // before the first.
+        let mut last_frame_at = started;
+        // The frame-change digests of the decision's first and latest frames.
+        let mut first: Option<ColorDigest> = None;
+        let mut previous: Option<ColorDigest> = None;
+        loop {
+            if budget_now(runtime, pace) >= deadline {
+                return Ok(false);
+            }
+            let observation =
+                self.linear_observe_scene(runtime, pages, run.timing, Some(&mut *loading))?;
+            if budget_now(runtime, pace) >= deadline {
+                return Ok(false);
+            }
+            let frame_at = budget_now(runtime, pace);
+            let previous_frame_at = std::mem::replace(&mut last_frame_at, frame_at);
+            let judged = self.judge_frame(
+                runtime,
+                None,
+                observation.as_ref().ok(),
+                loading,
+                run.timing,
+            )?;
+            let page = observation
+                .as_ref()
+                .ok()
+                .map(|observation| observation.page_label.clone());
+            // Workflow #407 LOAD-4: the frame counts for the attempt's loading records as a
+            // retry decision's frame does; nothing here waits on it.
+            loading.frame(
+                runtime,
+                game,
+                LoadingFrame {
+                    transition: judged.transition,
+                    page: page.as_deref(),
+                    now: frame_at,
+                    previous: previous_frame_at,
+                },
+            )?;
+            // Rule 1 (b): one of `pages` passed on this frame by itself; LOAD-4: a transition
+            // frame. Neither is a screen the package never recorded.
+            let scene = match observation {
+                Ok(_) => return Ok(false),
+                Err(_) if judged.row == FrameRow::Transition => return Ok(false),
+                Err(scene) => scene,
+            };
+            // Rule 3: a shared interrupt page on the frame, recognised and not handled.
+            if self.shown_shared_interrupt(runtime, &scene)? {
+                return Ok(false);
+            }
+            // PERF-B1 (R3).
+            backoff.frame(&scene)?;
+            let digest = StillScreen::WHOLE_FRAME.digest(&scene)?;
+            let last_two_still = match &previous {
+                Some(previous) => !StillScreen::WHOLE_FRAME.moved(previous, &digest)?,
+                None => false,
+            };
+            let now = budget_now(runtime, pace);
+            if now.saturating_duration_since(started) >= bound {
+                // Rules 1 (c) and 2: the decision's last two captures, and its first and its last
+                // frame, are alike; rule 1 (d): no other page of the package is on the last frame.
+                let first_still = match &first {
+                    Some(first) => !StillScreen::WHOLE_FRAME.moved(first, &digest)?,
+                    None => false,
+                };
+                return Ok(first_still && last_two_still && !self.another_page_on(pages, &scene));
+            }
+            if first.is_none() {
+                first = Some(digest.clone());
+            }
+            previous = Some(digest);
+            let boundary = LinearWaitPurpose::RetryDecision.boundary();
+            let identity = runtime.task_boundary_identity(boundary);
+            let wait_started = runtime.monotonic_now();
+            let now = pace.budget(wait_started);
+            pace_pause(
+                runtime,
+                pace,
+                backoff
+                    .interval()
+                    .min(bound.saturating_sub(now.saturating_duration_since(started)))
+                    .min(deadline.saturating_duration_since(now)),
+            );
+            let wait_ended = runtime.monotonic_now();
+            runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                boundary,
+                identity,
+                context: run.timing,
+                started: wait_started,
+                ended: wait_ended,
+                succeeded: true,
+            });
+        }
+    }
+
+    /// Workflow #463 U1, fix round 2 (rule 1 (d)): whether a page the package declares that
+    /// `pages` leaves out (another step's page, an intermediate page, a skip target, a loading
+    /// page) passes on `scene`, the frame the run would pin, in one scene evaluation that
+    /// captures and records nothing. An error of that evaluation counts as such a page.
+    fn another_page_on(&self, pages: &[&str], scene: &Scene) -> bool {
+        let others = self
+            .detector
+            .page_ids()
+            .chain(self.detector.loading_page_ids())
+            .filter(|page| !pages.contains(page))
+            .collect::<Vec<_>>();
+        if others.is_empty() {
+            return false;
+        }
+        match self.matching_pages_on_scene(scene, &others) {
+            Ok(matched) => !matched.is_empty(),
+            Err(_) => true,
         }
     }
 

@@ -1668,7 +1668,8 @@ const DO_CAPTURE_DRY_RUN: Lab2Path = Lab2Path {
 };
 /// Online `do --capture`: the element or coordinates, the hints, the arrival condition, the
 /// recording and the preview (contained-lab-operation.md); the destructive guard flags are read
-/// only by offline and dry-run planning.
+/// only by offline and dry-run planning. #463 L1: with `--record`, the one-call form's mark request
+/// and next frame (`lab-recording.md`, "One call per step").
 const DO_CAPTURE: Lab2Path = Lab2Path {
     name: "do --capture",
     reads: &[
@@ -1686,6 +1687,10 @@ const DO_CAPTURE: Lab2Path = Lab2Path {
         "--tap-rect",
         "--preview",
         "--seed",
+        "--mark-request",
+        "--mark-request-json",
+        "--next-frame-after-ms",
+        "--next-frame-out",
     ],
     repeats: &[],
 };

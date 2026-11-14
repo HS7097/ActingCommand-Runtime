@@ -22,9 +22,9 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3910 |
+| active | 3911 |
 | retired | 28 |
-| all | 3938 |
+| all | 3939 |
 
 ## Active codes by category
 
@@ -33,19 +33,19 @@ here.
 | success | 129 |
 | info | 212 |
 | warning | 149 |
-| error | 3403 |
+| error | 3404 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 723 |
+| `common_causes` and `handling` both written | 724 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3183 |
 | `settled` | 170 |
-| `pending` | 3740 |
-| all active codes | 3910 |
+| `pending` | 3741 |
+| all active codes | 3911 |
 
 ## By owner
 
@@ -61,7 +61,7 @@ here.
 | [contract](contract.md) | 916 | 902 | 158 | 38 |
 | [device](device.md) | 33 | 33 | 27 | 23 |
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
-| [execution-kernel](execution-kernel.md) | 203 | 200 | 29 | 0 |
+| [execution-kernel](execution-kernel.md) | 204 | 201 | 30 | 0 |
 | [host-metrics](host-metrics.md) | 17 | 17 | 0 | 0 |
 | [lab](lab.md) | 9 | 9 | 7 | 0 |
 | [ledger](ledger.md) | 293 | 292 | 26 | 0 |
@@ -82,4 +82,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3938 | 3910 | 723 | 170 |
+| all | 3939 | 3911 | 724 | 170 |
