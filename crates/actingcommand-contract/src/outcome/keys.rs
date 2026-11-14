@@ -810,4 +810,12 @@ outcome_keys! {
     // ---- Workflow #437 MAPP-2a (contracts/device-group.md "The switch before a run"): which step
     // of the switch before a member's run failed; kept in codes mode. ----
     application_switch_step: vocab(application_switch_step),
+    // ---- Workflow #467 RPT-1 fix round 1 (contracts/problem-report.md section 9): the closed
+    // values of `report export`'s codes: which part is missing and why, the write's step, whether
+    // the archive fits its bound, and the root a refused output lies in. ----
+    report_part: vocab(report_part),
+    report_part_reason: vocab(report_part_reason),
+    report_write_step: vocab(report_write_step),
+    report_fit: vocab(report_fit),
+    report_output_root: vocab(report_output_root),
 }

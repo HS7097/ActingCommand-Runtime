@@ -4,7 +4,8 @@
 //! order of 11-14 with its rulings, and the design's section G, row RPT-1): the slice's named
 //! tests of `report export`. The reads go to a made-up Runtime ([`Fake`], a [`Source`] that
 //! answers made-up runs and writes down every read it is asked for); the installation, the state
-//! root and the output are temporary folders; no Runtime, no clock, no sleep.
+//! root and the output are temporary folders; no Runtime, no sleep, and no clock read by a test
+//! (the private bindings' writer stamps its own binding time).
 //!
 //! - `rpt1_summary_names_the_failing_step_its_scores_and_the_display`: the summary page of two
 //!   failed runs: each run's terminal code with the catalog's description, the step it ended in,
@@ -40,16 +41,36 @@
 //!   the summary name every part left out.
 //! - `rpt1_the_errors_view_of_each_instance_newest_rows_counted`: each instance's errors view is
 //!   read with the window, the newest 200 rows kept and the newest ten on the summary, which says
-//!   how many the window held.
+//!   whether they are the newest of the window or every row of it.
 //! - `rpt1_every_read_names_a_request_or_an_instance_and_the_window`: the reads in order, each
 //!   naming an instance with the report's window, a request id with the failing step's range, or
 //!   a material reference; with an instance named, no other instance is read.
 //! - `rpt1_the_tables_row_report_export`: the row of the operation table.
+//!
+//! Fix round 1 (`rd-1115/brief-1725-fix1.md`), adapting the tests above where its items change
+//! what they pin (the errors view's newest rows and no total, item 7; the reads' order, item 7;
+//! the size bound in packed bytes, item 8; the parts missing with their part and reason; the
+//! private bindings written by their one writer, item 2), and four new tests:
+//! - `rpt1_fix1_a_listing_not_read_to_its_end_never_says_none`: a listing cut short is a part
+//!   missing naming its instance, the summary says for each instance whether its listing was read
+//!   to its end, and "none" is said only of listings that were (item 3).
+//! - `rpt1_fix1_still_over_the_bound_is_said_in_the_manifest_the_summary_and_the_answer`: with
+//!   every part that may be left out left out, in order, the archive still over its bound says
+//!   so in `report_trimmed`, the manifest, the summary and the answer (item 4).
+//! - `rpt1_fix1_no_frames_leaves_out_every_text_and_value_read_from_a_frame`: each member that
+//!   holds what a frame shows, in the stream's records and the errors view's rows, is in the
+//!   report with frames and in no entry without them; what measures a frame stays (item 5).
+//! - `rpt1_fix1_the_masks_replace_names_inside_words_escaped_paths_and_dns_names`: the masks of
+//!   item 11.
 
 use crate::code_lookup::{self, Answer, Query};
-use crate::codes::{ActingctlCode, RunState};
+use crate::codes::{
+    ActingctlCode, ReportFit, ReportOutputRoot, ReportPart, ReportPartReason, ReportWriteStep,
+    RunState,
+};
 use crate::core_ops::{self, Caller, Place};
 use crate::core_reads::READ_HERE;
+use crate::devices::{self, AdbRun, Bind};
 use crate::events::CursorBinding;
 use crate::front::Connection;
 use crate::material_export::MAX_EXPORT_BYTES;
@@ -62,11 +83,12 @@ use crate::table::{
     Entry, MAX_HELP_BYTES, Operation, OperationModule, Param, ParamForm, ParamType, RuntimeNeed,
     operation_table,
 };
-use actingcommand_contract::RuntimeOperationKind;
 use actingcommand_contract::outcome::{CodeStr, Outcome};
+use actingcommand_contract::{DeviceBoundVia, RuntimeOperationKind};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Cursor, Read};
@@ -202,15 +224,17 @@ impl FakeRun {
 }
 
 /// The made-up Runtime: its instances, its failed and unfinished runs, the runs that ended
-/// normally, each instance's errors view, its materials (by reference; those known only by a
-/// size larger than any bound the report reads with), and every read it was asked for.
+/// normally, each instance's errors view (its rows, oldest first), its materials (by reference;
+/// those known only by a size larger than any bound the report reads with), the instance whose
+/// run listing stops before its end, and every read it was asked for.
 struct Fake {
     instances: Vec<&'static str>,
     runs: Vec<FakeRun>,
     settled: Vec<RunRow>,
-    errors: BTreeMap<&'static str, Errors>,
+    errors: BTreeMap<&'static str, Vec<Value>>,
     materials: BTreeMap<&'static str, Vec<u8>>,
     sizes: BTreeMap<&'static str, u64>,
+    cut_listing: Option<&'static str>,
     reads: RefCell<Vec<String>>,
 }
 
@@ -219,11 +243,16 @@ impl Fake {
         self.reads.borrow_mut().push(read);
     }
 
-    fn run_of(&self, request_id: &str) -> Result<&FakeRun, Outcome> {
+    fn run_of(&self, request_id: &str) -> Result<&FakeRun, Missed> {
         self.runs
             .iter()
             .find(|run| run.row.request_id == request_id)
-            .ok_or_else(|| Outcome::new(ActingctlCode::RunUnknown).request_id(request_id))
+            .ok_or_else(|| {
+                Missed::new(
+                    ReportPartReason::RuntimeRefused,
+                    Outcome::new(ActingctlCode::RunUnknown).request_id(request_id),
+                )
+            })
     }
 
     fn reads(&self) -> Vec<String> {
@@ -259,26 +288,34 @@ impl Source for Fake {
         window: Window,
         which: Which,
         limit: usize,
-    ) -> Result<Listed, Outcome> {
+    ) -> Result<Listed, Missed> {
         self.note(format!(
             "runs {} {} {:?} {which:?} {limit}",
             instance.alias, window.since_unix_ms, window.until_unix_ms
         ));
+        // A listing that stops before its end holds no run (as `list_contained_runs` answers an
+        // incomplete listing).
+        if self.cut_listing == Some(instance.alias.as_str()) {
+            return Ok(Listed {
+                runs: Vec::new(),
+                cut: Some(ReportPartReason::NotReadToEnd),
+            });
+        }
         let unfinished = self.runs.iter().map(|run| &run.row);
         let mut rows = match which {
             Which::Unfinished => unfinished.cloned().collect::<Vec<_>>(),
             Which::Any => unfinished.chain(&self.settled).cloned().collect(),
         };
         rows.retain(|row| row.alias == instance.alias && within(row, window));
-        rows.sort_by(|left, right| right.first_unix_ms.cmp(&left.first_unix_ms));
+        rows.sort_by_key(|row| Reverse(row.first_unix_ms));
         rows.truncate(limit);
         Ok(Listed {
             runs: rows,
-            incomplete: false,
+            cut: None,
         })
     }
 
-    fn errors(&self, instance: &Instance, window: Window, keep: usize) -> Result<Errors, Outcome> {
+    fn errors(&self, instance: &Instance, window: Window, keep: usize) -> Result<Errors, Missed> {
         self.note(format!(
             "errors {} {} {:?} {keep}",
             instance.alias, window.since_unix_ms, window.until_unix_ms
@@ -288,14 +325,15 @@ impl Source for Fake {
             .get(instance.alias.as_str())
             .cloned()
             .unwrap_or_default();
-        let skipped = all.rows.len().saturating_sub(keep);
+        let skipped = all.len().saturating_sub(keep);
         Ok(Errors {
-            rows: all.rows[skipped..].to_vec(),
-            total: all.total,
+            rows: all[skipped..].to_vec(),
+            searched_from: None,
+            cut: false,
         })
     }
 
-    fn run(&self, request_id: &str) -> Result<Value, Outcome> {
+    fn run(&self, request_id: &str) -> Result<Value, Missed> {
         self.note(format!("run {request_id}"));
         let run = self.run_of(request_id)?;
         Ok(json!({
@@ -307,12 +345,12 @@ impl Source for Fake {
         }))
     }
 
-    fn evidence(&self, request_id: &str) -> Result<Evidence, Outcome> {
+    fn evidence(&self, request_id: &str) -> Result<Evidence, Missed> {
         self.note(format!("evidence {request_id}"));
         self.run_of(request_id).map(FakeRun::evidence)
     }
 
-    fn geometry(&self, request_id: &str) -> Result<Vec<Geometry>, Outcome> {
+    fn geometry(&self, request_id: &str) -> Result<Vec<Geometry>, Missed> {
         self.note(format!("geometry {request_id}"));
         self.run_of(request_id).map(|run| run.geometry.clone())
     }
@@ -322,7 +360,7 @@ impl Source for Fake {
         request_id: &str,
         from: u64,
         through: Option<u64>,
-    ) -> Result<Vec<Recognition>, Outcome> {
+    ) -> Result<Vec<Recognition>, Missed> {
         self.note(format!("recognitions {request_id} {from} {through:?}"));
         let run = self.run_of(request_id)?;
         Ok(run
@@ -339,14 +377,15 @@ impl Source for Fake {
         self.note(format!("material {reference} {limit}"));
         match (self.materials.get(reference), self.sizes.get(reference)) {
             (Some(bytes), _) if bytes.len() as u64 > limit => {
-                Err(Missed::TooLarge(bytes.len() as u64))
+                Err(Missed::too_large(bytes.len() as u64, limit))
             }
             (Some(bytes), _) => Ok(bytes.clone()),
-            (None, Some(size)) if *size > limit => Err(Missed::TooLarge(*size)),
-            // The Runtime no longer has it (the cleaner removed it), or the read failed.
-            _ => Err(Missed::Failed(Outcome::new(
-                ActingctlCode::CallBudgetExhausted,
-            ))),
+            (None, Some(size)) if *size > limit => Err(Missed::too_large(*size, limit)),
+            // The Runtime no longer has it (the cleaner removed it).
+            _ => Err(Missed::new(
+                ReportPartReason::RuntimeRefused,
+                Outcome::new(ActingctlCode::CallBudgetExhausted),
+            )),
         }
     }
 }
@@ -406,6 +445,21 @@ fn template(id: &str, score: f64, threshold: f64) -> Value {
             "passed": false,
         },
     })
+}
+
+/// `length` characters that deflate cannot shrink much (fix round 1, item 8: the size bound
+/// counts packed bytes): a fixed pseudo-random sequence over 64 letters, digits, `-` and `_`.
+fn noise(length: usize, seed: u64) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut state = seed;
+    (0..length)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            char::from(ALPHABET[(state >> 58) as usize])
+        })
+        .collect()
 }
 
 /// The stream's framing: the header's line, one record a line (each after the first with its
@@ -511,7 +565,7 @@ fn stream_a(pad: usize) -> Vec<u8> {
             13,
             None,
             "error",
-            json!({"phase": "page", "pad": "x".repeat(pad)}),
+            json!({"phase": "page", "pad": noise(pad, 13)}),
         ));
     }
     records.push(record(
@@ -539,7 +593,7 @@ fn stream_b(pad: usize) -> Vec<u8> {
             4,
             None,
             "error",
-            json!({"phase": "page", "pad": "y".repeat(pad)}),
+            json!({"phase": "page", "pad": noise(pad, 4)}),
         ));
     }
     records.push(record(
@@ -682,20 +736,8 @@ fn fake(frame_size: usize, pad: usize) -> Fake {
     materials.insert(A_STREAM, stream_a(pad));
     materials.insert(B_STREAM, stream_b(pad));
     let mut errors = BTreeMap::new();
-    errors.insert(
-        "alpha",
-        Errors {
-            rows: (1..=250).map(error_row).collect(),
-            total: 250,
-        },
-    );
-    errors.insert(
-        "beta",
-        Errors {
-            rows: (1..=3).map(error_row).collect(),
-            total: 3,
-        },
-    );
+    errors.insert("alpha", (1..=250).map(error_row).collect());
+    errors.insert("beta", (1..=3).map(error_row).collect());
     Fake {
         instances: vec!["alpha", "beta"],
         runs: vec![a, b],
@@ -711,6 +753,7 @@ fn fake(frame_size: usize, pad: usize) -> Fake {
         errors,
         materials,
         sizes: BTreeMap::new(),
+        cut_listing: None,
         reads: RefCell::new(Vec::new()),
     }
 }
@@ -755,7 +798,7 @@ fn default_bound() -> u64 {
 }
 
 fn mask() -> Mask {
-    Mask::new(Some(USER), Some(COMPUTER))
+    Mask::new(Some(USER), &[COMPUTER])
 }
 
 fn export_from(source: &Fake, request: &Request, installed: &Installed) -> Exported {
@@ -805,6 +848,33 @@ fn missing_files(exported: &Exported) -> Vec<String> {
         .filter(|warning| warning.is(ActingctlCode::ReportPartMissing))
         .filter_map(|warning| warning.value("file")?.as_str().map(str::to_owned))
         .collect()
+}
+
+/// The warning `report_part_missing` of `part` for `why` whose `key` is `value`.
+fn missing_part<'a>(
+    exported: &'a Exported,
+    part: ReportPart,
+    why: ReportPartReason,
+    key: &str,
+    value: &str,
+) -> &'a Outcome {
+    exported
+        .warnings
+        .iter()
+        .find(|warning| {
+            warning.is(ActingctlCode::ReportPartMissing)
+                && warning.value("report_part") == Some(&json!(part.as_str()))
+                && warning.value("report_part_reason") == Some(&json!(why.as_str()))
+                && warning.value(key) == Some(&json!(value))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "report_part_missing {} {} with {key} {value}: {:?}",
+                part.as_str(),
+                why.as_str(),
+                exported.warnings
+            )
+        })
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -864,6 +934,18 @@ fn rpt1_summary_names_the_failing_step_its_scores_and_the_display() {
         ),
         "{summary}"
     );
+    // Fix round 1: what the screenshots can show and how to leave them out (item 10); the size
+    // within its bound (item 4); each instance's listing read to its end (item 3).
+    for line in [
+        "Screenshots / 截图: the screenshots in this report can show a player's name and \
+         numbers. To send a report without them, export again with `--no-frames`",
+        "Size / 大小: within the bound of 24 MiB / 在 24 MiB 上限内\n",
+        "- Listing of alpha / alpha 的运行列表: read to its end / 读完\n",
+        "- Listing of beta / beta 的运行列表: read to its end / 读完\n",
+    ] {
+        assert!(summary.contains(line), "{line}\n{summary}");
+    }
+    assert!(exported.within_bound);
     // The runs, newest first, and the run that ended normally before the newest on its
     // instance, which shows where the game was left.
     for line in [
@@ -956,6 +1038,17 @@ fn rpt1_summary_names_the_failing_step_its_scores_and_the_display() {
     let manifest = document(&entries, "report/manifest.json");
     assert_eq!(manifest["view"], report::VIEW_ERRORS);
     assert_eq!(manifest["frames"], true);
+    assert_eq!(manifest["within_bound"], true);
+    // Fix round 1, item 6: the manifest says the configuration is read and nothing of it written.
+    assert!(
+        manifest["secrets"]
+            .as_str()
+            .is_some_and(|text| text.starts_with(
+                "the configuration is read for its \
+                 standard_packs.root alone and nothing of it is written"
+            )),
+        "{manifest}"
+    );
     let files = manifest["files"].as_array().expect("the manifest's files");
     assert_eq!(files.len() + 1, entries.len());
     for file in files {
@@ -979,6 +1072,11 @@ fn rpt1_summary_names_the_failing_step_its_scores_and_the_display() {
     let again = report::export(&fake(64, 0), &request, &versions(), &mask())
         .expect_err("the same archive is never replaced");
     assert!(again.is(ActingctlCode::ReportWriteFailed), "{again}");
+    assert_eq!(
+        again.value("report_write_step"),
+        Some(&json!(ReportWriteStep::NameExists.as_str())),
+        "{again}"
+    );
     assert_eq!(
         fs::read(exported.path.as_path()).expect("the archive"),
         archive
@@ -1054,14 +1152,15 @@ fn rpt1_the_stream_is_read_for_the_failing_step_only() {
     assert_eq!(dialog["page"], "confirm_dialog");
     assert_eq!(dialog["best_milli"], 740);
     assert_eq!(dialog["first_failed_target"], "confirm_button");
-    let missing = exported
-        .warnings
-        .iter()
-        .find(|warning| {
-            warning.is(ActingctlCode::ReportPartMissing)
-                && warning.value("file") == Some(&json!("runs/run-a/scores.json"))
-        })
-        .expect("the scores' stream named missing");
+    // Fix round 1: the part named is the run's excerpt, for its size, with the run.
+    let missing = missing_part(
+        &exported,
+        ReportPart::RunExcerpt,
+        ReportPartReason::TooLarge,
+        "file",
+        "runs/run-a/overlay-excerpt.jsonl",
+    );
+    assert_eq!(missing.value("request_id"), Some(&json!("req-a")));
     assert!(
         missing
             .causes()
@@ -1133,6 +1232,13 @@ fn rpt1_frames_are_the_failing_steps_decided_and_last_and_the_runs_last() {
         "{:?}",
         missing_files(&exported)
     );
+    missing_part(
+        &exported,
+        ReportPart::Frame,
+        ReportPartReason::RuntimeRefused,
+        "file",
+        "runs/run-a/frames/52-run-last.png",
+    );
     let summary = text(&entries, "report/SUMMARY.md");
     assert!(
         summary.contains(
@@ -1176,6 +1282,11 @@ fn rpt1_an_output_inside_the_install_root_or_the_state_root_is_refused() {
         assert!(outcome.value("install_root").is_some(), "{outcome}");
         assert!(outcome.value("state_root").is_none(), "{outcome}");
         assert!(outcome.value("path").is_some(), "{outcome}");
+        assert_eq!(
+            outcome.value("report_output_root"),
+            Some(&json!(ReportOutputRoot::InstallRoot.as_str())),
+            "{outcome}"
+        );
     }
     // Inside the state root.
     for out in [
@@ -1191,6 +1302,11 @@ fn rpt1_an_output_inside_the_install_root_or_the_state_root_is_refused() {
         );
         assert!(outcome.value("state_root").is_some(), "{outcome}");
         assert!(outcome.value("install_root").is_none(), "{outcome}");
+        assert_eq!(
+            outcome.value("report_output_root"),
+            Some(&json!(ReportOutputRoot::StateRoot.as_str())),
+            "{outcome}"
+        );
     }
     // Beside them, a name that begins like a root's included: taken.
     for out in [
@@ -1260,6 +1376,7 @@ fn rpt1_no_secret_and_no_unmasked_name_is_in_the_archive() {
         json!({
             "secret_fingerprint_salt": salt,
             "standard_packs": {"root": "games"},
+            "instances": [{"alias": "alpha", "device": {"kind": "handset", "transport": "usb"}}],
         })
         .to_string(),
     )
@@ -1286,19 +1403,30 @@ fn rpt1_no_secret_and_no_unmasked_name_is_in_the_archive() {
         .to_string(),
     )
     .expect("the build manifest");
-    // The state root: its key file and the private device bindings with a serial.
+    // The state root: its key file, and the private device bindings with a serial, written by
+    // their one writer (`devices bind`, from a made-up adb listing; fix round 1, item 2: the
+    // architecture guard T10 lets only the binding reader and writer name the file).
     let state_root = folder.path().join("state");
-    fs::create_dir_all(state_root.join("private")).expect("the state root");
+    fs::create_dir_all(&state_root).expect("the state root");
     let key = (0_u8..32)
         .map(|place| 0xA5 ^ place.wrapping_mul(29))
         .collect::<Vec<_>>();
     fs::write(state_root.join("runtime-state.key"), &key).expect("the key file");
     let serial = "TESTSERIAL0467";
-    fs::write(
-        state_root.join("private").join("device-bindings.json"),
-        json!({"bindings": [{"alias": "alpha", "serial": serial}]}).to_string(),
-    )
-    .expect("the bindings");
+    let listing = |_: &Path| {
+        AdbRun::Printed(format!(
+            "List of devices attached\n{serial}         device usb:1-1 product:neutral \
+             model:Neutral_Phone device:neutral transport_id:7\n\n"
+        ))
+    };
+    let bound = Bind {
+        alias: "alpha",
+        handle: "usb:7",
+        via: DeviceBoundVia::Cli,
+    };
+    devices::bind(&state_root, Some(root.as_path()), &bound, &listing)
+        .unwrap_or_else(|outcome| panic!("the device is bound: {outcome}"));
+    assert!(state_root.join("private").is_dir());
 
     let out = folder.path().join("reports");
     report::refuse_output(&out, Some(root.as_path()), &state_root)
@@ -1435,10 +1563,13 @@ fn rpt1_the_report_only_reads_and_confirms_no_evidence() {
         .filter(|line| !line.trim_start().starts_with("//"))
         .flat_map(str::split_whitespace)
         .collect::<String>();
+    // Fix round 1, item 7: the errors view through the search for the newest records `events`
+    // has.
     let reaching = [
         "self.client.status(",
         "self.client.list_contained_runs(",
         "self.client.visit_events(",
+        "events::newest_in_window(self.client,",
         "run_show::read(self.client,",
         "run_evidence::read(self.client,",
         "material::resolve(self.client,",
@@ -1485,8 +1616,9 @@ fn rpt1_no_frames_leaves_out_every_frame_and_the_text_ocr_read() {
     }
     let summary = text(&entries, "report/SUMMARY.md");
     for line in [
-        "- Frames / 截图: none: what the screen showed is missing, and the text OCR read is \
-         removed / 未带截图：画面内容缺失，OCR 读到的文字已去掉",
+        "- Frames / 截图: none: what the screen showed is missing, and the text and values read \
+         from it are removed / 未带截图：画面内容缺失，从截图读出的文字和数值已去掉",
+        "Screenshots / 截图: none; the text and values read from them are left out too",
         "| title_text | ocr | no |  |  |  |  | 1 | (removed with the frames) |",
         "| confirm_button | template | no | 0.620 | 0.740 | 0.850 | -0.230 | 2 |  |",
         "frames: left out / 不带截图",
@@ -1519,9 +1651,12 @@ fn rpt1_no_frames_leaves_out_every_frame_and_the_text_ocr_read() {
 #[test]
 fn rpt1_the_size_bound_leaves_out_frames_then_excerpts_and_says_so() {
     let folder = TempDir::new().expect("a temporary folder");
-    // Frames of 400 KiB and a record of 1800 KiB in each failing step's stream, within 4 MiB.
-    let source = fake(400 * 1024, 1800 * 1024);
-    let limit = report::MIN_MIB * report::MIB;
+    // Fix round 1, item 8: the bound counts the archive's packed bytes. Frames of 100 KiB
+    // (stored as they are) and a record of 900 KiB that deflate cannot shrink much (some 680 KiB
+    // packed) in each failing step's stream, within 1 MiB: with every frame left out the two
+    // excerpts are still over it, with one of them left out the rest fits.
+    let source = fake(100 * 1024, 900 * 1024);
+    let limit = report::MIB;
     let exported = export_from(&source, &asked(folder.path(), true, limit), &versions());
     let entries = archive_entries(&exported.path);
     // The older run's frames first (its last first), then the newer run's, then the older
@@ -1548,7 +1683,12 @@ fn rpt1_the_size_bound_leaves_out_frames_then_excerpts_and_says_so() {
         .expect("report_trimmed");
     assert_eq!(trimmed.value("count"), Some(&json!(expected.len())));
     assert_eq!(trimmed.value("limit_bytes"), Some(&json!(limit)));
-    assert!(exported.size <= limit);
+    assert_eq!(
+        trimmed.value("report_fit"),
+        Some(&json!(ReportFit::Fits.as_str()))
+    );
+    assert!(exported.size <= limit, "{}", exported.size);
+    assert!(exported.within_bound);
     let kept = names(&entries);
     for name in [
         "report/runs/run-a/overlay-excerpt.jsonl",
@@ -1612,14 +1752,15 @@ fn rpt1_the_errors_view_of_each_instance_newest_rows_counted() {
     assert_eq!(rows.len(), report::ERRORS_PER_INSTANCE);
     assert_eq!(rows[0]["run_id"], "run-e51");
     assert_eq!(rows[rows.len() - 1]["run_id"], "run-e250");
-    // The summary says how many the window held and how many the file keeps, and shows the
-    // newest ten.
+    // The summary says how many rows the file keeps, whether they are the newest of the window
+    // or every row of it (fix round 1, item 7: the newest rows are searched for, the window is
+    // not read from its start, so no total is counted), and shows the newest ten.
     let summary = text(&entries, "report/SUMMARY.md");
     for line in [
         "## Errors view / 错误视图: alpha\n",
-        "250 rows in the window / 时间窗里 250 行; 200 in instances/alpha/errors.jsonl, the \
-         newest; the 50 older rows are left out / 较早的 50 行未放入.\n",
-        "3 rows in the window / 时间窗里 3 行; 3 in instances/beta/errors.jsonl.\n",
+        "200 rows in instances/alpha/errors.jsonl, the newest of the window; older rows were not \
+         read / 时间窗里最新的 200 行，更早的没有读.\n",
+        "3 rows in instances/beta/errors.jsonl, every row of the window / 时间窗里的全部记录.\n",
         "| time | severity | code | module | run |\n",
         "| runtime_host | run-e250 |\n",
         "| runtime_host | run-e241 |\n",
@@ -1629,9 +1770,11 @@ fn rpt1_the_errors_view_of_each_instance_newest_rows_counted() {
     assert!(!summary.contains("run-e240"), "{summary}");
     let data = document(&entries, "report/summary.json");
     assert_eq!(data["errors"][0]["alias"], "alpha");
-    assert_eq!(data["errors"][0]["total"], 250);
     assert_eq!(data["errors"][0]["kept"], report::ERRORS_PER_INSTANCE);
+    assert_eq!(data["errors"][0]["newest_only"], true);
+    assert_eq!(data["errors"][0]["searched_to_start"], true);
     assert_eq!(data["errors"][0]["in_archive"], true);
+    assert_eq!(data["errors"][1]["newest_only"], false);
 }
 
 #[test]
@@ -1652,9 +1795,7 @@ fn rpt1_every_read_names_a_request_or_an_instance_and_the_window() {
         source.reads(),
         [
             "instances None".to_owned(),
-            // Each instance's errors view and its failed and unfinished runs, in the window.
-            format!("errors alpha {SINCE} None {errors}"),
-            format!("errors beta {SINCE} None {errors}"),
+            // Each instance's failed and unfinished runs, in the window.
             format!("runs alpha {SINCE} None Unfinished {listed}"),
             format!("runs beta {SINCE} None Unfinished {listed}"),
             // The run first recorded before the newest on its instance, in the window.
@@ -1676,6 +1817,10 @@ fn rpt1_every_read_names_a_request_or_an_instance_and_the_window() {
             format!("material {B_STREAM} {stream}"),
             format!("material {B_DECIDED} {frame_bound}"),
             format!("material {B_STEP_LAST} {frame_bound}"),
+            // Fix round 1, item 7: then each instance's errors view, its newest rows in the
+            // window.
+            format!("errors alpha {SINCE} None {errors}"),
+            format!("errors beta {SINCE} None {errors}"),
         ]
     );
 
@@ -1755,4 +1900,438 @@ fn rpt1_the_tables_row_report_export() {
     assert!(core_ops::serves(row));
     assert_eq!(row.mcp_tool(), "ac_report_export");
     assert_eq!(row.source, ["actinglab report export --last-error"]);
+}
+
+#[test]
+fn rpt1_fix1_a_listing_not_read_to_its_end_never_says_none() {
+    // alpha's listing stops before its end: beta's run is the only one, the summary says for
+    // each instance whether its listing was read to its end, and the part missing names alpha.
+    let folder = TempDir::new().expect("a temporary folder");
+    let mut source = fake(64, 0);
+    source.cut_listing = Some("alpha");
+    let exported = export_from(
+        &source,
+        &asked(folder.path(), true, default_bound()),
+        &versions(),
+    );
+    let warning = missing_part(
+        &exported,
+        ReportPart::RunListing,
+        ReportPartReason::NotReadToEnd,
+        "alias",
+        "alpha",
+    );
+    assert_eq!(warning.value("file"), None, "{warning}");
+    assert_eq!(exported.runs.len(), 1);
+    assert_eq!(exported.runs[0]["alias"], "beta");
+    let entries = archive_entries(&exported.path);
+    let summary = text(&entries, "report/SUMMARY.md");
+    for line in [
+        "- Listing of alpha / alpha 的运行列表: not read to its end (`not_read_to_end`): the \
+         window may hold failed or unfinished runs it does not show",
+        "- Listing of beta / beta 的运行列表: read to its end / 读完\n",
+    ] {
+        assert!(summary.contains(line), "{line}\n{summary}");
+    }
+    let data = document(&entries, "report/summary.json");
+    assert_eq!(
+        data["listings"][0],
+        json!({"alias": "alpha", "read_to_end": false, "why": "not_read_to_end"})
+    );
+    assert_eq!(data["listings"][1]["read_to_end"], true);
+
+    // Only alpha, its listing cut: no run, and the summary never says the window holds none.
+    let folder = TempDir::new().expect("a temporary folder");
+    let mut alone = fake(64, 0);
+    alone.instances = vec!["alpha"];
+    alone.cut_listing = Some("alpha");
+    let exported = export_from(
+        &alone,
+        &asked(folder.path(), true, default_bound()),
+        &versions(),
+    );
+    assert!(exported.runs.is_empty());
+    let summary = text(&archive_entries(&exported.path), "report/SUMMARY.md");
+    assert!(
+        !summary.contains("No failed or unfinished run in the window"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains(
+            "No failed or unfinished run was found, but the listing of alpha was not read to \
+             its end: the window may hold some"
+        ),
+        "{summary}"
+    );
+
+    // An instance without a run whose listing was read to its end: none, and it says so.
+    let folder = TempDir::new().expect("a temporary folder");
+    let mut quiet = fake(64, 0);
+    quiet.instances = vec!["gamma"];
+    let exported = export_from(
+        &quiet,
+        &asked(folder.path(), true, default_bound()),
+        &versions(),
+    );
+    assert!(exported.runs.is_empty());
+    let summary = text(&archive_entries(&exported.path), "report/SUMMARY.md");
+    assert!(
+        summary.contains(
+            "No failed or unfinished run in the window / 时间窗里没有失败或未结束的运行。"
+        ),
+        "{summary}"
+    );
+}
+
+#[test]
+fn rpt1_fix1_still_over_the_bound_is_said_in_the_manifest_the_summary_and_the_answer() {
+    // A bound smaller than the parts that are never left out: every part that may be left out
+    // is, in its order, and the archive is still over the bound, which the warning, the
+    // manifest, the summary and the answer say.
+    let folder = TempDir::new().expect("a temporary folder");
+    let limit = 1024;
+    let exported = export_from(
+        &fake(64, 0),
+        &asked(folder.path(), true, limit),
+        &versions(),
+    );
+    let expected = [
+        "runs/run-b/frames/115-step-last.png",
+        "runs/run-b/frames/110-decided.png",
+        "runs/run-a/frames/52-run-last.png",
+        "runs/run-a/frames/47-step-last.png",
+        "runs/run-a/frames/41-decided.png",
+        "runs/run-b/overlay-excerpt.jsonl",
+        "runs/run-a/overlay-excerpt.jsonl",
+        "instances/beta/errors.jsonl",
+        "instances/alpha/errors.jsonl",
+    ];
+    let left = exported
+        .left_out
+        .iter()
+        .map(|left| left["file"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(left, expected);
+    assert!(exported.size > limit, "{}", exported.size);
+    assert!(!exported.within_bound);
+    let trimmed = exported
+        .warnings
+        .iter()
+        .find(|warning| warning.is(ActingctlCode::ReportTrimmed))
+        .expect("report_trimmed");
+    assert_eq!(
+        trimmed.value("report_fit"),
+        Some(&json!(ReportFit::StillOver.as_str()))
+    );
+    assert_eq!(trimmed.value("count"), Some(&json!(expected.len())));
+    let entries = archive_entries(&exported.path);
+    let manifest = document(&entries, "report/manifest.json");
+    assert_eq!(manifest["within_bound"], false);
+    let summary = text(&entries, "report/SUMMARY.md");
+    assert!(
+        summary.contains(
+            "Size / 大小: over the bound of 1024 bytes, with every part that may be left out \
+             left out"
+        ),
+        "{summary}"
+    );
+    let answer = report::line(&exported)
+        .line
+        .unwrap_or_else(|text| panic!("the answer is a line: {text}"));
+    assert_eq!(answer["within_bound"], false, "{answer}");
+}
+
+/// Run A's failing step with one record of every kind that holds what a frame shows, each value
+/// a sentinel, and an errors view row whose outcome keeps a frame's text as evidence.
+fn sentinel_fake() -> Fake {
+    let records = [
+        record(
+            1,
+            None,
+            "step_started",
+            json!({"step_index": 0, "monotonic_ms": 10}),
+        ),
+        record(
+            2,
+            None,
+            "step_started",
+            json!({"step_index": 1, "monotonic_ms": 20}),
+        ),
+        record(
+            3,
+            None,
+            "target",
+            json!({
+                "id": "count_check", "kind": "value_test", "passed": false, "template": null,
+                "color": null, "source": {"phase": "guard"},
+                "failure": {"code": "text_locate_not_found", "values": {
+                    "raw_text": "SENTINEL-FAILURE-TEXT",
+                }},
+                "value_test": {
+                    "left": {
+                        "target_id": "count_text", "raw_text": "SENTINEL-LEFT-TEXT",
+                        "value": 7_340_123,
+                    },
+                    "op": "ge",
+                    "right": {
+                        "kind": "operand",
+                        "operand": {
+                            "target_id": "goal_text", "raw_text": "SENTINEL-RIGHT-TEXT",
+                            "value": 8_120_456,
+                        },
+                        "mul": 1, "add": 0,
+                    },
+                    "passed": false,
+                },
+            }),
+        ),
+        record(
+            4,
+            Some(3),
+            "ocr",
+            json!({
+                "region": {}, "raw_text": "SENTINEL-OCR-RAW", "derived_text": "SENTINEL-OCR-DERIVED",
+                "confidence": 0.91, "matched_expected": "SENTINEL-OCR-EXPECTED",
+                "match_mode": "contains", "block_count": 1,
+            }),
+        ),
+        record(
+            5,
+            Some(4),
+            "ocr_block",
+            json!({
+                "source_index": 0, "derived_rank": 0,
+                "raw": {"text": "SENTINEL-BLOCK-TEXT", "rect": {}, "confidence": 0.91},
+            }),
+        ),
+        record(
+            6,
+            None,
+            "nn",
+            json!({
+                "requested_region": {}, "selected_label": "SENTINEL-NN-SELECTED",
+                "selected_score": 0.88, "selection": "best", "label_count": 1,
+            }),
+        ),
+        record(
+            7,
+            Some(6),
+            "nn_label",
+            json!({
+                "source_index": 0, "raw": {"label": "SENTINEL-NN-LABEL", "score": 0.88},
+                "derived": {"candidate": true, "rank": 0},
+            }),
+        ),
+        record(
+            8,
+            Some(3),
+            "color_digest",
+            json!({
+                "algorithm": "color_digest.v1", "columns": 2, "rows": 1, "active_cells": 2,
+                "mean_milli": 10, "max_cell": 3, "worst_cell": 1, "max_mean_milli": 50,
+                "max_cell_threshold": null, "observed_cells": "0badc0ffee0badc0ffee",
+            }),
+        ),
+        record(
+            9,
+            None,
+            "error",
+            json!({
+                "phase": "page",
+                "outcome": {"code": "text_locate_not_found", "values": {
+                    "raw_text": "SENTINEL-ERROR-TEXT",
+                }},
+            }),
+        ),
+        record(
+            10,
+            None,
+            "terminal",
+            json!({"result": "failed", "executed_steps": 2}),
+        ),
+    ];
+    let mut source = fake(64, 0);
+    source.materials.insert(A_STREAM, framed(&records));
+    source.errors.entry("alpha").or_default().push(json!({
+        "seq": 2_000, "ts": SINCE + 300_000, "type": "task.failed", "severity": "error",
+        "code": "text_locate_not_found", "run_id": "run-e300", "module": "runtime_host",
+        "outcome": {"code": "text_locate_not_found", "values": {"raw_text": "SENTINEL-ROW-TEXT"}},
+    }));
+    source
+}
+
+/// The member at `path` of `value`, when it is there.
+fn member<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    path.iter().try_fold(value, |inner, name| inner.get(*name))
+}
+
+#[test]
+fn rpt1_fix1_no_frames_leaves_out_every_text_and_value_read_from_a_frame() {
+    // What a frame shows, as the failing step's stream and the errors view hold it: an OCR
+    // read's text, derived text and matched expected text, an OCR block's text, the neural
+    // recognition's selected label and each label, a colour digest's observed cells, both
+    // sides of a value test (the text read and the value taken from it), and the text an
+    // outcome keeps as evidence (a target's failure, an error record, an errors view row).
+    let texts = [
+        "SENTINEL-FAILURE-TEXT",
+        "SENTINEL-LEFT-TEXT",
+        "SENTINEL-RIGHT-TEXT",
+        "SENTINEL-OCR-RAW",
+        "SENTINEL-OCR-DERIVED",
+        "SENTINEL-OCR-EXPECTED",
+        "SENTINEL-BLOCK-TEXT",
+        "SENTINEL-NN-SELECTED",
+        "SENTINEL-NN-LABEL",
+        "0badc0ffee0badc0ffee",
+        "SENTINEL-ERROR-TEXT",
+        "SENTINEL-ROW-TEXT",
+        "7340123",
+        "8120456",
+    ];
+    let contents = |exported: &Exported| {
+        archive_entries(&exported.path)
+            .iter()
+            .map(|(name, bytes)| format!("{name}\n{}", String::from_utf8_lossy(bytes)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // With frames every one of them is in the archive: the fixture reaches it.
+    let folder = TempDir::new().expect("a temporary folder");
+    let with = export_from(
+        &sentinel_fake(),
+        &asked(folder.path(), true, default_bound()),
+        &versions(),
+    );
+    let written = contents(&with);
+    for text in texts {
+        assert!(
+            written.contains(text),
+            "{text} is in the report with frames"
+        );
+    }
+
+    // Without frames none of them is in any entry.
+    let folder = TempDir::new().expect("a temporary folder");
+    let without = export_from(
+        &sentinel_fake(),
+        &asked(folder.path(), false, default_bound()),
+        &versions(),
+    );
+    let written = contents(&without);
+    for text in texts {
+        assert!(
+            !written.contains(text),
+            "{text} is in the report without frames"
+        );
+    }
+    // Each record and row lost exactly those members and says so; what measures a frame
+    // without showing it stays (a confidence, a score, the comparison).
+    let entries = archive_entries(&without.path);
+    let excerpt = text(&entries, "report/runs/run-a/overlay-excerpt.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("a record"))
+        .collect::<Vec<_>>();
+    let gone: [(u64, &[&str]); 13] = [
+        (3, &["data", "failure", "values", "raw_text"]),
+        (3, &["data", "value_test", "left", "raw_text"]),
+        (3, &["data", "value_test", "left", "value"]),
+        (3, &["data", "value_test", "right", "operand", "raw_text"]),
+        (3, &["data", "value_test", "right", "operand", "value"]),
+        (4, &["data", "raw_text"]),
+        (4, &["data", "derived_text"]),
+        (4, &["data", "matched_expected"]),
+        (5, &["data", "raw", "text"]),
+        (6, &["data", "selected_label"]),
+        (7, &["data", "raw", "label"]),
+        (8, &["data", "observed_cells"]),
+        (9, &["data", "outcome", "values", "raw_text"]),
+    ];
+    for (index, path) in gone {
+        let record = excerpt
+            .iter()
+            .find(|record| record["index"] == index)
+            .unwrap_or_else(|| panic!("record {index} is in the excerpt"));
+        assert_eq!(record["text_removed"], true, "{record}");
+        assert_eq!(member(record, path), None, "{index} {path:?}: {record}");
+    }
+    let stays: [(u64, &[&str], Value); 5] = [
+        (3, &["data", "value_test", "op"], json!("ge")),
+        (4, &["data", "confidence"], json!(0.91)),
+        (6, &["data", "selected_score"], json!(0.88)),
+        (8, &["data", "max_cell"], json!(3)),
+        (9, &["data", "phase"], json!("page")),
+    ];
+    for (index, path, kept) in stays {
+        let record = excerpt
+            .iter()
+            .find(|record| record["index"] == index)
+            .unwrap_or_else(|| panic!("record {index} is in the excerpt"));
+        assert_eq!(member(record, path), Some(&kept), "{record}");
+    }
+    let rows = text(&entries, "report/instances/alpha/errors.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("a row"))
+        .collect::<Vec<_>>();
+    let row = rows
+        .iter()
+        .find(|row| row["run_id"] == "run-e300")
+        .expect("the row with evidence");
+    assert_eq!(row["text_removed"], true, "{row}");
+    assert_eq!(
+        member(row, &["outcome", "values", "raw_text"]),
+        None,
+        "{row}"
+    );
+    assert_eq!(row["outcome"]["code"], "text_locate_not_found", "{row}");
+    let scores = document(&entries, "report/runs/run-a/scores.json");
+    assert_eq!(scores["scores"]["text_removed"], true);
+    assert_eq!(scores["scores"]["targets"][0]["confidence"], 0.91);
+}
+
+#[test]
+fn rpt1_fix1_the_masks_replace_names_inside_words_escaped_paths_and_dns_names() {
+    let mask = Mask::new(
+        Some("Zephyrine"),
+        &[
+            "HOSTVERDANT",
+            "hostverdant-tower",
+            "hostverdant-tower.corp.example",
+        ],
+    );
+    for (given, masked) in [
+        // A name inside a longer word, in another case.
+        (
+            "D:\\packs\\zephyrine_packs\\neutral",
+            "D:\\packs\\<user>_packs\\neutral",
+        ),
+        // A path's Users folder segment, once and doubly escaped.
+        ("C:\\Users\\Someone\\AppData", "C:\\Users\\<user>\\AppData"),
+        (
+            "C:\\\\Users\\\\Someone\\\\AppData",
+            "C:\\\\Users\\\\<user>\\\\AppData",
+        ),
+        ("/users//someone/x", "/users//<user>/x"),
+        // The full DNS name, the longer DNS host name and the NetBIOS name, the longest first.
+        (
+            "from hostverdant-tower.corp.example:5555",
+            "from <computer>:5555",
+        ),
+        ("HostVerdant-Tower is up", "<computer> is up"),
+        ("build-HOSTVERDANT-01", "build-<computer>-01"),
+        ("ZEPHYRINEhostverdant", "<user><computer>"),
+    ] {
+        assert_eq!(mask.text(given), masked, "{given}");
+    }
+    assert!(mask.applied() > 0);
+    // A mark already written is never searched again, even for a name that is in it.
+    let user = Mask::new(Some("User"), &[]);
+    assert_eq!(
+        user.text("the username in C:\\Users\\Bob"),
+        "the <user>name in C:\\Users\\<user>"
+    );
+    // A name of fewer than three characters is not masked.
+    let short = Mask::new(Some("Al"), &["PC"]);
+    assert_eq!(short.text("Alpha on PC-2"), "Alpha on PC-2");
+    assert_eq!(report::SHORTEST_NAME, 3);
 }

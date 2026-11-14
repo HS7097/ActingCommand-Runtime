@@ -8,15 +8,42 @@
 use super::source::Recognition;
 use serde_json::{Value, json};
 
-/// The members that carry text a frame shows (an OCR read, its blocks, a value test's sides);
-/// they leave the excerpt and the scores when the report carries no frames.
-const TEXT_KEYS: [&str; 3] = ["raw_text", "derived_text", "text"];
-/// The record kinds the scores read.
+/// The record kinds the scores read, and those whose members hold what a frame shows.
 const STEP_STARTED: &str = "step_started";
 const TERMINAL: &str = "terminal";
 const TARGET: &str = "target";
 const OCR: &str = "ocr";
+const OCR_BLOCK: &str = "ocr_block";
+const NN: &str = "nn";
+const NN_LABEL: &str = "nn_label";
+const COLOR_DIGEST: &str = "color_digest";
 const PAGE: &str = "page";
+/// Fix round 1, item 5 (`contracts/problem-report.md` section 6): the members of a diagnostic
+/// stream record that hold text or a value read from a frame, by the record's kind, each a path
+/// below its `data`: an OCR read's text, derived text and the expected text it matched; an OCR
+/// block's text; the neural recognition's selected label and each label; a colour digest's
+/// observed cells (a small picture of the region); each side of a value test, the text its
+/// target read and the value it took from it. They leave every record of a report without
+/// frames.
+const FRAME_MEMBERS: [(&str, &[&str]); 11] = [
+    (OCR, &["raw_text"]),
+    (OCR, &["derived_text"]),
+    (OCR, &["matched_expected"]),
+    (OCR_BLOCK, &["raw", "text"]),
+    (NN, &["selected_label"]),
+    (NN_LABEL, &["raw", "label"]),
+    (COLOR_DIGEST, &["observed_cells"]),
+    (TARGET, &["value_test", "left", "raw_text"]),
+    (TARGET, &["value_test", "left", "value"]),
+    (TARGET, &["value_test", "right", "operand", "raw_text"]),
+    (TARGET, &["value_test", "right", "operand", "value"]),
+];
+/// The member an outcome keeps foreign text in as evidence (`raw_text`), which may be text a
+/// frame showed (a value test's or a located text's failure); it leaves every record and every
+/// errors view row of a report without frames, at any depth.
+const EVIDENCE_TEXT: &str = "raw_text";
+/// What a record or a row that held any of them is marked with.
+const REMOVED_MARK: &str = "text_removed";
 
 /// The records of one diagnostic stream, and how many of its lines were no JSON object.
 pub(super) struct Stream {
@@ -100,35 +127,69 @@ pub(super) fn bounded(records: Vec<Value>, limit: usize) -> (Vec<Value>, bool) {
     (kept, cut)
 }
 
-/// `record` without the text a frame shows ([`TEXT_KEYS`], at any depth), marked
-/// `text_removed: true` when it held some; whether it held some.
-pub(super) fn strip_text(record: &mut Value) -> bool {
+/// The diagnostic stream record `record` without what a frame shows: its kind's
+/// [`FRAME_MEMBERS`] and [`EVIDENCE_TEXT`] at any depth, marked `text_removed: true` when it
+/// held any; whether it held any.
+pub(super) fn strip_record(record: &mut Value) -> bool {
+    let record_kind = kind(record).to_owned();
     let mut removed = false;
-    strip(record, &mut removed);
-    if removed && let Value::Object(members) = record {
-        members.insert("text_removed".to_owned(), Value::Bool(true));
+    if let Some(data) = record.get_mut("data") {
+        for (owner, path) in FRAME_MEMBERS {
+            if owner == record_kind {
+                removed |= remove_at(data, path);
+            }
+        }
     }
+    removed |= strip_evidence(record);
+    mark(record, removed);
     removed
 }
 
-fn strip(value: &mut Value, removed: &mut bool) {
+/// An errors view row `row` without [`EVIDENCE_TEXT`] at any depth, marked `text_removed: true`
+/// when it held some; whether it held some.
+pub(super) fn strip_row(row: &mut Value) -> bool {
+    let removed = strip_evidence(row);
+    mark(row, removed);
+    removed
+}
+
+fn mark(value: &mut Value, removed: bool) {
+    if removed && let Value::Object(members) = value {
+        members.insert(REMOVED_MARK.to_owned(), Value::Bool(true));
+    }
+}
+
+/// `value` without the member at `path`; whether it was there.
+fn remove_at(value: &mut Value, path: &[&str]) -> bool {
+    match path {
+        [] => false,
+        [last] => value
+            .as_object_mut()
+            .is_some_and(|members| members.remove(*last).is_some()),
+        [first, rest @ ..] => value
+            .get_mut(*first)
+            .is_some_and(|inner| remove_at(inner, rest)),
+    }
+}
+
+/// `value` without [`EVIDENCE_TEXT`] at any depth; whether it held some.
+fn strip_evidence(value: &mut Value) -> bool {
     match value {
         Value::Object(members) => {
-            for key in TEXT_KEYS {
-                if members.remove(key).is_some() {
-                    *removed = true;
-                }
-            }
+            let mut removed = members.remove(EVIDENCE_TEXT).is_some();
             for member in members.values_mut() {
-                strip(member, removed);
+                removed |= strip_evidence(member);
             }
+            removed
         }
         Value::Array(items) => {
+            let mut removed = false;
             for item in items {
-                strip(item, removed);
+                removed |= strip_evidence(item);
             }
+            removed
         }
-        _ => {}
+        _ => false,
     }
 }
 

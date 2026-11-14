@@ -134,6 +134,22 @@ pub fn dns_host_name() -> std::io::Result<String> {
     }
 }
 
+/// Workflow #467 RPT-1 fix round 1 (`report export`'s masks): this computer's full DNS name, its
+/// DNS host name and its domain (on Windows `GetComputerNameExW` with
+/// `ComputerNameDnsFullyQualified`), read without starting a program; empty when the computer
+/// has no DNS name. A failed query is the operating system's error; an operating system other
+/// than Windows answers `Unsupported`.
+pub fn dns_full_name() -> std::io::Result<String> {
+    #[cfg(windows)]
+    {
+        windows::dns_full_name()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+}
+
 /// Workflow #71 FLK-10: fills `buffer` from the operating system's random number generator (on
 /// Windows `BCryptGenRandom` with the system-preferred generator), without starting a program. A
 /// failed call is an error with its status; an operating system other than Windows answers

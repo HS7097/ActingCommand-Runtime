@@ -5,12 +5,14 @@
 //! ([`RuntimeSource`]), which reads through the code of the rows `status`, `runs`, `run show`,
 //! `run evidence`, `events` and `material`. Every read names a request id, or an instance with
 //! the report's window; none reads without one. No method writes, captures, pins or confirms
-//! anything: the trait has no such method.
+//! anything: the trait has no such method. Fix round 1: a read that answers nothing says why
+//! ([`Missed`], vocabulary `report_part_reason`), and a listing or a search that stopped before
+//! its end says so ([`Listed::cut`], [`Errors::cut`]).
 
 use super::READ_STEP;
 use crate::cli_line;
-use crate::codes::{ActingctlCode, ArgumentProblem, RunState};
-use crate::events::{self, Detail as RowDetail};
+use crate::codes::{ActingctlCode, ArgumentProblem, ReportPartReason, RunState};
+use crate::events::{self, Detail as RowDetail, EventsError};
 use crate::instance_selector::{self, SelectorMiss};
 use crate::material;
 use crate::run_evidence::{self, Evidence, EvidenceRequest, StepDetail};
@@ -22,11 +24,11 @@ use actingcommand_contract::{
     TaskSemanticFact,
 };
 use actingcommand_runtime_client::{
-    ContainedRunState, ListedContainedRun, RunListFilter, RuntimeClient,
+    ClientCode, ContainedRunState, ListedContainedRun, RunListFilter, RuntimeClient,
+    RuntimeClientError,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::VecDeque;
 use std::time::Instant;
 
 /// One instance of the Runtime's status: its alias, and its `instance_id` (a made-up source
@@ -85,20 +87,34 @@ pub struct RunRow {
     pub ended_unix_ms: Option<u64>,
 }
 
-/// A listing: its runs, newest first, and whether its read budget ended it early.
+/// A listing: its runs, newest first, and, when it was not read to its end, why (its read's
+/// limit or the Runtime's read budget, `not_read_to_end`; the report's budget, `budget_spent`):
+/// a run it does not hold may still be in the window.
 #[derive(Debug, Clone, Default)]
 pub struct Listed {
     pub runs: Vec<RunRow>,
-    pub incomplete: bool,
+    pub cut: Option<ReportPartReason>,
 }
 
-/// The rows of the `errors` view of one instance in the window: the newest that were kept,
-/// oldest first, each as `events --view errors --detail summary` answers it with its `module`,
-/// and how many the window held.
+/// The newest rows of the `errors` view of one instance in the window, found by the search for
+/// the newest records `events` has (fix round 1, item 7): oldest first, each as `events --view
+/// errors --detail summary` answers it with its `module`. When fewer than were asked for were
+/// found and the search did not reach the window's first record, `searched_from` is the lowest
+/// sequence it searched; `cut` when a read the Runtime cut short ended it. Either way older rows
+/// of the window were not searched.
 #[derive(Debug, Clone, Default)]
 pub struct Errors {
     pub rows: Vec<Value>,
-    pub total: u64,
+    pub searched_from: Option<u64>,
+    pub cut: bool,
+}
+
+impl Errors {
+    /// Whether the search reached the window's first record (or found every row it was asked
+    /// for, the newest of the window).
+    pub fn searched_to_start(&self) -> bool {
+        !self.cut && self.searched_from.is_none()
+    }
 }
 
 /// The display map a geometry observation used.
@@ -156,13 +172,33 @@ pub struct Recognition {
     pub omitted: u32,
 }
 
-/// Why a material was not read.
+/// Why a read answered nothing (fix round 1): the reason, a token of `report_part_reason`, and
+/// the read's own outcome when it has one (a fatal one ends the report).
 #[derive(Debug, Clone)]
-pub enum Missed {
-    /// It is larger than the bound it was read with: its size.
-    TooLarge(u64),
-    /// The read failed: its outcome.
-    Failed(Outcome),
+pub struct Missed {
+    pub why: ReportPartReason,
+    pub cause: Option<Outcome>,
+}
+
+impl Missed {
+    /// A read that answered nothing for `why`, with its outcome `cause`.
+    pub fn new(why: ReportPartReason, cause: Outcome) -> Self {
+        Self {
+            why,
+            cause: Some(cause),
+        }
+    }
+
+    /// A material of `actual` bytes, larger than the `limit` it was read with:
+    /// `material_too_large`.
+    pub fn too_large(actual: u64, limit: u64) -> Self {
+        Self::new(
+            ReportPartReason::TooLarge,
+            Outcome::new(ActingctlCode::MaterialTooLarge)
+                .actual_bytes(actual)
+                .limit_bytes(limit),
+        )
+    }
 }
 
 /// What `report export` reads. Every method is a read; none writes, captures, pins or
@@ -178,15 +214,15 @@ pub trait Source {
         window: Window,
         which: Which,
         limit: usize,
-    ) -> Result<Listed, Outcome>;
+    ) -> Result<Listed, Missed>;
     /// The rows of the `errors` view of `instance` in `window`: the newest `keep`.
-    fn errors(&self, instance: &Instance, window: Window, keep: usize) -> Result<Errors, Outcome>;
+    fn errors(&self, instance: &Instance, window: Window, keep: usize) -> Result<Errors, Missed>;
     /// The run `request_id` submitted, in full (`run show`).
-    fn run(&self, request_id: &str) -> Result<Value, Outcome>;
+    fn run(&self, request_id: &str) -> Result<Value, Missed>;
     /// The run's evidence, every step (`run evidence`).
-    fn evidence(&self, request_id: &str) -> Result<Evidence, Outcome>;
+    fn evidence(&self, request_id: &str) -> Result<Evidence, Missed>;
     /// The run's geometry observations, oldest first.
-    fn geometry(&self, request_id: &str) -> Result<Vec<Geometry>, Outcome>;
+    fn geometry(&self, request_id: &str) -> Result<Vec<Geometry>, Missed>;
     /// The run's recognition records from the ledger sequence `from` (through `through`),
     /// oldest first.
     fn recognitions(
@@ -194,7 +230,7 @@ pub trait Source {
         request_id: &str,
         from: u64,
         through: Option<u64>,
-    ) -> Result<Vec<Recognition>, Outcome>;
+    ) -> Result<Vec<Recognition>, Missed>;
     /// The material `reference` names, whole and verified, when it is at most `limit` bytes.
     fn material(&self, reference: &str, limit: u64) -> Result<Vec<u8>, Missed>;
 }
@@ -212,14 +248,76 @@ impl<'c> RuntimeSource<'c> {
         Self { client, deadline }
     }
 
-    /// When the next read stops.
-    fn step(&self) -> Result<Instant, Outcome> {
+    /// When the next read stops; none starts once the deadline has passed (`budget_spent`,
+    /// caused by `call_budget_exhausted`).
+    fn step(&self) -> Result<Instant, Missed> {
         let now = Instant::now();
         if now >= self.deadline {
-            return Err(Outcome::new(ActingctlCode::CallBudgetExhausted));
+            return Err(Missed::new(
+                ReportPartReason::BudgetSpent,
+                Outcome::new(ActingctlCode::CallBudgetExhausted),
+            ));
         }
         Ok(self.deadline.min(now + READ_STEP))
     }
+
+    /// Why a read stopped before its end: the report's deadline once it has passed, else the
+    /// read's own limit or the Runtime's read budget.
+    fn cut(&self) -> ReportPartReason {
+        if Instant::now() >= self.deadline {
+            ReportPartReason::BudgetSpent
+        } else {
+            ReportPartReason::NotReadToEnd
+        }
+    }
+
+    /// A read the client's `error` ended: the Runtime's refusal when the Runtime answered with
+    /// its error; the client's time limit a read stopped before its end ([`Self::cut`]); anything
+    /// else a failed read. Its outcome is the cause.
+    fn failed(&self, error: &RuntimeClientError) -> Missed {
+        let why = if error.projection().is_some() || error.receipt_outcome().is_some() {
+            ReportPartReason::RuntimeRefused
+        } else if error.code() == ClientCode::RuntimeEventQueryTimeLimitExceeded.code() {
+            self.cut()
+        } else {
+            ReportPartReason::ReadFailed
+        };
+        Missed::new(why, error.outcome())
+    }
+
+    /// A material read that answered nothing (as `material`'s row answers it): a reference that
+    /// is none is unreadable, the Runtime's answer without the material its refusal, the client's
+    /// failure as [`Self::failed`] says.
+    fn material_missed(&self, failure: material::Failure) -> Missed {
+        match failure {
+            material::Failure::Usage(outcome) | material::Failure::NotText(outcome) => {
+                Missed::new(ReportPartReason::Unreadable, outcome)
+            }
+            material::Failure::Unavailable(outcome) => {
+                Missed::new(ReportPartReason::RuntimeRefused, outcome)
+            }
+            material::Failure::OutOfRange {
+                argument,
+                minimum,
+                maximum,
+            } => Missed::new(
+                ReportPartReason::ReadFailed,
+                cli_line::usage_invalid(Some(argument), ArgumentProblem::OutOfRange)
+                    .range_min(minimum)
+                    .range_max(maximum),
+            ),
+            material::Failure::Runtime(error) => self.failed(&error),
+            material::Failure::RuntimeNoted { error, reached } => {
+                let missed = self.failed(&error);
+                Missed::new(missed.why, error.outcome().caused_by(reached))
+            }
+        }
+    }
+}
+
+/// A failed read whose outcome is `cause`, for `why`.
+fn missed_for(why: ReportPartReason) -> impl Fn(Outcome) -> Missed {
+    move |cause| Missed::new(why, cause)
 }
 
 /// A value's JSON text: a string as it is, anything else as JSON.
@@ -293,24 +391,6 @@ fn geometry_of(observation: &TaskGeometryObservation) -> Geometry {
     }
 }
 
-/// A material read that answered nothing, as its outcome (as `material`'s row answers it).
-fn missed(failure: material::Failure) -> Missed {
-    Missed::Failed(match failure {
-        material::Failure::Usage(outcome)
-        | material::Failure::NotText(outcome)
-        | material::Failure::Unavailable(outcome) => outcome,
-        material::Failure::OutOfRange {
-            argument,
-            minimum,
-            maximum,
-        } => cli_line::usage_invalid(Some(argument), ArgumentProblem::OutOfRange)
-            .range_min(minimum)
-            .range_max(maximum),
-        material::Failure::Runtime(error) => error.outcome(),
-        material::Failure::RuntimeNoted { error, reached } => error.outcome().caused_by(reached),
-    })
-}
-
 impl Source for RuntimeSource<'_> {
     fn instances(&self, selector: Option<&str>) -> Result<Vec<Instance>, Outcome> {
         let status = self.client.status().map_err(|error| error.outcome())?;
@@ -337,9 +417,9 @@ impl Source for RuntimeSource<'_> {
         window: Window,
         which: Which,
         limit: usize,
-    ) -> Result<Listed, Outcome> {
+    ) -> Result<Listed, Missed> {
         let filter = RunListFilter {
-            instance_id: Some(id_of(instance)?),
+            instance_id: Some(id_of(instance).map_err(missed_for(ReportPartReason::ReadFailed))?),
             states: which.states(),
             ..RunListFilter::default()
         };
@@ -353,70 +433,89 @@ impl Source for RuntimeSource<'_> {
                 limit,
                 self.step()?,
             )
-            .map_err(|error| error.outcome())?;
+            .map_err(|error| self.failed(&error))?;
         Ok(Listed {
             runs: page
                 .runs
                 .iter()
                 .map(|run| row_of(run, &instance.alias))
                 .collect(),
-            incomplete: page.incomplete,
+            cut: page.incomplete.then(|| self.cut()),
         })
     }
 
-    fn errors(&self, instance: &Instance, window: Window, keep: usize) -> Result<Errors, Outcome> {
+    fn errors(&self, instance: &Instance, window: Window, keep: usize) -> Result<Errors, Missed> {
         let query = EventQuery {
             view: Some(LedgerView::Errors),
-            instance_id: Some(id_of(instance)?),
+            instance_id: Some(id_of(instance).map_err(missed_for(ReportPartReason::ReadFailed))?),
             from_timestamp_unix_ms: Some(window.since_unix_ms),
             to_timestamp_unix_ms: window.until_unix_ms,
             ..EventQuery::default()
         };
+        self.step()?;
+        let limit = u16::try_from(keep).unwrap_or(u16::MAX);
+        let found =
+            events::newest_in_window(self.client, &query, limit).map_err(|error| match &error {
+                EventsError::Runtime(failure) => self.failed(failure),
+                _ => Missed::new(ReportPartReason::ReadFailed, error.outcome()),
+            })?;
         let envelope = |outcome: &Outcome| cli_line::outcome_value(outcome, Detail::Full);
-        let mut kept = VecDeque::new();
-        let mut total = 0_u64;
-        self.client
-            .visit_events(query, events::PROFILE, self.step()?, |event| {
-                total += 1;
-                let mut row = events::row(event, RowDetail::Summary, &envelope);
-                row["module"] = json!(event.origin.module());
-                kept.push_back(row);
-                if kept.len() > keep {
-                    kept.pop_front();
-                }
-            })
-            .map_err(|error| error.outcome())?;
         Ok(Errors {
-            rows: Vec::from(kept),
-            total,
+            rows: found
+                .events
+                .iter()
+                .map(|event| {
+                    let mut row = events::row(event, RowDetail::Summary, &envelope);
+                    row["module"] = json!(event.origin.module());
+                    row
+                })
+                .collect(),
+            searched_from: found.searched_from,
+            cut: found.cut,
         })
     }
 
-    fn run(&self, request_id: &str) -> Result<Value, Outcome> {
+    fn run(&self, request_id: &str) -> Result<Value, Missed> {
         self.step()?;
-        let key = run_show::by_request_id(request_id)
-            .ok_or_else(|| Outcome::new(ActingctlCode::RunUnknown).request_id(request_id))?;
+        let key = run_show::by_request_id(request_id).ok_or_else(|| {
+            Missed::new(
+                ReportPartReason::Unreadable,
+                Outcome::new(ActingctlCode::RunUnknown).request_id(request_id),
+            )
+        })?;
         run_show::read(self.client, key)
             .map(|status| run_show::answer(&status))
-            .map_err(|error| error.outcome())
+            .map_err(|error| self.failed(&error))
     }
 
-    fn evidence(&self, request_id: &str) -> Result<Evidence, Outcome> {
+    fn evidence(&self, request_id: &str) -> Result<Evidence, Missed> {
         let deadline = self.step()?;
-        let run = run_show::by_request_id(request_id)
-            .ok_or_else(|| Outcome::new(ActingctlCode::RunUnknown).request_id(request_id))?;
+        let run = run_show::by_request_id(request_id).ok_or_else(|| {
+            Missed::new(
+                ReportPartReason::Unreadable,
+                Outcome::new(ActingctlCode::RunUnknown).request_id(request_id),
+            )
+        })?;
         let request = EvidenceRequest {
             run,
             from_step: 0,
             limit: u64::MAX,
             detail: StepDetail::Full,
         };
-        run_evidence::read(self.client, &request, deadline).map_err(|failure| failure.outcome())
+        run_evidence::read(self.client, &request, deadline).map_err(|failure| match &failure {
+            run_evidence::Failure::Runtime(error) => self.failed(error),
+            run_evidence::Failure::Output(_) => {
+                Missed::new(ReportPartReason::Unreadable, failure.outcome())
+            }
+            _ => Missed::new(ReportPartReason::ReadFailed, failure.outcome()),
+        })
     }
 
-    fn geometry(&self, request_id: &str) -> Result<Vec<Geometry>, Outcome> {
+    fn geometry(&self, request_id: &str) -> Result<Vec<Geometry>, Missed> {
         let query = EventQuery {
-            request_id: Some(request_of(request_id)?),
+            request_id: Some(
+                request_of(request_id).map_err(missed_for(ReportPartReason::Unreadable))?,
+            ),
             event_types: vec![EventType::TaskGeometryObserved],
             ..EventQuery::default()
         };
@@ -427,7 +526,7 @@ impl Source for RuntimeSource<'_> {
                     found.push(geometry_of(observation));
                 }
             })
-            .map_err(|error| error.outcome())?;
+            .map_err(|error| self.failed(&error))?;
         Ok(found)
     }
 
@@ -436,9 +535,11 @@ impl Source for RuntimeSource<'_> {
         request_id: &str,
         from: u64,
         through: Option<u64>,
-    ) -> Result<Vec<Recognition>, Outcome> {
+    ) -> Result<Vec<Recognition>, Missed> {
         let query = EventQuery {
-            request_id: Some(request_of(request_id)?),
+            request_id: Some(
+                request_of(request_id).map_err(missed_for(ReportPartReason::Unreadable))?,
+            ),
             event_types: vec![EventType::TaskRecognitionCompleted],
             from_sequence: Some(from),
             to_sequence: through,
@@ -486,17 +587,20 @@ impl Source for RuntimeSource<'_> {
                     });
                 }
             })
-            .map_err(|error| error.outcome())?;
+            .map_err(|error| self.failed(&error))?;
         Ok(found)
     }
 
     fn material(&self, reference: &str, limit: u64) -> Result<Vec<u8>, Missed> {
-        let deadline = self.step().map_err(Missed::Failed)?;
-        let (position, artifact_id) = material::parse_ref(reference).map_err(missed)?;
-        let found = material::resolve(self.client, position, artifact_id).map_err(missed)?;
+        let deadline = self.step()?;
+        let (position, artifact_id) =
+            material::parse_ref(reference).map_err(|failure| self.material_missed(failure))?;
+        let found = material::resolve(self.client, position, artifact_id)
+            .map_err(|failure| self.material_missed(failure))?;
         if found.artifact.byte_count > limit {
-            return Err(Missed::TooLarge(found.artifact.byte_count));
+            return Err(Missed::too_large(found.artifact.byte_count, limit));
         }
-        material::read_whole(self.client, &found, deadline, &|| true).map_err(missed)
+        material::read_whole(self.client, &found, deadline, &|| true)
+            .map_err(|failure| self.material_missed(failure))
     }
 }

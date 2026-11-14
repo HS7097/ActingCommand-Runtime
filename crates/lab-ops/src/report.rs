@@ -10,41 +10,48 @@
 //! The view `errors` (the coordinator's addition of 11-14, from the owner's answer to the
 //! design's second question): the newest failed and unfinished runs of the window (at most
 //! [`MAX_RUNS`], [`PER_PACKAGE_AND_ENDING`] a package and terminal code), with the run that
-//! ended normally before the newest of them on its instance, and the rows of the ledger's
-//! `errors` view of each instance in the window (the newest [`ERRORS_PER_INSTANCE`]).
+//! ended normally before the newest of them on its instance, and the newest rows of the
+//! ledger's `errors` view of each instance in the window (at most [`ERRORS_PER_INSTANCE`]),
+//! read after the runs (fix round 1, item 7).
 //!
 //! Read only, and nothing leaves the machine: the row refuses an output inside the
 //! installation root or the state root before it reads anything ([`refuse_output`]), reads
 //! only through [`Source`] (every read names a request id, or an instance with the window),
 //! captures, pins and confirms nothing, opens no file of the state root, and writes one
-//! archive into the output directory. Secrets are never in it: it reads neither the
-//! configuration's salt nor the state root's key file nor the private binding file, and every
-//! text part passes through the [`Mask`].
+//! archive into the output directory. Secrets are never in it: the state root's key file and
+//! the private binding file are never opened; the configuration is read for its
+//! `standard_packs.root` alone and nothing of it is written, its salt included (fix round 1,
+//! item 6); and every text part passes through the [`Mask`].
 
 mod archive;
 mod scores;
 mod source;
 mod summary;
 
-pub use archive::{COMPUTER_MARK, Mask, USER_MARK};
+pub use archive::{COMPUTER_MARK, Mask, SHORTEST_NAME, USER_MARK};
 pub use source::{
     DisplayFacts, Errors, Geometry, Instance, Listed, Missed, PageVerdict, Recognition, RunRow,
     RuntimeSource, Source, TargetVerdict, Which, Window,
 };
 
 use crate::cli_line::{self, Exit};
-use crate::codes::{ActingctlCode, ArgumentProblem, RunState};
+use crate::codes::{
+    ActingctlCode, ArgumentProblem, ReportFit, ReportOutputRoot, ReportPart, ReportPartReason,
+    ReportWriteStep, RunState,
+};
 use crate::run_evidence::{Evidence, StepEvidence};
 use crate::{material_export, overview, packs};
+use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Category, IoOp, Outcome};
 use actingcommand_contract::{InstalledProcess, STANDARD_PACK_BUNDLE_FILE};
-use archive::Entry;
+use archive::{END_BYTES, Entry};
 use scores::Scores;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -83,10 +90,6 @@ pub const MAX_STEPS: usize = 1000;
 /// Every read of one report within this, and each read within [`READ_STEP`].
 pub const READ_BUDGET: Duration = Duration::from_secs(120);
 pub const READ_STEP: Duration = Duration::from_secs(20);
-/// What the size bound counts for each entry beside its bytes, and what it keeps for the
-/// summary, its data and the manifest, which are written after it.
-const ENTRY_OVERHEAD: u64 = 512;
-const RENDERED_RESERVE: u64 = MIB;
 /// The largest build manifest and configuration read.
 const MAX_MANIFEST_BYTES: u64 = 4 * MIB;
 const MAX_CONFIG_BYTES: u64 = MIB;
@@ -128,6 +131,10 @@ const NOT_YET: [(&str, &str); 7] = [
 /// Why a part is left out.
 const WHY_SIZE: &str = "size_bound";
 const WHY_NO_FRAMES: &str = "no_frames";
+/// What the manifest says of the configuration and the secrets (fix round 1, item 6).
+const SECRETS: &str = "the configuration is read for its standard_packs.root alone and nothing \
+     of it is written, its secret_fingerprint_salt included; the state root's key file and the \
+     private device bindings are never opened; no device serial is read";
 
 /// One report's request, read by the row's code.
 #[derive(Debug, Clone)]
@@ -171,6 +178,8 @@ pub struct Exported {
     pub frames: usize,
     /// Each part left out: `{file, why}`.
     pub left_out: Vec<Value>,
+    /// Fix round 1, item 4: whether the archive, as written, is within its size bound.
+    pub within_bound: bool,
     pub warnings: Vec<Outcome>,
 }
 
@@ -217,11 +226,19 @@ impl RunReport {
     }
 }
 
-/// The errors view of one instance.
+/// The errors view of one instance: what was read, or why nothing was.
 struct InstanceErrors {
     alias: String,
     file: String,
     read: Option<Errors>,
+    unread: Option<ReportPartReason>,
+}
+
+/// Fix round 1, item 3: whether the listing of one instance's failed and unfinished runs was
+/// read to its end; when not, why. Only a listing read to its end says the window holds none.
+struct InstanceListing {
+    alias: String,
+    cut: Option<ReportPartReason>,
 }
 
 /// What the summary and its data are written from.
@@ -229,12 +246,15 @@ struct Page<'a> {
     request: &'a Request,
     instances: &'a [String],
     versions: &'a Value,
+    listings: &'a [InstanceListing],
     reports: &'a [RunReport],
     previous: Option<&'a RunRow>,
     errors: &'a [InstanceErrors],
     /// The names of the parts kept.
     kept: &'a [String],
     left_out: &'a [Value],
+    /// Fix round 1, item 4: whether the archive fits its bound.
+    fit: ReportFit,
     warnings: &'a [Outcome],
 }
 
@@ -245,7 +265,37 @@ struct Part {
     stored: bool,
 }
 
+/// A part measured once (fix round 1, item 8): what it adds to the archive in packed bytes, and
+/// its digest for the manifest.
+struct Measured {
+    part: Part,
+    packed: u64,
+    sha256: String,
+}
+
 impl Part {
+    /// The part as an archive entry, its bytes copied.
+    fn to_entry(&self) -> Entry {
+        Entry {
+            name: format!("{PREFIX}{}", self.name),
+            bytes: self.bytes.clone(),
+            stored: self.stored,
+        }
+    }
+
+    /// The part measured: its packed size and its digest; one that cannot be packed is
+    /// `report_write_failed` at the step `pack`.
+    fn measured(self, out: &Path) -> Result<Measured, Outcome> {
+        let packed =
+            archive::packed_size(&self.to_entry()).map_err(|error| pack_failed(out, &error))?;
+        let sha256 = hex_sha256(&self.bytes);
+        Ok(Measured {
+            part: self,
+            packed,
+            sha256,
+        })
+    }
+
     fn json(name: String, mut value: Value, mask: &Mask) -> Self {
         mask.value(&mut value);
         Self {
@@ -300,34 +350,60 @@ fn file_word(text: &str) -> String {
         .collect()
 }
 
-/// `report_part_missing` naming the archive's `file` (and the run) caused by `cause`; a fatal
-/// cause ends the report instead (the Runtime connection is gone).
-fn missing(file: &str, request_id: Option<&str>, cause: Outcome) -> Result<Outcome, Outcome> {
-    if cause.category() == Category::Fatal {
-        return Err(cause);
+/// `report_part_missing` of `part` for `miss`'s reason (fix round 1: `report_part` and
+/// `report_part_reason` say which part and why), `place` adding where it belongs (the instance,
+/// the run, the archive's entry), caused by the read's outcome; a fatal cause ends the report
+/// instead (the Runtime connection is gone).
+fn missing(
+    part: ReportPart,
+    miss: Missed,
+    place: impl FnOnce(Outcome) -> Outcome,
+) -> Result<Outcome, Outcome> {
+    let Missed { why, cause } = miss;
+    let warning = place(
+        Outcome::new(ActingctlCode::ReportPartMissing)
+            .report_part(part)
+            .report_part_reason(why),
+    );
+    match cause {
+        Some(cause) if cause.category() == Category::Fatal => Err(cause),
+        Some(cause) => Ok(warning.caused_by(cause)),
+        None => Ok(warning),
     }
-    let warning = Outcome::new(ActingctlCode::ReportPartMissing).file(file);
-    let warning = match request_id {
-        Some(request_id) => warning.request_id(request_id),
-        None => warning,
-    };
-    Ok(warning.caused_by(cause))
 }
 
-/// A read's value, or none with its warning ([`missing`]).
+/// A run's part that could not be read: its `request_id` and the archive's `file`.
+fn run_missing(
+    part: ReportPart,
+    miss: Missed,
+    request_id: &str,
+    file: &str,
+) -> Result<Outcome, Outcome> {
+    missing(part, miss, |warning| {
+        warning.request_id(request_id).file(file)
+    })
+}
+
+/// A read's value, or none with its warning ([`run_missing`]).
 fn read_part<T>(
-    read: Result<T, Outcome>,
+    read: Result<T, Missed>,
+    part: ReportPart,
     file: &str,
     request_id: &str,
     warnings: &mut Vec<Outcome>,
 ) -> Result<Option<T>, Outcome> {
     match read {
         Ok(value) => Ok(Some(value)),
-        Err(cause) => {
-            warnings.push(missing(file, Some(request_id), cause)?);
+        Err(miss) => {
+            warnings.push(run_missing(part, miss, request_id, file)?);
             Ok(None)
         }
     }
+}
+
+/// `report_write_failed` at the step `pack`: the archive could not be packed in memory.
+fn pack_failed(out: &Path, error: &io::Error) -> Outcome {
+    archive::write_failed(ReportWriteStep::Pack, out, IoOp::Write, error)
 }
 
 /// The run's row as the archive holds it.
@@ -427,7 +503,7 @@ fn inside(child: &str, parent: &str) -> bool {
 /// The output's refusal, before anything is read: a path that is no directory is
 /// `actingctl_usage_invalid` (`--out`, `unusable`); one inside the installation root `root` or
 /// the state root `state_root` (each resolved, junctions and letter case included) is
-/// `report_output_refused` with the path and that root.
+/// `report_output_refused` with the path, `report_output_root` saying which root, and that root.
 pub fn refuse_output(out: &Path, root: Option<&Path>, state_root: &Path) -> Result<(), Outcome> {
     if out.exists() && !out.is_dir() {
         return Err(cli_line::usage_invalid(
@@ -441,11 +517,13 @@ pub fn refuse_output(out: &Path, root: Option<&Path>, state_root: &Path) -> Resu
     {
         return Err(Outcome::new(ActingctlCode::ReportOutputRefused)
             .path(out)
+            .report_output_root(ReportOutputRoot::InstallRoot)
             .install_root(root));
     }
     if inside(&target, &resolved(state_root)) {
         return Err(Outcome::new(ActingctlCode::ReportOutputRefused)
             .path(out)
+            .report_output_root(ReportOutputRoot::StateRoot)
             .state_root(state_root));
     }
     Ok(())
@@ -491,8 +569,8 @@ fn manifest(path: &Path, warnings: &mut Vec<Outcome>) -> Value {
 
 /// Each game root's bundle source `{repository, commit}` (the coordinator's ruling Q3: a
 /// package is named by its `package_id` and its bundle's source, no digest), from the selected
-/// configuration's `standard_packs.root`; null without one. Of the configuration only that
-/// member is read.
+/// configuration's `standard_packs.root`; null without one. The configuration is read whole (at
+/// most 1 MiB) and only that member is used; nothing of it is written (fix round 1, item 6).
 fn bundles(root: &Path, warnings: &mut Vec<Outcome>) -> Result<Value, Outcome> {
     let config = match InstalledProcess::read_active(root) {
         Ok(Some(process)) => process.config_path(),
@@ -536,11 +614,19 @@ fn bundles(root: &Path, warnings: &mut Vec<Outcome>) -> Result<Value, Outcome> {
     Ok(json!(sources))
 }
 
-/// `report_part_missing` naming `versions.json`, caused by `cause` (a fatal cause is the
-/// warning itself).
+/// `report_part_missing` of the versions (`versions.json`), caused by `cause`: a file that is no
+/// JSON is unreadable, any other failure a failed read (a fatal cause is the warning itself).
 fn versions_missing(cause: Outcome) -> Outcome {
+    let why = if cause.is(ContractCode::ForeignDataError) {
+        ReportPartReason::Unreadable
+    } else {
+        ReportPartReason::ReadFailed
+    };
     crate::with_cause(
-        Outcome::new(ActingctlCode::ReportPartMissing).file(VERSIONS),
+        Outcome::new(ActingctlCode::ReportPartMissing)
+            .report_part(ReportPart::Versions)
+            .report_part_reason(why)
+            .file(VERSIONS),
         cause,
     )
 }
@@ -641,7 +727,8 @@ fn select(mut candidates: Vec<RunRow>, max_runs: usize) -> Vec<RunRow> {
 }
 
 /// The run first recorded on the newest run's instance just before it in the window, when it
-/// ended normally.
+/// ended normally. A listing that failed, or was not read to its end, is `report_part_missing`
+/// (`run_before`) naming the instance.
 fn run_before(
     source: &dyn Source,
     instances: &[Instance],
@@ -662,17 +749,64 @@ fn run_before(
         since_unix_ms: window.since_unix_ms,
         until_unix_ms: Some(newest.first_unix_ms - 1),
     };
+    let alias = instance.alias.as_str();
     match source.runs(instance, before, Which::Any, 1) {
-        Ok(listed) => Ok(listed
-            .runs
-            .into_iter()
-            .next()
-            .filter(|run| run.state == RunState::Succeeded)),
-        Err(cause) => {
-            warnings.push(missing(SUMMARY_DATA, None, cause)?);
+        Ok(listed) => {
+            let found = listed.runs.into_iter().next();
+            if found.is_none()
+                && let Some(why) = listed.cut
+            {
+                let miss = Missed { why, cause: None };
+                warnings.push(missing(ReportPart::RunBefore, miss, |warning| {
+                    warning.alias(alias)
+                })?);
+            }
+            Ok(found.filter(|run| run.state == RunState::Succeeded))
+        }
+        Err(miss) => {
+            warnings.push(missing(ReportPart::RunBefore, miss, |warning| {
+                warning.alias(alias)
+            })?);
             Ok(None)
         }
     }
+}
+
+/// The failed and unfinished runs of every instance, and for each instance whether its listing
+/// was read to its end (fix round 1, item 3): a listing that failed or was cut is
+/// `report_part_missing` (`run_listing`) naming the instance.
+fn list_runs(
+    source: &dyn Source,
+    instances: &[Instance],
+    window: Window,
+    warnings: &mut Vec<Outcome>,
+) -> Result<(Vec<RunRow>, Vec<InstanceListing>), Outcome> {
+    let mut candidates = Vec::new();
+    let mut listings = Vec::new();
+    for instance in instances {
+        let alias = instance.alias.as_str();
+        let place = |warning: Outcome| warning.alias(alias);
+        let cut = match source.runs(instance, window, Which::Unfinished, CANDIDATES_PER_INSTANCE) {
+            Ok(listed) => {
+                candidates.extend(listed.runs);
+                if let Some(why) = listed.cut {
+                    let miss = Missed { why, cause: None };
+                    warnings.push(missing(ReportPart::RunListing, miss, place)?);
+                }
+                listed.cut
+            }
+            Err(miss) => {
+                let why = miss.why;
+                warnings.push(missing(ReportPart::RunListing, miss, place)?);
+                Some(why)
+            }
+        };
+        listings.push(InstanceListing {
+            alias: alias.to_owned(),
+            cut,
+        });
+    }
+    Ok((candidates, listings))
 }
 
 /// One run read whole: its status, steps, geometry, the failing step's recognition record and
@@ -686,18 +820,21 @@ fn run_report(source: &dyn Source, row: RunRow, request: &Request) -> Result<Run
     let mut warnings = Vec::new();
     let status = read_part(
         source.run(&id),
+        ReportPart::RunStatus,
         &format!("{dir}/run.json"),
         &id,
         &mut warnings,
     )?;
     let evidence = read_part(
         source.evidence(&id),
+        ReportPart::RunSteps,
         &format!("{dir}/steps.json"),
         &id,
         &mut warnings,
     )?;
     let geometry = read_part(
         source.geometry(&id),
+        ReportPart::RunGeometry,
         &format!("{dir}/geometry.json"),
         &id,
         &mut warnings,
@@ -717,6 +854,7 @@ fn run_report(source: &dyn Source, row: RunRow, request: &Request) -> Result<Run
             .map(|next| next.first_sequence.saturating_sub(1));
         recognition = read_part(
             source.recognitions(&id, step.first_sequence, through),
+            ReportPart::RunScores,
             &scores_file,
             &id,
             &mut warnings,
@@ -732,46 +870,55 @@ fn run_report(source: &dyn Source, row: RunRow, request: &Request) -> Result<Run
         .and_then(|evidence| evidence.overlay.as_ref())
         .and_then(|overlay| overlay["ref"].as_str())
         .map(str::to_owned);
-    match stream {
-        None => warnings.push(
-            Outcome::new(ActingctlCode::ReportPartMissing)
-                .file(excerpt_file.as_str())
-                .request_id(id.as_str()),
-        ),
-        Some(reference) => match source.material(&reference, MAX_STREAM_BYTES) {
-            Ok(bytes) => {
-                let read = scores::stream(&bytes);
-                let mut records = scores::span(&read.records, step_index);
-                let mut removed = false;
-                if !request.frames {
-                    for record in &mut records {
-                        removed |= scores::strip_text(record);
-                    }
-                }
-                let from_stream = scores::from_stream(&records);
-                if from_stream.source != scores::ScoreSource::Nothing {
-                    scores = from_stream;
-                }
-                scores.text_removed = removed;
-                (excerpt, excerpt_cut) = scores::bounded(records, MAX_EXCERPT_BYTES);
-                if read.unreadable > 0 {
-                    let cause = crate::foreign_data_error(&format!(
-                        "{} lines of the diagnostic stream are no JSON record",
-                        read.unreadable
-                    ));
-                    warnings.push(missing(&excerpt_file, Some(&id), cause)?);
+    let read_stream = match stream {
+        // A run whose steps were read and that has no stream records none; one whose steps
+        // could not be read is named missing for that.
+        None if evidence.is_some() => Err(Missed {
+            why: ReportPartReason::NotRecorded,
+            cause: None,
+        }),
+        None => Ok(None),
+        Some(reference) => source.material(&reference, MAX_STREAM_BYTES).map(Some),
+    };
+    match read_stream {
+        Ok(None) => {}
+        Ok(Some(bytes)) => {
+            let read = scores::stream(&bytes);
+            let mut records = scores::span(&read.records, step_index);
+            let mut removed = false;
+            if !request.frames {
+                for record in &mut records {
+                    removed |= scores::strip_record(record);
                 }
             }
-            Err(Missed::TooLarge(bytes)) => {
-                let cause = Outcome::new(ActingctlCode::MaterialTooLarge)
-                    .actual_bytes(bytes)
-                    .limit_bytes(MAX_STREAM_BYTES);
-                warnings.push(missing(&scores_file, Some(&id), cause)?);
+            let from_stream = scores::from_stream(&records);
+            if from_stream.source != scores::ScoreSource::Nothing {
+                scores = from_stream;
             }
-            Err(Missed::Failed(cause)) => {
-                warnings.push(missing(&scores_file, Some(&id), cause)?);
+            scores.text_removed = removed;
+            (excerpt, excerpt_cut) = scores::bounded(records, MAX_EXCERPT_BYTES);
+            if read.unreadable > 0 {
+                let cause = crate::foreign_data_error(&format!(
+                    "{} lines of the diagnostic stream are no JSON record",
+                    read.unreadable
+                ));
+                let miss = Missed::new(ReportPartReason::Unreadable, cause);
+                warnings.push(run_missing(
+                    ReportPart::RunExcerpt,
+                    miss,
+                    &id,
+                    &excerpt_file,
+                )?);
             }
-        },
+        }
+        Err(miss) => {
+            warnings.push(run_missing(
+                ReportPart::RunExcerpt,
+                miss,
+                &id,
+                &excerpt_file,
+            )?);
+        }
     }
     let mut frames = Vec::new();
     if request.frames
@@ -782,13 +929,7 @@ fn run_report(source: &dyn Source, row: RunRow, request: &Request) -> Result<Run
             let name = format!("{dir}/frames/{sequence}-{role}.png");
             match source.material(&reference, material_export::MAX_EXPORT_BYTES as u64) {
                 Ok(bytes) => frames.push(Frame { name, bytes }),
-                Err(Missed::TooLarge(bytes)) => {
-                    let cause = Outcome::new(ActingctlCode::MaterialTooLarge)
-                        .actual_bytes(bytes)
-                        .limit_bytes(material_export::MAX_EXPORT_BYTES);
-                    warnings.push(missing(&name, Some(&id), cause)?);
-                }
-                Err(Missed::Failed(cause)) => warnings.push(missing(&name, Some(&id), cause)?),
+                Err(miss) => warnings.push(run_missing(ReportPart::Frame, miss, &id, &name)?),
             }
         }
     }
@@ -925,34 +1066,153 @@ fn drop_order(reports: &[RunReport], errors: &[InstanceErrors]) -> Vec<String> {
     order
 }
 
-/// What the archive of `parts` takes at most, by the size bound's count.
-fn estimate(parts: &[Part]) -> u64 {
-    RENDERED_RESERVE
-        + parts
-            .iter()
-            .map(|part| part.bytes.len() as u64 + ENTRY_OVERHEAD)
-            .sum::<u64>()
+/// What every rendering of the summary and the manifest is made from: what was read, and the
+/// warnings and the masks applied before the size bound's trimming.
+struct Read<'a> {
+    request: &'a Request,
+    aliases: &'a [String],
+    versions: &'a Value,
+    listings: &'a [InstanceListing],
+    reports: &'a [RunReport],
+    previous: Option<&'a RunRow>,
+    errors: &'a [InstanceErrors],
+    warnings: &'a [Outcome],
+    masks_before: usize,
 }
 
-/// `parts` within `limit`, leaving out the parts of `order` in turn; the names left out.
-fn trimmed(parts: &mut Vec<Part>, order: &[String], limit: u64) -> Vec<String> {
-    let mut dropped = Vec::new();
-    for name in order {
-        if estimate(parts) <= limit {
-            break;
-        }
-        if let Some(place) = parts.iter().position(|part| part.name == *name) {
-            parts.remove(place);
-            dropped.push(name.clone());
-        }
+/// The summary page, the manifest and the summary's data, rendered for one choice of the parts
+/// kept, and the archive's packed size with them.
+struct Rendered {
+    summary_page: Part,
+    manifest: Part,
+    summary_data: Part,
+    left_out: Vec<Value>,
+    warnings: Vec<Outcome>,
+    total: u64,
+}
+
+/// One row of the manifest's `files`.
+fn file_row(name: &str, size: usize, sha256: &str) -> Value {
+    json!({"path": format!("{PREFIX}{name}"), "size": size, "sha256": sha256})
+}
+
+/// The summary page, the manifest and the summary's data with the parts `measured` less those
+/// `left` marks (the names `dropped`, in the order they were left out) and the bound's verdict
+/// `fit`; and the archive's size in packed bytes: the parts' own and the three rendered ones',
+/// each measured as the archive holds it, and the archive's end record (fix round 1, item 8).
+fn render(
+    read: &Read<'_>,
+    measured: &[Measured],
+    left: &[bool],
+    dropped: &[String],
+    fit: ReportFit,
+    mask: &Mask,
+) -> Result<Rendered, Outcome> {
+    let request = read.request;
+    let mut left_out = dropped
+        .iter()
+        .map(|file| json!({"file": file, "why": WHY_SIZE}))
+        .collect::<Vec<_>>();
+    if !request.frames {
+        left_out.push(json!({"file": "runs/*/frames/*.png", "why": WHY_NO_FRAMES}));
     }
-    dropped
+    let mut warnings = read.warnings.to_vec();
+    if !dropped.is_empty() || fit == ReportFit::StillOver {
+        warnings.push(
+            Outcome::new(ActingctlCode::ReportTrimmed)
+                .limit_bytes(request.max_bytes)
+                .count(dropped.len())
+                .report_fit(fit),
+        );
+    }
+    let kept = measured
+        .iter()
+        .zip(left)
+        .filter(|(_, left)| !**left)
+        .map(|(part, _)| part)
+        .collect::<Vec<_>>();
+    let kept_names = kept
+        .iter()
+        .map(|measured| measured.part.name.clone())
+        .collect::<Vec<_>>();
+    let page = Page {
+        request,
+        instances: read.aliases,
+        versions: read.versions,
+        listings: read.listings,
+        reports: read.reports,
+        previous: read.previous,
+        errors: read.errors,
+        kept: &kept_names,
+        left_out: &left_out,
+        fit,
+        warnings: &warnings,
+    };
+    let masks_start = mask.applied();
+    let summary_page = Part {
+        name: SUMMARY_PAGE.to_owned(),
+        bytes: mask.text(&summary::page(&page)).into_bytes(),
+        stored: false,
+    };
+    let summary_data = Part::json(SUMMARY_DATA.to_owned(), summary::data(&page), mask);
+    let masks_applied = read.masks_before + (mask.applied() - masks_start);
+    let files = [&summary_page, &summary_data]
+        .iter()
+        .map(|part| file_row(&part.name, part.bytes.len(), &hex_sha256(&part.bytes)))
+        .chain(kept.iter().map(|measured| {
+            file_row(
+                &measured.part.name,
+                measured.part.bytes.len(),
+                &measured.sha256,
+            )
+        }))
+        .collect::<Vec<_>>();
+    let manifest = json!({
+        "schema_version": SCHEMA,
+        "view": VIEW_ERRORS,
+        "tool": {"program": "actinglab", "lab_ops": env!("CARGO_PKG_VERSION")},
+        "generated_unix_ms": request.now_unix_ms,
+        "instances": read.aliases,
+        "window": window_json(Window {
+            since_unix_ms: request.since_unix_ms,
+            until_unix_ms: request.until_unix_ms,
+        }),
+        "max_runs": request.max_runs,
+        "max_bytes": request.max_bytes,
+        "within_bound": fit == ReportFit::Fits,
+        "runtime_online": true,
+        "frames": request.frames,
+        "files": files,
+        "left_out": left_out,
+        "not_in_this_report_yet": not_yet(),
+        "secrets": SECRETS,
+        "masks_applied": masks_applied,
+        "warnings": warnings.iter().map(cli_line::warning).collect::<Vec<_>>(),
+    });
+    let manifest = Part::json(MANIFEST.to_owned(), manifest, mask);
+    let mut total = END_BYTES + kept.iter().map(|measured| measured.packed).sum::<u64>();
+    for part in [&summary_page, &manifest, &summary_data] {
+        total += archive::packed_size(&part.to_entry())
+            .map_err(|error| pack_failed(&request.out, &error))?;
+    }
+    Ok(Rendered {
+        summary_page,
+        manifest,
+        summary_data,
+        left_out,
+        warnings,
+        total,
+    })
 }
 
 /// The report `request` asks for, read through `source`, with the installation's versions
 /// `installed`, written into the request's output directory with every text part masked by
 /// `mask`. The instances' read and a fatal read end it with that read's outcome; any other
-/// read that fails leaves its part out with the warning `report_part_missing`.
+/// read that fails, or does not reach its end, names its part with the warning
+/// `report_part_missing`. The runs are read first, then each instance's errors view (fix round
+/// 1, item 7). The size bound is measured on the packed archive; the parts of [`drop_order`]
+/// are left out in turn until it fits, and when it does not fit with all of them left out the
+/// manifest, the summary and the answer say so (fix round 1, items 4 and 8).
 pub fn export(
     source: &dyn Source,
     request: &Request,
@@ -969,39 +1229,8 @@ pub fn export(
         .map(|instance| instance.alias.clone())
         .collect::<Vec<_>>();
     let mut warnings = installed.warnings.clone();
-    // The errors view, instance by instance.
-    let mut errors = Vec::new();
-    for instance in &instances {
-        let file = format!("instances/{}/errors.jsonl", file_word(&instance.alias));
-        let read = match source.errors(instance, window, ERRORS_PER_INSTANCE) {
-            Ok(read) => Some(read),
-            Err(cause) => {
-                warnings.push(missing(&file, None, cause)?);
-                None
-            }
-        };
-        errors.push(InstanceErrors {
-            alias: instance.alias.clone(),
-            file,
-            read,
-        });
-    }
-    // The failed and unfinished runs, instance by instance.
-    let mut candidates = Vec::new();
-    for instance in &instances {
-        match source.runs(instance, window, Which::Unfinished, CANDIDATES_PER_INSTANCE) {
-            Ok(listed) => {
-                if listed.incomplete {
-                    warnings.push(
-                        Outcome::new(ActingctlCode::CallBudgetExhausted)
-                            .alias(instance.alias.as_str()),
-                    );
-                }
-                candidates.extend(listed.runs);
-            }
-            Err(cause) => warnings.push(missing(SUMMARY_DATA, None, cause)?),
-        }
-    }
+    // The failed and unfinished runs, instance by instance, and each run whole.
+    let (candidates, listings) = list_runs(source, &instances, window, &mut warnings)?;
     let selected = select(candidates, request.max_runs);
     let previous = match selected.first() {
         Some(newest) => run_before(source, &instances, newest, window, &mut warnings)?,
@@ -1013,8 +1242,43 @@ pub fn export(
         warnings.extend(report.warnings.iter().cloned());
         reports.push(report);
     }
+    // Then the errors view, instance by instance: its newest rows.
+    let mut errors = Vec::new();
+    for instance in &instances {
+        let alias = instance.alias.as_str();
+        let file = format!("instances/{}/errors.jsonl", file_word(alias));
+        let place = |warning: Outcome| warning.alias(alias).file(file.as_str());
+        let (read, unread) = match source.errors(instance, window, ERRORS_PER_INSTANCE) {
+            Ok(mut read) => {
+                if !request.frames {
+                    for row in &mut read.rows {
+                        scores::strip_row(row);
+                    }
+                }
+                if !read.searched_to_start() {
+                    let miss = Missed {
+                        why: ReportPartReason::NotReadToEnd,
+                        cause: None,
+                    };
+                    warnings.push(missing(ReportPart::ErrorsView, miss, place)?);
+                }
+                (Some(read), None)
+            }
+            Err(miss) => {
+                let why = miss.why;
+                warnings.push(missing(ReportPart::ErrorsView, miss, place)?);
+                (None, Some(why))
+            }
+        };
+        errors.push(InstanceErrors {
+            alias: instance.alias.clone(),
+            file,
+            read,
+            unread,
+        });
+    }
 
-    // The parts, within the size bound.
+    // The parts, each measured once.
     let mut parts = vec![Part::json(
         VERSIONS.to_owned(),
         installed.versions.clone(),
@@ -1028,86 +1292,77 @@ pub fn export(
             parts.push(Part::lines(instance.file.clone(), &read.rows, mask));
         }
     }
-    let dropped = trimmed(
-        &mut parts,
-        &drop_order(&reports, &errors),
-        request.max_bytes,
-    );
-    let mut left_out = dropped
-        .iter()
-        .map(|file| json!({"file": file, "why": WHY_SIZE}))
-        .collect::<Vec<_>>();
-    if !dropped.is_empty() {
-        warnings.push(
-            Outcome::new(ActingctlCode::ReportTrimmed)
-                .limit_bytes(request.max_bytes)
-                .count(dropped.len()),
-        );
-    }
-    if !request.frames {
-        left_out.push(json!({"file": "runs/*/frames/*.png", "why": WHY_NO_FRAMES}));
-    }
-    let kept = parts
-        .iter()
-        .map(|part| part.name.clone())
-        .collect::<Vec<_>>();
-    let page = Page {
+    let measured = parts
+        .into_iter()
+        .map(|part| part.measured(&request.out))
+        .collect::<Result<Vec<_>, _>>()?;
+    let read = Read {
         request,
-        instances: &aliases,
+        aliases: &aliases,
         versions: &installed.versions,
+        listings: &listings,
         reports: &reports,
         previous: previous.as_ref(),
         errors: &errors,
-        kept: &kept,
-        left_out: &left_out,
         warnings: &warnings,
+        masks_before: mask.applied(),
     };
-    let summary_page = Part {
-        name: SUMMARY_PAGE.to_owned(),
-        bytes: mask.text(&summary::page(&page)).into_bytes(),
-        stored: false,
+    // Within the size bound: the parts of the drop order left out in turn while the archive is
+    // over it.
+    let order = drop_order(&reports, &errors);
+    let mut pending = order.iter();
+    let mut left = vec![false; measured.len()];
+    let mut dropped: Vec<String> = Vec::new();
+    let (rendered, fit) = loop {
+        let rendered = render(&read, &measured, &left, &dropped, ReportFit::Fits, mask)?;
+        if rendered.total <= request.max_bytes {
+            break (rendered, ReportFit::Fits);
+        }
+        let next = pending.find_map(|name| {
+            measured
+                .iter()
+                .position(|kept| kept.part.name == *name)
+                .filter(|place| !left[*place])
+                .map(|place| (place, name))
+        });
+        match next {
+            Some((place, name)) => {
+                left[place] = true;
+                dropped.push(name.clone());
+            }
+            None => {
+                let over = render(
+                    &read,
+                    &measured,
+                    &left,
+                    &dropped,
+                    ReportFit::StillOver,
+                    mask,
+                )?;
+                break (over, ReportFit::StillOver);
+            }
+        }
     };
-    let summary_data = Part::json(SUMMARY_DATA.to_owned(), summary::data(&page), mask);
-    let files = std::iter::once(&summary_page)
-        .chain(std::iter::once(&summary_data))
-        .chain(&parts)
-        .map(|part| {
-            json!({
-                "path": format!("{PREFIX}{}", part.name),
-                "size": part.bytes.len(),
-                "sha256": hex_sha256(&part.bytes),
-            })
-        })
-        .collect::<Vec<_>>();
-    let manifest = json!({
-        "schema_version": SCHEMA,
-        "view": VIEW_ERRORS,
-        "tool": {"program": "actinglab", "lab_ops": env!("CARGO_PKG_VERSION")},
-        "generated_unix_ms": request.now_unix_ms,
-        "instances": aliases,
-        "window": window_json(window),
-        "max_runs": request.max_runs,
-        "max_bytes": request.max_bytes,
-        "runtime_online": true,
-        "frames": request.frames,
-        "files": files,
-        "left_out": left_out,
-        "not_in_this_report_yet": not_yet(),
-        "secrets": "none read: the configuration's salt, the state root's key file and the private device bindings are never opened",
-        "masks_applied": mask.applied(),
-        "warnings": warnings.iter().map(cli_line::warning).collect::<Vec<_>>(),
-    });
-    let manifest = Part::json(MANIFEST.to_owned(), manifest, mask);
+    let Rendered {
+        summary_page,
+        manifest,
+        summary_data,
+        left_out,
+        warnings: written_warnings,
+        ..
+    } = rendered;
     let entries = [summary_page, manifest, summary_data]
         .into_iter()
-        .chain(parts)
+        .chain(
+            measured
+                .into_iter()
+                .zip(left)
+                .filter(|(_, left)| !left)
+                .map(|(kept, _)| kept.part),
+        )
         .map(Part::entry)
         .collect::<Vec<_>>();
-    let bytes = archive::zipped(&entries).map_err(|error| {
-        Outcome::new(ActingctlCode::ReportWriteFailed)
-            .path(request.out.as_path())
-            .caused_by(Outcome::from_io_error(&error, IoOp::Write))
-    })?;
+    let bytes = archive::zipped(&entries).map_err(|error| pack_failed(&request.out, &error))?;
     let digest = hex_sha256(&bytes);
     let name = format!(
         "problem-report-{}Z-{}.zip",
@@ -1135,12 +1390,14 @@ pub fn export(
             .collect(),
         frames: entries.iter().filter(|entry| entry.stored).count(),
         left_out,
-        warnings,
+        within_bound: fit == ReportFit::Fits && bytes.len() as u64 <= request.max_bytes,
+        warnings: written_warnings,
     })
 }
 
 /// The row's line: `report_exported` with the archive's `path`, and `{view, path, sha256,
-/// size, instances, window, runs, frames, left_out, not_in_this_report_yet, warnings?}`.
+/// size, within_bound, instances, window, runs, frames, left_out, not_in_this_report_yet,
+/// warnings?}`.
 pub fn line(exported: &Exported) -> Exit {
     let mut members = Map::new();
     members.insert("view".to_owned(), json!(VIEW_ERRORS));
@@ -1150,6 +1407,7 @@ pub fn line(exported: &Exported) -> Exit {
     );
     members.insert("sha256".to_owned(), json!(exported.sha256));
     members.insert("size".to_owned(), json!(exported.size));
+    members.insert("within_bound".to_owned(), json!(exported.within_bound));
     members.insert("instances".to_owned(), json!(exported.instances));
     members.insert("window".to_owned(), window_json(exported.window));
     members.insert("runs".to_owned(), Value::Array(exported.runs.clone()));

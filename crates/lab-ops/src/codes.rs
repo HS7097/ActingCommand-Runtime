@@ -786,3 +786,98 @@ actingcommand_contract::outcome_vocabulary! {
 }
 
 // ---- Workflow #421 INST-0 (end) ----
+
+// ---- Workflow #467 RPT-1 fix round 1 (begin): the vocabularies of `report export`'s codes
+// (contracts/problem-report.md section 9; the coordinator's ruling of 11-15, provisional): each a
+// required value, so that one code never stands for situations a reader cannot tell apart. ----
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Which part of a problem report could not be read (vocabulary `report_part`, the value
+    /// `report_part` of `report_part_missing`).
+    pub enum ReportPart: "report_part" {
+        /// The listing of an instance's failed and unfinished runs (`alias`).
+        RunListing => "run_listing",
+        /// The listing of the run before the newest on its instance (`alias`).
+        RunBefore => "run_before",
+        /// A run's status, as `run show` reads it (`request_id`).
+        RunStatus => "run_status",
+        /// A run's steps, as `run evidence` reads them (`request_id`).
+        RunSteps => "run_steps",
+        /// A run's geometry observations (`request_id`).
+        RunGeometry => "run_geometry",
+        /// The failing step's recognition records (`request_id`).
+        RunScores => "run_scores",
+        /// The failing step's records of the run's diagnostic stream (`request_id`).
+        RunExcerpt => "run_excerpt",
+        /// A frame of a run (`request_id`, `file`).
+        Frame => "frame",
+        /// The errors view of an instance (`alias`).
+        ErrorsView => "errors_view",
+        /// The installation's bundle sources (`versions.json`).
+        Versions => "versions",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a part of a problem report is missing (vocabulary `report_part_reason`, the value
+    /// `report_part_reason` of `report_part_missing`).
+    pub enum ReportPartReason: "report_part_reason" {
+        /// The read stopped before its end (its own limit, or the Runtime's read budget): what it
+        /// holds may miss what came after.
+        NotReadToEnd => "not_read_to_end",
+        /// The report's read budget was spent before the read began or while it ran.
+        BudgetSpent => "budget_spent",
+        /// The Runtime answered the read with its refusal.
+        RuntimeRefused => "runtime_refused",
+        /// The read failed: the connection, the client's own check, or the file system.
+        ReadFailed => "read_failed",
+        /// The run records no such part (a run without a diagnostic stream).
+        NotRecorded => "not_recorded",
+        /// The part is larger than the bound it is read with.
+        TooLarge => "too_large",
+        /// What was read is not what it must be (a line of the stream that is no record, a file
+        /// that is no JSON).
+        Unreadable => "unreadable",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// The step of writing a problem report that failed (vocabulary `report_write_step`, the
+    /// value `report_write_step` of `report_write_failed`).
+    pub enum ReportWriteStep: "report_write_step" {
+        /// Packing the archive in memory.
+        Pack => "pack",
+        /// Making the output directory.
+        CreateDirectory => "create_directory",
+        /// A file of the archive's name is already there.
+        NameExists => "name_exists",
+        /// Creating or writing the partial file.
+        WritePartial => "write_partial",
+        /// Moving the partial file into place.
+        Rename => "rename",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Whether a problem report fits its size bound after the parts the bound may leave out were
+    /// left out (vocabulary `report_fit`, the value `report_fit` of `report_trimmed`).
+    pub enum ReportFit: "report_fit" {
+        /// The archive is within the bound.
+        Fits => "fits",
+        /// Every part the bound may leave out was left out and the archive is still over it.
+        StillOver => "still_over",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// The root a refused output of a problem report lies in (vocabulary `report_output_root`,
+    /// the value `report_output_root` of `report_output_refused`).
+    pub enum ReportOutputRoot: "report_output_root" {
+        /// The installation root (`install_root`).
+        InstallRoot => "install_root",
+        /// The Runtime's state root (`state_root`).
+        StateRoot => "state_root",
+    }
+}
+
+// ---- Workflow #467 RPT-1 fix round 1 (end) ----

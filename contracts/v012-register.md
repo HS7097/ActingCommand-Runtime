@@ -25132,6 +25132,62 @@ nothing written without a Runtime). Adapted (the requirement changes what they p
 own commands (35, `gate_434_cli_help`), LAB-5B5's lines and corpus (`gate_434_lab5b5`), the MCP
 front's own members (`gate_434_lab5g2b`).
 
+**Fix round 1** (coordinator brief `rd-1115/brief-1725-fix1.md`, after the slice's independent
+review, which found every read bounded, nothing of the configuration or a secret written and the
+output refusals holding; still 0.12.61, nothing of it shipped in 0.12.60).
+- *CI.* The test fake sorts with `sort_by_key` (lint); the secrets test has the private bindings
+  written by their one writer, `devices bind` from a made-up adb listing, so that no file but the
+  binding reader and writer names the file (architecture guard T10, untouched).
+- *A listing not read to its end* (`runs`' listing answers no run for an incomplete listing) is
+  `report_part_missing` naming its instance; the summary and its data say for each instance
+  whether its listing was read to its end, and "no failed or unfinished run" is said only when
+  every listing was. The same for the run before the newest.
+- *Still over the bound* with every part that may be left out left out: the archive is written,
+  and `report_trimmed` (`report_fit` `still_over`), the manifest's and the summary's data's
+  `within_bound`, the summary's size line and the answer's `within_bound` say so.
+- *`no_frames`* leaves out every member that holds text or a value read from a frame, in the
+  stream's records and the errors view's rows (the table of [problem-report.md](problem-report.md)
+  section 6: OCR text, derived and matched expected text, an OCR block's text, the neural
+  recognition's labels, a colour digest's observed cells, a value test's read texts and values,
+  `raw_text` evidence at any depth); what measures a frame without showing it stays.
+- *The manifest's `secrets`* says what is true: the configuration is read whole for its
+  `standard_packs.root` and nothing of it is written.
+- *The codes* (the coordinator's ruling, provisional while the owner refines the status codes on
+  board #469): `report_part_missing` requires `report_part` and `report_part_reason`
+  (`file`, `alias`, `request_id` where they apply; before, `file` alone was required and a
+  listing's failure named `summary.json`), `report_write_failed` requires `report_write_step`
+  (and names a partial file it leaves behind in `retained`), `report_trimmed` requires
+  `report_fit`, `report_output_refused` requires `report_output_root`. Five keys and five
+  vocabularies are new in [outcome-codes/catalog.json](outcome-codes/catalog.json) and the key
+  table (`crates/actingcommand-contract/src/outcome/keys.rs`), each vocabulary an enum of
+  `crates/lab-ops/src/codes.rs`: `report_part` (10 tokens), `report_part_reason` (7),
+  `report_write_step` (5), `report_fit` (2), `report_output_root` (2); `since` 0.12.61, pending;
+  the index is regenerated. No code is added.
+- *The reads.* The runs are read before the errors views, and an errors view is its newest 200
+  rows found by `events`' search for the newest records (CLI-EV, §1.306; `events::newest_in_window`
+  calls the search's own parts, with the window's first record as its floor, and changes no
+  answer of `events`), not the window read from its start; no total is counted, and a search
+  that stopped above the window's start is a part missing.
+- *The size* is measured in packed bytes (each part zipped alone, less the end record, plus the
+  rendered summary, data and manifest), not the unpacked sum with a reserve.
+- *A failed write* names the partial file it left behind (`retained`).
+- *The summary page* says the screenshots can show a player's name and numbers and that the
+  export can be made without them (`--no-frames`).
+- *The masks* replace the user's and the computer's names (its NetBIOS name, its DNS host name
+  and its full DNS name, the last two from `actingcommand-host-metrics`, whose `dns_full_name` is
+  new beside `dns_host_name`) wherever they stand, inside longer words and without regard to case,
+  when at least three characters long, and a `Users` folder's segment behind one or more
+  separators (a doubly escaped path too); [problem-report.md](problem-report.md) section 7 says
+  what is and is not replaced.
+- *Tests.* New: `rpt1_fix1_a_listing_not_read_to_its_end_never_says_none`,
+  `rpt1_fix1_still_over_the_bound_is_said_in_the_manifest_the_summary_and_the_answer`,
+  `rpt1_fix1_no_frames_leaves_out_every_text_and_value_read_from_a_frame`,
+  `rpt1_fix1_the_masks_replace_names_inside_words_escaped_paths_and_dns_names`, in the row's gate.
+  Adapted (the items change what they pin): the errors view's summary lines and data (no total,
+  item 7), the reads' order (item 7), the size bound's fixture (incompressible excerpts within
+  1 MiB of packed bytes, item 8), the part named missing for a stream above 8 MiB (the run's
+  excerpt, `too_large`), the fake source's error type, and the secrets fixture (above).
+
 **At deploy.** Nothing to configure: the Lab programs of 0.12.61 have the row
 (`actinglab report export --out <dir>`, `ac_report_export` on `actinglab-mcp`). A script that
 called the placeholder gets `actingctl_usage_invalid` for `--last-error`. `actingctl mcp-serve`

@@ -2708,6 +2708,26 @@
     "application_switch_step": {
       "type": "vocab:application_switch_step",
       "description": "Which step of the switch that brings a member of a device group to the front before its run failed (Workflow #437 MAPP-2a, since 0.12.59)."
+    },
+    "report_part": {
+      "type": "vocab:report_part",
+      "description": "Which part of a problem report could not be read (Workflow #467 RPT-1, since 0.12.61)."
+    },
+    "report_part_reason": {
+      "type": "vocab:report_part_reason",
+      "description": "Why a part of a problem report is missing (Workflow #467 RPT-1, since 0.12.61)."
+    },
+    "report_write_step": {
+      "type": "vocab:report_write_step",
+      "description": "The step of writing a problem report that failed (Workflow #467 RPT-1, since 0.12.61)."
+    },
+    "report_fit": {
+      "type": "vocab:report_fit",
+      "description": "Whether a problem report fits its size bound after the parts the bound may leave out were left out (Workflow #467 RPT-1, since 0.12.61)."
+    },
+    "report_output_root": {
+      "type": "vocab:report_output_root",
+      "description": "The root a refused output directory of a problem report lies in (Workflow #467 RPT-1, since 0.12.61)."
     }
   },
   "vocabularies": {
@@ -9438,6 +9458,134 @@
         },
         "lease_renewal": {
           "description": "The run's renewal of its lease after the startup run handed the key back was refused or failed: the lease lost, lapsed or taken over (failure_code the scheduler's refusal). The member's application was started and no task of the run ran (Workflow #437 MAPP-2d, since 0.12.60)."
+        }
+      }
+    },
+    "report_part": {
+      "description": "Which part of a problem report could not be read, the value report_part of report_part_missing (Workflow #467 RPT-1, contracts/problem-report.md section 9, since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab-ops/src/codes.rs",
+        "enum": "ReportPart"
+      },
+      "tokens": {
+        "run_listing": {
+          "description": "The listing of an instance's failed and unfinished runs in the window (alias the instance)."
+        },
+        "run_before": {
+          "description": "The listing of the run first recorded just before the newest failed or unfinished run on its instance (alias the instance)."
+        },
+        "run_status": {
+          "description": "A run's status, as run show reads it (request_id the run; file its run.json)."
+        },
+        "run_steps": {
+          "description": "A run's steps, as run evidence reads them (request_id the run; file its steps.json)."
+        },
+        "run_geometry": {
+          "description": "A run's task.geometry_observed records (request_id the run; file its geometry.json)."
+        },
+        "run_scores": {
+          "description": "The failing step's task.recognition_completed records (request_id the run; file its scores.json)."
+        },
+        "run_excerpt": {
+          "description": "The failing step's records of the run's diagnostic stream (request_id the run; file its overlay-excerpt.jsonl); without them the scores come from the recognition record."
+        },
+        "frame": {
+          "description": "One frame of a run (request_id the run; file the frame's entry)."
+        },
+        "errors_view": {
+          "description": "The errors view of an instance in the window (alias the instance; file its errors.jsonl)."
+        },
+        "versions": {
+          "description": "The installation's bundle sources in versions.json (file versions.json)."
+        }
+      }
+    },
+    "report_part_reason": {
+      "description": "Why a part of a problem report is missing, the value report_part_reason of report_part_missing (Workflow #467 RPT-1, contracts/problem-report.md section 9, since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab-ops/src/codes.rs",
+        "enum": "ReportPartReason"
+      },
+      "tokens": {
+        "not_read_to_end": {
+          "description": "The read stopped before its end, at its own limit or at the Runtime's read budget: what it holds may miss what came after, and a listing that was not read to its end never says none."
+        },
+        "budget_spent": {
+          "description": "The report's read budget was spent before the read began or while it ran (caused by call_budget_exhausted, or by the client's time limit once the budget was spent)."
+        },
+        "runtime_refused": {
+          "description": "The Runtime answered the read with its refusal (the caused_by link is the Runtime's outcome)."
+        },
+        "read_failed": {
+          "description": "The read failed: the connection, the client's own check, or the file system (the caused_by link is its failure)."
+        },
+        "not_recorded": {
+          "description": "The run records no such part: a run without a diagnostic stream."
+        },
+        "too_large": {
+          "description": "The part is larger than the bound it is read with (caused by material_too_large)."
+        },
+        "unreadable": {
+          "description": "What was read is not what it must be: lines of the diagnostic stream that are no record, a bundle file that is no JSON (caused by foreign_data_error)."
+        }
+      }
+    },
+    "report_write_step": {
+      "description": "The step of writing a problem report that failed, the value report_write_step of report_write_failed (Workflow #467 RPT-1, contracts/problem-report.md section 9, since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab-ops/src/codes.rs",
+        "enum": "ReportWriteStep"
+      },
+      "tokens": {
+        "pack": {
+          "description": "Packing the archive in memory failed; nothing was written."
+        },
+        "create_directory": {
+          "description": "The output directory could not be made (path the directory)."
+        },
+        "name_exists": {
+          "description": "A file of the archive's name is already there (path the archive); it is never replaced."
+        },
+        "write_partial": {
+          "description": "The partial file could not be created or written (path the partial file); one that was created and is left behind is retained."
+        },
+        "rename": {
+          "description": "The partial file could not be moved into place (path the archive, from_path the partial file, which is retained)."
+        }
+      }
+    },
+    "report_fit": {
+      "description": "Whether a problem report fits its size bound after the parts the bound may leave out were left out, the value report_fit of report_trimmed (Workflow #467 RPT-1, contracts/problem-report.md section 8, since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab-ops/src/codes.rs",
+        "enum": "ReportFit"
+      },
+      "tokens": {
+        "fits": {
+          "description": "The archive, as written, is within its bound."
+        },
+        "still_over": {
+          "description": "Every part the bound may leave out was left out and the archive, as written, is still over its bound: the parts that are never left out are larger than it."
+        }
+      }
+    },
+    "report_output_root": {
+      "description": "The root a refused output directory of a problem report lies in, the value report_output_root of report_output_refused (Workflow #467 RPT-1, contracts/problem-report.md section 1, since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab-ops/src/codes.rs",
+        "enum": "ReportOutputRoot"
+      },
+      "tokens": {
+        "install_root": {
+          "description": "The installation root (install_root)."
+        },
+        "state_root": {
+          "description": "The Runtime's state root (state_root)."
         }
       }
     }

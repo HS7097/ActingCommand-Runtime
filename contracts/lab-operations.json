@@ -303,7 +303,7 @@
         {"name": "until_unix_ms", "form": "option", "type": "unsigned", "required": false, "note": "the window's end, unix ms; absent: now"},
         {"name": "max_runs", "form": "option", "type": "integer", "required": false, "default": "5", "note": "the failed and unfinished runs kept, newest first, 1 to 10; at most 2 of one package that ended with one code"},
         {"name": "max_mib", "form": "option", "type": "integer", "required": false, "default": "24", "note": "the archive's bound in MiB, 4 to 64; frames are left out first"},
-        {"name": "no_frames", "form": "switch", "type": "boolean", "required": false, "note": "no frame and no text OCR read in the archive; the summary says what is missing"}
+        {"name": "no_frames", "form": "switch", "type": "boolean", "required": false, "note": "no frame and nothing read from one (text, values, labels) in the archive; the summary says what is missing"}
       ],
       "help": "Writes one problem report of the errors view into the directory it names: the newest failed or unfinished runs with steps, scores, frames, and the error rows.",
       "output": "the archive written: its path, sha256 and size, the view, the instances and the window, the runs, the frames and what was left out",

@@ -7,11 +7,12 @@
 use super::scores::{ScoreSource, TargetScore};
 use super::source::Geometry;
 use super::{
-    ERRORS_ON_SUMMARY, MEMBERS, NOT_YET, Page, RunReport, SCHEMA, VIEW_ERRORS, not_yet, row_json,
-    window_json,
+    ERRORS_ON_SUMMARY, ERRORS_PER_INSTANCE, InstanceErrors, MEMBERS, MIB, NOT_YET, Page, RunReport,
+    SCHEMA, VIEW_ERRORS, not_yet, row_json, window_json,
 };
 use crate::cli_line;
 use crate::code_lookup::{self, Answer, Query};
+use crate::codes::ReportFit;
 use actingcommand_contract::outcome::CodeStr;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -277,8 +278,8 @@ fn targets_table(report: &RunReport) -> String {
 
 fn frames_line(report: &RunReport, page: &Page<'_>) -> String {
     if !page.request.frames {
-        return "- Frames / 截图: none: what the screen showed is missing, and the text OCR read \
-                is removed / 未带截图：画面内容缺失，OCR 读到的文字已去掉\n"
+        return "- Frames / 截图: none: what the screen showed is missing, and the text and \
+                values read from it are removed / 未带截图：画面内容缺失，从截图读出的文字和数值已去掉\n"
             .to_owned();
     }
     if report.frames.is_empty() {
@@ -354,6 +355,39 @@ fn run_section(number: usize, report: &RunReport, page: &Page<'_>) -> String {
     out
 }
 
+/// What one instance's errors view holds, in one sentence (fix round 1, item 7: its newest rows,
+/// and whether the search reached the window's start).
+fn errors_line(instance: &InstanceErrors) -> String {
+    let Some(read) = &instance.read else {
+        let why = instance.unread.map_or("", |why| why.as_str());
+        return format!("Not read (`{why}`); see the warnings / 没有读到，见警告");
+    };
+    let count = read.rows.len();
+    let file = &instance.file;
+    if read.cut {
+        return format!(
+            "{count} rows in {file}, the newest found; the Runtime cut the search short, so \
+             older rows of the window were not searched / Runtime 中途截断了搜索，更早的记录没有读到"
+        );
+    }
+    if let Some(from) = read.searched_from {
+        return format!(
+            "{count} rows in {file}, the newest found; searched from ledger sequence {from} \
+             on, so older rows of the window were not searched / 从账本序号 {from} 起搜索，更早的记录没有读到"
+        );
+    }
+    if count >= ERRORS_PER_INSTANCE {
+        return format!(
+            "{count} rows in {file}, the newest of the window; older rows were not read / \
+             时间窗里最新的 {count} 行，更早的没有读"
+        );
+    }
+    if count == 0 {
+        return "No row in the window / 时间窗里没有记录".to_owned();
+    }
+    format!("{count} rows in {file}, every row of the window / 时间窗里的全部记录")
+}
+
 fn errors_section(page: &Page<'_>) -> String {
     let mut out = String::new();
     let mut descriptions: BTreeMap<String, Option<String>> = BTreeMap::new();
@@ -362,22 +396,12 @@ fn errors_section(page: &Page<'_>) -> String {
             "## Errors view / 错误视图: {}\n\n",
             cell(&instance.alias)
         ));
+        out.push_str(&errors_line(instance));
         let Some(read) = &instance.read else {
-            out.push_str("Not read; see the warnings / 没有读到，见警告。\n\n");
+            out.push_str(".\n\n");
             continue;
         };
-        let kept = read.rows.len() as u64;
-        let left = read.total.saturating_sub(kept);
-        out.push_str(&format!(
-            "{} rows in the window / 时间窗里 {} 行; {} in {}",
-            read.total, read.total, kept, instance.file
-        ));
-        if left > 0 {
-            out.push_str(&format!(
-                ", the newest; the {left} older rows are left out / 较早的 {left} 行未放入"
-            ));
-        }
-        if !page.kept.contains(&instance.file) {
+        if !read.rows.is_empty() && !page.kept.contains(&instance.file) {
             out.push_str(" (the file was left out to keep the size bound / 为守大小上限未放入)");
         }
         out.push_str(".\n\n");
@@ -411,9 +435,70 @@ fn errors_section(page: &Page<'_>) -> String {
     out
 }
 
-/// `SUMMARY.md`: its first line says the view, the instances and the window; then the runs'
-/// table, each run, the errors view of each instance, what was left out, what is not in this
-/// report yet, and the warnings.
+/// The bound `bytes` as people read it: whole MiB, else bytes.
+fn bound_text(bytes: u64) -> String {
+    if bytes.is_multiple_of(MIB) {
+        format!("{} MiB", bytes / MIB)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+/// Fix round 1, item 10: what the screenshots can show, and how to export without them; or that
+/// this report has none.
+fn privacy_line(frames: bool) -> &'static str {
+    if frames {
+        "Screenshots / 截图: the screenshots in this report can show a player's name and numbers. \
+         To send a report without them, export again with `--no-frames` (in the console: untick \
+         the screenshots); the text and values read from them are left out too / \
+         本报告里的截图可能显示玩家的名字和数字；不想带截图时，用 --no-frames 重新导出（监控台上取消勾选截图），\
+         从截图读出的文字和数值也会一起去掉。\n\n"
+    } else {
+        "Screenshots / 截图: none; the text and values read from them are left out too / \
+         不带截图，从截图读出的文字和数值也已去掉。\n\n"
+    }
+}
+
+/// Fix round 1, item 4: whether the archive fits its bound.
+fn size_line(page: &Page<'_>) -> String {
+    let bound = bound_text(page.request.max_bytes);
+    match page.fit {
+        ReportFit::Fits => {
+            format!("Size / 大小: within the bound of {bound} / 在 {bound} 上限内\n\n")
+        }
+        ReportFit::StillOver => format!(
+            "Size / 大小: over the bound of {bound}, with every part that may be left out left \
+             out (see Left out) / 去掉所有可以去掉的部分后仍超过 {bound} 上限（见“未放入”）\n\n"
+        ),
+    }
+}
+
+/// Fix round 1, item 3: for each instance, whether the listing of its failed and unfinished runs
+/// was read to its end.
+fn listings_lines(page: &Page<'_>) -> String {
+    let mut out = String::new();
+    for listing in page.listings {
+        let alias = cell(&listing.alias);
+        match listing.cut {
+            None => out.push_str(&format!(
+                "- Listing of {alias} / {alias} 的运行列表: read to its end / 读完\n"
+            )),
+            Some(why) => out.push_str(&format!(
+                "- Listing of {alias} / {alias} 的运行列表: not read to its end (`{}`): the \
+                 window may hold failed or unfinished runs it does not show / 没读完，时间窗里可能还有没列出的运行\n",
+                why.as_str()
+            )),
+        }
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
+/// `SUMMARY.md`: its first line says the view, the instances and the window; then the
+/// versions, the screenshots, the size, the runs' listings and table, each run, the errors view
+/// of each instance, what was left out, what is not in this report yet, and the warnings.
 pub(super) fn page(page: &Page<'_>) -> String {
     let request = page.request;
     let until = request
@@ -440,14 +525,29 @@ pub(super) fn page(page: &Page<'_>) -> String {
         "Versions / 版本: {}\n\n",
         versions_line(page.versions)
     ));
+    out.push_str(privacy_line(request.frames));
+    out.push_str(&size_line(page));
     out.push_str(&format!(
         "## Runs / 运行: {} failed or unfinished, newest first / 失败或未结束的运行，新的在前\n\n",
         page.reports.len()
     ));
-    if page.reports.is_empty() {
+    out.push_str(&listings_lines(page));
+    let unread = page
+        .listings
+        .iter()
+        .filter(|listing| listing.cut.is_some())
+        .map(|listing| cell(&listing.alias))
+        .collect::<Vec<_>>();
+    if page.reports.is_empty() && unread.is_empty() {
         out.push_str(
             "No failed or unfinished run in the window / 时间窗里没有失败或未结束的运行。\n\n",
         );
+    } else if page.reports.is_empty() {
+        let names = unread.join(", ");
+        out.push_str(&format!(
+            "No failed or unfinished run was found, but the listing of {names} was not read to \
+             its end: the window may hold some / 没找到失败或未结束的运行，但 {names} 的运行列表没读完，时间窗里可能有。\n\n"
+        ));
     } else {
         out.push_str(
             "| # | instance | state | package | ended with | last page | first recorded |\n",
@@ -525,15 +625,24 @@ pub(super) fn data(page: &Page<'_>) -> Value {
         }),
         "runtime_online": true,
         "frames": request.frames,
+        "within_bound": page.fit == ReportFit::Fits,
         "versions": page.versions,
+        "listings": page.listings.iter().map(|listing| json!({
+            "alias": listing.alias,
+            "read_to_end": listing.cut.is_none(),
+            "why": listing.cut.map(|why| why.as_str()),
+        })).collect::<Vec<_>>(),
         "runs": page.reports.iter().map(|report| run_data(report, page)).collect::<Vec<_>>(),
         "succeeded_before_newest": page.previous.map(row_json),
         "errors": page.errors.iter().map(|instance| json!({
             "alias": instance.alias,
             "file": instance.file,
             "read": instance.read.is_some(),
-            "total": instance.read.as_ref().map(|read| read.total),
+            "why": instance.unread.map(|why| why.as_str()),
             "kept": instance.read.as_ref().map(|read| read.rows.len()),
+            "newest_only": instance.read.as_ref().map(|read| read.rows.len() >= ERRORS_PER_INSTANCE),
+            "searched_to_start": instance.read.as_ref().map(super::Errors::searched_to_start),
+            "searched_from": instance.read.as_ref().and_then(|read| read.searched_from),
             "in_archive": page.kept.contains(&instance.file),
         })).collect::<Vec<_>>(),
         "left_out": page.left_out,

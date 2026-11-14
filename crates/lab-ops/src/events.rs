@@ -950,6 +950,103 @@ fn ledger_head(client: &RuntimeClient) -> Result<u64, EventsError> {
     Ok(page.snapshot_ledger_position())
 }
 
+/// Workflow #467 RPT-1 fix round 1 (`report export`'s errors view): what [`newest_in_window`]
+/// found.
+pub(crate) struct Newest {
+    /// The newest records found, oldest first, with their payloads ([`PROFILE`]).
+    pub(crate) events: Vec<ProjectedEvent>,
+    /// When fewer than the limit were found: the lowest sequence the search searched, when that
+    /// is above the window's first record (its largest window ended it); older records of the
+    /// window were not searched.
+    pub(crate) searched_from: Option<u64>,
+    /// A read the Runtime cut short (its read budget) ended the search with what it had found;
+    /// older records of the window were not searched.
+    pub(crate) cut: bool,
+}
+
+/// Workflow #467 RPT-1 fix round 1: the newest `limit` records `query` matches inside its time
+/// window, found as a read of the newest records finds them ([`read_newest`], without its wait),
+/// by the same reads: the ledger's head read once ([`ledger_head`]); the window's first record as
+/// the search's floor ([`window_start`]); the search ([`Search::newest`]); and the records it
+/// found read with their payloads ([`Search::rows`]), again from the first not yet read when the
+/// Runtime cuts a page to its response bound. `query` names no sequence. No answer of `events`
+/// changes: this calls the parts its own read calls.
+pub(crate) fn newest_in_window(
+    client: &RuntimeClient,
+    query: &EventQuery,
+    limit: u16,
+) -> Result<Newest, EventsError> {
+    let head = ledger_head(client)?;
+    let Some(floor) = window_start(client, query, head)? else {
+        return Ok(Newest {
+            events: Vec::new(),
+            searched_from: None,
+            cut: false,
+        });
+    };
+    let search = Search {
+        client,
+        query,
+        head,
+    };
+    let found = search.newest(limit, floor)?;
+    let mut events = Vec::with_capacity(found.sequences.len());
+    let mut rest = found.sequences.as_slice();
+    while !rest.is_empty() {
+        let page = search.rows(rest)?.events;
+        if page.is_empty() {
+            return Err(EventsError::Pagination);
+        }
+        rest = rest.get(page.len()..).ok_or(EventsError::Pagination)?;
+        events.extend(page);
+    }
+    let searched_from = (found.sequences.len() < usize::from(limit) && found.reached > floor)
+        .then_some(found.reached);
+    Ok(Newest {
+        events,
+        searched_from,
+        cut: found.cut,
+    })
+}
+
+/// Workflow #467 RPT-1 fix round 1: the sequence of the first record of `query`'s time window at
+/// the snapshot `head`: one page of one record under the time bound alone, without run recovery
+/// (a page with a time bound starts at the window's first record, LN-WS); `None` when the window
+/// holds none. A page the Runtime's read budget cut before it found one starts the search after
+/// the position the page reached.
+fn window_start(
+    client: &RuntimeClient,
+    query: &EventQuery,
+    head: u64,
+) -> Result<Option<u64>, EventsError> {
+    let request = RuntimeEventQueryPageRequest::new(1, None)
+        .and_then(|request| request.at_snapshot(head))
+        .map_err(|_| EventsError::Pagination)?
+        .without_run_recovery();
+    let bounds = EventQuery {
+        from_timestamp_unix_ms: query.from_timestamp_unix_ms,
+        to_timestamp_unix_ms: query.to_timestamp_unix_ms,
+        to_sequence: Some(head),
+        ..EventQuery::default()
+    };
+    let page = client
+        .query_event_page(bounds, SEARCH_PROFILE, request)
+        .map_err(EventsError::Runtime)?;
+    if page.snapshot_ledger_position() != head {
+        return Err(EventsError::Pagination);
+    }
+    if let Some(first) = page.events().first() {
+        return Ok(Some(first.sequence));
+    }
+    if page.has_more() {
+        let after = page
+            .next_cursor()
+            .map_or(0, RuntimeEventQueryCursor::after_sequence);
+        return Ok(Some(after.saturating_add(1)));
+    }
+    Ok(None)
+}
+
 /// Workflow #434 CLI-EV: the reads of one search for the newest records: the records `query`
 /// matches at the snapshot `head`, each read by a sequence range and without run recovery.
 struct Search<'a> {
