@@ -3067,6 +3067,35 @@ impl PolicyHost {
         crate::policy_control::runtime_budget_exceeded(&intent, admission, runtime_ms)
     }
 
+    /// Workflow #463 U1, fix round 2 (rule 6): the largest runtime of the dispatch
+    /// `decision_id`'s run that its admitted runtime budget still admits, by the policy's own rule
+    /// ([`Self::runtime_budget_exceeded`]); `None` when its admission carries no runtime budget.
+    pub(crate) fn runtime_budget_allowance_ms(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<u64>> {
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::ReadPolicyRuntimeBudget,
+            )
+        })?;
+        let admission = dispatch.admission.as_ref().ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchAdmissionMissing,
+                HostLocation::ReadPolicyRuntimeBudget,
+            )
+        })?;
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        let intent = control_intent(
+            &dispatch.data,
+            dispatch.expected_duration_ms,
+            &catalog.compiled,
+            admission,
+        )?;
+        crate::policy_control::runtime_budget_allowance_ms(&intent, admission)
+    }
+
     pub(crate) fn pending_dispatch_completions(&self) -> Vec<String> {
         self.seen_dispatches
             .iter()

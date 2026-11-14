@@ -343,6 +343,14 @@ fn seen(
 // of no candidate and the arrival runs out at 1 000 ms, twenty pauses, without loading values.
 // Shadow: the same end and pauses as off; the entry frame and every frame after the input are
 // evaluated, and the stretch is recorded as entered.
+//
+// Workflow #463 U1, fix round 1 (contracts/linear-steps.md, "Retries"): `open` declares no retry,
+// so under off and shadow the arrival's end is followed by one closing decision on `result` and
+// `home`, made at once and sharing the attempt's allowance. Its frames 22 to 40 after the input
+// are spinner frames of no page (nineteen more pauses of 50 ms), and `result` passes on the 41st:
+// the run ends as the arrival ended it, with no further input. Under shadow those frames are
+// evaluated too, and `result` leaves the stretch: 1 900 ms spent (the arrival's twenty pauses and
+// the decision's eighteen before its last spinner frame), 50 ms after the last spinner frame.
 #[test]
 fn linear_loading_pauses_the_arrival_budget() {
     let task = plan(vec![open(json!({}), json!({}))]);
@@ -383,18 +391,24 @@ fn linear_loading_pauses_the_arrival_budget() {
             "{mode:?}"
         );
         assert_eq!(loading_values(&error), no_loading_values(), "{mode:?}");
-        assert_eq!(pauses_after_input(&runtime, 1), ms(&[50; 20]), "{mode:?}");
+        assert_eq!(runtime.inputs().len(), 1, "{mode:?}");
+        // The arrival's twenty pauses, then the closing decision's nineteen.
+        assert_eq!(pauses_after_input(&runtime, 1), ms(&[50; 39]), "{mode:?}");
+        assert_eq!(runtime.captures_after(1), 41, "{mode:?}");
         if mode == LoadingMode::Off {
             assert!(runtime.loading_evaluations().is_empty());
             assert!(runtime.loading_events().is_empty());
         } else {
             assert_eq!(
                 runtime.loading_evaluations(),
-                (1..=22).collect::<Vec<_>>().as_slice()
+                (1..=42).collect::<Vec<_>>().as_slice()
             );
             assert_eq!(
                 transitions(&runtime),
-                [seen(2, LoadingEventKind::Entered, 0, None, None)]
+                [
+                    seen(2, LoadingEventKind::Entered, 0, None, None),
+                    seen(42, LoadingEventKind::Left, 1_900, Some("result"), Some(50)),
+                ]
             );
         }
     }

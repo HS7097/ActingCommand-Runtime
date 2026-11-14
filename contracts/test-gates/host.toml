@@ -3942,3 +3942,33 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_453_s12::s12_a_command_stopped_after_each_step_is_completed_by_running_it_again",
 ]
 incident = ["#453 S12"]
+
+# Workflow #463 U1 (0.12.60; register §1.372; brief rd-1114/brief-463-u1-unrecorded-screen.md; contracts/linear-steps.md, "Failure codes"; contracts/policy-suspension.md, "A failure that pauses at its first occurrence"), the host's half, on the manual clock and a fake device, a linear_steps source package of one tap from home to list attempted twice: with the fixture catalog's task under on_failure continue with retry_limit 0 and under the recommended value, a scheduled run whose device shows after the tap a screen of neither page, unchanged, fails contained_task_linear_unrecorded_screen after one input and its settlement pauses the pair at once (paused_task, original and effective class severe, consecutive_same_error 1, no retry time, a failure identity whose base is the code and that accumulates), and at the pair's next due evaluation the pause keeps it and nothing is dispatched; a run of the same package whose tap is swallowed fails page_confirmation_failed after two inputs and follows on_failure as before (continue; retry_scheduled), class recoverable (1); with a second task of the same instance of lower priority, after the pause the next due evaluation keeps the pair paused and dispatches the other task, which the instance admits and which settles, and the due evaluation after it keeps the pair paused and dispatches the other task again (2); the pause keeps the pair at its next due evaluation, and the package changed in place lifts it at the first due evaluation after the lift check's interval, the task dispatched (3); a direct run of the package on a device instance fails with the new code after one input; its terminal and its receipt carry pack_operation_id open, page_ids [neutral/list, neutral/home], attempts 1 and artifact_id, the frame of the run's one Failure pin; no policy execution is recorded, and the task bound to the package is dispatched at its next due evaluation, not paused (4); the new code's ladder class is pack_logic_mismatch (the owner's ruling on board #463, closing round: the ladder starts at once) and it reaches the default item pack_logic by its class at the task stage, as page_confirmation_failed does (5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_u1::u1_a_scheduled_run_on_an_unrecorded_screen_pauses_its_pair_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1::u1_another_pair_of_the_instance_is_dispatched_while_the_pair_is_paused",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1::u1_a_changed_package_lifts_the_pause",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1::u1_a_direct_run_names_the_pinned_frame_and_pauses_nothing",
+    "actingcommand-runtime-config::lib::ladder_tests::u1_the_unrecorded_screen_code_reaches_pack_logic_as_page_confirmation_failed_does",
+]
+incident = ["#463 U1"]
+
+# Workflow #463 U1 fix round 1 (0.12.60; register §1.372, "Fix round 1"; brief rd-1114/brief-1715-fix1.md; contracts/linear-steps.md, "Retries"), the host's half, on the manual clock and a fake device: the same package whose tap declares no retry, run directly on a device instance whose screen after the tap is neither page and unchanged: the step's closing decision ends the run Failed with contained_task_linear_unrecorded_screen after one input, and its terminal and its receipt carry pack_operation_id open, page_ids [neutral/list, neutral/home], attempts 1 and artifact_id, the frame of the run's one Failure pin
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_u1::u1_a_step_without_a_retry_names_the_pinned_frame_of_its_closing_decision",
+]
+incident = ["#463 U1"]
+
+# Workflow #463 U1 fix round 2 (0.12.60; register §1.372, "Fix round 2"; brief rd-1114/brief-1715-fix2.md, rules 5 and 6 and the ladder; contracts/linear-steps.md, "A screen the package never recorded"), the host's half, on the manual clock and a fake device: the package whose tap declares no retry as the instance's startup package, run on a key the test holds as a granted startup claim runs it, on the screen of neither page after the tap, fails page_confirmation_failed after one tap, settles no policy execution, and the task bound to the package is dispatched at its next due evaluation, not paused (1); a scheduled run of the package with a retry under a task whose expected duration and admitted runtime budget are 1 300 ms, after its arrival of 200 ms, its retry delay of 10 ms and its retry decision of 600 ms, has less of its budget left than the closing bound of 600 ms, makes no closing decision and fails page_confirmation_failed after one tap; its settlement records that code, class recoverable, disposition continue (2); a scheduled run on a device instance that fails with the new code admits one ladder, at the task stage, by the default item pack_logic, matched by the class pack_logic_mismatch, naming the code; the pair is paused_task and, after the ladder's end, the task is not dispatched at its next due evaluation (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_u1::u1_a_startup_package_with_an_entry_page_never_gets_the_code_and_pauses_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1::u1_a_scheduled_run_whose_budget_ends_before_the_closing_bound_keeps_its_failure",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1::u1_the_new_code_admits_one_ladder_by_its_class_and_the_paused_pair_is_not_dispatched",
+]
+incident = ["#463 U1"]
