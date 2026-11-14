@@ -74,11 +74,11 @@ crate::outcome_vocabulary! {
     /// or, since Workflow #451 LOAD-P, a bundle zip's loading templates directory. Since Workflow
     /// #455 G-R1 the root file `goals.json` has the fourteen `goal_*` words of its own (the
     /// fourteenth, `goal_out_of_limits`, since its fix round 1), and a bundle zip that carries it
-    /// `goal_undeclared`. Workflow #463 V1 (since 0.12.60; [`crate::package_variables`]): the
+    /// `goal_undeclared`. Workflow #463 V1 (since 0.12.61; [`crate::package_variables`]): the
     /// file's fifteenth, `goal_variable_unknown`, and the root check's three words of a package's
     /// declared variables, `variable_conflict`, `variable_out_of_limits` and `variable_cap_range`;
-    /// its fix round 1, the root check's fourth, `variable_on_irreversible`, and a bundle zip whose
-    /// packs declare variables `variable_undeclared`.
+    /// its fix round 1, the root check's fourth, `variable_irreversible_by_root`, and a bundle zip
+    /// whose packs declare variables `variable_undeclared`.
     pub enum StandardPackProblem: "standard_pack_problem" {
         /// The file is not JSON of the file's shape and version (for a table: not canonical
         /// JSON either, that is with a floating point number, an unsafe integer or a duplicate
@@ -271,7 +271,7 @@ crate::outcome_vocabulary! {
         /// below 12. Refused by the installer's `place` at `interfaces.json`, as
         /// `notice_undeclared` is.
         GoalUndeclared => "goal_undeclared",
-        /// Workflow #463 V1 (since 0.12.60): a `variable` entry of `goals.json` places a name no
+        /// Workflow #463 V1 (since 0.12.61): a `variable` entry of `goals.json` places a name no
         /// package of the game root declares as a variable, at its `name`.
         GoalVariableUnknown => "goal_variable_unknown",
         /// Workflow #463 V1: a variable two packages of the root declare with declarations that
@@ -292,7 +292,7 @@ crate::outcome_vocabulary! {
         /// something irreversible by the whole game root (it provides, unmarked, a capability
         /// another package marks irreversible, or its remedies list one; the rule of
         /// [`crate::IrreversiblePackages`]), at the declaration; no variable of that name applies.
-        VariableOnIrreversible => "variable_on_irreversible",
+        VariableIrreversibleByRoot => "variable_irreversible_by_root",
         /// Workflow #463 V1 fix round 1: a bundle zip whose packs declare `variables` declares a
         /// `package` interface maximum below 14. Refused by the installer's `place` at
         /// `interfaces.json`, as `goal_undeclared` is.

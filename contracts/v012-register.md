@@ -25046,10 +25046,11 @@ whose key it does not know, `config_override_dropped`, and goes on
 sibling key below 0.12.60, which §1.353 does not say. Nothing else is persisted by ORD-1c: the
 member in front and the queue waits live in memory only.
 
-### 1.378 Slice V1 (0.12.60): a package declares its variables, `control.json` `variables`, their root check and their place in `goals.json`; `package` revision 14 (Workflow #463 L4; the design `rd-1114/463-l4-design.md`, "Readings: what holds", section A, section D's "goals.json placement", section E, section F's second point, the row V1 of section G and section H items 1, 2, 5, 7 and 9 to 12, with "The coordinator's rulings on I", read on main `155366bb`; the coordinator's rulings of 11-14 in the work order and its two additions of the same night (the `package` revision is 14, revision 13 being Workflow #463 K1's; this section's number), not the owner's words; coordinator work order `rd-1114/brief-463-v1-package-variables.md`, read on main `155366bb`, main `1e67d1c5` merged)
+### 1.378 Slice V1 (0.12.61): a package declares its variables, `control.json` `variables`, their root check and their place in `goals.json`; `package` revision 14 (Workflow #463 L4; the design `rd-1114/463-l4-design.md`, "Readings: what holds", section A, section D's "goals.json placement", section E, section F's second point, the row V1 of section G and section H items 1, 2, 5, 7 and 9 to 12, with "The coordinator's rulings on I", read on main `155366bb`; the coordinator's rulings of 11-14 in the work order and its two additions of the same night (the `package` revision is 14, revision 13 being Workflow #463 K1's; this section's number), not the owner's words; coordinator work order `rd-1114/brief-463-v1-package-variables.md`, read on main `155366bb`, main `1e67d1c5` merged; fix round 1, after the independent review, coordinator work order `rd-1114/brief-1723-fix1.md`; the closing round, after the review of fix round 1, coordinator work order `rd-1115/brief-1723-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged)
 
 The coordinator gave this slice 1.378: main `1e67d1c5` held the sections up to §1.369 (G-R2s), and
-open pull requests hold 1.370 to 1.377. [package-variables.md](package-variables.md) is the
+open pull requests hold 1.370 to 1.377 (main `2eaf9b7e` holds §1.370 to §1.373). The slice ships in
+0.12.61 (release 0.12.60 is cut without it). [package-variables.md](package-variables.md) is the
 contract; [standard-pack-goals.md](standard-pack-goals.md) (the type `variable` in place of the four
 types that governed packages), [remedies.md](remedies.md) §1.2 item 2 and §2.4 rule 3,
 [resource-declarations.md](resource-declarations.md) (the `control.json` members and static rule 3),
@@ -25097,7 +25098,7 @@ are later slices.
 |---|---|---|---|---|---|
 | V1-1 | `control.json` `variables` (`choice`, `integer`, `switch`, `ordered`; `default_origin`) | package file format (`package` revision 14) | V1 | the resource repository (V6), the recording (V4) | read by kernel admission and the source parser; no run reads it |
 | V1-2 | `contained_task_control_invalid` with `reason=variables_invalid`, `variable_name_taken` or `variables_on_irreversible` and `json_pointer=<pointer>` | refusal detail of an existing code | V1 | kernel admission | the source parser: `resource_declaration_invalid`, `invalid_value` at the pointer, the word ending its message |
-| V1-3 | `goal_variable_unknown`, `variable_conflict`, `variable_out_of_limits`, `variable_cap_range`; fix round 1: `variable_on_irreversible`, `variable_undeclared` | words of the vocabulary `standard_pack_problem` (code `standard_pack_root_invalid`) | V1 | the goal check; the root check; `place` (`variable_undeclared`) | 6 words (4, and 2 in fix round 1); the vocabulary's descriptions of `goal_type_unknown`, `goal_block_mismatch`, `goal_package_unknown`, `goal_governs_irreversible`, `goal_range_invalid`, `goal_default_invalid`, `goal_table_unknown` (no longer given) and `ui_parameter_undeclared` extended |
+| V1-3 | `goal_variable_unknown`, `variable_conflict`, `variable_out_of_limits`, `variable_cap_range`; fix round 1: `variable_irreversible_by_root`, `variable_undeclared` | words of the vocabulary `standard_pack_problem` (code `standard_pack_root_invalid`) | V1 | the goal check; the root check; `place` (`variable_undeclared`) | 6 words (4, and 2 in fix round 1); the vocabulary's descriptions of `goal_type_unknown`, `goal_block_mismatch`, `goal_package_unknown`, `goal_governs_irreversible`, `goal_range_invalid`, `goal_default_invalid`, `goal_table_unknown` (no longer given) and `ui_parameter_undeclared` extended |
 | V1-4 | `goals.json` version 1's type `variable`; `integer`, `choice`, `switch`, `ordered` and `from_table` gone | game root file format, no revision | V1 | the resource repository (G-P1) | no pack carries the file; a file with one of the four types is `goal_type_unknown` |
 | V1-5 | `standard-pack check`'s `variable_provenance` `{pack, model}`; fix round 1: `not_applying` `[{name, standard_pack_problem}]`, absent when empty | Tools answer member (optional, after `models`) | V1 | `standard-pack check` | absent when no package declares a variable |
 | V1-6 | `RemedyDeclarations` `variables`, `cap_fact_keys` | kernel interface (memory only) | V1 | the metadata reader | the host reads neither yet |
@@ -25124,19 +25125,22 @@ bundle that declares 13 or 14 is placed by this installer. Before a resource rep
 pack that declares variables, the Runtime and Tools of this release are deployed first (an earlier
 Runtime refuses the pack), its bundle declares `package` [14, 14], and `actinglab standard-pack
 check --root <game root>` shows no `variable_conflict`, `variable_out_of_limits`,
-`variable_on_irreversible` or `variable_cap_range` warning (such a variable would not apply once a
-later slice reads values).
+`variable_irreversible_by_root` or `variable_cap_range` warning (such a variable would not apply
+once a later slice reads values). The installer's post check runs that check too but passes on its
+warnings and keeps no answer of a passed check, so the warnings are read from a check run by hand.
 **Rollback** below this release stays open while no root holds a pack that declares variables; an
 earlier Runtime refuses such a pack at admission.
 
 **Limits.** Admission judges a package's own `irreversible` marks only: a package that provides
 unmarked a capability another package marks irreversible, or whose remedies list one, may declare
 variables; the goal check refuses a placement of them (`goal_governs_irreversible`), the root
-check (fix round 1) reports each of them `variable_on_irreversible` and lists it as not applying,
-and V2 must run such a package on its defaults (the design, section B). "Does not apply" is a
-warning of `standard-pack check` only: `package bundle`, the installer and the host run no root
-check, and V2 must enforce it in the Runtime, for a conflicting name and a package irreversible by
-the root alike. The cap check reads a designated effect's
+check (fix round 1) reports each of them `variable_irreversible_by_root` and lists it as not
+applying, and V2 must run such a package on its defaults (the design, section B). "Does not apply"
+is a warning of `standard-pack check` only, wherever it runs: the installer's `place` runs it in
+its post check after every placement (`crates/lab-rescue/src/install/place.rs`, `check_step`) and
+reads only its exit code, which a warning leaves 0, so the placement passes; `package bundle` and
+the host run no root check; and V2 must enforce it in the Runtime, for a conflicting name and a
+package irreversible by the root alike. The cap check reads a designated effect's
 cap key from the same package only; an `integer` read anywhere else as a count is not judged.
 `package bundle` runs no root check of variables. Byte identity is of the entry as written in
 compact JSON: two declarations that differ only in member order are a conflict.
@@ -25189,13 +25193,15 @@ building it with `IrreversiblePackages::new` from what the metadata reader read 
 package): after the two conflicts and before the cap, a name some package that counts as
 irreversible declares (`IrreversiblePackages::counts_irreversible`: it provides unmarked a
 capability another package marks, or its remedies list one; a package the judgement was not told
-of counts) is `variable_on_irreversible` at each such package's declaration, applies in no
+of counts) is `variable_irreversible_by_root` at each such package's declaration, applies in no
 package, and the provenance listing gains `not_applying` `[{name, standard_pack_problem}]` with it
 (absent when empty). [package-variables.md](package-variables.md) and
 [standard-pack-goals.md](standard-pack-goals.md) say what is enforced: admission refuses
-`variables` on a package whose own `provides` marks the capability; the root check only warns,
-`package bundle`, the installer and the host run none, and V2 must enforce "does not apply" in the
-Runtime for a conflicting name and a package irreversible by the root alike. (3) The containment
+`variables` on a package whose own `provides` marks the capability; the root check only warns
+(the installer's post check runs it and passes on a warning; `package bundle` and the host run
+none; corrected in the closing round, which found that this round had written that the installer
+runs none), and V2 must enforce "does not apply" in the Runtime for a conflicting name and a
+package irreversible by the root alike. (3) The containment
 keeps the developer text the declaration gate appends to a refusal's location
 (`declaration_error`, `crates/pack-containment/src/lib.rs`, into
 `ContainmentError::ResourceDeclaration`'s `detail`), so an admission by path names the rule
@@ -25213,13 +25219,40 @@ crate's `package_variables::tests::v1_root_check_holds_a_variable_of_a_package_i
 Adapted because the requirement changes what they pin: `gate_455_gr1::gr1_governs_irreversible_is_refused_by_the_check_and_the_bundle`
 (the word, for the check and the bundle) and
 `gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused` (the unmarked
-provider's variable is also `variable_on_irreversible` at its declaration, before the goal
+provider's variable is also `variable_irreversible_by_root` at its declaration, before the goal
 warning, and the listing marks it), and the architecture pin; mechanically, the contract crate's
 root-check tests call the check through a helper that judges every package reversible. Not in
 this round: `goal_table_unknown` stays registered and unraised until the slice that brings
 `from_table` back for variables (the design, V7); this pull request is merged after or together
 with Workflow #463 K1 (pull request #1720, `package` 13), so that no build declares [3, 14] while
 row 13 is only a placeholder.
+
+**Closing round** (coordinator work order `rd-1115/brief-1723-fix2.md`, after the review of fix
+round 1; main `2eaf9b7e`, which holds release 0.12.60, merged). The slice did not ship in 0.12.60,
+so each statement of it says 0.12.61: this section's heading, the `since` of its six words in the
+catalog, `package-variables.md`, `standard-pack-goals.md`, `package-reference.md`,
+`install-cli.md`, row 14 of `component-interfaces.md`, the index of `README.md`, the comments of
+its gate rows and of its code; a statement of a slice that shipped in 0.12.60 keeps its number. The
+tag `v0.12.60` did not exist when this pull request opened, and does not yet, so `goals.json`
+stays version 1 (the coordinator's ruling 2 on I). (1) Fix round 1 wrote that the installer runs
+no root check. It does: the post check of `place` (`crates/lab-rescue/src/install/place.rs`,
+`check_step`) runs the installation's `actinglab --json standard-pack check --root <game root>`
+after every placement and reads only its exit code, which a warning leaves 0, so a variable warning
+does not stop a placement, the row `standard_pack_check` is `pass` with `{exit: 0}`, and the answer
+is kept only when the check fails. [package-variables.md](package-variables.md) ("What is built
+now, and what is not", "Shared names and the root check") and this section ("Limits", fix round
+1's paragraph, "At deploy") say so now. (2) The root check's word, one letter from admission's
+refusal `variables_on_irreversible` in its first name, is `variable_irreversible_by_root`: the
+vocabulary, the enum's `VariableIrreversibleByRoot`, the contracts, the tests and this section;
+neither name was released. The outcome-code index did not change: it lists codes, not the words of
+a vocabulary, so no word of this slice is in it (fix round 1's "index updated" changed no file).
+(3) Read only: the Lab's `record stop` stores no refused admission on disk. `crosscheck::admit`
+(`crates/lab/src/recording/crosscheck.rs`) turns the kernel's refusal into
+`record_artifact_admission_failed` with `details.detail`, which `generate_and_write` returns as the
+command's answer before it writes anything, the recording staying active and unchanged; since fix
+round 1 that answer's `detail` and message carry the declaration gate's developer text after the
+location (`; <text>`) where the gate wrote one. No test is new or adapted beyond the rename; no
+golden changes; no test leaves the gate map.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

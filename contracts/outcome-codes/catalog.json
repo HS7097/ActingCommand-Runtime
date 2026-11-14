@@ -6710,22 +6710,22 @@
           "description": "A bundle zip carries goals.json and declares a package interface maximum below 12. Refused by the installer's place at interfaces.json (Workflow #455 G-R1 fix round 1, since 0.12.60)."
         },
         "goal_variable_unknown": {
-          "description": "A variable entry of goals.json places a name no package of the game root declares as a variable in its control.json, at the entry's name (Workflow #463 V1, since 0.12.60)."
+          "description": "A variable entry of goals.json places a name no package of the game root declares as a variable in its control.json, at the entry's name (Workflow #463 V1, since 0.12.61)."
         },
         "variable_conflict": {
-          "description": "A variable several packages of the game root declare with declarations that are not byte-identical (at each declaration in its package's control.json), or whose name an entry of goals.json uses for anything but its placement (at each declaration's name); no variable of that name applies (Workflow #463 V1, since 0.12.60)."
+          "description": "A variable several packages of the game root declare with declarations that are not byte-identical (at each declaration in its package's control.json), or whose name an entry of goals.json uses for anything but its placement (at each declaration's name); no variable of that name applies (Workflow #463 V1, since 0.12.61)."
         },
         "variable_out_of_limits": {
-          "description": "A variable name after the game root's 96th, in registry order and then declaration order, at each declaration's name in its package's control.json; it does not apply (Workflow #463 V1, since 0.12.60)."
+          "description": "A variable name after the game root's 96th, in registry order and then declaration order, at each declaration's name in its package's control.json; it does not apply (Workflow #463 V1, since 0.12.61)."
         },
         "variable_cap_range": {
-          "description": "An integer variable a package reads as a designated effect's cap (max_repeats from session.dispatch.parameter.<name>) declares a max above 1000, at that package's declaration's max; since its fix round 1 also a min below 0, at its min, or a variable of another type read as a cap, at its type (a cap is read from an integer variable only); it does not apply (Workflow #463 V1, since 0.12.60)."
+          "description": "An integer variable a package reads as a designated effect's cap (max_repeats from session.dispatch.parameter.<name>) declares a max above 1000, at that package's declaration's max; since its fix round 1 also a min below 0, at its min, or a variable of another type read as a cap, at its type (a cap is read from an integer variable only); it does not apply (Workflow #463 V1, since 0.12.61)."
         },
-        "variable_on_irreversible": {
-          "description": "A variable declared by a package that counts as able to do something irreversible by the whole game root (it provides, unmarked, a capability another package of the root marks irreversible true, or a remedy of its mappings lists one), at the declaration in its package's control.json; no variable of that name applies. Admission refuses variables on a package whose own provides marks the capability (Workflow #463 V1 fix round 1, since 0.12.60)."
+        "variable_irreversible_by_root": {
+          "description": "A variable declared by a package that counts as able to do something irreversible by the whole game root (it provides, unmarked, a capability another package of the root marks irreversible true, or a remedy of its mappings lists one), at the declaration in its package's control.json; no variable of that name applies. Admission refuses variables on a package whose own provides marks the capability (Workflow #463 V1 fix round 1, since 0.12.61)."
         },
         "variable_undeclared": {
-          "description": "A bundle zip whose packs declare variables in their control.json declares a package interface maximum below 14. Refused by the installer's place at interfaces.json (Workflow #463 V1 fix round 1, since 0.12.60)."
+          "description": "A bundle zip whose packs declare variables in their control.json declares a package interface maximum below 14. Refused by the installer's place at interfaces.json (Workflow #463 V1 fix round 1, since 0.12.61)."
         }
       }
     },

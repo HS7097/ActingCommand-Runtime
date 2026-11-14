@@ -133,7 +133,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   its revision, so [3, 11]. Workflow #455 G-R1 (0.12.60, register §1.356) raises it to 12: a
 ///   game root's goal declaration `goals.json`, placed by the installer and opened by no reader of
 ///   the Runtime yet; a bundle without it keeps its revision, so [3, 12]. Revision 13 is reserved
-///   for Workflow #463 K1 (a `linear_steps` task with a select step). Workflow #463 V1 (0.12.60,
+///   for Workflow #463 K1 (a `linear_steps` task with a select step). Workflow #463 V1 (0.12.61,
 ///   register §1.378) raises it to 14: a package's `variables` in its `control.json`, which an
 ///   earlier Runtime refuses at its declaration gate; a pack without them keeps its revision, so
 ///   [3, 14].

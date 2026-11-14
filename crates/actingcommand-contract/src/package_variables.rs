@@ -727,7 +727,7 @@ pub struct VariableOrigins {
 }
 
 /// Fix round 1: a variable of the provenance listing that does not apply, by its name, and the
-/// word of the root check's warning that says why (`variable_on_irreversible`).
+/// word of the root check's warning that says why (`variable_irreversible_by_root`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NotApplyingVariable {
     pub name: String,
@@ -752,8 +752,8 @@ fn problem_word<S: serde::Serializer>(
 /// - `variable_conflict`: the declarations of the name are not byte-identical (compared as written,
 ///   member order included, in compact JSON), at each declaration; or an entry of `goals.json`
 ///   uses the name, at each declaration's `name`;
-/// - `variable_on_irreversible` (fix round 1): a package that declares it counts as able to do
-///   something irreversible by the whole root, as `irreversible` judges it
+/// - `variable_irreversible_by_root` (fix round 1): a package that declares it counts as able to
+///   do something irreversible by the whole root, as `irreversible` judges it
 ///   ([`IrreversiblePackages::counts_irreversible`], the one copy of the rule the goal check holds
 ///   a placement to; a package it was not told of counts), at each such package's declaration;
 ///   the name is listed in [`RootVariables::not_applying`];
@@ -797,7 +797,7 @@ pub fn check_root_variables(
             continue;
         };
         // Fix round 1: the provenance listing marks such a variable as not applying, with why.
-        if refusal.problem == StandardPackProblem::VariableOnIrreversible {
+        if refusal.problem == StandardPackProblem::VariableIrreversibleByRoot {
             checked.not_applying.push(NotApplyingVariable {
                 name: (*name).to_owned(),
                 standard_pack_problem: refusal.problem,
@@ -877,7 +877,7 @@ fn refusal_of(
         .collect::<Vec<_>>();
     if !on_irreversible.is_empty() {
         return Some(Refusal {
-            problem: StandardPackProblem::VariableOnIrreversible,
+            problem: StandardPackProblem::VariableIrreversibleByRoot,
             member: None,
             declarations: on_irreversible,
         });

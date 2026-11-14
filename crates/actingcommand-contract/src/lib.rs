@@ -28,7 +28,7 @@ pub mod ledger_capture;
 pub mod monitor;
 pub mod outcome;
 pub mod package;
-// Workflow #463 V1 (since 0.12.60): a package's declared variables, `control.json` `variables`.
+// Workflow #463 V1 (since 0.12.61): a package's declared variables, `control.json` `variables`.
 pub mod package_variables;
 pub mod page_projection;
 pub mod performance;

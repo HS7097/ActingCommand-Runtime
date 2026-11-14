@@ -36,7 +36,7 @@
 // `goal_governs_irreversible` at the placement's `name`. V1 fix round 1
 // (`rd-1114/brief-1723-fix1.md`): the refusal of the irreversible package's variable names
 // `variables_on_irreversible`, and the root check reports the unmarked provider's variable
-// `variable_on_irreversible`.
+// `variable_irreversible_by_root`.
 // A made-up game `neutral`, server `test`, 16x9; every package, pool, rule, variable and text is a
 // placeholder.
 
@@ -916,8 +916,8 @@ fn gr1_a_tier_over_a_rule_of_an_irreversible_package_is_refused() {
 // written); with a capability of its own the same file passes the check (and the bundle,
 // `gr1_package_bundle_lays_the_file_and_refuses_a_refused_one`). Workflow #463 V1 fix round 1:
 // the check's root check judges `neutral.keep` by the same rule, so its variable is
-// `variable_on_irreversible` at its declaration, before the goal warning and beside it nothing
-// else, and the provenance listing marks it as not applying.
+// `variable_irreversible_by_root` at its declaration, before the goal warning and beside it
+// nothing else, and the provenance listing marks it as not applying.
 #[test]
 fn gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused() {
     let (_plain, plain_root) = installed();
@@ -935,12 +935,13 @@ fn gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused() 
     let refused = check(&game_root);
     assert_eq!(refused.status, "checked");
     // Workflow #463 V1 fix round 1: the root check, before the goal declaration, judges the same
-    // package by the same rule: its variable `route` is `variable_on_irreversible` at its
+    // package by the same rule: its variable `route` is `variable_irreversible_by_root` at its
     // declaration and is listed as not applying.
     let control = std::path::absolute(&game_root)
         .expect("absolute game root")
         .join(KEEP)
         .join("control.json");
+    let by_root = StandardPackProblem::VariableIrreversibleByRoot.as_str();
     assert_eq!(
         root_invalid_warnings(&refused.warnings),
         [
@@ -949,7 +950,7 @@ fn gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused() 
                 "values": {
                     "game": GAME,
                     "path": control.to_string_lossy(),
-                    "standard_pack_problem": StandardPackProblem::VariableOnIrreversible.as_str(),
+                    "standard_pack_problem": by_root,
                     "json_pointer": "/variables/0"
                 }
             }),
@@ -963,7 +964,7 @@ fn gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused() 
             "model": [],
             "not_applying": [{
                 "name": "route",
-                "standard_pack_problem": StandardPackProblem::VariableOnIrreversible.as_str()
+                "standard_pack_problem": by_root
             }]
         })
     );

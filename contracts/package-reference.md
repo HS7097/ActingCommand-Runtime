@@ -445,7 +445,7 @@ in `root_files` after `display-layout.json`), the file is read after the composi
 the root (Workflow #463 V1: no table since); each problem of a refused file is one
 `standard_pack_root_invalid` warning, last, in file order, and the root is checked as without the
 file ([standard-pack-goals.md](standard-pack-goals.md), "Who reads it"). Workflow #463 V1 (since
-0.12.60, register §1.378): before it, the root check of the variables the packages' control
+0.12.61, register §1.378): before it, the root check of the variables the packages' control
 declarations declare, each problem one `standard_pack_root_invalid` warning naming the package's
 `control.json` ([package-variables.md](package-variables.md), "The root check"). It only
 reads. Every package of the registry is admitted, once, by its directory, with or
@@ -462,11 +462,11 @@ the packages the cross-check admitted, each `{model_ref, model_sha256, packages}
 packs name listed once with each of them, in byte order of `model_ref`, then of `model_sha256`,
 each model's `packages` in byte order of `package_id`; `[]` for a root whose packs name none. It
 is an added member: every member before it and the exit code are as before. Workflow #463 V1 (since
-0.12.60, register §1.378): after it, `variable_provenance` `{pack: [names], model: [names]}` when a
+0.12.61, register §1.378): after it, `variable_provenance` `{pack: [names], model: [names]}` when a
 package of the root declares variables, each variable that applies by who wrote its default, and
 (V1 fix round 1) `not_applying` `[{name, standard_pack_problem}]`, absent when empty, each
 variable a package that counts as irreversible by the whole root declares
-(`variable_on_irreversible`, [package-variables.md](package-variables.md)); absent otherwise, so a
+(`variable_irreversible_by_root`, [package-variables.md](package-variables.md)); absent otherwise, so a
 root without variables answers as before. A root without any root file is
 `standard_pack_root_invalid` `bundle_missing`; a `bundle.json` whose `packs` lists no pack is
 `package_bundle_packs_empty` with `path` `bundle.json` and `json_pointer` `/packs` (Workflow #411

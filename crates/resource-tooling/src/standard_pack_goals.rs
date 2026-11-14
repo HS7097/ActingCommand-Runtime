@@ -295,7 +295,7 @@ pub(crate) fn refuse_goals(
 /// Fix round 1: the packages are judged by the rule of irreversibility over the whole root, from
 /// what the reader read of every package (`IrreversiblePackages::new`, the one copy the goal
 /// check holds a placement to), so a variable of a package that counts as irreversible is
-/// `variable_on_irreversible` and the listing marks it as not applying.
+/// `variable_irreversible_by_root` and the listing marks it as not applying.
 pub(crate) fn variable_report(
     game: &str,
     root: &StandardPackRoot,

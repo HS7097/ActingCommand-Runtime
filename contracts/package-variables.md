@@ -1,6 +1,6 @@
 # Package variables (`control.json` `variables`)
 
-Workflow #463 L4, slice V1 (Runtime 0.12.60; [v012-register.md](v012-register.md) §1.378). A
+Workflow #463 L4, slice V1 (Runtime 0.12.61; [v012-register.md](v012-register.md) §1.378). A
 package made by recording, or by hand, leaves named slots that are filled from outside: "which
 one", "how many", "in which order". A **variable** is such a slot: a value the package's policies
 read at run time and do not choose themselves. The owner's requirement (board #463): the value
@@ -19,20 +19,27 @@ the place on the goal page, the default's origin, and the interface revision.
   kernel admission and the source parser both call, each refusal at its JSON pointer;
 - the root check of `actinglab standard-pack check` over the variables of a game root's packages,
   and its provenance listing; since fix round 1 it judges irreversibility over the whole root
-  with the goal check's rule (`variable_on_irreversible`) and the listing marks such a variable as
-  not applying;
+  with the goal check's rule (`variable_irreversible_by_root`) and the listing marks such a
+  variable as not applying;
 - the `goals.json` entry type `variable`, which places a variable on the page
   ([standard-pack-goals.md](standard-pack-goals.md));
 - `package` interface revision 14, and (fix round 1) the installer's `place` refusing a bundle
   whose packs declare variables and that declares less (`variable_undeclared`).
 
 **What does not apply is not enforced at run time yet.** "Does not apply" (a name the root check
-reports, "Shared names and the root check") is in this slice a warning and nothing more: the
-root check runs in `actinglab standard-pack check` only, and it only warns; `package bundle`, the
-installer and the Runtime's host do not run it, and no run reads a variable at all. The slice that
-hands values to a run (V2) must enforce it in the Runtime, for a conflicting name and for a
-variable of a package that counts as irreversible by the whole root alike: such a variable is
-handed no value from outside.
+reports, "Shared names and the root check") is in this slice a warning and nothing more. The root
+check is part of `actinglab standard-pack check`, and wherever that check runs it only warns (its
+exit stays 0). The installer runs it: the post check of `place` runs the installation's
+`<root>\tools\actinglab.exe --json standard-pack check --root <game root>` after every placement
+(its row `not_evaluated` when the installation holds no such file) and reads only its exit code
+(`crates/lab-rescue/src/install/place.rs`, `check_step`), so a variable warning does not stop a
+placement, its row `standard_pack_check` is `pass` with `{exit: 0}`, and the answer, warnings
+included, is not kept (it is kept only when the check fails).
+`resource verify`'s `bundle` step runs it on its installed root and relays the warnings.
+`package bundle` and the Runtime's host do not run it, and no run reads a variable at all. The
+slice that hands values to a run (V2) must enforce it in the Runtime, for a conflicting name and
+for a variable of a package that counts as irreversible by the whole root alike: such a variable
+is handed no value from outside.
 
 **Not built in V1; nothing here promises it:**
 
@@ -102,7 +109,7 @@ the permission they scope ([remedies.md](remedies.md) §2.2, §2.3). Admission j
 own marks only. A package that provides, without the mark, a capability another package of the
 root marks irreversible, or whose remedies list one, can only be judged with the root, by the one
 rule the goal check uses (the contract crate's `IrreversiblePackages`): its variables do not
-apply, `standard-pack check` reports each of them `variable_on_irreversible` (fix round 1,
+apply, `standard-pack check` reports each of them `variable_irreversible_by_root` (fix round 1,
 "Shared names and the root check"), a `goals.json` entry that places one is
 `goal_governs_irreversible` ([standard-pack-goals.md](standard-pack-goals.md), "The checks"), and
 the slice that resolves values (V2) runs such a package on its defaults.
@@ -153,17 +160,18 @@ then declaration order), the first of these holds:
 | `variable_out_of_limits` | the name is the root's 97th or later (96 names: the entry rows an application's goal record keeps, as `goals.json` holds at most 96 entries) | `/variables/<i>/name` of each declaration |
 | `variable_conflict` | the declarations of the name are not byte-identical | `/variables/<i>` of each declaration |
 | `variable_conflict` | an entry of an accepted `goals.json` uses the name for anything but its placement | `/variables/<i>/name` of each declaration |
-| `variable_on_irreversible` (fix round 1) | a package that declares it counts as able to do something irreversible by the whole root: it provides, unmarked, a capability another package of the root marks irreversible, or a remedy of its mappings lists one (the contract crate's `IrreversiblePackages`, the one copy of the rule the goal check holds a placement to; admission refuses `variables` on a package whose own `provides` marks the capability) | `/variables/<i>` of each such package's declaration |
+| `variable_irreversible_by_root` (fix round 1) | a package that declares it counts as able to do something irreversible by the whole root: it provides, unmarked, a capability another package of the root marks irreversible, or a remedy of its mappings lists one (the contract crate's `IrreversiblePackages`, the one copy of the rule the goal check holds a placement to; admission refuses `variables` on a package whose own `provides` marks the capability) | `/variables/<i>` of each such package's declaration |
 | `variable_cap_range` | a package that declares it reads a designated effect's cap from `session.dispatch.parameter.<name>` (`max_repeats: {fact_key}`, which takes a whole number from 0 to 1000), and the variable is of another type than `integer` (fix round 1: a cap is read from an `integer` variable only), or an `integer` whose `min` is below 0 (fix round 1) or whose `max` is above 1000, the first of these | `/variables/<i>/type`, `/variables/<i>/min` or `/variables/<i>/max` of each such package's declaration |
 
 Each problem is one `standard_pack_root_invalid` warning with `game`, `path` (the package's
 `control.json`), `standard_pack_problem` and `json_pointer`, after the composition's warnings and
 before those of `goals.json`. **The root still runs**, and no variable of that name applies (as a
 refused `goals.json` applies no entry): in this slice that is what the warning says, and nothing
-enforces it at run time. The check warns only; `package bundle`, the installer and the Runtime's
-host do not run the root check, and no run reads a variable. The slice that hands values to a
-run (V2) must enforce it in the Runtime, for a conflicting name and for a package irreversible by
-the root alike ("What is built now, and what is not"). A `goals.json` the reader refuses applies
+enforces it at run time. The check warns only, wherever it runs: the installer's `place` runs it
+after every placement and reads its exit code only, so a warning passes its post check;
+`package bundle` and the Runtime's host do not run it; and no run reads a variable. The slice
+that hands values to a run (V2) must enforce it in the Runtime, for a conflicting name and for a
+package irreversible by the root alike ("What is built now, and what is not"). A `goals.json` the reader refuses applies
 no entry, so it takes no name. The root check's four words, like V1's two others
 (`goal_variable_unknown` of the placement and, fix round 1, `variable_undeclared` of the
 installer), are words of the existing vocabulary `standard_pack_problem` under the existing code
@@ -176,7 +184,7 @@ variables: each variable that applies, once, in the root's order, by who wrote i
 values ([standard-pack-schedule.md](standard-pack-schedule.md), "Provenance"). Since fix round 1
 the listing marks as not applying each variable that a package counting as irreversible by the
 whole root declares, which would otherwise read as in effect: `not_applying`
-`[{name, standard_pack_problem: "variable_on_irreversible"}]`, once each in the root's order,
+`[{name, standard_pack_problem: "variable_irreversible_by_root"}]`, once each in the root's order,
 absent when there is none. A name another problem keeps from applying is in neither list (its
 warning says why). A root whose packages declare none answers without the member, byte for byte
 as before. `package bundle` runs no root check of variables.

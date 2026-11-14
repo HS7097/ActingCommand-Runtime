@@ -660,13 +660,13 @@ fn v1_provenance_lists_each_variable_by_its_default_s_origin() {
 // provides `cap_x` unmarked and declares `floor` and `extra`; a remedy of `neutral.blocked` lists
 // `cap_x` and it declares `other`; `neutral.keeps` provides `cap_y` and declares `extra`, as
 // `neutral.provides` does, and `own`. Each variable of the two packages that count is
-// `variable_on_irreversible` at its declaration there and nothing else, `extra` at
+// `variable_irreversible_by_root` at its declaration there and nothing else, `extra` at
 // `neutral.provides` only, and none of them applies in any package: only `own` applies, and the
 // provenance listing marks the three as not applying with the word. A package the judgement was
 // not told of counts as irreversible.
 #[test]
 fn v1_root_check_holds_a_variable_of_a_package_irreversible_by_the_root() {
-    use StandardPackProblem::VariableOnIrreversible;
+    use StandardPackProblem::VariableIrreversibleByRoot;
     let none = BTreeSet::new();
     let read = |provides: &[(&str, bool)], remedies: &[&str]| {
         Some(DeclaredCapabilities {
@@ -711,15 +711,27 @@ fn v1_root_check_holds_a_variable_of_a_package_irreversible_by_the_root() {
     assert_eq!(
         checked.issues,
         [
-            root_issue("neutral.provides", VariableOnIrreversible, "/variables/0"),
-            root_issue("neutral.provides", VariableOnIrreversible, "/variables/1"),
-            root_issue("neutral.blocked", VariableOnIrreversible, "/variables/0"),
+            root_issue(
+                "neutral.provides",
+                VariableIrreversibleByRoot,
+                "/variables/0"
+            ),
+            root_issue(
+                "neutral.provides",
+                VariableIrreversibleByRoot,
+                "/variables/1"
+            ),
+            root_issue(
+                "neutral.blocked",
+                VariableIrreversibleByRoot,
+                "/variables/0"
+            ),
         ]
     );
     assert_eq!(applied(&checked), [("own", vec!["neutral.keeps"])]);
     let not_applying = |name: &str| NotApplyingVariable {
         name: name.to_owned(),
-        standard_pack_problem: VariableOnIrreversible,
+        standard_pack_problem: VariableIrreversibleByRoot,
     };
     let provenance = checked.provenance();
     assert_eq!(
@@ -734,7 +746,7 @@ fn v1_root_check_holds_a_variable_of_a_package_irreversible_by_the_root() {
             ],
         }
     );
-    let word = VariableOnIrreversible.as_str();
+    let word = VariableIrreversibleByRoot.as_str();
     assert_eq!(
         serde_json::to_value(&provenance).expect("the listing"),
         json!({
@@ -756,7 +768,7 @@ fn v1_root_check_holds_a_variable_of_a_package_irreversible_by_the_root() {
         told_nothing.issues,
         [root_issue(
             "neutral.keeps",
-            VariableOnIrreversible,
+            VariableIrreversibleByRoot,
             "/variables/0"
         )]
     );

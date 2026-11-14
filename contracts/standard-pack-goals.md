@@ -7,7 +7,7 @@ is that declaration: where it lives, an entry's members, the five types of versi
 and the fallback rule, defaults, texts and limits, every refusal of its check with its pointer,
 who reads it, its interface revision, and what is not this file's.
 
-**Workflow #463 V1** (Runtime 0.12.60; [v012-register.md](v012-register.md) §1.378;
+**Workflow #463 V1** (Runtime 0.12.61; [v012-register.md](v012-register.md) §1.378;
 [package-variables.md](package-variables.md)) replaced the four types that governed packages
 (`integer`, `choice`, `switch`, `ordered`) by the type `variable`: a package declares the value it
 reads in its own `control.json`, and an entry of this file only places it on the page. The tag
@@ -325,7 +325,7 @@ whose packages declare the variables a placement names declares `package` [14, 1
      irreversible (`variables_on_irreversible`); a package that counts as irreversible only by the
      whole root (it provides such a capability unmarked, or its remedies list one) may declare
      them, and then (Workflow #463 V1 fix round 1) `standard-pack check` reports each of its
-     variables `variable_on_irreversible`, the variable does not apply, and a placement of it is
+     variables `variable_irreversible_by_root`, the variable does not apply, and a placement of it is
      `goal_governs_irreversible` (item 1). In V1 "does not apply" is a warning only: no run reads a
      variable, and the slice that hands values to a run enforces it in the Runtime
      ([package-variables.md](package-variables.md), "What is built now, and what is not").
