@@ -14,10 +14,10 @@
 //!   nothing is unconfirmed; Workflow #403 fences an unconfirmed close), the waiting entry gets
 //!   the instance and its lease end closes the session that must close, under its fenced close
 //!   (`read-session-resource-close.md`, "Device session lifetime"), and the host keeps answering;
-//! - T2 (host 172): a close on the same path that the contract keeps fatal still halts the host:
-//!   a close attempted under a lapsed lease retains failure and owner protection
-//!   (`read-session-resource-close.md`). Since #403 an unconfirmed close of the instance's own
-//!   capture fences the instance instead, so it cannot be this guard.
+//! - T2 (host 172): a close on the same path refused for a reason of the instance's own key.
+//!   Before Workflow #456 the contract kept it fatal and T2 pinned that the host halted; since
+//!   #456 (register §1.363) the refusal of a close under a lapsed lease fences only the
+//!   instance, and T2 pins that instead.
 //!
 //! FLK-07 met the refusal only when a claim happened to arrive during one of its observes; no
 //! test queued one while an observe held the instance. Each test holds the failing capture inside
@@ -27,7 +27,6 @@
 use super::gate_403::{fence_records, status_fence};
 use super::instance_workers::{all_events, phases};
 use super::*;
-use crate::codes::HostLocation;
 use actingcommand_contract::{ResourceQuiescence, RuntimeLifecyclePhase, RuntimePayload};
 use actingcommand_scheduler::ClaimKind;
 use actingcommand_scheduler::codes::SchedulerCode;
@@ -238,16 +237,28 @@ fn a52_t1_a_close_lease_the_queue_refuses_fails_only_the_observe_and_the_next_ho
     host.close().expect("close host");
 }
 
-/// T2 (host 172): a client holds the instance's lease and stops renewing it; the lease runs out
-/// while a failing read-only observe holds the instance, so the sweep cannot end it and the
-/// observe's close reuses it. That close under a lapsed lease is refused `lease_expired` and,
-/// as before, halts the Runtime: the observe's failure is fatal, the Runtime's latched fatal is
-/// that refusal of the resource close, no instance is fenced, and the host's close fails.
+/// T2 (host 172), adapted by Workflow #456 (register §1.363): a client holds the instance's
+/// lease and stops renewing it; the lease runs out while a failing read-only observe holds the
+/// instance, so the sweep cannot end it (its expiry scan is held until the observe has answered)
+/// and the observe's close reuses it. That close under a lapsed lease is refused `lease_expired`
+/// (operation `begin_destructive_resource_close`). Before #456 the refusal halted the Runtime:
+/// the observe's failure was fatal, the latched fatal was that refusal, no instance was fenced
+/// and the host's close failed. Now it fences only the instance: the observe fails as a capture
+/// failure (`capture_failed`, not fatal), nothing is latched, the instance is fenced with
+/// `lease_expired` as its cause, the refusal is recorded once under the observe's request, and
+/// nothing was closed under the lapsed lease. Once the sweep ends the lapsed lease (Workflow
+/// #458: the expiry's own close meets the same lapsed lease and the instance is fenced already),
+/// the session is closed once, under a fenced close, after the lease expired, the Runtime still
+/// runs and the host closes.
 #[test]
-fn a52_t2_a_close_under_a_lapsed_lease_still_halts_the_host() {
+fn a52_t2_a_close_under_a_lapsed_lease_fences_only_its_instance() {
     let root = TempDir::new().expect("tempdir");
     let instance = instance_id();
     let state = Arc::new(FakeState::default());
+    // Every capture close must run under a fenced resource-close step.
+    state
+        .require_fenced_capture_close
+        .store(true, Ordering::Release);
     let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
     let host = start_host(
         instance,
@@ -259,8 +270,11 @@ fn a52_t2_a_close_under_a_lapsed_lease_still_halts_the_host() {
     assert_eq!(opened.state(), RuntimeReceiptState::Completed, "{opened:?}");
     let mut holder = TestClient::connect(&host);
     let (_, token) = holder.acquire(ALIAS);
+    let scan = host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
 
-    let (_, failed, ()) = failing_observe_while(&host, &state, || {
+    let (request, failed, ()) = failing_observe_while(&host, &state, || {
         clock.advance(
             token
                 .expires_at_monotonic_ms()
@@ -270,21 +284,82 @@ fn a52_t2_a_close_under_a_lapsed_lease_still_halts_the_host() {
     });
 
     assert_eq!(failed.state(), RuntimeReceiptState::Failed, "{failed:?}");
+    let projection = failed.error_projection().expect("observe failure");
     assert!(
-        failed.error_projection().expect("observe failure").fatal,
-        "a close under a lapsed lease halts the Runtime: {failed:?}"
+        !projection.fatal,
+        "the Runtime must not halt: {failed:?}; {}",
+        client.host_fatal_context()
     );
-    let fatal = host
-        .fatal_error()
-        .expect("runtime health")
-        .expect("the Runtime halted");
-    assert_eq!(fatal.code(), RuntimeErrorCode::LeaseExpired.as_str());
     assert_eq!(
-        fatal.operation(),
-        HostLocation::BeginDestructiveResourceClose.as_str()
+        projection.code,
+        RuntimeErrorCode::CaptureFailed,
+        "{failed:?}"
     );
-    assert!(fence_records(&all_events(&host)).is_empty());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let lease_expired = RuntimeErrorCode::LeaseExpired.as_str();
+    let fence = status_fence(&host, ALIAS).expect("the instance's fence");
+    assert_eq!(fence.cause.as_str(), lease_expired, "{fence:?}");
+    let events = all_events(&host);
+    let fences = fence_records(&events);
+    assert_eq!(fences.len(), 1, "one fence record: {fences:#?}");
+    let refusals = events
+        .iter()
+        .filter(|event| match event.payload() {
+            EventPayload::Runtime(RuntimePayload::Failed(record)) => {
+                record.outcome().code().as_str() == lease_expired
+                    && event.links().request_id() == Some(&request.request_id())
+            }
+            _ => false,
+        })
+        .count();
+    assert_eq!(
+        refusals, 1,
+        "the refusal is recorded once under the observe"
+    );
+    assert_eq!(
+        state.capture_close_count.load(Ordering::Acquire),
+        0,
+        "nothing was closed under the lapsed lease"
+    );
+    drop(scan);
+
+    host.expire_due_leases_for_test().expect("the sweep's tick");
+
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let events = all_events(&host);
+    let expiries = events
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::LeaseExpired
+                && event.links().lease_id() == Some(&token.lease_id())
+        })
+        .map(PersistedEvent::sequence)
+        .collect::<Vec<_>>();
+    let [expiry] = expiries.as_slice() else {
+        panic!("the lapsed lease expired once: {expiries:?}");
+    };
+    assert_eq!(
+        closes(&events, instance),
+        vec![ResourceQuiescence::Confirmed]
+    );
+    let closed_at = phases(&events)
+        .into_iter()
+        .find_map(|(event, phase)| {
+            matches!(phase, RuntimeLifecyclePhase::ResourceQuiescence { instance_id, .. }
+                if instance_id == instance)
+            .then_some(event.sequence())
+        })
+        .expect("the session's close");
+    assert!(
+        closed_at > *expiry,
+        "the session is closed after the lease expired"
+    );
+    assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+    assert_eq!(
+        state.unfenced_capture_close_count.load(Ordering::Acquire),
+        0
+    );
     drop(holder);
     drop(client);
-    assert!(host.close().is_err());
+    host.close().expect("close host");
 }

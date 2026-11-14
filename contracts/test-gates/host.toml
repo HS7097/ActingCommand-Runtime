@@ -2312,14 +2312,14 @@ tests = [
 ]
 incident = ["#411 A52"]
 
-# #411 A52 (register §1.175): a close on the same capture-failure path that the contract keeps fatal still halts the host: a client lease that ran out while a failing observe held the instance is reused by the observe's close, which is refused lease_expired; the observe's failure is fatal, the latched fatal is that refusal (begin_destructive_resource_close) and no instance is fenced
+# #411 A52 (register §1.175), adapted by Workflow #456 (register §1.363): a close on the same capture-failure path refused for a reason of the instance's own key: a client lease that ran out while a failing observe held the instance (the lease sweep's scan held meanwhile) is reused by the observe's close, which is refused lease_expired (begin_destructive_resource_close); before #456 the observe's failure was fatal and the Runtime latched that refusal; now the observe fails as a capture failure (capture_failed, not fatal), nothing is latched, the instance alone is fenced with lease_expired as its cause (one fence record), the refusal is recorded once under the observe's request and nothing is closed under the lapsed lease; once the sweep ends the lapsed lease (#458) the session is closed once, under a fenced close, after the lease expired, the Runtime runs and the host closes
 [[gate]]
 key = "172"
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-host::lib::tests::gate_411_a52::a52_t2_a_close_under_a_lapsed_lease_still_halts_the_host",
+    "actingcommand-runtime-host::lib::tests::gate_411_a52::a52_t2_a_close_under_a_lapsed_lease_fences_only_its_instance",
 ]
-incident = ["#411 A52"]
+incident = ["#411 A52", "#456"]
 
 # #411 A44 writer (0.12.x; register §1.173; ledger revision 4, the writer of §1.153 LR-8; no code, no configuration key; host key 174 assigned by the coordinator): the host writes the verdicts a page recognition hands it into task.recognition_completed's candidate_scores unchanged; a run whose second of two candidate pages matches stores the fact with both entries in candidate order (the first not passed, with its best score and first failed target; the second passed, with its best score; omitted 0), which passed its own validation when appended and is read back from the ledger; the paired recognition.completed payload is unchanged
 [[gate]]
@@ -3869,3 +3869,15 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_gr2a::gr2a_h7_a_v3_records_view_decodes_through_the_contracts_strict_types_and_passes_validate",
 ]
 incident = ["#455 G-R2a"]
+
+# Workflows #456 and #458 (0.12.60; register §1.363; contracts/read-session-resource-close.md, contracts/device-group.md "Release."): a close of one instance's session refused before it began isolates that instance, on fake devices and a manual Runtime clock, stuck recovery off. X and Y alone on their devices both on the Nemu IPC (the multi-Nemu gate) and LONE alone without a device configuration: X's observation opens its session, a client's lease of X lapses with it open, a Runtime claim of Y lapses while another claim of Y waits; one sweep tick: the Runtime's health stays clean, X alone is fenced with lease_expired as its cause (one fence record naming X), the refusal is recorded once naming X's lease and the stage runtime_lifecycle_session_close, X's lease expires once and X's session is closed once after it under a fenced close, and in the same tick Y's lapsed lease is handed to Y's waiting claim by a transfer; in the next tick Y's lease lapses again and is handed to Y's next claim, the Runtime still running (1); a device group of several A and B: A's Runtime claim holds the device, A's observation under it keeps A's session open, B's claim waits; one sweep tick: health clean, A alone fenced (lease_expired), A's lease expires once, A's session is closed once after that before B's lease.granted, B's claim granted to B by the queue's own grant (requested, queued, admitted, granted, no transfer), the device's log never shows two members' sessions open and A's capture closed under a fenced step (2); a keyless observation of LONE whose capture fails and whose dedicated close lease is refused, in LONE's device's takeover cooldown (lease_cooldown) and by LONE's own startup claim its scheduling pause holds back (lease_busy): the observation fails capture_failed, not fatal, the health is clean, LONE alone is fenced with that refusal as its cause, and the refusal is recorded once under the observation's request naming LONE; the third reason (the lapsed lease the close reuses) is host key 172 (3); with the record of the refused close made to fail (a test-only switch, the ledger's failure) X's lease lapsing with its session open makes the sweep's tick return ledger_failure at fence_instance_resources, fatal and Global, which the resident sweep latches (the test's tick returns it, or the resident tick met the lapse first and the Runtime holds it latched; nothing is waited for), with no instance fenced (4); no refusal, nothing changes: on two hosts of this build with the same instance ids, one with the slices turned off by the test-only switch (close_isolates_off_for_test, under cfg(test) only), LONE's lapsed lease keeps its session at its expiry, X's released lease closes X's session at its release and Y's lapsed lease finds no session at its expiry, and each lease end's records naming its instance are equal record by record by type, severity, instance and whole payload with ids, times, places, an evaluation's seed and the temporary root's base name normalised, every difference named in one failure, no instance fenced (5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close458_a_lease_lapsed_with_its_session_open_fences_only_its_instance_and_the_sweep_goes_on",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close458_a_members_lapsed_lease_hands_the_device_on_only_after_its_session_is_closed",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close456_a_keyless_observations_close_lease_refused_for_its_own_key_fences_only_its_instance",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close458_a_record_that_cannot_be_appended_at_the_expirys_close_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close458_without_a_refusal_every_lease_end_writes_the_records_it_wrote_before",
+]
+incident = ["#456", "#458"]

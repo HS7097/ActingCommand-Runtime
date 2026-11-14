@@ -2461,7 +2461,10 @@ impl HostShared {
     /// session closed under a session close ahead (`close_lapsed_run_session_guarded`), still
     /// under the guard, so no other member's lease begins while it is open: the claim that waits
     /// first is granted afterwards, in its place, by the queue's own grant when the guard's holder
-    /// lets it go. Nothing of this is reached by an instance alone on its device.
+    /// lets it go. Nothing of this is reached by an instance alone on its device. Workflow #458:
+    /// then, for a lease whose close at its expiry met the lapsed lease
+    /// (`fence_expired_lease_close`), the instance's session, closed still under the guard
+    /// (`close_expired_lease_session_guarded`); nothing is owed for any other lease end.
     fn cleanup_token_guarded(
         &self,
         token: &LeaseToken,
@@ -2475,7 +2478,7 @@ impl HostShared {
         if self.lapsed_close_owed_in_group(token)? {
             self.close_lapsed_run_session_guarded(token, admission)?;
         }
-        Ok(())
+        self.close_expired_lease_session_guarded(token, admission)
     }
 
     /// A lease end under the instance's admission guard. Every end except `HostShutdown` hands
@@ -2515,8 +2518,11 @@ impl HostShared {
             | LeaseReleaseReason::ConnectionPrepared
             | LeaseReleaseReason::SessionClosed => None,
         };
-        // Workflow #437 MAPP-1d: no hand-over while a member of several owes its lapsed close.
-        let transfer_reason = if self.lapsed_close_owed_in_group(token)? {
+        // Workflow #437 MAPP-1d: no hand-over while a member of several owes its lapsed close;
+        // Workflow #458: nor the close its expiry's lapsed lease refused.
+        let transfer_reason = if self.lapsed_close_owed_in_group(token)?
+            || self.expired_close_owed_in_group(token)?
+        {
             None
         } else {
             transfer_reason

@@ -2330,6 +2330,11 @@ impl RuntimeHost {
             mapp1c_off_for_test: AtomicBool::new(false),
             #[cfg(test)]
             mapp1d_off_for_test: AtomicBool::new(false),
+            expired_lease_closes: Mutex::new(BTreeSet::new()),
+            #[cfg(test)]
+            close_isolates_off_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            refused_close_record_failure_for_test: AtomicBool::new(false),
             #[cfg(test)]
             monitor_loop_held_for_test: AtomicBool::new(false),
             fact_refresh_bindings,
@@ -6393,6 +6398,18 @@ struct HostShared {
     // before the slice.
     #[cfg(test)]
     mapp1d_off_for_test: AtomicBool,
+    // Workflow #458: the leases whose close at their expiry met the lapsed lease and fenced the
+    // instance, until the lease's end closes the session (`close_expired_lease_session_guarded`).
+    // A leaf lock. Memory only: a restart opens no session it would owe.
+    expired_lease_closes: Mutex<BTreeSet<LeaseId>>,
+    // Workflows #456 and #458, test only: nothing of the two slices applies while set (a refused
+    // close at a lease's expiry or after a capture failure ends the Runtime), as before them.
+    #[cfg(test)]
+    close_isolates_off_for_test: AtomicBool,
+    // Workflows #456 and #458, test only: while set, the record of a refused close that would
+    // fence its instance cannot be appended (the ledger's failure, the Runtime's own).
+    #[cfg(test)]
+    refused_close_record_failure_for_test: AtomicBool,
     // Workflow #437 MAPP-1d, test only: while set the resident monitor loop takes no probe, and a
     // test runs each round itself (`RuntimeHost::run_due_monitor_probe_for_test`).
     #[cfg(test)]
