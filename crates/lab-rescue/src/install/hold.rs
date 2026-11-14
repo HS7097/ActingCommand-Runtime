@@ -39,7 +39,7 @@
 use super::Flags;
 use super::host::Host;
 use super::journal::S0;
-use super::runtime::{ConfigSeen, Drained, PauseSeen, PlanSeen, RuntimeLink, RuntimeSeen};
+use super::runtime::{ConfigSeen, Drained, PauseSeen, PlanSeen, Resumed, RuntimeLink, RuntimeSeen};
 use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
 use actingcommand_contract::SchedulingPauseReason;
 use actingcommand_contract::outcome::{CauseRelation, Outcome};
@@ -410,7 +410,9 @@ impl HoldReport<'_> {
 }
 
 /// A release step's evidence: the hold's reason and what the step did. Workflow #421 INST-5b:
-/// `global_resumed` when it resumed the hold's own global pause (absent otherwise).
+/// `global_resumed` when it resumed the hold's own global pause (absent otherwise). Workflow #453
+/// S3: `held_again`, the instances the Runtime held again instead of resuming them ([`HeldAgain`];
+/// absent when none), which `resumed` does not name.
 #[derive(Serialize)]
 pub(crate) struct ReleaseEvidence<'a> {
     pub(crate) reason: &'a SchedulingPauseReason,
@@ -420,6 +422,8 @@ pub(crate) struct ReleaseEvidence<'a> {
     pub(crate) resumed: Option<&'a [String]>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) global_resumed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) held_again: Option<&'a [HeldAgain]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) handed_back: Option<&'a Value>,
 }
@@ -820,16 +824,33 @@ pub(crate) fn own_global<'a>(
     (&pause.reason == reason && recorded).then_some(pause)
 }
 
+/// Workflow #453 S3 (the coordinator's ruling 4 on board #453): an instance whose pause the release
+/// asked the Runtime to lift and that the Runtime held again instead, as a Runtime with Workflow
+/// #453 S2 answers for an entry that declares `start_paused` and that its start left unapplied
+/// (`contracts/scheduling-pause.md`, "Pauses held at a first start"): its hold's pause is gone and
+/// it stays paused with `instance.added`, as a newly added instance waits for a person's resume.
+/// Recorded as S0 records a pause: the alias, the reason and the revision the Runtime answered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct HeldAgain {
+    pub(crate) alias: String,
+    pub(crate) reason: SchedulingPauseReason,
+    pub(crate) revision: u64,
+}
+
 /// What a release of the rescue module's own hold did: the instances it resumed, and the
 /// instances the hold was to pause that show its reason though its pause step did not pause them,
 /// which are not the module's pauses and are left as they are. Workflow #421 INST-5b: and whether
-/// it resumed the hold's own global pause (`global`, absent when not).
+/// it resumed the hold's own global pause (`global`, absent when not). Workflow #453 S3: and the
+/// instances the Runtime held again instead of resuming them (`held_again`, absent when none),
+/// which `resumed` does not name.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct OwnRelease {
     pub(crate) resumed: Vec<String>,
     pub(crate) left: Vec<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) global: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) held_again: Vec<HeldAgain>,
 }
 
 /// Workflow #434 LAB-3 fix 1 and 2: the release of the rescue module's own hold `reason`, in the
@@ -839,7 +860,9 @@ pub(crate) struct OwnRelease {
 /// though its step did not pause it is left (`left`). No other instance and no other pause, an
 /// instance whose pause shows another reason, a global pause or another party's above all, is
 /// ever touched. Workflow #421 INST-5b: first the hold's own global pause ([`own_global`]), by the
-/// owner epoch and the revision the Runtime shows; no other global pause. A failure as
+/// owner epoch and the revision the Runtime shows; no other global pause. Workflow #453 S3: an
+/// instance the Runtime holds again at its resume ([`Resumed::HeldAgain`]) is recorded in
+/// `held_again` with `instance.added` and the revision it answered, not in `resumed`. A failure as
 /// [`release`]'s.
 pub(crate) fn release_own(
     runtime: &dyn RuntimeLink,
@@ -879,7 +902,7 @@ pub(crate) fn release_own(
             }
             continue;
         }
-        runtime
+        let resumed = runtime
             .resume(
                 state_root,
                 &instance.alias,
@@ -891,7 +914,14 @@ pub(crate) fn release_own(
                     .alias(instance.alias.clone())
                     .joined(CauseRelation::CausedBy, cause)
             })?;
-        released.resumed.push(instance.alias.clone());
+        match resumed {
+            Resumed::Lifted => released.resumed.push(instance.alias.clone()),
+            Resumed::HeldAgain { revision } => released.held_again.push(HeldAgain {
+                alias: instance.alias.clone(),
+                reason: super::instance_add::pause_reason()?,
+                revision,
+            }),
+        }
     }
     Ok(released)
 }

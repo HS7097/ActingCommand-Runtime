@@ -34,7 +34,7 @@ const fn reads(row: &'static str, names: &'static [&'static str]) -> Reads {
 }
 
 /// The rows whose parameters the module reads in its process.
-pub static READ_HERE: [Reads; 19] = [
+pub static READ_HERE: [Reads; 22] = [
     reads("restart", &[]),
     reads("alive", &["wait"]),
     reads("deploy", &["target", "plan", "detach", "dir"]),
@@ -56,7 +56,21 @@ pub static READ_HERE: [Reads; 19] = [
         ],
     ),
     reads("place", &["bundle", "sums", "facts", "plan"]),
+    // Workflow #453 S4: the new root and its state root under names the module does not refuse.
+    reads(
+        "new",
+        &[
+            "new_root",
+            "build",
+            "new_state_root",
+            "mumu_root",
+            "lab_authoring",
+            "watchdog",
+        ],
+    ),
     reads("unlock", &[]),
+    // Workflow #453 S12: the live build's `actingd claim-state-root`, `--new-identity` when given.
+    reads("state-root claim", &["new_identity"]),
     reads("check-config", &["file"]),
     reads("ledger verify", &[]),
     // Workflow #453 S10: the live build's `actingd discover`; the row declares no parameter.
@@ -65,6 +79,8 @@ pub static READ_HERE: [Reads; 19] = [
     // `actingd vision check`, which declares no parameter.
     reads("vision manifest", &["provider"]),
     reads("vision check", &[]),
+    // Workflow #453 S9: the folder the files are placed from.
+    reads("vision place", &["from"]),
     reads("watchdog install", &[]),
     reads("watchdog uninstall", &[]),
     reads("mcp plan", &["entry_protocol", "current_build"]),
@@ -111,6 +127,8 @@ pub static INSTALLER: [Handed; 11] = [
     // The hold's reason is the module's own when the caller names none (`rescue::down`).
     handed("down", &["stop"], &[Part::Root, flag("reason", "--hold")]),
     handed("undo", &["undo"], &[Part::Root, OPERATION, Part::Further]),
+    // Workflow #453 S12 fix round 1: `state_root_installation` is read by the module itself
+    // (`rescue::op_status`), never handed on.
     handed(
         "op status",
         &["status"],
@@ -118,6 +136,7 @@ pub static INSTALLER: [Handed; 11] = [
             Part::Root,
             OPERATION,
             each("check_rollback", "--check-rollback"),
+            Part::Param("state_root_installation", Written::Beside),
             Part::Further,
         ],
     ),

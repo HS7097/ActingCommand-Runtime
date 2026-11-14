@@ -49,6 +49,19 @@ pub(crate) enum StepKind {
     // of the rescue module's `place` (a pack, a table, a root file, or a root file set aside),
     // each `.part` → `.old-<ms>` → in place, as `swap_file` per item.
     PackItem,
+    // Workflow #453 S4 (contracts/install-cli.md, "Fresh root", "Steps"): the rescue module's
+    // `new`: the first configuration written beside the live file as a part, checked by the new
+    // live build's check-config and renamed into place; the state root's folder created, empty;
+    // fix round 1 (the coordinator's ruling after the review of `vision place`): the root's
+    // default vision root `<root>\vision` created, empty, when the template names no root of its
+    // own.
+    WriteConfig,
+    CreateStateRoot,
+    CreateVisionRoot,
+    // Workflow #453 S9: one file of the rescue module's `vision place`, copied from the folder a
+    // person gave to `.part`, a file in its place kept as `.old-<ms>`, the part renamed in, each
+    // checked against the manifest's pin.
+    VisionFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,7 +78,12 @@ pub(crate) enum StepState {
 pub(crate) struct Step {
     pub(crate) n: usize,
     pub(crate) kind: StepKind,
-    /// The path the step changes, relative to the root with `/` separators.
+    /// What the step changes: a program or installer file relative to the root with `/`
+    /// separators (`release stage` reads its own steps' back); the absolute path, in its ordinary
+    /// spelling, of a game root's item (`pack_item`) and (Workflow #453 S9) of a vision root's
+    /// file (`vision_file`), which may lie outside the root; for a step that changes no file of its
+    /// own, the part it acts on (`runtime`, or the vision root of a `vision place`'s
+    /// `post_check`).
     pub(crate) target: String,
     /// What the step is to do, by kind.
     pub(crate) intent: Value,

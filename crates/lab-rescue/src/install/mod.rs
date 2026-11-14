@@ -38,6 +38,8 @@ pub(crate) mod journal;
 pub(crate) mod launch;
 pub(crate) mod lock;
 pub(crate) mod manifest;
+// Workflow #453 S4: the rescue module's `new`, a fresh root with its first configuration.
+pub(crate) mod new;
 // Workflow #434 LAB-5G5b: the rescue module's `mcp config`, the second generation's snippet.
 pub(crate) mod mcp_config;
 // Workflow #421 MCP-ENTRY: `mcp-entry plan|list`; Workflow #434 LAB-5G5b: and the rescue module's
@@ -54,6 +56,8 @@ pub(crate) mod state;
 pub(crate) mod status;
 pub(crate) mod undo;
 pub(crate) mod update;
+// Workflow #453 S9: the rescue module's `vision place`.
+pub(crate) mod vision;
 
 // Test-only: Workflow #421 INST-1, test rows IT-1 to IT-4 (frozen model INST-M §12), and the
 // neutral release fixture they share.
@@ -91,6 +95,11 @@ mod gate_434_lab3;
 // `instance add`.
 #[cfg(test)]
 mod gate_421_inst5;
+// Test-only: Workflow #453 S3, the rescue module's `instance add` while the Runtime is stopped,
+// `config replace` under the same stopped rule, a hand-back the Runtime answers by holding the
+// instance again, and the start after a cold add.
+#[cfg(test)]
+mod gate_453_s3;
 // Test-only: Workflow #434 LAB-5G6, the register's named test of a running MCP server under a
 // deploy.
 #[cfg(test)]
@@ -147,9 +156,19 @@ mod gate_453_s10;
 // host's actingd and Tools.
 #[cfg(test)]
 mod gate_453_s7;
+// Test-only: Workflow #453 S12, the rescue row `state-root claim` and the member `state_root` of
+// `op status`, on the fake host's actingd.
+#[cfg(test)]
+mod gate_453_s12;
 // Test-only: Workflow #454, a post-start check that fails closes its step with what it read.
 #[cfg(test)]
 mod gate_454_postcheck;
+// Test-only: Workflow #453 S4, the rescue row `new` on the release fixture and temporary roots.
+#[cfg(test)]
+mod gate_453_s4;
+// Test-only: Workflow #453 S9, the rescue row `vision place` on the fake host's actingd.
+#[cfg(test)]
+mod gate_453_s9;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
@@ -554,7 +573,10 @@ fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
         | OperationKind::Start
         | OperationKind::ReleaseHold
         | OperationKind::ConfigReplace
-        | OperationKind::PackPlace => update::resume(operation)?,
+        | OperationKind::PackPlace
+        | OperationKind::VisionPlace => update::resume(operation)?,
+        // Workflow #453 S4: the rescue module's `new`.
+        OperationKind::New => new::resume(operation)?,
     };
     Ok(resumed(operation_id, answer))
 }

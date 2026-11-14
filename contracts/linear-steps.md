@@ -331,7 +331,7 @@ beyond its settle, `N` passes under the popup and the run goes on as if no popup
 
 ## Select steps
 
-Workflow #463 K1 (since 0.12.60, [v012-register.md](v012-register.md) §1.366; the coordinator's
+Workflow #463 K1 (since 0.12.60, [v012-register.md](v012-register.md) §1.370; the coordinator's
 rulings on board #463). An operation's effect may be a select step
 ([selection-graph.md](selection-graph.md), "Select step"): instead of a click it chooses one item of
 a list by what its frame shows, by its selection-policy document, and taps it once. Its

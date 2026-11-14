@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #463 K1 (register §1.366; contracts/linear-steps.md, "Select steps"; the design note
+// Workflow #463 K1 (register §1.370; contracts/linear-steps.md, "Select steps"; the design note
 // `rd-1114/463-l3l5-design.md`, section A, and the coordinator's rulings on board #463): a
 // `linear_steps` task admits and runs the select step a page-graph task has. Its attempt is the
 // page graph's: the decision on the step's frame, the confirmation on a fresh frame, one tap inside
