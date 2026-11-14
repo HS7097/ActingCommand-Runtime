@@ -143,8 +143,9 @@ actingcommand_contract::outcome_codes! {
         // Workflow #463 U1: a linear step's retry decision, or the closing decision of a step
         // that declares no retry, saw neither page on a settled screen, a screen the package never
         // recorded (keys `pack_operation_id`, `page_ids`, `attempts`; the host adds
-        // `artifact_id`). Its ladder class is the catalog entry's (register §1.365).
-        ContainedTaskLinearUnrecordedScreen => "contained_task_linear_unrecorded_screen": error / none,
+        // `artifact_id`). The owner's ruling on board #463: the ladder starts at once, by
+        // `pack_logic`, as for `page_confirmation_failed` (register §1.365).
+        ContainedTaskLinearUnrecordedScreen => "contained_task_linear_unrecorded_screen": error / pack_logic_mismatch,
         // Workflow #390 EXEC-2: a declared stability wait ended before its frames held (keys
         // `pack_operation_id`, `timeout_ms`).
         ContainedTaskInputStabilityUnconfirmed => "contained_task_input_stability_unconfirmed": error / pack_logic_mismatch,

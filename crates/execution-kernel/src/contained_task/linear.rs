@@ -692,6 +692,16 @@ fn unrecorded_screen(
     .with_timing(postcondition_timing(elapsed, limit))
 }
 
+/// Workflow #463 U1, closing round: whether `failure` is the task's deadline
+/// (`contained_task_timeout`), as a wait reports it once the deadline has passed.
+fn is_task_deadline<E>(failure: &ContainedTaskRunError<E>) -> bool {
+    matches!(
+        failure,
+        ContainedTaskRunError::Task(error)
+            if error.code().as_str() == ExecutionKernelCode::ContainedTaskTimeout.as_str()
+    )
+}
+
 /// An application step whose next page did not pass (§5.3 h): never retried. Workflow #407
 /// LOAD-4: a wait that ended on the attempt's loading allowance adds its loading values.
 fn application_unconfirmed(
@@ -1667,8 +1677,8 @@ impl PreparedContainedTask {
     /// it only classifies: it never inputs and never goes on with the attempt. Its pages when
     /// neither passed on a settled screen (a screen the package never recorded); `None` for every
     /// other end, the code and detail of the failed wait standing: a page that passes on it, the
-    /// late gate included, a screen not settled or a decision on its loading allowance. A
-    /// deadline inside it ends the run as it ends a retry decision. It is made only where its end
+    /// late gate included, a screen not settled, a decision on its loading allowance, or the task
+    /// deadline cutting it (the run had failed when the wait ended). It is made only where its end
     /// can differ: in a task's own run outside a restart segment, after a wait that did not end
     /// on the attempt's loading allowance, and, with sample consensus, on pages whose recognition
     /// fits the step timeout, as admission requires of a retry decision.
@@ -1703,7 +1713,12 @@ impl PreparedContainedTask {
                 return Ok(None);
             }
         }
-        let decision = self.linear_decision(runtime, (run, loading), &pages, own_page)?;
+        // The closing round's ruling: the run had already failed when the wait ended, so a task
+        // deadline that cuts the decision leaves that failure, its code and its detail.
+        let decision = match self.linear_decision(runtime, (run, loading), &pages, own_page) {
+            Err(failure) if is_task_deadline(&failure) => return Ok(None),
+            decided => decided?,
+        };
         Ok(matches!(
             decision,
             LinearDecision::Neither {

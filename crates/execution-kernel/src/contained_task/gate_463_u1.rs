@@ -18,9 +18,9 @@
 // attempt, and a page that passes on it leaves the run failed as before. Only neither page on a
 // settled screen gives the new code, with the detail, timing and values of that end; the step's
 // own page, an awaited page that shows only then, a screen still changing keep the code and the
-// detail of the failed wait, and the task's deadline inside it ends the run as a deadline inside a
-// retry decision does (`contained_task_timeout`, `task` / `page_recognition`). It makes no input
-// and at most the captures of one retry decision.
+// detail of the failed wait, and so does the task's deadline inside it (closing round: the run
+// had failed when the wait ended). It makes no input and at most the captures of one retry
+// decision.
 //
 // Every expected value comes from those lines and the package values below, never from the code.
 // The runs play scripted frames on the scripted clock (EXEC-I4) at the factor 1000: the device
@@ -40,7 +40,6 @@ use std::path::PathBuf;
 
 const UNRECORDED_SCREEN: &str = ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.as_str();
 const CONFIRMATION_FAILED: &str = ExecutionKernelCode::PageConfirmationFailed.as_str();
-const TASK_TIMEOUT: &str = ExecutionKernelCode::ContainedTaskTimeout.as_str();
 
 const CONFIRMATION_MS: u64 = 1_000;
 const STEP_MS: u64 = 1_000;
@@ -472,25 +471,21 @@ fn u1_without_a_retry_a_screen_still_changing_keeps_page_confirmation_failed() {
     assert_ends_as_the_arrival("a changing screen", result, &runtime);
 }
 
-// Fix round 1: without a retry, the task's deadline 500 ms into the closing decision (a task
-// timeout of 1 500 ms), the dark screen of the raised case. The closing decision counts against
-// the deadline as a retry decision does: the run ends with the task timeout a deadline inside a
-// decision gives (`task` / `page_recognition`, the task timeout as its limit), not with the new
-// code, after one input.
+// Closing round: without a retry, the task's deadline 500 ms into the closing decision (a task
+// timeout of 1 500 ms), the dark screen of the raised case. The run had failed when the arrival
+// ended, and the closing decision only classifies that failure: the deadline that cuts it, before
+// its own budget ends, leaves the end the arrival gave, `page_confirmation_failed` with its detail
+// and timing, neither the new code nor the task timeout, after one input.
 #[test]
-fn u1_without_a_retry_the_task_deadline_inside_the_closing_decision_ends_with_the_task_timeout() {
+fn u1_without_a_retry_the_task_deadline_inside_the_closing_decision_keeps_page_confirmation_failed()
+{
     let (result, runtime) = run_without_retry(vec![plain(DARK)], DEADLINE_TASK_MS);
-    let error = failed("the task's deadline", result);
-    assert_eq!(error.code().as_str(), TASK_TIMEOUT, "{error}");
-    assert_eq!(
-        timing(&error),
-        Some((
-            TaskTimingScope::Task,
-            TaskTimingStage::PageRecognition,
-            DEADLINE_TASK_MS
-        ))
+    assert_ends_as_the_arrival("the task's deadline", result, &runtime);
+    assert!(
+        runtime.captures_after(1) < 42,
+        "the deadline cut the closing decision: {} frames",
+        runtime.captures_after(1)
     );
-    assert_eq!(runtime.inputs().len(), 1);
 }
 
 // Fix round 1: the closing decision makes no input and at most the captures of one retry decision.

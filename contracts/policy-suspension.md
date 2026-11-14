@@ -253,10 +253,13 @@ occurrence, whatever the pair's `on_failure` says:
   layer's the identity names) changed, at the pair's next due evaluation after the lift check's
   interval. No manual lift is added.
 
-Nothing else changes: the instance is neither paused nor fenced, no other pair's admission, order
-or timing moves, the next due pair is dispatched as before (its entry gate does what it did), and
-the code's ladder class `none` starts no stuck-recovery ladder under the default triggers. Every
-other failure code follows `on_failure` exactly as before. No configuration key, ledger event type,
+The code's ladder class is `pack_logic_mismatch` (the owner's ruling on board #463: the ladder
+starts at once), so under the default triggers it starts the stuck-recovery ladder through
+`pack_logic` as `page_confirmation_failed` does; the ladder and the pause are two separate
+consequences, and the order on the instance is the code, the pair's pause, the ladder, then the
+next due pair. Nothing else changes: the pause neither pauses nor fences the instance, no other
+pair's admission, order or timing moves, the next due pair is dispatched as before (its entry gate
+does what it did). Every other failure code follows `on_failure` exactly as before. No configuration key, ledger event type,
 enum value or persisted member is added: the rule is code, as UPD-1's is. A direct run of the
 package fails with the same code and pauses nothing. The pair shows in `actingd suspended` under
 `suspended` (`failure` with the code and its values, `artifact_id` among them, `previous` `null`,

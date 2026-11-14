@@ -144,11 +144,7 @@ Between Runtime modules outcomes always travel full.
   configuration that a run uses and finds wrong is row 3. Rows 3 and 4 part at the screen: a
   condition decided from the declarations alone is row 3, one that needs the screen is row 4.
   A receipt or projection code takes the class of the outcome it projects: `recognition_failed`
-  is `pack_logic_mismatch`, `capture_failed` is `environment_fault`. One code is `none` although
-  row 4 above would fit it: `contained_task_linear_unrecorded_screen` (Workflow #463 U1, register
-  §1.365), because of the owner's order for a task that meets a screen its package never recorded
-  (board #463): the next task goes first, and the return-home package or the ladder only when
-  that one cannot start, so the code itself must start no ladder.
+  is `pack_logic_mismatch`, `capture_failed` is `environment_fault`.
 - **Release files** (compact since Workflow #420 S3): `{schema_version:
   "actingcommand.outcome-codes.release.v2", release, codes: {name: {category, ladder_class,
   review, status, values: {key: {type, required}}}}, locations: {name: {review, status}}}`, one

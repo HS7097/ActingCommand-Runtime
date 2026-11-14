@@ -221,9 +221,8 @@ next step's page (every candidate of "Optional steps" below).
 - Workflow #463 U1, fix round 1 (the coordinator's ruling on board #463): an operation that
   declares no retry makes one **closing decision** before that `StepFinished` when its failed wait
   ends the task with `page_confirmation_failed` (the arrival, the next step's page after a seen
-  intermediate page, or a seen skip target's candidates; not the intermediate page's own code), in
-  a task's own run outside a restart segment, its wait not ended on the attempt's loading
-  allowance. It is the retry decision's wait with the same classification, made at once (no
+  intermediate page, or a seen skip target's candidates; not the intermediate page's own code).
+  It is the retry decision's wait with the same classification, made at once (no
   `retry_interval_ms` before it): for `step_timeout_ms` at the control capture interval, with the
   pack's sample consensus where it declares one and its frames compared by the frame-change
   measure, sharing the attempt's loading allowance, on every page the failed wait awaited, then
@@ -232,15 +231,24 @@ next step's page (every candidate of "Optional steps" below).
   now) leaves the task failed with `page_confirmation_failed` and the detail, values and timing of
   the failed wait, as do a screen still changing and a decision ended on its loading allowance;
   only neither page on a settled screen at its end gives `contained_task_linear_unrecorded_screen`
-  ("Failure codes"). It counts against the task's deadline as a retry decision does: a deadline
-  inside it ends the task with `contained_task_timeout` (`task` / `page_recognition`). It is spent
-  on the failing path only: a failing step that declares no retry can now take up to
-  `step_timeout_ms` longer than before (with sample consensus, each observe-only retry of a
-  sampling timeout opens one more such window, as in a retry decision), and it takes at most the
-  captures of one retry decision. A package with sample consensus whose closing pages'
-  recognition does not fit `step_timeout_ms` (the bound admission checks for a retry decision)
-  makes none. An operation that declares a retry makes no closing decision: after its last
-  attempt, a seen intermediate page or a seen skip target it ends as before.
+  ("Failure codes"). Its time counts against the task's deadline as a retry decision's does, but
+  a deadline that cuts it leaves the end the failed wait gave, `page_confirmation_failed` with its
+  detail (closing round: the run had failed when the wait ended; a deadline inside the retry
+  decision of an operation that declares a retry ends the task `contained_task_timeout`, as
+  before). It is spent on the failing path only: a failing step that declares no retry can now
+  take up to `step_timeout_ms` longer than before (with sample consensus, each observe-only retry
+  of a sampling timeout opens one more such window, as in a retry decision), and it takes at most
+  the captures of one retry decision. It is not made, and the failed wait's end stands, in four
+  cases: a run that is not a task's own run (a prerequisite, return-home, navigation or interrupt
+  layer's, or one the host starts itself: a startup package, a ladder rung); a run inside a
+  restart segment (R25-1, below); a wait that ended on the attempt's loading allowance; and a
+  package with sample consensus whose recognition of the closing pages does not fit
+  `step_timeout_ms` (the bound admission checks for a retry decision). A known limit: "settled"
+  compares the decision's observations frame against frame (with sample consensus, each
+  observation's last frame), so a screen that changes with a period can be judged either way;
+  both results are failures of the run, and they differ only in the code and the pause. An
+  operation that declares a retry makes no closing decision: after its last attempt, a seen
+  intermediate page or a seen skip target it ends as before.
 
 `executed_steps` counts dispatched operations: a retry adds none.
 
@@ -856,21 +864,21 @@ values name the operation (`pack_operation_id`), the pages the decision awaited 
 gate, or for a closing decision the pages the failed wait awaited, first and the step's own page
 last) and the attempts, and the host adds `artifact_id`, the frame of the run's `Failure` pin,
 which is the decision's last frame, on the terminal and the receipt (as #411 A15 does for an
-unconfirmed page-graph step). Known limits: the kernel sees only the restart segments its own
-steps open (a `launch` or `restart` step of the package), not a restart inside a shared interrupt
-handler, so a screen never recorded after such a restart can end with this code where R25-1 would
-count the run in a restart segment; and with sample consensus the measure compares each
-observation's last frame, so a screen that alternates in step with the observation's samples
-compares as settled. That frame is the error point's frame of the run's failed terminal,
+unconfirmed page-graph step). That frame is the error point's frame of the run's failed terminal,
 so frame retention keeps it in the state root's `kept` folder of that error, under the code's
 name, until a person deletes it ([ledger-store.md](ledger-store.md), "Frame classes"). The code's
-ladder class is `none`: no default trigger item names it, so it starts no stuck-recovery ladder,
-where `page_confirmation_failed` (class `pack_logic_mismatch`) starts one through `pack_logic`. A
-scheduled run that ends with it pauses its pair (catalog task, instance) at once
+ladder class is `pack_logic_mismatch` (the owner's ruling on board #463: the ladder starts at
+once), so it starts the stuck-recovery ladder through `pack_logic`, as `page_confirmation_failed`
+does. A scheduled run that ends with it pauses its pair (catalog task, instance) at once
 ([policy-suspension.md](policy-suspension.md), "A failure that pauses at its first occurrence"); a
-direct run pauses nothing. Page-graph packages are unchanged.
+direct run pauses nothing. Page-graph packages are unchanged. Known limits: the kernel sees only
+the restart segments its own steps open (a `launch` or `restart` step of the package), not a
+restart inside a shared interrupt handler, so a screen never recorded after such a restart can end
+with this code where R25-1 would count the run in a restart segment; and a screen that changes
+with a period can be judged settled or not ("Retries", the closing decision).
 
-The new codes are strings; none of them starts the stuck-recovery ladder.
+The new codes are strings; none of them starts the stuck-recovery ladder, except
+`contained_task_linear_unrecorded_screen` (class `pack_logic_mismatch`, above).
 
 A scheduled linear task records its failure as a failure identity built from these codes, the
 step and the detail; which of them can pause the task, the immediate rerun and the lift by a

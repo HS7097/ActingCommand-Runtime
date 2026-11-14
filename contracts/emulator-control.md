@@ -610,7 +610,9 @@ reaches the emulator restart); exclusions `contained_task_prerequisite_*` and
 acceptance ruling 7, in place of M-373 §9.4's proposal): the page list says the run reached its
 entry and the package's own check says it did not, so the Runtime does not know where it is,
 which is the ladder's job, as for `contained_task_page_unknown`; it starts the ladder by
-`pack_logic`.
+`pack_logic`. So does `contained_task_linear_unrecorded_screen` (Workflow #463 U1, class
+`pack_logic_mismatch`, the owner's ruling on board #463), as `page_confirmation_failed` does; its
+scheduled run also pauses its pair ([policy-suspension.md](policy-suspension.md)).
 
 - **Task stage.** A scheduled (policy) contained task run on a physical instance whose
   `task.failed` terminal's outcome code (ledger revision 3; the relayed spelling's `raw_code`
