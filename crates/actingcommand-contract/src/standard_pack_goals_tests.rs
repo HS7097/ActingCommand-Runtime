@@ -33,6 +33,25 @@ fn read(value: &Value) -> Result<StandardPackGoals, Vec<StandardPackRootIssue>> 
     parse_standard_pack_goals(&bytes(value), GAME)
 }
 
+/// Each package of `provides` with what its control declaration provides and no remedy (Workflow
+/// #455 G-R2s fix round 3: the references take each package's declarations whole).
+fn provided(
+    provides: BTreeMap<String, BTreeMap<String, bool>>,
+) -> BTreeMap<String, DeclaredCapabilities> {
+    provides
+        .into_iter()
+        .map(|(package_id, provides)| {
+            (
+                package_id,
+                DeclaredCapabilities {
+                    provides,
+                    remedies: BTreeSet::new(),
+                },
+            )
+        })
+        .collect()
+}
+
 fn issue(problem: StandardPackProblem, pointer: &str) -> StandardPackRootIssue {
     StandardPackRootIssue {
         file: STANDARD_PACK_GOALS_FILE,
@@ -121,10 +140,10 @@ fn goals_neutral_example_reads_to_typed_entries() {
         Some(GoalType::Choice)
     );
     // A root that offers the valued pool and the package holds every reference.
-    let mut references = GoalReferences::new(BTreeMap::from([(
+    let mut references = GoalReferences::new(provided(BTreeMap::from([(
         "neutral.collect".to_owned(),
         BTreeMap::new(),
-    )]));
+    )])));
     references
         .pools
         .insert("pool.neutral.points".to_owned(), true);
@@ -330,10 +349,10 @@ fn goals_each_type_reads_its_members() {
     );
     assert_eq!(goals.tables(), BTreeSet::from(["neutral_members"]));
     // A root that offers every reference holds them all.
-    let mut references = GoalReferences::new(BTreeMap::from([
+    let mut references = GoalReferences::new(provided(BTreeMap::from([
         ("neutral.collect".to_owned(), BTreeMap::new()),
         ("neutral.spend".to_owned(), BTreeMap::new()),
-    ]));
+    ])));
     references
         .pools
         .insert("pool.neutral.points".to_owned(), true);
@@ -502,7 +521,7 @@ fn goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root() {
         ]
     }))
     .unwrap_or_else(|issues| panic!("the declaration reads: {issues:?}"));
-    let mut references = GoalReferences::new(BTreeMap::from([
+    let mut references = GoalReferences::new(provided(BTreeMap::from([
         ("neutral.collect".to_owned(), BTreeMap::new()),
         (
             "neutral.discard".to_owned(),
@@ -515,7 +534,7 @@ fn goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root() {
                 ("cap_reuse".to_owned(), false),
             ]),
         ),
-    ]));
+    ])));
     for package_id in PACKAGES {
         references.rules.insert(
             rule_of(package_id),

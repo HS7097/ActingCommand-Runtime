@@ -232,7 +232,7 @@ Workflow #464 P2 (since 0.12.60), `standard-pack build`'s own codes, in the same
 
 ## `standard-pack build`
 
-Workflow #464 P2 (register [v012-register.md](v012-register.md) §1.369; the coordinator's rulings
+Workflow #464 P2 (register [v012-register.md](v012-register.md) §1.376; the coordinator's rulings
 on board #464, not the owner's words): one operation from a game's working root to the thing an
 installation's placement accepts.
 

@@ -753,12 +753,15 @@ fn compose(
     .unwrap_or_else(|issue| panic!("the root reads: {issue}"))
     .expect("the root holds bundle.json");
     let schedule = serde_json::to_vec_pretty(schedule).expect("schedule bytes");
+    // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+    let irreversible = super::readable_root(&root);
     let games = BTreeMap::from([(
         GAME.to_owned(),
         StandardPackGameFiles {
             schedule: schedule.as_slice(),
             root: &root,
             maintenance: &[],
+            irreversible: &irreversible,
         },
     )]);
     let instances = BTreeMap::from([(
