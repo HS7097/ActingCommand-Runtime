@@ -1216,7 +1216,7 @@ the rescue face:
   `config_unreadable` for a `standard_packs.root` that cannot be listed or a `bundle.json` whose
   kind cannot be read; `pack_invalid` (`game`, `path`) for a game root whose check gives no
   models. Nothing is written, downloaded or placed; placing the files is a later slice's.
-- **`state-root claim [--new-identity]`** (Workflow #453 S12, since 0.12.60; register §1.363;
+- **`state-root claim [--new-identity]`** (Workflow #453 S12, since 0.12.60; register §1.364;
   [state-root-installation.md](state-root-installation.md), "Handing a state root over"; the
   coordinator's rulings on board #453, not the owner's words). `writes`, `irreversible`, `runtime`
   `offline`; no `actingctl install` command. It reads the root's configuration as every row does,

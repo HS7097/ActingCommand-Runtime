@@ -6,7 +6,7 @@ identity by the configuration's salt. Before this slice nothing in a state root 
 installation it belongs to, so a configuration that names another installation's state root
 started on it whenever that installation was not running. Since this slice a Runtime started from
 an installation root records, in the state root, which installation claimed it, and refuses to
-start on another installation's state root. Workflow #453 S12 (Runtime 0.12.60; register §1.363)
+start on another installation's state root. Workflow #453 S12 (Runtime 0.12.60; register §1.364)
 brings the command that hands a state root over to an installation, `actingd claim-state-root`
 ("Handing a state root over"), and its rescue row `state-root claim`.
 
@@ -196,7 +196,7 @@ bytes).
 
 ## Handing a state root over: `actingd claim-state-root`
 
-Workflow #453 S12 (register §1.363). The way out of a refusal when this installation is meant to
+Workflow #453 S12 (register §1.364). The way out of a refusal when this installation is meant to
 own the state root ("When a start is refused" below): what a person did by hand before, set the
 record aside and let this installation claim the state root, done by one command that keeps
 every file it replaces.
