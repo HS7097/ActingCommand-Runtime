@@ -140,9 +140,10 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskErrorPageReached => "contained_task_error_page_reached": error / pack_logic_mismatch,
         ContainedTaskLinearIntermediateUnobserved => "contained_task_linear_intermediate_unobserved": error / pack_logic_mismatch,
         ContainedTaskLinearApplicationUnconfirmed => "contained_task_linear_application_unconfirmed": error / pack_logic_mismatch,
-        // Workflow #463 U1: a linear step's retry decision saw neither page on a settled screen,
-        // a screen the package never recorded (keys `pack_operation_id`, `page_ids`, `attempts`;
-        // the host adds `artifact_id`). Class `none`: no default trigger item starts a ladder.
+        // Workflow #463 U1: a linear step's retry decision, or the closing decision of a step
+        // that declares no retry, saw neither page on a settled screen, a screen the package never
+        // recorded (keys `pack_operation_id`, `page_ids`, `attempts`; the host adds
+        // `artifact_id`). Its ladder class is the catalog entry's (register §1.365).
         ContainedTaskLinearUnrecordedScreen => "contained_task_linear_unrecorded_screen": error / none,
         // Workflow #390 EXEC-2: a declared stability wait ended before its frames held (keys
         // `pack_operation_id`, `timeout_ms`).

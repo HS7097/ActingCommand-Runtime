@@ -30,7 +30,12 @@
 //! Runtime's one frame-change measure and which did not end on its loading allowance, met a
 //! screen the package never recorded. In a task's own run, outside a restart segment, the run
 //! ends with `contained_task_linear_unrecorded_screen` in place of `page_confirmation_failed`,
-//! with the same detail; every other end of a step stays as it was.
+//! with the same detail; every other end of a step stays as it was. Fix round 1 (the
+//! coordinator's ruling on board #463): a step that declares no retry, whose failed wait ends the
+//! run with `page_confirmation_failed`, first makes one closing decision, the retry decision's
+//! wait on the pages it awaited and its own page ([`LinearDecision`], one classification for
+//! both). It never inputs and never goes on with the attempt: only neither page on a settled
+//! screen changes its end, to the new code; every other end is the one it had.
 
 use super::loading::{Charge, FrameRow, LoadingAllowance, LoadingFrame, LoadingLimit};
 use super::observation_window::StillScreen;
@@ -437,7 +442,8 @@ enum LinearWaitPurpose {
     Entry,
     /// The intermediate page or the next step's page, after an input.
     AfterInput,
-    /// The retry decision between the gate and this step's own page.
+    /// The retry decision between the gate and this step's own page; Workflow #463 U1: also the
+    /// closing decision of a step that declares no retry.
     RetryDecision,
 }
 
@@ -516,13 +522,53 @@ struct LinearWaitMiss {
     settled: bool,
 }
 
+/// Workflow #463 U1: what one decision between a step's gate and its own page saw (§5.5), the one
+/// classification of a retry decision and of the closing decision of a step that declares no
+/// retry ([`PreparedContainedTask::linear_decision`]).
+enum LinearDecision {
+    /// A page of the gate passed on this frame: the input took effect.
+    Gate(PageObservation),
+    /// The step's own page passed on this frame: the input was swallowed.
+    OwnPage(PageObservation),
+    /// Neither passed by the decision's end.
+    Neither {
+        /// A screen the package never recorded: the decision's frames were settled, it ended on
+        /// its budget, not on its loading allowance, and the run is a task's own run outside a
+        /// restart segment.
+        unrecorded: bool,
+        /// Workflow #407 LOAD-4: the loading values when it ended on its allowance.
+        loading_limit: Option<LoadingLimit>,
+    },
+}
+
+/// Workflow #463 U1: the pages of a step's decision after a miss of kind `kind` (§5.5), the gate
+/// first and the step's own page `own_page` last. The gate is the intermediate page while it was
+/// not seen, every candidate otherwise (Workflow #339 §3.5): after a seen intermediate page, the
+/// pages the failed wait awaited.
+fn linear_decision_pages<'p>(
+    step: &'p LinearStep,
+    candidates: &LinearCandidates<'p>,
+    kind: LinearMissKind,
+    own_page: &'p str,
+) -> Vec<&'p str> {
+    let mut pages = match (&step.transition, kind) {
+        (Some(LinearTransition::Page { page, .. }), LinearMissKind::Intermediate) => {
+            vec![page.as_str()]
+        }
+        _ => candidates.pages.clone(),
+    };
+    pages.push(own_page);
+    pages
+}
+
 /// Workflow #463 U1: whether the latest two frames of a retry decision's wait that showed none of
 /// its pages are unchanged by the Runtime's one frame-change measure (#411 B12: the whole frame
 /// at the frame-change default, as #411 A43b compares a wait's frames). It reads only frames the
 /// wait captured, so it adds no capture, no recognition and no time to the wait. A wait of
 /// another purpose compares nothing.
 struct SettledScreen {
-    /// Whether the wait compares its frames: only a retry decision's does.
+    /// Whether the wait compares its frames: only a decision's does (a retry decision, or the
+    /// closing decision of a step that declares no retry).
     compares: bool,
     /// The frame-change digest of the wait's latest frame that showed none of its pages.
     previous: Option<ColorDigest>,
@@ -619,14 +665,16 @@ fn page_confirmation_failed(
     .with_timing(postcondition_timing(elapsed, limit))
 }
 
-/// Workflow #463 U1: the retry decision after attempt `attempt` saw none of `pages` (its gate,
-/// then the step's own page) on a settled screen. The detail and the timing are those
-/// `page_confirmation_failed` gives the same end; the values name the operation, the pages and
-/// the attempts, and the host adds the frame of the run's `Failure` pin (`artifact_id`).
+/// Workflow #463 U1: the decision after attempt `attempt` saw none of `pages` (its gate, then the
+/// step's own page) on a settled screen. The detail and the timing are those
+/// `page_confirmation_failed` gives the same end (`intermediate_seen` after a seen intermediate
+/// page, for the closing decision of a step that declares no retry); the values name the
+/// operation, the pages and the attempts, and the host adds the frame of the run's `Failure` pin
+/// (`artifact_id`).
 fn unrecorded_screen(
     operation: &TaskOperation,
     step: &LinearStep,
-    attempt: u32,
+    (attempt, intermediate_seen): (u32, bool),
     awaited: &str,
     pages: &[&str],
     elapsed: Duration,
@@ -638,7 +686,7 @@ fn unrecorded_screen(
         .attempts(attempt);
     ContainedTaskError::with_detail(
         UNRECORDED_SCREEN,
-        confirmation_detail(operation, step, attempt, false, awaited),
+        confirmation_detail(operation, step, attempt, intermediate_seen, awaited),
     )
     .with_values(values)
     .with_timing(postcondition_timing(elapsed, limit))
@@ -1395,7 +1443,33 @@ impl PreparedContainedTask {
                 || miss.skip_target_seen
                 || attempt >= max_attempts
             {
+                // Workflow #463 U1 (fix round 1): a step that declares no retry, whose end here is
+                // `page_confirmation_failed` (not the intermediate page's own code), first closes
+                // with one decision that only classifies that end.
+                let unrecorded = if max_attempts <= 1 && miss.kind != LinearMissKind::Intermediate {
+                    self.linear_closing_decision(
+                        runtime,
+                        (run, &mut loading),
+                        step,
+                        candidates,
+                        &miss,
+                    )?
+                } else {
+                    None
+                };
                 Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
+                if let Some(pages) = unrecorded {
+                    return Err(unrecorded_screen(
+                        operation,
+                        step,
+                        (attempt, miss.kind == LinearMissKind::AfterIntermediate),
+                        &awaited,
+                        &pages,
+                        miss.elapsed,
+                        miss.limit,
+                    )
+                    .into());
+                }
                 return Err(match (miss.kind, &step.transition, miss.loading_limit) {
                     // Workflow #407 LOAD-4 (§5): a wait that ended on the attempt's loading
                     // allowance, the intermediate page's included, is the confirmation's failure
@@ -1436,24 +1510,14 @@ impl PreparedContainedTask {
             };
             self.linear_retry_delay(runtime, run, retry_interval)?;
             let decision_started = budget_now(runtime, pace);
-            let mut decision_pages = match &step.transition {
-                Some(LinearTransition::Page { page, .. }) => vec![page.as_str()],
-                _ => candidates.pages.clone(),
-            };
-            decision_pages.push(own_page.as_str());
+            // Workflow #463 U1: here the miss is the intermediate page's (a page transition) or
+            // the arrival's, so the gate is the intermediate page or every candidate.
+            let decision_pages = linear_decision_pages(step, candidates, miss.kind, own_page);
             // Workflow #407 LOAD-4 (§5): the decision's waits share the attempt's allowance, and a
             // transition frame is never the gate or the step's own page, so no input follows a
             // loading screen.
-            let decided = self.linear_wait(
-                runtime,
-                &decision_pages,
-                run.step_timeout,
-                run.capture_interval,
-                LinearWaitPurpose::RetryDecision,
-                (run, &mut loading),
-            )?;
-            match decided {
-                Ok(frame) if frame.page_label != *own_page => {
+            match self.linear_decision(runtime, (run, &mut loading), &decision_pages, own_page)? {
+                LinearDecision::Gate(frame) => {
                     // The input took effect late: this attempt goes on, without another input.
                     let continued = match &step.transition {
                         Some(LinearTransition::Page { .. }) => self.linear_arrival(
@@ -1522,23 +1586,26 @@ impl PreparedContainedTask {
                         }
                     }
                 }
-                Ok(frame) => {
+                LinearDecision::OwnPage(frame) => {
                     // This step's own page: the input was swallowed; input again on this frame.
                     Self::linear_step_finished(runtime, step_index, operation, &frame.page_label)?;
                     attempt += 1;
                     observation = Some(frame);
                 }
-                Err(missed) => {
+                LinearDecision::Neither {
+                    unrecorded,
+                    loading_limit,
+                } => {
                     Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
                     let elapsed = budget_elapsed_since(runtime, pace, decision_started);
                     // Workflow #463 U1: neither page on a settled screen, the decision's budget
                     // spent (not its loading allowance), in a task's own run outside a restart
                     // segment: a screen the package never recorded. No input follows.
-                    if missed.settled && run.own_task_run && !run.restart_segment {
+                    if unrecorded {
                         return Err(unrecorded_screen(
                             operation,
                             step,
-                            attempt,
+                            (attempt, false),
                             &candidates.awaited(false),
                             &decision_pages,
                             elapsed,
@@ -1555,11 +1622,96 @@ impl PreparedContainedTask {
                         elapsed,
                         run.step_timeout,
                     )
-                    .with_loading_limit(missed.loading_limit)
+                    .with_loading_limit(loading_limit)
                     .into());
                 }
             }
         }
+    }
+
+    /// Workflow #463 U1: one decision of a step between its gate and its own page `own_page`
+    /// (§5.5), `pages` the gate first and `own_page` last ([`linear_decision_pages`]): a wait of
+    /// the step timeout at the capture interval, with no extra round, its sampling and its
+    /// frame-change comparison ([`SettledScreen`]), sharing the attempt's loading allowance. The
+    /// one classification of the retry decision of a step that declares a retry and of the
+    /// closing decision of a step that declares none.
+    fn linear_decision<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        (run, loading): (LinearRun, &mut LoadingAllowance),
+        pages: &[&str],
+        own_page: &str,
+    ) -> Result<LinearDecision, ContainedTaskRunError<R::Error>> {
+        let decided = self.linear_wait(
+            runtime,
+            pages,
+            run.step_timeout,
+            run.capture_interval,
+            LinearWaitPurpose::RetryDecision,
+            (run, loading),
+        )?;
+        Ok(match decided {
+            Ok(frame) if frame.page_label == own_page => LinearDecision::OwnPage(frame),
+            Ok(frame) => LinearDecision::Gate(frame),
+            Err(missed) => LinearDecision::Neither {
+                unrecorded: missed.settled && run.own_task_run && !run.restart_segment,
+                loading_limit: missed.loading_limit,
+            },
+        })
+    }
+
+    /// Workflow #463 U1, fix round 1 (`contracts/linear-steps.md`, "Retries"): the closing
+    /// decision of a step that declares no retry, after its failed wait `miss`, which ends the
+    /// run with `page_confirmation_failed`. It is the decision a retry decision makes
+    /// ([`Self::linear_decision`]) on the pages the wait awaited, then the step's own page, and
+    /// it only classifies: it never inputs and never goes on with the attempt. Its pages when
+    /// neither passed on a settled screen (a screen the package never recorded); `None` for every
+    /// other end, the code and detail of the failed wait standing: a page that passes on it, the
+    /// late gate included, a screen not settled or a decision on its loading allowance. A
+    /// deadline inside it ends the run as it ends a retry decision. It is made only where its end
+    /// can differ: in a task's own run outside a restart segment, after a wait that did not end
+    /// on the attempt's loading allowance, and, with sample consensus, on pages whose recognition
+    /// fits the step timeout, as admission requires of a retry decision.
+    fn linear_closing_decision<'p, R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        (run, loading): (LinearRun, &mut LoadingAllowance),
+        step: &'p LinearStep,
+        candidates: &LinearCandidates<'p>,
+        miss: &LinearMiss,
+    ) -> Result<Option<Vec<&'p str>>, ContainedTaskRunError<R::Error>> {
+        if !run.own_task_run || run.restart_segment || miss.loading_limit.is_some() {
+            return Ok(None);
+        }
+        // An application entry has no page of its own, and admission gives it no click.
+        let LinearFrom::Page(own_page) = &step.from else {
+            return Ok(None);
+        };
+        let pages = linear_decision_pages(step, candidates, miss.kind, own_page);
+        if !self.evaluator.pack().target_consensus.is_empty() {
+            let required_ms = selection::page_recognition_budget_ms(
+                &self.evaluator,
+                &self.detector,
+                Some(pages.as_slice()),
+            )?;
+            let limit_ms = self
+                .control
+                .step_timeout()
+                .milliseconds
+                .min(self.control.task_timeout().milliseconds);
+            if required_ms > limit_ms {
+                return Ok(None);
+            }
+        }
+        let decision = self.linear_decision(runtime, (run, loading), &pages, own_page)?;
+        Ok(matches!(
+            decision,
+            LinearDecision::Neither {
+                unrecorded: true,
+                ..
+            }
+        )
+        .then_some(pages))
     }
 
     /// The guard on the frame that passed this step, then the effect intent and the input

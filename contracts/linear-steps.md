@@ -218,6 +218,29 @@ next step's page (every candidate of "Optional steps" below).
     with `contained_task_linear_unrecorded_screen` when the decision's screen had settled, see
     "Failure codes").
 - With no attempt left, `StepFinished` names `<unrecognized>` and the task fails.
+- Workflow #463 U1, fix round 1 (the coordinator's ruling on board #463): an operation that
+  declares no retry makes one **closing decision** before that `StepFinished` when its failed wait
+  ends the task with `page_confirmation_failed` (the arrival, the next step's page after a seen
+  intermediate page, or a seen skip target's candidates; not the intermediate page's own code), in
+  a task's own run outside a restart segment, its wait not ended on the attempt's loading
+  allowance. It is the retry decision's wait with the same classification, made at once (no
+  `retry_interval_ms` before it): for `step_timeout_ms` at the control capture interval, with the
+  pack's sample consensus where it declares one and its frames compared by the frame-change
+  measure, sharing the attempt's loading allowance, on every page the failed wait awaited, then
+  the step's own page. It only classifies the end: it never inputs and never goes on with the
+  attempt, so a page that passes on it (the step's own page, or an awaited page that shows only
+  now) leaves the task failed with `page_confirmation_failed` and the detail, values and timing of
+  the failed wait, as do a screen still changing and a decision ended on its loading allowance;
+  only neither page on a settled screen at its end gives `contained_task_linear_unrecorded_screen`
+  ("Failure codes"). It counts against the task's deadline as a retry decision does: a deadline
+  inside it ends the task with `contained_task_timeout` (`task` / `page_recognition`). It is spent
+  on the failing path only: a failing step that declares no retry can now take up to
+  `step_timeout_ms` longer than before (with sample consensus, each observe-only retry of a
+  sampling timeout opens one more such window, as in a retry decision), and it takes at most the
+  captures of one retry decision. A package with sample consensus whose closing pages'
+  recognition does not fit `step_timeout_ms` (the bound admission checks for a retry decision)
+  makes none. An operation that declares a retry makes no closing decision: after its last
+  attempt, a seen intermediate page or a seen skip target it ends as before.
 
 `executed_steps` counts dispatched operations: a retry adds none.
 
@@ -777,8 +800,8 @@ starts the stuck-recovery ladder.
 |---|---|---|
 | The first step's page does not pass within `step_timeout_ms`, or (LOAD-4) the entry wait ended on its loading allowance, with the loading values ("Loading pages") | `contained_task_linear_entry_unmatched` | `page_recognition` / `entry_recognition` |
 | The intermediate page is not seen within its timeout, with no attempt left | `contained_task_linear_intermediate_unobserved` | `postcondition` / `postcondition` |
-| The next step's page does not pass in its budget (with no attempt left), the retry decision sees neither page (except on a settled screen, the next row), the next step's page does not follow a seen intermediate page, or no candidate passes within `S + T` after a seen skip target; or (LOAD-4) one of these waits, or the intermediate page's, ended on the attempt's loading allowance, with the loading values ("Loading pages") | `page_confirmation_failed`, detail `transition=none\|page\|window ...` (`intermediate_seen=true` after a seen intermediate page) | `postcondition` / `postcondition`, `limit_ms` the spent budget |
-| Workflow #463 U1 (since 0.12.60): in a task's own run, outside a restart segment, the retry decision sees neither page on a settled screen, its budget spent (not its loading allowance): a screen the package never recorded (below) | `contained_task_linear_unrecorded_screen`, the detail `page_confirmation_failed` gives that end, values `pack_operation_id`, `page_ids`, `attempts` and (from the host) `artifact_id` | `postcondition` / `postcondition`, `limit_ms` the step timeout |
+| The next step's page does not pass in its budget (with no attempt left), the retry decision sees neither page (except on a settled screen, the next row), the next step's page does not follow a seen intermediate page, or no candidate passes within `S + T` after a seen skip target (for an operation that declares no retry, after its closing decision, "Retries", except on a settled screen, the next row); or (LOAD-4) one of these waits, or the intermediate page's, ended on the attempt's loading allowance, with the loading values ("Loading pages") | `page_confirmation_failed`, detail `transition=none\|page\|window ...` (`intermediate_seen=true` after a seen intermediate page) | `postcondition` / `postcondition`, `limit_ms` the spent budget |
+| Workflow #463 U1 (since 0.12.60): in a task's own run, outside a restart segment, the retry decision, or the closing decision of an operation that declares no retry, sees neither page on a settled screen, its budget spent (not its loading allowance): a screen the package never recorded (below) | `contained_task_linear_unrecorded_screen`, the detail `page_confirmation_failed` gives that end, values `pack_operation_id`, `page_ids`, `attempts` and (from the host) `artifact_id` | `postcondition` / `postcondition`: after a retry decision `limit_ms` the step timeout; after a closing decision the timing `page_confirmation_failed` gives the failed wait |
 | After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page; or (LOAD-4) its wait ended on its loading allowance, with the loading values | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
@@ -816,18 +839,29 @@ shared interrupt page or a failed observation starts the comparison afresh; the 
 run (a scheduled run or a direct run of the package, not a prerequisite, return-home, navigation
 or interrupt layer, a startup package or a ladder rung); and the run is not in a restart segment
 (it made no `launch` or `restart` step whose segment no step has closed by arriving on the main
-interface, R25-1). Only the retry decision judges the step's own page after an input, so only a
-step that declares a retry (`--click-retry` in a Lab recording) can end so; every other end above
-keeps its code: the step's own page still shown with no attempt left, a wait that ended on its
-loading allowance, a screen still changing at the decision's end, a missed intermediate page or
-skip target, an application step, the entry, a guard refusal, an input recheck and every gate code.
-The run makes no further input. Its detail is the one `page_confirmation_failed` gives the same end
-(`operation`, `attempts`, `after_page=<unrecognized>`, `hit_error_page=false`, `transition=`,
-`awaited=`), so the failure identity's detail′ keeps its fragments; its values name the operation
-(`pack_operation_id`), the pages the decision awaited (`page_ids`, the gate first and the step's
-own page last) and the attempts, and the host adds `artifact_id`, the frame of the run's `Failure`
-pin, which is the decision's last frame, on the terminal and the receipt (as #411 A15 does for an
-unconfirmed page-graph step). That frame is the error point's frame of the run's failed terminal,
+interface, R25-1). The step's own page is judged after an input by its retry decision and, since
+fix round 1 (the coordinator's ruling on board #463: the owner's requirement is every recorded
+step), by the closing decision of an operation that declares no retry ("Retries"), one
+classification for both: a step with a retry ends so at a retry decision, one without at its
+closing decision, which only classifies and never makes a failure a success. Every other end above
+keeps its code: the step's own page still shown with no attempt left, a page that passes only on a
+closing decision, a wait that ended on its loading allowance, a screen still changing at the
+decision's end, the last attempt of a step that declares a retry and an attempt of it after a seen
+intermediate page or skip target, a missed intermediate page, an application step, the entry, a
+guard refusal, an input recheck and every gate code. The run makes no further input. Its detail
+is the one `page_confirmation_failed` gives the same end (`operation`, `attempts`,
+`after_page=<unrecognized>`, `hit_error_page=false`, `transition=`, `intermediate_seen=true` after
+a seen intermediate page, `awaited=`), so the failure identity's detail′ keeps its fragments; its
+values name the operation (`pack_operation_id`), the pages the decision awaited (`page_ids`, the
+gate, or for a closing decision the pages the failed wait awaited, first and the step's own page
+last) and the attempts, and the host adds `artifact_id`, the frame of the run's `Failure` pin,
+which is the decision's last frame, on the terminal and the receipt (as #411 A15 does for an
+unconfirmed page-graph step). Known limits: the kernel sees only the restart segments its own
+steps open (a `launch` or `restart` step of the package), not a restart inside a shared interrupt
+handler, so a screen never recorded after such a restart can end with this code where R25-1 would
+count the run in a restart segment; and with sample consensus the measure compares each
+observation's last frame, so a screen that alternates in step with the observation's samples
+compares as settled. That frame is the error point's frame of the run's failed terminal,
 so frame retention keeps it in the state root's `kept` folder of that error, under the code's
 name, until a person deletes it ([ledger-store.md](ledger-store.md), "Frame classes"). The code's
 ladder class is `none`: no default trigger item names it, so it starts no stuck-recovery ladder,
@@ -926,7 +960,8 @@ optional steps. They cannot cover:
 - a popup that appears later than its settle after the next page, more often than it was
   recorded, or that was never recorded: the next step judges or clicks on it, and, with a
   popup-sensitive skip target, the run fails loudly; a screen never recorded that the retry
-  decision of a step with a declared retry sees as neither page, settled, ends the run with
+  decision of a step with a declared retry, or the closing decision of a step without one, sees
+  as neither page, settled, ends the run with
   `contained_task_linear_unrecorded_screen` and pauses its task at once (Workflow #463 U1,
   "Failure codes"), and the frame it names is where the missing ending is recorded from;
 - a popup already on the screen before the preceding step's click: it is cleared by a

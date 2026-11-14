@@ -1281,9 +1281,18 @@ fn gate_linear_only_a_swallowed_input_is_retried() {
     assert_eq!(device.inputs(), 1);
     assert_eq!(device.started(), ["0 open neutral/home"]);
     assert_eq!(device.finished(), ["0 open <unrecognized>"]);
+    // Workflow #463 U1, fix round 1 ("Retries"): the operation's one closing decision awaits the
+    // next step's page, then the step's own page, which passes on its first frame; it inputs
+    // nothing and the task fails as above. Every recognition before it awaited the next step's
+    // page alone.
     let awaited = device.recognitions_after_first_input();
+    let Some((closing, arrival)) = awaited.split_last() else {
+        panic!("no recognition after the input");
+    };
+    assert_eq!(*closing, ["neutral/list", "neutral/home"], "{awaited:?}");
+    assert!(!arrival.is_empty(), "{awaited:?}");
     assert!(
-        awaited.iter().all(|pages| *pages == ["neutral/list"]),
+        arrival.iter().all(|pages| *pages == ["neutral/list"]),
         "a retry decision ran: {awaited:?}"
     );
 }

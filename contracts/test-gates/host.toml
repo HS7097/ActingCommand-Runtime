@@ -3906,3 +3906,11 @@ tests = [
     "actingcommand-runtime-config::lib::ladder_tests::u1_the_unrecorded_screen_code_reaches_no_default_trigger_item",
 ]
 incident = ["#463 U1"]
+
+# Workflow #463 U1 fix round 1 (0.12.60; register §1.365, "Fix round 1"; brief rd-1114/brief-1715-fix1.md; contracts/linear-steps.md, "Retries"), the host's half, on the manual clock and a fake device: the same package whose tap declares no retry, run directly on a device instance whose screen after the tap is neither page and unchanged: the step's closing decision ends the run Failed with contained_task_linear_unrecorded_screen after one input, and its terminal and its receipt carry pack_operation_id open, page_ids [neutral/list, neutral/home], attempts 1 and artifact_id, the frame of the run's one Failure pin
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_u1::u1_a_step_without_a_retry_names_the_pinned_frame_of_its_closing_decision",
+]
+incident = ["#463 U1"]

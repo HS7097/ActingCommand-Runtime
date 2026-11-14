@@ -66,6 +66,9 @@ const SAMPLE_BUDGET: &str = ExecutionKernelCode::RecognitionSampleBudgetInsuffic
 const LINEAR_ENTRY_UNMATCHED: &str =
     ExecutionKernelCode::ContainedTaskLinearEntryUnmatched.as_str();
 const LINEAR_NOT_CONFIRMED: &str = ExecutionKernelCode::PageConfirmationFailed.as_str();
+// Workflow #463 U1: the closing decision of a step without a retry on a settled screen.
+const LINEAR_UNRECORDED_SCREEN: &str =
+    ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.as_str();
 
 const HOME: [u8; 3] = [255, 0, 0];
 const NEXT: [u8; 3] = [0, 0, 255];
@@ -704,22 +707,32 @@ fn gate_e3_g3_consensus_not_met_at_the_linear_first_page_ends_with_linear_entry_
 // contracts/linear-steps.md, "Failure codes": the next step's page does not pass in its budget,
 // with no attempt left): after the click the consensus of `next` does not hold (the screen stays
 // on `home`, or `next` shows on one frame of two), so the step is not confirmed.
+//
+// Workflow #463 U1, fix round 1 (contracts/linear-steps.md, "Retries"): the step declares no
+// retry, so its failed wait is followed by one closing decision on `next` and `home`, with the
+// pack's two-frame consensus, which inputs nothing. When the screen stays on `home` it sees the
+// step's own page and the run ends `page_confirmation_failed` as before. When `next` shows on one
+// frame of two, every observation of the decision is a pair of frames in the same order, so the
+// frame each observation hands the frame-change measure (its last) is the same on every
+// observation: the decision sees neither page on a settled screen and the run ends
+// `contained_task_linear_unrecorded_screen`, still after one input.
 #[test]
 fn gate_e3_g3_consensus_not_met_at_the_linear_next_page_ends_with_page_confirmation_failed() {
-    for (case, after_input) in [
-        ("both frames miss", steady(Screen::Home)),
+    for (case, after_input, code) in [
+        (
+            "both frames miss",
+            steady(Screen::Home),
+            LINEAR_NOT_CONFIRMED,
+        ),
         (
             "one frame of two hits",
             alternating(Screen::Blank, Screen::Next),
+            LINEAR_UNRECORDED_SCREEN,
         ),
     ] {
         let mut runtime = ScriptedRuntime::new(vec![steady(Screen::Home), after_input]);
         let error = failure(linear_task(Sampling::TwoFrames).run(&mut runtime));
-        assert_eq!(
-            error.code().as_str(),
-            LINEAR_NOT_CONFIRMED,
-            "{case}: {error:?}"
-        );
+        assert_eq!(error.code().as_str(), code, "{case}: {error:?}");
         assert_eq!(runtime.inputs().len(), 1, "{case}");
     }
     assert_starts_pack_logic(LINEAR_NOT_CONFIRMED);

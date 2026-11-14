@@ -23204,7 +23204,8 @@ the step's own page on every frame and knows whether it ended on its loading all
 `page_confirmation_failed` ends of a step (no attempt left after the arrival, a seen intermediate
 page, a seen skip target, the continued wait after a late gate) evaluate only the candidates, so
 nothing judges the step's own page there: they keep their code, and a step without a declared
-retry (`--click-retry`) never reaches the new code. The measure is `StillScreen::WHOLE_FRAME`
+retry (`--click-retry`) never reaches the new code (until fix round 1 below, which gives such a
+step a closing decision). The measure is `StillScreen::WHOLE_FRAME`
 (`contracts/color-digest.md`, "Frame change") on the frames the decision captured, a
 `SettledScreen` of the decision's wait: no capture, no recognition and no time is added; a loading
 frame, a handled shared interrupt page and a failed observation start it afresh. The ladder's
@@ -23245,13 +23246,70 @@ package lifts the pause; a direct run names the `Failure` pin's frame on its ter
 and pauses nothing; and `ladder_tests.rs`: the code matches no default trigger item while
 `page_confirmation_failed` reaches `pack_logic`. No existing test pins `page_confirmation_failed`
 for the end this slice renames (the linear retry tests end on the gate, the own page or a loading
-allowance); none is adapted, no golden changes, no test leaves the gate map.
+allowance); none is adapted, no golden changes, no test leaves the gate map (fix round 1 below
+adapts three).
+
+**Fix round 1** (the coordinator's ruling on board #463, read in `rd-1114/brief-1715-fix1.md`:
+the owner's requirement is every recorded step). A step that declares no retry, whose failed wait
+ends the run with `page_confirmation_failed` (the arrival, the next page after a seen intermediate
+page, a seen skip target's candidates; not on the attempt's loading allowance), makes one closing
+decision before its `StepFinished`, in a task's own run outside a restart segment: the retry
+decision's own wait (the step timeout at the capture interval, its sampling, its frames for the
+settled comparison, the attempt's allowance), made at once on the pages the failed wait awaited
+and then the step's own page ([linear-steps.md](linear-steps.md), "Retries"). One function,
+`linear_decision`, classifies both decisions (gate, own page, neither and whether unrecorded); the
+retry decision's handling of each is unchanged. The closing decision never inputs and never goes
+on with the attempt: a page that passes on it, a screen not settled or a decision on its loading
+allowance leaves the end, code, detail and timing, as it was; only neither page on a settled
+screen gives the new code, with that end's detail and timing and the values above. A deadline
+inside it ends the run `contained_task_timeout` (`task` / `page_recognition`), as inside a retry
+decision. A failing step without a retry can so take up to the step timeout longer (a window more
+for each observe-only sampling retry) and at most the captures of one retry decision; the success
+path is unchanged. A package with sample consensus whose closing pages' recognition does not fit
+the step timeout makes none (admission checks that bound only for a retry decision). Known
+limits: the kernel sees only the restart segments of its own steps, not a restart inside a shared
+interrupt handler; with sample consensus the measure compares each observation's last frame.
+- **Ladder class.** It stays `none` until the owner chooses between it and `pack_logic_mismatch`
+  (whether the ladder starts at once or the next task goes first). The catalog entry's
+  description no longer names the class, so the change is its `ladder_class` line, its twin in
+  `crates/execution-kernel/src/codes.rs` (`error / none`, which the outcome guard's G1 holds equal
+  to the catalog), the regenerated index, and the expectations of
+  `ladder_tests.rs::u1_the_unrecorded_screen_code_reaches_no_default_trigger_item`; no kernel or
+  host test names the class (the host fixtures run no ladder either way: a fixture simulation is
+  no physical instance and a direct run is exempt by default).
+  [runtime-outcomes.md](runtime-outcomes.md) now says why the code is `none` although row 4 fits.
+- **`performance.calibration.trouble_codes`** names the step codes the pacing self-calibration
+  (PERF §4.5.1, P-a) counts as trouble, a sign that the device is too slow for its pace; nothing
+  in this release reads it yet, and it decides nothing about a pair's pause, which the settlement
+  takes from the terminal's severity. The new code is not on it, since a screen settled on a page
+  the package never recorded is no sign of pace; leaving it out makes no paused pair count as
+  healthy, so the list is unchanged.
+- **Tests.** Kernel `gate_463_u1.rs` (exec gate row "#463 U1 fix round 1"), a step without a
+  retry: a settled screen of neither page (the new code, the arrival's detail and timing, the
+  values, one input); its own page still shown, an awaited page only on the closing decision and
+  a screen still changing (each `page_confirmation_failed` with the arrival's detail and timing,
+  one input); the task's deadline inside the closing decision (`contained_task_timeout`); and the
+  closing decision makes no input and as many captures as the retry decision of the same step
+  with a retry. Host `gate_463_u1.rs` (host gate row "#463 U1 fix round 1"): a direct run of the
+  package without a retry names the `Failure` pin's frame on its terminal and receipt. The PR's
+  own tests of a step with a retry are unchanged. Adapted, because a step without a retry now
+  makes a closing decision: `gate_382_e3::gate_e3_g3_consensus_not_met_at_the_linear_next_page_ends_with_page_confirmation_failed`
+  (it asserted `page_confirmation_failed` for both cases; `next` on one frame of two now ends
+  `contained_task_linear_unrecorded_screen`, every observation's last frame being the same),
+  `gate_e5_linear::gate_linear_only_a_swallowed_input_is_retried` (it asserted that no
+  recognition after the input awaited the step's own page; the last one now is the closing
+  decision's) and `gate_load4::linear_loading_pauses_the_arrival_budget` (it asserted twenty
+  pauses and 22 evaluations under off and shadow; the closing decision adds nineteen pauses until
+  `result` and, under shadow, its evaluations and the stretch's `left`). No golden changes and no
+  test leaves the gate map.
 
 **At deploy.** Installed `linear_steps` packages change behaviour with this version, with no
 change to any package: a run whose step declares a retry and whose retry decision sees a settled
-screen of neither page, which ended `page_confirmation_failed` and started a recovery ladder
-(`pack_logic`), now ends `contained_task_linear_unrecorded_screen`, pauses its pair at the first
-occurrence and starts no ladder; the instance goes on with its other tasks. List paused pairs with
+screen of neither page, or (fix round 1) whose step declares none and whose closing decision sees
+one, which ended `page_confirmation_failed` and started a recovery ladder (`pack_logic`), now ends
+`contained_task_linear_unrecorded_screen`, pauses its pair at the first occurrence and starts no
+ladder; the instance goes on with its other tasks. A failing step without a retry takes up to its
+step timeout longer before the run ends. List paused pairs with
 `actingd suspended` (`suspended[]`: the code in `failure`, its `artifact_id`, `lifts_when`
 `content_hash_changes`) or `ac_diagnose` (its `suspended` rows; `failures_grouped`). A pause lifts
 when the package's content changes (add the ending recorded from the named frame), at the pair's

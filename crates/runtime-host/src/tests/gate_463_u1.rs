@@ -7,7 +7,9 @@
 // `contained_task_linear_unrecorded_screen`. The run's terminal and receipt name the frame of its
 // `Failure` pin (`artifact_id`). A scheduled run that fails so pauses its pair (catalog task,
 // instance) at once, whatever its `on_failure`, with no rerun; a changed package lifts the pause;
-// another pair of the instance is dispatched as before; a direct run pauses nothing.
+// another pair of the instance is dispatched as before; a direct run pauses nothing. Fix round 1:
+// a step that declares no retry reaches the code through its closing decision, and the frame of
+// the run's `Failure` pin is named the same way.
 //
 // The package is a `linear_steps` source package of game `neutral`, server `test`, 2 x 1: one tap
 // `open` from `home` (first pixel red, as the fake device shows it) to `list` (first pixel blue),
@@ -49,6 +51,12 @@ enum AfterTap {
 // Writes the package as a source package directory at `directory`, its taps
 // `retry_interval_ms` apart (another value is other content).
 fn write_package(directory: &Path, retry_interval_ms: u64) {
+    write_package_with(directory, Some(retry_interval_ms));
+}
+
+// Fix round 1: the same package, its tap attempted twice `retry_interval_ms` apart, or, without
+// one, declaring no retry.
+fn write_package_with(directory: &Path, retry_interval_ms: Option<u64>) {
     let control = json!({
         "schema_version": "Lab-1y.control.v2",
         "package_id": "neutral.u1.open",
@@ -67,6 +75,19 @@ fn write_package(directory: &Path, retry_interval_ms: u64) {
                "region": {"mode": "rect", "rect": {"x": 0, "y": 0, "width": 1, "height": 1}},
                "expected": expected})
     };
+    let mut operation = json!({
+        "id": "open",
+        "from": "home",
+        "to": "list",
+        "click": {"kind": "point", "x": 1, "y": 0},
+        "unguarded_trusted_coordinate": true,
+        "expect_after": {"page_id": "list", "timeout_ms": 200}
+    });
+    if let Some(retry_interval_ms) = retry_interval_ms {
+        operation["retryable"] = json!(true);
+        operation["max_attempts"] = json!(2);
+        operation["retry_interval_ms"] = json!(retry_interval_ms);
+    }
     let task = json!({
         "schema_version": "0.9",
         "task_id": "task",
@@ -84,17 +105,7 @@ fn write_package(directory: &Path, retry_interval_ms: u64) {
         "entry_page": "home",
         "target_page": "list",
         "max_steps": 1,
-        "operations": [{
-            "id": "open",
-            "from": "home",
-            "to": "list",
-            "click": {"kind": "point", "x": 1, "y": 0},
-            "unguarded_trusted_coordinate": true,
-            "expect_after": {"page_id": "list", "timeout_ms": 200},
-            "retryable": true,
-            "max_attempts": 2,
-            "retry_interval_ms": retry_interval_ms
-        }]
+        "operations": [operation]
     });
     for (path, value) in [
         ("control.json", control),
@@ -601,5 +612,107 @@ fn u1_a_direct_run_names_the_pinned_frame_and_pauses_nothing() {
     let due = evaluate(&host, &clock, NEXT_OCCURRENCE_UNIX_MS, 61);
     assert!(!due.paused, "nothing pauses the pair");
     assert_eq!(due.dispatched, [TASK]);
+    host.close().expect("close runtime host");
+}
+
+// Fix round 1 (the coordinator's ruling on board #463; contracts/linear-steps.md, "Retries"): the
+// same package whose tap declares no retry, run directly on the device instance. After the tap
+// the device shows the screen of neither page; the arrival runs out and the step's closing
+// decision, on `list` and then `home`, sees neither page on a settled screen: the run ends Failed
+// with the new code after one tap, and its terminal and its receipt carry the kernel's values (the
+// operation, the pages the closing decision awaited, the arrival's page first and the step's own
+// page last, one attempt) and `artifact_id`, the frame of the run's one `Failure` pin.
+#[test]
+fn u1_a_step_without_a_retry_names_the_pinned_frame_of_its_closing_decision() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("u1-open-once");
+    write_package_with(&package, None);
+    let state = device(AfterTap::Unrecorded);
+    // A direct run needs a device instance whose display is observed (Workflow #392 DA-A).
+    state.physical_task_geometry.store(true, Ordering::Release);
+    *state
+        .physical_task_extent
+        .lock()
+        .expect("fake physical task extent") = Some((2, 1));
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock)
+            .with_procedure_manifest(manifest_at(&package)),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let run = runtime_request(
+        &ids,
+        RuntimeOperation::run_contained_task(
+            POLICY_INSTANCE_ALIAS,
+            ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.to_string_lossy().into_owned())
+                .expect("task request"),
+        ),
+    );
+    let receipt = host
+        .process_request_for_test(&run, ConnectionId::new(463).expect("connection"))
+        .expect("run receipt");
+    assert_eq!(receipt.state(), RuntimeReceiptState::Failed, "{receipt:?}");
+    assert_eq!(
+        state.input_count.load(Ordering::Acquire),
+        1,
+        "the closing decision taps nothing"
+    );
+
+    let events = all_events(&host);
+    let failure_frames = events
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Capture(CapturePayload::SummaryCommitted(summary)) => Some(summary),
+            _ => None,
+        })
+        .flat_map(|summary| summary.summary().pinned())
+        .filter(|pin| pin.reason() == PinnedFrameReason::Failure)
+        .filter_map(|pin| pin.artifact())
+        .map(|artifact| serde_json::to_value(artifact.artifact_id).expect("artifact id"))
+        .collect::<Vec<_>>();
+    let [failure_frame] = failure_frames.as_slice() else {
+        panic!("one Failure pin with its frame: {failure_frames:?}");
+    };
+    let terminals = events
+        .iter()
+        .filter(|event| event.event_type() == EventType::TaskFailed)
+        .filter_map(|event| match event.payload() {
+            EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: Some(outcome),
+                    ..
+                } => Some(outcome.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [terminal] = terminals.as_slice() else {
+        panic!("one failed terminal with its outcome: {terminals:?}");
+    };
+    for (carrier, outcome) in [("terminal", terminal), ("receipt", receipt.outcome())] {
+        assert_eq!(outcome.code().as_str(), UNRECORDED_SCREEN, "{carrier}");
+        let value = |key: &str| outcome.value(key).cloned();
+        assert_eq!(value("pack_operation_id"), Some(json!("open")), "{carrier}");
+        assert_eq!(
+            value("page_ids"),
+            Some(json!(["neutral/list", "neutral/home"])),
+            "{carrier}"
+        );
+        assert_eq!(value("attempts"), Some(json!(1)), "{carrier}");
+        assert_eq!(
+            value("artifact_id").as_ref(),
+            Some(failure_frame),
+            "{carrier}"
+        );
+    }
     host.close().expect("close runtime host");
 }
