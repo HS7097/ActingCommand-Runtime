@@ -109,7 +109,8 @@ mod detection;
 mod facts;
 mod forward_projection;
 // #411 A52 (FLK-07's cause; host keys 171, 172), register §1.175: a close lease the instance's
-// queue refuses fails only the capture's work; a close under a lapsed lease still halts the host.
+// queue refuses fails only the capture's work; since Workflow #456 (register §1.364) a close
+// under a lapsed lease fences only its instance.
 mod gate_411_a52;
 // Workflow #411 A3 (R-1, v0.12.1): a routine entry the pause gate holds does not refuse a
 // shutdown.
@@ -241,6 +242,10 @@ mod gate_mapp1c;
 // handed on only after the member's session is closed, and each queued claim judged by its own
 // member's gate.
 mod gate_mapp1d;
+// Workflows #456 and #458 (0.12.60; register §1.364): a close of one instance's session refused
+// before it began, at a lease's expiry or after a keyless observation's capture failure, fences
+// that instance only; the Runtime runs on.
+mod gate_458_close_isolates;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
 // one worker per device, the group's occupancy, pause, gates, session rule and refusals.
 mod gate_mapp1b;

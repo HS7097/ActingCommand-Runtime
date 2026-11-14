@@ -1070,3 +1070,11 @@ test = "actingcommand-runtime-host::lib::tests::gate_mapp2b::mapp2b_known_gap_a_
 ruling = "Workflow #437 MAPP-2d (contracts/device-group.md, \"The switch before a run\", \"The key's time\" and \"Release.\"; the coordinator's work order rd-1114/brief-437-mapp2d.md, board #437)"
 reason = "Replaced, as the test itself said it would be: it pinned MAPP-2b's known gap, a member whose D_s + D_run exceeded the longest lease selected and refused at its admission in every round while the device's other members waited. MAPP-2d ends the gap (no member cannot fit), so the refusal it pinned no longer exists; the work order replaces it by a test that the same member with the same deadlines is dispatched and runs."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_mapp2b::mapp2d_the_member_that_could_not_fit_is_dispatched_and_runs, in the host.toml row of #437 MAPP-2d: the same member with the same deadlines is selected while A waits, granted with no dispatch refusal, runs through its switch and settles a success; its direct run completes."
+
+# host.toml, the row of #411 A52 with key 172.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_411_a52::a52_t2_a_close_under_a_lapsed_lease_still_halts_the_host"
+ruling = "Workflow #456 (contracts/read-session-resource-close.md; the coordinator's work order on board #458, which closes #456; register §1.364)"
+reason = "Renamed: the test pinned that a keyless observation's close under a client lease that lapsed during the observation, refused lease_expired, halts the Runtime (the observation's failure fatal, the latched fatal that refusal, no instance fenced, the host's close failed), as the contract then kept it. #456 makes that refusal fence only the instance, so the halt it pinned no longer exists; the same shape is kept and asserts the new truth."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_411_a52::a52_t2_a_close_under_a_lapsed_lease_fences_only_its_instance, in the same host.toml row (key 172): the same lapsed lease reused by the same failing observation; the observation fails capture_failed, not fatal, the instance alone is fenced with lease_expired, and the session is closed once the sweep ends the lapsed lease."

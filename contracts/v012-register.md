@@ -22936,6 +22936,251 @@ no test leaves the gate map.
 
 **At deploy.** Nothing to do: a device is no longer held after such a failure.
 
+### 1.364 Fixes #456 and #458 (0.12.60): a close of one instance's session refused before it began isolates that instance, at a lease's expiry and after a capture failure (Workflows #456 and #458, both found by reading, never seen on an installation; the rule of board #419, [runtime-outcomes.md](runtime-outcomes.md), "Failure scope"; the coordinator's rulings in the work order on board #458, not the owner's words; coordinator work order `rd-1114/brief-456-458-refused-close-isolates.md`, read on main `e44fecb4`; fix round 1, after an independent review, coordinator work order `rd-1114/brief-1707-fix1.md`; fix round 2, the coordinator's closing round, main `3d9d25e6` merged)
+
+This fix took 1.363, the next free number on main `e44fecb4` (#453 S2 holds §1.362); #1706,
+merged first, took §1.363, and the merge of main `3d9d25e6` renumbered this entry 1.364. Line
+numbers marked *main* are of `e44fecb4`, the others of this
+fix's head.
+
+**The triggers, established by reading (step 1 of the work order).**
+
+*#458.* Every lease end at an expiry goes through `end_lease_device_use` with
+`LeaseDeviceEnd::Expiry` (`host/resource_close.rs:31`, main): the lease sweep
+(`expire_due_leases`, `host/lease.rs:2993` main, → `cleanup_expired_if_guard_free` → the lease end
+under the guard) and an acquire that meets a due lease of its instance (`expire_instance_if_due`,
+`host/lease.rs:3030` main). It closes the session when the session must close (`session_needs_close`:
+its worker stopped or holds its backends after a failure, a close is in progress) or the instance
+does not keep it (`keeps_device_session`, `host/resource_close.rs:114-145` main: two or more
+registered instances whose capture or input backend is `nemu_ipc`, `auto` or `auto-fastest`, this
+one among them; or a member of a device group of several), main `:55-61`. That close asks the
+close's write authority under the lease (`retire_instance_resources`, `begin_resource_close`,
+`host/resource_close.rs:763-775` main), and the scheduler refuses every expired token
+(`validate_active_lease`, `crates/scheduler/src/lib.rs:3161-3163`: `expires_at <= now` is
+`lease_expired`), while the sweep and the acquire end only due tokens: **at an expiry a close that
+must be made is refused every time; nothing needs to be queued or held.** The refusal is a poison
+(fatal, Global); only a run's lease in its end phase took #411 A64's fence (`close_lease_lapsed`,
+`:355`); every other one returned to the sweep, which latched it (`host.rs:7050-7052` main), or to
+the acquire's door, which contains an untagged fatal as Global. So **an installation whose instances
+are each alone on their device reaches it today** whenever (a) two or more of its instances name
+`nemu_ipc`, `auto` or `auto-fastest` for capture or input and (b) a lease of one of them that is not
+a run's in its end phase lapses with that instance's session open; and, whatever the backends,
+when (b) meets a session that needs its close (its worker stopped or retained its backends after an
+application-lifecycle failure or a lost geometry reply). The two readings of the work order agree on
+(a): the review's "two or more instances on the native capture" and the implementer's "an instance
+outside that gate" (outside the gate means one that does not keep its session) name the same
+instances; they differed on whether it was a defect. The contract kept it in words ("only a session
+that must close fails as before"); no gate test drove it (the lapse tests run on instances that keep
+their session, `gate_411_a64.rs`'s header says so), and the existing test that pinned the same
+fatal of a close under a lapsed lease is #411 A52's T2 (host key 172), on the capture path below.
+
+| Lease kind (who takes it) | Can lapse with the session open? | What refuses its close at the expiry |
+|---|---|---|
+| A client's lease (`AcquireLease`, `QueueLease`: a CLI or MCP agent, a Lab session's held lease) | yes: the holder stops renewing while its connection stays | `lease_expired`, the lapsed token (`begin_resource_close`) |
+| A Lab operation's immediate lease | yes, if its work outlasts the lease between device steps | the same |
+| A direct run outside its end phase, a policy dispatch's run outside it | only when the run does not reach its deadline's end phase before the reserve runs out (the run renews at its deadline; inside a device step the sweep waits for the guard) | the same |
+| A run in its end phase past its end grace | yes | the same; #411 A64's fence, unchanged |
+| An operator's claim (`SelfCheck`, `ResumeReconnect`, `EmulatorControl`, `BackendSwitch`, `InputLifecycle`) | yes, if the holder's work outlasts the claim's lease between device steps | the same |
+| The Runtime's own claims (a recovery ladder and its continuation, a startup package, an autostart, a fence's recheck) | the same | the same |
+| A dedicated lease (a preparation's, a close lease kept after an unconfirmed close, a session close ahead) | a kept close lease does; its instance's unconfirmed close was fenced and forgotten, so the expiry finds no session and closes nothing | none |
+| The monitor's probe and a keyless observation | they take no lease; their capture failure is #456's | — |
+
+Every kind ends through the same code (`cleanup_token_guarded` → `end_lease_ordered` →
+`end_lease_device_use`), so one cure covers them.
+
+*#456.* `finish_capture_failure_while_guarded` (`host/resource_close.rs:1100-1162` main; a keyless
+observation, the monitor's probe, a contained run's capture) closes the session through
+`close_retained_instance_while_guarded` (`:978`, reusing a lease the instance holds). After MAPP-1c
+(§1.350), whose session close ahead serves only members of a group of several, these errors are
+left that are not the queue's refusal (`close_lease_refused_by_queue`, `lease_transfer_not_safe`):
+(1) the dedicated close lease refused by the device's takeover cooldown (`lease_cooldown`,
+`prepare_acquire_with_policy`, `crates/scheduler/src/lib.rs:1289-1292`), an instance alone, in the
+start after an unclean end; (2) the dedicated close lease refused as a queue ahead (`lease_busy`,
+`:1311-1312`): the instance's own routine claim waits in its queue held back by its own routine gate
+(a scheduling pause, a fence, a blackout), which `refusing_count_of` does not count but
+`prepare_acquire_with_policy` judges with an open gate, an instance alone, outside any cooldown;
+(3) a reused lease that lapsed during the capture (`lease_expired` at `begin_resource_close`;
+#411 A52's T2); (4) `lease_busy` or `lease_expired` of another member's lease holding the device
+(MAPP-1d refuses the observation first, so not reached); and the Runtime's own: the instance
+missing from the registry, an identifier that cannot be minted, a record that cannot be appended,
+a poisoned lock, the owner's journal, the dedicated lease's release. (1) to (4) are one instance's;
+the rest the Runtime's. The input failure's cleanup just above (`finish_input_failure`, `:1046-1098`
+main) has the same shape: its close under the input's own lease is refused `lease_expired` when that
+lease lapsed during the failed input (one instance's), and the rest are the Runtime's own; the work
+order's cure names the expiry and the capture failure only, so it is unchanged (below).
+
+**Which failures stay fatal.** At the two `fatal.mark`s that see these errors: the sweep's
+(`host.rs:7099`, since fix round 1 with every error made fatal first, below) still latches every
+error of the expiry that is not a refused close (a record, a lock, the owner's journal, an
+invariant of the scheduler: an instance, holder or connection mismatch, a stale epoch) and every
+refusal met during shutdown or where no fence may take the instance;
+`finish_capture_failure_while_guarded`'s (`host/resource_close.rs:1349`) still marks the Runtime's
+own failures listed above, every refusal during shutdown, and a scheduler refusal outside
+`close_refused_for_instance`. A fence whose record cannot be appended is returned as the ledger's
+failure (Global). `finish_input_failure`'s `fatal.mark` (`:1268`) is not touched.
+
+**The cure.**
+
+| Part | Where |
+|---|---|
+| The refusal at an expiry | `close_instance_resources` (`host/resource_close.rs:299`) takes the lease end's kind; after A64's branch, unchanged and first, a refusal of an `Expiry` end that `expiry_close_refused` (`:467`) names (`lease_expired` at `begin_destructive_resource_close`, not during shutdown) goes to `fence_expired_lease_close` (`:482`): the refusal is recorded once per lease (it names the lease; stage `runtime_lifecycle_session_close`), the instance is fenced with it as an unconfirmed close of that instance (`fence_refused_close`, `:503`, through `settle_unconfirmed_resources`, Workflow #403), the close is owed (`HostShared::expired_lease_closes`, memory only, a leaf lock) and the lease end goes on |
+| The owed close | `cleanup_token_guarded` (`host/lease.rs:2480`) ends with `close_expired_lease_session_guarded` (`host/resource_close.rs:551`), still under the instance's admission guard: nothing during shutdown or when a holder took the key on; otherwise the session close ahead, for an instance alone and for a member of several alike (fix round 1), which no waiting claim refuses and which hands the device to no one when it ends; a refusal that is not fatal is recorded once and leaves the session to a preparation of the fenced instance; a fatal failure is returned |
+| No hand-over with the session open | `end_lease_ordered` names no transfer while `expired_close_owed` (`host/resource_close.rs:595`, `host/lease.rs:2538`) holds, for any instance whose expiry's close is owed (fix round 1: before, only for a member of several), as MAPP-1d does for a member's A64 close; the claim that waits first is granted after the close by the queue's own grant when the guard is let go |
+| The capture failure | `finish_capture_failure_while_guarded`: a refusal `close_refused_for_instance` (`:2070`) names, not during shutdown, is recorded and fences the instance (`fence_refused_close`); the capture failure is answered as every capture failure is |
+
+The fence is #403's own: the causes are the refusals' existing codes (`lease_expired`,
+`lease_cooldown`, `lease_busy`), the records are `runtime.failed` with stage
+`runtime_lifecycle_session_close` and `instance_resources_fenced`, a fence met by manual work (a
+client's lease, a Lab operation, a direct run, an input command) waits for a person at once and
+others go to a ladder or a person; only a preparation whose self-check passes lifts it. The owner is
+not retained: while a fence holds, the owner's resources stay `in_use`. **The device is not handed
+on with the session open:** the expiry names no transfer and the session close ahead runs before
+the device's admission guard is let go, so the claim that waits first, of the same instance or of
+another member, is granted afterwards by the queue's own grant (as MAPP-1d's lapsed run lease of a
+member). An unconfirmed close there keeps its close lease for that lease's time only: the open item
+"an unconfirmed close of one member must keep the device from the other members" stays in
+[device-group.md](device-group.md), "Release.". **What closes the session** in each case: the owed
+close right after the lease ended; when its close lease is refused (not fatally), a preparation of
+the fenced instance; and in every case any preparation of the fenced instance (its ladder, the
+fence's recheck, a person's self-check or resume), which closes a kept session before it opens.
+
+**Fix round 1 (the independent review; coordinator work order `rd-1114/brief-1707-fix1.md`).**
+(1) An instance alone on its device still stopped whole when a claim of its own waited behind its
+lapsed lease and the routine hold did not stop it (a person's self-check, a client's or Lab
+operation's lease, a direct run): the expiry handed the key on, the transfer's own lease end
+(`perform_transfer`, `end_lease_device_use` with `Keep`, `host/lease.rs:1025`) closed again under
+the lapsed token, the scheduler refused it `lease_expired`, the branch above recognises only an
+`Expiry` end, and the sweep latched the refusal. Of the work order's two cures this round takes the
+second: an instance alone closes first and hands on afterwards, as a member does (`expired_close_owed`
+for any instance, and the session close ahead for every owed close). The first (the `Keep` call
+answering `Ok` for an owed lease, as A64's does) would hand the device to the instance's waiting
+claim with the session the lapsed lease left open, which for an instance on the multi-Nemu gate is
+a Nemu session kept across a lease end, exactly what the gate forbids; the second closes it before
+any grant and is one rule for every instance. (2) #411 A64's owed close, refused by a queue ahead
+whose claim the fenced instance's gate holds back (`lease_busy`), reached the sweep as a failure that
+is not fatal; the sweep's fatal mark refuses such a failure (`nonfatal_error_marked_fatal`) and
+the sweep's thread ended with nothing latched, so no lease lapsed, no fence was handed on or
+rechecked and the idle checks stopped while the health read normal. A64's arm now takes every
+refusal of its dedicated close lease that is not fatal as it took the queue's (recorded once, the
+session left to the waiting entry or a preparation; `host/resource_close.rs:702`); its successful
+close and a failure of the Runtime itself are unchanged. The general hole: the sweep's expiry step
+handed its error to the fatal mark as it was, where the steps before it convert theirs; it now
+converts it too (`into_fatal`, `host.rs:7099`), so no error of that step ends the thread without the
+health saying so. Two races that made such an error out of a lease a holder had ended meanwhile (a
+disconnect between the scan and the expiry) are skipped: the scan's read of the lease's connection
+(`host/lease.rs:3039`, since fix round 2 only when the scheduler holds the token no more) and the
+guarded expiry's check that the lease is still held (`:2407`). Errors
+that can still reach that mark, each now latched loudly: the Runtime's own (a record, a lock, the
+owner's journal, an identifier), a scheduler refusal of the lapsed lease's own end that is not one
+of those races (an invariant of the scheduler: an instance, holder or connection mismatch, a stale
+epoch, the `scheduler_cleanup_state_mismatch` of a lease the scheduler still holds), and a fatal
+failure of an owed close. (3) The comparison test's text, the order of the first test, the second
+tick's clock, the row 7 citation and the left items, below.
+
+**Fix round 2 (the review of fix round 1, "can merge"; the coordinator's closing round).** Main
+`3d9d25e6` (#1706, §1.363) merged into the branch, which renumbered this entry 1.364; it conflicted
+in the register only (`host.rs`, `codes.rs` and the host gate map merged by themselves), and
+`host/contained_task.rs`, which #1706 changed, is no file of this fix. (a) The same silent hole in the sweep's other steps: the drain's queue cancel, the agent
+sessions' expiry, the device links' timers and the idle check handed their error to the fatal mark
+as it was, so one that was not fatal ended the thread with nothing latched; they convert it now as
+the expiry step does, and so do the tick's two reads before them (`begin_continuation`,
+`lifecycle_draining`, which returned their error from the thread with no mark at all), so no step
+of the tick ends the thread without the Runtime's health saying so (`host.rs:7048-7124`). What
+reaches those marks is, by reading, the Runtime's own failures (a record, a lock, the clock, an
+identifier, the agent dispatcher's store), which were fatal already: the device links' timers and
+the idle check contain one instance's failure themselves and return only the Runtime's; any error
+that is not fatal and still reaches a mark now latches instead of ending the thread unseen. (b) The
+skip of the scan's connection read: it skipped whenever the read reported the lease missing or
+mismatched, so a lease whose location the scheduler lost while it still held its token would have
+been skipped at every tick and never lapsed; it now skips only when the scheduler holds the token
+no more, and a token it still holds is an error, which the sweep makes fatal. (c) The test
+fixture closes its host before it drops the host's temporary state root (`close_host`), as the
+A64 and MAPP-1d gates do; before, the root was dropped first.
+
+**Fix round 3 (the first CI run of fix rounds 1 and 2, run 43558842328, red on `light` and
+`host-lab`).** No product code changes. `gate_tests_are_deterministic` refused the gate file's
+bounded wait named `WAIT` (a gate file's `recv_timeout` takes only `GATE_WAIT`): the constant is
+renamed. `close458_a64s_owed_close_refused_by_a_held_claim_leaves_the_sweep_running` passed every
+assertion of the fix (no error from the tick, the refusal recorded, the health clean, the sweep's
+thread running, another instance's lease ended, the self-check's close of the session) and failed
+on the fence's lift after the person's self-check: on these Nemu-configured fakes that self-check
+does not pass, so the fence stays (its cause not established by reading). The lift is the fence's
+own mechanism, not this fix's; the test no longer asserts it nor the held claim's grant after it,
+and ends with the host closed without asserting how.
+
+**Tests.** `crates/runtime-host/src/tests/gate_458_close_isolates.rs` (gate map `host.toml`, "#456
+and #458"), on fake devices and a manual Runtime clock with stuck recovery off:
+`close458_a_lease_lapsed_with_its_session_open_fences_only_its_instance_and_the_sweep_goes_on` (two
+instances on the Nemu IPC; a client's lease and a Runtime claim stand for every kind, which share
+the sweep's path; fix round 1: the fenced instance's id is the smaller, so the scan meets it
+first and the other instance's expiry in the same tick follows it, and the next tick moves the
+clock only past a claim's time, short of the fence's recheck, asserting nothing of the fenced
+instance runs),
+`close458_an_instance_alones_lapsed_lease_closes_its_session_before_its_own_waiting_claim` (fix
+round 1: a self-check's claim, then a direct run's, queued behind the lapsed lease of the same
+instance),
+`close458_a64s_owed_close_refused_by_a_held_claim_leaves_the_sweep_running` (fix round 1: a direct
+run's lease lapsing in its end phase with a startup claim queued behind it; the tick returns no
+error, the refusal `lease_busy` is recorded, the sweep's thread still runs and a later tick ends
+another instance's lapsed lease; a person's self-check then closes the session in its
+preparation; fix round 3: whether that self-check passes and lifts the fence is the fixture's, and
+on these Nemu-configured fakes it does not, CI run 43558842328, so the lift and the startup claim's
+grant the first version asserted are no longer asserted),
+`close458_a_members_lapsed_lease_hands_the_device_on_only_after_its_session_is_closed`,
+`close456_a_keyless_observations_close_lease_refused_for_its_own_key_fences_only_its_instance`
+(the cooldown and the held claim),
+`close458_a_record_that_cannot_be_appended_at_the_expirys_close_still_stops_the_runtime` (a
+test-only switch makes the fence's record fail; the sweep's tick returns `ledger_failure`, fatal
+and Global, which the resident sweep latches) and
+`close458_without_a_refusal_every_lease_end_writes_the_records_it_wrote_before`. Adapted because
+the requirement changes what it pins: #411 A52's T2 (host key 172), renamed
+`a52_t2_a_close_under_a_lapsed_lease_fences_only_its_instance` (`ci/retired-gates.toml` lists the
+old name): it asserted that the observation's close under the lapsed client lease halted the
+Runtime (the observation's failure fatal, the latched `lease_expired` at
+`begin_destructive_resource_close`, no fence, the host's close failed); it now asserts the
+capture failure, the fence and, once the sweep ends the lapsed lease, the session's close.
+**What the comparison proves, and what rests on reading** (corrected in fix round 1). It compares
+two hosts of this build, one with the test-only switch `close_isolates_off_for_test` (under
+`cfg(test)` only) set, which turns off the two entries the fixes add (the branch in
+`close_instance_resources` and the one in `finish_capture_failure_while_guarded`). None of the
+three compared lease ends (an expiry that keeps the session, a release that closes it, an expiry
+that finds nothing open) meets a refused close, so neither guarded entry is reached on either
+host, and the additions that run on every lease end (the owed set's two reads, the scan's two
+skips of a lease a holder ended meanwhile) run on both hosts alike. So the test proves little: that
+these three lease ends write the same records on this build with and without the entries, and
+that the additions write no record there. **That nothing changes against main when no close is
+refused rests on reading the diff**: outside the two entries the change is the lease end's kind
+passed to `close_instance_resources`, the owed set's reads (empty unless an entry was reached),
+the two skips of a lease already ended (which end nothing that main would have ended: main's
+path then met a missing lease and returned an error), the A64 arm that takes a refusal that is not
+fatal (reached only by a refusal) and the sweep's conversion (reached only by an error). No lease
+end at an expiry closes a session without a refusal (the refusal above is certain), so "an expiry
+whose session closes" exists only through A64 or these fixes.
+
+**What is left (reported, not fixed here; each gets a board issue of its own).** A holder's own end
+that meets its lapsed lease before the sweep (a disconnect, `cleanup_connection` →
+`cleanup_token(Disconnect)` → `end_lease_device_use(Keep)`) is refused the same way and keeps its
+fatality: the work order's cure names the expiry. `finish_input_failure`'s close under an input's
+lease that lapsed during the failed input keeps its fatality. An installation whose instances are
+each alone on their device can reach both, under the condition of #458 above (two or more
+instances on the native capture, or a session that needs its close). The third item this entry
+first left here, #411 A64's owed close refused `lease_busy` ending the sweep's thread unseen, is
+fixed in fix round 1 above.
+
+**What is not added.** No outcome code, value key, word, configuration key, record type, payload
+member, fact, wire shape or interface revision.
+
+**At deploy.** Nothing to do. What an operator sees when it happens: the Runtime keeps running;
+the instance's row in the overview and `Status` shows its resource fence with the refusal's code as
+its cause (`lease_expired` at a lease's expiry or after a capture under a lapsed lease;
+`lease_cooldown` or `lease_busy` after a capture failure), waiting for a person (manual work) or
+handed to a ladder; the ledger holds the refusal's `runtime.failed` record (stage
+`runtime_lifecycle_session_close`, naming the lease at an expiry) and `instance_resources_fenced`; a
+self-check, a resume or the fence's recheck lifts it.
+
+**Rollback** (below 0.12.60). Nothing is persisted by the fixes; a build before them reads every
+record they write, and halts again where they fence.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

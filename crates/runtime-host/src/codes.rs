@@ -2736,6 +2736,10 @@ pub(crate) mod test_spellings {
             HoldMonitorLoopForTest => "hold_monitor_loop_for_test",
             RunDueMonitorProbeForTest => "run_due_monitor_probe_for_test",
             LiftInstancePauseForTest => "lift_instance_pause_for_test",
+            // Workflows #456 and #458: a test turns the two slices off, and makes the record of a
+            // refused close fail.
+            CloseIsolatesOffForTest => "close_isolates_off_for_test",
+            FailRefusedCloseRecordForTest => "fail_refused_close_record_for_test",
             // #411 A51: a test latches a condition in the Runtime's fatal state.
             MarkRuntimeFatalForTest => "mark_runtime_fatal_for_test",
             ObserveShutdownSettleForTest => "observe_shutdown_settle_for_test",
