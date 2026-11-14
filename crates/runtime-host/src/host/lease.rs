@@ -2404,6 +2404,16 @@ impl HostShared {
         let Some(admission) = self.try_lock_admission(&instance_guard, token.instance_id())? else {
             return Ok(false);
         };
+        // Workflow #458 fix round 1: a holder's own end (a disconnect) that took the guard between
+        // the scan and here has ended the lease already; nothing of it is left to expire, and the
+        // next scan no longer lists it.
+        if !lock(&self.scheduler, HostLocation::CheckCleanupLease)?
+            .active_tokens()
+            .into_iter()
+            .any(|active| active == *token)
+        {
+            return Ok(false);
+        }
         // ISO-5a (#419, ISO-M row B02): a write still in flight on the lease (an input writes
         // without the admission guard) is a device step too: the expiry closes nothing under it
         // and is retried at the next tick, once per tick and without a record, until the write
@@ -2463,8 +2473,10 @@ impl HostShared {
     /// first is granted afterwards, in its place, by the queue's own grant when the guard's holder
     /// lets it go. Nothing of this is reached by an instance alone on its device. Workflow #458:
     /// then, for a lease whose close at its expiry met the lapsed lease
-    /// (`fence_expired_lease_close`), the instance's session, closed still under the guard
-    /// (`close_expired_lease_session_guarded`); nothing is owed for any other lease end.
+    /// (`fence_expired_lease_close`; that end handed the device to no one, whatever instance it
+    /// serves), the instance's session, closed still under the guard under a session close ahead
+    /// (`close_expired_lease_session_guarded`), before the claim that waits first is granted;
+    /// nothing is owed for any other lease end.
     fn cleanup_token_guarded(
         &self,
         token: &LeaseToken,
@@ -2519,14 +2531,15 @@ impl HostShared {
             | LeaseReleaseReason::SessionClosed => None,
         };
         // Workflow #437 MAPP-1d: no hand-over while a member of several owes its lapsed close;
-        // Workflow #458: nor the close its expiry's lapsed lease refused.
-        let transfer_reason = if self.lapsed_close_owed_in_group(token)?
-            || self.expired_close_owed_in_group(token)?
-        {
-            None
-        } else {
-            transfer_reason
-        };
+        // Workflow #458: nor while any instance owes the close its expiry's lapsed lease refused
+        // (fix round 1: an instance alone too, whose transfer would close again under the lapsed
+        // lease).
+        let transfer_reason =
+            if self.lapsed_close_owed_in_group(token)? || self.expired_close_owed(token)? {
+                None
+            } else {
+                transfer_reason
+            };
         // Workflow #437 MAPP-1d: each claim of the device's queue by its own member's gate.
         let gates = self.device_gates(token.instance_id())?;
         let gate = |member: InstanceId| gates.gate_of(member);
@@ -3019,11 +3032,20 @@ impl HostShared {
             if self.run_end_keeps_lease(&token, now)? {
                 continue;
             }
-            let connection_id = lock(&self.scheduler, HostLocation::ReadLeaseConnection)?
+            let connection_id = match lock(&self.scheduler, HostLocation::ReadLeaseConnection)?
                 .connection_for_token(&token)
-                .map_err(|error| {
-                    RuntimeHostError::scheduler(HostLocation::ReadLeaseConnection, &error)
-                })?;
+            {
+                Ok(connection_id) => connection_id,
+                // Workflow #458 fix round 1: a holder's own end ended the lease since the scan;
+                // nothing of it is left to expire.
+                Err(SchedulerError::LeaseMissing | SchedulerError::LeaseMismatch) => continue,
+                Err(error) => {
+                    return Err(RuntimeHostError::scheduler(
+                        HostLocation::ReadLeaseConnection,
+                        &error,
+                    ));
+                }
+            };
             if !self.cleanup_expired_if_guard_free(&token, connection_id)? {
                 continue;
             }

@@ -8,10 +8,13 @@
 //!   open and must close (two instances on the emulator's native capture, the multi-Nemu gate; a
 //!   member of a device group of several). The lease sweep's expiry asks the close's write
 //!   authority under the lapsed lease, which `begin_resource_close` refuses (`lease_expired`), and
-//!   the sweep used to mark that fatal. Now the instance is fenced by the refusal, the lease ends,
-//!   and its session is closed under the instance's admission guard right after (a dedicated
-//!   close lease for an instance alone, the session close ahead for a member, which hands the
-//!   device on only after that close).
+//!   the sweep used to mark that fatal. Now the instance is fenced by the refusal, the lease ends
+//!   handing the device to no one, and its session is closed under the instance's admission guard
+//!   right after, under the session close ahead; the claim that waited first, of the same
+//!   instance or of another member, is granted only after that close (fix round 1: an instance
+//!   alone handed its lapsed lease to its own waiting claim, and that transfer's close met the
+//!   lapsed lease again). Fix round 1 also keeps #411 A64's owed close, refused by a claim the
+//!   fenced instance's gate holds back, from ending the lease sweep's thread unseen.
 //! - #456: a keyless observation's capture fails and its close lease is refused for a reason of
 //!   the instance's own key (the takeover cooldown, a queued claim its routine gate holds back,
 //!   the lapsed lease the close reused): the observation answers its capture failure, and the
@@ -31,7 +34,7 @@ use super::gate_411_a64::nemu_capture;
 use super::instance_workers::{all_events, phases};
 use super::*;
 use crate::codes::HostLocation;
-use crate::host::HostClaimForTest;
+use crate::host::{ContainedTaskCheckpointPoint, HostClaimForTest};
 use actingcommand_contract::{
     InstanceStuckRecovery, ResourceQuiescence, RuntimeLifecyclePhase, RuntimePayload,
     SchedulingPauseReason, SchedulingPauseScope,
@@ -51,14 +54,17 @@ const B: &str = "close458.member.b";
 const GROUP: &str = "device.one";
 /// Bounds a broken run's wait only; nothing sleeps.
 const WAIT: Duration = Duration::from_secs(120);
-/// How far a test moves the Runtime clock to let a lease lapse: past a client lease's time and a
-/// Runtime claim's (60 s).
+/// How far a test moves the Runtime clock to let a lease lapse: past a client lease's time, a
+/// Runtime claim's and a run's end grace.
 const LAPSE_MS: u64 = 60 * 60 * 1_000;
+/// The lease time `request_host_claim_for_test` gives every claim it asks for.
+const CLAIM_TTL_MS: u64 = 60_000;
 
 // ---- The fixture.
 
 struct Fixture {
-    host: RuntimeHost,
+    /// Shared with a run's checkpoint hook.
+    host: Arc<RuntimeHost>,
     clock: Arc<ManualRuntimeClock>,
     ids: BTreeMap<&'static str, InstanceId>,
     states: BTreeMap<&'static str, Arc<FakeState>>,
@@ -83,11 +89,14 @@ fn stuck_recovery_off(aliases: &[&str]) -> BTreeMap<String, InstanceStuckRecover
         .collect()
 }
 
-/// New ids for X, Y and LONE.
+/// New ids for X, Y and LONE, X's the smaller of X's and Y's: the lease sweep's scan meets the
+/// devices in the order of their keys (an instance alone keys its own id), so X's lapsed lease is
+/// always ended before Y's in one tick.
 fn alone_ids() -> BTreeMap<&'static str, InstanceId> {
+    let (first, second) = (instance_id(), instance_id());
     BTreeMap::from([
-        (X, instance_id()),
-        (Y, instance_id()),
+        (X, first.min(second)),
+        (Y, first.max(second)),
         (LONE, instance_id()),
     ])
 }
@@ -131,7 +140,7 @@ impl Fixture {
         }
         let host = RuntimeHost::start(config, Arc::new(provider)).expect("start the host");
         Self {
-            host,
+            host: Arc::new(host),
             clock,
             ids: ids.clone(),
             states,
@@ -174,7 +183,7 @@ impl Fixture {
         );
         let host = RuntimeHost::start(config, Arc::new(provider)).expect("start the group's host");
         Self {
-            host,
+            host: Arc::new(host),
             clock,
             ids,
             states,
@@ -352,9 +361,40 @@ impl Fixture {
         entries
     }
 
+    /// The host, once every hook that shared it has run.
+    fn into_host(self) -> RuntimeHost {
+        let Ok(host) = Arc::try_unwrap(self.host) else {
+            panic!("a hook still holds the host");
+        };
+        host
+    }
+
     fn close(self) {
         self.assert_runtime_runs();
-        self.host.close().expect("close the host");
+        assert!(
+            self.host.sweep_thread_runs_for_test(),
+            "the lease sweep's thread still runs"
+        );
+        self.into_host().close().expect("close the host");
+    }
+
+    /// The host closed without asserting how: a session a fence keeps open, or the Runtime's
+    /// own failure, is not the subject of the test that ends so.
+    fn close_unchecked(self) {
+        let _closed = self.into_host().close();
+    }
+
+    /// The neutral package of a direct run written beside the host, the fake device of `alias`
+    /// set to finish it on its target page (`gate_mapp1d.rs`'s).
+    fn run_package(&self, alias: &str) -> String {
+        let package = self.root.path().join("neutral-task.zip");
+        fs::write(&package, neutral_contained_task_package(true)).expect("write package");
+        let state = &self.states[alias];
+        state.physical_task_geometry.store(true, Ordering::Release);
+        state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+        package.display().to_string()
     }
 }
 
@@ -640,12 +680,14 @@ impl Fixture {
 /// run's in its end phase ends there: a client's lease, a Lab session's, an operator's or the
 /// Runtime's own claim; this test drives a client's lease of X and a Runtime claim of Y). X's
 /// observation opens X's session and a client's lease of X lapses with it open; Y's Runtime claim
-/// lapses while another claim of Y waits. One sweep tick: the Runtime's health stays clean; X
-/// alone is fenced, with the refusal `lease_expired` as its cause; the refusal is recorded once,
-/// naming X's lease and the stage `runtime_lifecycle_session_close`; X's lease is expired once and
-/// X's session is closed after it, under a fenced close; in the same tick Y's lapsed lease is
-/// handed to Y's waiting claim. In the next tick Y's lease lapses again and is handed to Y's next
-/// claim, and the Runtime still runs.
+/// lapses while another claim of Y waits; X's id is the smaller, so the scan ends X's lease first.
+/// One sweep tick: the Runtime's health stays clean; X alone is fenced, with the refusal
+/// `lease_expired` as its cause; the refusal is recorded once, naming X's lease and the stage
+/// `runtime_lifecycle_session_close`; X's lease is expired once and X's session is closed after
+/// it, under a fenced close; after X's, in the same tick, Y's lapsed lease is handed to Y's
+/// waiting claim. In the next tick (the clock moved past Y's handed lease and short of X's
+/// fence's recheck) Y's lease lapses again and is handed to Y's next claim, nothing of X runs, and
+/// the Runtime and its lease sweep's thread still run.
 #[test]
 fn close458_a_lease_lapsed_with_its_session_open_fences_only_its_instance_and_the_sweep_goes_on() {
     let fixture = Fixture::alone(&alone_ids(), false);
@@ -729,13 +771,23 @@ fn close458_a_lease_lapsed_with_its_session_open_fences_only_its_instance_and_th
         .expect("Y's waiting claim holds Y");
     assert_eq!(handed.instance_id(), fixture.ids[Y]);
 
-    // The next tick.
+    // The next tick: the clock moves just past the lease Y's waiting claim was handed (a claim's
+    // time, from the first tick), and stays inside the first wait of X's fence for its recheck
+    // (`recovery_ladder.fence_recheck.interval_ms`, 300 000 ms), so no recheck of X runs meanwhile.
     let y_next = fixture.claim(Y, ClaimKind::SelfCheck);
     assert!(y_next.queued.is_some(), "Y's next claim waits: {y_next:?}");
     let mark = fixture.head();
-    fixture.lapse();
+    fixture.clock.advance(CLAIM_TTL_MS + 1);
+    fixture.sample_capacity();
     fixture.tick();
     fixture.assert_runtime_runs();
+    assert!(
+        fixture.events_after(mark).iter().all(|event| {
+            event.links().instance_id() != Some(&fixture.ids[X])
+                || event.payload().artifact_retention().is_some()
+        }),
+        "nothing of X ran in the next tick"
+    );
     assert!(
         fixture.transferred_since(mark, Y),
         "in the next tick Y's lapsed lease is handed to Y's next claim"
@@ -748,6 +800,271 @@ fn close458_a_lease_lapsed_with_its_session_open_fences_only_its_instance_and_th
         .host
         .release_host_claim_for_test(&y_next, &last)
         .expect("Y's last lease end");
+    fixture.close();
+}
+
+/// Fix round 1: #458 for an instance alone with a claim of its own waiting behind its lapsed
+/// lease, one the routine hold does not stop: a person's self-check, then (second round) a direct
+/// run's claim. X's observation opens X's session and a client's lease of X holds X with that
+/// claim queued behind it; Y's Runtime claim holds Y with another claim of Y queued. One sweep
+/// tick: the Runtime's health stays clean; X alone is fenced (`lease_expired`); X's lease expires
+/// once and hands the device to no one; X's session is closed once after that, under a fenced
+/// close, before X's waiting claim is granted, which the queue's own grant grants (requested,
+/// queued, admitted, granted; no transfer); in the same tick Y's lapsed lease is handed to Y's
+/// waiting claim. Before the fix the expiry handed X's lease to X's waiting claim, the transfer
+/// closed again under the lapsed lease and the Runtime stopped.
+#[test]
+fn close458_an_instance_alones_lapsed_lease_closes_its_session_before_its_own_waiting_claim() {
+    for kind in [ClaimKind::SelfCheck, ClaimKind::DirectTaskRun] {
+        let fixture = Fixture::alone(&alone_ids(), false);
+        let observed = fixture.observe(X).1;
+        assert_eq!(
+            observed.state(),
+            RuntimeReceiptState::Completed,
+            "{kind:?}: {observed:?}"
+        );
+        let x_lease = fixture.acquire_on(X, fixture.connection());
+        let x_waiting = fixture.claim(X, kind);
+        assert!(
+            x_waiting.queued.is_some() && x_waiting.granted.is_none(),
+            "{kind:?}: X's claim waits behind X's lease: {x_waiting:?}"
+        );
+        let y_claim = fixture.claim(Y, ClaimKind::SelfCheck);
+        assert!(y_claim.granted.is_some(), "{kind:?}: {y_claim:?}");
+        let y_waiting = fixture.claim(Y, ClaimKind::SelfCheck);
+        assert!(y_waiting.queued.is_some(), "{kind:?}: {y_waiting:?}");
+        let x_closes = fixture.states[X]
+            .capture_close_count
+            .load(Ordering::Acquire);
+        let mark = fixture.head();
+
+        fixture.lapse();
+        fixture.tick();
+
+        fixture.assert_runtime_runs();
+        fixture.assert_only_fenced(X, RuntimeErrorCode::LeaseExpired.as_str(), mark);
+        let x_token = x_waiting
+            .wait_for_grant(WAIT)
+            .expect("the grant slot")
+            .unwrap_or_else(|| panic!("{kind:?}: X's waiting claim is granted after X's close"));
+        assert_eq!(x_token.instance_id(), fixture.ids[X], "{kind:?}");
+        let events = fixture.events_after(mark);
+        let expiries = lease_records(&events, EventType::LeaseExpired, x_lease.lease_id());
+        let [expiry] = expiries.as_slice() else {
+            panic!("{kind:?}: X's lease expired once: {expiries:#?}");
+        };
+        let closes = confirmed_closes(&events, fixture.ids[X]);
+        let [close] = closes.as_slice() else {
+            panic!("{kind:?}: X's session is closed once: {closes:?}");
+        };
+        assert!(
+            *close > expiry.sequence() && *close < grant_of(&events, &x_waiting),
+            "{kind:?}: X's session is closed after X's lease expired and before X's claim's grant"
+        );
+        assert_eq!(
+            fixture.states[X]
+                .capture_close_count
+                .load(Ordering::Acquire),
+            x_closes + 1,
+            "{kind:?}"
+        );
+        assert_eq!(
+            fixture.states[X]
+                .unfenced_capture_close_count
+                .load(Ordering::Acquire),
+            0,
+            "{kind:?}: under a fenced resource-close step"
+        );
+        let types = events
+            .iter()
+            .filter(|event| event.links().request_id() == Some(&x_waiting.request.request_id()))
+            .map(PersistedEvent::event_type)
+            .collect::<Vec<_>>();
+        assert_events_in_order(
+            &types,
+            &[EventType::SchedulerAdmitted, EventType::LeaseGranted],
+        );
+        assert!(
+            !types.contains(&EventType::LeaseTransferred),
+            "{kind:?}: no transfer handed X's claim the device: {types:?}"
+        );
+        assert!(
+            fixture.transferred_since(mark, Y),
+            "{kind:?}: in the same tick Y's lapsed lease is handed to Y's waiting claim"
+        );
+        let y_token = y_waiting
+            .wait_for_grant(WAIT)
+            .expect("the grant slot")
+            .unwrap_or_else(|| panic!("{kind:?}: Y's waiting claim holds Y"));
+        fixture
+            .host
+            .release_host_claim_for_test(&x_waiting, &x_token)
+            .expect("X's claim's lease end");
+        fixture
+            .host
+            .release_host_claim_for_test(&y_waiting, &y_token)
+            .expect("Y's claim's lease end");
+        fixture.close();
+    }
+}
+
+/// Fix round 1: the lease sweep's thread does not end unseen when #411 A64's owed close is refused
+/// `lease_busy`. X's direct run reaches its end work (its end phase entered, its lease renewed by
+/// the end grace); there a startup claim of X queues behind the run, the clock moves past the end
+/// grace and one sweep tick expires the run's lease: its close meets the lapsed lease and fences X
+/// (#411 A64, unchanged), and the close A64 then owes is refused before it begins, `lease_busy`
+/// (X's startup claim waits in X's queue, held back by X's fence). That refusal is X's: the tick
+/// returns no error, the refusal is recorded once naming X with the stage
+/// `runtime_lifecycle_session_close`, the Runtime's health is clean and the lease sweep's thread
+/// still runs; a later tick (the clock moved past a claim of Y and short of X's fence's recheck)
+/// still ends Y's lapsed lease. The session the refused close left open
+/// is closed by the fence's way out: a person's self-check of X closes it first and, passing,
+/// lifts the fence, and X's startup claim is then granted. Before the fix the refusal reached the
+/// sweep, whose fatal mark refuses a failure that is not fatal, and the sweep's thread ended with
+/// nothing latched.
+#[test]
+fn close458_a64s_owed_close_refused_by_a_held_claim_leaves_the_sweep_running() {
+    let fixture = Fixture::alone(&alone_ids(), false);
+    let package = fixture.run_package(X);
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    let run = runtime_request(
+        &issuer,
+        RuntimeOperation::run_contained_task(
+            X,
+            issuer.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package).expect("task request"),
+        ),
+    );
+    let (sent, lapsed) = mpsc::channel();
+    let host = Arc::clone(&fixture.host);
+    let clock = Arc::clone(&fixture.clock);
+    let checkpoint = fixture
+        .host
+        .run_at_request_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::EndWork,
+            run.request_id(),
+            fixture.ids[X],
+            move |_| {
+                let held = host
+                    .request_host_claim_for_test(X, ClaimKind::StartupPackage)
+                    .expect("X's startup claim");
+                clock.advance(LAPSE_MS);
+                let swept = host.expire_due_leases_for_test();
+                sent.send((held, swept)).expect("the lapse");
+            },
+        )
+        .expect("arm X's end work");
+
+    let receipt = fixture
+        .host
+        .process_request_for_test(&run, fixture.connection())
+        .expect("X's run's receipt");
+
+    assert_eq!(checkpoint.consumed(), 1, "X's run reached its end work");
+    let (held, swept) = lapsed.recv_timeout(WAIT).expect("the lapse");
+    assert!(swept.is_ok(), "the sweep's tick: {swept:?}");
+    assert!(
+        receipt
+            .error_projection()
+            .is_none_or(|projection| !projection.fatal),
+        "{receipt:?}"
+    );
+    assert!(
+        held.queued.is_some() && held.granted.is_none(),
+        "X's startup claim waited behind the run: {held:?}"
+    );
+    fixture.assert_runtime_runs();
+    assert!(
+        fixture.host.sweep_thread_runs_for_test(),
+        "the lease sweep's thread still runs"
+    );
+    let fence = status_fence(&fixture.host, X).expect("X's fence");
+    assert_eq!(
+        fence.cause.as_str(),
+        RuntimeErrorCode::LeaseExpired.as_str(),
+        "{fence:?}"
+    );
+    let events = all_events(&fixture.host);
+    let refusals = failures(&events, RuntimeErrorCode::LeaseBusy.as_str());
+    let [refused] = refusals.as_slice() else {
+        panic!("one record of the refused close lease: {refusals:#?}");
+    };
+    assert_eq!(refused.links().instance_id(), Some(&fixture.ids[X]));
+    assert_eq!(
+        failure_outcome(refused)
+            .value("stage")
+            .and_then(Value::as_str),
+        Some(HostLocation::RuntimeLifecycleSessionClose.as_str())
+    );
+    assert_eq!(
+        fixture
+            .host
+            .instance_claims_for_test(X)
+            .expect("X's claims"),
+        (None, vec![ClaimKind::StartupPackage]),
+        "X is free and its startup claim waits, held"
+    );
+
+    // A later tick still ends another instance's lapsed lease. The clock moves only past that
+    // claim's time, inside the first wait of X's fence for its recheck (300 000 ms), so no recheck
+    // of X runs meanwhile.
+    fixture.sample_capacity();
+    let y_claim = fixture.claim(Y, ClaimKind::SelfCheck);
+    let y_lease = y_claim
+        .granted
+        .clone()
+        .unwrap_or_else(|| panic!("Y's claim holds Y: {y_claim:?}"));
+    fixture.clock.advance(CLAIM_TTL_MS + 1);
+    fixture.sample_capacity();
+    fixture.tick();
+    assert_eq!(
+        lease_records(
+            &all_events(&fixture.host),
+            EventType::LeaseExpired,
+            y_lease.lease_id()
+        )
+        .len(),
+        1,
+        "Y's lapsed lease is ended"
+    );
+    fixture.assert_runtime_runs();
+    assert!(fixture.host.sweep_thread_runs_for_test());
+
+    // The fence's way out: a person's self-check closes the session and lifts the fence.
+    let x_closes = fixture.states[X]
+        .capture_close_count
+        .load(Ordering::Acquire);
+    let checked = fixture.process_on(
+        RuntimeOperation::SelfCheckInstance {
+            instance_alias: X.to_owned(),
+        },
+        fixture.connection(),
+    );
+    assert_eq!(
+        checked.state(),
+        RuntimeReceiptState::Completed,
+        "{checked:?}"
+    );
+    assert!(
+        fixture.states[X]
+            .capture_close_count
+            .load(Ordering::Acquire)
+            > x_closes,
+        "the self-check closed the session the refused close left open"
+    );
+    assert_eq!(
+        status_fence(&fixture.host, X),
+        None,
+        "the passing self-check lifted X's fence"
+    );
+    let token = held
+        .wait_for_grant(WAIT)
+        .expect("the grant slot")
+        .expect("X's startup claim is granted once X's fence is lifted");
+    fixture
+        .host
+        .release_host_claim_for_test(&held, &token)
+        .expect("the startup claim's lease end");
     fixture.close();
 }
 
@@ -926,7 +1243,7 @@ fn close456_a_keyless_observations_close_lease_refused_for_its_own_key_fences_on
         // The session the fence keeps open is closed by the fence's own paths (its recheck, a
         // person's self-check), which this test does not drive; the Host close's own close of it
         // is not its subject.
-        let _closed = fixture.host.close();
+        fixture.close_unchecked();
     }
 }
 
@@ -972,8 +1289,7 @@ fn close458_a_record_that_cannot_be_appended_at_the_expirys_close_still_stops_th
     );
     assert!(failure.is_fatal() && failure.halts_runtime(), "{failure:?}");
     assert!(fence_records(&all_events(&fixture.host)).is_empty());
-    // The host's close after the Runtime's own failure is not this test's subject.
-    let _closed = fixture.host.close();
+    fixture.close_unchecked();
 }
 
 /// No refusal, nothing changes. Two hosts of this build started alike with the same instance
@@ -987,6 +1303,14 @@ fn close458_a_record_that_cannot_be_appended_at_the_expirys_close_still_stops_th
 /// severity, instance and whole payload, with ids, times, places, an evaluation's `seed` and the
 /// temporary root's base name normalised; every difference is named in one failure. No instance
 /// is fenced on either host.
+///
+/// What this proves is narrow (fix round 1, the review): none of the three lease ends meets a
+/// refused close, so neither entry the switch guards is reached on either host, and the additions
+/// that run on every lease end (the owed set's two reads, the scan's skip of a lease a holder
+/// ended meanwhile) run on both hosts alike. It proves that these three lease ends write the same
+/// records on this build as on itself with the entries off, and that the additions write no record
+/// there; that nothing changes against main when no close is refused rests on reading the diff
+/// (register §1.363).
 #[test]
 fn close458_without_a_refusal_every_lease_end_writes_the_records_it_wrote_before() {
     let ids = alone_ids();

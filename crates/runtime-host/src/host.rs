@@ -4473,6 +4473,14 @@ impl RuntimeHost {
             .expire_due_leases()
     }
 
+    /// Workflow #458 fix round 1: whether the resident lease sweep's thread still runs.
+    #[cfg(test)]
+    pub(crate) fn sweep_thread_runs_for_test(&self) -> bool {
+        self.sweep_thread
+            .as_ref()
+            .is_some_and(|thread| !thread.is_finished())
+    }
+
     /// #411 A64: holds the lease sweep's expiry scan (`expire_due_leases`) until the returned
     /// guard drops, so that a run's own lease end, not the sweep, meets the run's lapsed lease.
     #[cfg(test)]
@@ -7064,8 +7072,11 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
+        // Workflow #458 fix round 1: as the steps before it, an error of the expiry step stops the
+        // Runtime loudly whatever its severity; the fatal mark refuses a failure that is not
+        // fatal, and the sweep's thread used to end then with nothing latched.
         if let Err(error) = shared.expire_due_leases() {
-            shared.fatal.mark(error.clone())?;
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
         if let Err(error) = shared.expire_agent_sessions() {

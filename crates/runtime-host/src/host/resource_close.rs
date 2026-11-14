@@ -538,17 +538,16 @@ impl HostShared {
     /// lapsed lease (`fence_expired_lease_close`), closed once the lease has ended. The caller
     /// holds the instance's admission guard. Nothing is closed when no close is owed, during
     /// shutdown (the Host close's second pass closes it), or when a holder took the instance's key
-    /// on (the session is its, and its lease end or its preparation closes it). A member of a
-    /// device group of several closes under the session close ahead, on the free device, before
-    /// any other member's lease begins (the expiry handed the device to no one,
-    /// `end_lease_ordered`), as MAPP-1d closes a lapsed run's session; an instance alone closes
-    /// under a dedicated close lease, as #411 A64 does. A close lease refused before any close
-    /// (a refusal that is not fatal: a waiting entry, the takeover cooldown, a queued claim the
-    /// routine gate holds) is recorded once and leaves the session to the fence's own paths: the
-    /// waiting entry's lease end, or a preparation (the fence's recovery ladder, its recheck, a
-    /// person's self-check or resume), which closes a kept session before it opens. A failed
-    /// close is recorded, and an unconfirmed one settled, by the close path; a fatal failure (the
-    /// Runtime's own) is returned.
+    /// on (the session is its, and its lease end or its preparation closes it). The expiry handed
+    /// the device to no one (`end_lease_ordered`, `expired_close_owed`), so the session is closed
+    /// under the session close ahead on the free device, which no claim waiting in the device's
+    /// queue refuses, before any waiting claim is granted: the claim that waited first, of the
+    /// same instance or (on a device of several) of another member, is granted afterwards by the
+    /// queue's own grant when the guard is let go, as MAPP-1d closes a member's lapsed run
+    /// session. A refusal that is not fatal is recorded once and leaves the session to the fence's
+    /// own paths: a preparation (the fence's recovery ladder, its recheck, a person's self-check or
+    /// resume), which closes a kept session before it opens. A failed close is recorded, and an
+    /// unconfirmed one settled, by the close path; a fatal failure (the Runtime's own) is returned.
     pub(super) fn close_expired_lease_session_guarded(
         &self,
         token: &LeaseToken,
@@ -572,18 +571,7 @@ impl HostShared {
         }
         let links = EventLinksDraft::default()
             .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
-        let closed = if self.in_group_of_several(instance_id) {
-            self.close_session_ahead_while_guarded(instance_id, links.clone(), admission)
-        } else {
-            self.close_retained_instance_while_guarded(
-                instance_id,
-                links.clone(),
-                false,
-                LeaseReleaseReason::BackendFailure,
-                admission,
-            )
-        };
-        match closed {
+        match self.close_session_ahead_while_guarded(instance_id, links.clone(), admission) {
             Ok(_) => Ok(()),
             Err(mut refused) if !refused.is_fatal() => {
                 refused.lifecycle.instance_id = Some(instance_id);
@@ -598,18 +586,13 @@ impl HostShared {
         }
     }
 
-    /// Workflow #458: whether `token`, the lease of a member of a device group of several, ended
-    /// at its expiry with its session's close owed (`fence_expired_lease_close`). Such a lease end
-    /// hands the device to no one, and the member's session is closed under a session close ahead
-    /// before any other member's lease begins (`close_expired_lease_session_guarded`). `false` for
-    /// an instance alone on its device, before any lock.
-    pub(super) fn expired_close_owed_in_group(
-        &self,
-        token: &LeaseToken,
-    ) -> RuntimeHostResult<bool> {
-        if !self.in_group_of_several(token.instance_id()) {
-            return Ok(false);
-        }
+    /// Workflow #458: whether `token` ended at its expiry with its session's close owed
+    /// (`fence_expired_lease_close`). Such a lease end hands the device to no one, an instance
+    /// alone on its device as a member of several (fix round 1: handed on, the key went to a
+    /// claim of the same instance with the session open, and that transfer's own close met the
+    /// lapsed lease again), and the session is closed under a session close ahead before any
+    /// waiting claim is granted (`close_expired_lease_session_guarded`).
+    pub(super) fn expired_close_owed(&self, token: &LeaseToken) -> RuntimeHostResult<bool> {
         Ok(lock(
             &self.expired_lease_closes,
             HostLocation::FenceInstanceResources,
@@ -661,7 +644,9 @@ impl HostShared {
     /// keeps its session, or when a holder took the instance's key on (the session is its, and its
     /// lease end closes it). A dedicated lease refused because an entry waits in the instance's
     /// queue is recorded once and leaves the session to that entry, which closes it at its lease
-    /// end or in its preparation (#411 A52).
+    /// end or in its preparation (#411 A52); so, since Workflow #458's fix round 1, is every other
+    /// refusal of it that is not fatal (a queue ahead held back by the fenced instance's gate),
+    /// whose session a preparation of the fenced instance closes.
     pub(super) fn close_lapsed_run_session_guarded(
         &self,
         token: &LeaseToken,
@@ -708,7 +693,13 @@ impl HostShared {
         ) {
             // A failed close is recorded, and an unconfirmed one settled, by the close path.
             Ok(_) => Ok(()),
-            Err(mut refused) if close_lease_refused_by_queue(&refused) => {
+            // Workflow #458 fix round 1: every refusal of the dedicated close lease that is not
+            // fatal is one instance's, as the queue's is: also the takeover cooldown's and a queue
+            // ahead whose claim the fenced instance's routine gate holds back (`lease_busy`).
+            // Recorded once, the session is left to the waiting entry or to a preparation of the
+            // fenced instance; before, such a refusal reached the lease sweep, whose fatal mark
+            // refuses a failure that is not fatal, and the sweep's thread ended unseen.
+            Err(mut refused) if !refused.is_fatal() => {
                 refused.lifecycle.instance_id = Some(instance_id);
                 self.append_lifecycle_failure(
                     RuntimeLifecycleFailureStage::SessionClose,

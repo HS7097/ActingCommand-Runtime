@@ -17,7 +17,9 @@ session close ahead for two more sessions of such a member, each under the devic
 admission guard and on a free device: the session the monitor's probe opened
 ([device-group.md](device-group.md), "The monitor's probe in a device group"), and the
 session a run's lease that lapsed in its end phase left open (below, and
-[device-group.md](device-group.md), "Device-level actions", row 7).
+[device-group.md](device-group.md), "Device-level actions", row 7). Workflow #458 uses it for
+the session any instance's lease left open when its close at the lease's expiry was refused,
+an instance alone on its device included (below).
 `begin_resource_close` admits the native close and returns its `FencedWrite`;
 ordinary input validation rejects this lease. Host invokes
 `close_instance(FencedDeviceWrite(Arc<FencedWrite>))` only after that
@@ -171,17 +173,25 @@ the session is closed once the lease has ended (`close_lapsed_run_session_guarde
 #458 (Runtime 0.12.60) does the same for every other lease at its expiry (a client's, a Lab
 session's, a direct run's outside its end phase, an operator's claim, the Runtime's own claims
 and dedicated leases): the refusal is recorded once (it names the lease; its stage is the session
-close), the instance is fenced with `lease_expired` as its cause, the lease end goes on, and once
-the lease has ended, still under the instance's admission guard, the session is closed
-(`close_expired_lease_session_guarded`): under a dedicated close lease for an instance alone on
-its device, and for a member of a device group of several under the session close ahead, the
-expiry having handed the device to no one, so the device passes to another member only after
-that close. A close lease refused there is recorded once and leaves the session to the waiting
-entry's lease end or to a preparation of the fenced instance; a failed close is recorded, and an
+close), the instance is fenced with `lease_expired` as its cause, and the lease ends handing the
+device to no one, an instance alone on its device as a member of several (fix round 1: handed on
+to a claim of the same instance, the transfer's own close met the lapsed lease again and stopped
+the Runtime). Once the lease has ended, still under the instance's admission guard, the session is
+closed under the session close ahead (`close_expired_lease_session_guarded`), which no claim
+waiting in the device's queue refuses; the claim that waited first, of the same instance or of
+another member, is granted afterwards by the queue's own grant, so the device passes on only
+after that close. A refusal of that close lease that is not fatal is recorded once and leaves
+the session to a preparation of the fenced instance; a failed close is recorded, and an
 unconfirmed one settled, by the close path. Only a preparation whose self-check passes lifts the
 fence. During shutdown, and where no fence may take the instance, the lease end fails as before;
 a failure of the Runtime itself in these paths (a record that cannot be appended, a poisoned
-lock, the owner's journal) stays fatal. For a
+lock, the owner's journal) stays fatal. #411 A64's own dedicated close lease, refused for any
+reason that is not fatal (a waiting entry, the takeover cooldown, a queue ahead whose claim the
+fenced instance's gate holds back), is recorded once and leaves the session to the waiting entry
+or to a preparation of the fenced instance (fix round 1: before, a queue ahead reached the lease
+sweep, whose fatal mark refuses a failure that is not fatal, and the sweep's thread ended with
+nothing latched). The lease sweep's expiry step now stops the Runtime loudly on any error it
+returns, as the sweep's other steps do. For a
 member of a device group of several (Workflow #437 MAPP-1d) that end hands the key to no one,
 and the session is closed under the session close ahead, still under the device's admission
 guard, before any waiting claim is granted; an unconfirmed close there keeps its close lease,
