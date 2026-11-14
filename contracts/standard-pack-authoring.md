@@ -46,7 +46,7 @@ rule is derived ("What is derived"). A member it does not list is refused at its
 | `value` | `"pending"`, or `{fixed_value_milli, origin}`: a whole number of at least 1, `origin` absent or `pack` ("The value's origin"). A new business rule needs it, but a follower of a chain, which gives none ("A pending value"). |
 | `consumes`, `produces` | Lists of `{pool_id, amount or expected_amount_milli, observation_source?, confidence_milli?}`, each `pool_id` a pool `schedule.json` declares; the direction and the evidence members not given are derived. |
 | `limited`, `realization` | `true` when written: the marks of [standard-pack-schedule.md](standard-pack-schedule.md). |
-| `uses` | For the class `maintenance` without a trigger: `startup`, `return_home` or `recognition`, or a list of them; a `maintenance.json` entry for the package's server. Beside a business rule of the package (one that does not declare `maintenance`) it is refused, since adopt never turns that rule into a maintenance rule unasked ("One role"). |
+| `uses` | For the class `maintenance` without a trigger: `startup`, `return_home` or `recognition`, or a list of them; a `maintenance.json` entry for the package's server. Beside a business rule of the package (one the composer judges by its value: it does not declare `maintenance` and no root file gives the package a maintenance role) it is refused, since adopt never turns that rule into a maintenance rule unasked ("One role"). |
 | `held` | For the class `held`: `{reason, reference?}`, each a non-blank text of at most 1024 bytes without a control character. |
 | `overrides` | A derived member stated with its value, where the table of "What is derived" says it may be: `id`, `priority`, `feedback_stop`, `on_failure`, `sensitive`, `next_run_clamp_ms`, `yield_points`, `expected_duration_ms`, `cooldown_ms`, `load_profile`, `strategic_weight_milli`, `loop_budget`. |
 
@@ -161,20 +161,29 @@ recovery chain, an `interrupts.json` handler or `then.run`) is not ended by adop
 write those files: a decision of the class `business` for such a package, whose rule would never
 be judged beside it, is refused `decision_invalid` at `/class`, naming the file. A decision of the
 class `held` is taken (a package that `pages.json` names and that is not run through yet is
-adopted as held): its hold is written beside that role, which stays as that file gives it. A
-decision of the class `maintenance` by its `uses` alone (no trigger) for a package whose rule in
-`schedule.json` is a business rule (one that does not declare `maintenance`) is refused
-`business_rule_in_the_way`, naming that rule by its id and its pointer (`entry` `schedule.json`,
-`json_pointer` `/rules/<i>`): adopt never turns that rule into a maintenance rule unasked; take it
-out of `schedule.json` first, or give the decision the trigger of a maintenance rule. The answer
-lists in `removed_entries` every entry it removed and in `replaced_entries` every entry that was
-there and that it changed (the rule, the held entry, the `maintenance.json` entry), each with its
-file, its pointer in the file as read, the entry as it was and, when replaced, as written. Without a
-decision nothing is removed or replaced, and the class is the earlier adoption's as the composer
-reads the files (held, else maintenance when a root file gives the package a maintenance role, else
-the rule's); when `schedule.json` gives the package a held entry or a business rule and
+adopted as held): its hold is written beside that role, which stays as that file gives it.
+
+A rule's role is the composer's judgement, which adopt calls and does not copy (the policy crate's
+`is_judged_rule`, fix round 3): a rule is a business rule exactly when the composer judges it by its
+value, that is when it does not declare `maintenance` and no root file (`maintenance.json`,
+`pages.json`, `navigation.json`, `interrupts.json`) gives its package a maintenance role. So a rule
+that declares nothing beside its package's `maintenance.json` entry, as a hand-written root may
+hold it, is not a second role: the composer does not judge it, and it is part of the package's one
+maintenance role. A decision of the class `maintenance` by its `uses` alone (no trigger) for a
+package whose rule in `schedule.json` is a business rule is refused `business_rule_in_the_way`,
+naming that rule by its id and its pointer (`entry` `schedule.json`, `json_pointer` `/rules/<i>`):
+adopt never turns that rule into a maintenance rule unasked; take it out of `schedule.json` first,
+or give the decision the trigger of a maintenance rule. Beside a rule the composer does not judge,
+the same decision is taken. The answer lists in `removed_entries` every entry it removed and in
+`replaced_entries` every entry that was there and that it changed (the rule, the held entry, the
+`maintenance.json` entry), each with its file, its pointer in the file as read, the entry as it was
+and, when replaced, as written. Without a decision nothing is removed or replaced, and the class is
+the earlier adoption's as the composer reads the files (held, else the rule's: business when the
+composer judges it, maintenance otherwise; else maintenance for a `maintenance.json` entry); when
+`schedule.json` gives the package a held entry, or a rule the composer judges, and
 `maintenance.json` an entry too (two roles, which an adoption leaves only when it was interrupted
-between its two renames, "If a call was interrupted"), a call without a decision is refused
+between its two renames, "If a call was interrupted"; the composer judges no rule of a package that
+entry names, so in practice the held entry), a call without a decision is refused
 `repository_invalid` at that entry (`entry` `maintenance.json`), its message saying what to do.
 
 ## The checks
@@ -189,18 +198,18 @@ the repository and keeps no copy.
 | The recording is as its last stop left it: `actingcommand.lab-recording.v1`, its `record_id`, `stopped`, not marked again since (`amended_at_unix_ms` absent or null), its package there | `recording_not_current` | `path` of `recording.json`, `member` |
 | The package is admitted as `package preflight` admits it, and its `package_id` names one directory `packs/<package_id>` that no root file reserves | `package_invalid` | `path`, the loader's refusal as the cause; or `package_id` |
 | Its game is `applications.json`'s and its server one of that file's | `package_mismatch` | `member` `game` or `server` |
-| No `packs/<package_id>.part` is left ("If a call was interrupted"); not adopted before (its directory, its rule, its held entry, its `maintenance.json` entry), or `--replace`; the kept copy's place free | `pack_exists` | `entry` the directory or its `.part`, or `json_pointer` of the entry; `path` of a taken place |
+| No `packs/<package_id>.part` is left ("If a call was interrupted"); not adopted before (its directory, its rule, its held entry, its `maintenance.json` entry), or `--replace`; the kept copy's place free | `pack_exists` | `entry` the directory or its `.part`, or `json_pointer` of the entry; `path` of a taken place; without `--replace` the message names what the root files hold of the package, and when they hold nothing beside its directory says that an adoption was interrupted before it wrote them ("If a call was interrupted") |
 | With `--replace`, no change below `packs/<package_id>` the version control does not hold (`git status --porcelain=v1 -z --untracked-files=all`, which writes nothing) | `pack_dirty` | `entry`, `count`; or the version control's failure as the cause |
 | With `--replace`, the kept copy's place lies on the checkout's volume (the volume of the nearest existing part of each path, links resolved: the drive or network share on Windows, the device elsewhere; a volume mounted on a folder of another is not told apart on Windows), so that the replaced directory can be moved there | `replace_across_volumes` | `entry` the directory, `path` the kept place; the message says to give a `--state-dir` on the checkout's volume and, for a recording of the default state directory, its package by `--package <state>/record-artifacts/<record>/lab/out/<package_id>.<ext>` instead of `--record-id` |
 | The decision document | `decision_invalid` | `path`, `json_pointer` (`""` for a first adoption without one) |
 | Its value's origin ("The value's origin") | `value_origin_model` | `path`, `json_pointer` `/value/origin` |
 | A class `business` beside a maintenance role a root file adopt does not write gives the package ("One role") | `decision_invalid` | `path`, `json_pointer` `/class` |
-| A class `maintenance` by its `uses` alone beside the package's business rule ("One role") | `business_rule_in_the_way` | `entry` `schedule.json`, `json_pointer` `/rules/<i>`, `package_id`; the message names the rule's id |
-| Without a decision, no held entry or business rule of the package in `schedule.json` beside its `maintenance.json` entry ("One role", "If a call was interrupted") | `repository_invalid` | `entry` `maintenance.json`, `json_pointer` the entry, `package_id` |
+| A class `maintenance` by its `uses` alone beside the package's business rule, a rule the composer judges by its value ("One role") | `business_rule_in_the_way` | `entry` `schedule.json`, `json_pointer` `/rules/<i>`, `package_id`; the message names the rule's id |
+| Without a decision, no held entry of the package, nor a rule of it the composer judges, in `schedule.json` beside its `maintenance.json` entry ("One role", "If a call was interrupted") | `repository_invalid` | `entry` `maintenance.json`, `json_pointer` the entry, `package_id` |
 | A class other than `held` needs a package run through: its entry task's provenance a recording's, the cross-check `passed`, the first decision evaluated (no `first_decision_not_evaluated` warning, no application step) and no step whose click needs review | `recording_unreviewed` | `package_id`; the details carry `review` |
 | No text of the package holds an absolute local path (a drive or network path, the state directory, the checkout) | `local_path` | `entry` the file, `json_pointer` the string |
 | A root file adopt must change is in the canonical form ("The canonical form") | `root_file_not_canonical` | `entry` |
-| The checkout's check tree is no link, the tool's own and free (below) | `check_tree_link`, `check_tree_unmarked`, `check_tree_busy` | `path` the check tree |
+| The checkout's check tree is no link, the tool's own and free, and no directory beside it named as one a call makes the tree whole in is a link (below) | `check_tree_link`, `check_tree_unmarked`, `check_tree_busy` | `path` the check tree, or that directory |
 | The tree as it would be written composes (below) | `rule_refused` | `entry` `schedule.json`, the composer's `json_pointer`, its refusal as the cause; or `package_id` when the package comes out unclassified |
 | Every key the schedule as the check compiled it reads of the rule's own outcome is one the package's entry task declares (`scheduling_outcome.mappings`): the policy crate's own `referenced_outcome_keys`, which the Runtime runs, collects them from every composed rule's trigger and `feedback_stop` (the rule's own, given, derived or kept, and another rule's), every pool's observation and every activity target's measure. And every key an outcome predicate of the rule as it would be written reads of another task is one the package of that task declares. The Runtime refuses every dispatch of a task whose outcome is read for a key its package does not declare ([scheduling/README.md](scheduling/README.md)): the rule, or the task it reads and so the rule, would never run | `decision_invalid` | `path` the decision and `json_pointer` in it (`/trigger/…`, `/overrides/feedback_stop/…`) when the decision gave the member; otherwise `entry` `schedule.json` and `json_pointer` in the file as it would be written (`/rules/<i>/…`, `/pools/<i>/…`, `/activity/<i>/goals/<j>/metric/outcome_key`); the message names who reads, the rule, pool or activity profile by its id; the details carry `declared_outcome_keys` of the package of the task read and, for another task, its `task_id` and `package_id` |
 | A business rule's value ("A pending value") | `decision_invalid` | `path`, `json_pointer` `/value` |
@@ -217,20 +226,26 @@ checkout.
 **The check tree is the tool's own scratch, not anyone's data** (the coordinator's ruling): one
 directory for each checkout, `<checkout>` its last segment and 16 hexadecimal digits of the
 SHA-256 of its resolved path. Adopt makes it whole, so that no crash leaves it unmarked: as a
-directory of the call's own beside it, `<checkout>.new-<process>-<count>/`, with the marker
+directory of the call's own beside it, `<checkout>.new-<process>-<ms>-<count>/` (the process, the
+call's time and a count of the process; a name another directory already holds is passed over for
+the next count, so that no two calls, of one process or of two, share one), with the marker
 `.adopt-check-tree` written, renamed into place; when another call put its tree there first (two
-first calls at once), the call removes its own directory, which holds only the marker it wrote, and
-goes on with the other's tree, so neither is refused `check_tree_unmarked` (one may be refused
-`check_tree_busy`). A crash before that rename leaves only the call's own directory beside the
-place, which no call reads. Adopt holds the marker open and locked for the whole call, and at the
-start of each call empties the directory of everything but the marker, only when the marker is
-there, and never anything else. Before anything in it is cleared, the place itself is checked: a
-link there (a symbolic link, or on Windows a junction) is refused `check_tree_link`, and nothing is
-cleared through it or where it points. A directory at that place without the marker is not touched
-and the call is refused `check_tree_unmarked`; a call while another adoption of the checkout with
-the same state directory holds the marker is refused `check_tree_busy`. The rule "nothing is
-removed" holds for the checkout and for a replaced pack directory's kept copy; the check tree alone
-is emptied, by the tool, of what the tool laid there.
+first calls at once), the call removes its own directory, which holds only the marker it wrote
+(unless that call, which holds the tree, cleared it already), and goes on with the other's tree, so
+neither is refused `check_tree_unmarked` (one may be refused `check_tree_busy`). A crash before
+that rename leaves only the call's own directory beside the place, which no call reads. Adopt holds
+the marker open and locked for the whole call, and at the start of each call, while it holds it,
+clears every directory beside the place named so (`<checkout>.new-` and three numbers) that carries
+the marker, which only a crash leaves there, and empties the tree of everything but the marker,
+only when the marker is there, and never anything else: a directory named so without the marker
+(a crash before the marker was written) is not the tool's and is left alone. Before anything is
+cleared, the place itself and those directories are checked: a link there (a symbolic link, or on
+Windows a junction) is refused `check_tree_link`, and nothing is cleared through it or where it
+points. A directory at the place without the marker is not touched and the call is refused
+`check_tree_unmarked`; a call while another adoption of the checkout with the same state directory
+holds the marker is refused `check_tree_busy`. The rule "nothing is removed" holds for the checkout
+and for a replaced pack directory's kept copy; the check tree and those directories alone are
+cleared, by the tool, of what the tool laid there.
 
 ## What is derived
 
@@ -290,38 +305,76 @@ deleted in the checkout or of a kept copy:
   when it changes: both written whole as `<name>.part` first, then renamed one after the other,
   first the file that gives the package its new role (`maintenance.json` for the class
   `maintenance`, `schedule.json` for the others), then the file that ends its old one, so that a
-  call interrupted between the two renames leaves the package two roles beside the `.part` of the
-  file it did not rename, and the next call sees both ("If a call was interrupted"). Before the
-  first write, and again immediately before each rename, the file is read again and compared with
-  the bytes the call computed from; when it changed (another adoption, which the MCP server allows
-  at the same time, or a person), the call stops with `adopt_write_failed` at that file, renames
-  nothing more and overwrites nothing of that work. A root file with changes not committed is
-  read and written as it is: several adoptions in a row before one commit are normal use.
+  call interrupted between the two renames leaves the `.part` of the file it did not rename, which
+  the next call sees ("If a call was interrupted"). Before the first write, and again immediately
+  before each rename, the file is read again and compared with the bytes the call computed from;
+  when it changed (another adoption, which the MCP server allows at the same time, or a person),
+  the call stops with `adopt_write_failed` at that file, renames nothing more and overwrites
+  nothing of that work; its message says what to do: before anything was written, run adopt
+  again; after the call put its new `packs/<package_id>` in place, the steps "to run it again"
+  below. A root file with changes not committed is read and written as it is: several adoptions in
+  a row before one commit are normal use.
 
 A failed write is `adopt_write_failed`: `path` where it stopped and `paths` what it had written or
 moved before, in order, the operating system's refusal as the cause when there is one; nothing is
 removed in the checkout (a `.part` and a kept copy stay where they are).
 
-**If a call was interrupted** (a crash, a stopped process) after it began writing, it leaves
-`packs/<package_id>.part/`, `schedule.json.part` or `maintenance.json.part` in the checkout. The
-next call refuses as long as one of its own is there (`pack_exists` for the package's `.part`,
-`repository_invalid` for a root file's), and its message names each leftover and says what to do:
-when the interrupted call began, `packs/<package_id>` was absent or committed (adopt refuses a
+**If a call was interrupted** (a crash, a stopped process) after it began writing, it leaves in the
+checkout what it had written, in this order: `packs/<package_id>.part/` until it is renamed, then
+its new `packs/<package_id>` in place, then `schedule.json.part` or `maintenance.json.part` until
+each is renamed. When the call began, `packs/<package_id>` was absent or committed (adopt refuses a
 pack directory with changes), so `git status -- packs/<package_id>` shows exactly what it left
 there, and a replaced directory it had moved away is in the last commit and under the state
-directory's `adopt/`. A root file's `.part` is that file whole as the call computed it; since the
-call writes every `.part` before it renames the first, a root file whose `.part` is left was not
-renamed and is as it was before that call. When only one root file's `.part` is left, the other
-root file was either renamed by that call or not changed by it: look whether that file holds the
-package's rule or entry as the call decided it. To finish the interrupted adoption, rename each root
-file's `.part` over its file; to undo it, move those `.part` files out of the checkout and restore
-the root files with the version control; move a `packs/<package_id>.part` out by hand (adopt
-deletes nothing); then run adopt again. When a root file's `.part` was moved away without either,
-the two files may give the package two roles: a held entry or a business rule in `schedule.json`
-beside its `maintenance.json` entry. A call with a decision writes its one role again and answers
-the entry it removes in `removed_entries`; a call without one is refused `repository_invalid` at
-that entry, its message saying to run adopt again with the decision the interrupted call was given,
-or to restore both files with the version control.
+directory's `adopt/`. So after a call that put its new directory in place, `--replace` is refused
+`pack_dirty` until `packs/<package_id>` is committed or put back as it was (moved out of the
+checkout by hand and, where it was committed, restored with the version control), and adopt
+without `--replace` is refused `pack_exists`. The next call refuses as long as a `.part` is there
+(`pack_exists` for the package's, `repository_invalid` for a root file's), and its message names
+each leftover, says what it tells of that call and gives the steps below, each of which a later
+call accepts:
+
+- `packs/<package_id>.part/` (whole, or cut off): that call wrote no root file. Move the `.part`
+  out of the checkout by hand (adopt deletes nothing), then run adopt again as that call was run.
+- A root file's `.part`: that call had put its `packs/<package_id>` in place before it wrote the
+  first, writes every root `.part` before it renames the first and renames them one after the
+  other, so a root file whose `.part` is left was not renamed and is as it was before that call. A
+  `.part` is trusted as its file whole only when it reads as that root file (`schedule.json` by the
+  schedule reader, `maintenance.json` as its list of entries) and is in the canonical form, its
+  final newline included, as a finished write leaves it; a `.part` cut off by a crash ends before
+  its last bracket or its final newline, so it is not, and the message names each `.part` trusted
+  or not and why. A `.part` not trusted was being written when the call stopped, so that call had
+  renamed no root file. When one root `.part` is left and trusted, the other root file is in one of
+  three states, which the next call cannot tell apart: renamed by that call, not to change in it,
+  or to change and its `.part` not written yet (the call stopped between its two writes); look
+  whether that file is already as the call decided it (the package's rule, held entry or
+  `maintenance.json` entry there, or gone where the call ended one).
+  - To finish the adoption, where every root `.part` left is trusted and, for a single one, the
+    other file is as the call decided it: rename each `.part` over its file. The adoption is then
+    whole, its directory included; nothing more is run.
+  - To run it again, always: move the root `.part` files out of the checkout; commit
+    `packs/<package_id>` or put it back as it was; then run adopt with `--replace` and the
+    decision that call was given (none when it was given none), which writes the package's one
+    role from the root files as they are.
+  - To undo it: move the root `.part` files out, put `packs/<package_id>` back as it was, and
+    restore with the version control the root file that call renamed (to its last commit: a change
+    not committed before that call is not in it).
+- Nothing left (a call interrupted after it put `packs/<package_id>` in place and before it wrote
+  its first root `.part`): the next call without `--replace` is refused `pack_exists` at the
+  directory, its message naming what the root files hold of the package. When they hold nothing
+  of it (no rule or held entry in `schedule.json`, no entry in `maintenance.json`), that call was
+  interrupted before it wrote the root files, or the directory was put there by hand: put it back
+  as it was and run adopt again as before, or commit it and run adopt with `--replace` and the
+  decision.
+
+When a root file's `.part` was moved away without either, the two files may give the package two
+roles as the composer reads them: a held entry in `schedule.json`, or a rule the composer judges by
+its value, beside its `maintenance.json` entry ("One role"; a rule that declares nothing beside that
+entry is part of the package's one maintenance role). A call with a decision writes its one role
+again and answers the entry it removes in `removed_entries`; a call without one is refused
+`repository_invalid` at that entry, its message saying to commit `packs/<package_id>` or put it back
+as it was, then to run adopt with `--replace` and the decision the interrupted call was given; or,
+to undo it, to put `packs/<package_id>` back as it was and restore both files with the version
+control.
 
 The repository's own items adopt does not write are named in `next` when the checkout holds them:
 a regression case (`regression/<game>/`), the catalog section (`docs/PACKS.md`) and the census row

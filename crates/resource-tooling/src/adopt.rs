@@ -45,10 +45,17 @@
 //!   and moved back when the new one cannot take its place; `schedule.json` and `maintenance.json`,
 //!   each only when it changes, both written as `<name>.part` first, then each read again and
 //!   renamed only when it is still the file the call read, the file that gives the package its
-//!   new role first, so that a call interrupted between the two renames leaves a `.part` and two
-//!   roles the next call sees. A failure is `adopt_write_failed` naming where it stopped and what
-//!   it had written. The check tree alone is the tool's own scratch, made whole under a temporary
-//!   name and renamed into place, and emptied at the start of each call when its marker is there.
+//!   new role first, so that a call interrupted between the two renames leaves a `.part` the next
+//!   call sees. A failure is `adopt_write_failed` naming where it stopped and what it had written.
+//!   The check tree alone is the tool's own scratch, made whole under a temporary name of its
+//!   call's own and renamed into place, and emptied at the start of each call when its marker is
+//!   there, as is a temporary directory a crash left beside it that carries the marker.
+//! - **One role as the composer reads it** (fix round 3): a rule is a business rule exactly when
+//!   the composer judges it by its value (the policy crate's `is_judged_rule`), so a rule of a
+//!   package a root file makes maintenance-role is part of its maintenance role, not a second one.
+//! - **After an interruption** (fix round 3): each refusal that meets what an interrupted call
+//!   left says what that call left and the steps that are taken from there; a root file's `.part`
+//!   is trusted as that file whole only when it reads as it and is in the canonical form.
 //! - **The value's origin** (coordinator ruling on #464): adopt never writes
 //!   `fixed_value_origin: "model"`. A decided value is `"pending"` or a number of the pack's own
 //!   (`origin` absent or `pack`), written as `fixed_value_milli` without an origin; a decision that
@@ -77,8 +84,8 @@ use actingcommand_contract::{
     SCHEDULE_VALUE_ORIGIN_MODEL, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE,
     STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
     STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_SCHEDULE_VERSION, ScheduleItem, ScheduleRule, StandardPackRegistry,
-    StandardPackRoot, StandardPackSchedule, canonical_json_bytes,
+    STANDARD_PACK_SCHEDULE_VERSION, ScheduleItem, ScheduleRule, StandardPackClassification,
+    StandardPackRegistry, StandardPackRoot, StandardPackSchedule, canonical_json_bytes,
     package_id_names_one_path_segment, parse_standard_pack_interrupts,
     parse_standard_pack_navigation, parse_standard_pack_pages, parse_standard_pack_schedule,
     reserved_package_id, standard_pack_maintenance_packages,
@@ -89,7 +96,7 @@ use actingcommand_policy::{
     BENEFIT_FIXED_VALUE_SUBSYSTEM, BenefitGap, CONSUMPTION_FACT_SUBSYSTEM, CompiledCatalog,
     FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
     MAX_QUEUE_WAIT_MEMBER, POOL_FACT_REFERENCE_SUBSYSTEM, PolicyCode, QUEUE_WAIT_SUBSYSTEM,
-    SCHEDULE_RULE_LIMITED_MEMBER, is_manual_request,
+    SCHEDULE_RULE_LIMITED_MEMBER, is_judged_rule, is_manual_request,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -119,9 +126,12 @@ pub(crate) const CHECK_TREE_MARKER: &str = ".adopt-check-tree";
 /// Of a check tree's name: the characters of the checkout's last segment kept, then the digest.
 const CHECK_TREE_STEM_CHARS: usize = 32;
 const CHECK_TREE_DIGEST_CHARS: usize = 16;
-/// A check tree is made whole beside its place, as `<checkout>.new-<process>-<count>/` with its
-/// marker, and renamed into place, so that no crash leaves it unmarked; the count makes each such
-/// directory of the process its own.
+/// A check tree is made whole beside its place, as `<checkout>.new-<process>-<ms>-<count>/` with
+/// its marker, and renamed into place, so that no crash leaves it unmarked. The process, the
+/// call's time and a count of the process name it, and a name a directory already holds is never
+/// taken (the next count is), so that no two calls, of one process or of two, share one; a call
+/// that holds the tree clears such a directory a crash left beside it when it carries the marker
+/// ([`clear_staged_leftovers`]).
 const CHECK_TREE_STAGING: &str = "new";
 static CHECK_TREE_STAGED: AtomicU64 = AtomicU64::new(0);
 /// A recording's file and the directory of the package its last stop generated.
@@ -556,14 +566,14 @@ pub fn standard_pack_adopt(
     if fs::symlink_metadata(&staged).is_ok() {
         return Err(refused(
             adopt(AdoptProblem::PackExists).entry(format!("{pack_relative}.{PART}")),
-            interrupted(&root.leftovers),
+            interrupted(&repo, &root.leftovers),
         ));
     }
     let pack_exists = fs::symlink_metadata(&pack_dir).is_ok();
     if !request.replace && (pack_exists || existing.any()) {
         return Err(refused(
             existing.pointing(adopt(AdoptProblem::PackExists), pack_exists, &pack_relative),
-            format!("{package_id} was adopted before; give --replace to adopt it again"),
+            existing.adopted_before(&root, &package_id, pack_exists),
         ));
     }
     let kept_place = state
@@ -648,7 +658,7 @@ pub fn standard_pack_adopt(
     };
     let class = match (
         &decision,
-        existing.class(&root.schedule, &root.maintenance_role, &package_id),
+        existing.class(&root.schedule, &root.classification),
     ) {
         (Some(decision), _) => decision.class,
         (None, Some(class)) => class,
@@ -677,14 +687,16 @@ pub fn standard_pack_adopt(
         ));
     }
     // A maintenance role by its uses alone never turns the package's business rule into a
-    // maintenance rule.
+    // maintenance rule. A business rule is one the composer judges by its value (its own
+    // `is_judged_rule`): a rule of a package a root file makes maintenance-role is not judged, and
+    // is part of that role already.
     if let Some(decision) = &decision
         && decision.class == AdoptClass::Maintenance
         && decision.trigger.is_none()
         && decision.uses.is_some()
         && let Some(index) = existing.rule
         && let Some(rule) = root.schedule.rules.get(index)
-        && !rule.maintenance
+        && is_judged_rule(rule, &root.classification)
     {
         return Err(refused(
             named_package(adopt(AdoptProblem::BusinessRuleInTheWay), &package_id)
@@ -692,9 +704,11 @@ pub fn standard_pack_adopt(
                 .json_pointer(format!("/{RULES}/{index}")),
             format!(
                 "the decision gives {package_id} a maintenance role by its uses alone, and \
-                 schedule.json holds its business rule {} at /{RULES}/{index}, which adopt does \
-                 not turn into a maintenance rule; take that rule out of schedule.json first, or \
-                 give the decision the trigger of a maintenance rule; nothing was written",
+                 schedule.json holds its business rule {} at /{RULES}/{index} (the composer \
+                 judges it by its value: it declares no maintenance and no root file gives the \
+                 package a maintenance role), which adopt does not turn into a maintenance rule; \
+                 take that rule out of schedule.json first, or give the decision the trigger of a \
+                 maintenance rule; nothing was written",
                 rule.id
             ),
         ));
@@ -702,7 +716,7 @@ pub fn standard_pack_adopt(
     // Without a decision nothing decides a role, so two roles in the files adopt writes (an
     // adoption interrupted between its two renames leaves them so) are told and not kept.
     if decision.is_none()
-        && let Some((entry_index, message)) = existing.two_roles(&root)
+        && let Some((entry_index, message)) = existing.two_roles(&root, &package_id)
     {
         return Err(refused(
             named_package(adopt(AdoptProblem::RepositoryInvalid), &package_id)
@@ -757,6 +771,7 @@ pub fn standard_pack_adopt(
         repo: &repo,
         root: &root,
         state: &state,
+        at_unix_ms: request.at_unix_ms,
         package_id: &package_id,
         files: &package.files,
         plan: &plan,
@@ -882,6 +897,7 @@ pub fn standard_pack_adopt(
                 files: &package.files,
                 staged: &staged,
                 pack_dir: &pack_dir,
+                pack_relative: &pack_relative,
                 kept: replaced.then_some(kept_place.as_path()),
                 plan: &plan,
                 read_schedule: root.schedule_bytes.as_deref(),
@@ -941,8 +957,10 @@ struct Repository {
     maintenance: Vec<BundleMaintenance>,
     schedule_bytes: Option<Vec<u8>>,
     schedule: StandardPackSchedule,
-    /// The packages a role of the root files makes maintenance-role.
-    maintenance_role: BTreeSet<String>,
+    /// The packages a role of the root files makes maintenance-role, as the composer's
+    /// classification holds them (`standard_pack_maintenance_packages`), so that a rule's role is
+    /// read by the composer's own `is_judged_rule`; its other sets are not read and stay empty.
+    classification: StandardPackClassification,
     /// The packages each root file adopt does not write (`pages.json`, `navigation.json`,
     /// `interrupts.json`) gives a maintenance role, by the file's name.
     other_roles: Vec<(&'static str, BTreeSet<String>)>,
@@ -973,7 +991,7 @@ impl Repository {
             .iter()
             .find(|left| !left.starts_with(&pack_prefix))
         {
-            return Err(repository_invalid(part, interrupted(&leftovers)));
+            return Err(repository_invalid(part, interrupted(repo, &leftovers)));
         }
         let schedule_path = repo.join(STANDARD_PACK_SCHEDULE_FILE);
         let schedule_bytes = optional_file(&schedule_path, STANDARD_PACK_SCHEDULE_FILE)?;
@@ -997,7 +1015,10 @@ impl Repository {
             maintenance,
             schedule_bytes,
             schedule,
-            maintenance_role: roles.all,
+            classification: StandardPackClassification {
+                maintenance: roles.all,
+                ..StandardPackClassification::default()
+            },
             other_roles: roles.others,
             leftovers,
         })
@@ -1049,9 +1070,11 @@ fn leftovers(repo: &Path) -> LabResult<Vec<String>> {
     Ok(left)
 }
 
-/// The message of a refusal for what an interrupted adoption left: each leftover by name, and
-/// what to do (`contracts/standard-pack-authoring.md`, "If a call was interrupted").
-fn interrupted(leftovers: &[String]) -> String {
+/// The message of a refusal for what an interrupted adoption left: each leftover by name, what it
+/// tells of that call, and the steps to take from there, each of which a later call accepts
+/// (`contracts/standard-pack-authoring.md`, "If a call was interrupted"). A root file's `.part` is
+/// trusted as that file whole only when [`finished_part`] finds it so.
+fn interrupted(repo: &Path, leftovers: &[String]) -> String {
     let pack_prefix = format!("{PACKS_DIRECTORY}/");
     let mut said = vec![format!(
         "an earlier adoption was interrupted and left {leftovers:?} in the checkout, and adopt \
@@ -1059,45 +1082,125 @@ fn interrupted(leftovers: &[String]) -> String {
     )];
     if leftovers.iter().any(|left| left.starts_with(&pack_prefix)) {
         said.push(
-            "packs/<package_id>.part is a new pack directory that call had not put in place: \
+            "packs/<package_id>.part is a pack directory that call had not put in place (whole, \
+             or cut off where the call was interrupted), and that call had written no root file: \
              when it began, packs/<package_id> was absent or committed (adopt refuses a pack \
              directory with changes), so `git status -- packs/<package_id>` shows exactly what \
-             it left there, and a replaced directory it had moved away is in the last commit and \
-             under the state directory's adopt/; move that .part out of the checkout by hand"
+             it left there, and a directory it replaced and had moved away is in the last commit \
+             and under the state directory's adopt/; move that .part out of the checkout by \
+             hand, then run adopt again as that call was run"
                 .to_owned(),
         );
     }
-    let left = [STANDARD_PACK_SCHEDULE_FILE, MAINTENANCE_FILE]
+    let parts = [STANDARD_PACK_SCHEDULE_FILE, MAINTENANCE_FILE]
         .into_iter()
         .filter(|name| leftovers.contains(&format!("{name}.{PART}")))
         .collect::<Vec<_>>();
-    if !left.is_empty() {
-        said.push(format!(
-            "a root file's .part is that file whole as that call computed it; the call writes \
-             every .part before it renames the first, and renames schedule.json and \
-             maintenance.json one after the other, so {left:?} were not renamed and are as they \
-             were before that call"
-        ));
-        if let [one] = left.as_slice() {
-            let other = if *one == STANDARD_PACK_SCHEDULE_FILE {
-                MAINTENANCE_FILE
-            } else {
-                STANDARD_PACK_SCHEDULE_FILE
-            };
-            said.push(format!(
-                "{other} was either renamed by that call or not changed by it: look whether it \
-                 holds the package's rule or entry as that call decided it"
-            ));
-        }
-        said.push(
-            "to finish the interrupted adoption, rename each root file's .part over its file; to \
-             undo it, move those .part files out of the checkout and restore the root files with \
-             the version control"
-                .to_owned(),
-        );
+    if parts.is_empty() {
+        return said.join("; ");
     }
-    said.push("then run adopt again; it refuses while a leftover named is there".to_owned());
+    said.push(format!(
+        "that call put its packs/<package_id> in place before it wrote its first root .part, \
+         writes every root .part before it renames the first, and renames schedule.json and \
+         maintenance.json one after the other, so {parts:?} were not renamed and are as they were \
+         before that call"
+    ));
+    let mut trusted = Vec::new();
+    let mut cut_off = false;
+    for name in parts {
+        match finished_part(repo, name) {
+            Ok(()) => {
+                said.push(format!(
+                    "{name}.{PART} is trusted as {name} whole: it reads as {name} and is in the \
+                     canonical form, its final newline included, as a finished write leaves it"
+                ));
+                trusted.push(name);
+            }
+            Err(why) => {
+                said.push(format!(
+                    "{name}.{PART} is not trusted ({why}): it is not whole, as a .part the call \
+                     was interrupted while writing is not"
+                ));
+                cut_off = true;
+            }
+        }
+    }
+    let finish = if cut_off {
+        "a .part not trusted was being written when the call stopped, so it had renamed no root \
+         file and every root file is as it was before that call; renaming does not finish that \
+         adoption"
+            .to_owned()
+    } else if let [one] = trusted.as_slice() {
+        let other = if *one == STANDARD_PACK_SCHEDULE_FILE {
+            MAINTENANCE_FILE
+        } else {
+            STANDARD_PACK_SCHEDULE_FILE
+        };
+        format!(
+            "{other} was renamed by that call, or was not to change in it, or was to change and \
+             the call stopped before it wrote its .part: when {other} already is as that call \
+             decided it (the package's rule, held entry or maintenance.json entry there, or gone \
+             where the call ended one), renaming {one}.{PART} over {one} finishes that adoption \
+             and nothing more is run; when it is not, renaming does not finish it"
+        )
+    } else {
+        "both were written whole and neither was renamed: renaming each over its file finishes \
+         that adoption and nothing more is run"
+            .to_owned()
+    };
+    said.push(finish);
+    said.push(format!(
+        "to run that adoption again instead: move the root .part files out of the checkout; {}; \
+         then run adopt with --replace and the --decide that call was given, if any, which writes \
+         the package's one role from the root files as they are; to undo it: move the root .part \
+         files out, put packs/<package_id> back as it was, and restore with the version control \
+         a root file that call renamed (to its last commit: a change not committed before that \
+         call is not in it)",
+        new_directory_step("packs/<package_id>", "that call")
+    ));
     said.join("; ")
+}
+
+/// The step that comes before adopt is run again on a package whose new directory an interrupted
+/// or stopped call (`who`) put in place, `pack` by its path relative to the checkout: the
+/// directory is not committed, so `--replace` refuses it `pack_dirty` until it is committed or
+/// put back as it was (`contracts/standard-pack-authoring.md`, "If a call was interrupted").
+fn new_directory_step(pack: &str, who: &str) -> String {
+    format!(
+        "{pack} is {who}'s new directory and not committed, which --replace refuses: commit it, \
+         or put it back as it was (move it out of the checkout by hand and, where it was \
+         committed, restore it with the version control; a directory {who} replaced is also \
+         under the state directory's adopt/)"
+    )
+}
+
+/// Whether the `.part` of the root file `name` that an interrupted call left in `repo` is that
+/// file whole, as a finished write of adopt leaves it: a file that reads as that root file
+/// (`schedule.json` by the schedule reader, `maintenance.json` as its list of entries) and is in
+/// the canonical form, its final newline included. A `.part` cut off by a crash ends before its
+/// last bracket or its final newline, so it is not; `Err` says why not, in words.
+fn finished_part(repo: &Path, name: &str) -> Result<(), String> {
+    let path = repo.join(format!("{name}.{PART}"));
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return Err("it is no file".to_owned()),
+        Err(error) => return Err(format!("it cannot be read: {error}")),
+    }
+    let bytes = fs::read(&path).map_err(|error| format!("it cannot be read: {error}"))?;
+    let value = serde_json::from_slice::<Value>(&bytes)
+        .map_err(|error| format!("it is no whole JSON document: {error}"))?;
+    if canonical_json_bytes(&value).ok().as_deref() != Some(bytes.as_slice()) {
+        return Err("it is not in the canonical form, its final newline included".to_owned());
+    }
+    if name == STANDARD_PACK_SCHEDULE_FILE {
+        parse_standard_pack_schedule(&bytes)
+            .map(|_| ())
+            .map_err(|issue| format!("it does not read as schedule.json: {issue}"))
+    } else {
+        serde_json::from_value::<Vec<BundleMaintenance>>(value)
+            .map(|_| ())
+            .map_err(|error| format!("it does not read as maintenance.json: {error}"))
+    }
 }
 
 /// The game and the servers `applications.json` declares; its full check is `package bundle`'s.
@@ -1508,28 +1611,76 @@ impl Existing {
     }
 
     /// The class the earlier adoption gave the package, as the composer reads the files: held
-    /// wins, as the composer leaves a held package's rule out; then a maintenance role of the root
-    /// files, which leaves its rule unjudged whatever it declares.
+    /// wins, as the composer leaves a held package's rule out; then its rule, business exactly
+    /// when the composer judges it by its value (`is_judged_rule`: a maintenance role of the root
+    /// files leaves it unjudged whatever it declares); then its `maintenance.json` entry.
     fn class(
         &self,
         schedule: &StandardPackSchedule,
-        maintenance_role: &BTreeSet<String>,
-        package_id: &str,
+        classification: &StandardPackClassification,
     ) -> Option<AdoptClass> {
         if self.held.is_some() {
             return Some(AdoptClass::Held);
         }
-        if self.any() && maintenance_role.contains(package_id) {
-            return Some(AdoptClass::Maintenance);
-        }
-        if let Some(index) = self.rule {
-            return Some(if schedule.rules[index].maintenance {
-                AdoptClass::Maintenance
-            } else {
+        if let Some(rule) = self.rule.and_then(|index| schedule.rules.get(index)) {
+            return Some(if is_judged_rule(rule, classification) {
                 AdoptClass::Business
+            } else {
+                AdoptClass::Maintenance
             });
         }
         self.maintenance.map(|_| AdoptClass::Maintenance)
+    }
+
+    /// The message of `pack_exists` without `--replace` (`pack_exists` the directory is there):
+    /// what the checkout holds of the package, and what to do. When only `packs/<package_id>` is
+    /// there and no root file adopt writes names the package, an adoption was interrupted after it
+    /// put the directory in place and before it wrote the root files (or the directory was put
+    /// there by hand), and the message says so (`contracts/standard-pack-authoring.md`, "If a call
+    /// was interrupted").
+    fn adopted_before(&self, root: &Repository, package_id: &str, pack_exists: bool) -> String {
+        let pack = format!("{PACKS_DIRECTORY}/{package_id}");
+        if !self.any() {
+            return format!(
+                "{pack} is there and no root file adopt writes names {package_id} (schedule.json \
+                 holds no rule or held entry of it, maintenance.json no entry of it for its \
+                 server): an adoption of it was interrupted after it put that directory in place \
+                 and before it wrote the root files, or the directory was put there by hand; when \
+                 an adoption begins, {pack} is absent or committed (adopt refuses a pack \
+                 directory with changes), so `git status -- {pack}` shows what is not committed \
+                 there; put the directory back as it was (move it out of the checkout by hand \
+                 and, where it was committed, restore it with the version control) and run adopt \
+                 again as before, or commit it and run adopt with --replace and the decision; \
+                 nothing was written"
+            );
+        }
+        let mut held = Vec::new();
+        if pack_exists {
+            held.push(format!("its directory {pack}"));
+        }
+        if let Some(index) = self.rule {
+            let id = root
+                .schedule
+                .rules
+                .get(index)
+                .map_or(package_id, |rule| rule.id.as_str());
+            held.push(format!(
+                "its rule {id} at /{RULES}/{index} of schedule.json"
+            ));
+        }
+        if let Some(index) = self.held {
+            held.push(format!(
+                "its held entry at /{HELD}/{index} of schedule.json"
+            ));
+        }
+        if let Some(index) = self.maintenance {
+            held.push(format!("its entry at /{index} of maintenance.json"));
+        }
+        format!(
+            "{package_id} was adopted before ({}); give --replace to adopt it again; nothing was \
+             written",
+            held.join(", ")
+        )
     }
 
     /// `outcome` naming what was adopted before: the directory, else the rule or the held entry
@@ -1556,31 +1707,37 @@ impl Existing {
         }
     }
 
-    /// Two roles of the package in the files adopt writes, which no adoption that ended leaves
-    /// (one interrupted between its two renames does): its held entry or its business rule in
-    /// `schedule.json` beside its `maintenance.json` entry. The entry's index and the message that
-    /// says what to do; `None` when the package has one role there.
-    fn two_roles(&self, root: &Repository) -> Option<(usize, String)> {
+    /// Two roles of the package in the files adopt writes, as the composer reads them, which no
+    /// adoption that ended leaves (one interrupted between its two renames does): beside its
+    /// `maintenance.json` entry, its held entry, or a rule of it the composer judges by its value
+    /// (`is_judged_rule`; the composer judges no rule of a package such an entry names, so a rule
+    /// beside it is part of the package's one maintenance role). The entry's index and the message
+    /// that says what to do; `None` when the package has one role there.
+    fn two_roles(&self, root: &Repository, package_id: &str) -> Option<(usize, String)> {
         let entry = self.maintenance?;
-        let rule = self
+        let business = self
             .rule
-            .and_then(|index| root.schedule.rules.get(index).map(|rule| (index, rule)));
-        let other = match (self.held, rule) {
+            .and_then(|index| root.schedule.rules.get(index).map(|rule| (index, rule)))
+            .filter(|(_, rule)| is_judged_rule(rule, &root.classification));
+        let other = match (self.held, business) {
             (Some(index), _) => format!("its held entry at /{HELD}/{index}"),
-            (None, Some((index, rule))) if !rule.maintenance => {
+            (None, Some((index, rule))) => {
                 format!("its business rule {} at /{RULES}/{index}", rule.id)
             }
-            _ => return None,
+            (None, None) => return None,
         };
+        let pack = format!("{PACKS_DIRECTORY}/{package_id}");
         Some((
             entry,
             format!(
                 "schedule.json holds {other} and maintenance.json its maintenance entry at \
                  /{entry}: two roles, which an adoption that writes both files leaves only when it \
                  was interrupted between its two renames (the .part of the file it did not rename \
-                 is left, unless it was moved away). To finish that adoption, run adopt again with \
-                 the decision it was given, which writes one role; to undo it, restore \
-                 schedule.json and maintenance.json with the version control; nothing was written"
+                 is left, unless it was moved away). To finish that adoption: {}; then run adopt \
+                 with --replace and the decision that call was given, which writes one role. To \
+                 undo it: put {pack} back as it was and restore schedule.json and \
+                 maintenance.json with the version control. Nothing was written",
+                new_directory_step(&pack, "that call")
             ),
         ))
     }
@@ -2000,7 +2157,7 @@ impl Plan {
                 .rules
                 .iter()
                 .filter(|rule| rule.package_id != inputs.package_id)
-                .map(|rule| (rule, tier_of(rule, &root.maintenance_role)))
+                .map(|rule| (rule, tier_of(rule, &root.classification)))
                 .collect(),
             tier,
             rule_id: rule_id.to_owned(),
@@ -2530,11 +2687,13 @@ enum Tier {
     Maintenance,
 }
 
-fn tier_of(rule: &ScheduleRule, maintenance_role: &BTreeSet<String>) -> Tier {
-    if rule.maintenance || maintenance_role.contains(&rule.package_id) {
-        Tier::Maintenance
-    } else {
+/// The tier of `rule`: business exactly when the composer judges it by its value
+/// (`is_judged_rule`).
+fn tier_of(rule: &ScheduleRule, classification: &StandardPackClassification) -> Tier {
+    if is_judged_rule(rule, classification) {
         Tier::Business
+    } else {
+        Tier::Maintenance
     }
 }
 
@@ -3311,6 +3470,8 @@ struct CheckInputs<'a> {
     repo: &'a Path,
     root: &'a Repository,
     state: &'a Path,
+    /// The operation's time, which names the directory a first call makes the tree whole in.
+    at_unix_ms: u64,
     package_id: &'a str,
     files: &'a BTreeMap<String, Vec<u8>>,
     plan: &'a Plan,
@@ -3356,9 +3517,11 @@ fn check_tree_name(repo: &Path) -> LabResult<String> {
 /// for this call: made whole and marked ([`CHECK_TREE_MARKER`], [`make_check_tree`]) when it is
 /// not there; when it is, refused when it is a link (a symbolic link or a junction: nothing is
 /// cleared through it), without its marker (it is then not the tool's own and nothing in it is
-/// touched) and while another call holds the marker, and otherwise emptied of everything but the
-/// marker. The marker is answered open and locked, and stays so until the call ends.
-fn prepare_check_tree(state: &Path, repo: &Path) -> LabResult<(PathBuf, File)> {
+/// touched) and while another call holds the marker, and otherwise, the marker locked, cleared of
+/// the marked directories a crash left beside it ([`clear_staged_leftovers`]) and emptied of
+/// everything but the marker. The marker is answered open and locked, and stays so until the call
+/// ends.
+fn prepare_check_tree(state: &Path, repo: &Path, at_unix_ms: u64) -> LabResult<(PathBuf, File)> {
     let parent = state.join(CHECK_DIRECTORY);
     fs::create_dir_all(&parent).map_err(|error| tree_failed(&parent, &error, IoOp::CreateDir))?;
     let name = check_tree_name(repo)?;
@@ -3367,7 +3530,7 @@ fn prepare_check_tree(state: &Path, repo: &Path) -> LabResult<(PathBuf, File)> {
     let metadata = match fs::symlink_metadata(&tree) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            make_check_tree(&parent, &name, repo)?;
+            make_check_tree(&parent, &name, repo, at_unix_ms)?;
             fs::symlink_metadata(&tree)
                 .map_err(|error| tree_failed(&tree, &error, IoOp::Metadata))?
         }
@@ -3423,6 +3586,9 @@ fn prepare_check_tree(state: &Path, repo: &Path) -> LabResult<(PathBuf, File)> {
             return Err(tree_failed(&marker, &error, IoOp::Lock));
         }
     }
+    // This call holds the tree: a directory a crash left beside it, in which a call was making it
+    // whole, goes when it carries the marker.
+    clear_staged_leftovers(&parent, &name)?;
     // Everything in it but its marker is this tool's scratch of an earlier call.
     let entries = fs::read_dir(&tree)
         .map_err(|error| tree_failed(&tree, &error, IoOp::ReadDir))?
@@ -3446,18 +3612,28 @@ fn prepare_check_tree(state: &Path, repo: &Path) -> LabResult<(PathBuf, File)> {
 }
 
 /// Makes the check tree `<parent>/<name>/` whole, so that no crash leaves it unmarked: this call's
-/// own directory `<name>.new-<process>-<count>/` beside it with the marker written, renamed into
-/// place. When another call put its tree there first (two first calls at once), this call's own
-/// directory, which holds only the marker this call wrote, is removed and the other's tree is
-/// used. A crash before the rename leaves only that directory of this call, which no call reads.
-fn make_check_tree(parent: &Path, name: &str, repo: &Path) -> LabResult<()> {
+/// own directory `<name>.new-<process>-<ms>-<count>/` beside it (a name no directory holds: a
+/// taken one is passed over for the next count) with the marker written, renamed into place.
+/// When another call put its tree there first (two first calls at once), this call's own
+/// directory, which holds only the marker this call wrote, is removed (unless that call, which
+/// holds the tree, cleared it already) and the other's tree is used. A crash before the rename
+/// leaves only that directory of this call, marked, which no call reads and the next call that
+/// holds the tree clears ([`clear_staged_leftovers`]).
+fn make_check_tree(parent: &Path, name: &str, repo: &Path, at_unix_ms: u64) -> LabResult<()> {
     let tree = parent.join(name);
-    let staged = parent.join(format!(
-        "{name}.{CHECK_TREE_STAGING}-{}-{}",
-        std::process::id(),
-        CHECK_TREE_STAGED.fetch_add(1, Ordering::Relaxed)
-    ));
-    create_dir(&staged)?;
+    let staged = loop {
+        let staged = parent.join(format!(
+            "{name}.{CHECK_TREE_STAGING}-{}-{at_unix_ms}-{}",
+            std::process::id(),
+            CHECK_TREE_STAGED.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::create_dir(&staged) {
+            Ok(()) => break staged,
+            // The name is another directory's (a leftover of an earlier process): the next count.
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(tree_failed(&staged, &error, IoOp::CreateDir)),
+        }
+    };
     let marker = staged.join(CHECK_TREE_MARKER);
     let text = format!(
         "actinglab standard-pack adopt keeps the check tree of the checkout {} in this \
@@ -3474,14 +3650,92 @@ fn make_check_tree(parent: &Path, name: &str, repo: &Path) -> LabResult<()> {
         return Err(noted(
             tree_failed(&tree, &error, IoOp::Rename),
             &format!(
-                "the check tree made beside it stays at {}, and no call reads it",
+                "the check tree made beside it stays at {}, with its marker: no call reads it, \
+                 and the next call on the checkout that holds the tree clears it; nothing was \
+                 written in the repository; run adopt again",
                 staged.display()
             ),
         ));
     }
-    // Another call's tree took the place first: this call's own directory goes.
-    fs::remove_file(&marker).map_err(|error| tree_failed(&marker, &error, IoOp::Remove))?;
-    fs::remove_dir(&staged).map_err(|error| tree_failed(&staged, &error, IoOp::Remove))
+    // Another call's tree took the place first: this call's own directory goes, unless that call,
+    // which holds the tree, cleared it already.
+    gone(&marker, fs::remove_file(&marker))?;
+    gone(&staged, fs::remove_dir(&staged))
+}
+
+/// Clears what calls made the checkout's check tree `<parent>/<name>/` whole in and a crash left
+/// beside it ([`make_check_tree`]: `<name>.new-<process>-<ms>-<count>/`), each only when it
+/// carries the marker: a directory of that name without it is not the tool's and is left alone,
+/// and a link of that name is refused `check_tree_link` before anything is cleared. Called while
+/// this call holds the tree: the tree is in place, so no call renames such a directory into it any
+/// more, and a call still making its own finds the tree there and goes on with it.
+fn clear_staged_leftovers(parent: &Path, name: &str) -> LabResult<()> {
+    let prefix = format!("{name}.{CHECK_TREE_STAGING}-");
+    let names = fs::read_dir(parent)
+        .map_err(|error| tree_failed(parent, &error, IoOp::ReadDir))?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(|error| tree_failed(parent, &error, IoOp::ReadDir))?;
+    let mut marked = Vec::new();
+    for entry_name in names {
+        let Some(rest) = entry_name
+            .to_str()
+            .and_then(|text| text.strip_prefix(prefix.as_str()))
+        else {
+            continue;
+        };
+        if !staged_suffix(rest) {
+            continue;
+        }
+        let path = parent.join(&entry_name);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(tree_failed(&path, &error, IoOp::Metadata)),
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(refused(
+                adopt(AdoptProblem::CheckTreeLink).path(&path),
+                format!(
+                    "{} is named as a directory adopt makes the check tree {} whole in, and is a \
+                     link (a symbolic link or a junction): adopt clears nothing through a link and \
+                     touches nothing where it points; move it away by hand; nothing was written",
+                    path.display(),
+                    parent.join(name).display()
+                ),
+            ));
+        }
+        if metadata.is_dir()
+            && fs::symlink_metadata(path.join(CHECK_TREE_MARKER))
+                .is_ok_and(|marker| marker.is_file())
+        {
+            marked.push(path);
+        }
+    }
+    for path in marked {
+        gone(&path, fs::remove_dir_all(&path))?;
+    }
+    Ok(())
+}
+
+/// Whether `rest`, what follows `<name>.new-` in a name beside the check tree, is
+/// `<process>-<ms>-<count>` as [`make_check_tree`] writes it: three decimal numbers.
+fn staged_suffix(rest: &str) -> bool {
+    let fields = rest.split('-').collect::<Vec<_>>();
+    fields.len() == 3
+        && fields
+            .iter()
+            .all(|field| !field.is_empty() && field.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// `removed`, the removal of `path`: done, or found done already (`NotFound`, another call that
+/// holds the check tree cleared it); any other failure is `adopt_write_failed` at `path`.
+fn gone(path: &Path, removed: io::Result<()>) -> LabResult<()> {
+    match removed {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(tree_failed(path, &error, IoOp::Remove)),
+    }
 }
 
 /// B.4 item 6: the tree as it would be written, in the checkout's check tree
@@ -3492,7 +3746,7 @@ fn make_check_tree(parent: &Path, name: &str, repo: &Path) -> LabResult<()> {
 /// that refuses the file as it would be written is `rule_refused` with the composer's pointer, any
 /// other refusal is answered as it is. Nothing is written in the repository.
 fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
-    let (tree, marker) = prepare_check_tree(inputs.state, inputs.repo)?;
+    let (tree, marker) = prepare_check_tree(inputs.state, inputs.repo, inputs.at_unix_ms)?;
     let packs_root = tree.join("packs-root");
     create_dir(&packs_root)?;
     let packs = inputs.repo.join(PACKS_DIRECTORY);
@@ -3653,6 +3907,8 @@ struct WriteInputs<'a> {
     files: &'a BTreeMap<String, Vec<u8>>,
     staged: &'a Path,
     pack_dir: &'a Path,
+    /// `packs/<package_id>`, relative to the checkout, as a message names it.
+    pack_relative: &'a str,
     /// Where the replaced pack directory goes, when it is replaced.
     kept: Option<&'a Path>,
     plan: &'a Plan,
@@ -3668,7 +3924,8 @@ struct WriteInputs<'a> {
 /// The order the two root files are renamed in: first the file that gives the package its new
 /// role (`maintenance.json` for the class maintenance, `schedule.json` for the others), then the
 /// file that ends its old one, so that a call interrupted between the two renames leaves the
-/// package two roles, which the next call tells, beside the `.part` of the file not renamed.
+/// `.part` of the file not renamed, which the next call tells, and never ends the old role before
+/// the new one is written.
 fn root_order(maintenance_first: bool) -> [&'static str; 2] {
     if maintenance_first {
         [MAINTENANCE_FILE, STANDARD_PACK_SCHEDULE_FILE]
@@ -3708,7 +3965,7 @@ fn write_adoption(
     // Before the first write: each root file it will rename is still the one it read.
     for (name, bytes, read) in root_writes {
         if bytes.is_some() {
-            unchanged(inputs.repo, name, read, &done)?;
+            unchanged(inputs.repo, name, read, &done, inputs.pack_relative)?;
         }
     }
     fs::create_dir(inputs.staged)
@@ -3744,7 +4001,9 @@ fn write_adoption(
             Ok(()) => {
                 done.retain(|done_path| done_path.as_path() != kept);
                 format!(
-                    "the old directory was moved back from {} to {}; the new one stays as {}",
+                    "the old directory was moved back from {} to {}; the new one stays as {}: \
+                     move it out of the checkout by hand, then run adopt again as this call was \
+                     run",
                     kept.display(),
                     inputs.pack_dir.display(),
                     inputs.staged.display()
@@ -3752,7 +4011,8 @@ fn write_adoption(
             }
             Err(back) => format!(
                 "moving the old directory back from {} failed too ({back}): it is there, {} is \
-                 missing, and the new one stays as {}; move the old one back by hand",
+                 missing, and the new one stays as {}; move the old one back by hand and the new \
+                 one out of the checkout, then run adopt again as this call was run",
                 kept.display(),
                 inputs.pack_dir.display(),
                 inputs.staged.display()
@@ -3777,7 +4037,7 @@ fn write_adoption(
     }
     for (name, part, read) in parts {
         let target = inputs.repo.join(name);
-        unchanged(inputs.repo, name, read, &done)?;
+        unchanged(inputs.repo, name, read, &done, inputs.pack_relative)?;
         worktree
             .rename(&part, &target)
             .map_err(|error| write_failed(&target, &done, &error, IoOp::Rename))?;
@@ -3788,8 +4048,17 @@ fn write_adoption(
 
 /// The root file `name` of `repo` is still `read` (`None`: absent), the bytes the call computed
 /// from; otherwise a write refusal (`adopt_write_failed` at the file) that says it changed, after
-/// `done`: the call renames nothing more.
-fn unchanged(repo: &Path, name: &str, read: Option<&[u8]>, done: &[PathBuf]) -> LabResult<()> {
+/// `done`: the call renames nothing more. Its message says what to do: before anything was
+/// written, run adopt again; after the call put its new directory `pack` in place, move the root
+/// `.part` files it wrote out, commit `pack` or put it back as it was, and run adopt again with
+/// `--replace` ([`new_directory_step`]).
+fn unchanged(
+    repo: &Path,
+    name: &str,
+    read: Option<&[u8]>,
+    done: &[PathBuf],
+    pack: &str,
+) -> LabResult<()> {
     let path = repo.join(name);
     let now = match fs::read(&path) {
         Ok(bytes) => Some(bytes),
@@ -3809,14 +4078,23 @@ fn unchanged(repo: &Path, name: &str, read: Option<&[u8]>, done: &[PathBuf]) -> 
         .iter()
         .map(|done_path| done_path.display().to_string())
         .collect::<Vec<_>>();
+    let next = if done.is_empty() {
+        "nothing was written: run adopt again, which reads the file as it is now".to_owned()
+    } else {
+        format!(
+            "written or moved before: {listed:?}; nothing is removed: compare with the version \
+             control; move the root .part files this call wrote out of the checkout; {}; then run \
+             adopt again with --replace and this call's --decide, if any, which reads the root \
+             files as they are now",
+            new_directory_step(pack, "this call")
+        )
+    };
     Err(LabError::new(
         LabErrorClass::UsageValidation,
         ResourceToolingCode::AdoptWriteFailed.as_str(),
         format!(
             "{} changed after this call read it (another adoption or another writer), so this \
-             call stops here and renames nothing more, and does not overwrite that work; written \
-             or moved before: {listed:?}; nothing is removed: compare with the version control, \
-             move what this call left away by hand, and run adopt again",
+             call stops here and renames nothing more, and does not overwrite that work; {next}",
             path.display()
         ),
         &[],

@@ -173,10 +173,12 @@ actingcommand_contract::outcome_vocabulary! {
         /// Another adoption of the checkout with the same state directory holds its check tree.
         CheckTreeBusy => "check_tree_busy",
         /// The place of the checkout's check tree is a link (a symbolic link or a junction), so
-        /// nothing in it is cleared (fix round 2).
+        /// nothing in it is cleared (fix round 2); or so is a directory beside it named as one a
+        /// call makes the tree whole in (fix round 3).
         CheckTreeLink => "check_tree_link",
-        /// A maintenance decision by its uses alone meets the package's business rule, which adopt
-        /// does not turn into a maintenance rule (fix round 2).
+        /// A maintenance decision by its uses alone meets the package's business rule (a rule the
+        /// composer judges by its value, fix round 3), which adopt does not turn into a
+        /// maintenance rule (fix round 2).
         BusinessRuleInTheWay => "business_rule_in_the_way",
     }
 }

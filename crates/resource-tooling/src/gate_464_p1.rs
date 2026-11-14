@@ -2,7 +2,8 @@
 
 // Workflow #464 P1 (register §1.377; contracts/standard-pack-authoring.md; coordinator work orders
 // `rd-1114/brief-464-p1-adopt.md`, the design's row "P1 adopt" of its section G,
-// `rd-1114/brief-1722-fix1.md` and `rd-1115/brief-1722-fix2.md`): `actinglab standard-pack adopt`
+// `rd-1114/brief-1722-fix1.md`, `rd-1115/brief-1722-fix2.md` and `rd-1115/brief-1722-fix3.md`):
+// `actinglab standard-pack adopt`
 // on a made-up resource repository of the game `neutral`, server `test`, which holds one package,
 // its business rule and a valued pool.
 // - a first adoption of a stopped recording writes exactly the pack directory (its JSON canonical)
@@ -38,7 +39,13 @@
 //   package's `maintenance.json` entry and answers it; `pending` for a follower of a chain is
 //   refused; a root file another writer changed after the call read it is not renamed over; the
 //   old pack directory is moved back when the new one cannot take its place; a check tree another
-//   call holds is refused `check_tree_busy`.
+//   call holds is refused `check_tree_busy`;
+// - fix round 3: after a call stopped between the two renames of the root files, the steps the
+//   refusals advise (move the trusted `.part` out, put the pack directory back as it was, adopt
+//   with `--replace` and the decision) are each accepted and end in one role; a rule that
+//   declares no maintenance beside its package's `maintenance.json` entry is that package's one
+//   maintenance role as the composer reads it (adopted again with or without a decision), and a
+//   business rule only without that entry.
 // No device, no Runtime, no clock read, no sleep: temporary directories and made-up packages.
 
 use crate::adopt::CHECK_TREE_MARKER;
@@ -213,6 +220,25 @@ impl AdoptWorktree for NewDirectoryInUse {
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         if from.ends_with(format!("{ADOPTED_DIRECTORY}.part")) {
             return Err(io::Error::other("a file of the new directory is in use"));
+        }
+        fs::rename(from, to)
+    }
+}
+
+/// Fix round 3: a machine on which the call stops between the two renames of the root files, as a
+/// crash there would leave them: the rename of `maintenance.json.part` (the second, for a decision
+/// of another class than maintenance) fails; every other rename is made. Every change is
+/// committed.
+struct StopsBetweenTheRenames;
+
+impl AdoptWorktree for StopsBetweenTheRenames {
+    fn changes_under(&self, _repo: &Path, _relative: &str) -> Result<Vec<String>, Outcome> {
+        Ok(Vec::new())
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if from.ends_with("maintenance.json.part") {
+            return Err(io::Error::other("the call stops here"));
         }
         fs::rename(from, to)
     }
@@ -2047,5 +2073,225 @@ fn p1_a_check_tree_another_adoption_holds_is_refused_busy() {
         tree(&check_tree),
         laid,
         "the tree another call holds is not emptied"
+    );
+}
+
+#[test]
+fn p1_after_an_interruption_between_the_two_renames_the_advised_steps_are_accepted() {
+    // A package with a maintenance.json entry, adopted again as held: the call renames
+    // schedule.json (its hold) first and maintenance.json (its entry ended) second, and stops
+    // between the two.
+    let entry = json!({"package_id": ADOPTED, "server": SERVER, "uses": ["startup"]});
+    let fixture = Fixture::new();
+    write(&fixture.repo().join("maintenance.json"), &json!([entry]));
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(ADOPTED, SERVER, "Adopted", &provenance("passed")),
+    );
+    let held = decide(
+        &fixture,
+        "held",
+        &json!({
+            "schema_version": DECISION_SCHEMA,
+            "class": "held",
+            "held": {"reason": "Fixture: kept from scheduling."}
+        }),
+    );
+    let error = standard_pack_adopt(
+        request(&fixture, source.clone(), Some(held.clone()), true, FIRST),
+        &StopsBetweenTheRenames,
+    )
+    .expect_err("the call stops between the two renames");
+    assert_eq!(
+        outcome_of_error(&error)["code"],
+        ResourceToolingCode::AdoptWriteFailed.as_str(),
+        "{error}"
+    );
+    // What it left: its directory in place, schedule.json renamed, maintenance.json as it was
+    // beside its .part.
+    assert!(
+        fixture
+            .repo()
+            .join(ADOPTED_DIRECTORY)
+            .join("control.json")
+            .is_file()
+    );
+    assert_eq!(fixture.schedule()["held"][0]["package_id"], ADOPTED);
+    assert!(fixture.repo().join("maintenance.json.part").is_file());
+
+    // The next call names the leftover, trusts it as maintenance.json whole, and says to move it
+    // out and run adopt again with --replace.
+    let before = tree(&fixture.repo());
+    let result = standard_pack_adopt(
+        request(&fixture, source.clone(), Some(held.clone()), true, SECOND),
+        &Committed,
+    );
+    let (_, message) = refusal(&result);
+    assert_refused(
+        result,
+        AdoptProblem::RepositoryInvalid,
+        &json!({"entry": "maintenance.json.part"}),
+        &fixture,
+        &before,
+    );
+    assert!(
+        message.contains("maintenance.json.part is trusted"),
+        "{message}"
+    );
+    assert!(message.contains("--replace"), "{message}");
+
+    // The .part moved out: a call without the decision meets the two roles and says to commit the
+    // pack directory or put it back, then to run adopt with --replace and the decision.
+    fs::rename(
+        fixture.repo().join("maintenance.json.part"),
+        fixture.path("maintenance.json.part"),
+    )
+    .expect("the .part moved out of the checkout");
+    let before = tree(&fixture.repo());
+    let result = standard_pack_adopt(
+        request(&fixture, source.clone(), None, true, THIRD),
+        &Committed,
+    );
+    let (_, message) = refusal(&result);
+    assert_refused(
+        result,
+        AdoptProblem::RepositoryInvalid,
+        &json!({"entry": "maintenance.json", "json_pointer": "/0", "package_id": ADOPTED}),
+        &fixture,
+        &before,
+    );
+    assert!(
+        message.contains("commit it, or put it back as it was"),
+        "{message}"
+    );
+    assert!(message.contains("--replace"), "{message}");
+
+    // The pack directory put back as it was (absent before that call), adopt with --replace and
+    // the decision is accepted and writes the package's one role.
+    fs::rename(
+        fixture.repo().join(ADOPTED_DIRECTORY),
+        fixture.path("adopted-directory-moved-out"),
+    )
+    .expect("the directory moved out of the checkout");
+    let answer = standard_pack_adopt(
+        request(&fixture, source, Some(held), true, FOURTH),
+        &Committed,
+    )
+    .unwrap_or_else(|error| panic!("the advised call is accepted: {error}"));
+    assert_eq!(answer.class, AdoptClass::Held);
+    assert_eq!(
+        answer.removed_entries,
+        [RootEntryChange {
+            file: "maintenance.json".to_owned(),
+            json_pointer: "/0".to_owned(),
+            before: entry,
+            after: None,
+        }]
+    );
+    assert_eq!(
+        fs::read(fixture.repo().join("maintenance.json")).expect("maintenance.json"),
+        canonical_json_bytes(&json!([])).expect("canonical JSON"),
+        "one role"
+    );
+    assert_eq!(fixture.schedule()["held"][0]["package_id"], ADOPTED);
+    assert!(!fixture.repo().join("maintenance.json.part").exists());
+    assert!(!fixture.repo().join("schedule.json.part").exists());
+}
+
+#[test]
+fn p1_a_rule_beside_its_packages_maintenance_entry_is_its_one_maintenance_role() {
+    // A hand-written root: the package's rule declares no maintenance and writes no value.
+    let mut rule = adopted_rule(1);
+    let value = rule
+        .as_object_mut()
+        .expect("the rule")
+        .shift_remove("fixed_value_milli");
+    assert_eq!(value, Some(json!(1)));
+    let entry = json!({"package_id": ADOPTED, "server": SERVER, "uses": ["startup"]});
+    let hand_written = |fixture: &Fixture, maintenance: &Value| {
+        write(
+            &fixture.repo().join("schedule.json"),
+            &json!({
+                "schema_version": "actingcommand.schedule.v1",
+                "rules": [existing_rule(), rule.clone()],
+                "pools": [pool()]
+            }),
+        );
+        write(&fixture.repo().join("maintenance.json"), maintenance);
+        write_directory(
+            &fixture.repo().join(ADOPTED_DIRECTORY),
+            &package_files(ADOPTED, SERVER, "Adopted before", &provenance("passed")),
+        );
+    };
+    let by_uses = json!({
+        "schema_version": DECISION_SCHEMA,
+        "class": "maintenance",
+        "uses": "startup"
+    });
+
+    // Without the entry the composer judges the rule by its value: a business rule, beside which
+    // a maintenance role by its uses alone is refused.
+    let fixture = Fixture::new();
+    hand_written(&fixture, &json!([]));
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(ADOPTED, SERVER, "Adopted", &provenance("passed")),
+    );
+    let decision = decide(&fixture, "uses", &by_uses);
+    let before = tree(&fixture.repo());
+    assert_refused(
+        standard_pack_adopt(
+            request(&fixture, source, Some(decision), true, FIRST),
+            &Committed,
+        ),
+        AdoptProblem::BusinessRuleInTheWay,
+        &json!({"entry": "schedule.json", "json_pointer": "/rules/1", "package_id": ADOPTED}),
+        &fixture,
+        &before,
+    );
+
+    // Beside the package's maintenance.json entry the composer does not judge it: it is part of
+    // the package's one maintenance role. Adopted again without a decision, the class is
+    // maintenance and both root files are kept byte for byte.
+    let fixture = Fixture::new();
+    hand_written(&fixture, &json!([entry]));
+    let schedule = fs::read(fixture.repo().join("schedule.json")).expect("schedule.json");
+    let maintenance = fs::read(fixture.repo().join("maintenance.json")).expect("maintenance.json");
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(ADOPTED, SERVER, "Adopted", &provenance("passed")),
+    );
+    let answer = standard_pack_adopt(
+        request(&fixture, source.clone(), None, true, FIRST),
+        &Committed,
+    )
+    .unwrap_or_else(|error| panic!("one role, adopted again without a decision: {error}"));
+    assert_eq!(answer.class, AdoptClass::Maintenance);
+    assert_eq!(answer.coverage, None);
+    assert_eq!(answer.written, [ADOPTED_DIRECTORY]);
+    assert_eq!(
+        fs::read(fixture.repo().join("schedule.json")).expect("schedule.json"),
+        schedule
+    );
+    assert_eq!(
+        fs::read(fixture.repo().join("maintenance.json")).expect("maintenance.json"),
+        maintenance
+    );
+
+    // A maintenance role by its uses alone is taken there, its entry kept as it was.
+    let decision = decide(&fixture, "uses", &by_uses);
+    let answer = standard_pack_adopt(
+        request(&fixture, source, Some(decision), true, SECOND),
+        &Committed,
+    )
+    .unwrap_or_else(|error| panic!("maintenance by its uses alone beside the entry: {error}"));
+    assert_eq!(answer.class, AdoptClass::Maintenance);
+    assert_eq!(answer.maintenance, Some(entry));
+    assert_eq!(
+        fs::read(fixture.repo().join("maintenance.json")).expect("maintenance.json"),
+        maintenance
     );
 }

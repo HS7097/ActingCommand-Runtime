@@ -9454,7 +9454,7 @@
       },
       "tokens": {
         "repository_invalid": {
-          "description": "--repo holds no applications.json, maintenance.json or packs directory, one of them or its schedule.json does not read, or a .part of a root file an interrupted adoption left is there (the message names every leftover and what to do), or, without a decision, schedule.json gives the package a held entry or a business rule beside its maintenance.json entry (two roles, which only an adoption interrupted between its two renames leaves)."
+          "description": "--repo holds no applications.json, maintenance.json or packs directory, one of them or its schedule.json does not read, or a .part of a root file an interrupted adoption left is there (the message names every leftover and what to do), or, without a decision, schedule.json gives the package a held entry, or a rule the composer judges by its value, beside its maintenance.json entry (two roles, which only an adoption interrupted between its two renames leaves; a rule that declares nothing beside that entry is the package's one maintenance role)."
         },
         "recording_not_current": {
           "description": "The recording --record-id names is not as its last record stop left it: no recording.json, not stopped, marked again since, or without its package."
@@ -9466,7 +9466,7 @@
           "description": "The package's game is not applications.json's, or its server is none of that file's servers."
         },
         "pack_exists": {
-          "description": "The package was adopted before (its directory, its rule, its held entry or its maintenance entry is there) and --replace is not given, its .part an interrupted adoption left is there (the message names every leftover and what to do), or the kept copy's place is taken."
+          "description": "The package was adopted before (its directory, its rule, its held entry or its maintenance entry is there; the message names which, and with its directory alone that an adoption was interrupted before it wrote the root files) and --replace is not given, its .part an interrupted adoption left is there (the message names every leftover and what to do), or the kept copy's place is taken."
         },
         "pack_dirty": {
           "description": "With --replace, the version control shows a change not committed below packs/<package_id>, or cannot tell."
@@ -9499,10 +9499,10 @@
           "description": "Another adoption of the same checkout with the same state directory holds the checkout's check tree."
         },
         "check_tree_link": {
-          "description": "The place of the checkout's check tree under the state directory is a link (a symbolic link or a junction), so nothing is cleared through it or where it points."
+          "description": "The place of the checkout's check tree under the state directory, or a directory beside it named as one a call makes the tree whole in, is a link (a symbolic link or a junction), so nothing is cleared through it or where it points."
         },
         "business_rule_in_the_way": {
-          "description": "A decision of the class maintenance by its uses alone, without a trigger, meets the package's business rule in schedule.json, which adopt does not turn into a maintenance rule unasked; the refusal names the rule."
+          "description": "A decision of the class maintenance by its uses alone, without a trigger, meets the package's business rule in schedule.json (a rule the composer judges by its value), which adopt does not turn into a maintenance rule unasked; the refusal names the rule."
         }
       }
     }

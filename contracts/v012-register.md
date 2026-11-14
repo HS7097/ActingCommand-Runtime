@@ -25122,6 +25122,21 @@ composition compiled (`ScheduleReport::compiled` in `crates/resource-tooling/src
 check` and of `package bundle` is unchanged. `crates/policy` gains `is_manual_request`, a public
 call of the placement's own rule; nothing of its behaviour changes.
 
+**Fix round 3** (after the review of fix round 2; the coordinator's work order, not the owner's
+words; main `2eaf9b7e` unchanged, no merge):
+
+| Item | Before | Now |
+|---|---|---|
+| The advice after an interruption | "run adopt again with the decision it was given" (two roles) and "then run adopt again" (a leftover `.part`), which the call's own new `packs/<package_id>`, in place and not committed, refused `pack_exists` or, with `--replace`, `pack_dirty` | every message that meets what an interrupted or stopped call left says what does work, each step followed through the checks: move the root `.part` files out, commit `packs/<package_id>` or put it back as it was, then adopt with `--replace` and the decision (two roles, a leftover root `.part`, a root file another writer changed); move a `packs/<package_id>.part` out and run adopt as that call was run; to finish, rename a trusted `.part` only where that finishes the adoption |
+| A root file's `.part` | "that file whole as the call computed it"; the other root file "renamed or not changed" | trusted only when it reads as that root file (the schedule reader, the list of `maintenance.json` entries) and is in the canonical form, its final newline included, as a finished write leaves it; the message names each `.part` trusted or not and why; a `.part` not trusted means no root file was renamed; for one trusted `.part`, the other file's three states (renamed, not to change, to change with its `.part` not written yet) |
+| A business rule | a rule without the `maintenance` member, so an unmarked rule beside its package's `maintenance.json` entry (one legal role) was refused `business_rule_in_the_way` or as two roles | a rule the composer judges by its value, by the composer's own rule (the policy crate's new `is_judged_rule`, the composer's `judged`), in the `uses`-alone check, the two-roles check, the class an earlier adoption gave and the derivation's tiers |
+| The check tree's temporary directory | `<checkout>.new-<process>-<count>/`, never cleared after a crash, so a later process with the same number failed `adopt_write_failed` without advice | `<checkout>.new-<process>-<ms>-<count>/`, a name another directory holds passed over for the next count; while a call holds the tree, every directory beside it named so (three numbers) that carries the marker is cleared, one without the marker left alone, a link of that name refused `check_tree_link` before anything is cleared |
+| A crash that leaves nothing behind | after `packs/<package_id>` was put in place and before the first root `.part`: only "was adopted before; give --replace" | the `pack_exists` message names what the root files hold of the package and, when they hold nothing beside its directory, says that an adoption was interrupted before it wrote them (or the directory was put there by hand) and what to do; no new word |
+
+`crates/policy` gains `is_judged_rule`, a public call of the composer's own `judged`; nothing of
+its behaviour changes. The descriptions of `adopt_refused`, `adopt_write_failed` and the words
+`repository_invalid`, `pack_exists`, `check_tree_link` and `business_rule_in_the_way` say the same.
+
 **Built.**
 
 | Part | Where |
@@ -25178,7 +25193,10 @@ adoption ending the package's `maintenance.json` entry and answering it, `pendin
 refused, another writer's `schedule.json` not renamed over, the old pack directory moved back when
 the new one cannot take its place, and a check tree another call holds refused `check_tree_busy`
 (seven tests; the test of fix round 1 on own-outcome keys adapted to the two-key package, as the
-work order asks).
+work order asks); and since fix round 3 the steps the refusals advise after a call stopped between
+its two renames accepted one after the other, ending in one role, and a rule that declares no
+maintenance a business rule without its package's `maintenance.json` entry and that package's one
+maintenance role beside it (two tests).
 
 **What is not added.** No configuration key, record type, payload member, fact, wire shape or
 interface revision; no persisted structure of the Runtime changes. No file of the recording, the
