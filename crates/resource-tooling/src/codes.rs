@@ -131,5 +131,46 @@ actingcommand_contract::outcome_codes! {
         RecognitionPackUndeclared => "recognition_pack_undeclared": warning / none,
         // Resource conversion source reads (`resource_convert`).
         SelectionPolicyLimitExceeded => "selection_policy_limit_exceeded": error / none,
+        // Workflow #464 P1: `actinglab standard-pack adopt` (`adopt`).
+        /// Workflow #464 P1 (contracts/standard-pack-authoring.md, "The checks"): a check of the
+        /// adoption refused before anything was written in the repository (key `adopt_problem`;
+        /// optional `path`, `entry`, `json_pointer`, `package_id`, `member`, `count`; the refusal
+        /// of the loader, the reader or the composer as its cause).
+        AdoptRefused => "adopt_refused": error / none,
+        /// Workflow #464 P1 (contracts/standard-pack-authoring.md, "What it writes"): a write of
+        /// the adoption failed, or stopped because a root file changed after the call read it
+        /// (key `path`, where it stopped; optional `paths`, what it had written or moved before;
+        /// the operating system's refusal as its cause when there is one); nothing is removed in
+        /// the checkout.
+        AdoptWriteFailed => "adopt_write_failed": error / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #464 P1: which check of `actinglab standard-pack adopt` refused (vocabulary
+    /// `adopt_problem`, the value `adopt_problem` of `adopt_refused`).
+    pub enum AdoptProblem: "adopt_problem" {
+        RepositoryInvalid => "repository_invalid",
+        RecordingNotCurrent => "recording_not_current",
+        PackageInvalid => "package_invalid",
+        PackageMismatch => "package_mismatch",
+        PackExists => "pack_exists",
+        PackDirty => "pack_dirty",
+        RecordingUnreviewed => "recording_unreviewed",
+        LocalPath => "local_path",
+        DecisionInvalid => "decision_invalid",
+        /// The decision's `value` names the origin `model`, which only the model's export writes
+        /// (the coordinator's ruling on #464).
+        ValueOriginModel => "value_origin_model",
+        RuleRefused => "rule_refused",
+        RootFileNotCanonical => "root_file_not_canonical",
+        /// With `--replace`, the replaced directory's kept place under the state directory is on
+        /// another volume than the checkout, where it cannot be moved.
+        ReplaceAcrossVolumes => "replace_across_volumes",
+        /// The place of the checkout's check tree holds no marker of the tool's own, so it is not
+        /// touched (the coordinator's ruling on the check tree).
+        CheckTreeUnmarked => "check_tree_unmarked",
+        /// Another adoption of the checkout with the same state directory holds its check tree.
+        CheckTreeBusy => "check_tree_busy",
     }
 }

@@ -1208,6 +1208,45 @@
       "description": "Workflow #428 CFL-2 (contracts/recognition-preprocess.md, Hand-over; contracts/selection-graph.md, Shared OCR read): an OCR target that a fixed_slots layout's slots or features read lies inside the layout's shared read with its model and languages, but its preprocess chain differs from the shared read's (two chains are the same only step by step, colors in their declared order), so it reads on its own instead of taking its text from the shared read. json_pointer names the shared read in the package's recognition pack (/candidate_layouts/<i>/shared_ocr). package bundle and actinglab standard-pack check list one entry in warnings per package, target and shared read. Nothing is refused.",
       "common_causes": "The chain was edited on the shared read or on the slot target only, or copied with its colors in another order.",
       "handling": "Copy the shared read's preprocess to the target verbatim, or remove it from both, unless the target must read on its own."
+    },
+    "adopt_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "adopt_problem": "required",
+        "path": "optional",
+        "entry": "optional",
+        "json_pointer": "optional",
+        "package_id": "optional",
+        "member": "optional",
+        "count": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #464 P1 (contracts/standard-pack-authoring.md, \"The checks\"): actinglab standard-pack adopt refused before it wrote anything in the repository, adopt_problem naming the check: repository_invalid (entry the file of --repo that is missing or does not read: applications.json, maintenance.json, packs, schedule.json, or a .part of one an interrupted adoption left, the message naming every leftover and what to do), recording_not_current (path the recording's recording.json, member the member that is not as a stopped recording's last stop left it: schema_version, record_id, status, amended_at_unix_ms or artifact), package_invalid (path the package; the loader's refusal as the cause, or package_id when it names no directory packs/<package_id>), package_mismatch (member game or server: the package's is not applications.json's), pack_exists (entry packs/<package_id>, or json_pointer the rule or held entry of an earlier adoption without --replace; entry packs/<package_id>.part an interrupted adoption left, the message naming every leftover and what to do; path a kept copy's place that is taken), pack_dirty (entry packs/<package_id>, count the paths with a change not committed, or the version control's failure as the cause), recording_unreviewed (package_id: the package is not run through, its cross-check not passed, its first decision not evaluated or a step needing review, and the class is not held; the refusal's details carry review), local_path (entry the package's file, json_pointer the string, which holds an absolute local path or the state directory), decision_invalid (path the decision document and json_pointer the member, or entry schedule.json and json_pointer in the file as it would be written for what the rule keeps: a member missing or wrong, a business rule without its value that is no follower of a chain, pending for a follower, a class beside a maintenance role a root file adopt does not write gives the package, or an outcome predicate on the rule itself on a key its package does not declare, the details carrying declared_outcome_keys), value_origin_model (path the decision document, json_pointer /value/origin: the value names the origin model, which only the model's export writes; give the number with the origin pack, or pending), rule_refused (entry schedule.json, json_pointer the composer's pointer in the file as it would be written, the composer's refusal as the cause; or package_id when the adopted package comes out unclassified), root_file_not_canonical (entry schedule.json or maintenance.json, which adopt must change and which is not in the canonical form package fmt writes), replace_across_volumes (entry packs/<package_id>, path the kept copy's place: with --replace the state directory lies on another volume than the checkout, where the replaced directory cannot be moved, or the volume cannot be told, the failure as the cause; the message says to give a --state-dir on the checkout's volume, and a recording's package by --package), check_tree_unmarked (path the checkout's check tree under the state directory, which holds no marker the tool wrote: it is not the tool's own and is not touched), check_tree_busy (path the check tree, which another adoption of the checkout with the same state directory holds). A refusal of package bundle or standard-pack check of the check tree other than these is answered as it is.",
+      "common_causes": "A decision document without a member the class needs, a package adopted before without --replace, a recording whose cross-check was only partly evaluated, a root file formatted by hand.",
+      "handling": "Fix what the value names and run the adoption again; it wrote nothing. A root file that is not canonical is written in the canonical form once, in a commit of its own."
+    },
+    "adopt_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "paths": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "Workflow #464 P1 (contracts/standard-pack-authoring.md, \"What it writes\"): a write of actinglab standard-pack adopt failed: path where it stopped (a file or directory of the check tree, of the repository or of the kept copy), paths what it had written or moved before, in order; the operating system's refusal as its cause. Or it stopped because schedule.json or maintenance.json changed after the call read it (path that file, no cause): it renames nothing more and overwrites no other call's work. When the new pack directory cannot take the place of a replaced one, the old one is moved back and the message says so. Nothing is removed in the checkout: a .part left behind and a kept copy stay where they are.",
+      "common_causes": "Another adoption or a person changed a root file during the call; a file held open by another program; a full disk.",
+      "handling": "Read the paths, restore the checkout with the version control where it changed, move a .part away by hand, and run the adoption again."
     }
   }
 }

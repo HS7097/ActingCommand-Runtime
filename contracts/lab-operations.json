@@ -2472,6 +2472,31 @@
       "status": "planned"
     },
     {
+      "name": "standard-pack adopt",
+      "module": "authoring",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true, "note": "the game's working root in a resource repository's checkout: applications.json, maintenance.json, packs/ and the root files"},
+        {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "a stopped recording of the state directory, its package the one its last record stop generated; not with package"},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with record_id"},
+        {"name": "decide", "form": "option", "type": "file", "required": false, "note": "the decision document actingcommand.pack-decision.v1; required on a first adoption"},
+        {"name": "replace", "form": "switch", "type": "boolean", "required": false, "note": "adopt a package adopted before again: its directory is replaced and moved to the state directory, its rule kept but for what the decision names"},
+        {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+      ],
+      "help": "Makes a recorded package a member of its game's standard pack in a resource repository's checkout, with a rule the Runtime's composer accepts.",
+      "output": "the adoption: the package, its class, the rule, held entry or maintenance entry as written, the entries removed or replaced so that the package has one role, the members given and derived (each with where it came from), whether the task waits for its value, every warning of the check, what was written and where the replaced directory was kept",
+      "writes": true,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab standard-pack adopt"],
+      "new": "#464",
+      "slice": "SP-ADOPT",
+      "status": "planned",
+      "notes": "Workflow #464 P1 (0.12.60; contracts/standard-pack-authoring.md): it writes only inside repo and under the state directory, every check before the first write (refusals adopt_refused, adopt_problem naming the check), nothing deleted; the readiness of the package is another slice's"
+    },
+    {
       "name": "scheduling compile",
       "module": "authoring",
       "params": [

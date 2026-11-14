@@ -810,4 +810,7 @@ outcome_keys! {
     // ---- Workflow #437 MAPP-2a (contracts/device-group.md "The switch before a run"): which step
     // of the switch before a member's run failed; kept in codes mode. ----
     application_switch_step: vocab(application_switch_step),
+    // ---- Workflow #464 P1 (`actinglab standard-pack adopt`, contracts/standard-pack-authoring.md):
+    // which check of the adoption refused; kept in codes mode. ----
+    adopt_problem: vocab(adopt_problem),
 }

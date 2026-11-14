@@ -367,8 +367,12 @@ its pools' valuations weigh in):
   ([scheduling/README.md](scheduling/README.md), "Pool Valuation", "A valuation written in the
   pack").
 - `"fixed_value_origin": "model"` says that the model's export wrote the number (`acmodel bindings
-  apply`); without it the pack's own hand wrote it. Only `"model"` is a value, and only beside
-  `fixed_value_milli`. It decides nothing: only "Provenance" below reads it.
+  apply`, not built yet); without it the pack's own hand wrote it. Only `"model"` is a value, and
+  only beside `fixed_value_milli`. It decides nothing: only "Provenance" below reads it. (Workflow
+  #464 P1, the coordinator's ruling) Today no writer of `model` exists (the model's export writes
+  thresholds only), so no rule carries it and the Lab does not write it
+  ([standard-pack-authoring.md](standard-pack-authoring.md), "The value's origin"); the provenance
+  listing of `standard-pack check` therefore shows which values wait for the model.
 - The rule requires `benefit_fixed_value` ("`requires`" above).
 
 **Provenance** (SCHED-C1a, since 0.12.52; the coordinator's point 6). So that a later model export
