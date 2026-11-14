@@ -3,7 +3,8 @@
 Workflow #437 MAPP-C (contracts only; [v012-register.md](v012-register.md) §1.323). **Every rule of
 this file is (MAPP, not built yet)** unless its section names MAPP-1 ([v012-register.md](v012-register.md)
 §1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57), MAPP-2a (§1.342, Runtime 0.12.59),
-MAPP-2b (§1.353, Runtime 0.12.60) or MAPP-2d (§1.360, Runtime 0.12.60):
+MAPP-2b (§1.353, Runtime 0.12.60), MAPP-2d (§1.360, Runtime 0.12.60) or ORD-1c (§1.363, Runtime
+0.12.60):
 no code, key, code, value key or word named here exists until the code slices of §1.323 build it,
 and every code, value key and vocabulary word below is proposed but those MAPP-1 registers:
 `device_group`, `instance.<instance id>.device_group`, `device_group_config_invalid` with the
@@ -11,8 +12,9 @@ vocabulary `device_group_problem`, `device_group_assembled`, `device_group_waiti
 vocabulary `device_group_wait`, (MAPP-1b) `device_group_action_refused`, (MAPP-2a)
 `application_switch_failed` with the vocabulary `application_switch_step`, (MAPP-2b) the key
 `scheduling.device_group.switch_failure_cooldown_ms` and the optional value `failure_code` of
-`dispatch_instance_cooldown`, and (MAPP-2d) the word `lease_renewal` of
-`application_switch_step`. The coordinator cut
+`dispatch_instance_cooldown`, (MAPP-2d) the word `lease_renewal` of
+`application_switch_step`, and (ORD-1c) the key `scheduling.device_group.max_queue_wait_ms`. The
+coordinator cut
 MAPP-1 in two: MAPP-1a (§1.328) builds the configuration form and its checks, the refusal of every
 group of several, the member → device key map, the scheduler keyed by device and the evaluator's
 one pick per device; MAPP-1b (§1.330) builds the host's worker, occupancy, admission guard and
@@ -338,7 +340,10 @@ order's inputs beside the map, the members of one device are ordered as
   not in a run's own duration.
 
 Without the order's inputs the device's first candidate in the allocation order wins it, as MAPP-1
-built it; no Runtime build passes them before the host's slice of the order. Until the release
+built it. **From ORD-1c (Runtime 0.12.60, register §1.363) the Runtime passes them at every policy
+cycle whose device map names a device of several**: the member it holds in front of each device,
+the start of each waiting pair's wait and `scheduling.device_group.max_queue_wait_ms` ("The member
+in front"); a cycle whose map names none is handed the map alone, as before. Until the release
 that first accepts a group of several, the load refuses every such group ("The configuration
 form", "Release").
 
@@ -778,6 +783,53 @@ position 2 of [scheduling-blackout.md](scheduling-blackout.md), "Order of the de
   and the section's nearest failure wait, `scheduling.fact_refresh.failure_backoff_ms`, has none
   either. A group of one never makes a switch, so it never meets the key.
 
+## The member in front (ORD-1c, built in Runtime 0.12.60)
+
+The order within one device ("Ranking across members" above; [scheduling/README.md](scheduling/README.md),
+"Order within one device") reads three inputs beside the device map, which the host keeps and
+passes from ORD-1c on (register §1.363; the coordinator's rulings 1 to 4 on board #437, not the
+owner's words). All three live in the host's memory only: nothing of them enters the ledger, a
+fact, a snapshot or a decision identity, and an instance alone on its device never meets them.
+
+- **The member in front.** One map from a device key to the member in front
+  (`HostShared::device_fronts`, `crates/runtime-host/src/host.rs`), with one writer: the function
+  the switch's two entries share (`switch_front`, `host/switch.rs`; "The switch before a run").
+  When the switch's own steps end with the member's application in front or started (its
+  `Ok(Ok)`), the member is in front of its device, whether or not the run's lease renewal after
+  the steps then fails (the device's state is what counts); when the switch is refused or fails
+  (its `Ok(Err)`), the device has none in front, since a stop may already have run. Both entries
+  write it: the switch before a run (a policy run, a direct run) and the switch before a start
+  outside a run (an `ApplicationLifecycle` `launch` or `restart`, the ladder's application restart
+  rung). A policy cycle reads it as it builds the device map (`policy_device_groups`,
+  `host/policy_dispatch.rs`) and names the member in front by its alias.
+- **The queue waits.** Kept beside the eligibility ages in the policy host (`QueueWaits`,
+  `crates/runtime-host/src/policy_host.rs`), with their staging: an evaluated cycle's verdicts are
+  applied when the next evaluation starts, and that evaluation passes the starts of the members not
+  in front. Which decisions start, keep or end a wait is the clock of
+  [scheduling/README.md](scheduling/README.md), "Order within one device", "The inputs". The
+  admission of a pair's dispatch ends its wait; a member's switch that puts it in front ends every
+  wait of its pairs; a member that loses the front waits anew from the first evaluated round after.
+- **The default limit.** `scheduling.device_group.max_queue_wait_ms` in effect as the cycle starts
+  (milliseconds `60000..=86400000`, default `1800000`, settable, `actingd-config` revision 32),
+  the limit of a task that declares no `max_queue_wait_ms`. It names no application and has no
+  per-instance or per-group form, as its sibling `switch_failure_cooldown_ms`.
+
+**What a restart forgets.** Everything: a start holds none in front and no wait, as it holds no
+lease, queue or switch cooldown ("Derived, never stored"). After a restart every member's queued
+pairs wait from the first evaluated cycle, so a task can wait up to one more limit; with equal
+limits the first pick of a device is the allocation order's, as MAPP-1's.
+
+**What a wrong entry costs.** The member in front is only a preference of the order: a member named
+in front that is not (a person started another application by hand, an emulator stopped or
+restarted, a member's own application stopped) is preferred while its tasks end by the waiting
+tasks' limits, and its next run's switch reads the real foreground and brings it to the front, so
+a wrong entry costs at most one switch. A device with none in front orders every member's pairs as
+waiting. Past a limit nothing is written: no record, no held-set rule, no code.
+
+**A device of one.** The host names only devices of several, so on a host without one the map is
+handed to the evaluator alone, exactly as before ORD-1c, the policy host stages no wait and the
+switch, which a group of one never reaches, writes nothing.
+
 ## Identity on the device (MAPP, not built yet)
 
 On the device, a member is its `application_id` (the package name), with its `nemu_app_index` as
@@ -1015,6 +1067,13 @@ of a device group of several:
   members); a file that does not name it keeps its revision, so the Runtime reads 5 to 30 and
   declares [5, 30]. The console must reach revision 30 before it edits the key, and before a
   release pairs with this Runtime (the UI repository's work).
+- **`actingd-config` 32** ([component-interfaces.md](component-interfaces.md), row 32; ORD-1c,
+  Runtime 0.12.60): the `scheduling` section's member `device_group.max_queue_wait_ms` (31 is #453
+  S2's). A build before it refuses a file that names the member (`config_decode_failed`: the
+  section's `device_group` member denies unknown members); a file that does not name it keeps its
+  revision, so the Runtime reads 5 to 32 and declares [5, 32]. The consoles and installers that
+  read `actingd-config` must accept 32 before an installation is moved to a release that carries
+  it (the UI repository's work).
 - **`ledger` does not move.** Every record that a group of several writes and a group of one never
   writes has an existing shape:
   - reasons with new codes and value words in decisions and their records
@@ -1047,9 +1106,12 @@ of a device group of several:
 ## Later slices (named, not written here)
 
 - **Order within one device.** Its rules are written by ORD-1b ("Ranking across members" above;
-  [scheduling/README.md](scheduling/README.md), "Order within one device"); what is still to come
-  is the host's slice of the order, which passes the order's inputs. The time a switch takes counts
-  in no order and not in a run's own duration (board #437, 2026-11-13).
+  [scheduling/README.md](scheduling/README.md), "Order within one device"), and the host's slice,
+  ORD-1c, passes the order's inputs ("The member in front"). The time a switch takes counts in no
+  order and not in a run's own duration (board #437, 2026-11-13). Not built: a forgetting of the
+  member in front by the paths that change what is in front without a switch (a person's hold,
+  an emulator stop or restart, a ladder rung, a member's application stop; register §1.363
+  lists them), which the coordinator decides on.
 - **The normalized weight.** Superseded by the order within one device (ORD-1b, "Ranking across
   members" above): no weight is compared across the members of one device.
 - **Device-level actions by device.** It lifts the limits of slice 1 ("Device-level actions") and
@@ -1101,6 +1163,13 @@ of a device group of several:
   run's renewal after it with the token the renewal returns, and the step `lease_renewal`); the
   load still refuses every group of several, so no installation reaches any of it, and nothing is
   added to the configuration or an interface.
+- ORD-1a and ORD-1b are built in Runtime 0.12.60 (register §1.352): a task's
+  `max_queue_wait_ms` and the selection among a device's members, with no input passed by the
+  host. ORD-1c is built in Runtime 0.12.60 (register §1.363): the host keeps the member in front,
+  the queue waits and passes them with `scheduling.device_group.max_queue_wait_ms`, in
+  `actingd-config` revision 32 ("The member in front"); the load still refuses every group of
+  several, so no installation reaches any of it, and a host without a device of several hands the
+  evaluator the map alone, as before.
 - The release that first accepts a device group of more than one member carries the host's rows
   (MAPP-1b), the switch before a run (MAPP-2a, MAPP-2b and MAPP-2d) and the slice "order within
   one device" together, so that no released build runs a group of several without the switch.
@@ -1172,7 +1241,9 @@ Its description and causes name both cooldowns. No code is added.
 
 One configuration key (registered, MAPP-2b, 0.12.60, `actingd-config` revision 30):
 `scheduling.device_group.switch_failure_cooldown_ms`, milliseconds `1..=3600000`, default
-`300000`, settable ("The switch before a run").
+`300000`, settable ("The switch before a run"). A second (ORD-1c, 0.12.60, `actingd-config`
+revision 32): `scheduling.device_group.max_queue_wait_ms`, milliseconds `60000..=86400000`,
+default `1800000`, settable ("The member in front"). ORD-1c adds no code, value key or word.
 
 ## Not verified
 

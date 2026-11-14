@@ -22812,6 +22812,140 @@ member (the entry denies unknown members): remove the member first. It never rea
 `host.start_pause_applied`; a held pause stays a pause it restores as any other, and a person
 resumes it as any other.
 
+### 1.363 Slice ORD-1c (0.12.60): the host passes the order within one device: the member in front, the queue waits and the default limit; `actingd-config` revision 32 (Workflow #437; the owner's rulings on board #437 as the coordinator recorded them, not the owner's words; the design note `rd-1114/ord1-design.md`, its sections 1 ("Default (ORD-1c)"), 2.1, 2.2, 3.6, 7 and its row ORD-1c of section 8, with the coordinator's four rulings of board #437 comment 6859534064, which override its 2.2 where they differ; coordinator work order `rd-1114/brief-437-ord1c.md`, read on main `e44fecb4`)
+
+1.363 is the next free number after §1.362 on this slice's base; open pull requests may take
+numbers before it merges, and the train renumbers. ORD-1b (§1.352) built the selection among the
+members of one device in the policy crate, with its three inputs beside the device map; the host
+passed none (`DeviceGroups::new`), so a device of several still picked as MAPP-1. This slice makes
+the host keep and pass them. The load still refuses every group of several
+(`several_members_unsupported`, unchanged), so nothing of it is reachable on any installation; its
+tests hand the host the member → device key map and the group's name as the assembly builds them.
+
+| Part | Built | Where |
+|---|---|---|
+| the member in front | yes | `HostShared::device_fronts` (`crates/runtime-host/src/host.rs`, memory only): one map from a device key to the member in front. Its one writer is `HostShared::note_front`, called by the function the switch's two entries share (`switch_front`, `host/switch.rs`) for a member of a device group of several, never at the call sites: the member when the switch's own steps end with its application in front or started (`Ok(Ok)`, whether or not the run's lease renewal after them fails), removed when the switch is refused or fails (`Ok(Err)`); empty at a start. A Runtime-level failure of the steps (`Err`) leaves the map as it was (ruling 4 names the two results only). Read by `policy_device_groups` (`host/policy_dispatch.rs`) through `HostShared::device_fronts()` |
+| the queue waits | yes | `QueueWaits` beside `EligibilityAges` in the policy host (`crates/runtime-host/src/policy_host.rs`), with its staging: `stage` after an evaluated cycle (in `PolicyHost::evaluate`, right after the eligibility ages'), `apply_pending` when the next evaluation starts (`PolicyHost::apply_queue_wait_verdicts`, called with `apply_eligibility_verdicts` under the same policy guard, which returns the starts that evaluation passes), `forget` at the admission of the pair's dispatch (`commit_admission`), `forget_member` when the member takes the front (`PolicyHost::forget_queue_waits_of`, called by `note_front`). Kept only for pairs whose alias the cycle's `DeviceQueue` names as a member of a device of several not in front. Memory only: nothing reaches the ledger, a fact, a snapshot or a decision identity |
+| the pass | yes | `policy_device_groups` (`host/policy_dispatch.rs`): when the map names at least one device of several, `DeviceGroups::with_order` with the members in front by alias, the applied starts of the members not in front, and `scheduling.device_group.max_queue_wait_ms` in effect (`HostShared::max_queue_wait_ms`, `host/runtime_config.rs`, read at every such cycle); and the `DeviceQueue` (each member of a device of several with whether it is in front) for the staging. Otherwise the map alone and an empty `DeviceQueue`, exactly what it returned before (the same map, `DeviceGroups::new`), and no configuration read |
+| the key | yes | `scheduling.device_group.max_queue_wait_ms` (`crates/runtime-config/src/scheduling.rs`, `DEVICE_GROUP_MAX_QUEUE_WAIT_MS`, `DeviceGroupFile::max_queue_wait_ms`, `MAX_QUEUE_WAIT_RANGE` `60000..=86400000`, its `ROWS` row with `since` 0.12.60, reader `ORD-1c`, settable, default from the file; `SchedulingConfig::max_queue_wait_ms`; `distribution/windows/actingd.defaults.json` `1800000`), declared as its sibling `switch_failure_cooldown_ms` is; no per-instance form, naming no application |
+| the interface | yes | `actingd-config` [5, 32] (`distribution/windows/component-interfaces.json`; the architecture test `tools/actinglab-architecture/tests/component_interfaces.rs`; [component-interfaces.md](component-interfaces.md), row 32): 31 is #453 S2's (§1.362) |
+
+**The wait's clock (the coordinator's rulings 1 and 2).** A pair (task, member) has a wait only
+while its member belongs to a device of several, is not the member the host holds in front, and the
+pair is queued. Queued, after the design note's 2.2 row "Start, or keep, the wait": eligibility
+`true`, not blocked, and either selected (its dispatch not admitted yet) or its last reason
+`instance_already_selected`, `device_group_waiting` `held`, `device_group_waiting` `selected` *with*
+`limit_ms`, `dispatch_instance_held`, `policy_chain_handover_waiting`,
+`policy_concurrent_runs_deferred`, `heavy_scene_budget_deferred` or `heavy_scene_budget_exhausted`.
+A `device_group_waiting` `selected` row without the order's values is a member held as the cycle
+starts behind another member's pick (§1.352, "For the host's slice of the order"): it starts and
+keeps no wait (ruling 2). Every other decision ends the wait (not due, a person's hold, a pause, a
+fence, a takeover or switch cooldown, the task's own gates), as does the admission of the pair's
+dispatch. When a member's switch puts it in front, every wait of its pairs is forgotten, the staged
+ones included; a member that loses the front has no wait (it had none while in front), so its
+queued pairs' waits begin at the first evaluated round after, from that round's instant; with none
+in front every member's queued pairs wait. Past its limit a wait writes nothing (ruling 3).
+
+**Where the build completes the rulings.**
+
+1. *A pair with a dispatch in flight* (admitted and not yet settled) starts and keeps no wait, as
+   the eligibility age starts none and the held records skip it: its dispatch is what it waited
+   for, and the admission has just ended its wait. Without this, a member's pair whose run was
+   admitted but whose switch had not yet run would begin a new wait behind its own run
+   (`dispatch_instance_held`).
+2. *The forgetting at the front* runs where the front is written: `note_front` takes the policy
+   host's guard after the switch's steps and the front map's guard are released (no guard is held
+   by any caller of the switch at that point: the policy run's, the direct run's, the
+   `ApplicationLifecycle` request's and the ladder rung's), so a member that took the front and
+   lost it again before the next evaluation keeps no wait from before.
+3. *The starts passed* are those applied at the evaluation's start, read under the same guard as
+   the eligibility ages are applied, and filtered by the fronts read for the map: a member in
+   front is passed no start.
+
+**The staging gives an evaluation and its admissions the same starts.** No admission reads a start;
+an admission only ends its pair's wait (`commit_admission`), and the verdicts of an evaluation are
+applied only when the next evaluation starts, as the eligibility ages'.
+
+**What can change what is in front without the map knowing** (ruling 4: listed, nothing forgets
+the front there; the coordinator decides whether a later slice does). An `ApplicationLifecycle`
+`stop` of a member, and a `launch` or `restart` whose own command fails after the switch's steps
+succeeded (`host/input.rs`, `application_lifecycle`, the call of `application_control`); the
+ladder's application restart rung, which stops and restarts the member's own application after
+`stop_others_before_start` (`host/recovery_ladder.rs`, `recovery_application_restart`,
+`stop_assigned_application`), and its emulator restart rung (`recovery_emulator_restart`); the idle
+action's close of an application (`host/idle.rs`); an operator's emulator control (refused for a
+member, `host/device_group.rs`, `refuse_emulator_control_of_group`); the reset after a stopped run
+(`host/stop_instance_run.rs`, `reset_stopped_run`); a person's hold (`AcquirePlayerHold` is not
+built, `host/requests.rs`; a person's hand on the device is seen by no code); a run's own steps
+that bring another package to the front (a store update package's). A wrong entry is only a
+preference and costs at most one switch, which reads the real foreground.
+
+**The code.** No code, value key or word is added; no location of the catalog either (the new
+guards reuse `HostLocation::SwitchApplication` and `HostLocation::ReadPolicyInstanceRegistry`); the
+test build gains the test location `queue_order_for_test`. The index is not regenerated. `runtime-outcomes` stays 1.
+
+**Tests.** `crates/runtime-host/src/tests/gate_ord1c.rs` (gate map `host.toml`, "#437 ORD-1c"):
+`ord1c_t1_a_switch_that_succeeds_puts_its_member_in_front_and_one_that_fails_forgets_it`,
+`ord1c_t2_a_due_task_waits_from_its_first_queued_round_across_selected_and_held_until_admission`,
+`ord1c_t3_taking_the_front_forgets_the_waits_and_two_backlogs_switch_by_the_limit_not_per_dispatch`
+(twelve dispatches, A five, B six, A once: two switches),
+`ord1c_t4_a_pause_a_player_hold_or_a_switch_cooldown_ends_the_wait_and_it_starts_anew`,
+`ord1c_t5_a_restart_forgets_the_front_and_every_wait`,
+`ord1c_t6_the_key_has_its_range_default_and_rows_and_applies_from_the_next_round`,
+`ord1c_t7_front_tasks_run_until_a_waiting_task_would_pass_its_limit_then_the_device_switches` and
+`ord1c_t8_a_host_without_a_device_of_several_evaluates_and_writes_the_same_with_and_without_the_slice`.
+The fixture's catalog is the generic task declared V2, every task due at every evaluation and
+declaring one minute, the expected runtime off by the file, so `E` is one minute throughout; the
+fake devices answer each member's own application in front. **What the last test proves, and what
+rests on reading.** It compares two hosts of this build started alike with the same instance ids,
+whose instances are each alone on their devices: one as built, one with the test-only switch
+(`QUEUE_ORDER_OFF_FOR_TEST`, `policy_host.rs`, one function per build, `queue_order_on`) that makes
+every entry the slice adds return at once (the order's branch of `policy_device_groups`,
+`apply_queue_wait_verdicts`, the staging, `note_front`). Over the whole start and three rounds
+(each intent admitted, run and settled) the picks are equal as they are, and the evaluations and
+every record are equal record by record, type, severity and whole payload with ids, times, numbers
+(the start's records hold measurements of the process clock and of the machine), the evaluation's
+`seed` and the temporary root normalised, every difference named in one message. On such a host
+both builds leave the slice's entries at their first test (no device of several, no member to
+stage, no switch reached), so the comparison pins that the slice adds nothing to the start and the
+rounds; that the switched host behaves as main rests on reading: the switch returns from exactly
+those entries, `policy_device_groups` builds the same map as before and calls `DeviceGroups::new`
+with it, the admission's `forget` finds nothing, and the evaluator is handed what it was handed on
+main. **Adapted on purpose** (the requirement moves what they pin): `gate_mapp1b.rs`
+`mapp1b_a_member_waits_held_behind_the_others_holder_and_runs_after_it` (A's last row gains the
+order's `limit_ms` 1 800 000 and `remaining_ms` 1 680 000: no member is in front, and A has waited
+since the first round, behind B's pick and then behind its own lease; the winner is the same) and
+`mapp1b_a_hold_or_a_fence_of_one_member_holds_the_other_and_the_holds_end_frees_it` (B's row after
+the hold gains `limit_ms` and `remaining_ms` 1 800 000: the hold ended every wait; the winner is the
+same); `gate_mapp2b.rs`
+`mapp2b_a_failed_switch_holds_the_member_for_the_cooldown_while_the_other_member_runs` (after the
+cooldown A, in front after its run, keeps the device while its task ends by B's limit, so B's task
+is dispatched in the round its limit comes, not in the first round after the cooldown) and
+`mapp2b_the_switch_cooldown_also_holds_the_rerun_the_member_is_owed` (A's dispatch now runs, so A is
+in front and its wait over, and B's owed rerun goes in the round its limit comes: without the run,
+A's wait from the cooldown's round would be the earlier deadline in every round); the architecture
+test of the interface declarations pins `actingd-config` [5, 32]. The other MAPP-1b, MAPP-2b and
+MAPP-2d tests pick as before: their devices have none in front, or one evaluation, where equal
+fresh limits leave the allocation order's pick.
+
+**At deploy.** Every root gains the key's manifest row and its `config.parameters.scheduling` row,
+`scheduling.device_group.max_queue_wait_ms` with its default `1800000`, and the shipped defaults
+file's digest in `config.selection` changes. The Runtime declares `actingd-config` [5, 32]: the
+consoles and installers that read `actingd-config` must accept 32 before an installation is moved
+to a release that carries this slice (the console pins released Runtime commits, so its release
+that accepts 32 follows the Runtime's release and precedes that deployment; the UI repository's
+work). Nothing else changes on an installation without a device of several, which is every
+installation until the load accepts a group of several: no order input, no wait, no front.
+
+**Rollback** (below 0.12.60, or to a 0.12.60 build before this slice). As §1.353 says for the
+sibling key: a file that names `scheduling.device_group.max_queue_wait_ms` must drop it, since the
+earlier build's `device_group` member denies unknown members. An instruction recorded while running
+that names it (a `host.config_overrides` row) needs nothing: an earlier build's restore drops a row
+whose key it does not know, `config_override_dropped`, and goes on
+(`crates/runtime-config/src/effective.rs`, `EffectiveConfig::restore`); the same holds for the
+sibling key below 0.12.60, which §1.353 does not say. Nothing else is persisted by ORD-1c: the
+member in front and the queue waits live in memory only.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

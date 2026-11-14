@@ -2824,6 +2824,9 @@ pub(crate) mod test_spellings {
             // Workflow #437 MAPP-2d fix round 1: a test makes the release of a policy run's failed
             // settlement take the granted token.
             ReleaseFailedPolicyRunWithGrantedTokenForTest => "release_failed_policy_run_with_granted_token_for_test",
+            // Workflow #437 ORD-1c: a test reads the member in front of a device and a pair's queue
+            // wait.
+            QueueOrderForTest => "queue_order_for_test",
         }
     }
 }

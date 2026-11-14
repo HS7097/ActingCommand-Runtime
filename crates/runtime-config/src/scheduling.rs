@@ -58,6 +58,11 @@
 //! revision 30): `device_group.switch_failure_cooldown_ms` (`1..=3600000`, default `300000`), how
 //! long a member of a device group of several whose switch failed does not compete for its
 //! device; read by the host when a switch fails. No per-instance form.
+//! Workflow #437 ORD-1c (`contracts/scheduling/README.md`, "Order within one device";
+//! `actingd-config` revision 32): `device_group.max_queue_wait_ms` (`60000..=86400000`, default
+//! `1800000`), the longest time a task of a member of a device group of several waits in its
+//! device's queue when its task declares no `max_queue_wait_ms`; read by the host at every policy
+//! cycle of a host with a device of several. No per-instance form.
 //! BX-1 (Workflow #429, register §1.273, since 0.12.39): a blackout entry's parser and shape as a
 //! client surface ([`BlackoutListKey`], [`BlackoutEntry::parse`], [`BlackoutEntry::parse_list`],
 //! [`BlackoutEntry::to_json`], [`BlackoutEntry::list_json`]): the console builds and checks the
@@ -227,6 +232,11 @@ pub const TASK_HELD_AFTER_MS: &str = "scheduling.task_held.after_ms";
 /// failed does not compete for its device. It names no application and has no per-instance form.
 pub const DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS: &str =
     "scheduling.device_group.switch_failure_cooldown_ms";
+/// Workflow #437 ORD-1c (`actingd-config` revision 32; `contracts/scheduling/README.md`, "Order
+/// within one device"): the longest time, in milliseconds, a task of a member of a device group of
+/// several waits in its device's queue when its task declares no `max_queue_wait_ms`. It names no
+/// application and has no per-instance form.
+pub const DEVICE_GROUP_MAX_QUEUE_WAIT_MS: &str = "scheduling.device_group.max_queue_wait_ms";
 /// #428 SCHED-C1e (register §1.299 SC1-12; `actingd-config` revision 28;
 /// `contracts/scheduling/README.md`, "Lines for one instance"): the member of an instance's own
 /// pool lines (`instance.<instance id>.scheduling.pool_lines`; in the file the
@@ -538,8 +548,13 @@ file_struct!(
 );
 file_struct!(
     /// Workflow #437 MAPP-2b: the switch cooldown of a member of a device group of several.
+    /// Workflow #437 ORD-1c: and the default of a task's longest wait in its device's queue.
     DeviceGroupFile {
-        switch_failure_cooldown_ms
+        switch_failure_cooldown_ms,
+        // Interface anchor `actingd-config` revision 32 (contracts/component-interfaces.md;
+        // Workflow #437 ORD-1c): a Runtime before ORD-1c refuses a file that names it, because the
+        // member denies unknown fields; a file that does not name it keeps its revision.
+        max_queue_wait_ms,
     }
 );
 
@@ -618,6 +633,13 @@ pub(crate) const TASK_HELD_AFTER_RANGE: KeyRange = KeyRange::Integer {
 pub(crate) const SWITCH_FAILURE_COOLDOWN_RANGE: KeyRange = KeyRange::Integer {
     min: 1,
     max: 3_600_000,
+};
+/// Workflow #437 ORD-1c: the default of a task's longest wait in its device's queue, one minute to
+/// one day, the range of a task's own `max_queue_wait_ms` (register §1.352, ORD1A-1). A range, not
+/// a threshold.
+pub(crate) const MAX_QUEUE_WAIT_RANGE: KeyRange = KeyRange::Integer {
+    min: 60_000,
+    max: 86_400_000,
 };
 
 /// Workflow #438 HELD-1: a key of the held records, read by the host from the release that joins
@@ -884,6 +906,18 @@ pub(crate) static ROWS: &[KeyRow] = &[
             "MAPP-2b",
         )
     },
+    // Workflow #437 ORD-1c (`contracts/scheduling/README.md`, "Order within one device"): read by
+    // the host at every policy cycle of a host with a device of several, so an instruction applies
+    // from the next round; a host without one never reads it.
+    KeyRow {
+        since: "0.12.60",
+        ..row(
+            DEVICE_GROUP_MAX_QUEUE_WAIT_MS,
+            ValueType::DurationMs,
+            MAX_QUEUE_WAIT_RANGE,
+            "ORD-1c",
+        )
+    },
 ];
 
 /// A pacing stage a stage key names (the vocabulary `pacing_stage`).
@@ -1108,6 +1142,9 @@ pub struct SchedulingConfig {
     /// Workflow #437 MAPP-2b: how long a member of a device group of several whose switch failed
     /// does not compete for its device, in milliseconds (`1..=3600000`).
     pub switch_failure_cooldown_ms: u64,
+    /// Workflow #437 ORD-1c: the longest time a task of a member of a device group of several waits
+    /// in its device's queue when its task declares none, in milliseconds (`60000..=86400000`).
+    pub max_queue_wait_ms: u64,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -1693,6 +1730,7 @@ impl SchedulingConfig {
                 after_ms: reader.duration(TASK_HELD_AFTER_MS)?,
             },
             switch_failure_cooldown_ms: reader.duration(DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS)?,
+            max_queue_wait_ms: reader.duration(DEVICE_GROUP_MAX_QUEUE_WAIT_MS)?,
         })
     }
 }

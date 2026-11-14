@@ -31,6 +31,9 @@ const TASK_B: &str = "fixture.member-b";
 const GROUP: &str = "device.one";
 const SEED: u64 = 11;
 const MINUTE_MS: u64 = 60_000;
+/// Workflow #437 ORD-1c: `scheduling.device_group.max_queue_wait_ms`'s default, the limit of a task
+/// that declares none.
+const DEFAULT_LIMIT_MS: u64 = 1_800_000;
 /// Bounds a broken run's end only; nothing sleeps.
 const GATE_WAIT: Duration = Duration::from_secs(120);
 
@@ -438,6 +441,12 @@ fn mapp1b_one_worker_per_device_and_a_member_held_behind_the_others_registered_r
 /// `device_group_waiting` `held` (A, the client's claim kind), at info; the next round defers B's
 /// task the same way and A's own task keeps its own holder's code. Once A's lease is released B's
 /// task is dispatched, and A's waits behind it.
+///
+/// Adapted by Workflow #437 ORD-1c (register §1.363): the host now passes the order within one
+/// device. No member is in front (no switch ran), so every contender waits; A's task has waited
+/// since the first round (behind B's pick, then behind its own lease), so its last row carries the
+/// order's values: the default limit (`scheduling.device_group.max_queue_wait_ms`, 1 800 000) and
+/// its time left, 1 800 000 less the two minutes since. The winner is the same.
 #[test]
 fn mapp1b_a_member_waits_held_behind_the_others_holder_and_runs_after_it() {
     let mut group = Group::start(200, 300, false);
@@ -496,6 +505,8 @@ fn mapp1b_a_member_waits_held_behind_the_others_holder_and_runs_after_it() {
                 json!(DeviceGroupWait::Selected.as_str()),
             ),
             ("task_id", json!(TASK_B)),
+            ("limit_ms", json!(DEFAULT_LIMIT_MS)),
+            ("remaining_ms", json!(DEFAULT_LIMIT_MS - 2 * MINUTE_MS)),
         ],
     );
     drop(holder);
@@ -578,6 +589,12 @@ fn mapp1b_a_pause_of_one_member_waits_only_for_its_own_work_and_leaves_the_other
 /// A person's hold of A holds the device for B (`device_group_waiting` `player_hold`, A) while A
 /// keeps its own gate's code; once the hold ends the device goes to the round's pick again. A
 /// fence of A holds B (`fenced`, A).
+///
+/// Adapted by Workflow #437 ORD-1c (register §1.363): the host now passes the order within one
+/// device. The hold ended every wait, and no member is in front, so in the round after it B's task
+/// waits from that round: its row carries the order's values, the default limit
+/// (`scheduling.device_group.max_queue_wait_ms`, 1 800 000) and all of it left. The winner is the
+/// same.
 #[test]
 fn mapp1b_a_hold_or_a_fence_of_one_member_holds_the_other_and_the_holds_end_frees_it() {
     let t0 = POLICY_NOW_UNIX_MS;
@@ -617,6 +634,8 @@ fn mapp1b_a_hold_or_a_fence_of_one_member_holds_the_other_and_the_holds_end_free
                 json!(DeviceGroupWait::Selected.as_str()),
             ),
             ("task_id", json!(TASK_A)),
+            ("limit_ms", json!(DEFAULT_LIMIT_MS)),
+            ("remaining_ms", json!(DEFAULT_LIMIT_MS)),
         ],
     );
     group.close();

@@ -2311,6 +2311,7 @@ impl RuntimeHost {
             start_paused: config.start_paused,
             start_pause_unapplied: Mutex::new(BTreeSet::new()),
             switch_cooldowns: Mutex::new(BTreeMap::new()),
+            device_fronts: Mutex::new(BTreeMap::new()),
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
             ladder_busy_holds: Mutex::new(BTreeMap::new()),
@@ -6342,6 +6343,11 @@ struct HostShared {
     // member of a device group of several whose switch failed, with the Runtime-clock (monotonic)
     // instant its switch cooldown ends. Memory only, never stored: a restart drops it.
     switch_cooldowns: Mutex<BTreeMap<InstanceId, u64>>,
+    // Workflow #437 ORD-1c (`contracts/device-group.md`, "The member in front"): the member the
+    // host holds in front of each device of several, by device key, as the switch's own steps
+    // left it (`switch.rs`, `HostShared::note_front`, its one writer). Memory only, never stored: a
+    // start begins with none. A wrong entry is only a preference of the order within one device.
+    device_fronts: Mutex<BTreeMap<InstanceId, InstanceId>>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the
     // per-instance ladder window.
     stuck_recovery: OnceLock<BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>>,

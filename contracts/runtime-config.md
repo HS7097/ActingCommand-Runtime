@@ -502,6 +502,7 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.task_held.enabled` (Workflow #438 HELD-1, since 0.12.56) | boolean | `true` |
 | `scheduling.task_held.after_ms` (Workflow #438 HELD-1, since 0.12.56) | milliseconds `60000..=86400000` | `1800000` |
 | `scheduling.device_group.switch_failure_cooldown_ms` (Workflow #437 MAPP-2b, since 0.12.60) | milliseconds `1..=3600000` | `300000` |
+| `scheduling.device_group.max_queue_wait_ms` (Workflow #437 ORD-1c, since 0.12.60) | milliseconds `60000..=86400000` | `1800000` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
@@ -613,6 +614,20 @@ cooldowns that start after it; the cooldown itself is kept in memory only. It na
 and has no per-instance form. A group of one never reads it; it is one more row of the manifest
 and of `config.parameters.scheduling` on every root. A Runtime before MAPP-2b refuses a file that
 names it (the section denies unknown members).
+
+**The default queue wait of a device group's member (Workflow #437 ORD-1c, since 0.12.60;
+`actingd-config` revision 32, [component-interfaces.md](component-interfaces.md);
+[v012-register.md](v012-register.md) §1.363).** `scheduling.device_group.max_queue_wait_ms`
+(milliseconds `60000..=86400000`, default `1800000`, settable), in the file the second member of
+the `scheduling` section's `device_group` member, is the longest time a task of a member of a
+device group of several waits in its device's queue when its task declares no
+`max_queue_wait_ms` ([scheduling/README.md](scheduling/README.md), "Order within one device";
+[device-group.md](device-group.md), "The member in front"). The host reads it at every policy cycle
+whose device map names a device of several, so an instruction applies from the next round. It
+names no application and has no per-instance form. A host without a device of several never reads
+it; it is one more row of the manifest and of `config.parameters.scheduling` on every root. A
+Runtime before ORD-1c refuses a file that names it (the `device_group` member denies unknown
+members).
 
 **Pool lines for one instance (#428 SCHED-C1e, register §1.299 SC1-12; `actingd-config` revision
 28; since 0.12.54).** `instance.<instance id>.scheduling.pool_lines`, in the file the entry's
@@ -1766,10 +1781,17 @@ switch cooldown is MAPP-2's, not built yet):
   with `dispatch_instance_cooldown`, as during a takeover cooldown, while the other members go on;
   a change applies to cooldowns that start after it. No per-instance or per-group form
   ([device-group.md](device-group.md), "The switch before a run").
+- **The default queue wait** (ORD-1c, built in 0.12.60, `actingd-config` revision 32):
+  `scheduling.device_group.max_queue_wait_ms`, milliseconds `60000..=86400000`, default
+  `1800000`, the second member of the section's `device_group`, settable, default `file`, read at
+  every policy cycle of a host with a device of several: the limit of a member's task that
+  declares no `max_queue_wait_ms` in the order within one device. No per-instance or per-group form
+  ([device-group.md](device-group.md), "The member in front").
 - **A group of one is unchanged:** none of these rules applies to it but the name's, and no key of
-  today changes for it. The switch cooldown's key is one more row of the `scheduling`
-  section on every root, in the manifest and in `config.parameters.scheduling`, which a group of
-  one never meets: it makes no switch. The default of `recovery_ladder.profiles` gains
+  today changes for it. The switch cooldown's key and (ORD-1c) the default queue wait's key are
+  each one more row of the `scheduling` section on every root, in the manifest and in
+  `config.parameters.scheduling`, which a group of one never meets: it makes no switch and has no
+  order within one device. The default of `recovery_ladder.profiles` gains
   `without_emulator_restart`: on a root that leaves the key at its default, the row's value, the
   program fact `config.parameters.recovery_ladder` and the ladder's `config_digest` change, and
   nothing climbs by the profile unless an entry names it ([device-group.md](device-group.md), "A

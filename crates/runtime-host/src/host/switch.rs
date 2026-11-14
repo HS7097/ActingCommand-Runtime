@@ -34,6 +34,14 @@
 //! (`HostShared::renew_after_switch`), before its request lifecycle. The renewal keeps the lease
 //! and replaces its token, so the run's later steps resolve the token the scheduler holds
 //! ([`HostShared::run_token`]).
+//!
+//! Workflow #437 ORD-1c (register §1.363; `contracts/device-group.md`, "The member in front"):
+//! the member in front. The function the switch's two entries share notes what its own steps left
+//! in front of the member's device, in one in-memory map by device key (`HostShared::note_front`,
+//! its one writer): the member once its application is in front or started, none once the switch
+//! was refused or failed. A policy cycle reads the map for the order within one device
+//! (`HostShared::policy_device_groups`); a start begins with none, and a wrong entry costs at most
+//! one switch, which reads the real foreground.
 
 use super::resource_fence::UnconfirmedResources;
 use super::*;
@@ -392,6 +400,13 @@ impl HostShared {
     /// and 2 always, and with `startup` (the run's request and its need) the time check before
     /// any stop and step 3, the startup run on the borrowed key ([`Self::switch_application`],
     /// [`Self::stop_others_before_start`]).
+    ///
+    /// Workflow #437 ORD-1c (`contracts/device-group.md`, "The member in front"): the function both
+    /// entries share notes, for a member of a device group of several, what the steps left in
+    /// front of its device ([`Self::note_front`]): the member when they ended with its
+    /// application in front or started (`Ok(Ok)`), none when the switch was refused or failed
+    /// (`Ok(Err)`). A lease renewal after the steps (`HostShared::switch_before_run`) changes
+    /// nothing here: the device's state is what counts.
     fn switch_front(
         &self,
         links: EventLinksDraft,
@@ -405,6 +420,62 @@ impl HostShared {
         if !self.in_group_of_several(member) {
             return Ok(Ok(ApplicationSwitch::default()));
         }
+        let switched = self.switch_steps(links, token, connection_id, startup)?;
+        self.note_front(member, switched.is_ok())?;
+        Ok(switched)
+    }
+
+    /// Workflow #437 ORD-1c (`contracts/device-group.md`, "The member in front"; the
+    /// coordinator's rulings 1 and 4 on board #437): the one writer of the map of the members in
+    /// front (`HostShared::device_fronts`). `in_front`: `member`, of a device group of several, is
+    /// now in front of its device, and every queue wait of its pairs is forgotten (the policy
+    /// host's `PolicyHost::forget_queue_waits_of`); otherwise its device has none in front. Memory
+    /// only. The device's other members' waits are left as they are: a member that lost the front
+    /// waits anew from the first evaluated round after it.
+    fn note_front(&self, member: InstanceId, in_front: bool) -> RuntimeHostResult<()> {
+        if !crate::policy_host::queue_order_on() {
+            return Ok(());
+        }
+        let device = self.device_key(member);
+        {
+            let mut fronts = lock(&self.device_fronts, HostLocation::SwitchApplication)?;
+            if in_front {
+                fronts.insert(device, member);
+            } else {
+                fronts.remove(&device);
+            }
+        }
+        if !in_front {
+            return Ok(());
+        }
+        let Some(registration) = self.switch_registration(member)? else {
+            return Ok(());
+        };
+        lock(self.policy()?, HostLocation::SwitchApplication)?
+            .forget_queue_waits_of(&registration.instance_alias);
+        Ok(())
+    }
+
+    /// Workflow #437 ORD-1c: the member the host holds in front of each device of several, by
+    /// device key, as a policy cycle reads it (`HostShared::policy_device_groups`).
+    pub(super) fn device_fronts(&self) -> RuntimeHostResult<BTreeMap<InstanceId, InstanceId>> {
+        Ok(lock(
+            &self.device_fronts,
+            HostLocation::ReadPolicyInstanceRegistry,
+        )?
+        .clone())
+    }
+
+    /// The switch's steps for `token`'s member, a member of a device group of several
+    /// ([`Self::switch_front`]).
+    fn switch_steps(
+        &self,
+        links: EventLinksDraft,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        startup: Option<(RequestId, RunNeed)>,
+    ) -> RuntimeHostResult<Result<ApplicationSwitch, RuntimeHostError>> {
+        let member = token.instance_id();
         let Some(resolved) = self.switch_registration(member)? else {
             return Ok(Err(member_mismatch()));
         };
@@ -1009,6 +1080,38 @@ impl RuntimeHost {
                 .get(decision_id)
                 .map(|clock| clock.switch_ms),
         )
+    }
+
+    /// Workflow #437 ORD-1c: the alias of the member the host holds in front of `alias`'s device,
+    /// `None` when it holds none (as the map of the members in front has it, in memory).
+    pub(crate) fn device_front_for_test(&self, alias: &str) -> RuntimeHostResult<Option<String>> {
+        let location = crate::codes::test_spellings::TestLocation::QueueOrderForTest;
+        let shared = self.shared_ref(location)?;
+        let member = shared
+            .resolve_instance(alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let Some(front) = lock(&shared.device_fronts, location)?
+            .get(&shared.device_key(member))
+            .copied()
+        else {
+            return Ok(None);
+        };
+        Ok(lock(&shared.registered_instances, location)?
+            .get(&front)
+            .map(|instance| instance.instance_alias.clone()))
+    }
+
+    /// Workflow #437 ORD-1c: the start of the queue wait of `task_id` on `alias` that the next
+    /// evaluation passes, the last evaluation's verdicts applied; `None` when the pair has none.
+    pub(crate) fn queue_wait_start_for_test(
+        &self,
+        task_id: &str,
+        alias: &str,
+    ) -> RuntimeHostResult<Option<u64>> {
+        let location = crate::codes::test_spellings::TestLocation::QueueOrderForTest;
+        let shared = self.shared_ref(location)?;
+        Ok(lock(shared.policy()?, location)?.queue_wait_start_for_test(task_id, alias))
     }
 
     /// How many times the switch's entry was reached since the host started.

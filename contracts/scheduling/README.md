@@ -1436,20 +1436,53 @@ package included (register §1.215 UPD-16), meets the game's "client out of date
 - **No configuration key.** The store update rule's cadence is its `cooldown_ms`; the hold and
   its order are code.
 
-## Order within one device (Workflow #437 ORD-1b, since 0.12.60)
+## Order within one device (Workflow #437 ORD-1b, since 0.12.60; the host's inputs: ORD-1c, since 0.12.60)
 
-Register §1.352; the owner's rulings on board #437 as the coordinator recorded them;
-[device-group.md](../device-group.md), "One pick per device per round". It applies only to a device
-whose key the device map names for two or more members, and only when the Runtime passes the
-order's inputs beside the map (`DeviceGroups::with_order`); without them the device's one pick is
-its first candidate in the allocation order, as MAPP-1 built it. An instance alone on its device
-never reads any of it, and a catalog that declares `max_queue_wait_ms` on its tasks decides there
-exactly as one that does not.
+Register §1.352 and §1.363; the owner's rulings on board #437 as the coordinator recorded them;
+[device-group.md](../device-group.md), "One pick per device per round" and "The member in front".
+It applies only to a device whose key the device map names for two or more members, and only when
+the Runtime passes the order's inputs beside the map (`DeviceGroups::with_order`); without them
+the device's one pick is its first candidate in the allocation order, as MAPP-1 built it. **From
+ORD-1c on the Runtime passes them at every policy cycle whose device map names a device of
+several**, so the selection below is in force for every device of several (which the load still
+refuses until the release that first accepts a group of several, [device-group.md](../device-group.md),
+"Release."); a cycle whose map names none is handed the map alone, exactly as before ORD-1c. An
+instance alone on its device never reads any of it, and a catalog that declares
+`max_queue_wait_ms` on its tasks decides there exactly as one that does not.
 
 - **The inputs.** The member in front of the device, or none. For each waiting contender, when its
   wait began; a contender the Runtime gives no start waits from the evaluation's time. The longest
-  wait of a task that declares none (1 800 000 ms until the Runtime passes a configured one). Two
-  members of one device named in front refuse the evaluation (`policy_evaluation_input_invalid`).
+  wait of a task that declares none (1 800 000 ms when no configured one is passed). Two members of
+  one device named in front refuse the evaluation (`policy_evaluation_input_invalid`). **What the
+  Runtime passes** (ORD-1c, register §1.363; the coordinator's rulings 1, 2 and 4 on board #437):
+  - *The member in front* is the member the host holds in front of the device: the member whose
+    switch's own steps last ended with its application in front or started, and none once a
+    switch of the device was refused or failed, and none after a start ([device-group.md](../device-group.md),
+    "The member in front").
+  - *The default limit* is `scheduling.device_group.max_queue_wait_ms` in effect as the cycle
+    starts (milliseconds `60000..=86400000`, default `1800000`; [runtime-config.md](../runtime-config.md)),
+    so an instruction applies from the next round.
+  - *The wait's clock.* A pair (task, member) has a wait only while its member belongs to a device
+    of several, is not the member in front, and the pair is queued: it is due and has no dispatch
+    in flight, and its decision is selected and not yet admitted, or its last reason is a wait
+    behind the device's order or behind a run (`instance_already_selected`,
+    `device_group_waiting` `held`, `device_group_waiting` `selected` with the order's `limit_ms`,
+    `dispatch_instance_held`, `policy_chain_handover_waiting`, `policy_concurrent_runs_deferred`,
+    `heavy_scene_budget_deferred`, `heavy_scene_budget_exhausted`). The wait begins at the instant
+    of the first evaluation in which the pair is queued and keeps that start while it stays
+    queued. Any other decision ends it: not due, a person's hold, a pause, a fence, a cooldown (the
+    member's switch cooldown included), the task's own gates; and so does a row
+    `device_group_waiting` `selected` without the order's values, which a member held as the cycle
+    starts gets behind another member's pick (it is no contender). The admission of the pair's
+    dispatch ends it. When a member takes the front (its switch succeeded), every wait of its pairs
+    is forgotten; a member that loses the front (another member's switch succeeded) starts its
+    queued pairs' waits anew at the first evaluated round after, from that round's instant; with
+    none in front every member's queued pairs wait. Past its limit a wait writes nothing: no record,
+    no held-set rule, no code.
+  - *Its staging* is the eligibility age's: the verdicts of an evaluated cycle are applied when the
+    next evaluation starts, and that evaluation passes the starts applied then, of the members not
+    in front. Memory only: none of it enters the ledger, a fact, a snapshot or a decision identity,
+    and a start of the Runtime begins with no wait and none in front.
 - **The contenders** of a device are the candidates of its members, but one the Runtime holds
   whole (`InstanceHolds`: UPD-1's hold, a switch cooldown), one whose member is held as the cycle
   starts (a pause, a fence, a person's hold, a holder of the device, a takeover cooldown, a

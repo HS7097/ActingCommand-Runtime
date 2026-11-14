@@ -7,7 +7,7 @@ use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::codes::SchedulingRuleHostCode;
 use crate::fact_store::LeftOutRecordLists;
-use crate::policy_host::InstanceOccupancy;
+use crate::policy_host::{DeviceQueue, InstanceOccupancy};
 use crate::{PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location, Outcome};
@@ -106,7 +106,19 @@ impl HostShared {
     /// scheduler keys it (the text of its device key), for the evaluator's one pick per device.
     /// An instance alone on its device is not named, and the evaluator keys it by its own alias
     /// as before; memory only.
-    fn policy_device_groups(&self) -> RuntimeHostResult<actingcommand_policy::DeviceGroups> {
+    ///
+    /// Workflow #437 ORD-1c (`contracts/scheduling/README.md`, "Order within one device"): when
+    /// the map names at least one device of several, with the order's inputs
+    /// (`DeviceGroups::with_order`): the member the host holds in front of each device by alias
+    /// (`HostShared::device_fronts`), the queue-wait starts this evaluation applied
+    /// (`wait_starts`) of the members not in front, and
+    /// `scheduling.device_group.max_queue_wait_ms` in effect; and the members it names, each with
+    /// whether it is in front, for the evaluation's queue-wait verdicts. Otherwise the map alone,
+    /// exactly as before the slice, and no member.
+    fn policy_device_groups(
+        &self,
+        wait_starts: &BTreeMap<(String, String), u64>,
+    ) -> RuntimeHostResult<(actingcommand_policy::DeviceGroups, DeviceQueue)> {
         let instances = lock(
             &self.registered_instances,
             HostLocation::ReadPolicyInstanceRegistry,
@@ -117,25 +129,54 @@ impl HostShared {
         let devices = {
             let scheduler = lock(&self.scheduler, HostLocation::ReadPolicyInstanceOccupancy)?;
             instances
-                .iter()
-                .map(|(instance_id, alias)| (scheduler.device_key(*instance_id), alias.clone()))
+                .into_iter()
+                .map(|(instance_id, alias)| (scheduler.device_key(instance_id), instance_id, alias))
                 .collect::<Vec<_>>()
         };
-        let mut members = BTreeMap::<InstanceId, Vec<String>>::new();
-        for (device, alias) in devices {
-            members.entry(device).or_default().push(alias);
+        let mut members = BTreeMap::<InstanceId, Vec<(InstanceId, String)>>::new();
+        for (device, instance_id, alias) in devices {
+            members
+                .entry(device)
+                .or_default()
+                .push((instance_id, alias));
         }
-        let by_alias = members
+        let several = members
             .into_iter()
             .filter(|(_, aliases)| aliases.len() > 1)
+            .collect::<Vec<_>>();
+        let by_alias = several
+            .iter()
             .flat_map(|(device, aliases)| {
-                let device = crate::failure_identity::identifier_text(&device);
+                let device = crate::failure_identity::identifier_text(device);
                 aliases
-                    .into_iter()
-                    .map(move |alias| (alias, device.clone()))
+                    .iter()
+                    .map(move |(_, alias)| (alias.clone(), device.clone()))
             })
             .collect();
-        Ok(actingcommand_policy::DeviceGroups::new(by_alias))
+        let groups = actingcommand_policy::DeviceGroups::new(by_alias);
+        if several.is_empty() || !crate::policy_host::queue_order_on() {
+            return Ok((groups, DeviceQueue::default()));
+        }
+        let fronts = self.device_fronts()?;
+        let mut order = actingcommand_policy::DeviceOrder::default()
+            .default_max_queue_wait_ms(self.max_queue_wait_ms()?);
+        let mut queue = BTreeMap::new();
+        for (device, aliases) in &several {
+            let front = fronts.get(device);
+            for (instance_id, alias) in aliases {
+                let in_front = front == Some(instance_id);
+                if in_front {
+                    order = order.front(alias.clone());
+                }
+                queue.insert(alias.clone(), in_front);
+            }
+        }
+        for ((task_id, alias), unix_ms) in wait_starts {
+            if queue.get(alias) == Some(&false) {
+                order = order.wait_start(task_id.clone(), alias.clone(), *unix_ms);
+            }
+        }
+        Ok((groups.with_order(order), DeviceQueue::new(queue)))
     }
 
     /// Q-3 (6): policy dispatches only to an instance with no holder, no eligible waiting claim
@@ -1319,6 +1360,7 @@ impl HostShared {
             unknown_offset_tasks,
             left_out_lists,
             dispatches_read,
+            queue_wait_starts,
         ) = {
             let _outcome_gate = lock(
                 &self.policy_outcome_gate,
@@ -1326,8 +1368,10 @@ impl HostShared {
             )?;
             let mut policy = lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
             // The previous evaluated cycle's eligibility verdicts take effect here, before
-            // this cycle's inputs are projected (Workflow #308 slice 5b).
+            // this cycle's inputs are projected (Workflow #308 slice 5b). Workflow #437 ORD-1c:
+            // and its queue-wait verdicts, whose starts this evaluation passes.
             policy.apply_eligibility_verdicts();
+            let queue_wait_starts = policy.apply_queue_wait_verdicts();
             let outcome_keys = policy.outcome_key_snapshot()?;
             let _gate = lock(&self.fact_write_gate, HostLocation::ProjectPolicyFacts)?;
             // ISO-PE (#419): the evaluation's time, sampled under the gates its inputs are
@@ -1373,6 +1417,7 @@ impl HostShared {
                 unknown_offset_tasks,
                 left_out_lists,
                 dispatches_read,
+                queue_wait_starts,
             )
         };
         // Workflow #428 S168-LB1a (`contracts/instance-fact-store.md`, "Left out of the
@@ -1415,8 +1460,9 @@ impl HostShared {
         // Workflow #369 W-1: every instance's one queue as this cycle starts; a held instance's
         // candidates are deferred, and nothing is written for them.
         let occupancy = self.policy_instance_occupancy(time.unix_ms)?;
-        // Workflow #437 MAPP-1: the device each member of a group of several runs on.
-        let device_groups = self.policy_device_groups()?;
+        // Workflow #437 MAPP-1: the device each member of a group of several runs on. Workflow
+        // #437 ORD-1c: with the order's inputs when the map names a device of several.
+        let (device_groups, device_queue) = self.policy_device_groups(&queue_wait_starts)?;
         // Workflow #437 MAPP-1b: each member of a group of several that another member keeps
         // from its device (its hold, its fence, its holder), with the pauses and fences above.
         let device_group_holds =
@@ -1513,6 +1559,7 @@ impl HostShared {
                     pool_lines: &pool_lines_context,
                     task_held: &task_held_context,
                     device_groups: &device_groups,
+                    device_queue: &device_queue,
                     device_group_holds: &device_group_holds,
                     switch_cooldowns: &switch_cooldowns,
                     dispatches_read,

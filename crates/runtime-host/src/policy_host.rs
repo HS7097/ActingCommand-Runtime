@@ -321,6 +321,11 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// device each member of a device group of several runs on, by alias; an instance it does
     /// not name is a device of its own.
     pub(crate) device_groups: &'a actingcommand_policy::DeviceGroups,
+    /// Workflow #437 ORD-1c (`contracts/scheduling/README.md`, "Order within one device"): the
+    /// members of the devices of several that `device_groups` names, by alias, each with whether
+    /// the host holds it in front; the evaluation's queue-wait verdicts are staged for them alone.
+    /// Empty on a host without a device of several.
+    pub(crate) device_queue: &'a DeviceQueue,
     /// Workflow #437 MAPP-1b (`contracts/device-group.md`, "One pick per device per round"):
     /// each member of a device group of several that another member keeps from its device as the
     /// cycle starts (its hold, its fence, or its holder), by alias; read after the member's own
@@ -1017,6 +1022,206 @@ impl EligibilityAges {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Workflow #437 ORD-1c, test builds only: while set on this thread, every entry the slice
+    /// adds returns at once, as a build without the slice would: the host passes no order inputs,
+    /// keeps no queue wait and notes no member in front. The comparison of a host without a device
+    /// of several runs its host beside one with it set.
+    pub(crate) static QUEUE_ORDER_OFF_FOR_TEST: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Workflow #437 ORD-1c: whether the order's entries run: always in a build.
+#[cfg(not(test))]
+pub(crate) const fn queue_order_on() -> bool {
+    true
+}
+
+/// Workflow #437 ORD-1c: whether the order's entries run: in a test build, unless the thread set
+/// `QUEUE_ORDER_OFF_FOR_TEST`.
+#[cfg(test)]
+pub(crate) fn queue_order_on() -> bool {
+    !QUEUE_ORDER_OFF_FOR_TEST.with(std::cell::Cell::get)
+}
+
+/// Workflow #437 ORD-1c (`contracts/scheduling/README.md`, "Order within one device"): the members
+/// of the host's devices of several as one evaluation reads them, by alias, each with whether the
+/// host holds it in front of its device (`HostShared::policy_device_groups`). Empty on a host
+/// without a device of several, whose evaluations keep no queue wait.
+#[derive(Debug, Default)]
+pub(crate) struct DeviceQueue {
+    members: BTreeMap<String, bool>,
+}
+
+impl DeviceQueue {
+    pub(crate) fn new(members: BTreeMap<String, bool>) -> Self {
+        Self { members }
+    }
+
+    /// Whether a pair of `alias` can wait in its device's queue: `alias` is a member of a device
+    /// of several that the host does not hold in front of it (the coordinator's ruling 1).
+    fn waits(&self, alias: &str) -> bool {
+        self.members.get(alias) == Some(&false)
+    }
+}
+
+/// The value key of `device_group_waiting`'s vocabulary word, and the order's limit value that
+/// tells a waiting contender's row from a held member's (register §1.352, "For the host's slice of
+/// the order"; the coordinator's ruling 2).
+const DEVICE_GROUP_WAIT: &str = "device_group_wait";
+const LIMIT_MS: &str = "limit_ms";
+
+/// Workflow #437 ORD-1c (the coordinator's rulings 1 and 2 on board #437; the design note's 2.2,
+/// "Start, or keep, the wait"): whether `decision` keeps its pair queued in its device: due
+/// (eligibility `true`, not blocked), with no dispatch of the pair in flight (`in_flight`), and
+/// either selected and not yet admitted, or held back by its device's order or by a run, its last
+/// reason one of `instance_already_selected`, `device_group_waiting` `held`,
+/// `device_group_waiting` `selected` with the order's `limit_ms` (a waiting contender; without
+/// it, a member held as the cycle starts, which is no contender), `dispatch_instance_held`,
+/// `policy_chain_handover_waiting`, `policy_concurrent_runs_deferred`,
+/// `heavy_scene_budget_deferred` or `heavy_scene_budget_exhausted`. Every other decision ends the
+/// wait: not due, a person's or a fence's gate, a cooldown, the task's own gates.
+fn queued_in_device(decision: &TaskDecision, in_flight: bool) -> bool {
+    if in_flight
+        || decision.eligibility != EligibilityState::True
+        || decision.state == SchedulingDecisionState::Blocked
+    {
+        return false;
+    }
+    if decision.state == SchedulingDecisionState::Selected {
+        return true;
+    }
+    let Some(reason) = decision.reasons.last() else {
+        return false;
+    };
+    let outcome = &reason.outcome;
+    if outcome.is(actingcommand_policy::PolicyCode::DeviceGroupWaiting) {
+        let word = outcome
+            .value(DEVICE_GROUP_WAIT)
+            .and_then(serde_json::Value::as_str);
+        return word == Some(actingcommand_policy::DeviceGroupWait::Held.as_str())
+            || (word == Some(actingcommand_policy::DeviceGroupWait::Selected.as_str())
+                && outcome.value(LIMIT_MS).is_some());
+    }
+    [
+        actingcommand_policy::PolicyCode::InstanceAlreadySelected,
+        actingcommand_policy::PolicyCode::PolicyChainHandoverWaiting,
+        actingcommand_policy::PolicyCode::PolicyConcurrentRunsDeferred,
+        actingcommand_policy::PolicyCode::HeavySceneBudgetDeferred,
+        actingcommand_policy::PolicyCode::HeavySceneBudgetExhausted,
+    ]
+    .into_iter()
+    .any(|code| outcome.is(code))
+        || outcome.is(HostCode::DispatchInstanceHeld)
+}
+
+/// Workflow #437 ORD-1c (`contracts/scheduling/README.md`, "Order within one device";
+/// `contracts/device-group.md`, "The member in front"): memory-only queue waits, the evaluation
+/// instant at which each pair (task, member alias) of a member of a device of several began to
+/// wait in its device's queue. Staged as the eligibility ages are: an evaluated cycle's verdicts
+/// apply when the next evaluation starts, so an evaluation and the admissions of its intents see
+/// the same starts. Nothing here reaches the ledger, a fact, a snapshot or a decision identity; a
+/// host starts with none, so every wait begins anew after a restart.
+#[derive(Debug, Default)]
+struct QueueWaits {
+    since: BTreeMap<(String, String), u64>,
+    /// The last evaluated cycle's pairs that keep or begin a wait, and its instant.
+    pending: Option<QueueWaitVerdicts>,
+}
+
+#[derive(Debug)]
+struct QueueWaitVerdicts {
+    evaluated_at_unix_ms: u64,
+    waiting: BTreeSet<(String, String)>,
+}
+
+impl QueueWaits {
+    /// The staged verdicts take effect: a pair that waits keeps its start, or begins its wait at
+    /// the instant of the evaluation that staged it; every other pair's wait ends.
+    fn apply_pending(&mut self) {
+        let Some(verdicts) = self.pending.take() else {
+            return;
+        };
+        self.since = verdicts
+            .waiting
+            .into_iter()
+            .map(|key| {
+                let started = self
+                    .since
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(verdicts.evaluated_at_unix_ms);
+                (key, started)
+            })
+            .collect();
+    }
+
+    /// The verdicts of `evaluation` at `evaluated_at_unix_ms`: the pairs of the members `queue`
+    /// names that are not in front and stay queued ([`queued_in_device`]). Nothing is staged on a
+    /// host without a device of several.
+    fn stage(
+        &mut self,
+        evaluation: &PolicyEvaluation,
+        evaluated_at_unix_ms: u64,
+        in_flight: &BTreeSet<(&str, &str)>,
+        queue: &DeviceQueue,
+    ) {
+        if queue.members.is_empty() {
+            return;
+        }
+        let waiting = evaluation
+            .decisions
+            .iter()
+            .filter_map(|decision| {
+                let instance_id = decision.instance_id.as_deref()?;
+                (queue.waits(instance_id)
+                    && queued_in_device(
+                        decision,
+                        in_flight.contains(&(decision.task_id.as_str(), instance_id)),
+                    ))
+                .then(|| (decision.task_id.clone(), instance_id.to_owned()))
+            })
+            .collect();
+        self.pending = Some(QueueWaitVerdicts {
+            evaluated_at_unix_ms,
+            waiting,
+        });
+    }
+
+    /// The pair's wait ends: its dispatch was admitted.
+    fn forget(&mut self, task_id: &str, instance_id: &str) {
+        let key = (task_id.to_owned(), instance_id.to_owned());
+        self.since.remove(&key);
+        if let Some(pending) = &mut self.pending {
+            pending.waiting.remove(&key);
+        }
+    }
+
+    /// Every wait of `alias`'s pairs ends: the member took the front of its device.
+    fn forget_member(&mut self, alias: &str) {
+        self.since.retain(|(_, member), _| member != alias);
+        if let Some(pending) = &mut self.pending {
+            pending.waiting.retain(|(_, member)| member != alias);
+        }
+    }
+
+    /// The start the next evaluation passes for the pair, the staged verdicts applied.
+    #[cfg(test)]
+    fn start_after_pending(&self, task_id: &str, alias: &str) -> Option<u64> {
+        let key = (task_id.to_owned(), alias.to_owned());
+        match &self.pending {
+            None => self.since.get(&key).copied(),
+            Some(pending) => pending.waiting.contains(&key).then(|| {
+                self.since
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(pending.evaluated_at_unix_ms)
+            }),
+        }
+    }
+}
+
 /// Workflow #405 D1: one (task, instance alias) pair's random delay, drawn at the first
 /// evaluation at which the pair passed every other gate of the eligibility closure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1319,6 +1524,8 @@ pub(crate) struct PolicyHost {
     detection_quota: DetectionQuotaState,
     control: PolicyControlState,
     eligibility: EligibilityAges,
+    /// Workflow #437 ORD-1c: the queue waits of the members of a device of several, memory only.
+    queue_waits: QueueWaits,
     /// Memory-only arbitration input per instance (Workflow #308 slice 5c): the latest cycle
     /// that had an Eligible or Selected decision for the instance sets its entry.
     arbitration: BTreeMap<String, InstanceArbitrationRank>,
@@ -1915,6 +2122,7 @@ impl PolicyHost {
             detection_quota: DetectionQuotaState::default(),
             control: PolicyControlState::default(),
             eligibility: EligibilityAges::default(),
+            queue_waits: QueueWaits::default(),
             arbitration: BTreeMap::new(),
             confirmed_run_admissions: BTreeMap::new(),
             quarantined_dispatches: BTreeSet::new(),
@@ -2981,6 +3189,32 @@ impl PolicyHost {
         self.eligibility.apply_pending();
     }
 
+    /// Workflow #437 ORD-1c (`contracts/scheduling/README.md`, "Order within one device"): applies
+    /// the previous evaluated cycle's queue-wait verdicts, called once when an evaluation starts
+    /// with the eligibility ages', and returns the starts this evaluation passes, by (task, member
+    /// alias). Empty while the order's entries are off (test builds only).
+    pub(crate) fn apply_queue_wait_verdicts(&mut self) -> BTreeMap<(String, String), u64> {
+        if !queue_order_on() {
+            return BTreeMap::new();
+        }
+        self.queue_waits.apply_pending();
+        self.queue_waits.since.clone()
+    }
+
+    /// Workflow #437 ORD-1c (the coordinator's ruling 1 on board #437): the member `alias` took
+    /// the front of its device (its switch's own steps ended with its application in front or
+    /// started), so every queue wait of its pairs is forgotten, the staged ones included.
+    pub(crate) fn forget_queue_waits_of(&mut self, alias: &str) {
+        self.queue_waits.forget_member(alias);
+    }
+
+    /// Workflow #437 ORD-1c: the start of the queue wait of `task_id` on `alias` that the next
+    /// evaluation passes, `None` when the pair has none.
+    #[cfg(test)]
+    pub(crate) fn queue_wait_start_for_test(&self, task_id: &str, alias: &str) -> Option<u64> {
+        self.queue_waits.start_after_pending(task_id, alias)
+    }
+
     /// The pairs the last evaluation started aging while no cycle's verdicts had been applied
     /// since the host opened: their age before this host is unknown. Empty afterwards.
     pub(crate) fn eligibility_unknown_pairs(&self) -> BTreeSet<(String, String)> {
@@ -3389,6 +3623,7 @@ impl PolicyHost {
             pool_lines,
             task_held,
             device_groups,
+            device_queue,
             device_group_holds,
             switch_cooldowns,
             dispatches_read,
@@ -3814,6 +4049,12 @@ impl PolicyHost {
         )?;
         self.eligibility
             .stage(&evaluation, time.unix_ms, &in_flight);
+        // Workflow #437 ORD-1c: the queue waits of the members of a device of several, staged as
+        // the eligibility ages are; nothing on a host without one.
+        if queue_order_on() {
+            self.queue_waits
+                .stage(&evaluation, time.unix_ms, &in_flight, device_queue);
+        }
         self.random_delays.retain_eligible(&evaluation);
         self.arbitration
             .extend(instance_arbitration_ranks(&evaluation));
@@ -4797,8 +5038,11 @@ impl PolicyHost {
                     .is(actingcommand_policy::PolicyCode::FailureRetryImmediate)
             }),
         )?;
-        // An admitted dispatch ends its pair's eligibility age (Workflow #308 slice 5b).
+        // An admitted dispatch ends its pair's eligibility age (Workflow #308 slice 5b), and
+        // (Workflow #437 ORD-1c) its pair's queue wait.
         self.eligibility
+            .forget(&intent.task_id, &intent.instance_id);
+        self.queue_waits
             .forget(&intent.task_id, &intent.instance_id);
         // SS-4 (register §1.231): the admitted dispatch's basis arms its pair's no-progress
         // guard, at the dispatch time its task state will carry.
