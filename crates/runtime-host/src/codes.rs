@@ -2828,6 +2828,9 @@ pub(crate) mod test_spellings {
             // Workflow #437 MAPP-2d fix round 1: a test makes the release of a policy run's failed
             // settlement take the granted token.
             ReleaseFailedPolicyRunWithGrantedTokenForTest => "release_failed_policy_run_with_granted_token_for_test",
+            // Workflow #457: a test turns off the release of a direct run's lease on a return
+            // from its terminal step, as before the fix.
+            DirectRunTerminalReleaseOffForTest => "direct_run_terminal_release_off_for_test",
         }
     }
 }

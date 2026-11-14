@@ -191,7 +191,7 @@ fenced instance's gate holds back), is recorded once and leaves the session to t
 or to a preparation of the fenced instance (fix round 1: before, a queue ahead reached the lease
 sweep, whose fatal mark refuses a failure that is not fatal, and the sweep's thread ended with
 nothing latched). The lease sweep's expiry step now stops the Runtime loudly on any error it
-returns, as the sweep's other steps do. For a
+returns, as the sweep's other steps do (since fix round 2 every step of the tick does so). For a
 member of a device group of several (Workflow #437 MAPP-1d) that end hands the key to no one,
 and the session is closed under the session close ahead, still under the device's admission
 guard, before any waiting claim is granted; an unconfirmed close there keeps its close lease,

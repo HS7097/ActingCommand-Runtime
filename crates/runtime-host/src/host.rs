@@ -2305,6 +2305,8 @@ impl RuntimeHost {
             run_failure_after_switch_for_test: AtomicBool::new(false),
             #[cfg(test)]
             granted_token_release_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            direct_run_terminal_release_off_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             device_keys: config.device_keys,
             device_group_names: config.device_group_names,
@@ -6334,6 +6336,10 @@ struct HostShared {
     // settlement takes the granted token, as a build without `HostShared::run_token` there would.
     #[cfg(test)]
     granted_token_release_for_test: AtomicBool,
+    // Workflow #457, test only: while set, a direct run that returns from its terminal step with
+    // a failure keeps its lease, as before the fix (`execute_contained_task_with_lease`).
+    #[cfg(test)]
+    direct_run_terminal_release_off_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Workflow #437 MAPP-1b (`contracts/device-group.md`, "Derived, never stored"): the member →
@@ -7035,16 +7041,34 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         if shared.fatal.is_shutdown_requested() {
             break;
         }
-        let Some(_work) = shared.begin_continuation()? else {
+        // Workflow #458 fix rounds 1 and 2: every step of the tick stops the Runtime loudly on any
+        // error it returns, whatever its severity, before the thread ends: the fatal mark refuses
+        // a failure that is not fatal, and the sweep's thread used to end then with nothing
+        // latched (no lease lapsed, no fence was handed on, the health read normal).
+        let work = match shared.begin_continuation() {
+            Ok(work) => work,
+            Err(error) => {
+                shared.fatal.mark(error.clone().into_fatal())?;
+                return Err(error);
+            }
+        };
+        let Some(_work) = work else {
             continue;
+        };
+        let draining = match shared.lifecycle_draining() {
+            Ok(draining) => draining,
+            Err(error) => {
+                shared.fatal.mark(error.clone().into_fatal())?;
+                return Err(error);
+            }
         };
         // Workflow #369 §5.2: while an install drains, every waiting entry except a holding
         // ladder's continuation is cancelled; holders finish or stop at their next check.
-        if shared.lifecycle_draining()?
+        if draining
             && !shared.fatal.is_shutdown_requested()
             && let Err(error) = shared.cancel_queues_for_drain()
         {
-            shared.fatal.mark(error.clone())?;
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
         // Workflow #403: every new resource fence goes to a recovery ladder or a person before
@@ -7072,15 +7096,12 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
-        // Workflow #458 fix round 1: as the steps before it, an error of the expiry step stops the
-        // Runtime loudly whatever its severity; the fatal mark refuses a failure that is not
-        // fatal, and the sweep's thread used to end then with nothing latched.
         if let Err(error) = shared.expire_due_leases() {
             shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
         if let Err(error) = shared.expire_agent_sessions() {
-            shared.fatal.mark(error.clone())?;
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
         // #411 A67-R: a capture frame store's budget that entered the floor since the last tick
@@ -7092,13 +7113,13 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         // Workflow #398 RD-2: the device links' timers (the settle wait, the restore retries and
         // the watch's restarts), on the host clock.
         if let Err(error) = device_link::tick(&shared) {
-            shared.fatal.mark(error.clone())?;
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
         // IDLE-1: the idle check between policy cycles, so a planned wake comes on time. A
         // failure of one instance is contained to it; only the Runtime's own is returned.
         if let Err(error) = shared.check_idle_instances(true) {
-            shared.fatal.mark(error.clone())?;
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
     }

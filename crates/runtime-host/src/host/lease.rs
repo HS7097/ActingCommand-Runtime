@@ -3032,18 +3032,28 @@ impl HostShared {
             if self.run_end_keeps_lease(&token, now)? {
                 continue;
             }
-            let connection_id = match lock(&self.scheduler, HostLocation::ReadLeaseConnection)?
-                .connection_for_token(&token)
-            {
-                Ok(connection_id) => connection_id,
-                // Workflow #458 fix round 1: a holder's own end ended the lease since the scan;
-                // nothing of it is left to expire.
-                Err(SchedulerError::LeaseMissing | SchedulerError::LeaseMismatch) => continue,
-                Err(error) => {
-                    return Err(RuntimeHostError::scheduler(
-                        HostLocation::ReadLeaseConnection,
-                        &error,
-                    ));
+            let connection_id = {
+                let scheduler = lock(&self.scheduler, HostLocation::ReadLeaseConnection)?;
+                match scheduler.connection_for_token(&token) {
+                    Ok(connection_id) => connection_id,
+                    // Workflow #458 fix rounds 1 and 2: a holder's own end ended the lease since
+                    // the scan, so the scheduler holds the token no more; nothing of it is left to
+                    // expire. A token it still holds whose connection it cannot read is an error,
+                    // which the sweep makes fatal, never a lease skipped at every tick.
+                    Err(SchedulerError::LeaseMissing | SchedulerError::LeaseMismatch)
+                        if !scheduler
+                            .active_tokens()
+                            .into_iter()
+                            .any(|active| active == token) =>
+                    {
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(RuntimeHostError::scheduler(
+                            HostLocation::ReadLeaseConnection,
+                            &error,
+                        ));
+                    }
                 }
             };
             if !self.cleanup_expired_if_guard_free(&token, connection_id)? {

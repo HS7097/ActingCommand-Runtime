@@ -1137,7 +1137,7 @@ of a device group of several:
     as row 7, "The monitor's probe in a device group" and "One queue, one worker, one lease per
     device" now say; the dedicated close lease keeps the asking member's gate, as before (fix round
     1, register §1.359).
-  - *History (Workflows #456 and #458, 0.12.60, register §1.363).* Before #458 this list named a
+  - *History (Workflows #456 and #458, 0.12.60, register §1.364).* Before #458 this list named a
     member's non-run lease that lapses while its session is open: the sweep's close under the
     lapsed lease was refused, the sweep marked that error fatal and the whole Runtime stopped, for
     every member of a group of several and, already, for an instance alone whose session must

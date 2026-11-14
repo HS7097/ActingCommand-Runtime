@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflows #456 and #458 (register §1.363; `contracts/read-session-resource-close.md`;
+//! Workflows #456 and #458 (register §1.364; `contracts/read-session-resource-close.md`;
 //! `contracts/device-group.md`, "Release."): a close of one instance's session that is refused
 //! before it began isolates that instance, and the Runtime runs on.
 //!
@@ -361,12 +361,16 @@ impl Fixture {
         entries
     }
 
-    /// The host, once every hook that shared it has run.
-    fn into_host(self) -> RuntimeHost {
-        let Ok(host) = Arc::try_unwrap(self.host) else {
+    /// Closes the host, once every hook that shared it has run, and only then drops its state
+    /// root, so the host never closes over a root already gone.
+    fn close_host(self) -> RuntimeHostResult<()> {
+        let Self { host, root, .. } = self;
+        let Ok(host) = Arc::try_unwrap(host) else {
             panic!("a hook still holds the host");
         };
-        host
+        let closed = host.close();
+        drop(root);
+        closed
     }
 
     fn close(self) {
@@ -375,13 +379,13 @@ impl Fixture {
             self.host.sweep_thread_runs_for_test(),
             "the lease sweep's thread still runs"
         );
-        self.into_host().close().expect("close the host");
+        self.close_host().expect("close the host");
     }
 
     /// The host closed without asserting how: a session a fence keeps open, or the Runtime's
     /// own failure, is not the subject of the test that ends so.
     fn close_unchecked(self) {
-        let _closed = self.into_host().close();
+        let _closed = self.close_host();
     }
 
     /// The neutral package of a direct run written beside the host, the fake device of `alias`
@@ -1310,7 +1314,7 @@ fn close458_a_record_that_cannot_be_appended_at_the_expirys_close_still_stops_th
 /// ended meanwhile) run on both hosts alike. It proves that these three lease ends write the same
 /// records on this build as on itself with the entries off, and that the additions write no record
 /// there; that nothing changes against main when no close is refused rests on reading the diff
-/// (register §1.363).
+/// (register §1.364).
 #[test]
 fn close458_without_a_refusal_every_lease_end_writes_the_records_it_wrote_before() {
     let ids = alone_ids();

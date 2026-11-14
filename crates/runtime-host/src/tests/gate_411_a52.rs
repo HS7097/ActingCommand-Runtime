@@ -16,7 +16,7 @@
 //!   (`read-session-resource-close.md`, "Device session lifetime"), and the host keeps answering;
 //! - T2 (host 172): a close on the same path refused for a reason of the instance's own key.
 //!   Before Workflow #456 the contract kept it fatal and T2 pinned that the host halted; since
-//!   #456 (register §1.363) the refusal of a close under a lapsed lease fences only the
+//!   #456 (register §1.364) the refusal of a close under a lapsed lease fences only the
 //!   instance, and T2 pins that instead.
 //!
 //! FLK-07 met the refusal only when a claim happened to arrive during one of its observes; no
@@ -237,7 +237,7 @@ fn a52_t1_a_close_lease_the_queue_refuses_fails_only_the_observe_and_the_next_ho
     host.close().expect("close host");
 }
 
-/// T2 (host 172), adapted by Workflow #456 (register §1.363): a client holds the instance's
+/// T2 (host 172), adapted by Workflow #456 (register §1.364): a client holds the instance's
 /// lease and stops renewing it; the lease runs out while a failing read-only observe holds the
 /// instance, so the sweep cannot end it (its expiry scan is held until the observe has answered)
 /// and the observe's close reuses it. That close under a lapsed lease is refused `lease_expired`
