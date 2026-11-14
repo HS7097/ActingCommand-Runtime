@@ -24180,6 +24180,159 @@ the resource tools and `gate_rl1b`, actingd's `gate_rl1c`) give each package its
 whole (`DeclaredCapabilities`, no remedy), pinning what they pinned. No golden changes; no test
 leaves the gate map.
 
+### 1.370 Slice #463 L1 (0.12.60): a recording step in one call (its marks, its press, the next frame), and MCP tools for the recording commands that had none (Workflow #463; the owner's words on board #463, as the work order quotes them, are the requirement; the rules are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-463-l1-record-one-call.md`, read on main `17197d8e`)
+
+This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364). The
+train 0.12.60d gave 1.365 to 1.368 to #453 S3, S4, S9 and S12 (main `155366bb`), #455 G-R2s took
+1.369 (main `1e67d1c5`), and the coordinator gave this slice 1.370.
+
+**Why.** Packages are made from now on by an agent that plays through the Lab with the recording
+on (the owner: recording stays on while an agent operates, the click and recognition boxes and how
+to recognise are marked live, every parameter can be changed through MCP, that is the Lab). A step
+cost three calls ([lab-recording.md](lab-recording.md), "`--record` on device commands" and
+"Steps, frames and remediation"): the frame arrives, `record mark` declares and self-tests the
+marks and the click, `do --capture --record` presses and closes the step. The owner found the
+agents slow; and her standing rule holds that whatever the Lab has is a command and a tool of the
+Lab's MCP server.
+
+**Established by reading (step 1 of the work order).**
+- *Where.* `record mark` is `recording_api::record_mark` (`crates/lab/src/recording_api.rs`) over
+  `recording::steps`' `apply_marks`, `apply_transition`, `apply_step_action` and `save`; `do
+  --capture --record` is actinglab's `lab2_cli/operation.rs` (`run_contained_lab_do`: the plan by
+  `record_plan_click`, the Runtime's `RunContainedLabOperation`, the outcome by
+  `record_commit_click`); the MCP side is `apps/actingctl/src/mcp/lab.rs` and `tools.rs`
+  (`ac_lab_do`, `ac_record_*`), and the Lab's MCP server (`apps/actinglab-mcp`) generates `ac_do`
+  from the row `do`. The mark request is applied by the code `record mark` uses, called, not
+  copied: `record_mark`'s body after its session is opened is one function now, `mark_session`,
+  which `record_mark` and the one-call form both call; `record mark` writes and answers as before.
+- *The next frame.* The operation record's `after_frame` (the click record's `after`, marked
+  `informational`) is the Runtime's frame right after the input is acknowledged, or with an arrival
+  condition its last sample; no wait the caller declares stands before it. So it cannot be the next
+  step's frame "after the declared wait": the next frame is one more capture after the wait, the
+  `CaptureSequence` `capture --record` sends (`capture_for_command`), attached as `capture
+  --record` attaches it. No new Runtime operation.
+- *Interface revisions.* None moves ([component-interfaces.md](component-interfaces.md) names no
+  interface for actinglab's command line, the recording files or the MCP tool table): no request
+  kind, wire shape, record, ledger member, configuration key or outcome code is added, and
+  `actingcommand.lab-recording.v1` and `actingcommand.lab-record-mark.v1` keep their schemas.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| One call (the Lab) | `record_plan_step` checks the next frame's bounds, applies the request with `validate_mark_request` and `mark_session` to the open session in memory, and plans the press with `plan_click` on that session; nothing is written or sent. `PlannedStep::perform` writes the marks once (`save`), sends the input through `RecordStepPorts::press`, records the answer with `record_commit_click`, and after a press performed without a failure, when asked, `wait`s, checks the arrival (`record_frame_preflight`), `capture`s, writes `--next-frame-out` and attaches the frame (`record_attach_frame`); an error after the marks are written carries them as `mark`, a next frame that is not taken its capture's own error with `record`, `next_frame {after_ms, taken: false}` and `mark` |
+| The command | `do --capture --record` takes `--mark-request <file>` or `--mark-request-json <json>`, `--next-frame-after-ms <0..60000>` and `--next-frame-out <png>` (`begin_record_step`, `RuntimeStep`, `recorded_answer`); the four are in the read list of `do --capture` and, as `--tap-rect`, accepted only with `--record` (`RECORD_ONLY_FLAGS`). `record mark --request` and `--request-json` read their request with the same parse (`parse_mark_request`, `read_mark_request_file`). The plain `do --capture --record` goes through the same planned step with no request, its answer and records unchanged |
+| MCP (today's server) | `ac_lab_do` takes `mark` (`--mark-request-json`), `next_frame_after_ms` and `next_frame_out`, each also refused with `operation`; five author tools, each its command with its read list's flags: `ac_record_candidates`, `ac_record_amend`, `ac_record_step`, `ac_record_archive`, `ac_record_reopen` (46 tools; author 12) |
+| The table | the row `do`: the four parameters, its help, its output, `CaptureSequence` beside `RunContainedLabOperation`, its notes; the five rows' `source` names their tools |
+
+**The recording family on both sides** (after this slice; "today's MCP" is `actingctl mcp-serve`,
+"the Lab's MCP" is `actinglab-mcp`, which offers every planned row of its slices):
+
+| Row or form | Command line | Today's MCP | The Lab's MCP |
+|---|---|---|---|
+| `record start`, `mark`, `status`, `stop` | yes | `ac_record_start`, `ac_record_mark`, `ac_record_status`, `ac_record_stop` | the same names |
+| `record candidates`, `amend`, `step`, `archive`, `reopen` | yes | new here: `ac_record_candidates`, `ac_record_amend`, `ac_record_step`, `ac_record_archive`, `ac_record_reopen` | the same names |
+| `record draft` | yes | `ac_binding_draft` | `ac_record_draft` |
+| `observe --capture --record`, `do --capture --record` | yes | `ac_lab_observe`, `ac_lab_do` with `record` | `ac_lab_observe`, `ac_do` with `record` |
+| `capture --record`, `session capture --record` | yes | none (the first frame is `ac_lab_observe` with `record`) | none (`capture` is no row) |
+| `session app --record`, `session instance app --record` | yes | none (`ac_app` never passes `--record`) | none (the rows `app launch\|restart\|stop` do not reach it) |
+| `replay`, `regression` | yes | none (a later slice) | `ac_replay`, `ac_regression` |
+
+`session app --record` has no MCP tool on either server, so an agent cannot record an application
+step through MCP; the coordinator takes it as the next small slice (fix round 1).
+
+**What differs from the three calls, and why it must.** Nothing in `recording.json`: the same
+steps, frames, marks, crops, clicks and executions, the times and the Runtime's ids aside; the
+package `record stop` generates is the same. The answer differs: `record.mark` and `next_frame`
+are new members of `do --capture --record`'s answer, present only with a mark request and a next
+frame. The marks are written right before the input is sent, after every check of both commands
+and of `do`'s own (the package, the Runtime connection): a refusal writes nothing, and a press that
+fails leaves the marks as the two calls leave them.
+
+**Tests** (`crates/lab/src/gate_463_l1.rs` on the Lab's fixtures with a fake Runtime and a fake
+clock; `apps/actinglab/src/tests/gate_463_l1.rs`; `apps/actingctl/src/mcp/lab/tests/gate_463_l1.rs`;
+apps gate map): one call writes the step table and the frame and crop files three calls write;
+a failed self-test, a click outside the frame and an unknown member are refused with `record
+mark`'s code, no input seen, every file unchanged; a press not performed, performed with a failure
+or indeterminate keeps the marks, the click's outcome as before, no wait and no capture; the next
+frame comes after the declared wait, opens step 2 and is written to its file, none without the
+option, and a failing capture leaves the closed step and answers its own error; a whole recording
+in the fewest calls generates the package of three calls a step; the command refuses `--dry-run`
+with the one-call form (`record_flag_unsupported`) and the four flags without `--record`; the five
+tools reach their commands and answer the envelope, and `ac_lab_do` hands the one-call form on.
+
+**Fix round 1** (after the independent review; coordinator work order
+`rd-1114/brief-1717-fix1.md`; mains `155366bb` and `1e67d1c5` merged, this section renumbered
+1.370):
+- *The open step and nothing else.* The mark request could write its marks to another step
+  (`step`), open a step from a file (`frame`) whose coordinates the device then pressed, or carry a
+  `transition` or a `step_action`, while the press was the open step's click. After `record mark`'s
+  checks and the press's plan, and before anything is written or sent, each is now
+  `validation_failed` with `details{member, open_step}` and a message naming `record mark`
+  (`hold_to_open_step`).
+- *The next frame's device configuration* is resolved in `begin_record_step`, after the lock, for
+  the instance the lock names, and before the step is planned (`next_frame_device_config`); it was
+  resolved after the press, so an error in it came only once the press was done.
+- *The exported MCP answer.* `next_frame` joined today's MCP server's frame parts, before
+  `after_attachment` (`FRAME_PARTS`, five): an answer exported over the budget keeps the next
+  screen inline, where before only the operation's own after frame stayed, which an agent took
+  for the next screen. The Lab's MCP server's own list (`after_child.rs`, `FRAME_PARTS`, five)
+  gained `next_frame` in the same place, so both servers keep the same parts (the owner's rule:
+  whatever the Lab has, both faces have, and they behave alike).
+- *A press that was not performed after the marks were written* (the coordinator's ruling: the
+  behaviour stays). The same call again is refused by `record mark`'s own check
+  (`record_click_exists`, or `record_mark_id_conflict` for a mark of the step it adds again), and
+  that refusal's message now says that the step holds its marks and its click and that the press is
+  repeated by the same call without the mark request (`repeat_without_mark`). A next frame's error
+  puts `record` and `next_frame` first in its details, before the capture's own members and `mark`:
+  today's MCP server keeps the first 4096 bytes of the details (`raw_text`) with `--detail full`;
+  with `--detail codes` it keeps no foreign text, so the two `device_error`s read alike there, and
+  `ac_record_status` (the step and its click's execution) tells them apart.
+- *Texts.* "One call per step" says the open-step rule, what a carrier package gives, that the
+  Runtime's admission answers the press after the marks are written, how a press that was not
+  performed is repeated, how the two errors are told apart, that the lock is taken after the flags
+  and the request are read, that the last screen needs its `page`, and that under MCP a missing
+  frame is taken with `ac_lab_observe`; its example runs as typed in PowerShell 7.3. Every tool the
+  slice's texts name exists under that name (today's server's table, the Lab's server's rows).
+- *CI*: a test of `ac_lab_do` took a `Result` whose error (`ToolError`) has no `Debug` with
+  `expect`; it matches the result as its neighbours do.
+- *Tests* (apps gate map): four refusals of the open-step rule, the device configuration resolved
+  before the press (actinglab's command line), an exported answer keeping `next_frame` inline on
+  today's MCP server and on the Lab's (`serve_calls::mcp_lab_overflow_rule_keeps_next_frame_inline`).
+
+Fix round 2 (after the second review; no behaviour of a press, a code or the recording changes):
+- *The repeat's words.* The refusal of the same call sent again no longer says that the press was
+  not performed: it says that the step holds its marks (and its click, when the request declared
+  one) and that the recording holds no outcome of a press, which can mean the press was not
+  performed or was performed and could not be recorded (`record_append_failed_after_input` means
+  performed); look at the screen first (`observe --capture` without `--record`, MCP
+  `ac_lab_observe` with `capture`) or read `record status` (`ac_record_status`), and only while the
+  step's own page is still shown send the same call without the mark request. "One call per step"
+  says the same.
+- *`--tap-rect` (or `--swipe`) with a request without a click.* The step then holds its marks and no
+  click, and the same call again ends `record_mark_id_conflict`: when the request is for the open
+  step and every mark it adds is on the step with the same members (`declares_mark`), that
+  refusal carries the same guidance, with `--tap-rect` or `--swipe` kept. `record_mark_id_conflict`
+  for a mark that differs keeps `record mark`'s own message.
+- *Tool names.* The refusal and the contract name both servers' tools: `ac_lab_do` with `mark`
+  (today's server) and `ac_do` with `mark_request_json` or `mark_request` (the Lab's), and
+  `ac_lab_observe` and `ac_record_status`, which both servers call so.
+- *Test* (apps gate map): a `--tap-rect` step whose press was not performed, sent again: the
+  guidance and both servers' names in the message, nothing pressed or written; a mark of the same
+  id with another region keeps `record mark`'s message; the same call without the request presses
+  the step.
+
+**At deploy.** Nothing to configure. Recordings, packages and the MCP registration stay as they
+are; `actingctl mcp-serve --tier author` lists the five new tools after a client reloads its tools
+(the stable entry switches its child as for every update). An agent records a step with one
+`ac_lab_do` call (`capture`, `record`, `mark`, `next_frame_after_ms`), or on the Lab's MCP server
+one `ac_do` call (`capture`, `record`, `mark_request_json`, `next_frame_after_ms`): read the
+answer's `next_frame` (its `out` file) before the next call.
+
+**Rollback** (below 0.12.60). Nothing is persisted that an older build does not read: the
+recordings are the three calls' files. An older actinglab refuses the four flags (unread), and an
+older MCP server the five tools and the three `ac_lab_do` members (`unknown`).
+
 ### 1.372 Slice #463 U1 (0.12.60): a recorded package that meets a screen it does not know ends with a code of its own, and only its own task pauses (Workflow #463; the owner's four sentences on board #463 and the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-463-u1-unrecorded-screen.md`, read on main `17197d8e`)
 
 1.365 was the next free number on main `17197d8e` (#1707, §1.364, merged). The train merged
