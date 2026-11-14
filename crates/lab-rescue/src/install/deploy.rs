@@ -189,6 +189,8 @@ pub(crate) fn step(
         StepKind::ReverseFiles => reverse_files(operation, n, loaded, notes),
         // Workflow #434 LAB-3: the rescue module's `place`.
         StepKind::PackItem => super::place::item_step(operation, n, loaded, notes),
+        // Workflow #453 S9: the rescue module's `vision place`.
+        StepKind::VisionFile => super::vision::file_step(operation, n),
         _ => Err(state_invalid(
             operation.journal().kind.location(),
             operation.paths().journal(operation.id()),
@@ -727,6 +729,10 @@ fn post_check(
     // Workflow #434 LAB-3: the checks after a placement, not after a start.
     if super::place::is_place_check(&step.intent) {
         return super::place::check_step(operation, n, loaded, notes);
+    }
+    // Workflow #453 S9: the check after a `vision place`.
+    if super::vision::is_vision_check(&step.intent) {
+        return super::vision::check_step(operation, n);
     }
     let rollback = of_rollback(&step.intent);
     let journal = operation.journal().clone();
@@ -1630,6 +1636,15 @@ pub(crate) fn finish(
             super::done(command)
                 .install_operation_id(operation_id.clone())
                 .installation_changed(true)
+        }
+        // Workflow #453 S9: the rescue module's `vision place`: each file placed, the check after
+        // them and its `undo`.
+        OperationKind::VisionPlace => {
+            let finished = super::vision::finished(&journal, &paths);
+            for (name, value) in finished.members {
+                insert(name.as_str(), value);
+            }
+            finished.outcome
         }
         OperationKind::ReleaseStage | OperationKind::Adopt => {
             return Err(operation.interrupted(state_invalid(

@@ -201,8 +201,10 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
     // with no hold, so its undo takes the writer lock and then applies the stopped rule the
     // placement applied (`launch::refuse_running`: `owner_lock_held`, `runtime_running`,
     // `processes_unreadable`), before anything is moved; the undo of any other operation is
-    // unchanged.
-    let cold = kind == OperationKind::PackPlace && super::place::is_cold(&operation);
+    // unchanged. Workflow #453 S9: so does the undo of a `vision place`, which always moved its
+    // files with the Runtime stopped.
+    let cold = (kind == OperationKind::PackPlace && super::place::is_cold(&operation))
+        || kind == OperationKind::VisionPlace;
     let _lock = if changes_program || cold {
         let loaded = plan::load(&paths, UNDO)?;
         let lock = WriterLock::take(&paths, loaded.settings.lock_wait_ms, UNDO)?;
@@ -319,6 +321,8 @@ pub(crate) fn reverse_step(
         }
         // Workflow #434 LAB-3: an item of the rescue module's `place`, reversed as a swap.
         StepKind::PackItem => super::place::reverse_item(operation, step, ms2)?,
+        // Workflow #453 S9: a file of the rescue module's `vision place`, reversed as a swap.
+        StepKind::VisionFile => super::vision::reverse_file(step, ms2)?,
         // Workflow #421 INST-2: the hold, the close, the start, the checks, the release and
         // a rollback's reversal change no file; a pause stays until `release-hold`.
         StepKind::VerifyTree

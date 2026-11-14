@@ -32,6 +32,10 @@ pub enum OperationKind {
     // is on row 7a″'s pass list: while one is unfinished the watchdog stands aside.
     ConfigReplace,
     PackPlace,
+    // Workflow #453 S9: the Lab's rescue module's `vision place`, which places a vision root's
+    // files while the Runtime is stopped. Not on row 7a″'s pass list either: while one is
+    // unfinished the watchdog stands aside.
+    VisionPlace,
 }
 
 /// `install\current.json`: the one unfinished operation.

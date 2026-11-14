@@ -1215,18 +1215,75 @@ the rescue face:
   cause;
   `config_unreadable` for a `standard_packs.root` that cannot be listed or a `bundle.json` whose
   kind cannot be read; `pack_invalid` (`game`, `path`) for a game root whose check gives no
-  models. Nothing is written, downloaded or placed; placing the files is a later slice's.
+  models. Nothing is written, downloaded or placed; placing the files is `vision place`'s (below).
+- **`vision place --from <dir>`** (Workflow #453 S9, since 0.12.60; register §1.363;
+  [vision-model-folders.md](vision-model-folders.md), "Placing a vision root from a folder"; the
+  coordinator's rulings on board #453, not the owner's words). A row of this module only
+  (`writes` true, `runtime` `offline`); `actingctl install` has no such command. It fetches
+  nothing and names no address.
+  - **Which files, and where.** The live build's `actingd vision check --config <the root's
+    configuration> --install-root <root>` (as `vision check` runs it, without `--model`, within its
+    160 s and ended there) resolves the configured vision root and its provider as a start does,
+    and answers every file of that provider's manifest with its size, SHA-256 and state there; the
+    files whose state is not `ok` (`missing`, `sha256_mismatch`, `unreadable`) are the ones to
+    place. A `directml` configuration's manifest holds every file of the `cpu` one and DirectML's
+    own, so a configuration that can fall back to the CPU (`gpu_fallback` `cpu`) gets what both
+    need; one without a `vision` section, or of `cuda`, has no manifest. The module links no vision
+    crate. A refusal of actingd at a stage is `vision_root_unresolved` (a vision root that does not
+    exist yet included: actingd resolves it as a start does, so its folder must exist), any other
+    failure `vision_report_unanswered`, as for `vision check`; both before anything is written.
+  - **`--from`** is laid out as a vision root: each file at its `vision_root_path` below it. Before
+    anything is written, each file to place is read from it and compared with its pin, its size
+    and then its SHA-256: one missing, of another size or another SHA-256, or unreadable refuses the
+    whole command `vision_source_invalid` with its `path` (the answer's `source` names its place,
+    its state and its pin; an OS failure is the cause); a `--from` that is no folder is refused the
+    same way. A file below `--from` that the manifest does not name is neither read nor copied; the
+    answer's `ignored` counts them. Every file of this build's manifest is pinned, its license
+    files too (S7, "The manifest"); a report that names a file without a size and a SHA-256 is
+    `vision_report_unanswered`, so no file is ever copied unverified.
+  - **While stopped.** Then, under the writer lock, with no operation unfinished, the stopped rule
+    of the update path (as `place` applies it while no Runtime answers: `owner_lock_held`
+    (`path`), `runtime_running` (`path`, `pid`), `processes_unreadable`), before anything is
+    written.
+  - **The operation** (kind `vision_place`; off row 7a″'s pass list, so the watchdog stands aside
+    while it is unfinished): its inputs `commit`, `provider`, `vision_root`, `from`, `ignored` and
+    `config_sha256`; no plan, no S0, no guards; one `vision_file` step per file to place, in the
+    manifest's order (the file copied from `--from` to `<dst>.new-<ms>.part` and checked, a file in
+    its place renamed `<dst>.old-<ms>` and kept, the part renamed in and checked again), then
+    `post_check`, the same `actingd vision check`: one row `vision_check`, passed when every
+    manifest file is `ok`, every manifest model's identity matches and the vision root is the one
+    placed into. Done is `install_command_done` (`install_operation_id`, `installation_changed`
+    true) with `provider`, `vision_root`, `from`, `ignored`, `placed` (each step's evidence: the
+    place, the file and the kept names), `checks` and `next` (`undo`). A failed row ends the
+    command `post_check_failed` (`count`), its step closed with what it read, the files placed and
+    `next` naming `undo`. A step that fails after a change on disk is
+    `install_operation_interrupted`; a copy or a placed file that does not hold its pin is its
+    cause as `vision_source_invalid` (`path` that file).
+  - **A complete root** answers `install_command_done` with `installation_changed` false,
+    `placed` `[]` and actingd's `report`, and opens no operation.
+  - **`resume` and `undo`** (`op resume`, `undo`) take the writer lock and apply the stopped rule
+    again before anything is moved. A crash between the two renames of a step leaves the file of
+    before renamed `.old-<ms>` and the part waiting: `resume` renames the part in, `undo` renames
+    the `.old-<ms>` back. `undo` sets each placed file that holds its pin aside as
+    `.rolledback-<ms2>`, puts a kept `.old-<ms>` back and sets a part left behind aside as
+    `.abandoned-<ms2>`. Nothing is deleted, and no file the manifest does not name and no other
+    folder under `models\` is touched. `leftovers` lists no item of a vision root, as it lists
+    none of a game root.
+  - It falls under the operating rule until LAB-7 ("Journals across versions" below): not used on
+    the production root.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
   `install-root` raise, component-interfaces.md covers the A/B roots only). An installer of
   v0.12.47 or older does not read a journal the module wrote (its `initiator`, `one_way`, the
-  kinds `config_replace` and `pack_place`): the testing phase keeps no old-version compatibility
+  kinds `config_replace` and `pack_place`; since 0.12.60, Workflow #453 S9, the kind
+  `vision_place` and its step `vision_file`, which a build before 0.12.60 does not read either):
+  the testing phase keeps no old-version compatibility
   (Alice, 2026-10-11). `actingctl install` writes its journals byte for byte as before, and this
   build reads the older ones. **Operational rule until LAB-7:** production keeps deploying through
-  `actingctl install` (the coordinator's deploy kit); the module's `deploy`, `rollback`, `place`
-  and `config replace` are not used on the production root, so no journal an older installer
-  cannot read appears there.
+  `actingctl install` (the coordinator's deploy kit); the module's `deploy`, `rollback`, `place`,
+  `config replace` and (Workflow #453 S9) `vision place` are not used on the production root, so
+  no journal an older installer cannot read appears there.
 
 ## Interface checks
 
@@ -1464,7 +1521,8 @@ any other schema (`state_invalid`).
 The Lab's rescue module (LAB-3) adds two members after `installer`, which `actingctl install`
 never writes: `"initiator": "<word>"` (lab-two-entries.md §4.1) and `"one_way": true` (a one-way
 ledger edge it applied; absent otherwise); its undo record carries `"initiator"` too. Kinds
-`config_replace` and `pack_place` are the module's. An older reader that refuses unknown members
+`config_replace` and `pack_place` are the module's, and (Workflow #453 S9, since 0.12.60)
+`vision_place` with its step `vision_file`. An older reader that refuses unknown members
 does not read such a journal; `install-root` does not change (lab-two-entries.md, open point 5).
 LAB-3 fix 1: the evidence of the module's `pause` step carries `"own_pauses": {"reason",
 "owner_epoch", "revisions": {"<alias>": <revision>}}`, the pauses it set; with the step's
@@ -1508,6 +1566,7 @@ state alone, so a step repeated after a crash is either already true or done aga
 | `reverse_files` | the previous build verified in place | reverse what is not yet reversed | — |
 | `config_swap` | INST-3 | | |
 | `pack_item` | INST-4, as `swap_file` per item | | |
+| `vision_file` | Workflow #453 S9: `<dst>` holds the pin's SHA-256; a file of before is kept as `<dst>.old-<ms>` | a part that is not the file set aside `.abandoned-<ms>` and written again; finish whichever half is missing | `<dst>` holding the pin → `.rolledback-<ms2>`; `.old-<ms>` → `<dst>`; a part → `.abandoned-<ms2>` |
 
 `<ms2>` is the undo's own Unix milliseconds. Crash points: before the first swap the live tree is
 untouched (resume restages, undo abandons the parts); between swaps every file is old or new,
@@ -2704,7 +2763,8 @@ fragments and this build's enums; the forwarder's codes are in
 - vocabulary `install_rollback_build_material` (new): `kept`, `cleaned`.
 - vocabulary `install_operation_kind` (new): `release_stage`, `adopt`, `update`, `rollback`,
   `stop`, `start`, `release_hold`, `prepare`, `convert`, `clean`, `restart`; the rescue module's
-  composites add (Workflow #434 LAB-3, since 0.12.48) `config_replace`, `pack_place`.
+  composites add (Workflow #434 LAB-3, since 0.12.48) `config_replace`, `pack_place`, and its
+  `vision place` (Workflow #453 S9, since 0.12.60) `vision_place`.
 - vocabulary `install_step_kind` (new): `extract`, `copy_build`, `verify_tree`, `place_build`,
   `materialize_part`, `verify_part`, `pause`, `close`, `ledger_verify`, `place_slot`,
   `stage_file`, `swap_file`, `retire_live_files`, `place_entries`, `refresh_entries`,
@@ -2712,7 +2772,7 @@ fragments and this build's enums; the forwarder's codes are in
   `start`, `post_check`, `record_health`, `release_hold`, `reverse_files`, `revert_selection`,
   `clean_check`, `clean_slot`, `clean_builds`, `clean_converted`, `delete_cleaning`,
   `record_cleanup`; the rescue module's place composite adds (Workflow #434 LAB-3, since
-  0.12.48) `pack_item`.
+  0.12.48) `pack_item`, and its `vision place` (Workflow #453 S9, since 0.12.60) `vision_file`.
 - vocabulary `install_member` (new): `runtime`, `tools`, `ui`.
 - vocabulary `install_row_reason` (new): `target_restores_player_holds`, `no_player_hold_support`,
   `ui_drives_no_installer`.
@@ -2802,6 +2862,12 @@ the fragment registers, names the command.
   and `pack_invalid` (`game`, `path`, `timeout_ms`) for the standard-pack root and a game root's
   check; no code or key is new here (actingd's `vision_manifest_reported` and
   `vision_check_completed` are actingd's own).
+- **Workflow #453 S9** (since 0.12.60; "The Lab's rescue module", `vision place`): the location
+  `install_vision_place`; `install_refusal` `vision_source_invalid` (`path`), which only this row
+  answers; the operation kind `vision_place` and the step kind `vision_file`; it answers the
+  existing `vision_root_unresolved`, `vision_report_unanswered` (`timeout_ms`),
+  `owner_lock_held`, `runtime_running`, `processes_unreadable`, `operation_unfinished`,
+  `writer_lock_failed` and `post_check_failed` (`count`); no code or key is new.
 - **Workflow #453 S1** (since 0.12.60; "Instances, the first slice", "A first row"):
   `install_instance_add`'s `instance_invalid` gives the existing key `config_key` two more
   values, `policy` and `policy.resources.hosts`, beside those it gave before; no code, location,

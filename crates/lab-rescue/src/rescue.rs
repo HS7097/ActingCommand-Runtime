@@ -65,6 +65,10 @@
 //!   `contracts/vision-model-folders.md`, "The manifest"), read only, offline: the live build's
 //!   `actingd vision manifest|check`, each ended at its bound; `vision check` also joins the models
 //!   the packs of each game root need, from the Tools' `standard-pack check` of the root.
+//! - **`vision place --from <dir>`** (Workflow #453 S9; `crate::install::vision`): the files of the
+//!   configured vision root's manifest it lacks or holds with another SHA-256, verified below the
+//!   folder a person gives before anything is written and placed while the Runtime is stopped, in
+//!   one journalled operation; nothing is fetched.
 
 use crate::agent_channel::{self, Answer as Answered};
 use crate::cli_line::{self, Exit};
@@ -109,8 +113,9 @@ const USAGE: &str = "usage: actinglab [--json] <rescue operation> [<positionals>
 
 /// The rows of module `rescue` this slice serves, by the table's name (Workflow #421 INST-5: and
 /// `instance add`; Workflow #434 LAB-5G5b: and the three MCP rows; Workflow #453 S10: and
-/// `emulators`; Workflow #453 S7: and `vision manifest` and `vision check`).
-pub const SERVED: [&str; 36] = [
+/// `emulators`; Workflow #453 S7: and `vision manifest` and `vision check`; Workflow #453 S9: and
+/// `vision place`).
+pub const SERVED: [&str; 37] = [
     "up",
     "restart",
     "down",
@@ -136,6 +141,7 @@ pub const SERVED: [&str; 36] = [
     "emulators",
     "vision manifest",
     "vision check",
+    "vision place",
     "watchdog install",
     "watchdog uninstall",
     "agent add",
@@ -259,6 +265,8 @@ pub(crate) fn answer_with(
         "emulators" => emulators(context),
         "vision manifest" => vision_manifest(context, params),
         "vision check" => vision_check(context),
+        // Workflow #453 S9: the files the vision root lacks, placed from a folder while stopped.
+        "vision place" => crate::install::vision::row(context, params),
         "watchdog install" => watchdog(context, crate::watchdog::Asked::Install),
         "watchdog uninstall" => watchdog(context, crate::watchdog::Asked::Uninstall),
         "mcp plan" => mcp_plan(context, params),

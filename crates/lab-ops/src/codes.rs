@@ -506,6 +506,9 @@ actingcommand_contract::outcome_locations! {
         // check`, the live build's `actingd vision manifest|check`, read only.
         VisionManifest => "install_vision_manifest",
         VisionCheck => "install_vision_check",
+        // Workflow #453 S9 (since 0.12.60): the rescue module's `vision place`, the files of the
+        // configured vision root's manifest placed from a folder a person gives.
+        VisionPlace => "install_vision_place",
     }
 }
 
@@ -608,6 +611,11 @@ actingcommand_contract::outcome_vocabulary! {
         // run, printed none (a build without the subcommand), refused its command line, could not
         // read its own registry, or was ended at the row's bound (`timeout_ms`, no cause).
         VisionReportUnanswered => "vision_report_unanswered",
+        // Workflow #453 S9 (since 0.12.60): a file the rescue module's `vision place` would place
+        // does not hold its pin: below `--from` before anything is written (missing, another size
+        // or another SHA-256, or unreadable), or its copy or the placed file during the operation
+        // (`path` the file).
+        VisionSourceInvalid => "vision_source_invalid",
     }
 }
 

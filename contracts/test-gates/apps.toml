@@ -2049,3 +2049,18 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_inst1_update::s11_an_update_and_a_rollback_leave_the_installation_identity_in_place",
 ]
 incident = ["#453 S11"]
+
+# Workflow #453 S9 (0.12.60; register §1.363; brief rd-1114/brief-453-s9-vision-place.md; contracts/install-cli.md, "The Lab's rescue module", vision place; contracts/vision-model-folders.md, "Placing a vision root from a folder"): the rescue row vision place --from <dir> on the fake host, whose live actingd's vision check answers from the vision root on disk against an injected pin table of made-up files. Missing files are placed and the post-check passes (the tree the manifest's files plus what was there; one vision_place journal, one vision_file step per file and post_check; watchdog row 7a″ stands aside after every step); a file of another SHA-256 is replaced and kept as .old-<ms> byte for byte; a complete root opens no operation and writes nothing; a --from file of another size, of another SHA-256 or missing refuses vision_source_invalid with its path before anything is written; a running Runtime, a held owner lock and an undecidable probe refuse with nothing written; a crash after each step and between the two renames resumes (op resume) to the same tree; undo sets the placed files aside and puts the replaced one back, deleting nothing; another model folder and a file the manifest does not name stay byte for byte.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_missing_files_are_placed_and_the_post_check_passes",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_differing_file_is_replaced_and_the_old_one_kept_byte_for_byte",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_complete_root_opens_no_operation_and_writes_nothing",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_wrong_or_missing_source_file_refuses_before_anything_is_written",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_running_runtime_a_held_owner_lock_or_an_undecidable_probe_refuses",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_a_crash_after_each_step_or_between_the_renames_resumes_to_the_same_tree",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_undo_sets_the_placed_files_aside_and_puts_the_replaced_file_back",
+    "actingcommand-lab-rescue::lib::install::gate_453_s9::s9_another_model_folder_and_an_unnamed_file_are_untouched",
+]
+incident = ["#453 S9"]

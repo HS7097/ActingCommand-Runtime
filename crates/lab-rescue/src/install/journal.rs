@@ -49,6 +49,10 @@ pub(crate) enum StepKind {
     // of the rescue module's `place` (a pack, a table, a root file, or a root file set aside),
     // each `.part` → `.old-<ms>` → in place, as `swap_file` per item.
     PackItem,
+    // Workflow #453 S9: one file of the rescue module's `vision place`, copied from the folder a
+    // person gave to `.part`, a file in its place kept as `.old-<ms>`, the part renamed in, each
+    // checked against the manifest's pin.
+    VisionFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -286,7 +286,9 @@ pub(crate) fn live_changes(
             | OperationKind::Start
             | OperationKind::ReleaseHold
             | OperationKind::ConfigReplace
-            | OperationKind::PackPlace => {}
+            | OperationKind::PackPlace
+            // Workflow #453 S9: nor does `vision place`.
+            | OperationKind::VisionPlace => {}
         }
     }
     changes.sort_by_key(|(since, _)| *since);
@@ -735,7 +737,8 @@ pub(crate) fn apply_command(
 /// Continues an unfinished update, rollback, stop, start or release of a hold; the writer lock
 /// is taken for every kind that changes program files or starts the Runtime. Workflow #453 S6
 /// fix 1: a placement begun while no Runtime ran goes on only while the Runtime is still stopped,
-/// by the rule the placement applied, judged under the writer lock before any step runs.
+/// by the rule the placement applied, judged under the writer lock before any step runs. Workflow
+/// #453 S9: so does a `vision place`, which always began with the Runtime stopped.
 pub(crate) fn resume(operation: Operation<'_>) -> Result<Answer, Outcome> {
     let loaded = plan::load(operation.paths(), InstallLocation::Resume)
         .map_err(|cause| operation.interrupted(cause))?;
@@ -754,7 +757,10 @@ pub(crate) fn resume(operation: Operation<'_>) -> Result<Answer, Outcome> {
             .map_err(|cause| operation.interrupted(cause))?,
         )
     };
-    if operation.journal().kind == OperationKind::PackPlace && super::place::is_cold(&operation) {
+    let kind = operation.journal().kind;
+    if (kind == OperationKind::PackPlace && super::place::is_cold(&operation))
+        || kind == OperationKind::VisionPlace
+    {
         super::launch::refuse_running(
             operation.host(),
             operation.paths(),
@@ -819,6 +825,7 @@ pub(crate) fn run(mut operation: Operation<'_>, loaded: &Loaded) -> Result<Answe
                 | StepKind::ReleaseHold
                 | StepKind::ReverseFiles
                 | StepKind::PackItem
+                | StepKind::VisionFile
         ) {
             let ended = super::deploy::step(&mut operation, n, loaded, &mut notes)
                 .map_err(|cause| operation.interrupted(cause))?;
