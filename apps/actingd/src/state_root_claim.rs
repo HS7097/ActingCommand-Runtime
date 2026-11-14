@@ -28,7 +28,9 @@ struct Claim {
 /// `actingd claim-state-root`. Its success is `state_root_claimed` (`path` the state root) with
 /// the report members `actor`, `changed`, `identity` (`read`, `minted`, `renewed`), `record`
 /// (`written`, `unchanged`, `replaced`), `claimed_at_unix_ms`, `previous` (`{claimed_at_unix_ms}`
-/// of a replaced record that could be read) and `kept` (the files set aside). A command line it
+/// of a replaced record that could be read), `kept` (the files set aside) and `kept_record` (fix
+/// round 1: the kept old record the fingerprint caveat is about, for `replaced` the one set aside
+/// now, for `written` the newest an earlier hand-over left in the state root). A command line it
 /// does not take is `invalid_arguments`; the configuration's refusals are `unlock-owner`'s, at
 /// stage `config_load`; every other refusal is the host's.
 pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, ActingdError> {
@@ -65,8 +67,13 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         .with("record", json!(handed.record.as_str()))
         .with("claimed_at_unix_ms", json!(handed.claimed_at_unix_ms))
         .with("kept", json!(kept));
-    Ok(match handed.previous_claimed_at_unix_ms {
+    let reported = match handed.previous_claimed_at_unix_ms {
         Some(previous) => reported.with("previous", json!({"claimed_at_unix_ms": previous})),
+        None => reported,
+    };
+    // Fix round 1 (ruling 3): the kept old record the fingerprint caveat is about.
+    Ok(match &handed.kept_record {
+        Some(kept) => reported.with("kept_record", json!(kept.to_string_lossy())),
         None => reported,
     })
 }

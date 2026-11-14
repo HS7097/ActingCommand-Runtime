@@ -315,11 +315,19 @@ fn s12_another_installations_record_is_kept_and_the_next_start_records_the_new_c
         .expect("a kept name")
         .to_string_lossy()
         .into_owned();
-    assert_eq!(kept_names(state.path(), RECORD), [kept_name.clone()]);
+    assert_eq!(
+        kept_names(state.path(), RECORD),
+        std::slice::from_ref(&kept_name)
+    );
     assert_eq!(
         fs::read(kept).ok(),
         Some(old_record),
         "the old record byte for byte"
+    );
+    assert_eq!(
+        handed.kept_record.as_deref(),
+        Some(kept.as_path()),
+        "the caveat names the record just kept"
     );
     let record = json_file(&state.path().join(RECORD));
     assert_eq!(record["installation_id"], json!(THIS_ID));
@@ -414,6 +422,7 @@ fn s12_no_record_is_written_and_its_own_record_changes_nothing() {
     assert_eq!(handed.record, HandedRecord::Written);
     assert_eq!(handed.previous_claimed_at_unix_ms, None);
     assert!(handed.kept.is_empty(), "{:?}", handed.kept);
+    assert_eq!(handed.kept_record, None, "no kept record: no caveat");
     assert!(handed.changed());
     assert_eq!(
         names(state.path()),
@@ -433,6 +442,7 @@ fn s12_no_record_is_written_and_its_own_record_changes_nothing() {
     assert_eq!(again.record, HandedRecord::Unchanged);
     assert!(!again.changed(), "the answer says nothing changed");
     assert!(again.kept.is_empty(), "{:?}", again.kept);
+    assert_eq!(again.kept_record, None);
     assert_eq!(again.previous_claimed_at_unix_ms, None);
     assert_eq!(again.claimed_at_unix_ms, handed.claimed_at_unix_ms);
     assert_eq!(
@@ -446,6 +456,44 @@ fn s12_no_record_is_written_and_its_own_record_changes_nothing() {
         "nothing renamed"
     );
     assert_eq!(files(&install), install_before);
+}
+
+// Fix round 1 (ruling 3): a record written on a state root that holds no record but old records an
+// earlier hand-over kept (a crash between setting the old record aside and placing the new one, or
+// a put-back that failed) names the newest of them as the kept record, so the answer carries the
+// fingerprint caveat with it; the kept records are left byte for byte and nothing else is kept.
+#[test]
+fn s12_fix1_a_record_written_beside_a_kept_record_names_it() {
+    let installation = installation_with(&identity(THIS_ID));
+    let state = TempDir::new().expect("tempdir");
+    let older = state
+        .path()
+        .join(format!("{RECORD}.old-{}", CLAIMED_AT_UNIX_MS - 1));
+    let newer = state
+        .path()
+        .join(format!("{RECORD}.old-{CLAIMED_AT_UNIX_MS}"));
+    fs::write(&older, record(THIS_ID)).expect("an older kept record");
+    fs::write(&newer, record(OTHER_ID)).expect("the newest kept record");
+
+    let handed = claim(&state, installation.path(), false).expect("the claim");
+    assert_eq!(handed.record, HandedRecord::Written);
+    assert!(
+        handed.kept.is_empty(),
+        "nothing set aside now: {:?}",
+        handed.kept
+    );
+    assert_eq!(
+        handed.kept_record,
+        Some(newer.clone()),
+        "the newest kept record"
+    );
+    assert_eq!(fs::read(&older).ok(), Some(record(THIS_ID)));
+    assert_eq!(fs::read(&newer).ok(), Some(record(OTHER_ID)));
+    assert_eq!(
+        json_file(&state.path().join(RECORD))["installation_id"],
+        json!(THIS_ID)
+    );
+    assert_eq!(kept_names(state.path(), RECORD).len(), 2);
 }
 
 // Ruling 4: a record that cannot be read is set aside under its kept name, byte for byte, and
@@ -624,6 +672,13 @@ fn s12_a_command_stopped_after_each_step_is_completed_by_running_it_again() {
             Some(record(OTHER_ID)),
             "{step:?}"
         );
+        // Fix round 1 (ruling 3): the record written after the stop names the record the stopped
+        // command kept, so the fingerprint caveat reaches the answer; an unchanged one names none.
+        let expected_kept = match step {
+            HandOverStep::RecordSetAside => Some(state.path().join(&kept[0])),
+            _ => None,
+        };
+        assert_eq!(handed.kept_record, expected_kept, "{step:?}");
     }
 
     for step in [HandOverStep::IdentitySetAside, HandOverStep::IdentityPlaced] {

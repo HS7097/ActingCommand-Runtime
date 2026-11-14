@@ -113,6 +113,8 @@ pub static INSTALLER: [Handed; 11] = [
     // The hold's reason is the module's own when the caller names none (`rescue::down`).
     handed("down", &["stop"], &[Part::Root, flag("reason", "--hold")]),
     handed("undo", &["undo"], &[Part::Root, OPERATION, Part::Further]),
+    // Workflow #453 S12 fix round 1: `state_root_installation` is read by the module itself
+    // (`rescue::op_status`), never handed on.
     handed(
         "op status",
         &["status"],
@@ -120,6 +122,7 @@ pub static INSTALLER: [Handed; 11] = [
             Part::Root,
             OPERATION,
             each("check_rollback", "--check-rollback"),
+            Part::Param("state_root_installation", Written::Beside),
             Part::Further,
         ],
     ),

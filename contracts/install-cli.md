@@ -1229,24 +1229,35 @@ the rescue face:
   `changed`, actingd's outcome `state_root_claimed` as its `related` link) with actingd's report
   as `report`, the initiator as `actor` and, when a record was replaced, its claim time as
   `previous {claimed_at_unix_ms}` (when it could be read) and the note `install_caveat_noted` with
-  `install_caveat` `fingerprints_discontinuous` (`path` the state root) whenever a record of
-  another installation or one that could not be read was replaced: the ledger's records that
+  `install_caveat` `fingerprints_discontinuous` (`path` actingd's `kept_record`, the record set
+  aside) whenever a record of another installation or one that could not be read was replaced,
+  and (fix round 1) whenever a record was written while the state root held an old record an
+  earlier hand-over kept (`path` the newest such record): the ledger's records that
   carry fingerprints were made with the salt of the configuration that wrote them, and the command
   cannot know whether this configuration's salt is the same. actingd's refusal is the answer, as
   `unlock`'s is; no report from actingd (it did not run, printed none or was left running at its
   deadline) is `install_command_refused` with `install_refusal` `state_root_claim_unanswered`
   (`path` the state root), the child's failure as the cause or `pid` and `config_key`. The row
   itself writes nothing in the root.
-- **`op status`, the member `state_root`** (Workflow #453 S12, since 0.12.60). When it names no
-  operation and answers, the rescue module's `op status` also reads the live build's check-config
-  of the root's configuration (`--install-root <root>`) and answers `state_root {path,
-  installation}`: the configured state root and its installation state as check-config reports
-  it, `claimed_by_this`, `unclaimed` or `not_installed` (`null` from a build before 0.12.60, whose
-  report has no such member); when check-config refuses (another installation's record is
-  `state_root_installation_mismatch`, a file that cannot be read
+- **`op status --state-root-installation`, the member `state_root`** (Workflow #453 S12, since
+  0.12.60; fix round 1, the coordinator's ruling after the review). **Only when the caller asks
+  with the switch `state_root_installation`** (off by default, declared in the operation table,
+  read by the module and never handed to `install status`) does the rescue module's `op status`
+  also read the live build's check-config of the root's configuration (`--install-root <root>`)
+  and answer `state_root {path, installation}`: the configured state root and its installation
+  state as check-config reports it, `claimed_by_this`, `unclaimed` or `not_installed` (`null` from
+  a build before 0.12.60, whose report has no such member); when check-config refuses (another
+  installation's record is `state_root_installation_mismatch`, a file that cannot be read
   `state_root_installation_record_invalid`, each at stage `config_state_root`) or gives no answer,
-  `installation` is `null` and `check_config` holds that outcome. Read only; `actingctl install
-  status` is unchanged.
+  `installation` is `null` and `check_config` holds that outcome. **Without the switch it starts
+  no process and its answer is byte for byte what it was before S12.** With the switch while
+  `install status` names an unfinished operation, the answer is the status without the member and
+  no process is started: the update path counts any actingd under the root as a running Runtime
+  (the stopped rule, the plan's running images), and a background operation's answer tells its
+  caller to follow it with `op status`, so a check-config started then could make the operation's
+  stop answer `runtime_running` or its plan count one Runtime too many; the answer's own
+  `unfinished` says why the member is not there. Read only; `actingctl install status` is
+  unchanged.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
@@ -2840,8 +2851,8 @@ the fragment registers, names the command.
 - **Workflow #453 S12** (since 0.12.60; "The Lab's rescue module", `state-root claim`): the
   location `install_state_root_claim`; `install_refusal` `state_root_claim_unanswered` (actingd
   gave no report: the child's failure as the cause, or `pid` and `config_key` for a child left
-  running at its deadline) and `install_caveat` `fingerprints_discontinuous` (`path`), which only
-  this row answers; the existing `owner_lock_held`, `runtime_running` and `processes_unreadable`
+  running at its deadline) and `install_caveat` `fingerprints_discontinuous` (`path` the kept
+  record), which only this row answers; the existing `owner_lock_held`, `runtime_running` and `processes_unreadable`
   for its stopped rule; no code or key is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.

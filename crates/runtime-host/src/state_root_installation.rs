@@ -441,6 +441,12 @@ pub struct StateRootHandOver {
     pub previous_claimed_at_unix_ms: Option<u64>,
     /// Each file set aside, under its kept name, in the order it was set aside.
     pub kept: Vec<PathBuf>,
+    /// Fix round 1 (ruling 3): the kept old record the fingerprint caveat is about: the record
+    /// this command set aside (`replaced`), or, when it wrote a record on a state root that held
+    /// none (`written`), the newest `installation.json.old-<ms>` an earlier hand-over left there (a
+    /// crash between setting the old record aside and placing the new one, or a put-back that
+    /// failed); none for `unchanged`, or for `written` with no kept record.
+    pub kept_record: Option<PathBuf>,
 }
 
 impl StateRootHandOver {
@@ -556,6 +562,7 @@ pub(crate) fn hand_over(request: &HandOverRequest<'_>) -> RuntimeHostResult<Stat
                 claimed_at_unix_ms: found.claimed_at_unix_ms,
                 previous_claimed_at_unix_ms: None,
                 kept,
+                kept_record: None,
             });
         }
         Ok(Some(found)) => (true, Some(found.claimed_at_unix_ms)),
@@ -571,6 +578,12 @@ pub(crate) fn hand_over(request: &HandOverRequest<'_>) -> RuntimeHostResult<Stat
         Some(aside)
     } else {
         None
+    };
+    // Fix round 1 (ruling 3): a record written beside an old record an earlier hand-over kept
+    // there is named, before anything is placed, so the caveat reaches this answer too.
+    let kept_record = match &aside {
+        Some(aside) => Some(aside.clone()),
+        None => newest_kept_record(request.state_root)?,
     };
     let record = StateRootRecord {
         schema_version: STATE_ROOT_INSTALLATION_SCHEMA.to_owned(),
@@ -603,7 +616,35 @@ pub(crate) fn hand_over(request: &HandOverRequest<'_>) -> RuntimeHostResult<Stat
         claimed_at_unix_ms: found.claimed_at_unix_ms,
         previous_claimed_at_unix_ms,
         kept,
+        kept_record,
     })
+}
+
+/// Workflow #453 S12 fix round 1 (ruling 3): the newest record an earlier hand-over set aside in
+/// `state_root` (`installation.json.old-<ms>`, the largest `<ms>`), if any. A state root whose
+/// entries cannot be listed is `state_root_claim_failed`; nothing has been placed then.
+fn newest_kept_record(state_root: &Path) -> RuntimeHostResult<Option<PathBuf>> {
+    let prefix = format!("{STATE_ROOT_INSTALLATION_FILE}{KEPT_MARKER}");
+    let unlisted = |error: std::io::Error| claim_failed(state_root, &error, IoOp::ReadDir);
+    let mut newest: Option<(u64, PathBuf)> = None;
+    for entry in fs::read_dir(state_root).map_err(unlisted)? {
+        let entry = entry.map_err(unlisted)?;
+        let name = entry.file_name();
+        let Some(at_unix_ms) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(prefix.as_str()))
+            .and_then(|digits| digits.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        if newest
+            .as_ref()
+            .is_none_or(|(newest_ms, _)| at_unix_ms > *newest_ms)
+        {
+            newest = Some((at_unix_ms, entry.path()));
+        }
+    }
+    Ok(newest.map(|(_, path)| path))
 }
 
 /// Workflow #453 S12: a new identity for the hand-over, minted as a start mints it, placed only

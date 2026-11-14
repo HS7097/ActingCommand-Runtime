@@ -350,16 +350,36 @@ fn installer(context: &Context<'_>, handed: &'static Handed, params: &Map<String
 
 /// Workflow #453 S12: the member of `op status` that names the state root.
 const STATE_ROOT_MEMBER: &str = "state_root";
+/// Workflow #453 S12 fix round 1: `op status`'s switch that asks for that member.
+const STATE_ROOT_INSTALLATION: &str = "state_root_installation";
+/// The member of `install status` that names an unfinished operation (`null` when there is none).
+const UNFINISHED_MEMBER: &str = "unfinished";
 
-/// `op status`: the installer's `install status` with the module's face. Workflow #453 S12: when
-/// it names no operation and answers, with the read-only member `state_root`
-/// ([`state_root_installation`]); `actingctl install status` is unchanged.
+/// `op status`: the installer's `install status` with the module's face. Workflow #453 S12 fix
+/// round 1 (the coordinator's ruling after the review): only when the caller asks with the switch
+/// `state_root_installation` does it also answer the read-only member `state_root`
+/// ([`state_root_installation`]), which runs the live build's check-config. Without the switch it
+/// starts no process and answers exactly what it answered before the slice. With it, while
+/// `install status` names an unfinished operation, the answer is the status without the member,
+/// and no process is started: the update path counts any actingd under the root as a running
+/// Runtime (`install::launch::refuse_running`, the plan's running images), so a check-config
+/// started while an operation runs, which its answer tells the caller to follow with `op status`,
+/// could make its stop or its plan see a Runtime; the answer's own `unfinished` says why the member
+/// is not there. `actingctl install status` is unchanged.
 fn op_status(context: &Context<'_>, handed: &'static Handed, params: &Map<String, Value>) -> Exit {
+    if !switch(
+        rescue_reads::handing(handed, params),
+        STATE_ROOT_INSTALLATION,
+    ) {
+        return installer(context, handed, params);
+    }
     let words = installer_line(handed, params, &context.root_word());
     let mut answer = context.install(&words);
-    if !words.iter().any(|word| word == "--operation")
-        && answer.outcome.category() <= Category::Info
-    {
+    let unfinished = answer
+        .members
+        .get(UNFINISHED_MEMBER)
+        .is_some_and(|operation| !operation.is_null());
+    if !unfinished && answer.outcome.category() <= Category::Info {
         answer.members.insert(
             STATE_ROOT_MEMBER.to_owned(),
             state_root_installation(context),
@@ -443,6 +463,9 @@ fn installer_line(handed: &'static Handed, params: &Map<String, Value>, root: &s
                     words.push(value.to_owned());
                 }
             }
+            // Workflow #453 S12 fix round 1: a parameter the module reads itself (`op status`'s
+            // `state_root_installation`) is placed and never handed on.
+            Part::Param(name, Written::Beside) => placed.push(name),
             Part::Further => words.extend(further_flags(params, &placed)),
             // Written with `Part::Further`, in the order given; no installer row has another part.
             _ => {}
@@ -2066,7 +2089,9 @@ const NEW_IDENTITY: &str = "new_identity";
 /// `install_state_root_claim`, `installation_changed` as actingd's `changed`, actingd's outcome its
 /// `related` link) with actingd's report as `report`, the initiator as `actor` and, when a record
 /// was replaced, its claim time as `previous {claimed_at_unix_ms}` (when it could be read) and the
-/// note `install_caveat_noted` `fingerprints_discontinuous`: the ledger's records that carry
+/// note `install_caveat_noted` `fingerprints_discontinuous` with the kept record as `path` (fix
+/// round 1: also when a record was written beside an old record an earlier hand-over kept, the
+/// newest such record as `path`): the ledger's records that carry
 /// fingerprints were made with the salt of the configuration that wrote them, and the command
 /// cannot know whether this configuration's salt is the same. actingd's refusal is the answer as
 /// `unlock`'s is; no report from actingd is `install_command_refused` with `install_refusal`
@@ -2124,15 +2149,22 @@ fn state_root_claim(context: &Context<'_>, params: Params<'_>) -> Exit {
             members.insert("report".to_owned(), report);
             return Ok(cli_line::receipt(members, &reported, true));
         }
-        let replaced = report["record"] == "replaced";
+        // The caveat's record: the one this command set aside (`replaced`), or (fix round 1,
+        // ruling 3) the kept one an earlier hand-over left beside a record written now.
+        let kept_record = report["kept_record"].as_str().map(PathBuf::from);
+        let caveat_about = match (report["record"].as_str(), kept_record) {
+            (Some("replaced"), kept) => Some(kept.unwrap_or_else(|| state_root.clone())),
+            (Some("written"), Some(kept)) => Some(kept),
+            _ => None,
+        };
         let mut done = install::done(CLAIM)
             .path(state_root)
             .installation_changed(report["changed"].as_bool().unwrap_or(true))
             .link(CauseRelation::Related, reported);
-        if replaced {
+        if let Some(kept) = caveat_about {
             done = done.link(
                 CauseRelation::Note,
-                install::caveat(CLAIM, InstallCaveat::FingerprintsDiscontinuous).path(state_root),
+                install::caveat(CLAIM, InstallCaveat::FingerprintsDiscontinuous).path(&kept),
             );
         }
         if let Some(previous) = report

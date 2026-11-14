@@ -229,9 +229,14 @@ command line it does not take is `invalid_arguments`.
    and whose process still runs refuses it with `owner_resource_unconfirmed`, as it refuses a
    start. The acquire writes the command's own owner epoch, its pid and time, to the owner
    journal: **the owner journal records the act**, and the new record names that epoch as
-   `claimed_by.owner_epoch`. A previous owner that exited is released as a start releases it, and
-   since the command closes its epoch, the next start takes no instance over, as after a ledger
-   maintenance pass.
+   `claimed_by.owner_epoch`. **What taking the owner as a start and the maintenance passes take it
+   costs** (fix round 1, the coordinator's ruling): an earlier epoch that ended in a crash (its last
+   record still active) is taken over by this command and closed by it, so the next start finds an
+   inactive last record and gives that epoch's instances no takeover cooldown, as after a ledger
+   maintenance pass; and an owner that had exited with its resources recorded in use is released
+   as a start releases it but with no ledger record of the release (a start records
+   `runtime.lifecycle_observed` and writes the daemon line `owner_released`; this command opens no
+   ledger and writes no such line).
 4. Under the lock, **the identity**: one that can be read is used as it is (`read`); none (an
    installation that never started) is minted and placed only when absent, exactly as a start
    places it, and read back (`minted`); one that cannot be read, with `--new-identity`, is set
@@ -263,27 +268,40 @@ identity's placement the identity can be read, so the command is run again witho
 **It never opens the ledger.** The ledger, the integrity key `runtime-state.key` and the owner
 journal's earlier records are not touched; the journal gains only the command's epoch. The
 ledger's fact of the new claim is the next start's to record ("The state root's record": the
-start compares the claims), with the replaced claim's time as `previous_claimed_at_unix_ms`. Who
-asked (`--actor`) is in the command's report and the rescue row's answer; the owner journal's
-record has no member for it.
+start compares the claims), with the replaced claim's time as `previous_claimed_at_unix_ms`.
+
+**Who did it is not recorded** (fix round 1, the coordinator's ruling). The actor (`--actor`) is
+in the command's report and the rescue row's answer only: it stays out of the owner journal, whose
+record has no member for it, and out of the fact, and the record's shape is not changed. What a
+later reader can still find: the new record's `claimed_by.owner_epoch`, `pid` and
+`claimed_at_unix_ms`, which name the owner journal's epoch of the same id, with that epoch's pid,
+its start and its close; the old record, kept as `installation.json.old-<ms>` (the old claim, and
+in its name the time it was set aside); and the next start's fact of the new claim with the
+previous claim's time, `previous_claimed_at_unix_ms`.
 
 **Result.** One JSON line on stdout, schema `actingcommand.actingd.claim-state-root.v1`, exit by
 the outcome's category (0 for the success, 1 for an error, 2 for a fatal refusal):
 
 ```json
-{"schema_version":"actingcommand.actingd.claim-state-root.v1","outcome":{"schema_version":"actingcommand.outcome.v1","code":"state_root_claimed","category":"info","values":{"path":"C:\\ActingCommand\\state"}},"actor":"Lab-CLI","changed":true,"identity":"read","record":"replaced","claimed_at_unix_ms":1800000000000,"kept":["C:\\ActingCommand\\state\\installation.json.old-1800000000000"],"previous":{"claimed_at_unix_ms":1700000000000}}
+{"schema_version":"actingcommand.actingd.claim-state-root.v1","outcome":{"schema_version":"actingcommand.outcome.v1","code":"state_root_claimed","category":"info","values":{"path":"C:\\ActingCommand\\state"}},"actor":"Lab-CLI","changed":true,"identity":"read","record":"replaced","claimed_at_unix_ms":1800000000000,"kept":["C:\\ActingCommand\\state\\installation.json.old-1800000000000"],"previous":{"claimed_at_unix_ms":1700000000000},"kept_record":"C:\\ActingCommand\\state\\installation.json.old-1800000000000"}
 ```
 
 The success is `state_root_claimed` (`path` the state root), the code a claiming start's daemon
 line carries. `changed` is false only when the record was this installation's and its identity was
-read. `previous` is present when a record that could be read was replaced. A refusal is the
-refusal's outcome alone, its developer line on stderr.
+read. `previous` is present when a record that could be read was replaced. `kept_record` (fix
+round 1) is the kept old record the salt's caveat is about: for `replaced` the record set aside
+now; for `written`, the newest `installation.json.old-<ms>` the state root already held, when it
+held one (a crash between setting the old record aside and placing the new one, or a put-back that
+failed, looked for before anything is placed); absent for `unchanged`. A refusal is the refusal's
+outcome alone, its developer line on stderr.
 
 **The salt.** Ledger records that carry fingerprints were made with the salt of the configuration
 that wrote them. The command cannot know whether this configuration's salt is the same as the one
 the replaced record's installation used, so every answer that replaced a record of another
 installation, or one that could not be read, says so (the rescue row's caveat
-`fingerprints_discontinuous`); a state root taken over keeps those records as they are.
+`fingerprints_discontinuous`), and so does (fix round 1) an answer that wrote a record while the
+state root held a kept old record, since the replacement that left it there never answered; a
+state root taken over keeps those records as they are.
 
 **The rescue row `state-root claim`** ([install-cli.md](install-cli.md), "The Lab's rescue
 module"; [lab-operations.json](lab-operations.json)): `writes`, `irreversible`, `runtime`
@@ -293,9 +311,13 @@ configuration> --actor <initiator>` (and `--new-identity` when given), as the ro
 (`owner_lock_held`, `runtime_running`, `processes_unreadable`). Its answer is
 `install_command_done` (operation `install_state_root_claim`, `installation_changed` as actingd's
 `changed`) with actingd's report, `previous {claimed_at_unix_ms}` when a record was replaced, and
-the note `install_caveat_noted` with `install_caveat` `fingerprints_discontinuous` whenever a
-record of another installation or one that could not be read was replaced. Like every compound
-operation of the rescue module until LAB-7, it is not used on the production root.
+the note `install_caveat_noted` with `install_caveat` `fingerprints_discontinuous` and actingd's
+`kept_record` as `path` whenever a record of another installation or one that could not be read
+was replaced, and (fix round 1) whenever a record was written beside a kept old record. Like every
+compound operation of the rescue module until LAB-7, it is not used on the production root. The
+rescue module's `op status` reads the state root's installation state only when asked with its
+switch `state_root_installation` ([install-cli.md](install-cli.md)): without it, it starts no
+process.
 
 ## Who checks and who does not
 
@@ -401,7 +423,8 @@ subcommand with a new report schema, which no older component reads; the fact's 
 optional member, `previous_claimed_at_unix_ms`, a value of an existing record type that no reader
 checks (a `record_list` row of scalars); the owner journal and both files keep their shapes; the
 rescue row, its location and its two words are catalog additions; the rescue module's `op status`
-gains a read-only member `state_root` (`actingctl install status` is unchanged).
+gains a switch, `state_root_installation`, and with it a read-only member `state_root`, its
+answer without the switch unchanged (`actingctl install status` is unchanged).
 
 **At deploy.** The first start of this release on an installation mints `install\identity.json`,
 writes the state root's `installation.json`, records one fact and writes one daemon line; nothing
