@@ -2764,7 +2764,7 @@ fragments and this build's enums; the forwarder's codes are in
 - vocabulary `install_operation_kind` (new): `release_stage`, `adopt`, `update`, `rollback`,
   `stop`, `start`, `release_hold`, `prepare`, `convert`, `clean`, `restart`; the rescue module's
   composites add (Workflow #434 LAB-3, since 0.12.48) `config_replace`, `pack_place`, and its
-  `vision place` (Workflow #453 S9, since 0.12.60) `vision_place`.
+  vision place row (Workflow #453 S9, since 0.12.60) `vision_place`.
 - vocabulary `install_step_kind` (new): `extract`, `copy_build`, `verify_tree`, `place_build`,
   `materialize_part`, `verify_part`, `pause`, `close`, `ledger_verify`, `place_slot`,
   `stage_file`, `swap_file`, `retire_live_files`, `place_entries`, `refresh_entries`,
@@ -2772,7 +2772,7 @@ fragments and this build's enums; the forwarder's codes are in
   `start`, `post_check`, `record_health`, `release_hold`, `reverse_files`, `revert_selection`,
   `clean_check`, `clean_slot`, `clean_builds`, `clean_converted`, `delete_cleaning`,
   `record_cleanup`; the rescue module's place composite adds (Workflow #434 LAB-3, since
-  0.12.48) `pack_item`, and its `vision place` (Workflow #453 S9, since 0.12.60) `vision_file`.
+  0.12.48) `pack_item`, and its vision place row (Workflow #453 S9, since 0.12.60) `vision_file`.
 - vocabulary `install_member` (new): `runtime`, `tools`, `ui`.
 - vocabulary `install_row_reason` (new): `target_restores_player_holds`, `no_player_hold_support`,
   `ui_drives_no_installer`.
