@@ -1170,6 +1170,12 @@ equality only; it never pairs a need with a capability or orders capabilities.
 | `parameters[].name` | a token `^[a-z][a-z0-9_]{0,63}$`, unique across the package's whole `provides` | `reason=provides_parameters_invalid` |
 | `parameters[].options` | 1 to 16 unique tokens | `reason=provides_parameters_invalid` |
 | `parameters[].default` | one of `options` (required) | `reason=provides_parameters_invalid` |
+| `variables` | optional, 1 to 16 entries ([package-variables.md](package-variables.md)); none when the package provides an irreversible capability | `reason=variables_invalid`, `reason=variables_on_irreversible` |
+| `variables[].name` | a token `^[a-z][a-z0-9_]{0,63}$`, unique across the package's `variables` and every `provides[].parameters[].name` | `reason=variable_name_taken` |
+
+Workflow #463 V1: kernel admission's refusal of `variables` also carries the JSON pointer of what
+breaks the rule (`reason=<word> json_pointer=<pointer>`); the source parser refuses it
+`resource_declaration_invalid`, `invalid_value` at that pointer, its message ending with the word.
 
 **Static rules** (the package check, kernel admission and the source parser alike; the parser's
 refusal is `resource_declaration_invalid` with the JSON pointer):
@@ -1177,14 +1183,14 @@ refusal is `resource_declaration_invalid` with the JSON pointer):
 1. the members parse with the rules above; unknown members stay refused;
 2. a package does not provide a capability one of its own remedies names (a one-package cycle):
    `contained_task_control_invalid` `reason=provides_own_remedy`;
-3. parameter names are unique across the package's `provides`, so a parameter belongs to one
-   capability;
+3. parameter names are unique across the package's `provides` and its `variables` (Workflow #463
+   L4), so a name belongs to one capability or one variable;
 4. the rules across the packages of a game root (every named capability provided, no cycle,
    identical parameters per capability) are the bundle and standard-pack check's report
    ([package-reference.md](package-reference.md)), not a refusal.
 
-A mapping without `remedy` and a `control.json` without `provides` serialize byte for byte as
-before. Every execution mode that can be a policy task may provide capabilities, and a package may
+A mapping without `remedy` and a `control.json` without `provides` and `variables` serialize byte
+for byte as before. Every execution mode that can be a policy task may provide capabilities, and a package may
 both provide capabilities and declare remedies.
 
 Wherever another rule names a package's designated operation (a recognition package, a

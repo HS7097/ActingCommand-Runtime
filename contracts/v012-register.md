@@ -5582,6 +5582,8 @@ that cannot be read) are reused, their descriptions extended. No code, key or lo
 **Decisions within the work order.** (a) Package-level parameter declarations (A.7.2) arrive with
 R-10; until then no package declares one, so any name under a pack's `parameters` is
 `ui_parameter_undeclared`, and a valid file has none. R-10 gives the check its declarations.
+(Workflow #463 V1, §1.378: R-10 is superseded and not built; a package's variables carry their own
+texts, so `parameters` names nothing and every name stays `ui_parameter_undeclared`.)
 (b) An aspect ratio is checked for the form `<w>:<h>` only, its numbers never used; every other
 string is opaque and only measured in bytes. (c) A refused `ui.json`, like a refused table, never
 breaks its game root, and `ui.json` alone makes a directory a game root for its readers only
@@ -15640,7 +15642,9 @@ while the view refuses an unknown alias; the Lab's scope word.
 
 **Left for later slices.** R-9: the standard package's default layer (`pack_default`, a `source`
 `pack_default`, a risk package closed by default, never a recognition maintenance package). R-10:
-a package's parameters (`session.pack.parameters`, its own family). A row boundary is judged at
+a package's parameters (`session.pack.parameters`, its own family), superseded by Workflow #463
+V1's variables (§1.378; their values are entry rows of `session.resource_targets`), not built. A
+row boundary is judged at
 the evaluation, not again at admission (a record written meanwhile is, as `policy_facts_stale`).
 
 **Interface.** None raised ([component-interfaces.md](component-interfaces.md)): `runtime-client`,
@@ -24179,6 +24183,131 @@ crate's goal-reference tests and the composing gates' helpers (`readable_root` o
 the resource tools and `gate_rl1b`, actingd's `gate_rl1c`) give each package its declarations
 whole (`DeclaredCapabilities`, no remedy), pinning what they pinned. No golden changes; no test
 leaves the gate map.
+
+### 1.378 Slice V1 (0.12.60): a package declares its variables, `control.json` `variables`, their root check and their place in `goals.json`; `package` revision 14 (Workflow #463 L4; the design `rd-1114/463-l4-design.md`, "Readings: what holds", section A, section D's "goals.json placement", section E, section F's second point, the row V1 of section G and section H items 1, 2, 5, 7 and 9 to 12, with "The coordinator's rulings on I", read on main `155366bb`; the coordinator's rulings of 11-14 in the work order and its two additions of the same night (the `package` revision is 14, revision 13 being Workflow #463 K1's; this section's number), not the owner's words; coordinator work order `rd-1114/brief-463-v1-package-variables.md`, read on main `155366bb`, main `1e67d1c5` merged)
+
+The coordinator gave this slice 1.378: main `1e67d1c5` held the sections up to §1.369 (G-R2s), and
+open pull requests hold 1.370 to 1.377. [package-variables.md](package-variables.md) is the
+contract; [standard-pack-goals.md](standard-pack-goals.md) (the type `variable` in place of the four
+types that governed packages), [remedies.md](remedies.md) §1.2 item 2 and §2.4 rule 3,
+[resource-declarations.md](resource-declarations.md) (the `control.json` members and static rule 3),
+[instance-fact-store.md](instance-fact-store.md) (R-10 superseded),
+[package-reference.md](package-reference.md) (`standard-pack check`, `ui.json` `parameters`), the
+`package` rows 13 and 14 of [component-interfaces.md](component-interfaces.md) and the index of
+[README.md](README.md) change with it. Board #463: a package made by recording leaves a named slot
+("which one", "how many", "in which order") that a person, an agent or the package's default fills.
+This slice gives the package the declaration. **Nothing reads a value**: no run, no overlay of
+`session.dispatch.parameter.<name>`, no reason, no request, no view and no recording changes; a
+package without `variables` reads, serializes and runs byte for byte as before. V2 (the run), V3
+(the Lab and the view), V4 (the recording), V5 (the console) and V6 (the resource repositories)
+are later slices.
+
+**What it builds.**
+
+- *The declaration*: `control.json`'s optional top-level member `variables`, 1 to 16 entries of the
+  kinds `choice`, `integer`, `switch` and `ordered`, each `name` (the parameter grammar), `type`,
+  `title`, `help?`, `block?` (the kind's base block), the kind's members, `default` and the
+  optional `default_origin: "model"`. One reader, the contract crate's `parse_package_variables`,
+  called by kernel admission (`parse_task_control_declaration`, beside `provides` and
+  `store_update`) and by the source parser's control gate. The value-type code is the goal
+  declaration's, **moved**: the bodies of `goals.json`'s `integer`, `choice`, `switch` and
+  `ordered` readers left `standard_pack_goals.rs` for `package_variables.rs`, without `governs`
+  and `from_table`, and both read with the one `Check` (made shareable: the file it reports in,
+  the helpers `pub(crate)`, an option value's form a parameter: a tier's `[a-z0-9][a-z0-9_.:-]*`,
+  a variable's the token form).
+- *The line of irreversibility*: a package that provides an irreversible capability declares no
+  variable (`variables_on_irreversible`), judged from its own `provides`; names are unique across
+  the variables and every parameter of `provides` (`variable_name_taken`).
+- *The root check* of `actinglab standard-pack check`: the metadata reader answers each package's
+  variables and the fact keys its designated effects read their caps from; the contract crate's
+  `check_root_variables` shares a name only between byte-identical declarations and reports a
+  differing one, a name a `goals.json` entry uses for anything but its placement, a 97th name and
+  an `integer` read as a cap above 1000; the answer lists each variable that applies by its
+  default's origin.
+- *The placement*: `goals.json`'s type `variable` (`{name, type, block?}`) replaces `integer`,
+  `choice`, `switch` and `ordered` in version 1 (the coordinator's ruling 2 on I: the tag
+  `v0.12.60` did not exist when this pull request opened, so the version stays 1). A placement is
+  held to the variables the root's packages declare and, as a governed package was, to the
+  packages that declare its variable. With the `ordered` entry its `from_table` went, so no entry
+  reads a table: the goal check and `standard-pack check` read none.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| V1-1 | `control.json` `variables` (`choice`, `integer`, `switch`, `ordered`; `default_origin`) | package file format (`package` revision 14) | V1 | the resource repository (V6), the recording (V4) | read by kernel admission and the source parser; no run reads it |
+| V1-2 | `contained_task_control_invalid` with `reason=variables_invalid`, `variable_name_taken` or `variables_on_irreversible` and `json_pointer=<pointer>` | refusal detail of an existing code | V1 | kernel admission | the source parser: `resource_declaration_invalid`, `invalid_value` at the pointer, the word ending its message |
+| V1-3 | `goal_variable_unknown`, `variable_conflict`, `variable_out_of_limits`, `variable_cap_range` | words of the vocabulary `standard_pack_problem` (code `standard_pack_root_invalid`) | V1 | the goal check; the root check | 4 words; the vocabulary's descriptions of `goal_type_unknown`, `goal_block_mismatch`, `goal_package_unknown`, `goal_governs_irreversible`, `goal_range_invalid`, `goal_default_invalid`, `goal_table_unknown` (no longer given) and `ui_parameter_undeclared` extended |
+| V1-4 | `goals.json` version 1's type `variable`; `integer`, `choice`, `switch`, `ordered` and `from_table` gone | game root file format, no revision | V1 | the resource repository (G-P1) | no pack carries the file; a file with one of the four types is `goal_type_unknown` |
+| V1-5 | `standard-pack check`'s `variable_provenance` `{pack, model}` | Tools answer member (optional, after `models`) | V1 | `standard-pack check` | absent when no package declares a variable |
+| V1-6 | `RemedyDeclarations` `variables`, `cap_fact_keys` | kernel interface (memory only) | V1 | the metadata reader | the host reads neither yet |
+| V1-7 | `package` [3, 12] → [3, 14]; row 13 reserved (Workflow #463 K1, pull request #1720) | interface revision | V1 | `distribution/windows/component-interfaces.json` | a bundle whose packs declare variables declares [14, 14] (`VARIABLES_PACKAGE_REVISION`) |
+
+**What programs of an earlier release do.** A Runtime before this slice refuses a pack that
+declares `variables` at its declaration gate (`resource_declaration_invalid`, `UnknownField` at
+`/variables`), which every admission path runs on the control declaration before the kernel's own
+reader (whose serde type ignores an unknown member) sees it, so nothing ignores the member
+silently. An installer whose `package` range ends below 14 refuses a bundle that declares
+[14, 14] through its edge (`interface_edge`), in the plan, before the hold. `place` reads a pack's
+files by name only and does not refuse a bundle that declares less. A `goals.json` with a
+placement is refused by the earlier goal check (`goal_type_unknown`); no pack carries one.
+
+**Not moved.** `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` do not move:
+nothing persisted carries a variable, no request or answer of the workbench changes, the four words
+are words of an existing vocabulary and the three reasons details of an existing code. No
+configuration key.
+
+**At deploy.** Nothing changes for an installation in use: no released pack declares `variables`
+and no released bundle carries `goals.json`. The Runtime's `package` range becomes [3, 14]; a
+bundle that declares 13 or 14 is placed by this installer. Before a resource repository publishes a
+pack that declares variables, the Runtime and Tools of this release are deployed first (an earlier
+Runtime refuses the pack), its bundle declares `package` [14, 14], and `actinglab standard-pack
+check --root <game root>` shows no `variable_conflict`, `variable_out_of_limits` or
+`variable_cap_range` warning (such a variable would not apply once a later slice reads values).
+**Rollback** below this release stays open while no root holds a pack that declares variables; an
+earlier Runtime refuses such a pack at admission.
+
+**Limits.** Admission judges a package's own `irreversible` marks only: a package that provides
+unmarked a capability another package marks irreversible, or whose remedies list one, may declare
+variables; the goal check refuses a placement of them (`goal_governs_irreversible`), and V2 must run
+such a package on its defaults (the design, section B). The cap check reads a designated effect's
+cap key from the same package only; an `integer` read anywhere else as a count is not judged.
+`package bundle` runs no root check of variables. Byte identity is of the entry as written in
+compact JSON: two declarations that differ only in member order are a conflict.
+
+Tests (contract, exec and apps gate rows "#463 V1"): the contract crate's
+`package_variables::tests::v1_each_kind_reads_with_its_members` (the four kinds with every member,
+a time unit, a help text and sixteen entries),
+`v1_each_refusal_is_at_its_pointer` (thirty cases, each word at its pointer: the list, the entry,
+unknown and missing members, `governs` and `from_table`, the name's form and length, the type, the
+block, options, ranges, steps, counts, defaults, `default_origin`, a name an earlier variable or a
+parameter has, an irreversible package),
+`v1_root_check_shares_identical_declarations_and_refuses_the_rest` (identical sharing, a differing
+range and a differing member order, a goals name, the 97th name, a cap above 1000 at the reading
+package only, a cap of 1000 and an unread one passing),
+`v1_provenance_lists_each_variable_by_its_default_s_origin` and
+`v1_a_placement_is_held_to_the_variables_the_root_declares` (`goal_variable_unknown` and
+`goal_block_mismatch`); the execution kernel's
+`contained_task::gate_463_v1::v1_variables_violations_are_refused_with_their_reason_and_pointer`
+and `v1_a_package_with_variables_is_admitted_and_answers_as_without_them` (the descriptor, the
+parameter defaults and the parameters of a run without a dispatch as without them); the source
+parser's `source::declarations::tests::v1_source_parser_takes_variables_and_refuses_each_at_its_pointer`;
+the resource tools' `gate_463_v1::v1_check_reports_each_problem_at_the_package_and_lists_what_applies`
+and `v1_a_root_without_variables_answers_without_the_listing`; the rescue module's
+`install::gate_463_v1::v1_the_build_declares_package_through_revision_14` and
+`v1_a_bundle_at_revision_14_is_planned_here_and_refused_by_an_earlier_installer`.
+Existing tests adapted because the requirement changes what they pin: the contract crate's four
+goal tests (G-R1, §1.356: the neutral example's `choice` entry is a placement, the five types,
+the four replaced types `goal_type_unknown`, and the references' test holds four placements where a
+`switch` governed four packages) and the resource tools' eight `gate_455_gr1` tests (the packages
+declare the variables the valid file places where it held the four types; the refusals the check
+can still give, `goal_variable_unknown` among them and `goal_package_unknown` and
+`goal_table_unknown` no longer reachable; the irreversible package's variable fails the check and
+the bundle; the unmarked provider's placement refused at its `name`) and main's
+`gate_455_gr2s::gr2s_r3_a_remedy_that_lists_an_irreversible_capability_makes_its_package_irreversible`
+(§1.369: its `switch` over two packages is the placement of the variable both declare, refused at
+its `name`), each test name kept; mechanically, for the new members: the host's
+`gate_411_b15p_host` (`RemedyDeclarations` gains `variables` and `cap_fact_keys`, both empty) and
+the resource tools' `gate_cov1` and `gate_sched_c1f1` (the answer gains `variable_provenance`,
+absent). No golden changes; no test leaves the gate map.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

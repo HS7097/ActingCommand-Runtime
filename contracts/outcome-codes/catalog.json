@@ -6488,7 +6488,7 @@
       }
     },
     "standard_pack_problem": {
-      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6), table file (Workflow #357 DB-1), pack's loading copy (Workflow #407 LOAD-1) or bundle's notices directory (Workflow #444 NOTICES-1).",
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6), table file (Workflow #357 DB-1), pack's loading copy (Workflow #407 LOAD-1), bundle's notices directory (Workflow #444 NOTICES-1) or the variables a game root's packages declare (Workflow #463 V1).",
       "tokens": {
         "malformed": {
           "description": "The file is not JSON of the file's shape and version; for a table, not canonical JSON either (a floating point number, an unsafe integer or a duplicate key)."
@@ -6608,7 +6608,7 @@
           "description": "A pack's group in ui.json is not an id of its groups (Workflow #429 R-11, since 0.12.36)."
         },
         "ui_parameter_undeclared": {
-          "description": "A name under a pack's parameters in ui.json is not a parameter the package declares; until package-level declarations exist (R-10), every name (Workflow #429 R-11, since 0.12.36)."
+          "description": "A name under a pack's parameters in ui.json is not a parameter the package declares (Workflow #429 R-11, since 0.12.36); Workflow #463 V1 superseded R-10: a package's variables carry their own texts, so parameters names nothing and every name is this word."
         },
         "loading_target_invalid": {
           "description": "A target of loading.json or of a pack's loading copy has an id that is not loading/<name> or that the file declares twice, or a template target's template is not loading/<file>.png (Workflow #407 LOAD-1, since 0.12.37)."
@@ -6662,10 +6662,10 @@
           "description": "An entry of goals.json has a name an earlier entry has, at the later name (Workflow #455 G-R1, since 0.12.60)."
         },
         "goal_type_unknown": {
-          "description": "An entry's type in goals.json is none of the eight types of version 1, a later version's type included (Workflow #455 G-R1, since 0.12.60)."
+          "description": "An entry's type in goals.json is none of the types of version 1, a later version's type included (Workflow #455 G-R1, since 0.12.60); since Workflow #463 V1 the five, the four types the placement variable replaced (integer, choice, switch, ordered) included."
         },
         "goal_block_mismatch": {
-          "description": "An entry's block in goals.json is not the block its type is shown with (Workflow #455 G-R1, since 0.12.60)."
+          "description": "An entry's block in goals.json is not the block its type is shown with (Workflow #455 G-R1, since 0.12.60), or (Workflow #463 V1) a variable entry's block is not the placed variable's."
         },
         "goal_pool_unknown": {
           "description": "A resource entry of goals.json governs a pool that is not a pool of the composed schedule (Workflow #455 G-R1, since 0.12.60)."
@@ -6674,10 +6674,10 @@
           "description": "A resource entry of goals.json governs a pool whose valuation has no scale and gap (Workflow #455 G-R1, since 0.12.60)."
         },
         "goal_package_unknown": {
-          "description": "An entry of goals.json governs a package that is not a package of bundle.json (Workflow #455 G-R1, since 0.12.60)."
+          "description": "An entry of goals.json governs a package that is not a package of bundle.json (Workflow #455 G-R1, since 0.12.60): since Workflow #463 V1 the package a tier entry's rule runs, or one that declares a placed variable."
         },
         "goal_governs_irreversible": {
-          "description": "An entry of goals.json governs a package, or a tier entry a rule whose package, provides a capability that a package of the game root marks irreversible true in its control declaration's provides; no goal entry governs such a package or rule (Workflow #455 G-R1, since 0.12.60; rules and capabilities across the root since its fix round 1)."
+          "description": "An entry of goals.json governs a package, or a tier entry a rule whose package, provides a capability that a package of the game root marks irreversible true in its control declaration's provides; no goal entry governs such a package or rule (Workflow #455 G-R1, since 0.12.60; rules and capabilities across the root since its fix round 1); nor (Workflow #463 V1) places a variable such a package declares, at the entry's name."
         },
         "goal_rule_unknown": {
           "description": "A tier entry of goals.json governs a rule that is not a rule of schedule.json (Workflow #455 G-R1, since 0.12.60)."
@@ -6686,13 +6686,13 @@
           "description": "A tier entry of goals.json governs a rule that writes no fixed_value_milli (Workflow #455 G-R1, since 0.12.60)."
         },
         "goal_range_invalid": {
-          "description": "What an entry of goals.json declares as its values cannot hold one: an integer's min above its max or a step below 1, an option value written twice, an ordered entry's max_count of 0 or above 32 or its min_count above its max_count or its values, a tier's scale_milli outside 1 to 1000000, or a table of more than 1024 keys (Workflow #455 G-R1, since 0.12.60)."
+          "description": "What an entry of goals.json declares as its values cannot hold one: an option value written twice or a tier's scale_milli outside 1 to 1000000 (Workflow #455 G-R1, since 0.12.60; the integer, ordered and table cases went with the types Workflow #463 V1 replaced)."
         },
         "goal_default_invalid": {
-          "description": "An entry's default in goals.json is not a value of its declaration (Workflow #455 G-R1, since 0.12.60)."
+          "description": "An entry's default in goals.json is not a value of its declaration (Workflow #455 G-R1, since 0.12.60): since Workflow #463 V1 a tier's default that is none of its options."
         },
         "goal_table_unknown": {
-          "description": "An ordered entry of goals.json takes its values from a table that is no table of the game root, or names a key its table does not hold (Workflow #455 G-R1, since 0.12.60)."
+          "description": "An ordered entry of goals.json takes its values from a table that is no table of the game root, or names a key its table does not hold (Workflow #455 G-R1, since 0.12.60). Workflow #463 V1 replaced the ordered entry; no entry or variable takes a table, so nothing gives this word."
         },
         "goal_rate_invalid": {
           "description": "A resource entry's rate in goals.json has its ceiling below its floor (Workflow #455 G-R1, since 0.12.60)."
@@ -6702,6 +6702,18 @@
         },
         "goal_undeclared": {
           "description": "A bundle zip carries goals.json and declares a package interface maximum below 12. Refused by the installer's place at interfaces.json (Workflow #455 G-R1 fix round 1, since 0.12.60)."
+        },
+        "goal_variable_unknown": {
+          "description": "A variable entry of goals.json places a name no package of the game root declares as a variable in its control.json, at the entry's name (Workflow #463 V1, since 0.12.60)."
+        },
+        "variable_conflict": {
+          "description": "A variable several packages of the game root declare with declarations that are not byte-identical (at each declaration in its package's control.json), or whose name an entry of goals.json uses for anything but its placement (at each declaration's name); no variable of that name applies (Workflow #463 V1, since 0.12.60)."
+        },
+        "variable_out_of_limits": {
+          "description": "A variable name after the game root's 96th, in registry order and then declaration order, at each declaration's name in its package's control.json; it does not apply (Workflow #463 V1, since 0.12.60)."
+        },
+        "variable_cap_range": {
+          "description": "An integer variable a package reads as a designated effect's cap (max_repeats from session.dispatch.parameter.<name>) declares a max above 1000, at that package's declaration's max; it does not apply (Workflow #463 V1, since 0.12.60)."
         }
       }
     },

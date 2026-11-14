@@ -136,16 +136,18 @@ fn refusal(error: &ContainedTaskError) -> (&str, Option<&str>) {
     (error.code().as_str(), error.detail())
 }
 
+// [`variables`] changed by `change`.
+fn with(change: impl Fn(&mut Value)) -> Value {
+    let mut value = variables();
+    change(&mut value);
+    value
+}
+
 // Each rule of `variables` refuses the control declaration with `contained_task_control_invalid`,
 // its reason and its pointer; the variables of each kind, beside a reversible `provides` or
 // without one, pass.
 #[test]
 fn v1_variables_violations_are_refused_with_their_reason_and_pointer() {
-    let with = |change: &dyn Fn(&mut Value)| {
-        let mut value = variables();
-        change(&mut value);
-        value
-    };
     let cases = [
         (
             "no entry",
@@ -157,42 +159,42 @@ fn v1_variables_violations_are_refused_with_their_reason_and_pointer() {
         (
             "a member a variable does not have",
             None,
-            with(&|value| value[0]["governs"] = json!({"packages": [PACKAGE_ID]})),
+            with(|value| value[0]["governs"] = json!({"packages": [PACKAGE_ID]})),
             "variables_invalid",
             "/variables/0/governs",
         ),
         (
             "a name outside the token form",
             None,
-            with(&|value| value[1]["name"] = json!("Floor")),
+            with(|value| value[1]["name"] = json!("Floor")),
             "variables_invalid",
             "/variables/1/name",
         ),
         (
             "a default off the step",
             None,
-            with(&|value| value[1]["default"] = json!(5)),
+            with(|value| value[1]["default"] = json!(5)),
             "variables_invalid",
             "/variables/1/default",
         ),
         (
             "an ordered default that names no option",
             None,
-            with(&|value| value[2]["default"] = json!(["item_c"])),
+            with(|value| value[2]["default"] = json!(["item_c"])),
             "variables_invalid",
             "/variables/2/default/0",
         ),
         (
             "a name an earlier variable has",
             None,
-            with(&|value| value[3]["name"] = json!("pick")),
+            with(|value| value[3]["name"] = json!("pick")),
             "variable_name_taken",
             "/variables/3/name",
         ),
         (
             "a name a parameter of provides has",
             Some(provides(false)),
-            with(&|value| value[1]["name"] = json!("param_p")),
+            with(|value| value[1]["name"] = json!("param_p")),
             "variable_name_taken",
             "/variables/1/name",
         ),
