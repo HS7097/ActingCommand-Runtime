@@ -657,7 +657,7 @@ from their core rows.
   runs as its post-check (section 7), is a row of the core module: it is listed and served
   wherever the Lab runs, whatever the key says, so that an installation without the authoring
   module still places packages. `standard-pack compose` stays an authoring row. Workflow #464 P3
-  (0.12.60): `standard-pack ready`, the readiness of every pack of a game root, which only reads,
+  (0.12.61): `standard-pack ready`, the readiness of every pack of a game root, which only reads,
   is a core row too ([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness").
 - `lab_module_debugging` retires (`actingd-config` 28): still accepted when a boolean, with no
   effect, noted with the caveat `config_key_retired` by the commands that read it, as

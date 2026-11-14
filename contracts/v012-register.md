@@ -25042,14 +25042,16 @@ whose key it does not know, `config_override_dropped`, and goes on
 sibling key below 0.12.60, which §1.353 does not say. Nothing else is persisted by ORD-1c: the
 member in front and the queue waits live in memory only.
 
-### 1.375 Slice #464 P3 (0.12.60): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on the root check and the four answers, coordinator work order `rd-1114/brief-1718-fix1.md`, main `1e67d1c5` merged; fix round 2, after a second review, the coordinator's closing work order on the same main)
+### 1.375 Slice #464 P3 (0.12.61): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on the root check and the four answers, coordinator work order `rd-1114/brief-1718-fix1.md`, main `1e67d1c5` merged; fix round 2, after a second review, the coordinator's closing work order on the same main; main `2eaf9b7e` (release 0.12.60) merged, coordinator work order `rd-1115/brief-1718-main.md`)
 
 This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364);
 merging main `155366bb`, whose train 0.12.60d took §1.365 to §1.368 (#453 S3, S4, S9 and S12),
 renumbered it 1.369; merging main `1e67d1c5` in fix round 1, whose #1708 (#455 G-R2s) holds
 §1.369, it takes 1.375, the number the coordinator assigned (the numbers between belong to other
 open pull requests). The sibling slices P1 (`standard-pack adopt`) and P2 (`standard-pack
-build`), written at the same time, take the numbers their merges give them.
+build`), written at the same time, take the numbers their merges give them. Merging main
+`2eaf9b7e`, whose train 0.12.60e took §1.370 to §1.373 (#463 L1, L2 and U1, #437 ORD-1c), keeps
+1.375. The slice ships in 0.12.61 (release 0.12.60 is cut without it).
 
 **What it is.** One function, `actingcommand_resource_tooling::judge_standard_pack_readiness`,
 judges the readiness items of every pack of one game root (twelve as first built, thirteen since
@@ -25200,7 +25202,7 @@ no existing test changes. (2) The catalog's text of `check_refused` no longer na
 cooldowns and probe keys: those are `standard-pack check`'s refusals of `schedule.json`, which S4
 carries. (3) actinglab's module text says thirteen items.
 
-**At deploy.** Nothing to do: a new read-only command and tool. **Rollback** (below 0.12.60): the
+**At deploy.** Nothing to do: a new read-only command and tool. **Rollback** (below 0.12.61): the
 row and its tool are gone; nothing is persisted.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)

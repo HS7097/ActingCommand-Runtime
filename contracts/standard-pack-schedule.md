@@ -913,7 +913,7 @@ checks them), and the composer fills the scope:
   `"maintenance": true` ("The maintenance declaration"); it is then not judged and runs as it
   did before SS-2b.
 
-## Readiness (Workflow #464 P3, since 0.12.60)
+## Readiness (Workflow #464 P3, since 0.12.61)
 
 Register §1.375; the coordinator's rulings on board #464 and in the work order of its fix round 1,
 not the owner's words. A pack that lacks one thing is not refused: it is never dispatched, and

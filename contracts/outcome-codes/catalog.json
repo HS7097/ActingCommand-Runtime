@@ -2711,23 +2711,23 @@
     },
     "readiness_item": {
       "type": "vocab:readiness_item",
-      "description": "Which of the thirteen readiness items of a pack waits or was not judged: S1 to S7 of the game root, I1 to I6 of an installation (Workflow #464 P3, since 0.12.60)."
+      "description": "Which of the thirteen readiness items of a pack waits or was not judged: S1 to S7 of the game root, I1 to I6 of an installation (Workflow #464 P3, since 0.12.61)."
     },
     "readiness_problem": {
       "type": "vocab:readiness_problem",
-      "description": "Why a readiness item keeps a pack from being dispatched (Workflow #464 P3, since 0.12.60)."
+      "description": "Why a readiness item keeps a pack from being dispatched (Workflow #464 P3, since 0.12.61)."
     },
     "readiness_unjudged": {
       "type": "vocab:readiness_unjudged",
-      "description": "Why a readiness item of a pack was not judged, or the information line of item I3 (Workflow #464 P3, since 0.12.60)."
+      "description": "Why a readiness item of a pack was not judged, or the information line of item I3 (Workflow #464 P3, since 0.12.61)."
     },
     "required_revision": {
       "type": "integer",
-      "description": "The interface revision a content declares or needs: the package maximum a bundle declares, beside range_min and range_max of the range that does not hold it (Workflow #464 P3, since 0.12.60)."
+      "description": "The interface revision a content declares or needs: the package maximum a bundle declares, beside range_min and range_max of the range that does not hold it (Workflow #464 P3, since 0.12.61)."
     },
     "blocking_package_id": {
       "type": "name",
-      "description": "The package whose problem keeps another pack waiting: the pack of a follower's head (head_waiting), the layer a prerequisite chain was refused at (prerequisite_unregistered, prerequisite_refused), the return-home package the Runtime's entry would refuse for a page-graph pack's home entry (return_home_refused, fix round 2), the pack standard-pack check refused the root at (root_refused) (Workflow #464 P3 fix round 1, since 0.12.60)."
+      "description": "The package whose problem keeps another pack waiting: the pack of a follower's head (head_waiting), the layer a prerequisite chain was refused at (prerequisite_unregistered, prerequisite_refused), the return-home package the Runtime's entry would refuse for a page-graph pack's home entry (return_home_refused, fix round 2), the pack standard-pack check refused the root at (root_refused) (Workflow #464 P3 fix round 1, since 0.12.61)."
     }
   },
   "vocabularies": {
@@ -9462,7 +9462,7 @@
       }
     },
     "readiness_item": {
-      "description": "The thirteen readiness items of a pack, the value readiness_item of package_dispatch_waiting and package_readiness_unjudged (Workflow #464 P3, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.60).",
+      "description": "The thirteen readiness items of a pack, the value readiness_item of package_dispatch_waiting and package_readiness_unjudged (Workflow #464 P3, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.61).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
@@ -9511,7 +9511,7 @@
       }
     },
     "readiness_problem": {
-      "description": "Why a readiness item keeps a pack waiting, the value readiness_problem of package_dispatch_waiting (Workflow #464 P3, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.60).",
+      "description": "Why a readiness item keeps a pack waiting, the value readiness_problem of package_dispatch_waiting (Workflow #464 P3, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.61).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
@@ -9581,7 +9581,7 @@
       }
     },
     "readiness_unjudged": {
-      "description": "Why a readiness item was not judged, the value readiness_unjudged of package_readiness_unjudged; for item I3 the information line (Workflow #464 P3, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.60).",
+      "description": "Why a readiness item was not judged, the value readiness_unjudged of package_readiness_unjudged; for item I3 the information line (Workflow #464 P3, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.61).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
@@ -9618,7 +9618,7 @@
       }
     },
     "readiness_state": {
-      "description": "A pack's answer in the readiness (its member readiness; Workflow #464 P3 fix round 1, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.60).",
+      "description": "A pack's answer in the readiness (its member readiness; Workflow #464 P3 fix round 1, contracts/standard-pack-schedule.md \"Readiness\", since 0.12.61).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
@@ -9640,7 +9640,7 @@
       }
     },
     "readiness_role": {
-      "description": "The supporting part a root file gives a pack, the parts of standard_pack_maintenance_packages (its member roles in the readiness; Workflow #464 P3 fix round 1, since 0.12.60).",
+      "description": "The supporting part a root file gives a pack, the parts of standard_pack_maintenance_packages (its member roles in the readiness; Workflow #464 P3 fix round 1, since 0.12.61).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
