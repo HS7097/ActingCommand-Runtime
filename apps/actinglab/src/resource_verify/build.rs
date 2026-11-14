@@ -10,14 +10,17 @@
 //!   under `--work`. A tree with any change, an untracked file or an ignored file where the build
 //!   reads is refused by the checkout precondition, so every build names its commit and its tree.
 //! - **`--out`** is a directory that does not exist, whose parent does, or an existing empty one;
-//!   never one inside `--repo`. Anything else is refused before anything is read or written.
+//!   never one inside `--repo`. Anything else is refused before anything is read or written. Fix
+//!   round 1: a `--out` that does not exist is made by the bundle step, once the checkout
+//!   precondition passed, so a call the precondition refuses leaves nothing behind.
 //! - **The product**, written only when every step passed: the steps' zip, copied byte for byte,
-//!   `SHA256SUMS` (`<hex>  <name>\n`) and `build.json` (`actingcommand.standard-pack-build.v1`,
-//!   written as `build.json.part`, then renamed), which says the source repository, the commit
+//!   `SHA256SUMS` (`<hex>  <name>\n`) and `build.json` (`actingcommand.standard-pack-build.v1`),
+//!   each written under its `.part` name and renamed when all three are complete, `build.json`
+//!   last (fix round 1). `build.json` says the source repository, the commit
 //!   and the tree, the Tools head and executable SHA-256, and, read back from the zip, the game,
 //!   the `package` range its `interfaces.json` declares, its root files and root directories,
 //!   its packs and its name, SHA-256 and size. It has no readiness member: another slice judges
-//!   readiness. Steps that did not all pass write no product: `standard_pack_build_failed`, its
+//!   readiness. Steps that did not all pass write no product: `resource_build_failed`, its
 //!   cause the steps' outcome, its details the steps' report (`actinglab.resource-verify.v1`),
 //!   which is no file.
 //!
@@ -152,7 +155,7 @@ pub(crate) fn run_standard_pack_build(
     let flags = FlagArgs::parse(args)?;
     let request = parse_request(global, &flags)?;
     crate::dry_run_gate::refuse(global, "standard-pack build", None, Value::Null)?;
-    prepare_out(&request)?;
+    check_out(&request)?;
     let (report, top) = run_steps(&request.steps, std::env::current_exe(), StepsFor::Build);
     if !top.is(ActinglabCode::ResourceVerifyPassed) {
         return Err(steps_failed(&report, &top, &request.out));
@@ -252,14 +255,14 @@ fn parse_request(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<BuildRe
     })
 }
 
-/// `--out` is a directory that does not exist, whose parent does (made here, so that the steps'
-/// work directory can be made in it), or an existing empty directory; never inside `--repo`.
-/// Anything else is `standard_pack_build_output_invalid`, before anything is read.
-fn prepare_out(request: &BuildRequest) -> CliOutcome<()> {
+/// `--out` is a directory that does not exist, whose parent does, or an existing empty directory;
+/// never inside `--repo`. Anything else is `resource_build_output_invalid`, before anything is
+/// read. Fix round 1: nothing is made here; the bundle step makes a `--out` that does not exist,
+/// once the checkout precondition passed (`bundle.rs`).
+fn check_out(request: &BuildRequest) -> CliOutcome<()> {
     let out = &request.out;
     let refused = |message: String| {
-        let outcome =
-            Outcome::new(ActinglabCode::StandardPackBuildOutputInvalid).path(path_value(out));
+        let outcome = Outcome::new(ActinglabCode::ResourceBuildOutputInvalid).path(path_value(out));
         outcome_error(&outcome, message)
     };
     if inside(&request.steps.repo, out) {
@@ -294,8 +297,7 @@ fn prepare_out(request: &BuildRequest) -> CliOutcome<()> {
                     out.display()
                 )));
             }
-            fs::create_dir(out)
-                .map_err(|error| write_refused(&write_failed(out, &error, IoOp::CreateDir)))
+            Ok(())
         }
     }
 }
@@ -310,10 +312,10 @@ fn inside(repo: &Path, out: &Path) -> bool {
     fs::canonicalize(parent).is_ok_and(|parent| parent.join(name).starts_with(&repo))
 }
 
-/// Steps that did not all pass: `standard_pack_build_failed` (`failed_step_count`), caused by the
+/// Steps that did not all pass: `resource_build_failed` (`failed_step_count`), caused by the
 /// steps' outcome; its details that outcome and the steps' report.
 fn steps_failed(report: &Report, top: &Outcome, out: &Path) -> CliError {
-    let outcome = Outcome::new(ActinglabCode::StandardPackBuildFailed)
+    let outcome = Outcome::new(ActinglabCode::ResourceBuildFailed)
         .failed_step_count(report.failed_steps.len())
         .caused_by(top.clone());
     let details = serde_json::to_value(BuildFailure {
@@ -334,7 +336,7 @@ fn steps_failed(report: &Report, top: &Outcome, out: &Path) -> CliError {
     .with_details(details)
 }
 
-/// A file of the product that could not be written: `standard_pack_build_write_failed`, its
+/// A file of the product that could not be written: `resource_build_write_failed`, its
 /// details the outcome.
 fn write_refused(outcome: &Outcome) -> CliError {
     let message = format!("standard-pack build could not write its product ({outcome})");
@@ -348,34 +350,38 @@ fn write_product(
     report: &Report,
 ) -> Result<(BuildDocument, BuildFiles), Outcome> {
     let zip = steps_zip(report).ok_or_else(|| {
-        Outcome::new(ActinglabCode::StandardPackBuildWriteFailed).path(path_value(&request.out))
+        Outcome::new(ActinglabCode::ResourceBuildWriteFailed).path(path_value(&request.out))
     })?;
     let made = request.steps.work.join(ZIP_DIRECTORY).join(&zip.name);
     let bytes = fs::read(&made).map_err(|error| write_failed(&made, &error, IoOp::Read))?;
     if sha256_hex(&bytes) != zip.sha256 {
         // The zip the steps read back is not the one on disk any more.
-        return Err(
-            Outcome::new(ActinglabCode::StandardPackBuildWriteFailed).path(path_value(&made))
-        );
+        return Err(Outcome::new(ActinglabCode::ResourceBuildWriteFailed).path(path_value(&made)));
     }
+    // Fix round 1: the three files are written under their `.part` names first and renamed only
+    // when all three are complete, `build.json` last, so a failure while they are written leaves
+    // no file under a final name, and `build.json` is there only beside the other two.
     let zip_path = request.out.join(&zip.name);
-    write_new(&zip_path, &bytes)?;
     let sums_path = request.out.join(SUMS_FILE);
-    write_new(
-        &sums_path,
-        format!("{}  {}\n", zip.sha256, zip.name).as_bytes(),
-    )?;
-    let document = document(request, report, &zip, &zip_path, &bytes)?;
     let build_path = request.out.join(BUILD_FILE);
+    let document = document(request, report, &zip, &zip_path, &bytes)?;
     let mut encoded = serde_json::to_vec_pretty(&document).map_err(|error| {
         eprintln!("ERROR actinglab: build.json does not serialize: {error}");
-        Outcome::new(ActinglabCode::StandardPackBuildWriteFailed).path(path_value(&build_path))
+        Outcome::new(ActinglabCode::ResourceBuildWriteFailed).path(path_value(&build_path))
     })?;
     encoded.push(b'\n');
-    let part = part_path(&build_path);
-    write_new(&part, &encoded)?;
-    fs::rename(&part, &build_path)
-        .map_err(|error| write_failed(&build_path, &error, IoOp::Rename))?;
+    let sums = format!("{}  {}\n", zip.sha256, zip.name);
+    let product = [
+        (&zip_path, bytes.as_slice()),
+        (&sums_path, sums.as_bytes()),
+        (&build_path, encoded.as_slice()),
+    ];
+    for (path, content) in product {
+        write_new(&part_path(path), content)?;
+    }
+    for (path, _) in product {
+        rename_new(&part_path(path), path)?;
+    }
     let files = BuildFiles {
         zip: zip_path.display().to_string(),
         sums: sums_path.display().to_string(),
@@ -407,7 +413,7 @@ fn document(
     bytes: &[u8],
 ) -> Result<BuildDocument, Outcome> {
     let unreadable =
-        || Outcome::new(ActinglabCode::StandardPackBuildWriteFailed).path(path_value(zip_path));
+        || Outcome::new(ActinglabCode::ResourceBuildWriteFailed).path(path_value(zip_path));
     let entries = zip_entries(bytes).ok_or_else(unreadable)?;
     let index = entries
         .get(STANDARD_PACK_BUNDLE_FILE)
@@ -480,11 +486,21 @@ fn zip_entries(bytes: &[u8]) -> Option<BTreeMap<String, Vec<u8>>> {
     Some(entries)
 }
 
-/// `standard_pack_build_write_failed` naming `path`, caused by the OS failure.
+/// `resource_build_write_failed` naming `path`, caused by the OS failure.
 fn write_failed(path: &Path, error: &io::Error, op: IoOp) -> Outcome {
-    Outcome::new(ActinglabCode::StandardPackBuildWriteFailed)
+    Outcome::new(ActinglabCode::ResourceBuildWriteFailed)
         .path(path_value(path))
         .caused_by(Outcome::from_io_error(error, op).path(path_value(path)))
+}
+
+/// Fix round 1: renames the complete file `part` to `path`, which must not exist: an existing
+/// file is never replaced.
+fn rename_new(part: &Path, path: &Path) -> Result<(), Outcome> {
+    if fs::symlink_metadata(path).is_ok() {
+        let exists = io::Error::from(io::ErrorKind::AlreadyExists);
+        return Err(write_failed(path, &exists, IoOp::Rename));
+    }
+    fs::rename(part, path).map_err(|error| write_failed(path, &error, IoOp::Rename))
 }
 
 /// Writes the new file `path`; an existing one is never overwritten.

@@ -22,7 +22,8 @@
 mod build;
 mod bundle;
 mod git;
-mod revision;
+// Workflow #464 P2 fix round 1: the gate's tests read the revision table's rows one by one.
+pub(crate) mod revision;
 mod steps;
 
 pub(crate) use build::{BUILD_SCHEMA, build_options, run_standard_pack_build};

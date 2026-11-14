@@ -33,15 +33,16 @@ use super::steps::{
     Applications, PackIdentity, admission_failure, declaration_invalid, developer_line,
     foreign_json, preflight, relayed,
 };
-use super::{Counts, StepRun, StepsFor, ZipCounts, path_value, sha256_hex};
+use super::{Counts, StepRun, StepsFor, ZipCounts, path_value, pointer_value, sha256_hex};
 use crate::CliError;
 use crate::codes::{ActinglabCode, BundleProblem, LayoutProblem, ReadbackProblem, VerifyStep};
-use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, BundleSource, NOTICES_PACKAGE_REVISION,
     STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_NOTICES_DIRECTORY,
-    STANDARD_PACK_TABLES_DIRECTORY, notice_relative_path, read_standard_pack_tables,
+    STANDARD_PACK_TABLES_DIRECTORY, STANDARD_PACK_UI_FILE, StandardPackRegistry,
+    notice_relative_path, parse_standard_pack_ui, read_standard_pack_tables,
 };
 use actingcommand_resource_tooling::{
     PackageBundleRequest, ResourceToolingCode, StandardPackCheckRequest, StandardPackNotices,
@@ -174,6 +175,15 @@ fn lay_out(
     tally: &mut BundleTally,
 ) -> Result<(), Outcome> {
     let work = inputs.work;
+    // Workflow #464 P2 fix round 1: `standard-pack build`'s `--out`, the parent of its work
+    // directory, is made here when it is not there yet, so only once the checkout precondition
+    // passed: a call it refuses leaves nothing behind.
+    if inputs.steps_for == StepsFor::Build
+        && let Some(out) = work.parent()
+        && fs::symlink_metadata(out).is_err()
+    {
+        create_dir(out)?;
+    }
     create_dir(work)?;
     let maintenance = read_maintenance(inputs.repo)?;
     let stage = work.join("packs-root");
@@ -244,9 +254,11 @@ fn lay_out(
         // The bundle root check named it already; the zip cannot hold a second one.
         return Ok(());
     }
-    // Workflow #464 P2: `standard-pack build` carries the repository's tables.
+    // Workflow #464 P2: `standard-pack build` carries the repository's tables; fix round 1: and
+    // its `ui.json`, checked against the zip's `bundle.json`.
     if inputs.steps_for == StepsFor::Build {
         carry_tables(inputs.repo, &game, &mut entries, run)?;
+        carry_ui(inputs.repo, &game, &mut entries, run)?;
     }
     // Workflow #444 NOTICES-3: what the check of the installed root must count of the notices
     // directory the zip carries; nothing without it.
@@ -489,6 +501,48 @@ fn carry_tables(
         .map_err(|error| write_failed_with(foreign_json(&error.to_string())))?;
     encoded.push(b'\n');
     entries.insert(STANDARD_PACK_BUNDLE_FILE.to_owned(), encoded);
+    Ok(())
+}
+
+/// Workflow #464 P2 fix round 1: the repository `repo`'s `ui.json`, a root file of the standard
+/// package root (contracts/package-reference.md, "Standard package root") that `place` places and
+/// sets aside when a zip carries none, carried into the zip's `entries` of `game` byte for byte
+/// when its reader, `parse_standard_pack_ui`, takes it against the zip's `bundle.json`. Each
+/// violation of a refused file fails the step as `standard_pack_root_invalid` (`game`, `path`,
+/// `standard_pack_problem`, `json_pointer`), and the file is not carried; a repository without the
+/// file leaves the entries as they are.
+fn carry_ui(
+    repo: &Path,
+    game: &str,
+    entries: &mut BTreeMap<String, Vec<u8>>,
+    run: &mut StepRun,
+) -> Result<(), Outcome> {
+    let path = repo.join(STANDARD_PACK_UI_FILE);
+    if !is_file(&path) {
+        return Ok(());
+    }
+    let bytes = fs::read(&path)
+        .map_err(|error| read_failed(&path, &error, BundleProblem::RootFileDiffers))?;
+    let registry = entries
+        .get(STANDARD_PACK_BUNDLE_FILE)
+        .and_then(|index| StandardPackRegistry::from_bundle_bytes(index, game).ok())
+        .ok_or_else(|| mismatch(STANDARD_PACK_BUNDLE_FILE, BundleProblem::IndexSchema))?;
+    match parse_standard_pack_ui(&bytes, game, &registry) {
+        Ok(_) => {
+            entries.insert(STANDARD_PACK_UI_FILE.to_owned(), bytes);
+        }
+        Err(issues) => {
+            for issue in issues {
+                run.fail(
+                    Outcome::new(SharedCode::StandardPackRootInvalid)
+                        .game(game)
+                        .path(path_value(&path))
+                        .standard_pack_problem(issue.problem)
+                        .json_pointer(pointer_value(&issue.pointer)),
+                );
+            }
+        }
+    }
     Ok(())
 }
 

@@ -435,10 +435,12 @@ fn p2_notices_give_package_10_and_goals_give_12() {
 }
 
 // G, P2 third item, and the ruling on `--out`: a tree with a tracked change, and one with an
-// untracked file, are refused `standard_pack_build_failed`, caused by the checkout precondition's
-// `resource_verify_checkout_dirty`, with the steps' report in the details and nothing in `--out`;
-// an `--out` that holds a file, and one inside the repository, are refused
-// `standard_pack_build_output_invalid` before anything is read, the file kept and nothing made.
+// untracked file, are refused `resource_build_failed`, caused by the checkout precondition's
+// `resource_verify_checkout_dirty`, with the steps' report in the details; fix round 1 (adapted:
+// the work order's point 4 changes what this pinned, an empty `--out`): the refused call leaves
+// nothing behind, `--out` itself not made. An `--out` that holds a file, and one inside the
+// repository, are refused `resource_build_output_invalid` before anything is read, the file kept
+// and nothing made.
 #[test]
 fn p2_a_dirty_tree_or_an_output_in_use_is_refused_and_nothing_is_built() {
     let fixture = Fixture::new();
@@ -457,10 +459,10 @@ fn p2_a_dirty_tree_or_an_output_in_use_is_refused_and_nothing_is_built() {
         }
         let built = fixture.build(run, &[]);
         assert_eq!(built.exit_code(), 2, "{run}: {}", built.envelope_json());
-        assert_eq!(error_code(&built), "standard_pack_build_failed", "{run}");
+        assert_eq!(error_code(&built), "resource_build_failed", "{run}");
         let details = error_details(&built);
         let outcome = &details["outcome"];
-        assert_eq!(outcome["code"], "standard_pack_build_failed", "{details}");
+        assert_eq!(outcome["code"], "resource_build_failed", "{details}");
         assert_eq!(outcome["values"]["failed_step_count"], 1, "{run}");
         let cause = &outcome["causes"][0];
         assert_eq!(cause["code"], "resource_verify_checkout_dirty", "{run}");
@@ -474,10 +476,9 @@ fn p2_a_dirty_tree_or_an_output_in_use_is_refused_and_nothing_is_built() {
                 "{run} {name}"
             );
         }
-        assert_eq!(
-            entries_of(&fixture.out(run)),
-            BTreeSet::new(),
-            "{run}: nothing is built"
+        assert!(
+            !fixture.out(run).exists(),
+            "{run}: nothing is left behind, --out included"
         );
     }
 
@@ -488,7 +489,7 @@ fn p2_a_dirty_tree_or_an_output_in_use_is_refused_and_nothing_is_built() {
     for out in [&used, &inside] {
         let built = fixture.build_into(out, &[]);
         assert_eq!(built.exit_code(), 2, "{}", built.envelope_json());
-        assert_eq!(error_code(&built), "standard_pack_build_output_invalid");
+        assert_eq!(error_code(&built), "resource_build_output_invalid");
         assert_eq!(
             error_details(&built)["values"]["path"],
             out.display().to_string()
@@ -601,4 +602,746 @@ fn p2_build_json_names_the_commit_and_matches_the_zip() {
         answer["files"]["build"],
         out.join("build.json").display().to_string()
     );
+}
+
+/// The bytes of a table `neutral_scores` of the fixture's game (`actingcommand.table.v1`).
+fn neutral_table() -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "schema_version": "actingcommand.table.v1",
+        "game": "neutral",
+        "table_id": "neutral_scores",
+        "row_key": ["unit"],
+        "columns": [
+            {"name": "unit", "type": "key"},
+            {"name": "score_milli", "type": "integer", "min": 0, "max": 100000}
+        ],
+        "rows": [["unit.a", 500]]
+    }))
+    .unwrap()
+}
+
+// Fix round 1, the review's second point (`carry_tables`): a commit's `tables/neutral_scores.json`
+// goes into the zip byte for byte, the zip's `bundle.json` lists it in `tables`, `build.json`
+// names the directory, and the build declares no revision for it (the `package` row 6: no member
+// of a pack reads a game root's tables); a table its reader refuses fails the build, the reader's
+// refusal the bundle step's failure and the cause of the steps' outcome, and no product is
+// written.
+#[test]
+fn p2_tables_are_carried_and_listed_and_a_refused_table_fails_the_build() {
+    let fixture = Fixture::new();
+    let table = neutral_table();
+    fixture.write("tables/neutral_scores.json", &table);
+    let head = fixture.commit("a table");
+    let built = fixture.build("tables", &[]);
+    assert_eq!(built.exit_code(), 0, "{}", built.envelope_json());
+    let entries = zip_entries(&fixture.out("tables").join(zip_name(&head)));
+    assert_eq!(entries.get("tables/neutral_scores.json"), Some(&table));
+    let index: Value = serde_json::from_slice(&entries["bundle.json"]).unwrap();
+    assert_eq!(index["tables"], json!(["neutral_scores"]));
+    assert_eq!(declared_package(&entries), json!([3, 3]));
+    let document = fixture.build_json("tables");
+    assert_eq!(document["root_directories"], json!(["tables"]));
+    assert_eq!(document["package"], json!([3, 3]));
+
+    fixture.write("tables/neutral_scores.json", "{}\n");
+    fixture.commit("a table its reader refuses");
+    let built = fixture.build("refused-table", &[]);
+    assert_eq!(built.exit_code(), 2, "{}", built.envelope_json());
+    assert_eq!(error_code(&built), "resource_build_failed");
+    let details = error_details(&built);
+    assert_eq!(
+        details["outcome"]["causes"][0]["code"], "resource_verify_failed",
+        "{details}"
+    );
+    let report = &details["report"];
+    assert_eq!(report["failed_steps"], json!(["bundle"]), "{report}");
+    assert_eq!(
+        report["outcome"]["causes"][0]["code"], "standard_pack_table_invalid",
+        "{report}"
+    );
+    assert_eq!(
+        step(report, "bundle")["failures"][0]["code"],
+        "standard_pack_table_invalid"
+    );
+    assert_eq!(
+        entries_of(&fixture.out("refused-table")),
+        BTreeSet::from(["work".to_owned()]),
+        "no product"
+    );
+}
+
+// Fix round 1, the review's third point: `ui.json` is a root file of the standard package root
+// (contracts/package-reference.md), which `place` places and sets aside when a zip carries none,
+// so the build carries a commit's `ui.json` byte for byte, `build.json` lists it among the root
+// files and it needs no revision; a `ui.json` its reader (`parse_standard_pack_ui`) refuses
+// against the zip's `bundle.json` (a pack the bundle does not list) fails the build with the
+// reader's refusal, `standard_pack_root_invalid` naming the file and `package_not_listed`.
+#[test]
+fn p2_ui_json_is_carried_and_a_refused_one_fails_the_build() {
+    let fixture = Fixture::new();
+    let ui_of = |package_id: &str| {
+        json!({
+            "schema_version": "actingcommand.ui.v1",
+            "game": "neutral",
+            "groups": [{"id": "daily", "title": {"en": "Daily"}}],
+            "packs": [{
+                "package_id": package_id,
+                "title": {"en": "Pack"},
+                "summary": {"en": "A neutral pack"},
+                "group": "daily"
+            }]
+        })
+    };
+    fixture.write_json("ui.json", &ui_of(PACK_A));
+    let ui = fs::read(fixture.repo().join("ui.json")).unwrap();
+    let head = fixture.commit("display metadata");
+    let built = fixture.build("ui", &[]);
+    assert_eq!(built.exit_code(), 0, "{}", built.envelope_json());
+    let entries = zip_entries(&fixture.out("ui").join(zip_name(&head)));
+    assert_eq!(entries.get("ui.json"), Some(&ui));
+    assert_eq!(declared_package(&entries), json!([3, 3]));
+    let document = fixture.build_json("ui");
+    assert_eq!(
+        document["root_files"],
+        json!([
+            "applications.json",
+            "bundle.json",
+            "interfaces.json",
+            "ui.json"
+        ])
+    );
+
+    fixture.write_json("ui.json", &ui_of("neutral.build.unlisted"));
+    fixture.commit("a pack the bundle does not list");
+    let built = fixture.build("refused-ui", &[]);
+    assert_eq!(built.exit_code(), 2, "{}", built.envelope_json());
+    assert_eq!(error_code(&built), "resource_build_failed");
+    let details = error_details(&built);
+    let report = &details["report"];
+    assert_eq!(report["failed_steps"], json!(["bundle"]), "{report}");
+    let refusal = &step(report, "bundle")["failures"][0];
+    assert_eq!(refusal["code"], "standard_pack_root_invalid", "{report}");
+    assert_eq!(refusal["values"]["game"], "neutral");
+    assert_eq!(
+        refusal["values"]["path"],
+        fixture.repo().join("ui.json").display().to_string()
+    );
+    assert_eq!(
+        refusal["values"]["standard_pack_problem"],
+        "package_not_listed"
+    );
+    assert_eq!(
+        report["outcome"]["causes"][0]["code"],
+        "standard_pack_root_invalid"
+    );
+    assert_eq!(
+        entries_of(&fixture.out("refused-ui")),
+        BTreeSet::from(["work".to_owned()]),
+        "no product"
+    );
+}
+
+// Fix round 1, the review's first and second points: one test per row of the revision table
+// (`apps/actinglab/src/resource_verify/revision.rs`; contracts/resource-verify.md, "The `package`
+// revision"). Each builds the zip entries `content_revision` reads: a base whose content needs
+// the row's revision minus one (one member of a row below, in another pack), then the fixture
+// with the row's member, which needs the row's revision, and the same fixture without it, which
+// stays one lower. A conditional row's fixture without it is the same member where the condition
+// does not hold.
+
+/// The pack that holds a row's fixture, and the pack of the base.
+const ROW_PACK: &str = "neutral.row";
+const BASE_PACK: &str = "neutral.base";
+/// A pack's task file, a selection-policy document of that task and its navigation projection.
+const TASK_FILE: &str = "resources/operations/task/task.json";
+const POLICY_FILE: &str = "resources/operations/task/policies/policy.json";
+const NAVIGATION_FILE: &str = "resources/navigation/neutral.test.projection.json";
+
+type Entry = (String, Vec<u8>);
+
+fn json_entry(name: String, value: &Value) -> Entry {
+    (name, serde_json::to_vec(value).unwrap())
+}
+
+/// The row pack's file `path` holding `value`.
+fn in_row(path: &str, value: &Value) -> Entry {
+    json_entry(format!("packs/{ROW_PACK}/{path}"), value)
+}
+
+fn task(value: &Value) -> Entry {
+    in_row(TASK_FILE, value)
+}
+
+fn control(value: &Value) -> Entry {
+    in_row("control.json", value)
+}
+
+fn policy(value: &Value) -> Entry {
+    in_row(POLICY_FILE, value)
+}
+
+/// A task whose one operation is `operation`.
+fn operation(operation: &Value) -> Entry {
+    task(&json!({"operations": [operation]}))
+}
+
+/// The game root's `interrupts.json` with one entry `entry`.
+fn interrupt(entry: &Value) -> Entry {
+    json_entry(
+        "interrupts.json".to_owned(),
+        &json!({"interrupts": [entry]}),
+    )
+}
+
+/// Entries whose content needs exactly `revision`, 3 to 11: nothing for 3, else one member of a
+/// row of that revision in [`BASE_PACK`] (11 and 10 by root and pack files the rows name).
+fn base(revision: u64) -> Vec<Entry> {
+    let pack = |path: &str| format!("packs/{BASE_PACK}/{path}");
+    let base_task = |value: Value| json_entry(pack(TASK_FILE), &value);
+    match revision {
+        3 => vec![],
+        4 => vec![json_entry(pack("control.json"), &json!({"provides": []}))],
+        5 => vec![base_task(json!({
+            "operations": [{"click": {"kind": "single_touch_path_drag_v1"}}]
+        }))],
+        6 => vec![(pack("resources/loading.json"), b"{}\n".to_vec())],
+        7 => vec![base_task(
+            json!({"operations": [{"select": {"track_px": 4}}]}),
+        )],
+        8 => vec![base_task(json!({"operations": [{"read_list": {}}]}))],
+        9 => vec![json_entry(
+            pack(POLICY_FILE),
+            &json!({"lower_bound_column": "floor"}),
+        )],
+        10 => vec![("notices/NOTICE.md".to_owned(), b"Notice.\n".to_vec())],
+        11 => vec![base_task(json!({"field_lists": []}))],
+        _ => panic!("no base for revision {revision}"),
+    }
+}
+
+/// The revision `content_revision` gives the base of `below` with `entries`.
+fn revision_of(below: u64, entries: &[Entry]) -> u64 {
+    let zip = base(below)
+        .into_iter()
+        .chain(entries.iter().cloned())
+        .collect::<BTreeMap<_, _>>();
+    crate::resource_verify::revision::content_revision(&zip)
+}
+
+fn names_of(entries: &[Entry]) -> Vec<(&str, String)> {
+    entries
+        .iter()
+        .map(|(name, bytes)| (name.as_str(), String::from_utf8_lossy(bytes).into_owned()))
+        .collect()
+}
+
+/// The row of `revision`: `with` needs it over a base one lower, and `without` stays one lower.
+fn assert_row(revision: u64, with: &[Entry], without: &[Entry]) {
+    let below = revision - 1;
+    assert_eq!(revision_of(below, &[]), below, "the base of {below}");
+    assert_eq!(
+        revision_of(below, with),
+        revision,
+        "with: {:?}",
+        names_of(with)
+    );
+    assert_eq!(
+        revision_of(below, without),
+        below,
+        "without: {:?}",
+        names_of(without)
+    );
+}
+
+#[test]
+fn p2_revision_4_remedy_of_a_mapping() {
+    assert_row(
+        4,
+        &[task(
+            &json!({"scheduling_outcome": {"mappings": [{"remedy": {}}]}}),
+        )],
+        &[task(&json!({"scheduling_outcome": {"mappings": [{}]}}))],
+    );
+}
+
+#[test]
+fn p2_revision_4_provides_of_control() {
+    assert_row(
+        4,
+        &[control(&json!({"provides": []}))],
+        &[control(&json!({}))],
+    );
+}
+
+#[test]
+fn p2_revision_5_path_drag_click() {
+    let drag = json!({"kind": "single_touch_path_drag_v1"});
+    let point = json!({"kind": "point"});
+    assert_row(
+        5,
+        &[operation(&json!({"click": drag}))],
+        &[operation(&json!({"click": point}))],
+    );
+    assert_row(
+        5,
+        &[in_row(
+            NAVIGATION_FILE,
+            &json!({"navigation": [{"click": drag}]}),
+        )],
+        &[in_row(
+            NAVIGATION_FILE,
+            &json!({"navigation": [{"click": point}]}),
+        )],
+    );
+}
+
+#[test]
+fn p2_revision_6_tables_of_a_policy() {
+    assert_row(6, &[policy(&json!({"tables": []}))], &[policy(&json!({}))]);
+}
+
+#[test]
+fn p2_revision_6_table_value_source() {
+    assert_row(
+        6,
+        &[policy(&json!({"gates": [{"value": {"source": "table"}}]}))],
+        &[policy(&json!({"gates": [{"value": {"source": "field"}}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_post_admission_ocr_of_a_schema_0_9_task_only() {
+    let with_ocr =
+        |schema: &str| task(&json!({"schema_version": schema, "post_admission_ocr": {}}));
+    assert_row(6, &[with_ocr("0.9")], &[with_ocr("0.8")]);
+    assert_row(6, &[with_ocr("0.9")], &[with_ocr("0.7")]);
+    assert_row(
+        6,
+        &[with_ocr("0.9")],
+        &[task(&json!({"schema_version": "0.9"}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_expect_after_target_present() {
+    assert_row(
+        6,
+        &[operation(
+            &json!({"expect_after": {"target_present": ["t"]}}),
+        )],
+        &[operation(&json!({"expect_after": {}}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_expect_after_target_gone() {
+    assert_row(
+        6,
+        &[operation(&json!({"expect_after": {"target_gone": ["t"]}}))],
+        &[operation(&json!({"expect_after": {}}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_expect_after_loading() {
+    assert_row(
+        6,
+        &[operation(&json!({"expect_after": {"loading": "off"}}))],
+        &[operation(&json!({"expect_after": {}}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_expect_after_wait_page() {
+    assert_row(
+        6,
+        &[operation(
+            &json!({"expect_after": {"wait_page": {"page_id": "p", "max_ms": 1}}}),
+        )],
+        &[operation(&json!({"expect_after": {}}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_integer_compare_predicate() {
+    assert_row(
+        6,
+        &[policy(
+            &json!({"gates": [{"predicate": {"kind": "integer_compare"}}]}),
+        )],
+        &[policy(
+            &json!({"gates": [{"predicate": {"kind": "string_in"}}]}),
+        )],
+    );
+}
+
+#[test]
+fn p2_revision_6_part_of_an_ocr_integer_feature() {
+    let feature = |integer: Value| {
+        task(&json!({"candidate_layouts": [{"features": [
+            {"value": "ocr_integer", "integer": integer}
+        ]}]}))
+    };
+    assert_row(
+        6,
+        &[feature(
+            json!({"format": "current_capacity", "part": "capacity"}),
+        )],
+        &[feature(json!({"format": "current_capacity"}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_alternatives_of_a_color_probe() {
+    assert_row(
+        6,
+        &[task(
+            &json!({"color_probes": [{"id": "p", "alternatives": [[0, 0, 0]]}]}),
+        )],
+        &[task(&json!({"color_probes": [{"id": "p"}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_alternatives_of_a_color_check() {
+    assert_row(
+        6,
+        &[task(
+            &json!({"anchors": [{"id": "a", "color_check": {"alternatives": [[0, 0, 0]]}}]}),
+        )],
+        &[task(&json!({"anchors": [{"id": "a", "color_check": {}}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_busy_of_a_mapping() {
+    assert_row(
+        6,
+        &[task(
+            &json!({"scheduling_outcome": {"mappings": [{"busy": true}]}}),
+        )],
+        &[task(&json!({"scheduling_outcome": {"mappings": [{}]}}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_end_pages_of_a_stage() {
+    let with = json!({"phases": [{"end_pages": ["p"]}]});
+    let without = json!({"phases": [{}]});
+    assert_row(6, &[task(&with)], &[task(&without)]);
+    assert_row(6, &[control(&with)], &[control(&without)]);
+}
+
+#[test]
+fn p2_revision_6_entry_pages_of_a_stage() {
+    let with = json!({"phases": [{"entry_pages": ["p"]}]});
+    let without = json!({"phases": [{}]});
+    assert_row(6, &[task(&with)], &[task(&without)]);
+    assert_row(6, &[control(&with)], &[control(&without)]);
+}
+
+#[test]
+fn p2_revision_6_still_frames_input_recheck() {
+    assert_row(
+        6,
+        &[operation(
+            &json!({"input_recheck": {"kind": "still_frames"}}),
+        )],
+        &[operation(
+            &json!({"input_recheck": {"kind": "fresh_frame"}}),
+        )],
+    );
+}
+
+#[test]
+fn p2_revision_6_input_recheck_of_a_linear_steps_pack_only() {
+    let recheck = operation(&json!({"input_recheck": {"kind": "fresh_frame"}}));
+    assert_row(
+        6,
+        &[
+            control(&json!({"execution_mode": "linear_steps"})),
+            recheck.clone(),
+        ],
+        &[
+            control(&json!({"execution_mode": "navigable_route"})),
+            recheck,
+        ],
+    );
+}
+
+#[test]
+fn p2_revision_6_dictionary_of_an_unsigned_integer_value_only() {
+    let reading = |value: Value| task(&json!({"resource_readings": [{"value": value}]}));
+    assert_row(
+        6,
+        &[reading(
+            json!({"type": "unsigned_integer", "dictionary": {}}),
+        )],
+        &[reading(
+            json!({"type": "dictionary_entry", "dictionary": {"path": "d.json"}}),
+        )],
+    );
+}
+
+#[test]
+fn p2_revision_6_agreement_of_a_left_side() {
+    assert_row(
+        6,
+        &[task(
+            &json!({"checks": [{"value_test": {"left": {"agreement": {}}}}]}),
+        )],
+        &[task(&json!({"checks": [{"value_test": {"left": {}}}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_agreement_of_a_right_side() {
+    assert_row(
+        6,
+        &[task(
+            &json!({"checks": [{"value_test": {"right": {"agreement": {}}}}]}),
+        )],
+        &[task(&json!({"checks": [{"value_test": {"right": {}}}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_agreement_of_a_reading_mark() {
+    assert_row(
+        6,
+        &[task(&json!({"resource_readings": [{"agreement": {}}]}))],
+        &[task(&json!({"resource_readings": [{}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_max_runs_of_an_operation() {
+    assert_row(
+        6,
+        &[operation(&json!({"max_runs": 3}))],
+        &[operation(&json!({}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_on_max_runs_of_an_operation() {
+    assert_row(
+        6,
+        &[operation(&json!({"on_max_runs": "next_candidate"}))],
+        &[operation(&json!({}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_keyed_on_guard_refused_only() {
+    assert_row(
+        6,
+        &[operation(
+            &json!({"on_guard_refused": {"outcome_key": "k"}}),
+        )],
+        &[operation(&json!({"on_guard_refused": "next_candidate"}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_luma_floor_of_an_anchor() {
+    assert_row(
+        6,
+        &[task(&json!({"anchors": [{"id": "a", "luma_floor": {}}]}))],
+        &[task(&json!({"anchors": [{"id": "a"}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_luma_floor_of_a_verify_template() {
+    assert_row(
+        6,
+        &[task(
+            &json!({"verify_templates": [{"id": "v", "luma_floor": {}}]}),
+        )],
+        &[task(&json!({"verify_templates": [{"id": "v"}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_confirm_of_a_select() {
+    assert_row(
+        6,
+        &[operation(&json!({"select": {"confirm": "decision"}}))],
+        &[operation(&json!({"select": {}}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_wait_of_an_operation() {
+    assert_row(
+        6,
+        &[operation(&json!({"wait": {"max_ms": 1}}))],
+        &[operation(&json!({}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_timestamp_ms_value_of_a_reading_mark() {
+    let reading = |kind: &str| task(&json!({"resource_readings": [{"value": {"type": kind}}]}));
+    assert_row(
+        6,
+        &[reading("timestamp_ms")],
+        &[reading("unsigned_integer")],
+    );
+}
+
+#[test]
+fn p2_revision_6_limit_cause_of_an_interrupt() {
+    assert_row(
+        6,
+        &[interrupt(&json!({"limit_cause": "environment"}))],
+        &[interrupt(&json!({}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_store_update_of_control() {
+    assert_row(
+        6,
+        &[control(&json!({"store_update": {}}))],
+        &[control(&json!({}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_preprocess_of_an_ocr_target() {
+    assert_row(
+        6,
+        &[task(
+            &json!({"ocr_targets": [{"id": "o", "preprocess": {}}]}),
+        )],
+        &[task(&json!({"ocr_targets": [{"id": "o"}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_preprocess_of_a_shared_read() {
+    assert_row(
+        6,
+        &[task(
+            &json!({"candidate_layouts": [{"shared_ocr": {"preprocess": {}}}]}),
+        )],
+        &[task(&json!({"candidate_layouts": [{"shared_ocr": {}}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_result_of_an_interrupt() {
+    assert_row(
+        6,
+        &[interrupt(&json!({"result": "application_update_required"}))],
+        &[interrupt(&json!({}))],
+    );
+}
+
+#[test]
+fn p2_revision_6_loading_copy_of_a_pack() {
+    let copy = |path: &str| (format!("packs/{ROW_PACK}/{path}"), b"{}\n".to_vec());
+    assert_row(6, &[copy("resources/loading.json")], &[]);
+    assert_row(6, &[copy("resources/loading/page.png")], &[]);
+}
+
+#[test]
+fn p2_revision_7_anchor_milli_feature() {
+    let feature =
+        |value: &str| task(&json!({"candidate_layouts": [{"features": [{"value": value}]}]}));
+    assert_row(7, &[feature("anchor_milli")], &[feature("ocr_integer")]);
+}
+
+#[test]
+fn p2_revision_7_confirm_track_of_a_select() {
+    assert_row(
+        7,
+        &[operation(&json!({"select": {"confirm": "track"}}))],
+        &[operation(&json!({"select": {"confirm": "decision"}}))],
+    );
+}
+
+#[test]
+fn p2_revision_7_track_px_of_a_select() {
+    assert_row(
+        7,
+        &[operation(&json!({"select": {"track_px": 4}}))],
+        &[operation(&json!({"select": {}}))],
+    );
+}
+
+#[test]
+fn p2_revision_7_masked_anchor_of_a_repeated_anchor_layout() {
+    let layout = |anchor: Value| {
+        task(&json!({
+            "candidate_layouts": [{"kind": "repeated_anchor", "anchor": "a"}],
+            "anchors": [anchor]
+        }))
+    };
+    assert_row(
+        7,
+        &[layout(json!({"id": "a", "mask": {}}))],
+        &[layout(json!({"id": "a"}))],
+    );
+    assert_row(
+        7,
+        &[layout(json!({"id": "a", "scales": [1000]}))],
+        &[layout(json!({"id": "a"}))],
+    );
+}
+
+#[test]
+fn p2_revision_8_read_list_of_an_operation() {
+    assert_row(
+        8,
+        &[operation(&json!({"read_list": {}}))],
+        &[operation(&json!({}))],
+    );
+}
+
+#[test]
+fn p2_revision_8_table_max_over_list_value_source() {
+    assert_row(
+        8,
+        &[policy(
+            &json!({"gates": [{"value": {"source": "table_max_over_list"}}]}),
+        )],
+        &[policy(&json!({"gates": [{"value": {"source": "field"}}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_9_lower_bound_column() {
+    assert_row(
+        9,
+        &[policy(
+            &json!({"gates": [{"value": {"lower_bound_column": "floor"}}]}),
+        )],
+        &[policy(&json!({"gates": [{"value": {}}]}))],
+    );
+}
+
+#[test]
+fn p2_revision_10_notices_directory() {
+    assert_row(
+        10,
+        &[("notices/NOTICE.md".to_owned(), b"Notice.\n".to_vec())],
+        &[],
+    );
+}
+
+#[test]
+fn p2_revision_11_field_lists_of_a_task() {
+    assert_row(
+        11,
+        &[task(&json!({"field_lists": []}))],
+        &[task(&json!({}))],
+    );
+}
+
+#[test]
+fn p2_revision_12_goals_json() {
+    assert_row(12, &[json_entry("goals.json".to_owned(), &json!({}))], &[]);
 }

@@ -525,8 +525,8 @@ repository:
                                     (with tables when the repository has some), interfaces.json,
                                     the root files and directories the repository holds
                                     (pages.json, interrupts.json, navigation.json, schedule.json,
-                                    display-layout.json, goals.json, loading.json with loading/,
-                                    notices/, tables/), packs/<package_id>/
+                                    display-layout.json, goals.json, ui.json, loading.json with
+                                    loading/, notices/, tables/), packs/<package_id>/
 <out>/SHA256SUMS                    <hex>  <zip name>
 <out>/build.json                    actingcommand.standard-pack-build.v1
 <out>/work/                         the steps' work, kept
@@ -534,8 +534,13 @@ repository:
 
 **What it is.** The zip is what `place <zip> --sums <SHA256SUMS>` places ([install-cli.md](install-cli.md)):
 its `interfaces.json` declares `package [r, r]`, `r` computed from the content (resource-verify.md,
-"The `package` revision"; 12 with `goals.json`, 10 with `notices/`, a pack feature's revision where
-a pack uses it), never written by hand.
+"The `package` revision": every member, file and value a `package` row of
+[component-interfaces.md](component-interfaces.md) or the register puts into a revision, where it
+stands and under its condition), never written by hand. Fix round 1: the zip carries the
+repository's `ui.json` (above, "Standard package root"), checked by its reader against the zip's
+`bundle.json`, so placing the zip keeps the console's labels; the three files are written under
+`.part` names and renamed when all three are complete, `build.json` last; `--out` is made only once
+the checkout precondition passed.
 
 **How it is identified.** By its source commit: `bundle.json` carries `source {repository,
 commit}` and no version or tag (above), and `build.json` names the source repository, the commit
