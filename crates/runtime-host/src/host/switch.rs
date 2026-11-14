@@ -35,7 +35,7 @@
 //! and replaces its token, so the run's later steps resolve the token the scheduler holds
 //! ([`HostShared::run_token`]).
 //!
-//! Workflow #437 ORD-1c (register §1.365; `contracts/device-group.md`, "The member in front"):
+//! Workflow #437 ORD-1c (register §1.373; `contracts/device-group.md`, "The member in front"):
 //! the member in front. The function the switch's two entries share notes what its own steps left
 //! in front of the member's device, in one in-memory map by device key (`HostShared::note_front`,
 //! its one writer): the member once its application is in front or started, none once the switch
@@ -453,7 +453,7 @@ impl HostShared {
     }
 
     /// Workflow #437 ORD-1c fix round 1 (the review's point 3, as the coordinator ruled on board
-    /// #437; register §1.365): the one remover of the member in front outside the switch's own
+    /// #437; register §1.373): the one remover of the member in front outside the switch's own
     /// result, called where what is in front of `member`'s device changes without a switch, each
     /// call one line: `FrontLoss::Device` forgets the
     /// device's entry whoever it names (an emulator restart, a switch's Runtime-level failure),

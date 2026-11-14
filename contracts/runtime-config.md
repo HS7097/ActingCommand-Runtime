@@ -617,7 +617,7 @@ names it (the section denies unknown members).
 
 **The default queue wait of a device group's member (Workflow #437 ORD-1c, since 0.12.60;
 `actingd-config` revision 32, [component-interfaces.md](component-interfaces.md);
-[v012-register.md](v012-register.md) §1.365).** `scheduling.device_group.max_queue_wait_ms`
+[v012-register.md](v012-register.md) §1.373).** `scheduling.device_group.max_queue_wait_ms`
 (milliseconds `60000..=86400000`, default `1800000`, settable), in the file the second member of
 the `scheduling` section's `device_group` member, is the longest time a task of a member of a
 device group of several waits in its device's queue when its task declares no

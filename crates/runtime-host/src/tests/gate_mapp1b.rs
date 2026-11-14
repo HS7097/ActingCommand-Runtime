@@ -442,7 +442,7 @@ fn mapp1b_one_worker_per_device_and_a_member_held_behind_the_others_registered_r
 /// task the same way and A's own task keeps its own holder's code. Once A's lease is released B's
 /// task is dispatched, and A's waits behind it.
 ///
-/// Adapted by Workflow #437 ORD-1c (register §1.365): the host now passes the order within one
+/// Adapted by Workflow #437 ORD-1c (register §1.373): the host now passes the order within one
 /// device. No member is in front (no switch ran), so every contender waits; A's task has waited
 /// since the first round (behind B's pick, then behind its own lease), so its last row carries the
 /// order's values: the default limit (`scheduling.device_group.max_queue_wait_ms`, 1 800 000) and
@@ -590,7 +590,7 @@ fn mapp1b_a_pause_of_one_member_waits_only_for_its_own_work_and_leaves_the_other
 /// keeps its own gate's code; once the hold ends the device goes to the round's pick again. A
 /// fence of A holds B (`fenced`, A).
 ///
-/// Adapted by Workflow #437 ORD-1c (register §1.365): the host now passes the order within one
+/// Adapted by Workflow #437 ORD-1c (register §1.373): the host now passes the order within one
 /// device. The hold ended every wait, and no member is in front, so in the round after it B's task
 /// waits from that round: its row carries the order's values, the default limit
 /// (`scheduling.device_group.max_queue_wait_ms`, 1 800 000) and all of it left. The winner is the

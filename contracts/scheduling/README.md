@@ -1443,7 +1443,7 @@ package included (register §1.215 UPD-16), meets the game's "client out of date
 
 ## Order within one device (Workflow #437 ORD-1b, since 0.12.60; the host's inputs: ORD-1c, since 0.12.60)
 
-Register §1.352 and §1.365; the owner's rulings on board #437 as the coordinator recorded them;
+Register §1.352 and §1.373; the owner's rulings on board #437 as the coordinator recorded them;
 [device-group.md](../device-group.md), "One pick per device per round" and "The member in front".
 It applies only to a device whose key the device map names for two or more members, and only when
 the Runtime passes the order's inputs beside the map (`DeviceGroups::with_order`); without them
@@ -1459,7 +1459,7 @@ instance alone on its device never reads any of it, and a catalog that declares
   wait began; a contender the Runtime gives no start waits from the evaluation's time. The longest
   wait of a task that declares none (1 800 000 ms when no configured one is passed). Two members of
   one device named in front refuse the evaluation (`policy_evaluation_input_invalid`). **What the
-  Runtime passes** (ORD-1c, register §1.365; the coordinator's rulings 1, 2 and 4 on board #437):
+  Runtime passes** (ORD-1c, register §1.373; the coordinator's rulings 1, 2 and 4 on board #437):
   - *The member in front* is the member the host holds in front of the device: the member whose
     switch's own steps last ended with its application in front or started, or (since fix round 2)
     whose run's own step last launched or restarted its application, and none once a switch of the
@@ -1468,7 +1468,7 @@ instance alone on its device never reads any of it, and a catalog that declares
     ladder rung (a Runtime-level failure of the application restart rung included) or the idle
     action changed what is in front, and none after a start ([device-group.md](../device-group.md),
     "The member in front", "Who forgets it").
-    *What it does not see* (register §1.365, fix round 2): an emulator or an application that
+    *What it does not see* (register §1.373, fix round 2): an emulator or an application that
     crashes, a person's work by hand on the device, a Lab raw input and a run's own inputs that
     bring another package to the front leave a member named in front that is not. That costs at
     most one switch more, which reads the real foreground, and lets a waiting task start at most
@@ -1499,7 +1499,7 @@ instance alone on its device never reads any of it, and a catalog that declares
   - *Its staging* is the eligibility age's: the verdicts of an evaluated cycle are applied when the
     next evaluation starts, and that evaluation passes the starts applied then, of the members not
     in front. An evaluation stages no wait of a member that took the front after it read the
-    members in front (register §1.365, fix round 1). Memory only: none of it enters the ledger, a fact, a snapshot or a decision identity,
+    members in front (register §1.373, fix round 1). Memory only: none of it enters the ledger, a fact, a snapshot or a decision identity,
     and a start of the Runtime begins with no wait and none in front.
 - **The contenders** of a device are the candidates of its members, but one the Runtime holds
   whole (`InstanceHolds`: UPD-1's hold, a switch cooldown), one whose member is held as the cycle

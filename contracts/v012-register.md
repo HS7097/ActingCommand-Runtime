@@ -24773,12 +24773,14 @@ interval (60 s by default), with no restart.
 existing member); a pause the ledger recorded is rebuilt from its execution record and lifts by
 the same package change.
 
-### 1.365 Slice ORD-1c (0.12.60): the host passes the order within one device: the member in front, the queue waits and the default limit; `actingd-config` revision 32 (Workflow #437; the owner's rulings on board #437 as the coordinator recorded them, not the owner's words; the design note `rd-1114/ord1-design.md`, its sections 1 ("Default (ORD-1c)"), 2.1, 2.2, 3.6, 7 and its row ORD-1c of section 8, with the coordinator's four rulings of board #437 comment 6859534064, which override its 2.2 where they differ; coordinator work order `rd-1114/brief-437-ord1c.md`, read on main `e44fecb4`)
+### 1.373 Slice ORD-1c (0.12.60): the host passes the order within one device: the member in front, the queue waits and the default limit; `actingd-config` revision 32 (Workflow #437; the owner's rulings on board #437 as the coordinator recorded them, not the owner's words; the design note `rd-1114/ord1-design.md`, its sections 1 ("Default (ORD-1c)"), 2.1, 2.2, 3.6, 7 and its row ORD-1c of section 8, with the coordinator's four rulings of board #437 comment 6859534064, which override its 2.2 where they differ; coordinator work order `rd-1114/brief-437-ord1c.md`, read on main `e44fecb4`)
 
-1.365 is the next free number after §1.364 (fixes #456 and #458, merged first as main `17197d8e`
-and merged into this slice in fix round 2): the slice took 1.363 on its base `e44fecb4` and 1.364
-when main `3d9d25e6` (defect #457, §1.363) was merged into it; other open pull requests take
-numbers too, and the train settles the final order. ORD-1b (§1.352) built the selection among the
+1.373 is the number the train 0.12.60e gave this slice, the next free one after §1.372. The slice
+took 1.363 on its base `e44fecb4`, 1.364 when main `3d9d25e6` (defect #457, §1.363) was merged into
+it, and the next number when main `17197d8e` (fixes #456 and #458, §1.364) was merged into it in
+fix round 2; main then gave that number and the next three to #453 S3, S4, S9 and S12 (the train
+0.12.60d, main `155366bb`) and §1.369 to #455 G-R2s (main `1e67d1c5`), and #463 L1, L2 and U1 took
+§1.370 to §1.372 in this train. ORD-1b (§1.352) built the selection among the
 members of one device in the policy crate, with its three inputs beside the device map; the host
 passed none (`DeviceGroups::new`), so a device of several still picked as MAPP-1. This slice makes
 the host keep and pass them. The load still refuses every group of several
@@ -24955,7 +24957,7 @@ MAPP-2d tests pick as before: their devices have none in front, or one evaluatio
 fresh limits leave the allocation order's pick.
 
 **Fix round 2** (the independent review of fix round 1 and CI on its head; main `17197d8e`, §1.364,
-merged, which renumbered this entry 1.365; only the register conflicted). (1) A task step's own
+merged, which renumbered this entry 1.373; only the register conflicted). (1) A task step's own
 application effect and the application restart rung's Runtime-level failure forget the member,
 above. (2) t14 never ran: its host's start was refused `config_value_invalid` at
 `record_runtime_config`. The start's check of an instance's own idle keys (`check_instance`,

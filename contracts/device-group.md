@@ -3,7 +3,7 @@
 Workflow #437 MAPP-C (contracts only; [v012-register.md](v012-register.md) §1.323). **Every rule of
 this file is (MAPP, not built yet)** unless its section names MAPP-1 ([v012-register.md](v012-register.md)
 §1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57), MAPP-2a (§1.342, Runtime 0.12.59),
-MAPP-2b (§1.353, Runtime 0.12.60), MAPP-2d (§1.360, Runtime 0.12.60) or ORD-1c (§1.365, Runtime
+MAPP-2b (§1.353, Runtime 0.12.60), MAPP-2d (§1.360, Runtime 0.12.60) or ORD-1c (§1.373, Runtime
 0.12.60):
 no code, key, code, value key or word named here exists until the code slices of §1.323 build it,
 and every code, value key and vocabulary word below is proposed but those MAPP-1 registers:
@@ -340,7 +340,7 @@ order's inputs beside the map, the members of one device are ordered as
   not in a run's own duration.
 
 Without the order's inputs the device's first candidate in the allocation order wins it, as MAPP-1
-built it. **From ORD-1c (Runtime 0.12.60, register §1.365) the Runtime passes them at every policy
+built it. **From ORD-1c (Runtime 0.12.60, register §1.373) the Runtime passes them at every policy
 cycle whose device map names a device of several**: the member it holds in front of each device,
 the start of each waiting pair's wait and `scheduling.device_group.max_queue_wait_ms` ("The member
 in front"); a cycle whose map names none is handed the map alone, as before. Until the release
@@ -787,7 +787,7 @@ position 2 of [scheduling-blackout.md](scheduling-blackout.md), "Order of the de
 
 The order within one device ("Ranking across members" above; [scheduling/README.md](scheduling/README.md),
 "Order within one device") reads three inputs beside the device map, which the host keeps and
-passes from ORD-1c on (register §1.365; the coordinator's rulings 1 to 4 on board #437, not the
+passes from ORD-1c on (register §1.373; the coordinator's rulings 1 to 4 on board #437, not the
 owner's words). All three live in the host's memory only: nothing of them enters the ledger, a
 fact, a snapshot or a decision identity, and an instance alone on its device never meets them.
 
@@ -806,7 +806,7 @@ fact, a snapshot or a decision identity, and an instance alone on its device nev
   `host/contained_task.rs`): the member's own application is then in front or started, as after
   its switch. A policy cycle reads it as it builds the device map (`policy_device_groups`,
   `host/policy_dispatch.rs`) and names the member in front by its alias.
-- **Who forgets it** (register §1.365, fix round 1; the coordinator's ruling). One remover,
+- **Who forgets it** (register §1.373, fix round 1; the coordinator's ruling). One remover,
   `forget_front` (`host/switch.rs`), called in one line where what is in front changes without a
   switch's result. It forgets the device's entry whoever it names (*device*) or only while it
   names the member (*member*):
@@ -851,7 +851,7 @@ limits the first pick of a device is the allocation order's, as MAPP-1's.
 **What a stale entry costs.** The member in front is only a preference of the order: a member
 named in front that is not (an emulator or an application crashed, a person worked on the device
 by hand, a Lab raw input or a run's own inputs brought another package to the front; register
-§1.365, fix round 2) is preferred while its tasks end by the waiting tasks' limits, and its next
+§1.373, fix round 2) is preferred while its tasks end by the waiting tasks' limits, and its next
 run's switch reads the real foreground, brings it to the front and writes what is in front. So a
 stale entry costs at most one switch, and lets a waiting task start at most one startup run late:
 the order counted the named member's next run as needing no switch, and that run's switch takes
@@ -1146,7 +1146,7 @@ of a device group of several:
   order and not in a run's own duration (board #437, 2026-11-13). Not built: a forgetting of the
   member in front where the Runtime does not see what changed in front (an emulator or an
   application that crashes, a person's work by hand, a Lab raw input, a run's own inputs that
-  bring another package to the front; register §1.365 lists them with what they cost, and "Who
+  bring another package to the front; register §1.373 lists them with what they cost, and "Who
   forgets it" the places that forget since fix rounds 1 and 2).
 - **The normalized weight.** Superseded by the order within one device (ORD-1b, "Ranking across
   members" above): no weight is compared across the members of one device.
@@ -1201,7 +1201,7 @@ of a device group of several:
   added to the configuration or an interface.
 - ORD-1a and ORD-1b are built in Runtime 0.12.60 (register §1.352): a task's
   `max_queue_wait_ms` and the selection among a device's members, with no input passed by the
-  host. ORD-1c is built in Runtime 0.12.60 (register §1.365): the host keeps the member in front,
+  host. ORD-1c is built in Runtime 0.12.60 (register §1.373): the host keeps the member in front,
   the queue waits and passes them with `scheduling.device_group.max_queue_wait_ms`, in
   `actingd-config` revision 32 ("The member in front"); the load still refuses every group of
   several, so no installation reaches any of it, and a host without a device of several hands the
