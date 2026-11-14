@@ -506,6 +506,10 @@ actingcommand_contract::outcome_locations! {
         // check`, the live build's `actingd vision manifest|check`, read only.
         VisionManifest => "install_vision_manifest",
         VisionCheck => "install_vision_check",
+        // Workflow #453 S12 (since 0.12.60): the rescue module's `state-root claim`, the live
+        // build's `actingd claim-state-root` of the root's configuration while the Runtime is
+        // stopped.
+        StateRootClaim => "install_state_root_claim",
     }
 }
 
@@ -608,6 +612,10 @@ actingcommand_contract::outcome_vocabulary! {
         // run, printed none (a build without the subcommand), refused its command line, could not
         // read its own registry, or was ended at the row's bound (`timeout_ms`, no cause).
         VisionReportUnanswered => "vision_report_unanswered",
+        // Workflow #453 S12 (since 0.12.60): the rescue module's `state-root claim` got no report
+        // from the live build's `actingd claim-state-root`: it did not run, printed none, or was
+        // left running at its deadline.
+        StateRootClaimUnanswered => "state_root_claim_unanswered",
     }
 }
 
@@ -681,6 +689,10 @@ actingcommand_contract::outcome_vocabulary! {
         // Workflow #453 S7 (since 0.12.60): the rescue module's `vision check` found files of the
         // manifest or models that do not match (`count`).
         VisionIncomplete => "vision_incomplete",
+        // Workflow #453 S12 (since 0.12.60): the rescue module's `state-root claim` replaced a
+        // record of another installation, or one that could not be read: the ledger's records
+        // that carry fingerprints were made with the salt of the configuration that wrote them.
+        FingerprintsDiscontinuous => "fingerprints_discontinuous",
     }
 }
 

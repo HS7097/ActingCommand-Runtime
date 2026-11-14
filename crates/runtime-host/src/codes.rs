@@ -2655,6 +2655,9 @@ pub(crate) mod test_spellings {
         /// Test-only codes of injected and scaffolding failures.
         pub(crate) enum TestCode {
             ContainedTaskCheckpointTestHookAlreadyInstalled => "contained_task_checkpoint_test_hook_already_installed": error / none,
+            // Workflow #453 S12: a hand-over of `actingd claim-state-root` stopped after one of
+            // its steps, as a process that died there would.
+            HandOverCrashedForTest => "hand_over_crashed_for_test": error / none,
             LeaseCleanupFailed => "lease_cleanup_failed": error / none,
             PolicyOutcomeProjectionInjectedFailure => "policy_outcome_projection_injected_failure": error / none,
             PolicyOutcomeTransitionTestHookAlreadyInstalled => "policy_outcome_transition_test_hook_already_installed": error / none,
@@ -2704,6 +2707,8 @@ pub(crate) mod test_spellings {
             ConsumeScheduledPolicyCheckpointTestHook => "consume_scheduled_policy_checkpoint_test_hook",
             // ISO-M (#419): `contain_failure` at a boundary, and a fence that fails.
             ContainFailureForTest => "contain_failure_for_test",
+            // Workflow #453 S12: a test stops a hand-over after one of its steps.
+            CrashHandOverForTest => "crash_hand_over_for_test",
             ExpireAllQueuedForTest => "expire_all_queued_for_test",
             ExpireDueLeasesForTest => "expire_due_leases_for_test",
             ExpireLeaseOnceForTest => "expire_lease_once_for_test",

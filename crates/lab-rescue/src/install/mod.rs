@@ -147,6 +147,10 @@ mod gate_453_s10;
 // host's actingd and Tools.
 #[cfg(test)]
 mod gate_453_s7;
+// Test-only: Workflow #453 S12, the rescue row `state-root claim` and the member `state_root` of
+// `op status`, on the fake host's actingd.
+#[cfg(test)]
+mod gate_453_s12;
 // Test-only: Workflow #454, a post-start check that fails closes its step with what it read.
 #[cfg(test)]
 mod gate_454_postcheck;

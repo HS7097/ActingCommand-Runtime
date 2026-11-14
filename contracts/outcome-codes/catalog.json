@@ -7855,6 +7855,9 @@
         },
         "vision_report_unanswered": {
           "description": "The Lab's rescue module's vision manifest or vision check got no usable report from the live build's actingd vision (contracts/vision-model-folders.md, \"The manifest\"): it printed none (a build before the subcommand, or a crash: foreign_other_error with the exit code and stderr), refused with no stage (fix 2: every refusal but vision_root_unresolved's: its own installation check or slot lock, --install-root, its command line (invalid_arguments, among them a --model no model folder may be named, or more than 64 of them) or its own registry (serialization_failed)), each its outcome as the caused_by link, printed a check report without its lists (foreign_data_error), did not run (the OS failure), or was still running when its bound ran out and was ended there, or for vision check found no time left of the row's limit and was not run (timeout_ms the bound that ran out: 30 s for vision manifest, 160 s for vision check, or the vision check row's limit of 900 s when that ran out first; no cause link; it is read only, so ending it loses nothing). It says nothing about the vision root. Nothing was written. (Workflow #453 S7 fix 1, since 0.12.60)"
+        },
+        "state_root_claim_unanswered": {
+          "description": "The Lab's rescue module's state-root claim got no report from the live build's actingd claim-state-root (contracts/state-root-installation.md, \"Handing a state root over\"): it did not run (the child's failure as the caused_by link), printed no report (a build before 0.12.60 refuses the subcommand as a start's arguments: foreign_other_error with the exit code and stderr), or was still running at install.child.check_config_timeout_ms and was left running (pid and config_key). path is the state root. Whether actingd handed the state root over is then not known: run the row again once no actingd runs; a hand-over that was done answers that nothing changed. (Workflow #453 S12, since 0.12.60)"
         }
       }
     },
@@ -7974,6 +7977,9 @@
         },
         "vision_incomplete": {
           "description": "The Lab's rescue module's vision check found that the root's vision root does not hold what it must (contracts/vision-model-folders.md, \"The manifest\"): count is the manifest files whose state is not ok (missing, sha256_mismatch, unreadable) and the models, of the manifest and of the root's installed packs, each pair of model_ref and model_sha256 once, whose folder is missing, invalid or of another identity. The answer lists each; nothing was written, and placing the files is another command's. As the top of the answer, exit 0. (Workflow #453 S7, since 0.12.60)"
+        },
+        "fingerprints_discontinuous": {
+          "description": "The Lab's rescue module's state-root claim replaced a record of another installation, or one that could not be read (contracts/state-root-installation.md, \"Handing a state root over\"): the ledger's records that carry fingerprints were made with the salt of the configuration that wrote them, and the command cannot know whether this configuration's salt is the same, so a fingerprint recorded before the hand-over may not match one made after it. path is the state root. The hand-over is done and the old record kept as installation.json.old-<ms>; the ledger's records stay as they are. A note under install_command_done. (Workflow #453 S12, since 0.12.60)"
         }
       }
     },

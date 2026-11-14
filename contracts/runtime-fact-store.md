@@ -716,8 +716,15 @@ the backend self-check facts (source `device-proxy` or `capture`).
   the record: recorded once the ledger is open by the start that placed the
   record, or, from the record, by a start that finds its installation's record
   while the store holds no such fact (an earlier start placed the record and
-  failed before the fact); any other start records nothing. A Runtime not
-  started from an installation root never records it. Tagged
+  failed before the fact). Since Workflow #453 S12 a start compares the claims:
+  it records the fact from the record whenever the latest such fact is not of
+  the record's claim (another `claimed_at_unix_ms` or `claimed_by_owner_epoch`),
+  so after a hand-over by `actingd claim-state-root` the next start records the
+  new claim once; such a row also carries the optional
+  `previous_claimed_at_unix_ms`, the stored claim's time, and is observed at the
+  claim's time or one millisecond after the stored observation when that is not
+  earlier. A start whose record's claim the latest fact is records nothing. A
+  Runtime not started from an installation root never records it. Tagged
   (`tag.workbench_patterns`), so a start loads it.
 - `host.start_pause_applied` (Workflow #453 S2, 0.12.60; register §1.362;
   [scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start")

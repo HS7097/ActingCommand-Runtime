@@ -1216,6 +1216,37 @@ the rescue face:
   `config_unreadable` for a `standard_packs.root` that cannot be listed or a `bundle.json` whose
   kind cannot be read; `pack_invalid` (`game`, `path`) for a game root whose check gives no
   models. Nothing is written, downloaded or placed; placing the files is a later slice's.
+- **`state-root claim [--new-identity]`** (Workflow #453 S12, since 0.12.60; register §1.363;
+  [state-root-installation.md](state-root-installation.md), "Handing a state root over"; the
+  coordinator's rulings on board #453, not the owner's words). `writes`, `irreversible`, `runtime`
+  `offline`; no `actingctl install` command. It reads the root's configuration as every row does,
+  applies the update path's stopped rule (`owner_lock_held`, `runtime_running` with the image's
+  `pid`, `processes_unreadable`), then runs the live build's `actingd claim-state-root --config
+  <the root's configuration> --actor <initiator>` (and `--new-identity` when given) within
+  `install.child.check_config_timeout_ms`, as `unlock` runs `unlock-owner`: no installer command
+  writes into a state root, actingd does. A completed claim is `install_command_done` (operation
+  `install_state_root_claim`, `path` the state root, `installation_changed` as actingd's
+  `changed`, actingd's outcome `state_root_claimed` as its `related` link) with actingd's report
+  as `report`, the initiator as `actor` and, when a record was replaced, its claim time as
+  `previous {claimed_at_unix_ms}` (when it could be read) and the note `install_caveat_noted` with
+  `install_caveat` `fingerprints_discontinuous` (`path` the state root) whenever a record of
+  another installation or one that could not be read was replaced: the ledger's records that
+  carry fingerprints were made with the salt of the configuration that wrote them, and the command
+  cannot know whether this configuration's salt is the same. actingd's refusal is the answer, as
+  `unlock`'s is; no report from actingd (it did not run, printed none or was left running at its
+  deadline) is `install_command_refused` with `install_refusal` `state_root_claim_unanswered`
+  (`path` the state root), the child's failure as the cause or `pid` and `config_key`. The row
+  itself writes nothing in the root.
+- **`op status`, the member `state_root`** (Workflow #453 S12, since 0.12.60). When it names no
+  operation and answers, the rescue module's `op status` also reads the live build's check-config
+  of the root's configuration (`--install-root <root>`) and answers `state_root {path,
+  installation}`: the configured state root and its installation state as check-config reports
+  it, `claimed_by_this`, `unclaimed` or `not_installed` (`null` from a build before 0.12.60, whose
+  report has no such member); when check-config refuses (another installation's record is
+  `state_root_installation_mismatch`, a file that cannot be read
+  `state_root_installation_record_invalid`, each at stage `config_state_root`) or gives no answer,
+  `installation` is `null` and `check_config` holds that outcome. Read only; `actingctl install
+  status` is unchanged.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
@@ -1226,7 +1257,7 @@ the rescue face:
   build reads the older ones. **Operational rule until LAB-7:** production keeps deploying through
   `actingctl install` (the coordinator's deploy kit); the module's `deploy`, `rollback`, `place`
   and `config replace` are not used on the production root, so no journal an older installer
-  cannot read appears there.
+  cannot read appears there. Workflow #453 S12: nor is its `state-root claim`, until LAB-7.
 
 ## Interface checks
 
@@ -2806,6 +2837,12 @@ the fragment registers, names the command.
   `install_instance_add`'s `instance_invalid` gives the existing key `config_key` two more
   values, `policy` and `policy.resources.hosts`, beside those it gave before; no code, location,
   key or word is new.
+- **Workflow #453 S12** (since 0.12.60; "The Lab's rescue module", `state-root claim`): the
+  location `install_state_root_claim`; `install_refusal` `state_root_claim_unanswered` (actingd
+  gave no report: the child's failure as the cause, or `pid` and `config_key` for a child left
+  running at its deadline) and `install_caveat` `fingerprints_discontinuous` (`path`), which only
+  this row answers; the existing `owner_lock_held`, `runtime_running` and `processes_unreadable`
+  for its stopped rule; no code or key is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

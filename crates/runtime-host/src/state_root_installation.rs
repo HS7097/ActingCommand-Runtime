@@ -8,12 +8,14 @@
 //! claimed it in `<state root>\installation.json`. Both are files outside the ledger, a
 //! registered exception to "program state lives in tagged ledger records": the check reads them
 //! before the ledger is opened. A writer of the state root started from an installation root
-//! checks the record before it writes anything; only a start claims, under the owner lock. A
-//! writer not started from an installation root reads, mints and writes nothing here.
+//! checks the record before it writes anything; a start claims, under the owner lock, and so does
+//! `actingd claim-state-root` (Workflow #453 S12), the explicit act of a person that hands a state
+//! root over ([`hand_over`]). A writer not started from an installation root reads, mints and
+//! writes nothing here.
 
 use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
-use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     FactScalar, FactValue, OriginModule, OwnerEpoch, RuntimeErrorCode, RuntimeFactRecord,
@@ -48,6 +50,14 @@ const PART_SUFFIX: &str = ".part";
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 /// The bytes of an installation's number.
 const INSTALLATION_ID_BYTES: usize = 16;
+/// Workflow #453 S12: the marker of a file the hand-over sets aside, `<file>.old-<unix ms>`, a
+/// kept name (`install leftovers` lists the identity file's, `contracts/install-cli.md`).
+const KEPT_MARKER: &str = ".old-";
+/// Workflow #453 S12: the members of the fact's row a start compares with the record's claim, and
+/// the optional member that names the claim before a hand-over.
+const CLAIMED_AT_MEMBER: &str = "claimed_at_unix_ms";
+const OWNER_EPOCH_MEMBER: &str = "claimed_by_owner_epoch";
+const PREVIOUS_CLAIMED_AT_MEMBER: &str = "previous_claimed_at_unix_ms";
 
 /// What the read-only check found of a state root for the installation a writer runs from: the
 /// value of check-config's `state_root_installation`. A record of another installation, and a
@@ -326,6 +336,391 @@ pub(crate) fn claim_fact_record(claim: &StateRootClaim) -> RuntimeFactRecord {
         source: OriginModule::Runtime,
         ttl_ms: None,
     }
+}
+
+/// Workflow #453 S12 (ruling 5; `contracts/state-root-installation.md`, "The state root's
+/// record"): the fact a start records for the record `claim` it found or placed, given the latest
+/// `host.state_root_installation` the fact store holds, `stored`. None when `stored` is of this
+/// very claim (the same claim time and owner epoch); otherwise [`claim_fact_record`]. When `stored`
+/// is of an earlier claim (the state root was handed over since, the ledger keeping the old
+/// claim's fact), the row also carries that claim's time as `previous_claimed_at_unix_ms`, and the
+/// record is observed after the stored one (at the claim's time, or one millisecond after the
+/// stored observation when the claim's time is not later), so that the store takes it as the latest
+/// and the next start finds its own claim and records nothing.
+pub(crate) fn fact_for_start(
+    claim: &StateRootClaim,
+    stored: Option<&RuntimeFactRecord>,
+) -> Option<RuntimeFactRecord> {
+    let mut record = claim_fact_record(claim);
+    let Some(stored) = stored else {
+        return Some(record);
+    };
+    let stored_row = match &stored.value {
+        FactValue::RecordList(rows) => rows.first(),
+        _ => None,
+    };
+    let stored_claimed_at = stored_row
+        .and_then(|row| row.get(CLAIMED_AT_MEMBER))
+        .cloned();
+    let stored_epoch = stored_row
+        .and_then(|row| row.get(OWNER_EPOCH_MEMBER))
+        .cloned();
+    if let FactValue::RecordList(rows) = &mut record.value
+        && let Some(row) = rows.first_mut()
+    {
+        if row.get(CLAIMED_AT_MEMBER) == stored_claimed_at.as_ref()
+            && row.get(OWNER_EPOCH_MEMBER) == stored_epoch.as_ref()
+        {
+            return None;
+        }
+        if let Some(previous) = stored_claimed_at {
+            row.insert(PREVIOUS_CLAIMED_AT_MEMBER.to_owned(), previous);
+        }
+    }
+    record.observed_at_unix_ms = record
+        .observed_at_unix_ms
+        .max(stored.observed_at_unix_ms.saturating_add(1));
+    Some(record)
+}
+
+/// Workflow #453 S12: what `actingd claim-state-root` did with the installation's identity file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandedIdentity {
+    /// It was read and is used as it is.
+    Read,
+    /// There was none (an installation that never started): one was minted and placed only when
+    /// absent, as a start places it.
+    Minted,
+    /// It could not be read and `--new-identity` was given: it was set aside under its kept name
+    /// and a new one minted and placed.
+    Renewed,
+}
+
+impl HandedIdentity {
+    /// The word of the command's report.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Minted => "minted",
+            Self::Renewed => "renewed",
+        }
+    }
+}
+
+/// Workflow #453 S12: what `actingd claim-state-root` did with the state root's record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandedRecord {
+    /// There was none: this installation's record was written, as its first start would have.
+    Written,
+    /// It was this installation's: nothing changed.
+    Unchanged,
+    /// It was another installation's, or it could not be read: it was set aside under its kept
+    /// name and this installation's record written.
+    Replaced,
+}
+
+impl HandedRecord {
+    /// The word of the command's report.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Written => "written",
+            Self::Unchanged => "unchanged",
+            Self::Replaced => "replaced",
+        }
+    }
+}
+
+/// Workflow #453 S12: what `actingd claim-state-root` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateRootHandOver {
+    pub identity: HandedIdentity,
+    pub record: HandedRecord,
+    /// The claim time of the record the state root holds now.
+    pub claimed_at_unix_ms: u64,
+    /// The claim time of the record it replaced, when that record could be read.
+    pub previous_claimed_at_unix_ms: Option<u64>,
+    /// Each file set aside, under its kept name, in the order it was set aside.
+    pub kept: Vec<PathBuf>,
+}
+
+impl StateRootHandOver {
+    /// Whether the command wrote either file: false only when the record was this installation's
+    /// and its identity was read.
+    pub fn changed(&self) -> bool {
+        self.identity != HandedIdentity::Read || self.record != HandedRecord::Unchanged
+    }
+}
+
+/// Workflow #453 S12, test only: the step of a hand-over after which a test stops it, as a
+/// process that died there would.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HandOverStep {
+    IdentitySetAside,
+    IdentityPlaced,
+    RecordSetAside,
+    RecordPlaced,
+}
+
+/// Workflow #453 S12: what a hand-over works on, under the owner lock the command took: the
+/// installation and state roots, the command's owner epoch, the claim's time, the commit the build
+/// was made from and whether `--new-identity` was given.
+pub(crate) struct HandOverRequest<'a> {
+    pub(crate) installation_root: &'a Path,
+    pub(crate) state_root: &'a Path,
+    pub(crate) owner_epoch: OwnerEpoch,
+    pub(crate) at_unix_ms: u64,
+    pub(crate) build_commit: Option<&'a str>,
+    pub(crate) new_identity: bool,
+    /// Test only: the step after which the hand-over stops.
+    #[cfg(test)]
+    pub(crate) crash_after: Option<HandOverStep>,
+    /// Test only: every hard link fails with "unsupported", as on a file system without them.
+    #[cfg(test)]
+    pub(crate) hard_link_fails: bool,
+}
+
+/// Workflow #453 S12 (ruling 3): the hand-over's refusals that depend on the identity file alone,
+/// read before the owner is taken so that a refusal writes nothing: an identity file that cannot be
+/// read, without `--new-identity` (`state_root_installation_record_invalid`, as a start refuses
+/// it), and `--new-identity` while the identity file can be read (`invalid_arguments`: the command
+/// never replaces an identity that can be read).
+pub(crate) fn check_hand_over(
+    installation_root: &Path,
+    new_identity: bool,
+) -> RuntimeHostResult<()> {
+    const LOCATION: HostLocation = HostLocation::CheckStateRootInstallation;
+    match read_identity(installation_root, LOCATION) {
+        Ok(Some(_)) if new_identity => Err(identity_readable(installation_root, LOCATION)),
+        Ok(_) => Ok(()),
+        Err(_) if new_identity => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Workflow #453 S12 (rulings 2 to 4; `contracts/state-root-installation.md`, "Handing a state
+/// root over"): the hand-over of `actingd claim-state-root`, under the owner lock the command took.
+/// The identity file is read and used; an absent one is minted and placed only when absent and read
+/// back, as a start does; one that cannot be read is refused, unless `--new-identity` was given:
+/// then it is set aside under its kept name and a new one minted (a readable one with the flag is
+/// refused). Then the record: none is written; this installation's changes nothing; another
+/// installation's, or one that cannot be read, is set aside as `installation.json.old-<ms>` and
+/// this installation's written. Both files are placed with the start's primitive (a hard link of a
+/// flushed part, an exclusive create without hard links) and read back; nothing is ever deleted,
+/// and a placement that fails after its file was set aside gives the set-aside file its name back,
+/// so the failure leaves the file where it was. A crash between the steps is completed by running
+/// the command again.
+pub(crate) fn hand_over(request: &HandOverRequest<'_>) -> RuntimeHostResult<StateRootHandOver> {
+    const LOCATION: HostLocation = HostLocation::RecordStateRootInstallation;
+    // The hard link; a test may make it fail as a file system without hard links does.
+    #[cfg(test)]
+    let hard_link_fails = request.hard_link_fails;
+    #[cfg(not(test))]
+    let hard_link_fails = false;
+    let link = |from: &Path, to: &Path| -> std::io::Result<()> {
+        if hard_link_fails {
+            Err(std::io::Error::from(ErrorKind::Unsupported))
+        } else {
+            fs::hard_link(from, to)
+        }
+    };
+    let identity_path = identity_path(request.installation_root);
+    let mut kept = Vec::new();
+    let (identity, handed_identity) = match read_identity(request.installation_root, LOCATION) {
+        Ok(Some(_)) if request.new_identity => {
+            return Err(identity_readable(request.installation_root, LOCATION));
+        }
+        Ok(Some(identity)) => (identity, HandedIdentity::Read),
+        Ok(None) => (mint_identity(request, &link)?, HandedIdentity::Minted),
+        Err(error) if !request.new_identity => return Err(error),
+        Err(_) => {
+            let aside = set_aside(&identity_path, request.at_unix_ms, &link)?;
+            kept.push(aside.clone());
+            #[cfg(test)]
+            crash_point(request, HandOverStep::IdentitySetAside)?;
+            let identity = mint_identity(request, &link)
+                .map_err(|failed| put_back(&aside, &identity_path, &link, failed))?;
+            (identity, HandedIdentity::Renewed)
+        }
+    };
+    #[cfg(test)]
+    if handed_identity != HandedIdentity::Read {
+        crash_point(request, HandOverStep::IdentityPlaced)?;
+    }
+    let record_path = request.state_root.join(STATE_ROOT_INSTALLATION_FILE);
+    let (replaced, previous_claimed_at_unix_ms) = match read_record(request.state_root, LOCATION) {
+        Ok(Some(found)) if found.installation_id == identity.installation_id => {
+            return Ok(StateRootHandOver {
+                identity: handed_identity,
+                record: HandedRecord::Unchanged,
+                claimed_at_unix_ms: found.claimed_at_unix_ms,
+                previous_claimed_at_unix_ms: None,
+                kept,
+            });
+        }
+        Ok(Some(found)) => (true, Some(found.claimed_at_unix_ms)),
+        Ok(None) => (false, None),
+        // A record that cannot be read is replaced as another installation's is (ruling 4).
+        Err(_) => (true, None),
+    };
+    let aside = if replaced {
+        let aside = set_aside(&record_path, request.at_unix_ms, &link)?;
+        kept.push(aside.clone());
+        #[cfg(test)]
+        crash_point(request, HandOverStep::RecordSetAside)?;
+        Some(aside)
+    } else {
+        None
+    };
+    let record = StateRootRecord {
+        schema_version: STATE_ROOT_INSTALLATION_SCHEMA.to_owned(),
+        installation_id: identity.installation_id.clone(),
+        claimed_at_unix_ms: request.at_unix_ms,
+        claimed_by: ClaimedBy {
+            pid: std::process::id(),
+            owner_epoch: request.owner_epoch,
+            build_commit: request.build_commit.map(str::to_owned),
+        },
+    };
+    if let Err(failed) = place_once(&record_path, &record, &link) {
+        return Err(match &aside {
+            Some(aside) => put_back(aside, &record_path, &link, failed),
+            None => failed,
+        });
+    }
+    // Placed or found: the record the disk holds is judged as the check judges it.
+    let found = read_record(request.state_root, LOCATION)?.ok_or_else(|| vanished(&record_path))?;
+    judge(Some(&identity), &found, request.state_root, LOCATION)?;
+    #[cfg(test)]
+    crash_point(request, HandOverStep::RecordPlaced)?;
+    Ok(StateRootHandOver {
+        identity: handed_identity,
+        record: if replaced {
+            HandedRecord::Replaced
+        } else {
+            HandedRecord::Written
+        },
+        claimed_at_unix_ms: found.claimed_at_unix_ms,
+        previous_claimed_at_unix_ms,
+        kept,
+    })
+}
+
+/// Workflow #453 S12: a new identity for the hand-over, minted as a start mints it, placed only
+/// when absent and read back from the disk: the identity the disk holds is the installation's.
+fn mint_identity(
+    request: &HandOverRequest<'_>,
+    link: &HardLink<'_>,
+) -> RuntimeHostResult<InstallationIdentity> {
+    let path = identity_path(request.installation_root);
+    let minted = InstallationIdentity {
+        schema_version: INSTALLATION_IDENTITY_SCHEMA.to_owned(),
+        installation_id: mint_installation_id(&path)?,
+        minted_at_unix_ms: request.at_unix_ms,
+        minted_by: MintedBy {
+            pid: std::process::id(),
+            build_commit: request.build_commit.map(str::to_owned),
+        },
+    };
+    place_once(&path, &minted, link)?;
+    read_identity(
+        request.installation_root,
+        HostLocation::RecordStateRootInstallation,
+    )?
+    .ok_or_else(|| vanished(&path))
+}
+
+/// Workflow #453 S12: sets the file at `path` aside under its kept name `<file>.old-<at_unix_ms>`
+/// and answers that name. The file keeps its bytes and is never deleted: a hard link gives it the
+/// kept name (it fails when the name is taken, so no kept file is ever replaced), then its old name
+/// is removed. Without hard links (a link that fails for any other reason than "already exists") it
+/// is renamed, only while the kept name is free. A step that fails is `state_root_claim_failed`;
+/// the file is then under its name, or under both.
+fn set_aside(path: &Path, at_unix_ms: u64, link: &HardLink<'_>) -> RuntimeHostResult<PathBuf> {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!("{KEPT_MARKER}{at_unix_ms}"));
+    let kept = path.with_file_name(name);
+    match link(path, &kept) {
+        Ok(()) => {
+            fs::remove_file(path).map_err(|error| claim_failed(path, &error, IoOp::Remove))?;
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            return Err(claim_failed(&kept, &error, IoOp::Create));
+        }
+        Err(unlinked) => {
+            match fs::symlink_metadata(&kept) {
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Ok(_) => {
+                    return Err(claim_failed(
+                        &kept,
+                        &std::io::Error::from(ErrorKind::AlreadyExists),
+                        IoOp::Rename,
+                    ));
+                }
+                Err(error) => return Err(claim_failed(&kept, &error, IoOp::Metadata)),
+            }
+            fs::rename(path, &kept).map_err(|error| {
+                claim_failed(path, &error, IoOp::Rename)
+                    .with_note(Outcome::from_io_error(&unlinked, IoOp::Create))
+            })?;
+        }
+    }
+    Ok(kept)
+}
+
+/// Workflow #453 S12: after the placement of a new file at `path` failed (`failed`), the file set
+/// aside as `kept` is given its name back (a hard link, or without hard links a copy by an exclusive
+/// create; a file at `path` is left as it is), so the failed hand-over leaves the file where it
+/// was, also under its kept name. A put-back that fails too is a note of `failed`.
+fn put_back(
+    kept: &Path,
+    path: &Path,
+    link: &HardLink<'_>,
+    failed: RuntimeHostError,
+) -> RuntimeHostError {
+    let restored = match link(kept, path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(_) => fs::read(kept)
+            .map_err(|error| Outcome::from_io_error(&error, IoOp::Read))
+            .and_then(|bytes| {
+                create_exclusive(path, &bytes)
+                    .map(drop)
+                    .map_err(|error| error.daemon_outcome())
+            }),
+    };
+    match restored {
+        Ok(()) => failed,
+        Err(note) => failed.with_note(note),
+    }
+}
+
+/// Workflow #453 S12: `--new-identity` while the identity file can be read is `invalid_arguments`:
+/// the command never replaces an identity that can be read.
+fn identity_readable(installation_root: &Path, location: HostLocation) -> RuntimeHostError {
+    RuntimeHostError::fatal(
+        SharedCode::InvalidArguments,
+        location,
+        RuntimeErrorCode::InvalidRequest,
+    )
+    .with_native_detail(format!(
+        "--new-identity is refused: the identity file {} can be read, and an identity that can be read is never replaced",
+        identity_path(installation_root).display()
+    ))
+}
+
+/// Workflow #453 S12, test only: the hand-over stops after `step` when the test asked so.
+#[cfg(test)]
+fn crash_point(request: &HandOverRequest<'_>, step: HandOverStep) -> RuntimeHostResult<()> {
+    use crate::codes::test_spellings::{TestCode, TestLocation};
+    if request.crash_after == Some(step) {
+        return Err(RuntimeHostError::fatal(
+            TestCode::HandOverCrashedForTest,
+            TestLocation::CrashHandOverForTest,
+            RuntimeErrorCode::RuntimeHalted,
+        ));
+    }
+    Ok(())
 }
 
 /// The record against this installation's identity: the same number passes; another number, or

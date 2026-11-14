@@ -109,8 +109,9 @@ const USAGE: &str = "usage: actinglab [--json] <rescue operation> [<positionals>
 
 /// The rows of module `rescue` this slice serves, by the table's name (Workflow #421 INST-5: and
 /// `instance add`; Workflow #434 LAB-5G5b: and the three MCP rows; Workflow #453 S10: and
-/// `emulators`; Workflow #453 S7: and `vision manifest` and `vision check`).
-pub const SERVED: [&str; 36] = [
+/// `emulators`; Workflow #453 S7: and `vision manifest` and `vision check`; Workflow #453 S12: and
+/// `state-root claim`).
+pub const SERVED: [&str; 37] = [
     "up",
     "restart",
     "down",
@@ -131,6 +132,7 @@ pub const SERVED: [&str; 36] = [
     "instance add",
     "place",
     "unlock",
+    "state-root claim",
     "check-config",
     "ledger verify",
     "emulators",
@@ -238,6 +240,7 @@ pub(crate) fn answer_with(
         return Answered::Line(match name {
             "up" => up(context, handed, params),
             "down" => down(context, handed, params),
+            "op status" => op_status(context, handed, params),
             _ => installer(context, handed, params),
         });
     }
@@ -254,6 +257,7 @@ pub(crate) fn answer_with(
         "instance add" => instance_add(context, params),
         "place" => place(context, params),
         "unlock" => unlock(context),
+        "state-root claim" => state_root_claim(context, params),
         "check-config" => check_config(context, params),
         "ledger verify" => ledger_verify(context),
         "emulators" => emulators(context),
@@ -342,6 +346,73 @@ fn further_flags(params: &Map<String, Value>, declared: &[&str]) -> Vec<String> 
 fn installer(context: &Context<'_>, handed: &'static Handed, params: &Map<String, Value>) -> Exit {
     let words = installer_line(handed, params, &context.root_word());
     line(context, context.install(&words))
+}
+
+/// Workflow #453 S12: the member of `op status` that names the state root.
+const STATE_ROOT_MEMBER: &str = "state_root";
+
+/// `op status`: the installer's `install status` with the module's face. Workflow #453 S12: when
+/// it names no operation and answers, with the read-only member `state_root`
+/// ([`state_root_installation`]); `actingctl install status` is unchanged.
+fn op_status(context: &Context<'_>, handed: &'static Handed, params: &Map<String, Value>) -> Exit {
+    let words = installer_line(handed, params, &context.root_word());
+    let mut answer = context.install(&words);
+    if !words.iter().any(|word| word == "--operation")
+        && answer.outcome.category() <= Category::Info
+    {
+        answer.members.insert(
+            STATE_ROOT_MEMBER.to_owned(),
+            state_root_installation(context),
+        );
+    }
+    line(context, answer)
+}
+
+/// Workflow #453 S12: the state root of the root's configuration, `path`, and its installation
+/// state as the live build's check-config of that configuration (`--install-root <root>`) reports
+/// it, `installation`: its report member `state_root_installation` when it passes
+/// (`claimed_by_this`, `unclaimed`, `not_installed`; `null` from a build before 0.12.60, which
+/// reports none), else `null` with the check's refusal or failure as `check_config` (another
+/// installation's record is `state_root_installation_mismatch`, a file that cannot be read
+/// `state_root_installation_record_invalid`, each at stage `config_state_root`). Read only.
+fn state_root_installation(context: &Context<'_>) -> Value {
+    const STATUS: InstallLocation = InstallLocation::Status;
+    let path = files::plain(&context.location.state_root);
+    let checked = configuration(context, STATUS).and_then(|(_, settings)| {
+        programs::check_config(
+            context.host,
+            &context.location.root.join(Half::Runtime.dir()),
+            &context.location.config,
+            Some(&context.location.root),
+            Deadline::check_config(&settings),
+        )
+        .map_err(|failure| {
+            failure.onto(install::refusal(
+                STATUS,
+                InstallRefusal::CheckConfigUnanswered,
+            ))
+        })
+    });
+    match checked {
+        Ok(checked) if checked.passed() => json!({
+            "path": path,
+            "installation": checked
+                .report
+                .get("state_root_installation")
+                .cloned()
+                .unwrap_or(Value::Null),
+        }),
+        Ok(checked) => json!({
+            "path": path,
+            "installation": Value::Null,
+            "check_config": cli_line::warning(&checked.received),
+        }),
+        Err(failure) => json!({
+            "path": path,
+            "installation": Value::Null,
+            "check_config": cli_line::warning(&failure),
+        }),
+    }
 }
 
 /// Workflow #434 LAB-5B1b: the command line the installer row `handed` gives for `params`: its
@@ -1977,6 +2048,101 @@ fn unlock(context: &Context<'_>) -> Exit {
             (_, Some(reported)) => cli_line::receipt(members, &reported, true),
             (_, None) => cli_line::receipt(members, &programs::exited(&ran), true),
         })
+    };
+    run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
+}
+
+/// Workflow #453 S12: the switch of `state-root claim` that renews an identity that cannot be read.
+const NEW_IDENTITY: &str = "new_identity";
+
+/// Workflow #453 S12 (`contracts/state-root-installation.md`, "Handing a state root over";
+/// `contracts/install-cli.md`, "The Lab's rescue module"): `state-root claim [--new-identity]`, the
+/// live build's `actingd claim-state-root --config <the root's configuration> --actor <initiator>`
+/// (and `--new-identity` when given), as `unlock` runs `unlock-owner`, within
+/// `install.child.check_config_timeout_ms`, and only while the Runtime is stopped by the update
+/// path's stopped rule (`launch::refuse_running`: the state root's owner lock held refuses
+/// `owner_lock_held`, an actingd running under the root `runtime_running`, a probe that cannot
+/// decide `processes_unreadable`). A completed claim is `install_command_done` (operation
+/// `install_state_root_claim`, `installation_changed` as actingd's `changed`, actingd's outcome its
+/// `related` link) with actingd's report as `report`, the initiator as `actor` and, when a record
+/// was replaced, its claim time as `previous {claimed_at_unix_ms}` (when it could be read) and the
+/// note `install_caveat_noted` `fingerprints_discontinuous`: the ledger's records that carry
+/// fingerprints were made with the salt of the configuration that wrote them, and the command
+/// cannot know whether this configuration's salt is the same. actingd's refusal is the answer as
+/// `unlock`'s is; no report from actingd is `install_command_refused` with `install_refusal`
+/// `state_root_claim_unanswered`.
+fn state_root_claim(context: &Context<'_>, params: Params<'_>) -> Exit {
+    const CLAIM: InstallLocation = InstallLocation::StateRootClaim;
+    let state_root = &context.location.state_root;
+    let unanswered = || install::refusal(CLAIM, InstallRefusal::StateRootClaimUnanswered);
+    let run = || -> Result<Exit, Outcome> {
+        let (_, settings) = configuration(context, CLAIM)?;
+        let paths = context.paths(CLAIM)?;
+        crate::install::launch::refuse_running(context.host, &paths, state_root, CLAIM)?;
+        let program = context
+            .location
+            .root
+            .join(Half::Runtime.dir())
+            .join(programs::DAEMON);
+        let config = context.location.config.to_string_lossy().into_owned();
+        let mut arguments = vec![
+            "claim-state-root",
+            "--config",
+            config.as_str(),
+            "--actor",
+            context.initiator.as_str(),
+        ];
+        if switch(params, NEW_IDENTITY) {
+            arguments.push("--new-identity");
+        }
+        let ran = programs::run(
+            context.host,
+            &program,
+            &arguments,
+            Deadline::check_config(&settings),
+        )
+        .map_err(|failure| failure.onto(unanswered().path(state_root)))?;
+        let report = serde_json::from_slice::<Value>(files::without_bom(&ran.stdout)).ok();
+        let Some(reported) = report
+            .as_ref()
+            .and_then(|report| {
+                serde_json::from_value::<OutcomeEnvelope>(report["outcome"].clone()).ok()
+            })
+            .map(OutcomeEnvelope::into_outcome)
+        else {
+            return Err(unanswered()
+                .path(state_root)
+                .caused_by(programs::exited(&ran)));
+        };
+        let report = report.unwrap_or(Value::Null);
+        let mut members = Map::new();
+        members.insert(
+            "actor".to_owned(),
+            Value::String(context.initiator.as_str().to_owned()),
+        );
+        if ran.exit_code != Some(0) || reported.category() > Category::Info {
+            members.insert("report".to_owned(), report);
+            return Ok(cli_line::receipt(members, &reported, true));
+        }
+        let replaced = report["record"] == "replaced";
+        let mut done = install::done(CLAIM)
+            .path(state_root)
+            .installation_changed(report["changed"].as_bool().unwrap_or(true))
+            .link(CauseRelation::Related, reported);
+        if replaced {
+            done = done.link(
+                CauseRelation::Note,
+                install::caveat(CLAIM, InstallCaveat::FingerprintsDiscontinuous).path(state_root),
+            );
+        }
+        if let Some(previous) = report
+            .get("previous")
+            .filter(|previous| previous.is_object())
+        {
+            members.insert("previous".to_owned(), previous.clone());
+        }
+        members.insert("report".to_owned(), report);
+        Ok(cli_line::success(members, &done))
     };
     run().unwrap_or_else(|outcome| cli_line::failure(&outcome, None))
 }

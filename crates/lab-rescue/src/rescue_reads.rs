@@ -34,7 +34,7 @@ const fn reads(row: &'static str, names: &'static [&'static str]) -> Reads {
 }
 
 /// The rows whose parameters the module reads in its process.
-pub static READ_HERE: [Reads; 19] = [
+pub static READ_HERE: [Reads; 20] = [
     reads("restart", &[]),
     reads("alive", &["wait"]),
     reads("deploy", &["target", "plan", "detach", "dir"]),
@@ -57,6 +57,8 @@ pub static READ_HERE: [Reads; 19] = [
     ),
     reads("place", &["bundle", "sums", "facts", "plan"]),
     reads("unlock", &[]),
+    // Workflow #453 S12: the live build's `actingd claim-state-root`, `--new-identity` when given.
+    reads("state-root claim", &["new_identity"]),
     reads("check-config", &["file"]),
     reads("ledger verify", &[]),
     // Workflow #453 S10: the live build's `actingd discover`; the row declares no parameter.

@@ -3381,6 +3381,25 @@
       "notes": "the caller passes no confirmation; the initiator is recorded (lab-two-entries.md section 5). LAB-3: the live build's actingd unlock-owner with the initiator as --actor and actingd's --confirm-resources-released, which goes with LAB-7"
     },
     {
+      "name": "state-root claim",
+      "module": "rescue",
+      "params": [
+        {"name": "new_identity", "form": "switch", "type": "boolean", "required": false, "note": "only when this installation's identity file cannot be read: it is set aside under a kept name and a new identity minted; refused while the identity file can be read"}
+      ],
+      "help": "Hands the state root of this root's configuration over to this installation with the live build's actingd, keeping the old record.",
+      "output": "actingd claim-state-root's report (actor, changed, identity, record, claimed_at_unix_ms, kept) and, when a record was replaced, previous {claimed_at_unix_ms} and the caveat fingerprints_discontinuous",
+      "writes": true,
+      "irreversible": true,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actingd claim-state-root"],
+      "new": "#453 S12 (a state root another installation claimed, handed over to this one by a command instead of by hand)",
+      "slice": "S12",
+      "status": "planned",
+      "notes": "#453 S12: the live build's actingd claim-state-root --config <this root's configuration> --actor <initiator> (and --new-identity when given), within install.child.check_config_timeout_ms, only while the Runtime is stopped by the update path's stopped rule (owner_lock_held, runtime_running, processes_unreadable); actingd takes the owner as a start does (owner_conflict while a Runtime holds it), never opens the ledger, mints an identity only when there is none (or, with new_identity, when it cannot be read) and sets every replaced file aside as <file>.old-<ms>, deleting nothing (contracts/state-root-installation.md, Handing a state root over); install_command_done with actingd's report, previous {claimed_at_unix_ms} when a record was replaced, and the note install_caveat_noted fingerprints_discontinuous whenever a record of another installation or one that cannot be read was replaced; actingd's refusal is the answer as unlock's is; no report is install_command_refused with state_root_claim_unanswered. Not used on the production root until LAB-7, as every compound operation of the module"
+    },
+    {
       "name": "check-config",
       "module": "rescue",
       "params": [
