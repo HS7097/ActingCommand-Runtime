@@ -34,7 +34,7 @@ const fn reads(row: &'static str, names: &'static [&'static str]) -> Reads {
 }
 
 /// The rows whose parameters the module reads in its process.
-pub static READ_HERE: [Reads; 19] = [
+pub static READ_HERE: [Reads; 20] = [
     reads("restart", &[]),
     reads("alive", &["wait"]),
     reads("deploy", &["target", "plan", "detach", "dir"]),
@@ -56,6 +56,18 @@ pub static READ_HERE: [Reads; 19] = [
         ],
     ),
     reads("place", &["bundle", "sums", "facts", "plan"]),
+    // Workflow #453 S4: the new root and its state root under names the module does not refuse.
+    reads(
+        "new",
+        &[
+            "new_root",
+            "build",
+            "new_state_root",
+            "mumu_root",
+            "lab_authoring",
+            "watchdog",
+        ],
+    ),
     reads("unlock", &[]),
     reads("check-config", &["file"]),
     reads("ledger verify", &[]),

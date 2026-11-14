@@ -23392,6 +23392,149 @@ installer before this slice reads the journals this slice writes (their new memb
 and reports the first-start pause after a cold add as the caveat `post_check_mismatch`, as §1.362
 says.
 
+### 1.364 Slice #453 S4 (0.12.60): the rescue row `new` builds a fresh installation root with its first configuration (Workflow #453, approved by the owner on 11-13; the design survey `rd-1113/fresh-root-design.md` §0, §1(a), §1(b) points 4 and 5, §1(c) "1c. `install new`", the row S4 of §1(d) and §1(e), read on main `98924e28`, its places found again on main `f19756db`; the coordinator's rulings 1 to 9 on board #453, not the owner's words; coordinator work order `rd-1114/brief-453-s4-install-new.md`, read on main `f19756db`, main `e44fecb4` merged; fix round 1, after an independent review and the first CI run, with the coordinator's ruling that a fresh root gets its empty vision root, main `3d9d25e6` merged)
+
+The slice took 1.363 on main `e44fecb4`; merging main `3d9d25e6` in fix round 1, where #457
+took §1.363, renumbered it 1.364, the next free number; slices merged before it renumber it
+again. [install-cli.md](install-cli.md), "Fresh root" (from planned to built),
+"Downloads", the usage line, "Lab options from the graphical wizard", "Interface checks", the
+precondition row, row 7a″, "Secrets", the journal's kinds, the step table and "Outcome codes"
+("Workflow #453 S4") are the contract; [lab-two-entries.md](lab-two-entries.md) §7 and the row
+`new` of [lab-operations.json](lab-operations.json) follow it. **No interface revision moves**
+and no outcome code or key is new: two `install_refusal` tokens, one operation kind and two step
+kinds of the installer's journal, one file of the Runtime member.
+
+**What was missing.** Nothing built a fresh root: `install new` (INST-6) was contract text only,
+nothing defined what a first configuration contains, and the graphical installer wrote one
+itself. Now the Runtime ships the first configuration's template and the Lab's rescue module
+builds the root, so an installer only calls the row.
+
+**The rulings as built.**
+1. A row of the rescue module only, `new <new_root> --build <dir> [--new-state-root <dir>]
+   [--mumu-root <dir>] [--lab-authoring true|false] [--watchdog]`, every parameter declared; its
+   Lab command line and its MCP server both have it (`ac_new`); `actingctl install` gains nothing.
+   It is the one rescue row served without a located root (`rescue::answer_here` and
+   `rescue::answer_with` hand it to `rescue::answer_new` before the module locates its own
+   root): it acts on the root it names, so the release's own program runs it before any root
+   exists; no other row changes.
+2. Nothing is downloaded: `--build` is a release folder read by the release reader (`release
+   verify`: both zips, `SHA256SUMS`, `release-facts.json` in the folder when it is there; its
+   work folder left where it is) or a kept build folder; "Downloads" no longer names `new`.
+3. The state root defaults to `<new_root>\state`.
+4. The template `distribution/windows/actingd.config.first.json`, shipped beside the example
+   (unchanged), holds the example's members, a composer-mode `policy` with one host (`local`) and
+   no instance, and `standard_packs.root` `packages`. The command fills only `state_root`
+   (absolute), the salt (32 bytes of `actingcommand_host_metrics::fill_system_random`, FLK-10's
+   operating-system source, as 64 lowercase hexadecimal digits, written only into the part; never
+   in a journal, an answer or a log), `lab_module_authoring` (absent: `true`) and `mumu_root` when
+   given. **The host's seed values, 1000 each**, as the Runtime's own composer-mode fixture
+   (`apps/actingd/src/gate_rl1c.rs`, `policy_inputs`): the one reader of a host's
+   `*_available_milli` at run time is the evaluator's placement check
+   (`crates/policy/src/evaluator.rs`, `HostView::new` and `fits_capacity`: a task's own load must
+   fit; nothing is deducted for other dispatches), and its input check takes at most 1000; the
+   performance controller's overlay (`crates/runtime-host/src/performance_control.rs`,
+   `apply_to_resources_with`) sets each host's responsiveness, third-party pressure,
+   heavy-dispatch limit and threshold and never these ("The host budgets only express capacity:
+   no level scales them", Workflow #385 P-0). So 1000, the most a host may declare, restricts no
+   load on a real machine: neutral.
+5. The identity and the claim are not this command's (Workflow #453 S11, §1.358): `new` mints no
+   `install\identity.json` and writes no `installation.json`; it creates the state root's
+   folder, empty, and writes `install\state.json`, which makes the root an installation root, so
+   its first start mints and claims.
+6. Refused before anything is written, each with its own token: `root_not_empty`,
+   `state_root_not_empty` (new tokens, registered as the installer family registers its tokens:
+   `crates/lab-ops/src/codes.rs` and the catalog's vocabulary), `release_check_failed` (or
+   `build_invalid` for a kept build folder, a UI release, or a build whose Runtime member has no
+   template), `interface_edge` (`installer_meets_next` of `actingd-config`).
+7. One journalled operation of the new kind `new`, off row 7a″'s pass list
+   (`crates/watchdog/src/install_state.rs`: `unfinished_operation` passes only `release_stage`,
+   `adopt`, `stop`, `start` and `release_hold`, and an older watchdog fails to read the kind and
+   answers "unreadable", which stands aside too); a watchdog never starts a root that never
+   started (`crates/watchdog/src/decide.rs`, `decide_observed`: no owner lock or no journal is
+   `watchdog_never_started`, row 3). Steps in the survey's order: `copy_build`, `verify_tree`,
+   `place_build`, `stage_file` and `swap_file` per file, `verify_tree`, `write_config` (new),
+   `create_state_root` (new), `create_vision_root` (new, fix round 1), `record_state`. `resume` (`install resume`, `op resume`) continues
+   each step by its postcondition; `undo` (`install undo`, `undo`; the writer lock and the stopped
+   rule first) sets aside, deletes nothing.
+8. `--watchdog` runs the watchdog's `install` for the new root last, after the operation ended
+   and the writer lock was released; it starts nothing.
+9. The rule of every compound operation of the rescue module until LAB-7 holds: not used on the
+   production root (`new` cannot reach it: it refuses any folder that is not empty).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S4-1 | `distribution/windows/actingd.config.first.json` | file of the Runtime member (`distribution-v1`) | #453 S4 | the release build | in `$runtimeFiles` and the copy list of `.github/workflows/windows-remote-build.yml`; `scripts/windows-tools/Get-ExactBuildArtifact.ps1` requires it when a Runtime manifest declares it (an earlier artifact does not), and `Test-WindowsRemoteBuildTools.ps1`'s Runtime fixture carries it (seven payloads) |
+| S4-2 | operation kind `new` | installer journal and `current.json` kind | #453 S4 | `install::new::row` | `OperationKind::New` (`crates/watchdog`), location `install_new`; off the pass list |
+| S4-3 | step kinds `write_config`, `create_state_root`, `create_vision_root` (fix round 1) | installer journal step kinds | #453 S4 | `install::new::run` | their undo: the configuration `.rolledback-<ms2>` and its part `.abandoned-<ms2>`; the state root's folder `.rolledback-<ms2>` when the operation made it; `vision.rolledback-<ms2>` |
+| S4-4 | `install_refusal` `root_not_empty`, `state_root_not_empty` | vocabulary tokens | #453 S4 | `install::new::row` | `path`; `root_not_empty` also `install_operation_id` and `next` for a root holding an unfinished `new` |
+| S4-5 | the journal input of `new` (`build`, `source`, `commit`, `origin`, `tag`, `release_record`, `state_root`, `state_root_existed`, `mumu_root`, `lab_authoring`, `watchdog`) | journal input (free `inputs`) | #453 S4 | `install::new::row` | never the salt |
+
+**Settled here** (each the slice's; the coordinator may change them):
+- *The state root's option is `--new-state-root`* (`new_state_root`), never `--state-root`: the
+  module refuses a parameter named `state_root` on every row as it refuses `root`
+  (`rescue::REFUSED_PARAMETERS`, held by `gate_434_lab5b1b::rescue_exceptions_are_outside_the_table`),
+  the reason ruling 1 gives for `new_root`; the coordinator accepted it after the review.
+- *Resume and undo* are the installer's existing `install resume` and `install undo` (any build of
+  this release or later; `next` names them), and the new root's own `op resume` and `undo` once its
+  configuration is in place; no new command or row.
+- *A release folder without `release-facts.json`* is taken, with the caveat `release_unconfirmed`
+  as a `note` and the kept build recorded `local_build`, as `release stage` records one.
+- *A first configuration's part an earlier attempt wrote* is checked as it is on `resume`, its salt
+  kept; a new salt is made only for a part that is not there.
+- *A watchdog registration that fails* is the answer's top (the root built, its members beside),
+  so the exit is not 0.
+
+Tests (apps gate row "#453 S4"): `actingcommand-lab-rescue::lib::install::gate_453_s4` (twelve
+tests on the release fixture with the shipped template, the fake host and temporary roots, no
+sleep, no clock read: the tree, a given state root, the salt, the two folders that are not empty,
+a build that does not verify, an empty edge, a refused first configuration, a crash after each
+step and its resume, undo after each step, no identity and no record, the empty vision root and
+its undo, `--watchdog`) and actingd's `gate_453_s4` (the template through this build's `load`,
+`assemble_or_refusal` and check-config with `--install-root`, before and after the folders `new`
+makes; the example byte for byte). **Existing tests that change** (no Rust test of an earlier
+slice changes; no golden changes; no test leaves the gate map): the PowerShell tool test
+`scripts/windows-tools/Test-WindowsRemoteBuildTools.ps1`, whose Runtime artifact fixture carries
+the template (seven payloads; the positive case counts seven, it counted six), and whose check of
+the build workflow's Runtime split names the template among the files; and (fix round 1) the
+install fixture's fake watchdog (`install/fixture.rs`), whose `install` answer names the task
+(`name`), as the real one does and the catalog requires, since this slice's test is the first to
+ask it.
+
+**Fix round 1** (coordinator work order of 11-14 after the independent review and the first CI
+run; the coordinator's rulings, not the owner's words):
+- *CI.* `host-lab`: `s4_new_with_watchdog_registers_it_last_and_starts_nothing` panicked in a debug
+  build, the fake watchdog's `watchdog_installed` lacking its required `name`: the fixture names
+  it. `build`: the tool test's check of the workflow's `$runtimeFiles` list did not name the
+  template: it does. `rust` only followed the two.
+- *The salt in a failing test's message*: every comparison of a document that holds it compares
+  it without the salt; the salt itself is judged by assertions that print nothing of it.
+- *A refusal after the release was unpacked* (the edge, a UI release, a build without the template,
+  a facts file or a manifest that cannot be read) names the reader's work folder, `work_dir`, left
+  in place.
+- *The empty vision root.* `vision place` refuses a vision root that does not exist and never
+  creates one, so `new` creates `<new_root>\vision`, the root a start resolves by default
+  ([vision-model-folders.md](vision-model-folders.md), "Vision root"), empty, as the step
+  `create_vision_root` (its undo sets it aside as `vision.rolledback-<ms2>`), when the template's
+  `vision` section names no `root` of its own (the shipped one has no `vision` section). A start
+  reads a vision root only when the configuration has a `vision` section
+  (`apps/actingd/src/config.rs`, the assembly's `vision` and `ConfiguredVision::inspect`); with
+  one, a root that does not exist and an empty one are both refused `vision_root_unavailable` (the
+  first when it is resolved, the second when `models\` is listed), so the empty folder makes no
+  start refuse or warn where a missing one did not.
+- *The tests*: actingd's check-config runs before the state root's folder exists, as `new` runs
+  it, and again after; the undo after each step finds the state root's and the vision root's
+  folders set aside, not only gone.
+
+**At deploy.** Nothing changes for an existing installation: `new` refuses any folder that is not
+empty, so it cannot reach one; no running Runtime, configuration, state root or journal is read or
+written. The release gains one file, `actingd.config.first.json` in the Runtime zip. The rescue
+module's compound operations stay off the production root until LAB-7.
+
+**Rollback** (below 0.12.60). A release before this slice has no template and no row `new`
+(`actinglab new` is refused there as an unknown row). A root this command built is an ordinary
+single-location root: an older installer reads its `state.json`, and a journal of kind `new` is
+read only by this release's installer (an older one refuses the kind, as LAB-3's kinds).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

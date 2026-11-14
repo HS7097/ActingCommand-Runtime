@@ -3005,21 +3005,24 @@
       "name": "new",
       "module": "rescue",
       "params": [
-        {"name": "root", "form": "positional", "type": "dir", "required": true},
-        {"name": "build", "form": "option", "type": "dir", "required": true},
-        {"name": "lab_authoring", "form": "option", "type": "boolean", "required": false, "note": "the authoring module installed or not"}
+        {"name": "new_root", "form": "positional", "type": "dir", "required": true, "note": "the folder of the new root, absent or empty; named new_root, since the module refuses a parameter named root"},
+        {"name": "build", "form": "option", "type": "dir", "required": true, "note": "a release folder that verifies (both zips, SHA256SUMS, release-facts.json when it is there) or a kept build folder; nothing is downloaded"},
+        {"name": "new_state_root", "form": "option", "type": "dir", "required": false, "note": "--new-state-root, never --state-root: the module refuses a parameter named state_root on every row; the state root, absent or empty; absent: the new root's folder state"},
+        {"name": "mumu_root", "form": "option", "type": "dir", "required": false, "note": "written as the first configuration's mumu_root"},
+        {"name": "lab_authoring", "form": "option", "type": "boolean", "required": false, "note": "the first configuration's lab_module_authoring; absent: true"},
+        {"name": "watchdog", "form": "switch", "type": "boolean", "required": false, "note": "registers the watchdog's task for the new root last; nothing is started"}
       ],
-      "params_more": "actingctl install new (without --lab-debugging)",
-      "output": "the fresh root; nothing started",
+      "help": "Builds a fresh installation root from a verified release or kept build, with its first configuration and an empty state root; starts nothing.",
+      "output": "the operation id, the root, the state root, the configuration's SHA-256, lab_options_enabled, the build and next (place, instance add, up from the new root's program); never the salt",
       "writes": true,
       "irreversible": false,
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
       "source": ["actingctl install new", "acsetup: first-install wizard"],
-      "slice": "LAB-3",
+      "slice": "S4",
       "status": "planned",
-      "notes": "LAB-3: not served yet: its source, actingctl install new (INST-6, R-15e), is not built; the slice that builds it opens the row"
+      "notes": "#453 S4 (0.12.60; contracts/install-cli.md, Fresh root): the module's own command; actingctl install new is not built and actingctl install gains nothing. The one rescue row served without a located root: it acts on the root it names, so the release's own program and the Lab's MCP server run it before any root exists. Refused before anything is written: a new root or a state root that exists and is not empty (root_not_empty, state_root_not_empty), a build that does not verify (release_check_failed with the release reader's failures, or build_invalid, also for a build whose Runtime member has no actingd.config.first.json), an empty actingd-config edge between the running installer and the build (interface_edge). One journal of kind new (off the watchdog's pass list): copy_build, verify_tree, place_build, stage_file and swap_file for each file of the build into runtime and tools, verify_tree, write_config (the template filled with state_root, a 32-byte salt from the operating system's generator, lab_module_authoring and mumu_root when given, checked by the new live build's check-config with --install-root before it is renamed into place; a refusal ends the operation refused with the part kept), create_state_root (the folder, empty), create_vision_root (fix round 1: the default vision root <new_root>\\vision, empty, when the template names no vision root of its own), record_state; a refusal after the release was unpacked names its work folder (work_dir); no installation identity and no state-root record (the first start's, #453 S11); with watchdog, watchdog install last; resume and undo by install resume and install undo of the root (undo sets aside, deletes nothing)"
     },
     {
       "name": "release verify",

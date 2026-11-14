@@ -608,6 +608,11 @@ actingcommand_contract::outcome_vocabulary! {
         // run, printed none (a build without the subcommand), refused its command line, could not
         // read its own registry, or was ended at the row's bound (`timeout_ms`, no cause).
         VisionReportUnanswered => "vision_report_unanswered",
+        // Workflow #453 S4 (since 0.12.60): the rescue module's `new` builds only into an absent or
+        // empty folder: its new root (`path`), and the state root it is to create (`path`), each
+        // refused before anything is written when it exists and is not empty.
+        RootNotEmpty => "root_not_empty",
+        StateRootNotEmpty => "state_root_not_empty",
     }
 }
 

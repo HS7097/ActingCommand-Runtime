@@ -139,6 +139,10 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
     }
     let mut operation = Operation::load(host, &paths, operation_id, UNDO)?;
     let kind = operation.journal().kind;
+    // Workflow #453 S4: the rescue module's `new` sets aside what it wrote by its own table.
+    if kind == OperationKind::New {
+        return super::new::undo(operation, host, face);
+    }
     let changes_program = matches!(kind, OperationKind::Update | OperationKind::Rollback);
     // Workflow #421 INST-2: a composite update starts the Runtime; its program files are never
     // reversed under a running actingd.
@@ -329,6 +333,11 @@ pub(crate) fn reverse_step(
         }
         // Workflow #434 LAB-3: an item of the rescue module's `place`, reversed as a swap.
         StepKind::PackItem => super::place::reverse_item(operation, step, ms2)?,
+        // Workflow #453 S4: the configuration and the state root's folder of the rescue module's
+        // `new`.
+        StepKind::WriteConfig | StepKind::CreateStateRoot | StepKind::CreateVisionRoot => {
+            super::new::reverse_own(operation, step, ms2)?
+        }
         // Workflow #421 INST-2: the hold, the close, the start, the checks, the release and
         // a rollback's reversal change no file; a pause stays until `release-hold`.
         StepKind::VerifyTree

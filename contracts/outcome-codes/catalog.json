@@ -7855,6 +7855,12 @@
         },
         "vision_report_unanswered": {
           "description": "The Lab's rescue module's vision manifest or vision check got no usable report from the live build's actingd vision (contracts/vision-model-folders.md, \"The manifest\"): it printed none (a build before the subcommand, or a crash: foreign_other_error with the exit code and stderr), refused with no stage (fix 2: every refusal but vision_root_unresolved's: its own installation check or slot lock, --install-root, its command line (invalid_arguments, among them a --model no model folder may be named, or more than 64 of them) or its own registry (serialization_failed)), each its outcome as the caused_by link, printed a check report without its lists (foreign_data_error), did not run (the OS failure), or was still running when its bound ran out and was ended there, or for vision check found no time left of the row's limit and was not run (timeout_ms the bound that ran out: 30 s for vision manifest, 160 s for vision check, or the vision check row's limit of 900 s when that ran out first; no cause link; it is read only, so ending it loses nothing). It says nothing about the vision root. Nothing was written. (Workflow #453 S7 fix 1, since 0.12.60)"
+        },
+        "root_not_empty": {
+          "description": "The Lab's rescue module's new builds a fresh root only into a folder that is absent or empty (contracts/install-cli.md, \"Fresh root\"): its new_root exists and is not an empty folder (a file there counts as not empty; a folder that cannot be listed is refused the same way, the operating system's failure as the caused_by link). path names it. When the folder holds an unfinished operation of new, install_operation_id names it and next names the ways to continue or undo it. Nothing was written. (Workflow #453 S4, since 0.12.60)"
+        },
+        "state_root_not_empty": {
+          "description": "The Lab's rescue module's new creates the state root's folder empty and refuses a state root (its new_state_root, or the new root's state folder) that exists and is not an empty folder (a file there counts as not empty; a folder that cannot be listed is refused the same way, the operating system's failure as the caused_by link): another installation's ledger is never taken over by a fresh root. path names it. Nothing was written. (Workflow #453 S4, since 0.12.60)"
         }
       }
     },

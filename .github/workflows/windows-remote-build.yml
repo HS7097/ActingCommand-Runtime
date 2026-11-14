@@ -655,11 +655,13 @@ jobs:
           New-Item -ItemType Directory -Path $runtimeDir, $toolsDir | Out-Null
 
           # Workflow #387 D1b (model v1.2 §5.2): the defaults file ships beside the example
-          # configuration.
+          # configuration. Workflow #453 S4: so does the first configuration's template, which the
+          # rescue module's `new` fills.
           $runtimeFiles = @(
             'actingcommand-actingd.exe',
             'actingctl.exe',
             'actingd.config.example.json',
+            'actingd.config.first.json',
             'actingd.defaults.json',
             'INSTALL.md',
             'RELEASE-NOTES.md'
@@ -783,6 +785,7 @@ jobs:
           Copy-BuildFiles -Names @('actingcommand-actingd.exe', 'actingctl.exe') -Destination $runtimeDir
           Copy-BuildFiles -Names @(
             'actingd.config.example.json',
+            'actingd.config.first.json',
             'actingd.defaults.json',
             'INSTALL.md',
             'RELEASE-NOTES.md'

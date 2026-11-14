@@ -32,6 +32,10 @@ pub enum OperationKind {
     // is on row 7a″'s pass list: while one is unfinished the watchdog stands aside.
     ConfigReplace,
     PackPlace,
+    // Workflow #453 S4: the rescue module's `new`, which builds a fresh root. Off row 7a″'s pass
+    // list: while one is unfinished the watchdog stands aside (a watchdog before this kind reads
+    // the file as unreadable and stands aside as well).
+    New,
 }
 
 /// `install\current.json`: the one unfinished operation.

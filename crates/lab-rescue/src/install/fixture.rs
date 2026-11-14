@@ -824,9 +824,12 @@ impl Host for FakeHost {
             crate::watchdog::Asked::Status => {
                 ("status", Outcome::new(ActingctlCode::WatchdogNeverStarted))
             }
-            crate::watchdog::Asked::Install => {
-                ("install", Outcome::new(ActingctlCode::WatchdogInstalled))
-            }
+            // Workflow #453 S4: with the task's name, which the code requires (the real one names
+            // the task it registered).
+            crate::watchdog::Asked::Install => (
+                "install",
+                Outcome::new(ActingctlCode::WatchdogInstalled).name("neutral-watchdog-task"),
+            ),
             crate::watchdog::Asked::Uninstall => (
                 "uninstall",
                 Outcome::new(ActingctlCode::WatchdogUninstalled),

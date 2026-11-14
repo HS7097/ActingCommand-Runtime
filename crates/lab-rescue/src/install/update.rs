@@ -280,6 +280,14 @@ pub(crate) fn live_changes(
                     changes.push((undone, previous.clone()));
                 }
             }
+            // Workflow #453 S4: the rescue module's `new` makes its build the root's first live
+            // build, from its start on, once it recorded the state (as an adopt does).
+            OperationKind::New => {
+                let commit = journal.inputs.get("commit").and_then(Value::as_str);
+                if recorded && let Some(commit) = commit {
+                    changes.push((started, commit.to_owned()));
+                }
+            }
             // Workflow #434 LAB-3: `config replace` and `place` change no build.
             OperationKind::ReleaseStage
             | OperationKind::Stop

@@ -49,6 +49,15 @@ pub(crate) enum StepKind {
     // of the rescue module's `place` (a pack, a table, a root file, or a root file set aside),
     // each `.part` → `.old-<ms>` → in place, as `swap_file` per item.
     PackItem,
+    // Workflow #453 S4 (contracts/install-cli.md, "Fresh root", "Steps"): the rescue module's
+    // `new`: the first configuration written beside the live file as a part, checked by the new
+    // live build's check-config and renamed into place; the state root's folder created, empty;
+    // fix round 1 (the coordinator's ruling after the review of `vision place`): the root's
+    // default vision root `<root>\vision` created, empty, when the template names no root of its
+    // own.
+    WriteConfig,
+    CreateStateRoot,
+    CreateVisionRoot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
