@@ -479,7 +479,7 @@ crate::outcome_codes! {
         // `task_id` the rule, `pool_id` the file's pool). A hint only; the root is composed as
         // before. The policy composer finds it; the resource tools report it.
         StandardPackLineTriggerRedundant => "standard_pack_line_trigger_redundant": warning / declaration_error,
-        // Workflow #455 G-R2s (register §1.363; contracts/standard-pack-schedule.md, "The
+        // Workflow #455 G-R2s (register §1.364; contracts/standard-pack-schedule.md, "The
         // irreversible mark"): the declaration of a package a game root's bundle registers could
         // not be read, so every composed task of that game counts as able to do something
         // irreversible until it reads (keys `game`, `package_id`). The policy composer finds

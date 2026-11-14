@@ -1,24 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #455 G-R2s gate tests, policy half (0.12.60; register §1.363; coordinator work order
-// `rd-1114/brief-455-gr2s-irreversible-line.md` and the coordinator's two rulings of 11-14;
-// contracts/resource-targets.md, "A task that can do something irreversible";
+// Workflow #455 G-R2s gate tests, policy half (0.12.60; register §1.364; coordinator work order
+// `rd-1114/brief-455-gr2s-irreversible-line.md`, the coordinator's two rulings of 11-14 and its
+// fix round 1; contracts/resource-targets.md, "A task that can do something irreversible";
 // contracts/standard-pack-schedule.md, "The irreversible mark"): a goal never raises the weight
 // of a task whose package can do something irreversible. The composer marks such a task
-// (`irreversible_reach`) by the whole game root's declarations and the chain followers that ride
-// with it; the evaluator weighs a marked candidate exactly as on an instance without a target
+// (`irreversible_reach`) by the whole game root's declarations and every rule that follows it by
+// a chain link; the evaluator weighs a marked candidate exactly as on an instance without a target
 // record, under a v1, a v2 and a v3 record alike, and changes no other candidate's number.
 //
 // The evaluation fixture is gate_ss1's (tasks on one instance, due at NOW; pool A: step 10, base
-// 500, gap weight 100; pool B: step 1, base 7, no gap); the composition fixture is neutral rules
-// in catalog-a's task shape. Every expected value comes from the contract.
+// 500, gap weight 100; pool B: step 1, base 7, no gap), and gate_ss6's for the run cap; the
+// composition fixture is neutral rules in catalog-a's task shape. Every expected value comes from
+// the contract.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
-    BundleIndex, Initiator, IrreversiblePackages, RESOURCE_TARGETS_FACT_KEY, RuntimeChannel,
-    StandardPackProblem, StandardPackRootBytes, read_standard_pack_root,
+    BundleIndex, GoalReferences, GoalRule, Initiator, IrreversiblePackages,
+    RESOURCE_TARGETS_FACT_KEY, RuntimeChannel, StandardPackProblem, StandardPackRootBytes,
+    check_standard_pack_goal_references, parse_standard_pack_goals, parse_standard_pack_schedule,
+    read_standard_pack_root,
 };
 use serde_json::{Value, json};
 
@@ -26,6 +29,7 @@ use super::gate_ss1::{
     A, POOL_A, POOL_A_KEY, POOL_B_KEY, TASK_A, TASK_B, V1, V2, catalog, decision, inputs, reading,
     round, task, task_a, task_b, term, time,
 };
+use super::gate_ss6 as ss6;
 use super::selection_catalog::{DAY_MS, HOUR_MS, NOW, instance};
 use crate::{
     CompiledCatalog, DecisionReason, EvaluationResources, FactValue, ForwardProjectionConfig,
@@ -33,6 +37,7 @@ use crate::{
     ScopeSelector, StandardPackBinding, StandardPackComposeInput, StandardPackComposition,
     StandardPackGameFiles, TargetSetter, TaskDecision, check_resource_targets,
     compose_standard_pack_rules, parse_resource_targets, project_fact_pools, project_forward,
+    standard_pack_rule_followers,
 };
 
 const V3: &str = "actingcommand.resource-targets.v3";
@@ -173,6 +178,41 @@ fn without_the_new_reason(decision: &TaskDecision) -> TaskDecision {
     decision
 }
 
+/// The reasons of the round's dispatch chain of task A on instance A, without the one new reason:
+/// every reason but its `decision_record`, and that record's detail split into its `targets=`
+/// field and the rest.
+fn dispatch_chain(evaluation: &PolicyEvaluation) -> (Vec<DecisionReason>, (String, String)) {
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.task_id == TASK_A && intent.instance_id == A)
+        .unwrap_or_else(|| panic!("task A is dispatched: {evaluation:#?}"));
+    let chain = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .unwrap_or_else(|| panic!("the dispatch's chain: {evaluation:#?}"));
+    let records = chain
+        .reasons
+        .iter()
+        .filter(|reason| reason.outcome.is(PolicyCode::DecisionRecord))
+        .collect::<Vec<_>>();
+    let [record] = records.as_slice() else {
+        panic!("one decision record: {chain:#?}");
+    };
+    let (targets, rest) = record
+        .detail
+        .split_once(" related=")
+        .unwrap_or_else(|| panic!("a targets field: {record:?}"));
+    let reasons = chain
+        .reasons
+        .iter()
+        .filter(|reason| !reason.outcome.is(PolicyCode::DecisionRecord) && !left_out(reason))
+        .cloned()
+        .collect();
+    (reasons, (targets.to_owned(), rest.to_owned()))
+}
+
 /// The reasons of the score stage, which carry a candidate's own numbers: its score, its target
 /// terms, its override and its resource weights.
 const SCORE_STAGE: [PolicyCode; 10] = [
@@ -221,8 +261,11 @@ fn effective(decision: &TaskDecision) -> i64 {
 // A; each record has goal-a on pool A at a gap of 50 (the v1 record names task A). Its whole
 // decision (state, rank with its effective score, every reason with its values and detail, the
 // benefit its `rank_breakdown` names, its dispatch's scheduling values and its own wake) equals the
-// one without a record, but for the one new reason, which it carries once; without the mark the
-// v2 and v3 records do weigh it (term 2000, not 1000), so each record is one a goal would apply.
+// one without a record, but for the one new reason, which it carries once; so does its dispatch's
+// reason chain, with one stated exception (fix round 1, point 3): the chain's `decision_record`
+// names the instance's targets as they are, its record (`targets=active…`, not `targets=none`),
+// and only that field of it differs. Without the mark the v2 and v3 records do weigh it (term
+// 2000, not 1000), so each record is one a goal would apply.
 #[test]
 fn gr2s_t1_a_marked_candidate_under_each_record_equals_it_without_a_record() {
     let catalog = catalog(&[judged(marked(task_a()))]);
@@ -234,6 +277,8 @@ fn gr2s_t1_a_marked_candidate_under_each_record_equals_it_without_a_record() {
         "no record, no new reason: {base:#?}"
     );
     assert_eq!(term(&without, TASK_A), 1000, "the base term alone");
+    let (base_chain, (base_targets, base_rest)) = dispatch_chain(&without);
+    assert_eq!(base_targets, "targets=none", "no record");
     for (label, document, unmarked_term) in [
         ("v1", v1_document(&[TASK_A], "adjust"), None),
         ("v2", v2_document(vec![goal_a()]), Some(2000)),
@@ -245,6 +290,13 @@ fn gr2s_t1_a_marked_candidate_under_each_record_equals_it_without_a_record() {
             base,
             "{label}: the marked candidate is the one without a record"
         );
+        let (chain, (targets, rest)) = dispatch_chain(&with);
+        assert_eq!(chain, base_chain, "{label}: its dispatch's reasons");
+        assert!(
+            targets.starts_with("targets=active") && targets != base_targets,
+            "{label}: the decision record names the instance's record: {targets}"
+        );
+        assert_eq!(rest, base_rest, "{label}: the rest of the decision record");
         if let Some(unmarked_term) = unmarked_term {
             let weighed = evaluate_with(&unmarked, Some(record(&unmarked, &document)));
             assert_eq!(
@@ -522,6 +574,11 @@ fn schedule(extra: Option<(&str, Value)>) -> Value {
     if let Some((member, value)) = extra {
         rules[4][member] = value;
     }
+    schedule_of(rules)
+}
+
+/// A `schedule.json` of `rules` and the valued pool.
+fn schedule_of(rules: Vec<Value>) -> Value {
     json!({
         "schema_version": "actingcommand.schedule.v1",
         "requires": [],
@@ -543,37 +600,52 @@ fn schedule(extra: Option<(&str, Value)>) -> Value {
 
 /// What each package of the fixture provides, as a reader read it; `unread` could not be read.
 fn declared(unread: Option<&str>) -> IrreversiblePackages {
-    let provides = |capabilities: &[(&str, bool)]| {
-        capabilities
-            .iter()
-            .map(|(capability, marked)| ((*capability).to_owned(), *marked))
-            .collect::<BTreeMap<_, _>>()
-    };
-    let packages = [
-        (HEAD, provides(&[])),
-        (FOLLOW, provides(&[("cap_y", true)])),
-        (SINK, provides(&[("cap_x", false)])),
-        (OTHER, provides(&[("cap_x", true)])),
-        (PLAIN, provides(&[("cap_p", false)])),
+    let packages: [(&str, &[(&str, bool)]); 5] = [
+        (HEAD, &[]),
+        (FOLLOW, &[("cap_y", true)]),
+        (SINK, &[("cap_x", false)]),
+        (OTHER, &[("cap_x", true)]),
+        (PLAIN, &[("cap_p", false)]),
     ];
     IrreversiblePackages::new(
-        packages
+        provided(&packages)
             .into_iter()
             .map(|(package_id, capabilities)| {
-                let read = (Some(package_id) != unread).then_some(capabilities);
-                (package_id.to_owned(), read)
+                let read = (Some(package_id.as_str()) != unread).then_some(capabilities);
+                (package_id, read)
             })
             .collect(),
     )
 }
 
-/// Composes `schedule` for one instance of the game, whose registry holds a package per rule,
-/// with `irreversible` as the root's declarations.
+/// Each package of `packages` with the capabilities it provides, each with its mark.
+fn provided(packages: &[(&str, &[(&str, bool)])]) -> BTreeMap<String, BTreeMap<String, bool>> {
+    packages
+        .iter()
+        .map(|(package_id, capabilities)| {
+            (
+                (*package_id).to_owned(),
+                capabilities
+                    .iter()
+                    .map(|(capability, marked)| ((*capability).to_owned(), *marked))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// Composes `schedule` for one instance of the game, whose registry holds the package of each of
+/// its rules, with `irreversible` as the root's declarations.
 fn compose(
     schedule: &Value,
     irreversible: &IrreversiblePackages,
 ) -> Result<StandardPackComposition, crate::StandardPackComposeFailure> {
-    let packages = [HEAD, FOLLOW, SINK, OTHER, PLAIN];
+    let packages = schedule["rules"]
+        .as_array()
+        .expect("the fixture's rules")
+        .iter()
+        .map(|rule| rule["package_id"].as_str().expect("a package id"))
+        .collect::<Vec<_>>();
     let bundle = serde_json::to_vec(&json!({
         "schema_version": "actingcommand.bundle.v4",
         "game": GAME,
@@ -735,4 +807,182 @@ fn gr2s_t5_an_unreadable_package_marks_every_task_of_its_game_and_warns_once() {
     assert_eq!(unreadable.len(), 1, "{unreadable:?}");
     assert_eq!(unreadable[0].value("game"), Some(&json!(GAME)));
     assert_eq!(unreadable[0].value("package_id"), Some(&json!(PLAIN)));
+}
+
+// Fix round 1, point 1 (the independent review; `standard_pack_rule_followers`): the mark follows
+// every chain link the evaluator reads, not only the followers the coverage lists. Four heads, each
+// a complete rule on an hourly clock:
+// - H1's follower B1 writes its own `produces` (so it is no coverage follower);
+// - H2's follower B2 is linked by a `dependency_completed` that also accepts a `failed` end (no
+//   edge);
+// - H3's follower C3 is a complete rule, and B3 follows C3 (the coverage lists B3 with C3 alone).
+// B1, B2 and B3 run a package that marks its capability irreversible: H1, H2 and H3 are marked,
+// with C3. H4's one follower F4 runs a package nobody marks: neither carries the member. The goal
+// check reads the same lists: a `tier` entry over the four heads, each of whose packages provides
+// nothing, is refused at H1, H2 and H3 (`goal_governs_irreversible`) and passes H4.
+#[test]
+fn gr2s_t7_the_mark_follows_every_chain_link_the_evaluator_reads() {
+    let both_ends = json!({
+        "kind": "dependency_completed",
+        "task_id": "rule.h2",
+        "terminal_states": ["succeeded", "failed"],
+        "since_own_run": true
+    });
+    let schedule = schedule_of(vec![
+        rule("rule.h1", clock(), true),
+        rule("rule.b1", edge("rule.h1"), true),
+        rule("rule.h2", clock(), true),
+        rule("rule.b2", both_ends, false),
+        rule("rule.h3", clock(), true),
+        rule("rule.c3", edge("rule.h3"), true),
+        rule("rule.b3", edge("rule.c3"), false),
+        rule("rule.h4", clock(), true),
+        rule("rule.f4", edge("rule.h4"), false),
+    ]);
+    let packages: [(&str, &[(&str, bool)]); 9] = [
+        ("rule.h1", &[]),
+        ("rule.b1", &[("cap_y", true)]),
+        ("rule.h2", &[]),
+        ("rule.b2", &[("cap_y", true)]),
+        ("rule.h3", &[]),
+        ("rule.c3", &[]),
+        ("rule.b3", &[("cap_y", true)]),
+        ("rule.h4", &[]),
+        ("rule.f4", &[("cap_p", false)]),
+    ];
+    let irreversible = IrreversiblePackages::new(
+        provided(&packages)
+            .into_iter()
+            .map(|(package_id, capabilities)| (package_id, Some(capabilities)))
+            .collect(),
+    );
+    let composition = compose(&schedule, &irreversible)
+        .unwrap_or_else(|failure| panic!("the shapes compose: {failure}"));
+    let [(_, followers)] = composition.benefit_followers() else {
+        panic!("one game: {:?}", composition.benefit_followers());
+    };
+    assert_eq!(
+        followers
+            .iter()
+            .map(|follower| (follower.task_id.as_str(), follower.rides_with.as_str()))
+            .collect::<Vec<_>>(),
+        [("rule.b3", "rule.c3"), ("rule.f4", "rule.h4")],
+        "the coverage lists neither B1 nor B2, and B3 with C3"
+    );
+    assert_eq!(
+        marked_tasks(&composition),
+        [
+            "rule.h1", "rule.b1", "rule.h2", "rule.b2", "rule.h3", "rule.c3", "rule.b3"
+        ]
+        .map(str::to_owned)
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+    );
+
+    let bytes = serde_json::to_vec(&schedule).expect("schedule bytes");
+    let parsed = parse_standard_pack_schedule(&bytes)
+        .unwrap_or_else(|issue| panic!("the schedule reads: {issue}"));
+    let lists = standard_pack_rule_followers(&parsed);
+    let mut references = GoalReferences::new(provided(&packages));
+    for rule in &parsed.rules {
+        references.rules.insert(
+            rule.id.clone(),
+            GoalRule {
+                package_id: rule.package_id.clone(),
+                fixed_value: true,
+                followers: lists.get(&rule.id).cloned().unwrap_or_default(),
+            },
+        );
+    }
+    let goals = serde_json::to_vec(&json!({
+        "schema_version": "actingcommand.goals.v1",
+        "game": GAME,
+        "entries": [{
+            "name": "weight", "type": "tier",
+            "governs": {"rules": ["rule.h1", "rule.h2", "rule.h3", "rule.h4"]},
+            "title": {"en": "Weight"}, "default": "normal",
+            "options": [{"value": "normal", "title": {"en": "Normal"}, "scale_milli": 1000},
+                        {"value": "more", "title": {"en": "More"}, "scale_milli": 2000}]
+        }]
+    }))
+    .expect("goals bytes");
+    let goals = parse_standard_pack_goals(&goals, GAME)
+        .unwrap_or_else(|issues| panic!("the declaration reads: {issues:?}"));
+    let refused = check_standard_pack_goal_references(&goals, &references)
+        .iter()
+        .map(|issue| {
+            assert_eq!(
+                issue.problem,
+                StandardPackProblem::GoalGovernsIrreversible,
+                "{issue:?}"
+            );
+            issue.pointer.clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        refused,
+        (0..3)
+            .map(|index| format!("/entries/0/governs/rules/{index}"))
+            .collect::<Vec<_>>()
+    );
+}
+
+// Fix round 1, point 5 (the independent review): the run cap's goal term (SS-6) reads the mark.
+// gate_ss6's goal-driven task consumes 30 of pool A (reserve 100, read at 1000) and 7 of pool D
+// (reserve 10, read at 80), so its spend term is 10, and produces 10 of pool B, which carries no
+// base weight: unmarked, an open goal of 100 on pool B read at 45 (gap 55) hands the gap and caps
+// the run at ⌈55 / 10⌉ = 6. Marked, the same task under the same record is dispatched with the
+// `policy_dispatch_parameters` of an instance without a record, whole: no gap and the spend term
+// alone, 10.
+#[test]
+fn gr2s_t8_the_run_caps_goal_term_reads_the_mark() {
+    let driven = || {
+        ss6::task(&ss6::TaskDecl {
+            consumes: &[(ss6::POOL_A, 30), (ss6::POOL_D, 7)],
+            reserves: &[(ss6::POOL_A, 100), (ss6::POOL_D, 10)],
+            produces: &[(ss6::POOL_B, 10)],
+            ..ss6::TaskDecl::new(ss6::TASK_A, 100)
+        })
+    };
+    let dispatched = |catalog: &CompiledCatalog, with_record: bool| {
+        let mut facts = vec![
+            ss6::reading_of(ss6::POOL_A_KEY, 1000),
+            ss6::reading_of(ss6::POOL_D_KEY, 80),
+            ss6::reading_of(ss6::POOL_B_KEY, 45),
+        ];
+        if with_record {
+            let document = ss6::goals(&[ss6::goal(ss6::POOL_B, 100)]);
+            facts.push(ss6::stored(catalog, &document, NOW - HOUR_MS));
+        }
+        let evaluation = ss6::round(catalog, facts);
+        ss6::parameters(&evaluation, ss6::TASK_A)
+            .cloned()
+            .unwrap_or_else(|| panic!("the dispatch's parameters: {evaluation:#?}"))
+    };
+    let unmarked = ss6::catalog(&[driven()]);
+    let weighed = dispatched(&unmarked, true);
+    assert_eq!(
+        weighed.outcome.value("gaps_remaining"),
+        Some(&json!([{"effect_index": 0, "gap_remaining": 55}])),
+        "{weighed:?}"
+    );
+    assert_eq!(
+        weighed.outcome.value("run_cap"),
+        Some(&json!(6)),
+        "{weighed:?}"
+    );
+
+    let marked_catalog = ss6::catalog(&[marked(driven())]);
+    let without = dispatched(&marked_catalog, false);
+    assert_eq!(
+        without.outcome.value("run_cap"),
+        Some(&json!(10)),
+        "{without:?}"
+    );
+    assert_eq!(without.outcome.value("gaps_remaining"), None, "{without:?}");
+    assert_eq!(
+        dispatched(&marked_catalog, true),
+        without,
+        "the marked task's values are the ones without a record"
+    );
 }

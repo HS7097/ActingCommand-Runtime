@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #455 G-R2s gate tests, host half (0.12.60; register §1.363; coordinator work order
+// Workflow #455 G-R2s gate tests, host half (0.12.60; register §1.364; coordinator work order
 // `rd-1114/brief-455-gr2s-irreversible-line.md` and the coordinator's ruling 1 of 11-14;
 // contracts/standard-pack-schedule.md, "The irreversible mark"): the scheduler workbench reads
 // every package of a game root's `bundle.json` with the package reader the goal check uses and
@@ -264,8 +264,10 @@ fn ids(tasks: &[&str]) -> BTreeSet<String> {
 // marks `cap_x` irreversible, its time moved; `bundle.json` stays byte for byte: the next check
 // reads the root again and activates a generation in which SINK is marked and KEEP is not. The
 // reverse replacement takes the mark away. KEEP's control file is then broken: every task of the
-// game is marked and `standard_pack_package_unreadable` names KEEP once, also across a check that
-// finds nothing changed; once it reads again, the marks follow the declarations.
+// game is marked and `standard_pack_package_unreadable` names KEEP, with the reader's refusal as
+// its cause. Fix round 1, point 5: it is recorded once across two checks that read the root again
+// while KEEP stays unreadable (SINK's control file only touched, `schedule.json` opened once more);
+// once KEEP reads again, the marks follow the declarations.
 #[test]
 fn gr2s_host_the_marks_follow_the_declaration_files_with_bundle_json_unchanged() {
     let packs = TempDir::new().expect("standard-pack root");
@@ -306,11 +308,26 @@ fn gr2s_host_the_marks_follow_the_declaration_files_with_bundle_json_unchanged()
     write_at(&control(&game, KEEP), b"{", at(30));
     scene.cycle(4 * INTERVAL_MS);
     assert_eq!(scene.marked(), ids(&[KEEP, SINK]), "every task of the game");
+    let reads = scene.schedule_reads();
+    set_time(&control(&game, SINK), at(35));
     scene.cycle(5 * INTERVAL_MS);
+    assert_eq!(
+        scene.schedule_reads(),
+        reads + 1,
+        "the second check read the root again"
+    );
+    assert_eq!(scene.marked(), ids(&[KEEP, SINK]), "still every task");
     let unreadable = scene.reads_of(SharedCode::StandardPackPackageUnreadable);
     assert_eq!(unreadable.len(), 1, "recorded once: {unreadable:#?}");
     assert_eq!(unreadable[0].value("game"), Some(&json!(GAME_A)));
     assert_eq!(unreadable[0].value("package_id"), Some(&json!(KEEP)));
+    assert!(
+        unreadable[0]
+            .causes()
+            .iter()
+            .any(|link| link.relation().as_str() == "caused_by"),
+        "the reader's refusal: {unreadable:#?}"
+    );
 
     write_at(&control(&game, KEEP), &keep, at(40));
     scene.cycle(6 * INTERVAL_MS);
@@ -319,6 +336,52 @@ fn gr2s_host_the_marks_follow_the_declaration_files_with_bundle_json_unchanged()
         ids(&[]),
         "readable again: the declarations' marks"
     );
+    scene.close();
+}
+
+// Fix round 1, point 5: a declaration file whose metadata cannot be read (another error than its
+// absence; the gate tests' seam `DECLARATION_METADATA_FAILS_FOR_TEST`, for SINK's control file of
+// this test's own root) is a mark of its own. The check goes on and reads the root again, SINK
+// counts as unreadable without the reader running, so every task of the game is marked and
+// `standard_pack_package_unreadable` names SINK once, with no cause. Once the metadata reads again
+// the marks follow the declarations.
+#[test]
+fn gr2s_host_a_declaration_file_whose_metadata_fails_marks_its_game_and_the_check_goes_on() {
+    let packs = TempDir::new().expect("standard-pack root");
+    let game = place_root(packs.path());
+    let scene = Scene::start(packs.path());
+    scene.cycle(0);
+    assert_eq!(scene.marked(), ids(&[]), "nothing is irreversible");
+    let activations = scene.activations();
+    let reads = scene.schedule_reads();
+
+    let failing = control(&game, SINK);
+    let seam = || {
+        crate::host::DECLARATION_METADATA_FAILS_FOR_TEST
+            .lock()
+            .expect("the metadata seam")
+    };
+    seam().insert(failing.clone());
+    scene.cycle(INTERVAL_MS);
+    seam().remove(&failing);
+    assert_eq!(
+        scene.schedule_reads(),
+        reads + 1,
+        "the check went on and read the root"
+    );
+    assert_eq!(scene.marked(), ids(&[KEEP, SINK]), "every task of the game");
+    assert_eq!(scene.activations(), activations + 1);
+    let unreadable = scene.reads_of(SharedCode::StandardPackPackageUnreadable);
+    assert_eq!(unreadable.len(), 1, "{unreadable:#?}");
+    assert_eq!(unreadable[0].value("game"), Some(&json!(GAME_A)));
+    assert_eq!(unreadable[0].value("package_id"), Some(&json!(SINK)));
+    assert!(
+        unreadable[0].causes().is_empty(),
+        "the reader did not run: {unreadable:#?}"
+    );
+
+    scene.cycle(2 * INTERVAL_MS);
+    assert_eq!(scene.marked(), ids(&[]), "the metadata reads again");
     scene.close();
 }
 

@@ -442,11 +442,13 @@ pub struct GoalRule {
     pub package_id: String,
     /// The rule writes `fixed_value_milli`.
     pub fixed_value: bool,
-    /// G-R1 fix round 2: the ids of the rules that follow this one, in the composition's order:
-    /// the chain followers the composition lists as riding with it (`benefit_followers`), which run
-    /// when it completes (`dependency_completed`, contracts/scheduling/README.md, "Ties and chain
-    /// heads"), so that scaling its value makes them run more with it. Required, so that no
-    /// reader leaves them out by omission.
+    /// G-R1 fix round 2: the ids of the rules that follow this one, which run when it completes
+    /// (`dependency_completed`, contracts/scheduling/README.md, "Ties and chain heads"), so that
+    /// scaling its value makes them run more with it. Workflow #455 G-R2s fix round 1: every rule,
+    /// not held, whose trigger has a chain link to this one as the evaluator reads a link, in file
+    /// order (the policy crate's `standard_pack_rule_followers`, the lists the composer's mark
+    /// reads), not only the followers the coverage lists (`benefit_followers`). Required, so that
+    /// no reader leaves them out by omission.
     pub followers: Vec<String>,
 }
 
@@ -470,7 +472,7 @@ pub struct GoalReferences {
     packages: IrreversiblePackages,
 }
 
-/// Workflow #455 G-R2s (register §1.363; contracts/standard-pack-goals.md, "Irreversibility"):
+/// Workflow #455 G-R2s (register §1.364; contracts/standard-pack-goals.md, "Irreversibility"):
 /// which packages of one game root can do something irreversible, by G-R1's rule over the whole
 /// root ([`IrreversiblePackages::new`]), and which packages of the root could not be read. The
 /// one copy of the rule: the goal check holds one in [`GoalReferences`], and the standard-pack
@@ -544,7 +546,7 @@ impl IrreversiblePackages {
     }
 
     /// G-R1 fix round 2, shared with the composer (G-R2s): whether a rule among `followers` (the
-    /// rules that follow one rule, `benefit_followers`), or a rule that follows one of them in
+    /// rules that follow one rule, [`GoalRule::followers`]), or a rule that follows one of them in
     /// turn, runs a package that counts as irreversible ([`Self::counts_irreversible`]) or is a
     /// rule `rule` does not know. `rule` gives a follower's package and its own followers by the
     /// follower's id. Each follower is visited once, so a cycle of followers ends the walk.

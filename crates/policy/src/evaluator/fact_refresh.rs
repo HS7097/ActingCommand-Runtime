@@ -475,8 +475,6 @@ pub(super) fn plan(
                     tie: candidate.tie.clone(),
                     chain_head: None,
                     benefit: None,
-                    // Workflow #455 G-R2s: the Runtime's own reading carries no mark.
-                    targets_left_out: false,
                 });
                 candidates.push(candidate);
             }

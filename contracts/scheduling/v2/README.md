@@ -349,9 +349,9 @@ file then names `queue_wait` in `requires`. Refused, at the member: in a V1 docu
 `type_mismatch`; one outside the range `limit_exceeded`. A task without the member serializes,
 hashes and decides exactly as before.
 
-Workflow #455 G-R2s (since 0.12.60; register §1.363; [../../resource-targets.md](../../resource-targets.md),
+Workflow #455 G-R2s (since 0.12.60; register §1.364; [../../resource-targets.md](../../resource-targets.md),
 "A task that can do something irreversible"), V2 only: a task may carry `irreversible_reach`, a
-boolean. With `true` its package, or a chain follower that rides with it, can do something
+boolean. With `true` its package, or a rule that follows it by a chain link, can do something
 irreversible by its game root's declarations (or a package of the root could not be read), and a
 resource target never weighs its candidate: the candidate is computed as on an instance without a
 target record. The standard-pack composer writes it ([../../standard-pack-schedule.md](../../standard-pack-schedule.md),

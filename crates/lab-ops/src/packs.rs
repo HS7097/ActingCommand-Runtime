@@ -926,7 +926,7 @@ impl Rows {
         }
     }
 
-    /// Workflow #455 G-R2s (register §1.363; `contracts/standard-pack-schedule.md`, "The
+    /// Workflow #455 G-R2s (register §1.364; `contracts/standard-pack-schedule.md`, "The
     /// irreversible mark", the coordinator's ruling 2 of 11-14): the composer's required input for
     /// the game root `files` of `game` below the standard-pack root `root`: every package its
     /// registry lists, read by this crate's own reading of its `control.json`
@@ -1998,7 +1998,7 @@ mod tests {
         );
     }
 
-    /// Workflow #455 G-R2s (register §1.363; the coordinator's ruling 2 of 11-14): the composer's
+    /// Workflow #455 G-R2s (register §1.364; the coordinator's ruling 2 of 11-14): the composer's
     /// input lab-ops gives, from its own reading of each registered package's control file
     /// through the contract crate's one rule. A package that provides a capability another
     /// package of the root marks irreversible is irreversible (the whole-root rule), one whose

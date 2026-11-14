@@ -352,10 +352,10 @@ actingcommand_contract::outcome_codes! {
         // ---- Workflow #455 G-R2s (`contracts/resource-targets.md`, "A task that can do
         // something irreversible"): begin ----
         /// Info. The candidate's task carries the composer's mark `irreversible_reach` (its
-        /// package, or a follower that rides with it, can do something irreversible, or a package
-        /// of its game root could not be read) and its instance holds a resource target record:
-        /// the record's targets are left out for this candidate, which is weighed exactly as on an
-        /// instance without a record (no keys).
+        /// package, or a rule that follows it by a chain link, can do something irreversible, or
+        /// a package of its game root could not be read) and its instance holds a resource target
+        /// record: the record's targets are left out for this candidate, which is weighed exactly
+        /// as on an instance without a record (no keys).
         ResourceTargetPackageIrreversible => "resource_target_package_irreversible": info / none,
         // ---- Workflow #455 G-R2s: end ----
     }

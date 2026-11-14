@@ -465,6 +465,49 @@ fn rl1c_c4_composer_mode_check_config_runs_the_admission_and_remedy_checks() {
     assert_eq!(unusable[0]["need"], json!("fixture_need"), "{notes:#?}");
 }
 
+/// Workflow #455 G-R2s fix round 1 (the independent review, point 2): a game whose goals are all
+/// void is visible in check-config. The fixture's two packages have no files, so the package
+/// reader refuses both, every task of the game carries the irreversible mark and check-config in
+/// composer mode notes one `standard_pack_package_unreadable` per package, naming the game and the
+/// package, by package id, each with the reader's refusal as its cause.
+#[test]
+fn gr2s_check_config_notes_each_package_it_cannot_read() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let fixture = Fixture::new(
+        temp.path().to_path_buf(),
+        &[READS_PACKAGE, CLOCK_PACKAGE],
+        &[
+            rule(READS, READS_PACKAGE, false),
+            rule(CLOCK_ONLY, CLOCK_PACKAGE, true),
+        ],
+    );
+
+    let notes = check_notes(&fixture.composer(&[]));
+
+    let unreadable = notes
+        .iter()
+        .filter(|note| note.code().as_str() == "standard_pack_package_unreadable")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unreadable
+            .iter()
+            .map(|note| (
+                note.value("game").cloned(),
+                note.value("package_id").cloned()
+            ))
+            .collect::<Vec<_>>(),
+        [CLOCK_PACKAGE, READS_PACKAGE].map(|package| (Some(json!(GAME)), Some(json!(package)))),
+        "{notes:#?}"
+    );
+    assert!(
+        unreadable.iter().all(|note| note
+            .causes()
+            .iter()
+            .any(|link| link.relation().as_str() == "caused_by")),
+        "{notes:#?}"
+    );
+}
+
 /// C-2 (work order item 2): `actingd suspended` in composer mode composes the configuration's
 /// rules and goes on to read its ledger (here a state root that does not exist,
 /// `suspended_ledger_unavailable`) instead of answering `suspended_policy_unconfigured`.

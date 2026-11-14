@@ -26,7 +26,7 @@
 //!   only the game roots and writes only that new directory.
 
 use crate::standard_pack_check::{read_bounded, root_invalid};
-use crate::standard_pack_goals::root_irreversibility;
+use crate::standard_pack_goals::{RootIrreversibility, root_irreversibility};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
 use actingcommand_contract::{
@@ -126,7 +126,7 @@ pub(crate) fn readable_root(root: &StandardPackRoot) -> IrreversiblePackages {
 /// §1.299): and who wrote the game's fixed values and valuation blocks; #428 COV-1 (register
 /// §1.299): and the game's chain followers, each with the rule it rides with, in file order;
 /// #428 SCHED-C1f1 (register §1.303 SC1F-7): and the game's consumptions read from a fact, each
-/// with its key and fallback, in file order. Workflow #455 G-R2s (register §1.363): composed with
+/// with its key and fallback, in file order. Workflow #455 G-R2s (register §1.364): composed with
 /// `irreversible`, the root's packages as `root_irreversibility` read them; a package that could
 /// not be read is one `standard_pack_package_unreadable` among the composition's warnings.
 pub(crate) struct ScheduleReport {
@@ -310,7 +310,7 @@ pub fn compose_standard_packs(
                         schedule: schedule.as_slice(),
                         root: &read.root,
                         maintenance: read.maintenance.as_slice(),
-                        irreversible: &read.irreversible,
+                        irreversible: &read.irreversible.packages,
                     },
                 )
             })
@@ -343,6 +343,10 @@ pub fn compose_standard_packs(
             error
         })?;
     let catalog = composition.compiled().catalog();
+    // G-R2s fix round 1: an unreadable package's warning carries the reader's refusal.
+    let warnings = roots.iter().fold(composition.warnings(), |warnings, read| {
+        read.irreversible.with_causes(&read.game, warnings)
+    });
     Ok(StandardPackComposeResponse {
         status: "composed".to_owned(),
         out: out.display().to_string(),
@@ -354,7 +358,7 @@ pub fn compose_standard_packs(
         events: catalog.timeline.events.len(),
         games: composition.games().to_vec(),
         manifest: composition.manifest().to_vec(),
-        warnings: composition.warnings(),
+        warnings,
     })
 }
 
@@ -366,8 +370,8 @@ struct GameRoot {
     /// `schedule.json`'s bytes; `None` when the root holds none (the game has no rules).
     schedule: Option<Vec<u8>>,
     /// Workflow #455 G-R2s: the root's packages, each read below the game root by the reader the
-    /// goal check uses (`root_irreversibility`).
-    irreversible: IrreversiblePackages,
+    /// goal check uses (`root_irreversibility`), with the reader's refusal of each it refused.
+    irreversible: RootIrreversibility,
 }
 
 /// Reads `<root>/<game>/`: its root files by the one structure check of every reader, the

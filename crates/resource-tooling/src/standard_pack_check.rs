@@ -389,9 +389,10 @@ pub fn check_standard_pack_root(
             &maintenance,
             schedule,
             &root.join(STANDARD_PACK_SCHEDULE_FILE),
-            &irreversible,
+            &irreversible.packages,
         )?;
-        warnings.extend(report.warnings);
+        // G-R2s fix round 1: an unreadable package's warning carries the reader's refusal.
+        warnings.extend(irreversible.with_causes(&game, report.warnings));
         benefit_coverage = Some(report.benefit_coverage);
         benefit_provenance = Some(report.benefit_provenance);
         benefit_followers = report.benefit_followers;
@@ -422,8 +423,6 @@ pub fn check_standard_pack_root(
             &game,
             &checked,
             bytes(STANDARD_PACK_SCHEDULE_FILE).map(|schedule| (schedule, schedule_path.as_path())),
-            // G-R1 fix round 2: the chain followers the composition above listed.
-            &benefit_followers,
             goals,
             &|directory: &str| root.join(directory),
             Some(root.as_path()),

@@ -244,19 +244,6 @@ pub(super) fn readable_root(
     )
 }
 
-/// Workflow #455 G-R2s: the composer's input for `root` when no package its registry lists reads,
-/// as the workbench reads a root whose packages have no files.
-pub(super) fn unread_root(
-    root: &actingcommand_contract::StandardPackRoot,
-) -> actingcommand_contract::IrreversiblePackages {
-    actingcommand_contract::IrreversiblePackages::new(
-        root.registry
-            .package_ids()
-            .map(|package_id| (package_id.to_owned(), None))
-            .collect(),
-    )
-}
-
 pub(super) fn write_json(path: &Path, value: &Value) {
     fs::create_dir_all(path.parent().expect("a parent directory")).expect("create the game root");
     fs::write(
@@ -481,11 +468,22 @@ impl Bench {
         self.packs.path().join(game).join(file)
     }
 
+    /// Places `bundle.json` registering `packages` and `schedule` (none removes the file).
+    /// Workflow #455 G-R2s fix round 1: with a readable package, providing nothing, in the
+    /// directory the bundle names for each package that has none yet, so the workbench reads every
+    /// package and marks no task (the whole-game mark of a package it cannot read is
+    /// `gate_455_gr2s`'s).
     fn place(&self, game: &str, server: &str, packages: &[&str], schedule: Option<&Value>) {
         write_json(
             &self.path(game, "bundle.json"),
             &bundle(game, server, packages),
         );
+        for package_id in packages {
+            let directory = self.path(game, package_id);
+            if !directory.join("control.json").exists() {
+                super::gate_442_rem1::write_package(&directory, package_id, None, None);
+            }
+        }
         match schedule {
             Some(schedule) => write_json(&self.path(game, "schedule.json"), schedule),
             None => match fs::remove_file(self.path(game, "schedule.json")) {
@@ -1358,9 +1356,9 @@ fn compose_a(bench: &Bench, bound: &[Bound]) -> actingcommand_policy::StandardPa
     .expect("a sound root")
     .expect("a game root");
     let schedule_bytes = fs::read(bench.path(GAME_A, "schedule.json")).expect("schedule bytes");
-    // Workflow #455 G-R2s: the bench places no package files, so the workbench reads none of
-    // them and marks every task; the same input here.
-    let irreversible = unread_root(&root);
+    // Workflow #455 G-R2s: the bench places a readable package for each, providing nothing, so
+    // the workbench marks no task; the same input here.
+    let irreversible = readable_root(&root);
     let games = BTreeMap::from([(
         GAME_A.to_owned(),
         StandardPackGameFiles {

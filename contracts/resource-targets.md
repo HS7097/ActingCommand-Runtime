@@ -66,12 +66,13 @@ evaluator reads its targets as a v2 policy's.
 
 ## A task that can do something irreversible
 
-Workflow #455 G-R2s (0.12.60; register §1.363; the coordinator's rulings of 11-14 on board #455).
+Workflow #455 G-R2s (0.12.60; register §1.364; the coordinator's rulings of 11-14 on board #455).
 **A goal never raises the weight of a task whose package can do something irreversible**, for
 every version of the record. The standard-pack composer marks such a task `irreversible_reach:
-true` (its package, or a chain follower that rides with it, can do something irreversible by the
-whole game root's declarations, or a package of its game root could not be read:
-[standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). A candidate of a
+true` (its package, or a rule that follows it by a chain link, directly or further down, can do
+something irreversible by the whole game root's declarations, or a package of its game root could
+not be read: [standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). A
+candidate of a
 marked task on an instance that holds a target record (v1, v2 or v3; active, expired or unreadable)
 is computed **exactly as if the instance had no target record**: its instance is resolved once
 more as without the record (a server- or game-scoped record it ignores stays ignored), and the
@@ -85,8 +86,6 @@ candidate reads that resolution for everything the record would give it:
 - **The net benefit** of a judged candidate reads the pools' base weights only.
 - **Its dispatch's values**: its `gap_remaining` facts and the goal term of its `run_cap` take the
   values of an instance without a record (none and no goal term).
-- **Its dispatch decision record** names the instance's targets as an instance without a record
-  would (`targets=none`, or the ignored record it ignores).
 - **Its reasons** are those of an instance without a record: the record's policy-level reasons
   (`resource_target_policy_unreadable`, `resource_target_policy_expired`,
   `resource_target_tasks_unevaluable`) are not attached to it, and the base term's
@@ -100,7 +99,9 @@ target's best useful contribution `U` keeps counting the marked task's yield (as
 instance override's disabled task). Only the marked candidate is computed apart. On an instance
 without a record a marked candidate is the one of before: there is nothing to leave out and it
 carries no new reason. A marked candidate's rank can fall, so another candidate can be selected in
-its place; its numbers are its own.
+its place; its numbers are its own. Its dispatch's `decision_record` still names the instance's
+targets as they are (`targets=` the instance's record, fix round 1): that field says what the
+instance holds, not what weighed the candidate; the new reason says the record was left out.
 
 ## Document `actingcommand.resource-targets.v1`
 
@@ -747,9 +748,12 @@ R(k)   = min(sum of T(k,p) + floor(sum of F(k,p)), 1_000_000) ("capped" at the b
 
 A pool takes part for `k` when `r(k,p) > 0` and it declares a valuation or a target covering
 `k` names it. `W` belongs to the resource; a target's scope only decides who gets the
-shortfall part. Since Workflow #455 G-R2s (0.12.60) `scope(t)` holds no candidate whose task
-carries the irreversible mark, named or not: for it `W(k,p) = B_p` and none of the rest of this
-section applies ("A task that can do something irreversible" above). Only `produces` count: `consumes` still drives urgency alone. `Γ`, `W`, `T` and
+shortfall part. Since Workflow #455 G-R2s (0.12.60) a candidate whose task carries the irreversible
+mark is computed apart: the record's own resolution, `scope(t)` included, is left as it is (a
+marked task a target names stays in its `scope(t)`, and its yield still counts where the record
+reads it), and the marked candidate reads, in its place, the resolution of its instance without
+the record, so for it `W(k,p) = B_p` and none of the rest of this section applies ("A task that
+can do something irreversible" above). Only `produces` count: `consumes` still drives urgency alone. `Γ`, `W`, `T` and
 `R` never fall as the gap grows; at `g = 0` the base weight stays. A task's catalog `reserves`
 (Workflow #411 B16 part 2) are a separate hard gate after the score stage, not a term of `R`:
 of two candidates whose consumption fits a reserve alone but not together, the one with the

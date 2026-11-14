@@ -78,7 +78,7 @@ const FIRST_CHECK_WAIT_TICK: Duration = Duration::from_millis(50);
 /// The size and modification time of one root file, `None` when it does not exist.
 type FileMark = Option<(u64, Option<SystemTime>)>;
 
-/// Workflow #455 G-R2s (register §1.363; `contracts/standard-pack-schedule.md`, "The irreversible
+/// Workflow #455 G-R2s (register §1.364; `contracts/standard-pack-schedule.md`, "The irreversible
 /// mark"): the files of a package, below its directory, the workbench marks for its declaration.
 /// The declaration reader (`PreparedContainedTask::read_remedy_declarations`) reads the whole
 /// content directory of the package, so the set of files it opens follows the directory's listing
@@ -119,6 +119,28 @@ struct GameMarks {
     packages: BTreeMap<String, Vec<DeclarationMark>>,
 }
 
+/// G-R2s fix round 1, for the gate tests: the declaration files whose metadata reads fail as a
+/// file the process may not stat fails (another error than its absence), by path. Each test
+/// names files below its own temporary root, so tests running at once do not meet.
+#[cfg(test)]
+pub(crate) static DECLARATION_METADATA_FAILS_FOR_TEST: std::sync::Mutex<BTreeSet<PathBuf>> =
+    std::sync::Mutex::new(BTreeSet::new());
+
+/// G-R2s fix round 1: whether a gate test makes the metadata of the declaration file at `path`
+/// fail ([`DECLARATION_METADATA_FAILS_FOR_TEST`]).
+#[cfg(test)]
+fn metadata_fails_for_test(path: &Path) -> bool {
+    DECLARATION_METADATA_FAILS_FOR_TEST
+        .lock()
+        .is_ok_and(|failing| failing.contains(path))
+}
+
+/// G-R2s fix round 1: outside the gate tests no declaration file's metadata is made to fail.
+#[cfg(not(test))]
+const fn metadata_fails_for_test(_: &Path) -> bool {
+    false
+}
+
 /// G-R2s: the marks of the declaration files ([`DECLARATION_FILES`]) of the package whose
 /// directory is `package`, in that order.
 fn declaration_marks(package: &Path) -> Vec<DeclarationMark> {
@@ -128,6 +150,9 @@ fn declaration_marks(package: &Path) -> Vec<DeclarationMark> {
             let path = parts
                 .iter()
                 .fold(package.to_path_buf(), |path, part| path.join(part));
+            if metadata_fails_for_test(&path) {
+                return DeclarationMark::Failed;
+            }
             match file_mark(&path) {
                 Ok(mark) => DeclarationMark::Read(mark),
                 Err(_) => DeclarationMark::Failed,
@@ -233,7 +258,7 @@ struct ScheduleGame {
     declarations: Option<RootDeclarations>,
 }
 
-/// G-R2s (register §1.363): one game root's package declarations as the composer takes them.
+/// G-R2s (register §1.364): one game root's package declarations as the composer takes them.
 struct RootDeclarations {
     /// Which packages can do something irreversible, by the whole root, and which could not be
     /// read.
@@ -251,7 +276,7 @@ struct PackageMarks {
     marks: Vec<DeclarationMark>,
 }
 
-/// G-R2s (register §1.363; `contracts/standard-pack-schedule.md`, "The irreversible mark"): what
+/// G-R2s (register §1.364; `contracts/standard-pack-schedule.md`, "The irreversible mark"): what
 /// every package `root`'s registry lists provides, each read below the game root `directory`
 /// through the reader the goal check uses (`PreparedContainedTask::read_remedy_declarations`), into
 /// the one copy of the rule ([`IrreversiblePackages::new`]). Each package's declaration files are
@@ -305,6 +330,23 @@ fn read_declarations(directory: &Path, root: &StandardPackRoot) -> RootDeclarati
         irreversible: IrreversiblePackages::new(declared),
         refusals,
         marks,
+    }
+}
+
+/// G-R2s: the `standard_pack_package_unreadable` of the package `package_id` of `game` (keys
+/// `game`, `package_id`), with the reader's refusal as its cause when `files`' reader refused it
+/// (none when one of its declaration files could not be stat'ed): the workbench records it, and
+/// check-config shows it (fix round 1).
+fn unreadable_package(game: &str, package_id: &str, files: Option<&ScheduleGame>) -> Outcome {
+    let outcome = Outcome::new(SharedCode::StandardPackPackageUnreadable)
+        .game(game)
+        .package_id(package_id);
+    match files
+        .and_then(|files| files.declarations.as_ref())
+        .and_then(|declarations| declarations.refusals.get(package_id))
+    {
+        Some(refusal) => outcome.caused_by(refusal.clone()),
+        None => outcome,
     }
 }
 
@@ -869,7 +911,7 @@ impl HostShared {
                 }
             }
         }
-        // G-R2s (register §1.363): a package of a composed game whose declaration could not be
+        // G-R2s (register §1.364): a package of a composed game whose declaration could not be
         // read marks every task of its game; it is recorded once while it stays unreadable, with
         // the reader's refusal as its cause when the reader refused it, and again only after it
         // has read once.
@@ -883,22 +925,17 @@ impl HostShared {
             })
             .collect::<BTreeSet<_>>();
         for (game, files) in &read {
-            let Some(declarations) = &files.declarations else {
+            if files.declarations.is_none() {
                 continue;
-            };
+            }
             for package_id in files.root.registry.package_ids() {
                 let key = format!("declaration:{package_id}");
                 if !unreadable.contains(&(game.clone(), package_id.to_owned())) {
                     state.reported.remove(&(game.clone(), key));
                     continue;
                 }
-                let mut outcome = Outcome::new(SharedCode::StandardPackPackageUnreadable)
-                    .operation(HostLocation::StandardPackRead)
-                    .game(game.as_str())
-                    .package_id(package_id);
-                if let Some(refusal) = declarations.refusals.get(package_id) {
-                    outcome = outcome.caused_by(refusal.clone());
-                }
+                let outcome = unreadable_package(game, package_id, Some(files))
+                    .operation(HostLocation::StandardPackRead);
                 self.report_once(state, game, &key, outcome)?;
             }
         }
@@ -1412,7 +1449,10 @@ pub struct StandardPackSchedulePreview {
     pub profiles: usize,
     pub events: usize,
     pub unclassified: usize,
-    /// One `standard_pack_root_invalid` per refusal of a `schedule.json`.
+    /// One `standard_pack_root_invalid` per refusal of a `schedule.json`; Workflow #455 G-R2s fix
+    /// round 1: and one `standard_pack_package_unreadable` per package of a composed game whose
+    /// declaration could not be read (every task of that game carries the irreversible mark, so
+    /// no goal weighs it), with the reader's refusal as its cause, by game, then package id.
     pub problems: Vec<Outcome>,
     /// The games in use whose game root is broken (listed with their problem in check-config's
     /// `standard_packs`), left out of the preview.
@@ -1481,6 +1521,16 @@ pub fn preview_standard_pack_schedule(
                 .map(|game| game.unclassified.len())
                 .sum();
             preview.games = composition.games().to_vec();
+            // G-R2s fix round 1: a package of a composed game whose declaration could not be
+            // read marks every task of its game, so no goal weighs any of them; check-config
+            // shows each such package, with the reader's refusal as its cause.
+            for (game, packages) in composition.unreadable_packages() {
+                for package_id in packages {
+                    preview
+                        .problems
+                        .push(unreadable_package(game, package_id, read.get(game)));
+                }
+            }
         }
         Err(failure) => {
             for issue in failure.issues() {
