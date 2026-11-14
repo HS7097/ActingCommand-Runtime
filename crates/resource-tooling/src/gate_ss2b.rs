@@ -7,7 +7,7 @@
 // (`standard_pack_benefit_undeclared`), after the composition's own warnings. Nothing is refused.
 // Neutral fixtures only: game `game-a`, packages on server `server-a`.
 
-use crate::standard_pack_schedule::{check_schedule, report_schedule};
+use crate::standard_pack_schedule::{check_schedule, readable_root, report_schedule};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{StandardPackRoot, StandardPackRootBytes, read_standard_pack_root};
 use actingcommand_policy::BenefitCoverage;
@@ -32,8 +32,10 @@ fn ss2b_t9_the_check_counts_the_judged_rules_and_warns_once_per_undeclared_rule(
     let root = root(&rules.iter().map(|(id, _)| *id).collect::<Vec<_>>());
     let schedule = schedule(&rules);
     let path = Path::new("schedule.json");
+    // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+    let irreversible = readable_root(&root);
 
-    let report = report_schedule(GAME, &root, &[], &schedule, path)
+    let report = report_schedule(GAME, &root, &[], &schedule, path, &irreversible)
         .unwrap_or_else(|error| panic!("the schedule is checked: {error}"));
     assert_eq!(
         report.benefit_coverage,
@@ -82,7 +84,7 @@ fn ss2b_t9_the_check_counts_the_judged_rules_and_warns_once_per_undeclared_rule(
     }
 
     // The composition's own warnings stay as they were.
-    let warnings = check_schedule(GAME, &root, &[], &schedule, path)
+    let warnings = check_schedule(GAME, &root, &[], &schedule, path, &irreversible)
         .unwrap_or_else(|error| panic!("the schedule is checked: {error}"));
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(warnings[0].is(SharedCode::StandardPackPackageUnclassified));

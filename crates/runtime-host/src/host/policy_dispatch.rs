@@ -1292,6 +1292,9 @@ impl HostShared {
             PolicyCycleClock::Fixed { monotonic_ms, .. } => monotonic_ms,
         };
         self.check_standard_pack_rules(started_monotonic_ms)?;
+        // Workflow #455 G-R2s round 2: the games whose root the workbench could not compose,
+        // read right after its check; their instances' resource targets are left out below.
+        let uncomposed = self.uncomposed_standard_pack_games()?;
         #[cfg(test)]
         self.before_policy_inputs_read_for_test()?;
         let _detection_gate = lock(
@@ -1379,7 +1382,15 @@ impl HostShared {
         // projection"): each record list the projection left out for its rows is recorded once
         // after a start, and its key raises no fact refresh demand on the instances it applies to.
         self.report_left_out_record_lists(&left_out_lists)?;
-        let left_out = left_out_facts(&left_out_lists);
+        let mut left_out = left_out_facts(&left_out_lists);
+        // Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task
+        // that can do something irreversible"): a game whose root cannot be composed has no goals
+        // in effect until it composes; every instance of it reads as without a target record.
+        for instance in &facts.instances {
+            if uncomposed.contains(&instance.game_id) {
+                left_out.void_targets(&instance.instance_id);
+            }
+        }
         // Workflow #429 R-2 (A.1 契约 1): the shared run limits in effect as this cycle starts,
         // read before the policy and controller locks; a run already admitted is not cut.
         let run_limits = self.shared_run_limits()?;
