@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #463 U1 (register §1.369; contracts/linear-steps.md, "Failure codes";
+// Workflow #463 U1 (register §1.372; contracts/linear-steps.md, "Failure codes";
 // contracts/policy-suspension.md, "A failure that pauses at its first occurrence"; coordinator work
 // order `rd-1114/brief-463-u1-unrecorded-screen.md`), the host's half: a linear step's retry
 // decision that saw neither page on a settled screen ends the run with

@@ -479,6 +479,12 @@ crate::outcome_codes! {
         // `task_id` the rule, `pool_id` the file's pool). A hint only; the root is composed as
         // before. The policy composer finds it; the resource tools report it.
         StandardPackLineTriggerRedundant => "standard_pack_line_trigger_redundant": warning / declaration_error,
+        // Workflow #455 G-R2s (register §1.369; contracts/standard-pack-schedule.md, "The
+        // irreversible mark"): the declaration of a package a game root's bundle registers could
+        // not be read, so every composed task of that game counts as able to do something
+        // irreversible until it reads (keys `game`, `package_id`). The policy composer finds
+        // it; the Runtime's workbench records it once and the resource tools report it.
+        StandardPackPackageUnreadable => "standard_pack_package_unreadable": warning / declaration_error,
         // Workflow #373 NAV-6: a standard-pack root file breaks its shape, a limit or a
         // reference (keys `game`, `path`, `standard_pack_problem`, `json_pointer`). The Runtime's
         // root reader and check-config report it; the resource tools share the same check.

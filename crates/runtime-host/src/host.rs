@@ -298,6 +298,10 @@ pub use standard_pack_schedule::{
     ConfiguredStandardPackSchedule, StandardPackSchedulePreview, compose_configured_standard_packs,
     preview_standard_pack_schedule,
 };
+#[cfg(test)]
+pub(crate) use standard_pack_schedule::{
+    DECLARATION_METADATA_FAILS_FOR_TEST, REFUSALS_NAME_UNCOMPOSED_FOR_TEST,
+};
 mod startup_package;
 mod state_control;
 // Workflow #429 R-6: `StopInstanceRun`, a client's direct run stopped and reset by the Runtime.

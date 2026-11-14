@@ -246,7 +246,7 @@ mod gate_mapp1d;
 // before it began, at a lease's expiry or after a keyless observation's capture failure, fences
 // that instance only; the Runtime runs on.
 mod gate_458_close_isolates;
-// Workflow #463 U1 (0.12.60; register §1.369): a linear step on a screen its package never
+// Workflow #463 U1 (0.12.60; register §1.372): a linear step on a screen its package never
 // recorded ends with its own code, names its frame and pauses only its own pair, at once.
 mod gate_463_u1;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
@@ -700,6 +700,9 @@ mod gate_rl1c_follow;
 // Workflow #442 REM-1 (register §1.326): in composer mode the remedy table the start builds reads
 // the composed packages, and every table says what it found.
 mod gate_442_rem1;
+// Workflow #455 G-R2s (register §1.369): the workbench marks the tasks of irreversible packages and
+// reads a package's declaration again when one of its declaration files changes.
+mod gate_455_gr2s;
 mod home_entry;
 mod input;
 mod input_failure;

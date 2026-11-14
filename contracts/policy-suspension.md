@@ -234,7 +234,7 @@ round instead.
 
 ## A failure that pauses at its first occurrence (Workflow #463 U1)
 
-Since 0.12.60 (register §1.369; the owner's ruling on board #463: the code tells an auditing agent
+Since 0.12.60 (register §1.372; the owner's ruling on board #463: the code tells an auditing agent
 that a new result stopped the Runtime, and it affects no other task). A scheduled run that ends
 with `contained_task_linear_unrecorded_screen` (a linear step met a screen its package never
 recorded, [linear-steps.md](linear-steps.md), "Failure codes"; the kernel raises it only in the

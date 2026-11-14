@@ -1280,12 +1280,15 @@ fn compose(schedule: &Value) -> Result<StandardPackComposition, crate::StandardP
         .maintenance()
         .to_vec();
     let schedule = serde_json::to_vec(schedule).expect("schedule bytes");
+    // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+    let irreversible = super::readable_root(&root);
     let games = BTreeMap::from([(
         GAME.to_owned(),
         StandardPackGameFiles {
             schedule: &schedule,
             root: &root,
             maintenance: &maintenance,
+            irreversible: &irreversible,
         },
     )]);
     let instances = BTreeMap::from([(

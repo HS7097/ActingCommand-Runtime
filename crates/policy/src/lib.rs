@@ -166,4 +166,29 @@ mod tests {
     // Workflow #455 G-R2a (0.12.60; register §1.361): the goal document's value store, a v3
     // record whose targets weigh as a v2 record's.
     mod gate_455_gr2a;
+    // Workflow #455 G-R2s (0.12.60; register §1.369): a goal never raises the weight of a task
+    // whose package can do something irreversible.
+    mod gate_455_gr2s;
+
+    /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
+    /// registry lists reads and provides nothing, so nothing is marked: the gate tests' roots hold
+    /// no package files.
+    fn readable_root(
+        root: &actingcommand_contract::StandardPackRoot,
+    ) -> actingcommand_contract::IrreversiblePackages {
+        actingcommand_contract::IrreversiblePackages::new(
+            root.registry
+                .package_ids()
+                .map(|package_id| {
+                    (
+                        package_id.to_owned(),
+                        Some(actingcommand_contract::DeclaredCapabilities {
+                            provides: std::collections::BTreeMap::new(),
+                            remedies: std::collections::BTreeSet::new(),
+                        }),
+                    )
+                })
+                .collect(),
+        )
+    }
 }

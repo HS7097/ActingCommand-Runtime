@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #463 U1 (register §1.369; contracts/linear-steps.md, "Failure codes"; coordinator work
+// Workflow #463 U1 (register §1.372; contracts/linear-steps.md, "Failure codes"; coordinator work
 // order `rd-1114/brief-463-u1-unrecorded-screen.md`): a linear step's retry decision that saw
 // neither its gate nor the step's own page, on a screen whose last two frames were unchanged by the
 // Runtime's one frame-change measure, and that did not end on its loading allowance, met a screen
