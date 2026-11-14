@@ -1,6 +1,6 @@
 # Standard-pack authoring: `standard-pack adopt`
 
-Workflow #464, slice P1 (Runtime 0.12.60; [v012-register.md](v012-register.md) §1.377). A
+Workflow #464, slice P1 (Runtime 0.12.61; [v012-register.md](v012-register.md) §1.377). A
 recording ends in a package (`record stop`, [lab-recording.md](lab-recording.md)); before this
 slice a person copied it into a resource repository by hand and wrote its rule into
 `schedule.json` member by member. `actinglab standard-pack adopt` does it in one operation: it
@@ -46,7 +46,7 @@ rule is derived ("What is derived"). A member it does not list is refused at its
 | `value` | `"pending"`, or `{fixed_value_milli, origin}`: a whole number of at least 1, `origin` absent or `pack` ("The value's origin"). A new business rule needs it, but a follower of a chain, which gives none ("A pending value"). |
 | `consumes`, `produces` | Lists of `{pool_id, amount or expected_amount_milli, observation_source?, confidence_milli?}`, each `pool_id` a pool `schedule.json` declares; the direction and the evidence members not given are derived. |
 | `limited`, `realization` | `true` when written: the marks of [standard-pack-schedule.md](standard-pack-schedule.md). |
-| `uses` | For the class `maintenance` without a trigger: `startup`, `return_home` or `recognition`, or a list of them; a `maintenance.json` entry for the package's server. |
+| `uses` | For the class `maintenance` without a trigger: `startup`, `return_home` or `recognition`, or a list of them; a `maintenance.json` entry for the package's server. Beside a business rule of the package (one that does not declare `maintenance`) it is refused, since adopt never turns that rule into a maintenance rule unasked ("One role"). |
 | `held` | For the class `held`: `{reason, reference?}`, each a non-blank text of at most 1024 bytes without a control character. |
 | `overrides` | A derived member stated with its value, where the table of "What is derived" says it may be: `id`, `priority`, `feedback_stop`, `on_failure`, `sensitive`, `next_run_clamp_ms`, `yield_points`, `expected_duration_ms`, `cooldown_ms`, `load_profile`, `strategic_weight_milli`, `loop_budget`. |
 
@@ -108,14 +108,32 @@ provenance listing of `standard-pack check` therefore shows which values wait fo
 
 ## A pending value
 
-A business rule whose value is not known (`"pending"`, or no fixed value, no `produces` and no
-`consumes` entry, or an entry or a pool with the marker or without its valuation) is written and
-composed, and the Runtime's evaluator does not dispatch it until a value is given: each of its
-candidates is held with `benefit_unknown` and its `benefit_gap`. The answer says so in
-`waits_for_value`: that registered reason as an outcome (`benefit_unknown`, `benefit_gap`, and
-`pool_id` where a pool is why) and the same in words with what gives the value. The coverage stays
-the composer's word (`undeclared` or `pending`, [standard-pack-schedule.md](standard-pack-schedule.md),
-"Judged rules"), with its warning.
+A decided `"pending"` says only that adopt writes no fixed value; whether the rule is dispatched is
+the Runtime evaluator's placement ([scheduling/README.md](scheduling/README.md), "Net benefit
+within a tier", "Who is judged"), which adopt answers exactly. A business rule as written is in one of these rows, the first that
+fits ("reads": with a fixed value its `produces` are not read, its `consumes` are):
+
+| The business rule as written | Judged by its value | Dispatched | The answer |
+|---|---|---|---|
+| A follower of a chain (coverage `follower`) | no | with its chain's head, whatever its own value | `value_not_judged`, `because` `follower` |
+| A manual request: its trigger requires an instruction of the `session.` family from its root through `all` alone | no | when the instruction is given, whatever its value | `value_not_judged`, `because` `manual_request` |
+| No fixed value and no `produces` or `consumes` entry (`"pending"` alone) | yes | not until a value is given | `waits_for_value`, `benefit_gap` `no_effects` |
+| An entry it reads with the amount `"pending"` | yes | not until a value is given | `waits_for_value`, `entry_pending` with its `pool_id` |
+| A pool it reads with the valuation `"pending"` | yes | not until a value is given | `waits_for_value`, `valuation_pending` with its `pool_id` |
+| A pool it reads without a valuation | yes | not until a value is given | `waits_for_value`, `valuation_missing` with its `pool_id` |
+| A fixed value, or `"pending"` with `produces` or `consumes` entries, every entry it reads with its amount and every pool it reads valued | yes | when its net benefit (the value or what it produces, less the cost of what it consumes) is positive | neither |
+
+So `"pending"` with a valued `produces` is judged by that entry and dispatched when its net benefit
+is positive. A regenerating pool the rule consumes is also judged by its reading at each evaluation
+(`reading_unknown` while that reading is not known), which is the instance's state, not the rule's
+value, and which adopt does not answer. `waits_for_value` carries the registered reason the
+evaluator holds each candidate with, as an outcome (`benefit_unknown`, `benefit_gap`, and `pool_id`
+where a pool is why), and the same in words with what gives the value; `value_not_judged` says why
+the value is not judged, in a word and in words. The coverage stays the composer's word
+(`complete`, `pending`, `undeclared` or `follower`,
+[standard-pack-schedule.md](standard-pack-schedule.md), "Judged rules"), with its warning: the
+composer counts a manual request as any other rule it judges, so one without a value is
+`undeclared` there although the evaluator dispatches it when it is asked for.
 
 A follower of a chain (a rule that, by its trigger alone, can only be due in its chain head's run
 window and rides with a rule whose value the file declares; "Judged rules" there) is dispatched
@@ -140,13 +158,24 @@ The decision's class decides, and adopt writes the root files it writes, `schedu
 
 A maintenance role another root file gives (a `pages.json` feature, a `navigation.json` edge or
 recovery chain, an `interrupts.json` handler or `then.run`) is not ended by adopt, which does not
-write those files: a decision of the class `business` or `held` for such a package is refused
-`decision_invalid` at `/class`, naming the file. The answer lists in `removed_entries` every entry
-it removed and in `replaced_entries` every entry that was there and that it changed (the rule, the
-held entry, the `maintenance.json` entry), each with its file, its pointer in the file as read, the
-entry as it was and, when replaced, as written. Without a decision nothing is removed or replaced,
-and the class is the earlier adoption's as the composer reads the files (held, else maintenance
-when a root file gives the package a maintenance role, else the rule's).
+write those files: a decision of the class `business` for such a package, whose rule would never
+be judged beside it, is refused `decision_invalid` at `/class`, naming the file. A decision of the
+class `held` is taken (a package that `pages.json` names and that is not run through yet is
+adopted as held): its hold is written beside that role, which stays as that file gives it. A
+decision of the class `maintenance` by its `uses` alone (no trigger) for a package whose rule in
+`schedule.json` is a business rule (one that does not declare `maintenance`) is refused
+`business_rule_in_the_way`, naming that rule by its id and its pointer (`entry` `schedule.json`,
+`json_pointer` `/rules/<i>`): adopt never turns that rule into a maintenance rule unasked; take it
+out of `schedule.json` first, or give the decision the trigger of a maintenance rule. The answer
+lists in `removed_entries` every entry it removed and in `replaced_entries` every entry that was
+there and that it changed (the rule, the held entry, the `maintenance.json` entry), each with its
+file, its pointer in the file as read, the entry as it was and, when replaced, as written. Without a
+decision nothing is removed or replaced, and the class is the earlier adoption's as the composer
+reads the files (held, else maintenance when a root file gives the package a maintenance role, else
+the rule's); when `schedule.json` gives the package a held entry or a business rule and
+`maintenance.json` an entry too (two roles, which an adoption leaves only when it was interrupted
+between its two renames, "If a call was interrupted"), a call without a decision is refused
+`repository_invalid` at that entry (`entry` `maintenance.json`), its message saying what to do.
 
 ## The checks
 
@@ -165,13 +194,15 @@ the repository and keeps no copy.
 | With `--replace`, the kept copy's place lies on the checkout's volume (the volume of the nearest existing part of each path, links resolved: the drive or network share on Windows, the device elsewhere; a volume mounted on a folder of another is not told apart on Windows), so that the replaced directory can be moved there | `replace_across_volumes` | `entry` the directory, `path` the kept place; the message says to give a `--state-dir` on the checkout's volume and, for a recording of the default state directory, its package by `--package <state>/record-artifacts/<record>/lab/out/<package_id>.<ext>` instead of `--record-id` |
 | The decision document | `decision_invalid` | `path`, `json_pointer` (`""` for a first adoption without one) |
 | Its value's origin ("The value's origin") | `value_origin_model` | `path`, `json_pointer` `/value/origin` |
-| A class `business` or `held` beside a maintenance role a root file adopt does not write gives the package ("One role") | `decision_invalid` | `path`, `json_pointer` `/class` |
+| A class `business` beside a maintenance role a root file adopt does not write gives the package ("One role") | `decision_invalid` | `path`, `json_pointer` `/class` |
+| A class `maintenance` by its `uses` alone beside the package's business rule ("One role") | `business_rule_in_the_way` | `entry` `schedule.json`, `json_pointer` `/rules/<i>`, `package_id`; the message names the rule's id |
+| Without a decision, no held entry or business rule of the package in `schedule.json` beside its `maintenance.json` entry ("One role", "If a call was interrupted") | `repository_invalid` | `entry` `maintenance.json`, `json_pointer` the entry, `package_id` |
 | A class other than `held` needs a package run through: its entry task's provenance a recording's, the cross-check `passed`, the first decision evaluated (no `first_decision_not_evaluated` warning, no application step) and no step whose click needs review | `recording_unreviewed` | `package_id`; the details carry `review` |
 | No text of the package holds an absolute local path (a drive or network path, the state directory, the checkout) | `local_path` | `entry` the file, `json_pointer` the string |
 | A root file adopt must change is in the canonical form ("The canonical form") | `root_file_not_canonical` | `entry` |
-| Every outcome predicate of `schedule.json` as it would be written that reads the rule's own outcome (`kind` `outcome`, `task_id` the rule's id: its trigger and its `feedback_stop`, given, derived or kept, and another rule's or a pool's that reads it) names a key the package's entry task declares (`scheduling_outcome.mappings`), since the Runtime refuses every dispatch of a task whose outcome is read for a key its package does not declare ([scheduling/README.md](scheduling/README.md)) | `decision_invalid` | `path` the decision and `json_pointer` in it (`/trigger/…`, `/overrides/feedback_stop/…`) when the decision gave the member; otherwise `entry` `schedule.json` and `json_pointer` in the file as it would be written; the details carry `declared_outcome_keys` |
-| The checkout's check tree is the tool's own and free (below) | `check_tree_unmarked`, `check_tree_busy` | `path` the check tree |
+| The checkout's check tree is no link, the tool's own and free (below) | `check_tree_link`, `check_tree_unmarked`, `check_tree_busy` | `path` the check tree |
 | The tree as it would be written composes (below) | `rule_refused` | `entry` `schedule.json`, the composer's `json_pointer`, its refusal as the cause; or `package_id` when the package comes out unclassified |
+| Every key the schedule as the check compiled it reads of the rule's own outcome is one the package's entry task declares (`scheduling_outcome.mappings`): the policy crate's own `referenced_outcome_keys`, which the Runtime runs, collects them from every composed rule's trigger and `feedback_stop` (the rule's own, given, derived or kept, and another rule's), every pool's observation and every activity target's measure. And every key an outcome predicate of the rule as it would be written reads of another task is one the package of that task declares. The Runtime refuses every dispatch of a task whose outcome is read for a key its package does not declare ([scheduling/README.md](scheduling/README.md)): the rule, or the task it reads and so the rule, would never run | `decision_invalid` | `path` the decision and `json_pointer` in it (`/trigger/…`, `/overrides/feedback_stop/…`) when the decision gave the member; otherwise `entry` `schedule.json` and `json_pointer` in the file as it would be written (`/rules/<i>/…`, `/pools/<i>/…`, `/activity/<i>/goals/<j>/metric/outcome_key`); the message names who reads, the rule, pool or activity profile by its id; the details carry `declared_outcome_keys` of the package of the task read and, for another task, its `task_id` and `package_id` |
 | A business rule's value ("A pending value") | `decision_invalid` | `path`, `json_pointer` `/value` |
 
 The check of the tree lays the tree as it would be written in the checkout's check tree,
@@ -185,14 +216,21 @@ checkout.
 
 **The check tree is the tool's own scratch, not anyone's data** (the coordinator's ruling): one
 directory for each checkout, `<checkout>` its last segment and 16 hexadecimal digits of the
-SHA-256 of its resolved path; adopt writes the marker `.adopt-check-tree` into it when it makes it,
-holds the marker open and locked for the whole call, and at the start of each call empties the
-directory of everything but the marker, only when the marker is there, and never anything else. A
-directory at that place without the marker is not touched and the call is refused
-`check_tree_unmarked`; a call while another adoption of the checkout with the same state directory
-holds the marker is refused `check_tree_busy`. The rule "nothing is removed" holds for the checkout
-and for a replaced pack directory's kept copy; the check tree alone is emptied, by the tool, of
-what the tool laid there.
+SHA-256 of its resolved path. Adopt makes it whole, so that no crash leaves it unmarked: as a
+directory of the call's own beside it, `<checkout>.new-<process>-<count>/`, with the marker
+`.adopt-check-tree` written, renamed into place; when another call put its tree there first (two
+first calls at once), the call removes its own directory, which holds only the marker it wrote, and
+goes on with the other's tree, so neither is refused `check_tree_unmarked` (one may be refused
+`check_tree_busy`). A crash before that rename leaves only the call's own directory beside the
+place, which no call reads. Adopt holds the marker open and locked for the whole call, and at the
+start of each call empties the directory of everything but the marker, only when the marker is
+there, and never anything else. Before anything in it is cleared, the place itself is checked: a
+link there (a symbolic link, or on Windows a junction) is refused `check_tree_link`, and nothing is
+cleared through it or where it points. A directory at that place without the marker is not touched
+and the call is refused `check_tree_unmarked`; a call while another adoption of the checkout with
+the same state directory holds the marker is refused `check_tree_busy`. The rule "nothing is
+removed" holds for the checkout and for a replaced pack directory's kept copy; the check tree alone
+is emptied, by the tool, of what the tool laid there.
 
 ## What is derived
 
@@ -209,7 +247,7 @@ silently: a member nothing gives is refused `decision_invalid` at `/overrides/<m
 | `package_id` | The package's `package_id` (`package`). | no |
 | `priority` | With exactly two priorities among the file's rules, the lower for a business rule and the higher for a maintenance rule; else the one value the rules of its tier agree on (`file`); else none, and the decision must state it. | yes, `overrides.priority` |
 | `trigger` | Never derived. | must, for a new rule |
-| `feedback_stop` | Never copied from another rule (a copied stop may never come true, and the task would be dispatched again at every cooldown): "this rule's own run ended with a key its package declares", `{kind: outcome, task_id: <rule>, outcome_key: <key>, comparison: eq, value: {type: boolean, value: true}}` for every key of a normal end the entry task declares (every mapping's but a `busy` one's and one with a `remedy`), under `any` when there are several (`package`), so that the task runs once for each time its trigger comes true; none when the package declares no such key, and the decision must state it. | yes, `overrides.feedback_stop`, on keys the package declares ("The checks") |
+| `feedback_stop` | Never copied from another rule (a copied stop may never come true, and the task would be dispatched again at every cooldown): "this rule's own run ended with a key its package declares", `{kind: outcome, task_id: <rule>, outcome_key: <key>, comparison: eq, value: {type: boolean, value: true}}` for every key of a normal end the entry task declares (every mapping's but a `busy` one's and one with a `remedy`), under `any` when there are several (`package`): after one normal end inside the activity window the rule is not dispatched again in that window ([scheduling/README.md](scheduling/README.md): a stop is read only of a result of the current activity window); none when the package declares no such key, and the decision must state it. | yes, `overrides.feedback_stop`, on keys the package declares ("The checks") |
 | `consumes`, `produces` | `[]` (`neutral`) when the decision names none; for each decided entry its direction and, when not given, `observation_source` `self_reported` and `confidence_milli` 1000 (`neutral`). | yes, `consumes` and `produces` |
 | `fixed_value_milli` | Never derived. | yes, `value` ("The value's origin") |
 | `on_failure` | `{action: pause, retry_limit: 1, retry_backoff_ms: 0, escalation_threshold: 2}` (`neutral`). | yes, `overrides.on_failure` |
@@ -248,12 +286,17 @@ deleted in the checkout or of a kept copy:
   `.part`, and the refusal says what happened; when moving it back fails too, it says where the old
   directory is.
 - `schedule.json` (the rule appended or changed, the held entry, `requires`) and `maintenance.json`
-  (an entry `{package_id, server, uses}`, or the package's entries removed, "One role"), each
-  written as `<name>.part` and renamed, each only when it changes. Before the first write, and
-  again immediately before each rename, the file is read again and compared with the bytes the
-  call computed from; when it changed (another adoption, which the MCP server allows at the same
-  time, or a person), the call stops with `adopt_write_failed` at that file, renames nothing more
-  and overwrites nothing of that work.
+  (an entry `{package_id, server, uses}`, or the package's entries removed, "One role"), each only
+  when it changes: both written whole as `<name>.part` first, then renamed one after the other,
+  first the file that gives the package its new role (`maintenance.json` for the class
+  `maintenance`, `schedule.json` for the others), then the file that ends its old one, so that a
+  call interrupted between the two renames leaves the package two roles beside the `.part` of the
+  file it did not rename, and the next call sees both ("If a call was interrupted"). Before the
+  first write, and again immediately before each rename, the file is read again and compared with
+  the bytes the call computed from; when it changed (another adoption, which the MCP server allows
+  at the same time, or a person), the call stops with `adopt_write_failed` at that file, renames
+  nothing more and overwrites nothing of that work. A root file with changes not committed is
+  read and written as it is: several adoptions in a row before one commit are normal use.
 
 A failed write is `adopt_write_failed`: `path` where it stopped and `paths` what it had written or
 moved before, in order, the operating system's refusal as the cause when there is one; nothing is
@@ -265,11 +308,20 @@ next call refuses as long as one of its own is there (`pack_exists` for the pack
 `repository_invalid` for a root file's), and its message names each leftover and says what to do:
 when the interrupted call began, `packs/<package_id>` was absent or committed (adopt refuses a
 pack directory with changes), so `git status -- packs/<package_id>` shows exactly what it left
-there; `schedule.json` and `maintenance.json` are each written whole and renamed in one step, so
-each is as it was before that call or as that call computed it (`git diff` shows which); a
-replaced directory it had moved away is in the last commit and under the state directory's
-`adopt/`. The leftovers named can be moved out of the checkout by hand (adopt deletes nothing);
-then run adopt again.
+there, and a replaced directory it had moved away is in the last commit and under the state
+directory's `adopt/`. A root file's `.part` is that file whole as the call computed it; since the
+call writes every `.part` before it renames the first, a root file whose `.part` is left was not
+renamed and is as it was before that call. When only one root file's `.part` is left, the other
+root file was either renamed by that call or not changed by it: look whether that file holds the
+package's rule or entry as the call decided it. To finish the interrupted adoption, rename each root
+file's `.part` over its file; to undo it, move those `.part` files out of the checkout and restore
+the root files with the version control; move a `packs/<package_id>.part` out by hand (adopt
+deletes nothing); then run adopt again. When a root file's `.part` was moved away without either,
+the two files may give the package two roles: a held entry or a business rule in `schedule.json`
+beside its `maintenance.json` entry. A call with a decision writes its one role again and answers
+the entry it removes in `removed_entries`; a call without one is refused `repository_invalid` at
+that entry, its message saying to run adopt again with the decision the interrupted call was given,
+or to restore both files with the version control.
 
 The repository's own items adopt does not write are named in `next` when the checkout holds them:
 a regression case (`regression/<game>/`), the catalog section (`docs/PACKS.md`) and the census row
@@ -278,8 +330,9 @@ a regression case (`regression/<game>/`), the catalog section (`docs/PACKS.md`) 
 ## Repeating (`--replace`)
 
 Without a decision the rule, the held entry and the maintenance entry are kept byte for byte, and
-only the pack directory is replaced; the kept rule's outcome predicates on the rule itself are
-checked against the new package's keys ("The checks"). A decision changes only the members it
+only the pack directory is replaced; every key the schedule reads of the kept rule's outcome is
+checked against the new package's keys, and every key the kept rule reads of another task against
+that task's package ("The checks"). A decision changes only the members it
 names, and decides the package's one role ("One role"; a decision of another class than `held`
 lifts a hold, so the rule is composed again); a value the model wrote is kept ("The value's
 origin"). A derived member the derivation would now give otherwise is answered in `derived_drift`
@@ -299,9 +352,10 @@ repository and no copy is kept ([actinglab-dry-run.md](actinglab-dry-run.md)).
 `maintenance` as written, `removed_entries` and `replaced_entries` ("One role"),
 `requires_added`, `given`, `derived` (each `member`, `value`, `from` and, where it says more,
 `how`), `derived_drift`, `model_kept`, `coverage` (a business rule: `complete`, `pending`,
-`undeclared` or `follower`, as the composer counts the file's judged rules), `waits_for_value` ("A
-pending value"), `warnings` (every warning of the check, the game's included, each once),
-`written`, `would_write`, `kept`, `check_tree` and `next`.
+`undeclared` or `follower`, as the composer counts the file's judged rules), `waits_for_value` and
+`value_not_judged` (`because` `follower` or `manual_request`, and `text`; "A pending value"),
+`warnings` (every warning of the check, the game's included, each once), `written` (in the order
+it was renamed into place), `would_write`, `kept`, `check_tree` and `next`.
 
 ## The canonical form
 

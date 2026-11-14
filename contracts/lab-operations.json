@@ -2501,7 +2501,7 @@
       "new": "#464",
       "slice": "SP-ADOPT",
       "status": "planned",
-      "notes": "Workflow #464 P1 (0.12.60; contracts/standard-pack-authoring.md): it writes only inside repo and under the state directory, every check before the first write (refusals adopt_refused, adopt_problem naming the check), nothing deleted; the readiness of the package is another slice's"
+      "notes": "Workflow #464 P1 (0.12.61; contracts/standard-pack-authoring.md): it writes only inside repo and under the state directory, every check before the first write (refusals adopt_refused, adopt_problem naming the check), nothing deleted; the readiness of the package is another slice's"
     },
     {
       "name": "scheduling compile",

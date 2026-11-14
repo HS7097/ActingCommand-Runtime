@@ -25042,12 +25042,13 @@ whose key it does not know, `config_override_dropped`, and goes on
 sibling key below 0.12.60, which §1.353 does not say. Nothing else is persisted by ORD-1c: the
 member in front and the queue waits live in memory only.
 
-### 1.377 Slice #464 P1 (0.12.60): `actinglab standard-pack adopt` makes a recorded package a member of its game's standard pack in a resource repository's checkout (Workflow #464; the design `rd-1114/464-pack-build-design.md`, sections A, B, C.1, C.2, D and the row "P1 adopt" of G with its tests, and the coordinator's rulings 1, 2, 7 and 8 on board #464, not the owner's words; the coordinator's ruling on the value's origin, sent during the slice: adopt never writes `fixed_value_origin: "model"` on a caller's word; coordinator work order `rd-1114/brief-464-p1-adopt.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on what is derived and on the check tree, coordinator work order `rd-1114/brief-1722-fix1.md`, main `1e67d1c5`)
+### 1.377 Slice #464 P1 (0.12.61): `actinglab standard-pack adopt` makes a recorded package a member of its game's standard pack in a resource repository's checkout (Workflow #464; the design `rd-1114/464-pack-build-design.md`, sections A, B, C.1, C.2, D and the row "P1 adopt" of G with its tests, and the coordinator's rulings 1, 2, 7 and 8 on board #464, not the owner's words; the coordinator's ruling on the value's origin, sent during the slice: adopt never writes `fixed_value_origin: "model"` on a caller's word; coordinator work order `rd-1114/brief-464-p1-adopt.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on what is derived and on the check tree, coordinator work order `rd-1114/brief-1722-fix1.md`, main `1e67d1c5`; fix round 2, after the review of fix round 1, with the coordinator's rulings on its other points, coordinator work order `rd-1115/brief-1722-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged)
 
 This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364); the
 train 0.12.60d (#453 S3, S4, S9 and S12) and #455 G-R2s, merged first, took §1.365 to §1.369, and
 the merge of main `1e67d1c5` renumbered this entry; in fix round 1 the coordinator assigned it
-1.377, the numbers before it being taken by other open pull requests. The operation, its decision
+1.377, the numbers before it being taken by other open pull requests. The slice ships in 0.12.61
+(release 0.12.60 is cut without it): its codes are `since` 0.12.61. The operation, its decision
 document, its checks, what it derives and what it writes are
 [standard-pack-authoring.md](standard-pack-authoring.md); this entry records what the slice
 established, built and left.
@@ -25061,8 +25062,10 @@ written, given, derived or kept, is checked against every key the entry task's
 `decision_invalid` at the predicate's pointer before anything is written; a given predicate on a
 declared key keeps its key, and the derived `feedback_stop` names only declared keys (fix round 1;
 as first built the derivation put the first declared key into every such predicate it derived or
-copied, and given and kept predicates went unchecked). The Tools do not check that key themselves
-(`standard-pack check` composes a rule on an undeclared key), so adopt is where it is kept. (2)
+copied, and given and kept predicates went unchecked; since fix round 2 every reader the compiled
+schedule holds, an activity target's measure included, and every key the rule reads of another
+task, below). The Tools do not check that key themselves (`standard-pack check` composes a rule on
+an undeclared key), so adopt is where it is kept. (2)
 Whether a recording's first decision
 was evaluated is read from the package itself: the entry task's provenance (`source` `lab_record`,
 `record_id`, `cross_check.status`, `warnings` with `first_decision_not_evaluated`,
@@ -25096,6 +25099,29 @@ The lint finding of the first CI run (`clippy::unnecessary_to_owned` in `Existin
 fixed. `BenefitGap` is exported by `crates/policy` for the answer's outcome; nothing of the policy
 crate's behaviour changes.
 
+**Fix round 2** (after the review of fix round 1; the coordinator's work order and rulings, not the
+owner's words):
+
+| Item | Before | Now |
+|---|---|---|
+| Outcome keys of the rule | only rules and pools scanned for readers of the rule's outcome; an activity target's measure, which the Runtime also compares, unchecked | after the check of the tree, every key the schedule as that check compiled it reads of the rule's outcome, from the policy crate's own `CompiledCatalog::referenced_outcome_keys` (rules' triggers and stops, pools' observations, activity targets' measures: the one copy of the rule the Runtime runs), against the package's declared keys; the refusal at the first reader in file order of the rules the composer composes, the pools and the activity profiles, its message naming that reader by its id (item 9) |
+| Outcome keys of another task | a predicate of the rule reading another task's outcome unchecked, so that task was refused at every dispatch and the rule never came due | every outcome predicate of the rule as it would be written that reads another task checked against the keys the package of that task declares (its `packs/<package_id>` read as `package preflight` reads it), `decision_invalid` at its pointer, the details naming that task, its package and its declared keys |
+| The check tree | a link at its place was emptied through; made by `create_dir` and then marked, so a crash between left it unmarked and two first calls could refuse one `check_tree_unmarked` | a link (a symbolic link, a junction) at its place refused `check_tree_link` before anything is opened or cleared; made whole as `<checkout>.new-<process>-<count>/` with its marker and renamed into place, a call that finds another's tree there first removing its own and going on (busy at worst) |
+| `/class` | refused for `business` and `held` beside a role another root file gives | refused for `business` only; a package `pages.json` names that is not run through is adoptable as held |
+| Maintenance by `uses` alone | the package's business rule silently given `maintenance: true` | refused `business_rule_in_the_way` at `/rules/<i>` of `schedule.json`, naming the rule's id |
+| A manual request | answered `waits_for_value` ("not dispatched") although the evaluator dispatches it unjudged | the policy crate's `is_manual_request` on the compiled task (new, the placement's own `manual_request`): `value_not_judged` `manual_request` and no `waits_for_value`; a follower `value_not_judged` `follower`; the contract's table of which rules are dispatched and which wait ("`pending`" with a valued `produces` is judged and dispatched) |
+| Two root files | each written as its `.part` and renamed in turn | both `.part` files written first, then renamed one after the other, first the file that gives the new role (`maintenance.json` for the class maintenance, `schedule.json` otherwise), so that an interruption between the two renames leaves a `.part` and two roles; the leftover's message says which file was not renamed and how to finish or undo; without a decision, a held entry or business rule beside a `maintenance.json` entry is refused `repository_invalid` at that entry, saying what to do; `written` lists the files in the order renamed |
+| Texts | the error of a member nothing derives named the file's rules for `feedback_stop`; "the task runs once for each time its trigger comes true"; `git diff` shows which | `feedback_stop`'s error names the package's keys (never copied); after one normal end inside the activity window the rule is not dispatched again in that window (`how` and the contract); "look whether the file holds the package's rule or entry" |
+
+The seam `AdoptWorktree::rename` (every rename of the writes, `fs::rename` by default) lets the gate
+make the second rename fail and let another writer change a root file in between. The answer's
+`written` follows the renames. Root files with changes not committed are still read and written as
+they are (several adoptions before one commit). The check of the tree keeps the catalog its
+composition compiled (`ScheduleReport::compiled` in `crates/resource-tooling/src/standard_pack_schedule.rs`,
+`check_standard_pack_root_with_catalog` in `standard_pack_check.rs`); the answer of `standard-pack
+check` and of `package bundle` is unchanged. `crates/policy` gains `is_manual_request`, a public
+call of the placement's own rule; nothing of its behaviour changes.
+
 **Built.**
 
 | Part | Where |
@@ -25114,7 +25140,7 @@ the pack's own, written as `fixed_value_milli` without `fixed_value_origin` and 
 `model_kept`. [standard-pack-schedule.md](standard-pack-schedule.md) ("The fixed value") gained
 that `acmodel bindings apply` is not built yet and that no writer of `model` exists today.
 
-**Outcome codes** (since 0.12.60; catalog domain `adopt_`, owners `resource-tooling` and
+**Outcome codes** (since 0.12.61; catalog domain `adopt_`, owners `resource-tooling` and
 `runtime-host`).
 
 | Code | Category, ladder | Values |
@@ -25122,13 +25148,15 @@ that `acmodel bindings apply` is not built yet and that no writer of `model` exi
 | `adopt_refused` | error, none | `adopt_problem` (required); `path`, `entry`, `json_pointer`, `package_id`, `member`, `count` |
 | `adopt_write_failed` | error, none | `path` (required); `paths` |
 
-The value key `adopt_problem` (codes mode kept) takes the vocabulary `adopt_problem`, 15 words:
+The value key `adopt_problem` (codes mode kept) takes the vocabulary `adopt_problem`, 17 words:
 `repository_invalid`, `recording_not_current`, `package_invalid`, `package_mismatch`,
 `pack_exists`, `pack_dirty`, `recording_unreviewed`, `local_path`, `decision_invalid`,
-`value_origin_model`, `rule_refused`, `root_file_not_canonical`, and since fix round 1
-`replace_across_volumes`, `check_tree_unmarked`, `check_tree_busy`
-(`crates/resource-tooling/src/codes.rs`, `AdoptProblem`). The answer's `waits_for_value` carries
-the policy's registered `benefit_unknown` with its `benefit_gap`; no code is added for it.
+`value_origin_model`, `rule_refused`, `root_file_not_canonical`, since fix round 1
+`replace_across_volumes`, `check_tree_unmarked`, `check_tree_busy`, and since fix round 2
+`check_tree_link`, `business_rule_in_the_way` (`crates/resource-tooling/src/codes.rs`,
+`AdoptProblem`). The answer's `waits_for_value` carries the policy's registered `benefit_unknown`
+with its `benefit_gap`; no code is added for it, nor for `value_not_judged`, whose `because`
+(`follower`, `manual_request`) is a member of the answer, not a registered word.
 
 **Tests** (exec gate `#464 P1`, `crates/resource-tooling/src/gate_464_p1.rs`, a made-up repository
 of the game `neutral`, server `test`, whose rule stops on the key its package declares): the first
@@ -25142,7 +25170,15 @@ waits for its value; `--dry-run`; a JSON container and a ZIP alike; and since fi
 an own-outcome predicate on an undeclared key refused at its pointer (a given trigger, a given
 `feedback_stop`, a kept rule) and a given one on a declared key written as given, and the check
 tree reused by the next call, emptied but for its marker, and a directory there without the marker
-left untouched with the call refused.
+left untouched with the call refused; and since fix round 2 that given stop on one of a package's
+two keys (not the derivation's stop on both), an activity target measuring the rule's outcome on an
+undeclared key refused at its pointer, a trigger reading another task's outcome on a key that
+task's package does not declare refused and on one it declares adopted, a business and a held
+adoption ending the package's `maintenance.json` entry and answering it, `pending` for a follower
+refused, another writer's `schedule.json` not renamed over, the old pack directory moved back when
+the new one cannot take its place, and a check tree another call holds refused `check_tree_busy`
+(seven tests; the test of fix round 1 on own-outcome keys adapted to the two-key package, as the
+work order asks).
 
 **What is not added.** No configuration key, record type, payload member, fact, wire shape or
 interface revision; no persisted structure of the Runtime changes. No file of the recording, the
@@ -25155,7 +25191,7 @@ writer of `fixed_value_origin: "model"`.
 
 **At deploy.** Nothing to do: the operation runs offline, on a checkout a person names.
 
-**Rollback** (below 0.12.60). Nothing is persisted; a build before the slice has no row
+**Rollback** (below 0.12.61). Nothing is persisted; a build before the slice has no row
 `standard-pack adopt` and leaves an adopted checkout as it is.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)

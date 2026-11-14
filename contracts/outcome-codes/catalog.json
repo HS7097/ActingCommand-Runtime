@@ -2711,7 +2711,7 @@
     },
     "adopt_problem": {
       "type": "vocab:adopt_problem",
-      "description": "Which check of actinglab standard-pack adopt refused (Workflow #464 P1, since 0.12.60)."
+      "description": "Which check of actinglab standard-pack adopt refused (Workflow #464 P1, since 0.12.61)."
     }
   },
   "vocabularies": {
@@ -9446,7 +9446,7 @@
       }
     },
     "adopt_problem": {
-      "description": "Which check of actinglab standard-pack adopt refused, the value adopt_problem of adopt_refused (Workflow #464 P1, contracts/standard-pack-authoring.md \"The checks\", since 0.12.60).",
+      "description": "Which check of actinglab standard-pack adopt refused, the value adopt_problem of adopt_refused (Workflow #464 P1, contracts/standard-pack-authoring.md \"The checks\", since 0.12.61).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
@@ -9454,7 +9454,7 @@
       },
       "tokens": {
         "repository_invalid": {
-          "description": "--repo holds no applications.json, maintenance.json or packs directory, one of them or its schedule.json does not read, or a .part of a root file an interrupted adoption left is there (the message names every leftover and what to do)."
+          "description": "--repo holds no applications.json, maintenance.json or packs directory, one of them or its schedule.json does not read, or a .part of a root file an interrupted adoption left is there (the message names every leftover and what to do), or, without a decision, schedule.json gives the package a held entry or a business rule beside its maintenance.json entry (two roles, which only an adoption interrupted between its two renames leaves)."
         },
         "recording_not_current": {
           "description": "The recording --record-id names is not as its last record stop left it: no recording.json, not stopped, marked again since, or without its package."
@@ -9478,7 +9478,7 @@
           "description": "A text file of the package holds an absolute local path or the state directory."
         },
         "decision_invalid": {
-          "description": "The decision document breaks its schema, misses a member the class or a first adoption needs (a business rule's value, which only a follower of a chain may leave out), names a pool the file does not declare, names a derived member that cannot be derived without it, says pending for a follower of a chain, gives a class beside a maintenance role a root file adopt does not write gives the package; or an outcome predicate on the rule itself, given or kept in schedule.json, names a key the package does not declare."
+          "description": "The decision document breaks its schema, misses a member the class or a first adoption needs (a business rule's value, which only a follower of a chain may leave out), names a pool the file does not declare, names a derived member that cannot be derived without it, says pending for a follower of a chain, gives the class business beside a maintenance role a root file adopt does not write gives the package; or a key the schedule as compiled reads of the rule's own outcome (a rule's trigger or feedback_stop, a pool's observation, an activity target's measure), or a key the rule reads of another task's outcome, is one the package of the task read does not declare."
         },
         "value_origin_model": {
           "description": "The decision's value names the origin model, which only the model's export writes; the number is given with the origin pack, or the value is pending."
@@ -9497,6 +9497,12 @@
         },
         "check_tree_busy": {
           "description": "Another adoption of the same checkout with the same state directory holds the checkout's check tree."
+        },
+        "check_tree_link": {
+          "description": "The place of the checkout's check tree under the state directory is a link (a symbolic link or a junction), so nothing is cleared through it or where it points."
+        },
+        "business_rule_in_the_way": {
+          "description": "A decision of the class maintenance by its uses alone, without a trigger, meets the package's business rule in schedule.json, which adopt does not turn into a maintenance rule unasked; the refusal names the rule."
         }
       }
     }

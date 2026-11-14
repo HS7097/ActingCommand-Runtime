@@ -144,8 +144,9 @@ mod standard_pack_schedule;
 
 pub use adopt::{
     AdoptClass, AdoptCoverage, AdoptSource, AdoptWorktree, DerivedDrift, DerivedFrom,
-    DerivedMember, GivenMember, PACK_DECISION_SCHEMA, RecordingReview, RootEntryChange,
-    StandardPackAdoptRequest, StandardPackAdoptResponse, ValueWait, standard_pack_adopt,
+    DerivedMember, GivenMember, NotJudgedBecause, PACK_DECISION_SCHEMA, RecordingReview,
+    RootEntryChange, StandardPackAdoptRequest, StandardPackAdoptResponse, ValueNotJudged,
+    ValueWait, standard_pack_adopt,
 };
 pub use api::*;
 pub use authoring::*;
