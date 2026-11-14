@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #464 P1 (`contracts/standard-pack-authoring.md`; register §1.370):
+//! Workflow #464 P1 (`contracts/standard-pack-authoring.md`; register §1.377):
 //! `actinglab standard-pack adopt` makes a recorded package a member of its game's standard pack
-//! in a resource repository's checkout, with a rule the Runtime's composer accepts.
+//! in a resource repository's checkout, with a rule the composer accepts and the Runtime
+//! dispatches; its answer never says more than is true, and a call that cannot finish fails
+//! before it writes.
 //!
 //! - **Inputs.** `--repo`, the game's working root in the source layout (`applications.json`,
 //!   `maintenance.json`, `packs/`, the root files); the package, a stopped recording's
@@ -10,27 +12,37 @@
 //!   (`--package`); the decision document `actingcommand.pack-decision.v1` ([`Decision`]), which
 //!   holds only what the Lab cannot know and is required on a first adoption; the Lab's state
 //!   directory, which holds the recordings, the kept copies and the check trees.
-//! - **The checks**, every one before the first write, in this order: the repository; the
-//!   recording; the package, admitted as `package preflight` admits it, its game and server those
-//!   of `applications.json`; its `package_id` a directory name and not adopted before without
-//!   `--replace`, with `--replace` no change below its directory the version control does not hold
-//!   ([`AdoptWorktree`]); the decision; the review (a class other than `held` needs a package run
-//!   through); no absolute local path in the package's text; the root files it must change in their
-//!   canonical form; then the tree as it would be written, laid out under
-//!   `<state>/adopt-check/<ms>/`, bundled by `package bundle` with every root file the repository
-//!   holds, its installed layout checked by `standard-pack check`, both composing the schedule
-//!   with one instance per server. Each refusal is `adopt_refused` naming the check, its member or
-//!   its pointer, and writes nothing in the repository.
+//! - **The checks**, every one before the first write, in this order: the repository, no leftover
+//!   of an interrupted call; the recording; the package, admitted as `package preflight` admits
+//!   it, its game and server those of `applications.json`; its `package_id` a directory name and
+//!   not adopted before without `--replace`, with `--replace` no change below its directory the
+//!   version control does not hold and the kept copy's place on the checkout's volume
+//!   ([`AdoptWorktree`]); the decision, and one role for the package; the review (a class other
+//!   than `held` needs a package run through); no absolute local path in the package's text; the
+//!   root files it must change in their canonical form; every outcome predicate on the rule itself
+//!   on a key the package declares; then the tree as it would be written, laid out in the
+//!   checkout's own marked check tree `<state>/adopt-check/<checkout>/`, bundled by `package
+//!   bundle` with every root file the repository holds, its installed layout checked by
+//!   `standard-pack check`, both composing the schedule with one instance per server; last, a
+//!   business rule's value (none only for a follower of a chain, never `pending` for one). Each
+//!   refusal is `adopt_refused` naming the check, its member or its pointer, and writes nothing in
+//!   the repository.
 //! - **What is derived** ([`derive`]): every rule member the decision does not give, each answered
-//!   with its value and where it came from (`package`, `file`, `neutral`), so that nothing is
-//!   chosen silently; an outcome predicate on the rule itself takes the outcome key the package
-//!   declares, which the Runtime requires of a scheduled run.
+//!   with its value and where it came from (`package`, `file`, `neutral`, `neutral_floor`), so that
+//!   nothing is chosen silently; `feedback_stop` only from the package's own declared keys, never
+//!   from another rule; `expected_duration_ms` never below the neutral 60000.
+//! - **One role.** The decision's class decides: the package ends with exactly one role in the
+//!   files adopt writes (a business rule, a maintenance rule or entry, or a held entry), what it
+//!   removed or replaced answered in `removed_entries` and `replaced_entries`.
 //! - **What it writes**, only inside `--repo` and under the state directory, each part written whole
-//!   and renamed, nothing deleted: `packs/<package_id>/` (written as `packs/<package_id>.part/`,
-//!   only `control.json` and `resources/**`, its JSON in the canonical form), the replaced
-//!   directory first moved to `<state>/adopt/<package_id>.old-<ms>/`; `schedule.json` and
-//!   `maintenance.json` written as `<name>.part` and renamed, each only when it changes. A failure
-//!   is `adopt_write_failed` naming where it stopped and what it had written.
+//!   and renamed, nothing deleted in the checkout or of a replaced directory: `packs/<package_id>/`
+//!   (written as `packs/<package_id>.part/`, only `control.json` and `resources/**`, its JSON in the
+//!   canonical form), the replaced directory first moved to `<state>/adopt/<package_id>.old-<ms>/`
+//!   and moved back when the new one cannot take its place; `schedule.json` and `maintenance.json`
+//!   written as `<name>.part`, read again and renamed only when it is still the file the call read,
+//!   each only when it changes. A failure is `adopt_write_failed` naming where it stopped and what
+//!   it had written. The check tree alone is the tool's own scratch, emptied at the start of each
+//!   call when its marker is there.
 //! - **The value's origin** (coordinator ruling on #464): adopt never writes
 //!   `fixed_value_origin: "model"`. A decided value is `"pending"` or a number of the pack's own
 //!   (`origin` absent or `pack`), written as `fixed_value_milli` without an origin; a decision that
@@ -68,14 +80,16 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::{PreparedContainedTask, TaskPackageDescriptor};
 use actingcommand_pack_containment::Containment;
 use actingcommand_policy::{
-    BENEFIT_FIXED_VALUE_SUBSYSTEM, CONSUMPTION_FACT_SUBSYSTEM, FACT_REFERENCE_SUBSYSTEM,
-    FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM, MAX_QUEUE_WAIT_MEMBER,
-    POOL_FACT_REFERENCE_SUBSYSTEM, QUEUE_WAIT_SUBSYSTEM, SCHEDULE_RULE_LIMITED_MEMBER,
+    BENEFIT_FIXED_VALUE_SUBSYSTEM, BenefitGap, CONSUMPTION_FACT_SUBSYSTEM,
+    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
+    MAX_QUEUE_WAIT_MEMBER, POOL_FACT_REFERENCE_SUBSYSTEM, PolicyCode, QUEUE_WAIT_SUBSYSTEM,
+    SCHEDULE_RULE_LIMITED_MEMBER,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -91,6 +105,13 @@ const PACKS_DIRECTORY: &str = "packs";
 /// Below the state directory: the kept copies of replaced pack directories, and the check trees.
 const KEPT_DIRECTORY: &str = "adopt";
 const CHECK_DIRECTORY: &str = "adopt-check";
+/// The file adopt writes into the check tree of a checkout, `<state>/adopt-check/<checkout>/`, to
+/// mark it as its own scratch: adopt empties a check tree only when this file is in it, and holds
+/// it locked for the whole call, so that two calls on one checkout never share a tree at once.
+pub(crate) const CHECK_TREE_MARKER: &str = ".adopt-check-tree";
+/// Of a check tree's name: the characters of the checkout's last segment kept, then the digest.
+const CHECK_TREE_STEM_CHARS: usize = 32;
+const CHECK_TREE_DIGEST_CHARS: usize = 16;
 /// A recording's file and the directory of the package its last stop generated.
 const RECORDING_FILE: &str = "recording.json";
 const RECORDING_SCHEMA: &str = "actingcommand.lab-recording.v1";
@@ -218,15 +239,23 @@ pub struct StandardPackAdoptRequest {
     pub dry_run: bool,
     /// The Lab's state directory: the recordings, the kept copies and the check trees.
     pub state_dir: PathBuf,
-    /// The operation's time, which names its check tree and its kept copy.
+    /// The operation's time, which names its kept copy.
     pub at_unix_ms: u64,
 }
 
-/// What adopt asks of the checkout's version control: the paths below `relative` (a `/`-separated
-/// directory of the checkout `repo`) that hold a change it has not committed, untracked files
-/// included; an error outcome when it cannot tell.
+/// What adopt asks of the machine beyond the files it reads.
 pub trait AdoptWorktree {
+    /// The checkout's version control: the paths below `relative` (a `/`-separated directory of
+    /// the checkout `repo`) that hold a change it has not committed, untracked files included; an
+    /// error outcome when it cannot tell.
     fn changes_under(&self, repo: &Path, relative: &str) -> Result<Vec<String>, Outcome>;
+
+    /// The volume `path` lies on, a name two paths share exactly when a directory can be renamed
+    /// from one to the other ([`volume_of`]: the volume of the nearest part of `path` that
+    /// exists, its links resolved). A test sets its own to stand for two volumes.
+    fn volume(&self, path: &Path) -> io::Result<String> {
+        volume_of(path)
+    }
 }
 
 /// The decision's class: what the package becomes in its game's standard pack.
@@ -262,6 +291,9 @@ pub enum DerivedFrom {
     File,
     /// A neutral constant of the contract.
     Neutral,
+    /// The contract's neutral floor, which the value the package gives falls below
+    /// (`expected_duration_ms`: never below 60000).
+    NeutralFloor,
 }
 
 /// One member adopt derived and wrote.
@@ -272,6 +304,35 @@ pub struct DerivedMember {
     pub member: String,
     pub value: Value,
     pub from: DerivedFrom,
+    /// How it was derived, in words, where `from` alone does not say it (`feedback_stop`,
+    /// `expected_duration_ms`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub how: Option<String>,
+}
+
+/// One entry of a root file the adoption removed or replaced, so that the package has exactly one
+/// role.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RootEntryChange {
+    /// `schedule.json` or `maintenance.json`.
+    pub file: String,
+    /// The entry's JSON pointer in the file as the call read it.
+    pub json_pointer: String,
+    /// The entry as the call read it.
+    pub before: Value,
+    /// The entry as written; absent for an entry removed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<Value>,
+}
+
+/// Why the adopted business rule is not dispatched until a value is given.
+#[derive(Debug, Clone, Serialize)]
+pub struct ValueWait {
+    /// The reason the Runtime's evaluator records for each of its candidates, a registered code:
+    /// `benefit_unknown` with its `benefit_gap` (and `pool_id` where a pool is why).
+    pub outcome: Outcome,
+    /// The same in words, with what gives the value.
+    pub text: String,
 }
 
 /// One member of the rule the decision gave and adopt wrote; the value as `fixed_value_milli`
@@ -350,6 +411,12 @@ pub struct StandardPackAdoptResponse {
     /// Its `maintenance.json` entry, for the class `maintenance` with `uses`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maintenance: Option<Value>,
+    /// The entries of the root files the adoption removed (a held entry a decision of another
+    /// class lifts, a `maintenance.json` entry a decision of another class ends), in order.
+    pub removed_entries: Vec<RootEntryChange>,
+    /// The entries of the root files that were there and that the adoption changed (the rule,
+    /// the held entry, the `maintenance.json` entry), each as it was and as written.
+    pub replaced_entries: Vec<RootEntryChange>,
     /// The subsystems `requires` gained, in the order they were added.
     pub requires_added: Vec<String>,
     /// Every member of the rule the decision gave and adopt wrote, in the order written.
@@ -365,7 +432,12 @@ pub struct StandardPackAdoptResponse {
     /// The coverage of the adopted business rule; absent for another class.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coverage: Option<AdoptCoverage>,
-    /// The warnings of the check that name the package or its rule.
+    /// For a business rule whose value is not known (a `pending` value, no fixed value and no
+    /// effect, a pool without its valuation): it is not dispatched until a value is given; absent
+    /// otherwise, and for a follower, which is dispatched with its chain's head.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waits_for_value: Option<ValueWait>,
+    /// Every warning of the check, the game's included, each once.
     pub warnings: Vec<Outcome>,
     /// What it wrote in the repository, relative to it, in order; empty under `--dry-run`.
     pub written: Vec<String>,
@@ -374,7 +446,8 @@ pub struct StandardPackAdoptResponse {
     /// Where the replaced pack directory was moved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kept: Option<String>,
-    /// The check tree, kept.
+    /// The checkout's check tree, `<state>/adopt-check/<checkout>/`, kept until the next call on
+    /// the checkout empties it.
     pub check_tree: String,
     /// The repository's own items adopt does not write (a regression case, the census row, the
     /// catalog section), each by its path when the checkout holds it.
@@ -438,7 +511,7 @@ pub fn standard_pack_adopt(
     if fs::symlink_metadata(&staged).is_ok() {
         return Err(refused(
             adopt(AdoptProblem::PackExists).entry(format!("{pack_relative}.{PART}")),
-            format!("{} is left from an earlier adoption", staged.display()),
+            interrupted(&root.leftovers),
         ));
     }
     let pack_exists = fs::symlink_metadata(&pack_dir).is_ok();
@@ -480,6 +553,47 @@ pub fn standard_pack_adopt(
                 ),
             ));
         }
+        // The replaced directory is moved, never copied and removed: its kept place must lie on
+        // the checkout's volume, or the move fails after the new directory was written.
+        let volume = |path: &Path| {
+            worktree.volume(path).map_err(|error| {
+                refused(
+                    adopt(AdoptProblem::ReplaceAcrossVolumes)
+                        .entry(&pack_relative)
+                        .path(&kept_place)
+                        .caused_by(Outcome::from_io_error(&error, IoOp::Inspect).path(path)),
+                    format!(
+                        "the volume of {} cannot be told: {error}; nothing was written",
+                        path.display()
+                    ),
+                )
+            })
+        };
+        let checkout_volume = volume(&pack_dir)?;
+        let kept_volume = volume(&kept_place)?;
+        if checkout_volume != kept_volume {
+            let instead = match &request.source {
+                AdoptSource::Recording { .. } => format!(
+                    "; the recording lies in this state directory, so with another --state-dir \
+                     give its package by its path instead of --record-id: --package {}",
+                    locator.display()
+                ),
+                AdoptSource::Package(_) => String::new(),
+            };
+            return Err(refused(
+                adopt(AdoptProblem::ReplaceAcrossVolumes)
+                    .entry(&pack_relative)
+                    .path(&kept_place),
+                format!(
+                    "--replace moves {} to its kept place {}, and the checkout's volume \
+                     {checkout_volume} is not the state directory's {kept_volume}, where a \
+                     directory cannot be renamed to; give a --state-dir on the checkout's volume \
+                     {checkout_volume}{instead}; nothing was written",
+                    pack_dir.display(),
+                    kept_place.display()
+                ),
+            ));
+        }
     }
 
     // The decision; without one, the class of the earlier adoption.
@@ -487,7 +601,10 @@ pub fn standard_pack_adopt(
         Some(path) => Some(Decision::read(&absolute(path)?, &root.schedule)?),
         None => None,
     };
-    let class = match (&decision, existing.class(&root.schedule)) {
+    let class = match (
+        &decision,
+        existing.class(&root.schedule, &root.maintenance_role, &package_id),
+    ) {
         (Some(decision), _) => decision.class,
         (None, Some(class)) => class,
         (None, None) => {
@@ -497,6 +614,22 @@ pub fn standard_pack_adopt(
             ));
         }
     };
+    // One role (the decision's class decides): adopt writes `schedule.json` and
+    // `maintenance.json` only, so a maintenance role another root file gives cannot be ended here.
+    if let Some(decision) = &decision
+        && decision.class != AdoptClass::Maintenance
+        && let Some(file) = root.other_role_file(&package_id)
+    {
+        return Err(decision.invalid(
+            "/class",
+            &format!(
+                "{file} gives {package_id} a maintenance role, which adopt does not write and \
+                 which would stay beside the class {:?}; take it out of {file} first, or adopt \
+                 the package as maintenance",
+                decision.class
+            ),
+        ));
+    }
 
     // The review (ruling 2): a class other than `held` needs a package run through.
     let mut review = package.review();
@@ -537,13 +670,15 @@ pub fn standard_pack_adopt(
         decision: decision.as_ref(),
         existing: &existing,
     })?;
+    // The Runtime refuses every dispatch of a rule that reads an outcome key of its own its
+    // package does not declare: every such predicate, given, derived or kept, is checked here.
+    own_outcome_keys_declared(&plan, &package, decision.as_ref(), &package_id)?;
 
     // The tree as it would be written, checked as the Runtime reads it.
     let check = check_tree(&CheckInputs {
         repo: &repo,
         root: &root,
         state: &state,
-        at_unix_ms: request.at_unix_ms,
         package_id: &package_id,
         files: &package.files,
         plan: &plan,
@@ -562,13 +697,49 @@ pub fn standard_pack_adopt(
             ),
         ));
     }
+    // A business rule's value: none only for a follower of a chain, which is dispatched with its
+    // head whatever its own value, and so never `pending` for one.
+    let follower = rule_id.as_deref().is_some_and(|rule_id| {
+        check
+            .answer
+            .benefit_followers
+            .iter()
+            .any(|follower| follower.task_id == rule_id)
+    });
+    if class == AdoptClass::Business
+        && plan.held.is_none()
+        && let Some(decision) = &decision
+    {
+        if follower && decision.value == Some(DecidedValue::Pending) {
+            return Err(decision.invalid(
+                "/value",
+                "the rule follows its chain's head, and a follower is dispatched with its head \
+                 whatever its own value, so \"pending\" would be untrue: give the follower no \
+                 value at all, or adopt it apart from the chain (a trigger of its own) with its \
+                 value",
+            ));
+        }
+        if !follower && decision.value.is_none() && existing.rule.is_none() {
+            return Err(decision.invalid(
+                "/value",
+                "a business rule needs its value: {fixed_value_milli, origin} or \"pending\" \
+                 (only a follower of a chain, dispatched with its head, gives none)",
+            ));
+        }
+    }
     let coverage = match (&plan.rule, class) {
         (Some(rule), AdoptClass::Business) if plan.held.is_none() => {
             Some(rule_coverage(rule, &root.schedule.pools, &check.answer))
         }
         _ => None,
     };
-    let warnings = naming(&check, &package_id, rule_id.as_deref());
+    let waits_for_value = match (&plan.rule, coverage) {
+        (Some(rule), Some(coverage)) if coverage != AdoptCoverage::Follower => {
+            value_wait(rule, &root.schedule.pools)
+        }
+        _ => None,
+    };
+    let warnings = all_warnings(&check);
 
     // What it writes.
     let mut changed = vec![pack_relative.clone()];
@@ -589,6 +760,8 @@ pub fn standard_pack_adopt(
             pack_dir: &pack_dir,
             kept: replaced.then_some(kept_place.as_path()),
             plan: &plan,
+            read_schedule: root.schedule_bytes.as_deref(),
+            read_maintenance: &root.maintenance_bytes,
         })?;
         (
             changed,
@@ -614,12 +787,15 @@ pub fn standard_pack_adopt(
         rule: plan.rule.clone().map(Value::Object),
         held: plan.held.clone(),
         maintenance: plan.maintenance_entry.clone(),
+        removed_entries: plan.removed.clone(),
+        replaced_entries: plan.replaced.clone(),
         requires_added: plan.requires_added.clone(),
         given: plan.given.clone(),
         derived: plan.derived.clone(),
         derived_drift: plan.drift.clone(),
         model_kept: plan.model_kept.clone(),
         coverage,
+        waits_for_value,
         warnings,
         written,
         would_write,
@@ -639,6 +815,12 @@ struct Repository {
     schedule: StandardPackSchedule,
     /// The packages a role of the root files makes maintenance-role.
     maintenance_role: BTreeSet<String>,
+    /// The packages each root file adopt does not write (`pages.json`, `navigation.json`,
+    /// `interrupts.json`) gives a maintenance role, by the file's name.
+    other_roles: Vec<(&'static str, BTreeSet<String>)>,
+    /// What interrupted adoptions left below `packs/` ([`leftovers`]); a leftover root file is
+    /// refused when the checkout is read.
+    leftovers: Vec<String>,
 }
 
 impl Repository {
@@ -657,14 +839,13 @@ impl Repository {
                 format!("{} is no directory", repo.join(PACKS_DIRECTORY).display()),
             ));
         }
-        for name in [STANDARD_PACK_SCHEDULE_FILE, MAINTENANCE_FILE] {
-            let part = format!("{name}.{PART}");
-            if fs::symlink_metadata(repo.join(&part)).is_ok() {
-                return Err(repository_invalid(
-                    &part,
-                    format!("{part} is left from an earlier adoption"),
-                ));
-            }
+        let leftovers = leftovers(repo)?;
+        let pack_prefix = format!("{PACKS_DIRECTORY}/");
+        if let Some(part) = leftovers
+            .iter()
+            .find(|left| !left.starts_with(&pack_prefix))
+        {
+            return Err(repository_invalid(part, interrupted(&leftovers)));
         }
         let schedule_path = repo.join(STANDARD_PACK_SCHEDULE_FILE);
         let schedule_bytes = optional_file(&schedule_path, STANDARD_PACK_SCHEDULE_FILE)?;
@@ -680,7 +861,7 @@ impl Repository {
             })?,
             None => StandardPackSchedule::default(),
         };
-        let maintenance_role = maintenance_role(repo, &game, &maintenance);
+        let roles = maintenance_roles(repo, &game, &maintenance);
         Ok(Self {
             game,
             servers,
@@ -688,9 +869,71 @@ impl Repository {
             maintenance,
             schedule_bytes,
             schedule,
-            maintenance_role,
+            maintenance_role: roles.all,
+            other_roles: roles.others,
+            leftovers,
         })
     }
+
+    /// The root file adopt does not write that gives `package_id` a maintenance role, if any.
+    fn other_role_file(&self, package_id: &str) -> Option<&'static str> {
+        self.other_roles
+            .iter()
+            .find(|(_, packages)| packages.contains(package_id))
+            .map(|(file, _)| *file)
+    }
+}
+
+/// What an interrupted adoption leaves in the checkout: `schedule.json.part`,
+/// `maintenance.json.part` and every `packs/<name>.part`, by their `/`-separated paths relative
+/// to it, in that order.
+fn leftovers(repo: &Path) -> LabResult<Vec<String>> {
+    let mut left = Vec::new();
+    for name in [STANDARD_PACK_SCHEDULE_FILE, MAINTENANCE_FILE] {
+        let part = format!("{name}.{PART}");
+        if fs::symlink_metadata(repo.join(&part)).is_ok() {
+            left.push(part);
+        }
+    }
+    let packs = repo.join(PACKS_DIRECTORY);
+    let unreadable = |error: io::Error| {
+        refused(
+            adopt(AdoptProblem::RepositoryInvalid)
+                .entry(PACKS_DIRECTORY)
+                .caused_by(Outcome::from_io_error(&error, IoOp::ReadDir).path(&packs)),
+            format!("{}: {error}", packs.display()),
+        )
+    };
+    let mut names = fs::read_dir(&packs)
+        .map_err(unreadable)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(unreadable)?;
+    names.sort();
+    let suffix = format!(".{PART}");
+    for name in names {
+        if let Some(text) = name.to_str()
+            && text.ends_with(&suffix)
+        {
+            left.push(format!("{PACKS_DIRECTORY}/{text}"));
+        }
+    }
+    Ok(left)
+}
+
+/// The message of a refusal for what an interrupted adoption left: each leftover by name, and
+/// what to do (`contracts/standard-pack-authoring.md`, "If a call was interrupted").
+fn interrupted(leftovers: &[String]) -> String {
+    format!(
+        "an earlier adoption was interrupted and left {leftovers:?} in the checkout. When it \
+         began, the pack directory it wrote, packs/<package_id>, was absent or committed (adopt \
+         refuses a pack directory with changes), so `git status -- packs/<package_id>` shows \
+         exactly what it left there; schedule.json and maintenance.json are each written whole \
+         and renamed in one step, so each is as it was before that call or as that call \
+         computed it (`git diff` shows which); a replaced pack directory it had moved away is \
+         in the last commit and under the state directory's adopt/. Move the leftovers named \
+         out of the checkout by hand (adopt deletes nothing), then run adopt again"
+    )
 }
 
 /// The game and the servers `applications.json` declares; its full check is `package bundle`'s.
@@ -718,14 +961,19 @@ fn applications_of(bytes: &[u8]) -> LabResult<(String, BTreeSet<String>)> {
     Ok((game.to_owned(), servers.keys().cloned().collect()))
 }
 
+/// The packages the root files give a maintenance role.
+struct Roles {
+    /// Every one (`standard_pack_maintenance_packages`).
+    all: BTreeSet<String>,
+    /// Those each root file adopt does not write gives, by the file's name.
+    others: Vec<(&'static str, BTreeSet<String>)>,
+}
+
 /// The packages the root files give a maintenance role (`standard_pack_maintenance_packages`):
 /// `maintenance.json`'s, and those of `pages.json`, `navigation.json` and `interrupts.json` where
-/// they read. A root file that does not read gives none here; the check of the tree refuses it.
-fn maintenance_role(
-    repo: &Path,
-    game: &str,
-    maintenance: &[BundleMaintenance],
-) -> BTreeSet<String> {
+/// they read, the last three also each apart. A root file that does not read gives none here;
+/// the check of the tree refuses it.
+fn maintenance_roles(repo: &Path, game: &str, maintenance: &[BundleMaintenance]) -> Roles {
     let read = |name: &str| fs::read(repo.join(name)).ok();
     let pages = read(STANDARD_PACK_PAGES_FILE)
         .and_then(|bytes| parse_standard_pack_pages(&bytes, Some(game)).ok());
@@ -741,6 +989,37 @@ fn maintenance_role(
         }
         _ => None,
     };
+    let empty = StandardPackRoot {
+        registry: StandardPackRegistry::default(),
+        pages: None,
+        interrupts: None,
+        navigation: None,
+        display_layout: None,
+    };
+    let only = |root: StandardPackRoot| standard_pack_maintenance_packages(&[], &root);
+    let others = vec![
+        (
+            STANDARD_PACK_PAGES_FILE,
+            only(StandardPackRoot {
+                pages: pages.clone(),
+                ..empty.clone()
+            }),
+        ),
+        (
+            STANDARD_PACK_NAVIGATION_FILE,
+            only(StandardPackRoot {
+                navigation: navigation.clone(),
+                ..empty.clone()
+            }),
+        ),
+        (
+            STANDARD_PACK_INTERRUPTS_FILE,
+            only(StandardPackRoot {
+                interrupts: interrupts.clone(),
+                ..empty
+            }),
+        ),
+    ];
     let root = StandardPackRoot {
         registry: StandardPackRegistry::default(),
         pages,
@@ -748,7 +1027,10 @@ fn maintenance_role(
         navigation,
         display_layout: None,
     };
-    standard_pack_maintenance_packages(maintenance, &root)
+    Roles {
+        all: standard_pack_maintenance_packages(maintenance, &root),
+        others,
+    }
 }
 
 /// The package to adopt, admitted.
@@ -887,16 +1169,52 @@ impl Package {
             .unwrap_or_default()
     }
 
-    /// The first outcome key the entry task declares (`scheduling_outcome.mappings`).
-    fn outcome_key(&self) -> Option<String> {
+    /// The entry task's `scheduling_outcome` mappings.
+    fn mappings(&self) -> Vec<&Value> {
         self.task
-            .as_ref()?
-            .get("scheduling_outcome")?
-            .get("mappings")?
-            .as_array()?
-            .iter()
-            .find_map(|mapping| mapping.get("outcome_key").and_then(Value::as_str))
-            .map(str::to_owned)
+            .as_ref()
+            .and_then(|task| task.get("scheduling_outcome"))
+            .and_then(|outcome| outcome.get("mappings"))
+            .and_then(Value::as_array)
+            .map(|mappings| mappings.iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// Every outcome key the entry task declares (`scheduling_outcome.mappings`), each once, in
+    /// declaration order: the keys a scheduled run of the package may be read for.
+    fn declared_outcome_keys(&self) -> Vec<String> {
+        let mut seen = BTreeSet::new();
+        let mut keys = Vec::new();
+        for key in self
+            .mappings()
+            .into_iter()
+            .filter_map(|mapping| mapping.get("outcome_key").and_then(Value::as_str))
+        {
+            if seen.insert(key) {
+                keys.push(key.to_owned());
+            }
+        }
+        keys
+    }
+
+    /// The declared keys of a normal end: every mapping's but a busy one's (an activity still in
+    /// progress, `"busy": true`) and one with a `remedy` (the business result was not the expected
+    /// one), each once, in declaration order.
+    fn normal_outcome_keys(&self) -> Vec<String> {
+        let mut seen = BTreeSet::new();
+        let mut keys = Vec::new();
+        for mapping in self.mappings() {
+            let busy = mapping.get("busy").and_then(Value::as_bool) == Some(true);
+            let remedy = mapping.get("remedy").is_some();
+            if let Some(key) = mapping.get("outcome_key").and_then(Value::as_str)
+                && !busy
+                && !remedy
+                && seen.insert(key)
+            {
+                keys.push(key.to_owned());
+            }
+        }
+        keys
     }
 
     /// A lower bound of one run, in milliseconds: the sum over its operations of the wait after
@@ -1025,11 +1343,20 @@ impl Existing {
         self.rule.is_some() || self.held.is_some() || self.maintenance.is_some()
     }
 
-    /// The class the earlier adoption gave the package: held wins, as the composer leaves a held
-    /// package's rule out.
-    fn class(&self, schedule: &StandardPackSchedule) -> Option<AdoptClass> {
+    /// The class the earlier adoption gave the package, as the composer reads the files: held
+    /// wins, as the composer leaves a held package's rule out; then a maintenance role of the root
+    /// files, which leaves its rule unjudged whatever it declares.
+    fn class(
+        &self,
+        schedule: &StandardPackSchedule,
+        maintenance_role: &BTreeSet<String>,
+        package_id: &str,
+    ) -> Option<AdoptClass> {
         if self.held.is_some() {
             return Some(AdoptClass::Held);
+        }
+        if self.any() && maintenance_role.contains(package_id) {
+            return Some(AdoptClass::Maintenance);
         }
         if let Some(index) = self.rule {
             return Some(if schedule.rules[index].maintenance {
@@ -1045,7 +1372,7 @@ impl Existing {
     /// in `schedule.json`, else the entry in `maintenance.json`.
     fn pointing(&self, outcome: Outcome, pack_exists: bool, pack_relative: &str) -> Outcome {
         if pack_exists {
-            return outcome.entry(pack_relative.to_owned());
+            return outcome.entry(pack_relative);
         }
         if let Some(index) = self.rule {
             return outcome
@@ -1411,6 +1738,9 @@ struct Plan {
     rule: Option<Map<String, Value>>,
     held: Option<Value>,
     maintenance_entry: Option<Value>,
+    /// The entries of the root files removed and replaced, so that the package has one role.
+    removed: Vec<RootEntryChange>,
+    replaced: Vec<RootEntryChange>,
     requires_added: Vec<String>,
     given: Vec<GivenMember>,
     derived: Vec<DerivedMember>,
@@ -1459,6 +1789,8 @@ impl Plan {
             rule: None,
             held: None,
             maintenance_entry: None,
+            removed: Vec::new(),
+            replaced: Vec::new(),
             requires_added: Vec::new(),
             given: Vec::new(),
             derived: Vec::new(),
@@ -1479,7 +1811,7 @@ impl Plan {
                 .collect(),
             tier,
             rule_id: rule_id.to_owned(),
-            outcome_key: inputs.package.outcome_key(),
+            normal_outcome_keys: inputs.package.normal_outcome_keys(),
             lower_bound_ms: inputs.package.lower_bound_ms(),
         };
 
@@ -1513,6 +1845,7 @@ impl Plan {
                     format!("schedule.json: /rules/{index} is no object"),
                 ));
             };
+            let before = rule.clone();
             // A fixed value the model wrote is kept as it is, and answered.
             if rule
                 .get(SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER)
@@ -1537,6 +1870,14 @@ impl Plan {
             }
             if let Some(slot) = array_member(&mut document, RULES)?.get_mut(index) {
                 *slot = Value::Object(rule.clone());
+            }
+            if rule != before {
+                plan.replaced.push(RootEntryChange {
+                    file: STANDARD_PACK_SCHEDULE_FILE.to_owned(),
+                    json_pointer: format!("/{RULES}/{index}"),
+                    before: Value::Object(before),
+                    after: Some(Value::Object(rule.clone())),
+                });
             }
             plan.rule = Some(rule);
         } else if wants_rule {
@@ -1563,6 +1904,7 @@ impl Plan {
             let held = array_member(&mut document, HELD)?;
             match (inputs.existing.held, decided) {
                 (Some(index), decided) => {
+                    let before = held.get(index).cloned();
                     if let (Some(decided), Some(Value::Object(entry))) =
                         (decided, held.get_mut(index))
                     {
@@ -1572,6 +1914,16 @@ impl Plan {
                         }
                     }
                     plan.held = held.get(index).cloned();
+                    if let Some(before) = before
+                        && plan.held.as_ref() != Some(&before)
+                    {
+                        plan.replaced.push(RootEntryChange {
+                            file: STANDARD_PACK_SCHEDULE_FILE.to_owned(),
+                            json_pointer: format!("/{HELD}/{index}"),
+                            before,
+                            after: plan.held.clone(),
+                        });
+                    }
                 }
                 (None, Some(decided)) => {
                     let mut entry = Map::new();
@@ -1596,7 +1948,12 @@ impl Plan {
             // A decision of another class lifts the hold: the rule is composed again.
             let held = array_member(&mut document, HELD)?;
             if index < held.len() {
-                held.remove(index);
+                plan.removed.push(RootEntryChange {
+                    file: STANDARD_PACK_SCHEDULE_FILE.to_owned(),
+                    json_pointer: format!("/{HELD}/{index}"),
+                    before: held.remove(index),
+                    after: None,
+                });
             }
         }
 
@@ -1639,12 +1996,23 @@ impl Plan {
         }
         plan.check_schedule = any_schedule.then_some(schedule);
 
-        // `maintenance.json`: an entry for the class maintenance with `uses`.
+        // `maintenance.json`: an entry for the class maintenance with `uses`; a decision of
+        // another class ends every entry of the package there, so that it has one role.
         let uses = inputs
             .decision
             .filter(|decision| decision.class == AdoptClass::Maintenance)
             .and_then(|decision| decision.uses.clone());
-        if let Some(uses) = uses {
+        let ends_entries = inputs
+            .decision
+            .is_some_and(|decision| decision.class != AdoptClass::Maintenance);
+        let named_entries = root
+            .maintenance
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.package_id == inputs.package_id)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if uses.is_some() || (ends_entries && !named_entries.is_empty()) {
             let mut entries = serde_json::from_slice::<Value>(strip_bom(&root.maintenance_bytes))
                 .ok()
                 .and_then(|value| match value {
@@ -1654,26 +2022,57 @@ impl Plan {
                 .ok_or_else(|| {
                     repository_invalid(MAINTENANCE_FILE, "maintenance.json is no list".to_owned())
                 })?;
-            let uses_value = serde_json::to_value(&uses).map_err(|error| {
-                repository_invalid(
-                    MAINTENANCE_FILE,
-                    format!("the uses do not serialize: {error}"),
-                )
-            })?;
-            match inputs.existing.maintenance {
-                Some(index) => {
-                    if let Some(Value::Object(entry)) = entries.get_mut(index) {
-                        entry.insert(USES.to_owned(), uses_value);
+            match uses {
+                Some(uses) => {
+                    let uses_value = serde_json::to_value(&uses).map_err(|error| {
+                        repository_invalid(
+                            MAINTENANCE_FILE,
+                            format!("the uses do not serialize: {error}"),
+                        )
+                    })?;
+                    match inputs.existing.maintenance {
+                        Some(index) => {
+                            let before = entries.get(index).cloned();
+                            if let Some(Value::Object(entry)) = entries.get_mut(index) {
+                                entry.insert(USES.to_owned(), uses_value);
+                            }
+                            plan.maintenance_entry = entries.get(index).cloned();
+                            if let Some(before) = before
+                                && plan.maintenance_entry.as_ref() != Some(&before)
+                            {
+                                plan.replaced.push(RootEntryChange {
+                                    file: MAINTENANCE_FILE.to_owned(),
+                                    json_pointer: format!("/{index}"),
+                                    before,
+                                    after: plan.maintenance_entry.clone(),
+                                });
+                            }
+                        }
+                        None => {
+                            let mut entry = Map::new();
+                            entry.insert(PACKAGE_ID.to_owned(), json!(inputs.package_id));
+                            entry.insert(SERVER.to_owned(), json!(inputs.server));
+                            entry.insert(USES.to_owned(), uses_value);
+                            entries.push(Value::Object(entry.clone()));
+                            plan.maintenance_entry = Some(Value::Object(entry));
+                        }
                     }
-                    plan.maintenance_entry = entries.get(index).cloned();
                 }
                 None => {
-                    let mut entry = Map::new();
-                    entry.insert(PACKAGE_ID.to_owned(), json!(inputs.package_id));
-                    entry.insert(SERVER.to_owned(), json!(inputs.server));
-                    entry.insert(USES.to_owned(), uses_value);
-                    entries.push(Value::Object(entry.clone()));
-                    plan.maintenance_entry = Some(Value::Object(entry));
+                    // From the last, so that each index is the one the file was read with.
+                    let mut ended = Vec::new();
+                    for index in named_entries.into_iter().rev() {
+                        if index < entries.len() {
+                            ended.push(RootEntryChange {
+                                file: MAINTENANCE_FILE.to_owned(),
+                                json_pointer: format!("/{index}"),
+                                before: entries.remove(index),
+                                after: None,
+                            });
+                        }
+                    }
+                    ended.reverse();
+                    plan.removed.extend(ended);
                 }
             }
             let value = Value::Array(entries);
@@ -1717,12 +2116,8 @@ impl Plan {
             .trigger
             .clone()
             .ok_or_else(|| decision.invalid("/trigger", "a new rule needs its trigger"))?;
-        if decision.class == AdoptClass::Business && decision.value.is_none() {
-            return Err(decision.invalid(
-                "/value",
-                "a business rule needs its value: {fixed_value_milli, origin} or \"pending\"",
-            ));
-        }
+        // A business rule without its value is refused after the check of the tree, which tells
+        // a follower of a chain (dispatched with its head, so given none) from any other rule.
         let mut rule = Map::new();
         match decision.overrides.get(ID) {
             Some(id) => self.give(ID, id.clone()),
@@ -1754,7 +2149,12 @@ impl Plan {
                             ),
                         )
                     })?;
-                    self.derive_member(member, value.clone(), from);
+                    self.derived.push(DerivedMember {
+                        member: member.to_owned(),
+                        value: value.clone(),
+                        from,
+                        how: derivation(derive_inputs, member, from),
+                    });
                     value
                 }
             };
@@ -1908,6 +2308,7 @@ impl Plan {
             member: member.to_owned(),
             value,
             from,
+            how: None,
         });
     }
 
@@ -1956,8 +2357,9 @@ struct DeriveInputs<'a> {
     rules: Vec<(&'a ScheduleRule, Tier)>,
     tier: Tier,
     rule_id: String,
-    /// The first outcome key the package's entry task declares.
-    outcome_key: Option<String>,
+    /// The outcome keys of a normal end the package's entry task declares
+    /// ([`Package::normal_outcome_keys`]).
+    normal_outcome_keys: Vec<String>,
     /// The package's lower bound of one run, in milliseconds; 0 when it gives none.
     lower_bound_ms: u64,
 }
@@ -1985,10 +2387,15 @@ fn derive(inputs: &DeriveInputs<'_>, member: &str) -> Option<(Value, DerivedFrom
         )),
         SENSITIVE => Some((Value::Bool(false), DerivedFrom::Neutral)),
         YIELD_POINTS => Some((Value::Array(Vec::new()), DerivedFrom::Neutral)),
-        EXPECTED_DURATION_MS => Some(if inputs.lower_bound_ms > 0 {
+        // Never below the neutral floor: the package's waits are a lower bound only, and a value
+        // far below a run's time would rank the task first among its instance's tasks.
+        EXPECTED_DURATION_MS => Some(if inputs.lower_bound_ms >= NEUTRAL_EXPECTED_DURATION_MS {
             (json!(inputs.lower_bound_ms), DerivedFrom::Package)
         } else {
-            (json!(NEUTRAL_EXPECTED_DURATION_MS), DerivedFrom::Neutral)
+            (
+                json!(NEUTRAL_EXPECTED_DURATION_MS),
+                DerivedFrom::NeutralFloor,
+            )
         }),
         NEXT_RUN_CLAMP_MS => of_file(json!(NEUTRAL_NEXT_RUN_CLAMP_MS)),
         COOLDOWN_MS => of_file(json!(NEUTRAL_COOLDOWN_MS)),
@@ -2056,83 +2463,55 @@ fn frequent(values: Vec<Value>) -> Option<Value> {
     best.map(|(value, _)| value)
 }
 
-/// `feedback_stop`: the most frequent of the file's rules of the tier, each with its own id
-/// replaced by the rule's, else an outcome predicate on the rule itself; every outcome predicate
-/// on the rule itself takes the outcome key the package declares (a scheduled run is refused for
-/// a key its package does not declare). `None` when such a predicate needs a key the package does
-/// not declare.
+/// `feedback_stop`, never copied from another rule (a copied stop may never come true, so that the
+/// task would be dispatched again at every cooldown): "this rule's own run ended with a key its
+/// package declares for a normal end", an outcome predicate on the rule itself for each such key,
+/// under `any` when there are several, so that the task runs once for each time its trigger comes
+/// true. `None` when the package declares no such key, and the decision's `overrides` must give
+/// it.
 fn feedback_stop(inputs: &DeriveInputs<'_>) -> Option<(Value, DerivedFrom)> {
-    let candidates = inputs
-        .rules
+    let mut predicates = inputs
+        .normal_outcome_keys
         .iter()
-        .filter(|(_, tier)| *tier == inputs.tier)
-        .filter_map(|(rule, _)| {
-            rule.body.get(FEEDBACK_STOP).map(|written| {
-                let mut renamed = written.clone();
-                rename_task(&mut renamed, &rule.id, &inputs.rule_id);
-                renamed
-            })
-        })
-        .collect::<Vec<_>>();
-    let (mut stop, from) = match frequent(candidates) {
-        Some(stop) => (stop, DerivedFrom::File),
-        None => (
+        .map(|key| {
             json!({
                 "kind": "outcome",
                 "task_id": inputs.rule_id,
-                "outcome_key": "",
+                "outcome_key": key,
                 "comparison": "eq",
                 "value": {"type": "boolean", "value": true}
-            }),
-            DerivedFrom::Package,
-        ),
+            })
+        })
+        .collect::<Vec<_>>();
+    let stop = match predicates.len() {
+        0 => return None,
+        1 => predicates.remove(0),
+        _ => json!({"kind": "any", "predicates": predicates}),
     };
-    own_outcome_keys(&mut stop, &inputs.rule_id, inputs.outcome_key.as_deref())
-        .then_some((stop, from))
+    Some((stop, DerivedFrom::Package))
 }
 
-/// Every `task_id` of `value` that is `from` becomes `to`.
-fn rename_task(value: &mut Value, from: &str, to: &str) {
-    match value {
-        Value::Object(members) => {
-            for (name, member) in members.iter_mut() {
-                if name == "task_id" && member.as_str() == Some(from) {
-                    *member = json!(to);
-                } else {
-                    rename_task(member, from, to);
-                }
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                rename_task(item, from, to);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Every outcome predicate of `value` on `rule_id` takes `key`; `false` when one needs a key and
-/// there is none.
-fn own_outcome_keys(value: &mut Value, rule_id: &str, key: Option<&str>) -> bool {
-    match value {
-        Value::Object(members) => {
-            let own = members.get("kind").and_then(Value::as_str) == Some("outcome")
-                && members.get("task_id").and_then(Value::as_str) == Some(rule_id);
-            if own {
-                let Some(own_key) = key else {
-                    return false;
-                };
-                members.insert("outcome_key".to_owned(), json!(own_key));
-            }
-            members
-                .values_mut()
-                .all(|member| own_outcome_keys(member, rule_id, key))
-        }
-        Value::Array(items) => items
-            .iter_mut()
-            .all(|item| own_outcome_keys(item, rule_id, key)),
-        _ => true,
+/// How a derived member was derived, in words, where `from` alone does not say it.
+fn derivation(inputs: &DeriveInputs<'_>, member: &str, from: DerivedFrom) -> Option<String> {
+    match (member, from) {
+        (FEEDBACK_STOP, _) => Some(format!(
+            "derived from the package: this rule's own run ended with a key its package declares \
+             for a normal end ({:?}), so that the task runs once for each time its trigger comes \
+             true",
+            inputs.normal_outcome_keys
+        )),
+        (EXPECTED_DURATION_MS, DerivedFrom::NeutralFloor) => Some(format!(
+            "derived, neutral floor: the package's lower bound of one run, {} ms (the sum of its \
+             waits), is below the neutral {NEUTRAL_EXPECTED_DURATION_MS}; the measured runs \
+             replace it",
+            inputs.lower_bound_ms
+        )),
+        (EXPECTED_DURATION_MS, _) => Some(format!(
+            "derived from the package: its lower bound of one run, {} ms (the sum of its waits); \
+             the measured runs replace it",
+            inputs.lower_bound_ms
+        )),
+        _ => None,
     }
 }
 
@@ -2291,6 +2670,203 @@ fn rule_coverage(
     }
 }
 
+/// Workflow #464 P1 item 2: every outcome predicate of the schedule as it would be written that
+/// reads the adopted rule's own outcome (`kind` `outcome`, `task_id` the rule's id: the rule's own
+/// trigger and stop, given, derived or kept, and any other rule's or pool's that reads it) names a
+/// key the package declares. The Runtime refuses every dispatch of a task whose outcome is read
+/// for a key its package does not declare (`contracts/scheduling/README.md`, the outcome
+/// declaration). A refusal is `decision_invalid` at the predicate's key: in the decision when the
+/// decision gave the member, in `schedule.json` as it would be written otherwise.
+fn own_outcome_keys_declared(
+    plan: &Plan,
+    package: &Package,
+    decision: Option<&Decision>,
+    package_id: &str,
+) -> LabResult<()> {
+    let (Some(rule_id), None, Some(bytes)) = (plan.rule_id(), &plan.held, &plan.check_schedule)
+    else {
+        return Ok(());
+    };
+    let document = serde_json::from_slice::<Value>(bytes).map_err(|error| {
+        repository_invalid(
+            STANDARD_PACK_SCHEDULE_FILE,
+            format!("schedule.json as it would be written does not read: {error}"),
+        )
+    })?;
+    let declared = package.declared_outcome_keys();
+    let declared_set = declared.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let mut references = Vec::new();
+    for member in [RULES, "pools"] {
+        if let Some(items) = document.get(member) {
+            own_outcome_references(items, &format!("/{member}"), &rule_id, &mut references);
+        }
+    }
+    let own_index = document
+        .get(RULES)
+        .and_then(Value::as_array)
+        .and_then(|rules| {
+            rules
+                .iter()
+                .position(|rule| rule.get(PACKAGE_ID).and_then(Value::as_str) == Some(package_id))
+        });
+    for (pointer, key) in references {
+        if key
+            .as_deref()
+            .is_some_and(|named| declared_set.contains(named))
+        {
+            continue;
+        }
+        let key_pointer = format!("{pointer}/outcome_key");
+        // Where the predicate came from: the decision's trigger or stop, else the file.
+        let given = own_index.zip(decision).and_then(|(index, decided)| {
+            let rest = key_pointer.strip_prefix(&format!("/{RULES}/{index}"))?;
+            if let Some(tail) = rest.strip_prefix(&format!("/{TRIGGER}"))
+                && decided.trigger.is_some()
+            {
+                return Some((decided, format!("/{TRIGGER}{tail}")));
+            }
+            if let Some(tail) = rest.strip_prefix(&format!("/{FEEDBACK_STOP}"))
+                && decided.overrides.contains_key(FEEDBACK_STOP)
+            {
+                return Some((decided, format!("/overrides/{FEEDBACK_STOP}{tail}")));
+            }
+            None
+        });
+        let message = format!(
+            "the outcome predicate at {key_pointer:?} reads the rule {rule_id}'s own outcome on \
+             the key {key:?}, which its package does not declare (it declares {declared:?}); the \
+             Runtime refuses every dispatch of such a rule: name one of the declared keys"
+        );
+        let error = match given {
+            Some((decided, decided_pointer)) => decided.invalid(&decided_pointer, &message),
+            None => refused(
+                adopt(AdoptProblem::DecisionInvalid)
+                    .entry(STANDARD_PACK_SCHEDULE_FILE)
+                    .json_pointer(bounded_pointer(&key_pointer)),
+                format!("schedule.json as it would be written: {message}"),
+            ),
+        };
+        let outcome = cause_of(&error);
+        return Err(error.with_details(json!({
+            "outcome": outcome.envelope(Detail::Full),
+            "declared_outcome_keys": declared
+        })));
+    }
+    Ok(())
+}
+
+/// Each object below `value` (at `pointer`) that reads `rule_id`'s own outcome, by its pointer,
+/// with the key it names (`None` when it names none as a text).
+fn own_outcome_references(
+    value: &Value,
+    pointer: &str,
+    rule_id: &str,
+    references: &mut Vec<(String, Option<String>)>,
+) {
+    match value {
+        Value::Object(members) => {
+            if members.get("kind").and_then(Value::as_str) == Some("outcome")
+                && members.get("task_id").and_then(Value::as_str) == Some(rule_id)
+            {
+                references.push((
+                    pointer.to_owned(),
+                    members
+                        .get("outcome_key")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                ));
+            }
+            for (name, member) in members {
+                own_outcome_references(
+                    member,
+                    &format!("{pointer}/{}", segment(name)),
+                    rule_id,
+                    references,
+                );
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                own_outcome_references(item, &format!("{pointer}/{index}"), rule_id, references);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Why the business rule `rule` is not dispatched until a value is given, as the evaluator judges
+/// its net benefit before reading any pool (`contracts/scheduling/README.md`, "Net benefit within
+/// a tier"): no fixed value and no effect, an entry whose amount is the pending marker, a pool it
+/// touches without its valuation or with the marker. `None` when its value is declared (it is
+/// then judged by it at each evaluation).
+fn value_wait(rule: &Map<String, Value>, pools: &[ScheduleItem]) -> Option<ValueWait> {
+    let rule_id = rule.get(ID).and_then(Value::as_str).unwrap_or_default();
+    let fixed = rule.contains_key(SCHEDULE_RULE_FIXED_VALUE_MEMBER);
+    let entries = |member: &str| {
+        rule.get(member)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    // With a fixed value its `produces` are not read.
+    let produces = if fixed { Vec::new() } else { entries(PRODUCES) };
+    let consumes = entries(CONSUMES);
+    let give = "give it with --replace and a decision whose value is {fixed_value_milli, origin: \
+                pack}, or by the model's export, or declare its produces and consumes on valued \
+                pools";
+    let (gap, pool_id, why, remedy) = if !fixed && produces.is_empty() && consumes.is_empty() {
+        (
+            BenefitGap::NoEffects,
+            None,
+            "it writes no fixed value and no produces or consumes entry".to_owned(),
+            give.to_owned(),
+        )
+    } else {
+        produces.iter().chain(&consumes).find_map(|entry| {
+            let pool_id = entry.get("pool_id").and_then(Value::as_str)?.to_owned();
+            if entry.get("amount").and_then(Value::as_str) == Some(VALUE_PENDING) {
+                return Some((
+                    BenefitGap::EntryPending,
+                    Some(pool_id.clone()),
+                    format!("its entry on the pool {pool_id} has the amount \"pending\""),
+                    "write the entry's amount".to_owned(),
+                ));
+            }
+            let valuation = pools
+                .iter()
+                .find(|pool| pool.id == pool_id)
+                .and_then(|pool| pool.body.get("valuation"));
+            match valuation {
+                Some(Value::Object(_)) => None,
+                Some(Value::String(marker)) if marker == VALUE_PENDING => Some((
+                    BenefitGap::ValuationPending,
+                    Some(pool_id.clone()),
+                    format!("the pool {pool_id} has the valuation \"pending\""),
+                    "write the pool's valuation in schedule.json".to_owned(),
+                )),
+                _ => Some((
+                    BenefitGap::ValuationMissing,
+                    Some(pool_id.clone()),
+                    format!("the pool {pool_id} has no valuation"),
+                    "write the pool's valuation in schedule.json".to_owned(),
+                )),
+            }
+        })?
+    };
+    let outcome = Outcome::new(PolicyCode::BenefitUnknown).benefit_gap(gap);
+    let outcome = match &pool_id {
+        Some(pool_id) => outcome.pool_id(pool_id.as_str()),
+        None => outcome,
+    };
+    Some(ValueWait {
+        outcome,
+        text: format!(
+            "{rule_id} is not dispatched until a value is given: {why}; {remedy}. Until then the \
+             Runtime's evaluator holds each of its candidates with this reason"
+        ),
+    })
+}
+
 /// The check tree and what its checks answered.
 struct Checked {
     tree: PathBuf,
@@ -2298,6 +2874,8 @@ struct Checked {
     /// The bundle's warnings, which the check of the installed layout does not repeat (the
     /// recognition packages its maintenance declarations leave undeclared).
     bundle_warnings: Vec<Outcome>,
+    /// The check tree's marker, open and locked until the call ends.
+    _marker: File,
 }
 
 /// What [`check_tree`] reads.
@@ -2305,24 +2883,137 @@ struct CheckInputs<'a> {
     repo: &'a Path,
     root: &'a Repository,
     state: &'a Path,
-    at_unix_ms: u64,
     package_id: &'a str,
     files: &'a BTreeMap<String, Vec<u8>>,
     plan: &'a Plan,
 }
 
-/// B.4 item 6: the tree as it would be written, under `<state>/adopt-check/<ms>/`: `packs-root/`
-/// (the repository's pack directories, the package's own as it would be written), `root/` (the
-/// root files adopt changes), `bundle/` (`package bundle` with every root file the repository
-/// holds) and `installed/<game>/` (its installed layout, checked by `standard-pack check`). Both
-/// compose the schedule with one instance per server; a composition that refuses the file as it
-/// would be written is `rule_refused` with the composer's pointer, any other refusal is answered as
-/// it is. Nothing is written in the repository.
-fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
-    let parent = inputs.state.join(CHECK_DIRECTORY);
+/// The name of a checkout's check tree: the checkout's last segment (its characters that name a
+/// file on every system, at most 32), `-`, and 16 hexadecimal digits of the SHA-256 of its
+/// resolved path, so that one checkout has one tree whatever path names it.
+fn check_tree_name(repo: &Path) -> LabResult<String> {
+    let resolved = fs::canonicalize(repo).map_err(|error| {
+        refused(
+            adopt(AdoptProblem::RepositoryInvalid)
+                .path(repo)
+                .caused_by(Outcome::from_io_error(&error, IoOp::Canonicalize).path(repo)),
+            format!("{}: {error}", repo.display()),
+        )
+    })?;
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(resolved.to_string_lossy().as_bytes())
+    );
+    let stem = resolved
+        .file_name()
+        .map(|name| {
+            name.to_string_lossy()
+                .chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                        character
+                    } else {
+                        '_'
+                    }
+                })
+                .take(CHECK_TREE_STEM_CHARS)
+                .collect::<String>()
+        })
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "checkout".to_owned());
+    Ok(format!("{stem}-{}", &digest[..CHECK_TREE_DIGEST_CHARS]))
+}
+
+/// The checkout's check tree, `<state>/adopt-check/<checkout>/` ([`check_tree_name`]), made ready
+/// for this call: made and marked ([`CHECK_TREE_MARKER`]) when it is not there; when it is, refused
+/// without its marker (it is then not the tool's own and nothing in it is touched) and while
+/// another call holds the marker, and otherwise emptied of everything but the marker. The marker
+/// is answered open and locked, and stays so until the call ends.
+fn prepare_check_tree(state: &Path, repo: &Path) -> LabResult<(PathBuf, File)> {
+    let parent = state.join(CHECK_DIRECTORY);
     fs::create_dir_all(&parent).map_err(|error| tree_failed(&parent, &error, IoOp::CreateDir))?;
-    let tree = parent.join(inputs.at_unix_ms.to_string());
-    fs::create_dir(&tree).map_err(|error| tree_failed(&tree, &error, IoOp::CreateDir))?;
+    let tree = parent.join(check_tree_name(repo)?);
+    let marker = tree.join(CHECK_TREE_MARKER);
+    match fs::create_dir(&tree) {
+        Ok(()) => {
+            let text = format!(
+                "actinglab standard-pack adopt keeps the check tree of the checkout {} in this \
+                 directory. Each call on that checkout empties it, but for this file, before it \
+                 lays its tree; without this file adopt leaves the directory alone.\n",
+                repo.display()
+            );
+            write_new(&marker, text.as_bytes())
+                .map_err(|error| tree_failed(&marker, &error, IoOp::Write))?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(tree_failed(&tree, &error, IoOp::CreateDir)),
+    }
+    if !fs::symlink_metadata(&marker).is_ok_and(|metadata| metadata.is_file()) {
+        return Err(refused(
+            adopt(AdoptProblem::CheckTreeUnmarked).path(&tree),
+            format!(
+                "{} is the place of the check tree of the checkout {} and holds no marker \
+                 {CHECK_TREE_MARKER}: it is not the tool's own, and adopt touches nothing in it; \
+                 move it away by hand or give another --state-dir; nothing was written",
+                tree.display(),
+                repo.display()
+            ),
+        ));
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&marker)
+        .map_err(|error| tree_failed(&marker, &error, IoOp::Open))?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            return Err(refused(
+                adopt(AdoptProblem::CheckTreeBusy).path(&tree),
+                format!(
+                    "another adoption of the checkout {} with this state directory is running (it \
+                     holds the marker of {}); wait for it to end, then run adopt again; nothing \
+                     was written",
+                    repo.display(),
+                    tree.display()
+                ),
+            ));
+        }
+        Err(TryLockError::Error(error)) => {
+            return Err(tree_failed(&marker, &error, IoOp::Lock));
+        }
+    }
+    // Everything in it but its marker is this tool's scratch of an earlier call.
+    let entries = fs::read_dir(&tree)
+        .map_err(|error| tree_failed(&tree, &error, IoOp::ReadDir))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(|error| tree_failed(&tree, &error, IoOp::ReadDir))?;
+    for entry in entries {
+        if entry.file_name().and_then(|name| name.to_str()) == Some(CHECK_TREE_MARKER) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&entry)
+            .map_err(|error| tree_failed(&entry, &error, IoOp::Metadata))?;
+        let emptied = if metadata.is_dir() {
+            fs::remove_dir_all(&entry)
+        } else {
+            fs::remove_file(&entry)
+        };
+        emptied.map_err(|error| tree_failed(&entry, &error, IoOp::Remove))?;
+    }
+    Ok((tree, file))
+}
+
+/// B.4 item 6: the tree as it would be written, in the checkout's check tree
+/// ([`prepare_check_tree`]): `packs-root/` (the repository's pack directories, the package's own as
+/// it would be written), `root/` (the root files adopt changes), `bundle/` (`package bundle` with
+/// every root file the repository holds) and `installed/<game>/` (its installed layout, checked by
+/// `standard-pack check`). Both compose the schedule with one instance per server; a composition
+/// that refuses the file as it would be written is `rule_refused` with the composer's pointer, any
+/// other refusal is answered as it is. Nothing is written in the repository.
+fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
+    let (tree, marker) = prepare_check_tree(inputs.state, inputs.repo)?;
     let packs_root = tree.join("packs-root");
     create_dir(&packs_root)?;
     let packs = inputs.repo.join(PACKS_DIRECTORY);
@@ -2421,6 +3112,7 @@ fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
         tree,
         answer,
         bundle_warnings: bundle.warnings,
+        _marker: marker,
     })
 }
 
@@ -2459,23 +3151,19 @@ fn composed(mut error: LabError, tree: &Path) -> LabError {
     )
 }
 
-/// The warnings of the check that name the package or its rule, each once.
-fn naming(check: &Checked, package_id: &str, rule_id: Option<&str>) -> Vec<Outcome> {
+/// Every warning of the check, the game's included (those of the installed layout's check, then
+/// the bundle's), each once.
+fn all_warnings(check: &Checked) -> Vec<Outcome> {
     let mut seen = Vec::new();
-    let mut named = Vec::new();
+    let mut all = Vec::new();
     for warning in check.answer.warnings.iter().chain(&check.bundle_warnings) {
-        let names = text_value(warning, PACKAGE_ID) == Some(package_id)
-            || rule_id.is_some_and(|rule_id| text_value(warning, "task_id") == Some(rule_id));
-        if !names {
-            continue;
-        }
-        let envelope = serde_json::to_value(warning).unwrap_or(Value::Null);
+        let envelope = warning.envelope(Detail::Full);
         if !seen.contains(&envelope) {
             seen.push(envelope);
-            named.push(warning.clone());
+            all.push(warning.clone());
         }
     }
-    named
+    all
 }
 
 /// What [`write_adoption`] writes.
@@ -2487,14 +3175,38 @@ struct WriteInputs<'a> {
     /// Where the replaced pack directory goes, when it is replaced.
     kept: Option<&'a Path>,
     plan: &'a Plan,
+    /// `schedule.json` (absent: `None`) and `maintenance.json` as the call read them, which the
+    /// plan was computed from.
+    read_schedule: Option<&'a [u8]>,
+    read_maintenance: &'a [u8],
 }
 
 /// B.5: the pack directory written whole as its `.part` and renamed, the replaced one first moved
-/// to its kept place; `schedule.json` and `maintenance.json` each as `<name>.part`, renamed. A
-/// failure names where it stopped and what was done before; nothing is removed. The kept place,
-/// when a directory was moved there.
+/// to its kept place and moved back when the new one cannot take its place; `schedule.json` and
+/// `maintenance.json` each as `<name>.part`, read again just before its rename and renamed only
+/// while it is the file the call read (so that no call overwrites another's work). A failure names
+/// where it stopped and what was done before; nothing is removed. The kept place, when a directory
+/// was moved there.
 fn write_adoption(inputs: &WriteInputs<'_>) -> LabResult<Option<PathBuf>> {
     let mut done: Vec<PathBuf> = Vec::new();
+    let root_writes = [
+        (
+            STANDARD_PACK_SCHEDULE_FILE,
+            inputs.plan.schedule_bytes.as_deref(),
+            inputs.read_schedule,
+        ),
+        (
+            MAINTENANCE_FILE,
+            inputs.plan.maintenance_bytes.as_deref(),
+            Some(inputs.read_maintenance),
+        ),
+    ];
+    // Before the first write: each root file it will rename is still the one it read.
+    for (name, bytes, read) in root_writes {
+        if bytes.is_some() {
+            unchanged(inputs.repo, name, read, &done)?;
+        }
+    }
     fs::create_dir(inputs.staged)
         .map_err(|error| write_failed(inputs.staged, &done, &error, IoOp::CreateDir))?;
     for (relative, bytes) in inputs.files {
@@ -2518,13 +3230,36 @@ fn write_adoption(inputs: &WriteInputs<'_>) -> LabResult<Option<PathBuf>> {
         done.push(kept.to_path_buf());
         moved = Some(kept.to_path_buf());
     }
-    fs::rename(inputs.staged, inputs.pack_dir)
-        .map_err(|error| write_failed(inputs.pack_dir, &done, &error, IoOp::Rename))?;
+    if let Err(error) = fs::rename(inputs.staged, inputs.pack_dir) {
+        // The old directory goes back to its place, by a rename; nothing is removed.
+        let Some(kept) = inputs.kept else {
+            return Err(write_failed(inputs.pack_dir, &done, &error, IoOp::Rename));
+        };
+        let note = match fs::rename(kept, inputs.pack_dir) {
+            Ok(()) => {
+                done.retain(|done_path| done_path.as_path() != kept);
+                format!(
+                    "the old directory was moved back from {} to {}; the new one stays as {}",
+                    kept.display(),
+                    inputs.pack_dir.display(),
+                    inputs.staged.display()
+                )
+            }
+            Err(back) => format!(
+                "moving the old directory back from {} failed too ({back}): it is there, {} is \
+                 missing, and the new one stays as {}; move the old one back by hand",
+                kept.display(),
+                inputs.pack_dir.display(),
+                inputs.staged.display()
+            ),
+        };
+        return Err(noted(
+            write_failed(inputs.pack_dir, &done, &error, IoOp::Rename),
+            &note,
+        ));
+    }
     done.push(inputs.pack_dir.to_path_buf());
-    for (name, bytes) in [
-        (STANDARD_PACK_SCHEDULE_FILE, &inputs.plan.schedule_bytes),
-        (MAINTENANCE_FILE, &inputs.plan.maintenance_bytes),
-    ] {
+    for (name, bytes, read) in root_writes {
         let Some(bytes) = bytes else {
             continue;
         };
@@ -2532,11 +3267,56 @@ fn write_adoption(inputs: &WriteInputs<'_>) -> LabResult<Option<PathBuf>> {
         let part = inputs.repo.join(format!("{name}.{PART}"));
         write_new(&part, bytes).map_err(|error| write_failed(&part, &done, &error, IoOp::Write))?;
         done.push(part.clone());
+        unchanged(inputs.repo, name, read, &done)?;
         fs::rename(&part, &target)
             .map_err(|error| write_failed(&target, &done, &error, IoOp::Rename))?;
         done.push(target);
     }
     Ok(moved)
+}
+
+/// The root file `name` of `repo` is still `read` (`None`: absent), the bytes the call computed
+/// from; otherwise a write refusal (`adopt_write_failed` at the file) that says it changed, after
+/// `done`: the call renames nothing more.
+fn unchanged(repo: &Path, name: &str, read: Option<&[u8]>, done: &[PathBuf]) -> LabResult<()> {
+    let path = repo.join(name);
+    let now = match fs::read(&path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(write_failed(&path, done, &error, IoOp::Read)),
+    };
+    if now.as_deref() == read {
+        return Ok(());
+    }
+    let outcome = Outcome::new(ResourceToolingCode::AdoptWriteFailed).path(&path);
+    let outcome = if done.is_empty() {
+        outcome
+    } else {
+        outcome.paths(done.iter())
+    };
+    let listed = done
+        .iter()
+        .map(|done_path| done_path.display().to_string())
+        .collect::<Vec<_>>();
+    Err(LabError::new(
+        LabErrorClass::UsageValidation,
+        ResourceToolingCode::AdoptWriteFailed.as_str(),
+        format!(
+            "{} changed after this call read it (another adoption or another writer), so this \
+             call stops here and renames nothing more, and does not overwrite that work; written \
+             or moved before: {listed:?}; nothing is removed: compare with the version control, \
+             move what this call left away by hand, and run adopt again",
+            path.display()
+        ),
+        &[],
+    )
+    .with_details(json!({"outcome": outcome.envelope(Detail::Full)})))
+}
+
+/// `error` with `note` added to its message.
+fn noted(mut error: LabError, note: &str) -> LabError {
+    error.message = format!("{}; {note}", error.message);
+    error
 }
 
 /// The repository's own items adopt does not write, each by its path when the checkout holds it.
@@ -2900,4 +3680,57 @@ fn write_failed(path: &Path, done: &[PathBuf], error: &io::Error, op: IoOp) -> L
 fn absolute(path: &Path) -> LabResult<PathBuf> {
     std::path::absolute(path)
         .map_err(|error| LabError::usage(format!("{}: {error}", path.display())))
+}
+
+/// The volume `path` lies on ([`AdoptWorktree::volume`]): of the nearest part of `path` that
+/// exists, its links resolved, the drive or network share on Windows and the device elsewhere. A
+/// volume mounted on a folder of another is not told apart from it on Windows.
+fn volume_of(path: &Path) -> io::Result<String> {
+    let mut existing = path;
+    while fs::symlink_metadata(existing).is_err() {
+        existing = existing.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no part of {} exists", path.display()),
+            )
+        })?;
+    }
+    volume_name(&fs::canonicalize(existing)?)
+}
+
+#[cfg(windows)]
+fn volume_name(resolved: &Path) -> io::Result<String> {
+    use std::path::{Component, Prefix};
+    let Some(Component::Prefix(prefix)) = resolved.components().next() else {
+        return Err(io::Error::other(format!(
+            "{} names no volume",
+            resolved.display()
+        )));
+    };
+    Ok(match prefix.kind() {
+        Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+            format!("{}:", char::from(letter.to_ascii_uppercase()))
+        }
+        Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => format!(
+            r"\\{}\{}",
+            server.to_string_lossy(),
+            share.to_string_lossy()
+        )
+        .to_lowercase(),
+        Prefix::DeviceNS(name) | Prefix::Verbatim(name) => name.to_string_lossy().to_lowercase(),
+    })
+}
+
+#[cfg(unix)]
+fn volume_name(resolved: &Path) -> io::Result<String> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(format!("device {}", fs::metadata(resolved)?.dev()))
+}
+
+#[cfg(not(any(windows, unix)))]
+fn volume_name(resolved: &Path) -> io::Result<String> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!("the volume of {} cannot be told here", resolved.display()),
+    ))
 }

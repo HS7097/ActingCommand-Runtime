@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #464 P1 (register §1.370; contracts/standard-pack-authoring.md; coordinator work order
-// `rd-1114/brief-464-p1-adopt.md`, the design's row "P1 adopt" of its section G): `actinglab
-// standard-pack adopt` on a made-up resource repository of the game `neutral`, server `test`,
-// which holds one package, its business rule and a valued pool.
+// Workflow #464 P1 (register §1.377; contracts/standard-pack-authoring.md; coordinator work orders
+// `rd-1114/brief-464-p1-adopt.md`, the design's row "P1 adopt" of its section G, and
+// `rd-1114/brief-1722-fix1.md`): `actinglab standard-pack adopt` on a made-up resource repository
+// of the game `neutral`, server `test`, which holds one package, its business rule and a valued
+// pool.
 // - a first adoption of a stopped recording writes exactly the pack directory (its JSON canonical)
-//   and `schedule.json` (the rule appended with its derived members, `requires` gaining
+//   and `schedule.json` (the rule appended with its derived members, its `feedback_stop` from the
+//   package's own key and its `expected_duration_ms` at the neutral floor, `requires` gaining
 //   `benefit_fixed_value`), every other byte of the repository as it was; the repository as
 //   written bundles and composes;
 // - a second identical adoption is refused `pack_exists`;
@@ -19,11 +21,19 @@
 // - each check refuses naming its member or pointer and writes nothing in the repository;
 // - the classes `held` (a held entry, no rule, for a package not run through) and `maintenance`
 //   (a rule declaring itself maintenance, whose priority the file's rules cannot give);
-// - a pending value answers the coverage `undeclared`;
+// - a pending value answers, with the evaluator's registered reason and in words, that the task
+//   is not dispatched until a value is given;
 // - `--dry-run` runs every check and writes nothing;
-// - a JSON container and a ZIP of the same files give the same directory and the same rule.
+// - a JSON container and a ZIP of the same files give the same directory and the same rule;
+// - fix round 1: `--replace` with the state directory on another volume than the checkout is
+//   refused before anything is written, the volumes told apart by the test's own machine; an
+//   outcome predicate on the rule itself, given (trigger, `feedback_stop`) or kept, on a key the
+//   package does not declare is refused at its pointer; the check tree is one marked directory
+//   for each checkout, reused and emptied by the next call, and a directory there without its
+//   marker is not touched and the call refused.
 // No device, no Runtime, no clock read, no sleep: temporary directories and made-up packages.
 
+use crate::adopt::CHECK_TREE_MARKER;
 use crate::codes::AdoptProblem;
 use crate::{
     AdoptClass, AdoptCoverage, AdoptSource, AdoptWorktree, DerivedFrom, PackageBundleRequest,
@@ -33,11 +43,11 @@ use crate::{
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{LabResult, canonical_json_bytes};
-use actingcommand_policy::BENEFIT_FIXED_VALUE_SUBSYSTEM;
+use actingcommand_policy::{BENEFIT_FIXED_VALUE_SUBSYSTEM, BenefitGap, PolicyCode};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use zip::ZipWriter;
@@ -54,6 +64,8 @@ const POOL: &str = "pool.neutral.points";
 const RECORD: &str = "rec-1";
 /// The outcome key the made-up packages declare.
 const OUTCOME_KEY: &str = "task_done";
+/// An outcome key no made-up package declares.
+const UNDECLARED_KEY: &str = "never_declared";
 const DECISION_SCHEMA: &str = "actingcommand.pack-decision.v1";
 /// The operations' times, which name their check trees and kept copies.
 const FIRST: u64 = 1_000;
@@ -132,6 +144,27 @@ struct Changed;
 impl AdoptWorktree for Changed {
     fn changes_under(&self, _repo: &Path, relative: &str) -> Result<Vec<String>, Outcome> {
         Ok(vec![format!("{relative}/control.json")])
+    }
+}
+
+/// A machine whose every path below `state` lies on another volume than the checkout, every
+/// change of the checkout committed: two volumes the test tells apart on one physical drive.
+struct TwoVolumes {
+    state: PathBuf,
+}
+
+impl AdoptWorktree for TwoVolumes {
+    fn changes_under(&self, _repo: &Path, _relative: &str) -> Result<Vec<String>, Outcome> {
+        Ok(Vec::new())
+    }
+
+    fn volume(&self, path: &Path) -> io::Result<String> {
+        let volume = if path.starts_with(&self.state) {
+            "the state directory's volume"
+        } else {
+            "the checkout's volume"
+        };
+        Ok(volume.to_owned())
     }
 }
 
@@ -345,7 +378,8 @@ fn every(every_ms: u64) -> Value {
     })
 }
 
-/// The rule of [`EXISTING`]: business, priority 100, hourly, no value.
+/// The rule of [`EXISTING`]: business, priority 100, hourly, no value, stopped by its own run's
+/// end on the key its package declares (a key it does not declare would refuse every dispatch).
 fn existing_rule() -> Value {
     json!({
         "id": EXISTING,
@@ -355,7 +389,7 @@ fn existing_rule() -> Value {
         "feedback_stop": {
             "kind": "outcome",
             "task_id": EXISTING,
-            "outcome_key": "completed",
+            "outcome_key": OUTCOME_KEY,
             "comparison": "eq",
             "value": {"type": "boolean", "value": true}
         },
@@ -399,21 +433,27 @@ fn schedule() -> Value {
     })
 }
 
+/// An outcome predicate on the adopted rule itself: its own run ended with `key`.
+fn own_outcome(key: &str) -> Value {
+    json!({
+        "kind": "outcome",
+        "task_id": ADOPTED,
+        "outcome_key": key,
+        "comparison": "eq",
+        "value": {"type": "boolean", "value": true}
+    })
+}
+
 /// The rule a first adoption of [`ADOPTED`] writes with a fixed value of the pack's own: the
-/// decision's trigger and value, every other member derived.
+/// decision's trigger and value, every other member derived (its `feedback_stop` from the
+/// package's one key, its `expected_duration_ms` the neutral floor over the package's 200 ms).
 fn adopted_rule(milli: u64) -> Value {
     json!({
         "id": ADOPTED,
         "package_id": ADOPTED,
         "priority": 100,
         "trigger": every(86_400_000),
-        "feedback_stop": {
-            "kind": "outcome",
-            "task_id": ADOPTED,
-            "outcome_key": OUTCOME_KEY,
-            "comparison": "eq",
-            "value": {"type": "boolean", "value": true}
-        },
+        "feedback_stop": own_outcome(OUTCOME_KEY),
         "consumes": [],
         "produces": [],
         "fixed_value_milli": milli,
@@ -426,7 +466,7 @@ fn adopted_rule(milli: u64) -> Value {
         "sensitive": false,
         "next_run_clamp_ms": 86400000,
         "yield_points": [],
-        "expected_duration_ms": 200,
+        "expected_duration_ms": 60000,
         "cooldown_ms": 1000,
         "load_profile": {"kind": "light"},
         "strategic_weight_milli": 1000
@@ -573,8 +613,13 @@ fn p1_a_first_adoption_writes_the_pack_directory_the_rule_and_the_requires_words
     };
     assert_eq!(from("id"), Some(DerivedFrom::Package));
     assert_eq!(from("priority"), Some(DerivedFrom::File));
-    assert_eq!(from("feedback_stop"), Some(DerivedFrom::File));
-    assert_eq!(from("expected_duration_ms"), Some(DerivedFrom::Package));
+    // Never copied from the file's rule: from the package's own declared key.
+    assert_eq!(from("feedback_stop"), Some(DerivedFrom::Package));
+    // The package's 200 ms of waits raised to the neutral floor.
+    assert_eq!(
+        from("expected_duration_ms"),
+        Some(DerivedFrom::NeutralFloor)
+    );
     assert_eq!(from("on_failure"), Some(DerivedFrom::Neutral));
     assert_eq!(from("cooldown_ms"), Some(DerivedFrom::File));
     assert_eq!(from("trigger"), None, "the decision gave the trigger");
@@ -1174,7 +1219,7 @@ fn p1_the_held_and_the_maintenance_classes() {
 }
 
 #[test]
-fn p1_a_pending_value_answers_the_coverage_undeclared() {
+fn p1_a_pending_value_answers_that_the_task_waits_for_its_value() {
     let fixture = Fixture::new();
     let source = package_dir(
         &fixture,
@@ -1188,6 +1233,28 @@ fn p1_a_pending_value_answers_the_coverage_undeclared() {
     )
     .unwrap_or_else(|error| panic!("the adoption: {error}"));
     assert_eq!(answer.coverage, Some(AdoptCoverage::Undeclared));
+    // In the evaluator's registered reason and in words: not dispatched until a value is given.
+    let wait = answer
+        .waits_for_value
+        .as_ref()
+        .expect("the answer says the task waits for its value");
+    assert!(
+        wait.outcome.is(PolicyCode::BenefitUnknown),
+        "{:?}",
+        wait.outcome
+    );
+    assert_eq!(
+        wait.outcome.value("benefit_gap"),
+        Some(&json!(BenefitGap::NoEffects.as_str())),
+        "{:?}",
+        wait.outcome
+    );
+    assert!(
+        wait.text
+            .contains("is not dispatched until a value is given"),
+        "{}",
+        wait.text
+    );
     assert!(
         answer
             .given
@@ -1270,4 +1337,198 @@ fn p1_a_json_container_and_a_zip_give_the_same_directory() {
     }
     assert_eq!(adopted[0], adopted[1]);
     assert_eq!(adopted[0].0, canonical_files(&files));
+}
+
+#[test]
+fn p1_replace_across_two_volumes_is_refused_before_anything_is_written() {
+    let fixture = Fixture::new();
+    let files = package_files(ADOPTED, SERVER, "Adopted fixture", &provenance("passed"));
+    let source = recording(&fixture, &stopped(), &files);
+    let decision = decide(&fixture, "decision", &business(&fixed(9_000)));
+    standard_pack_adopt(
+        request(&fixture, source.clone(), Some(decision), false, FIRST),
+        &Committed,
+    )
+    .unwrap_or_else(|error| panic!("the first adoption: {error}"));
+    let before = tree(&fixture.repo());
+
+    // The state directory, and the replaced directory's kept place in it, on another volume.
+    let machine = TwoVolumes {
+        state: fixture.state(),
+    };
+    let result = standard_pack_adopt(request(&fixture, source, None, true, SECOND), &machine);
+    let message = match &result {
+        Err(error) => error.message.clone(),
+        Ok(_) => String::new(),
+    };
+    assert_refused(
+        result,
+        AdoptProblem::ReplaceAcrossVolumes,
+        &json!({"entry": ADOPTED_DIRECTORY}),
+        &fixture,
+        &before,
+    );
+    // The way out: a state directory on the checkout's volume, and the recording's package by
+    // its path instead of --record-id.
+    assert!(message.contains("--state-dir"), "{message}");
+    assert!(
+        message.contains("--package") && message.contains(&format!("{ADOPTED}.zip")),
+        "{message}"
+    );
+}
+
+#[test]
+fn p1_an_outcome_predicate_on_the_rule_itself_needs_a_key_the_package_declares() {
+    let fixture = Fixture::new();
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(ADOPTED, SERVER, "Adopted", &provenance("passed")),
+    );
+    let before = tree(&fixture.repo());
+
+    // Given: a trigger (daily while its own run has not ended on a key), and a `feedback_stop`.
+    let cases = [
+        (
+            "trigger",
+            json!({
+                "schema_version": DECISION_SCHEMA,
+                "class": "business",
+                "trigger": {"kind": "all", "predicates": [
+                    every(86_400_000),
+                    {"kind": "not", "predicate": own_outcome(UNDECLARED_KEY)}
+                ]},
+                "value": fixed(9_000)
+            }),
+            "/trigger/predicates/1/predicate/outcome_key",
+        ),
+        (
+            "stop",
+            json!({
+                "schema_version": DECISION_SCHEMA,
+                "class": "business",
+                "trigger": every(86_400_000),
+                "value": fixed(9_000),
+                "overrides": {"feedback_stop": own_outcome(UNDECLARED_KEY)}
+            }),
+            "/overrides/feedback_stop/outcome_key",
+        ),
+    ];
+    for (name, decision, pointer) in cases {
+        let decision = decide(&fixture, name, &decision);
+        assert_refused(
+            standard_pack_adopt(
+                request(&fixture, source.clone(), Some(decision), false, FIRST),
+                &Committed,
+            ),
+            AdoptProblem::DecisionInvalid,
+            &json!({"json_pointer": pointer}),
+            &fixture,
+            &before,
+        );
+    }
+
+    // A given `feedback_stop` on the key the package declares is written as given.
+    let declared = decide(
+        &fixture,
+        "declared",
+        &json!({
+            "schema_version": DECISION_SCHEMA,
+            "class": "business",
+            "trigger": every(86_400_000),
+            "value": fixed(9_000),
+            "overrides": {"feedback_stop": own_outcome(OUTCOME_KEY)}
+        }),
+    );
+    let answer = standard_pack_adopt(
+        request(&fixture, source.clone(), Some(declared), false, SECOND),
+        &Committed,
+    )
+    .unwrap_or_else(|error| panic!("a declared key is adopted: {error}"));
+    let rule = answer.rule.expect("the rule");
+    assert_eq!(rule["feedback_stop"], own_outcome(OUTCOME_KEY));
+
+    // Kept: the rule's stop edited to a key the package does not declare, then adopted again
+    // without a decision, which keeps the rule as it is.
+    let mut schedule = fixture.schedule();
+    schedule["rules"][1]["feedback_stop"]["outcome_key"] = json!(UNDECLARED_KEY);
+    write(&fixture.repo().join("schedule.json"), &schedule);
+    let before = tree(&fixture.repo());
+    assert_refused(
+        standard_pack_adopt(request(&fixture, source, None, true, THIRD), &Committed),
+        AdoptProblem::DecisionInvalid,
+        &json!({
+            "entry": "schedule.json",
+            "json_pointer": "/rules/1/feedback_stop/outcome_key"
+        }),
+        &fixture,
+        &before,
+    );
+}
+
+#[test]
+fn p1_the_check_tree_is_one_marked_scratch_directory_for_each_checkout() {
+    let fixture = Fixture::new();
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(ADOPTED, SERVER, "Adopted", &provenance("passed")),
+    );
+    let decision = decide(&fixture, "decision", &business(&fixed(9_000)));
+    let dry_run = |at_unix_ms: u64| {
+        let mut dry_run = request(
+            &fixture,
+            source.clone(),
+            Some(decision.clone()),
+            false,
+            at_unix_ms,
+        );
+        dry_run.dry_run = true;
+        dry_run
+    };
+    let first = standard_pack_adopt(dry_run(FIRST), &Committed)
+        .unwrap_or_else(|error| panic!("the first dry run: {error}"));
+    let check_tree = PathBuf::from(&first.check_tree);
+    assert!(
+        check_tree.starts_with(fixture.state().join("adopt-check")),
+        "{}",
+        first.check_tree
+    );
+    assert!(
+        check_tree.join(CHECK_TREE_MARKER).is_file(),
+        "the tool marked its tree"
+    );
+
+    // The next call reuses the one tree, emptied of what an earlier call left, its marker kept.
+    fs::write(check_tree.join("left-by-an-earlier-call"), b"scratch").expect("a file in the tree");
+    let second = standard_pack_adopt(dry_run(SECOND), &Committed)
+        .unwrap_or_else(|error| panic!("the second dry run: {error}"));
+    assert_eq!(second.check_tree, first.check_tree);
+    assert!(!check_tree.join("left-by-an-earlier-call").exists());
+    assert!(check_tree.join(CHECK_TREE_MARKER).is_file());
+    assert!(
+        check_tree.join("bundle").join("bundle.json").is_file(),
+        "the second call laid its tree there"
+    );
+
+    // Without its marker the directory is not the tool's: nothing in it is touched, and the call
+    // is refused before it writes.
+    fs::rename(
+        check_tree.join(CHECK_TREE_MARKER),
+        fixture.path("marker-moved-away"),
+    )
+    .expect("the marker moved away");
+    let untouched = tree(&check_tree);
+    let before = tree(&fixture.repo());
+    assert_refused(
+        standard_pack_adopt(
+            request(&fixture, source, Some(decision), false, THIRD),
+            &Committed,
+        ),
+        AdoptProblem::CheckTreeUnmarked,
+        &json!({}),
+        &fixture,
+        &before,
+    );
+    assert_eq!(tree(&check_tree), untouched, "nothing in it is touched");
 }

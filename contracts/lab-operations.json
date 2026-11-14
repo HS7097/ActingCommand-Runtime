@@ -2484,7 +2484,7 @@
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
       "help": "Makes a recorded package a member of its game's standard pack in a resource repository's checkout, with a rule the Runtime's composer accepts.",
-      "output": "the adoption: the package, its class, the rule, held entry or maintenance entry as written, the members given and derived (each with where it came from), what was written and where the replaced directory was kept",
+      "output": "the adoption: the package, its class, the rule, held entry or maintenance entry as written, the entries removed or replaced so that the package has one role, the members given and derived (each with where it came from), whether the task waits for its value, every warning of the check, what was written and where the replaced directory was kept",
       "writes": true,
       "irreversible": false,
       "runtime": "offline",

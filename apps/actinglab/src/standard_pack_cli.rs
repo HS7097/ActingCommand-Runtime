@@ -12,7 +12,7 @@
 //! the schedule rules of the bound games as the Runtime composes them and writes the four V2
 //! documents and the manifest. It writes a new directory, so `--dry-run` refuses it.
 //!
-//! Workflow #464 P1 (contracts/standard-pack-authoring.md; register §1.370): `actinglab
+//! Workflow #464 P1 (contracts/standard-pack-authoring.md; register §1.377): `actinglab
 //! standard-pack adopt --repo <checkout> (--record-id <id> | --package <path>) [--decide
 //! <decision.json>] [--replace] [--state-dir <dir>]` makes a recorded package a member of its
 //! game's standard pack in a resource repository's checkout. Under `--dry-run` it runs every check

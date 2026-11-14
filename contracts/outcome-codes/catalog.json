@@ -9448,7 +9448,7 @@
       },
       "tokens": {
         "repository_invalid": {
-          "description": "--repo holds no applications.json, maintenance.json or packs directory, one of them or its schedule.json does not read, or a .part of a root file is left there."
+          "description": "--repo holds no applications.json, maintenance.json or packs directory, one of them or its schedule.json does not read, or a .part of a root file an interrupted adoption left is there (the message names every leftover and what to do)."
         },
         "recording_not_current": {
           "description": "The recording --record-id names is not as its last record stop left it: no recording.json, not stopped, marked again since, or without its package."
@@ -9460,7 +9460,7 @@
           "description": "The package's game is not applications.json's, or its server is none of that file's servers."
         },
         "pack_exists": {
-          "description": "The package was adopted before (its directory, its .part, its rule, its held entry or its maintenance entry is there) and --replace is not given, or the kept copy's place is taken."
+          "description": "The package was adopted before (its directory, its rule, its held entry or its maintenance entry is there) and --replace is not given, its .part an interrupted adoption left is there (the message names every leftover and what to do), or the kept copy's place is taken."
         },
         "pack_dirty": {
           "description": "With --replace, the version control shows a change not committed below packs/<package_id>, or cannot tell."
@@ -9472,7 +9472,7 @@
           "description": "A text file of the package holds an absolute local path or the state directory."
         },
         "decision_invalid": {
-          "description": "The decision document breaks its schema, misses a member the class or a first adoption needs, names a pool the file does not declare, or names a derived member that cannot be derived without it."
+          "description": "The decision document breaks its schema, misses a member the class or a first adoption needs (a business rule's value, which only a follower of a chain may leave out), names a pool the file does not declare, names a derived member that cannot be derived without it, says pending for a follower of a chain, gives a class beside a maintenance role a root file adopt does not write gives the package; or an outcome predicate on the rule itself, given or kept in schedule.json, names a key the package does not declare."
         },
         "value_origin_model": {
           "description": "The decision's value names the origin model, which only the model's export writes; the number is given with the origin pack, or the value is pending."
@@ -9482,6 +9482,15 @@
         },
         "root_file_not_canonical": {
           "description": "schedule.json or maintenance.json must change and is not in the canonical form package fmt writes."
+        },
+        "replace_across_volumes": {
+          "description": "With --replace, the replaced pack directory's kept place under the state directory lies on another volume than the checkout, where it cannot be moved, or the volume cannot be told; a --state-dir on the checkout's volume is given instead (and a recording's package by --package)."
+        },
+        "check_tree_unmarked": {
+          "description": "The place of the checkout's check tree under the state directory holds no marker the tool wrote, so it is not the tool's own scratch and nothing in it is touched."
+        },
+        "check_tree_busy": {
+          "description": "Another adoption of the same checkout with the same state directory holds the checkout's check tree."
         }
       }
     }

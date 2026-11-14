@@ -138,9 +138,10 @@ actingcommand_contract::outcome_codes! {
         /// of the loader, the reader or the composer as its cause).
         AdoptRefused => "adopt_refused": error / none,
         /// Workflow #464 P1 (contracts/standard-pack-authoring.md, "What it writes"): a write of
-        /// the adoption failed (key `path`, where it stopped; optional `paths`, what it had
-        /// written or moved before; the operating system's refusal as its cause); nothing is
-        /// removed.
+        /// the adoption failed, or stopped because a root file changed after the call read it
+        /// (key `path`, where it stopped; optional `paths`, what it had written or moved before;
+        /// the operating system's refusal as its cause when there is one); nothing is removed in
+        /// the checkout.
         AdoptWriteFailed => "adopt_write_failed": error / none,
     }
 }
@@ -163,5 +164,13 @@ actingcommand_contract::outcome_vocabulary! {
         ValueOriginModel => "value_origin_model",
         RuleRefused => "rule_refused",
         RootFileNotCanonical => "root_file_not_canonical",
+        /// With `--replace`, the replaced directory's kept place under the state directory is on
+        /// another volume than the checkout, where it cannot be moved.
+        ReplaceAcrossVolumes => "replace_across_volumes",
+        /// The place of the checkout's check tree holds no marker of the tool's own, so it is not
+        /// touched (the coordinator's ruling on the check tree).
+        CheckTreeUnmarked => "check_tree_unmarked",
+        /// Another adoption of the checkout with the same state directory holds its check tree.
+        CheckTreeBusy => "check_tree_busy",
     }
 }

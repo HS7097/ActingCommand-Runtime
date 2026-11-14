@@ -7,7 +7,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::result_large_err)]
 
-// Workflow #464 P1 (register §1.370): `actinglab standard-pack adopt`.
+// Workflow #464 P1 (register §1.377): `actinglab standard-pack adopt`.
 mod adopt;
 mod api;
 mod authoring;
@@ -121,7 +121,7 @@ mod gate_455_gr1;
 // tools read, over real packages, follow every chain link and the remedies' capabilities.
 #[cfg(test)]
 mod gate_455_gr2s;
-// Workflow #464 P1 (register §1.370): standard-pack adopt on a made-up resource repository.
+// Workflow #464 P1 (register §1.377): standard-pack adopt on a made-up resource repository.
 #[cfg(test)]
 mod gate_464_p1;
 
@@ -144,8 +144,8 @@ mod standard_pack_schedule;
 
 pub use adopt::{
     AdoptClass, AdoptCoverage, AdoptSource, AdoptWorktree, DerivedDrift, DerivedFrom,
-    DerivedMember, GivenMember, PACK_DECISION_SCHEMA, RecordingReview, StandardPackAdoptRequest,
-    StandardPackAdoptResponse, standard_pack_adopt,
+    DerivedMember, GivenMember, PACK_DECISION_SCHEMA, RecordingReview, RootEntryChange,
+    StandardPackAdoptRequest, StandardPackAdoptResponse, ValueWait, standard_pack_adopt,
 };
 pub use api::*;
 pub use authoring::*;
