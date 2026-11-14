@@ -23181,11 +23181,12 @@ self-check, a resume or the fence's recheck lifts it.
 **Rollback** (below 0.12.60). Nothing is persisted by the fixes; a build before them reads every
 record they write, and halts again where they fence.
 
-### 1.364 Slice #453 S3 (0.12.60): `instance add` while the Runtime is stopped writes an entry that starts paused (Workflow #453; the owner's approval of board #453 on 11-13: only instances added while the Runtime is stopped start paused, and they stay paused until a person resumes them; the design survey `rd-1113/fresh-root-design.md`, sections 0 and 1(c) "1b. The cold commit", the row S3 of 1(d), 1(e) and 5(e), (g), read on main `98924e28`, every place it names found again on main `e44fecb4`; the coordinator's rulings 1 to 6 on board #453, not the owner's words; coordinator work order `rd-1114/brief-453-s3-cold-instance-add.md`, read on main `e44fecb4`)
+### 1.365 Slice #453 S3 (0.12.60): `instance add` while the Runtime is stopped writes an entry that starts paused (Workflow #453; the owner's approval of board #453 on 11-13: only instances added while the Runtime is stopped start paused, and they stay paused until a person resumes them; the design survey `rd-1113/fresh-root-design.md`, sections 0 and 1(c) "1b. The cold commit", the row S3 of 1(d), 1(e) and 5(e), (g), read on main `98924e28`, every place it names found again on main `e44fecb4`; the coordinator's rulings 1 to 6 on board #453, not the owner's words; coordinator work order `rd-1114/brief-453-s3-cold-instance-add.md`, read on main `e44fecb4`)
 
 1.363 was the next free number on the base `e44fecb4` (after §1.362, S2); #457 (§1.363) merged
-first, and merging main `3d9d25e6` renumbered this section 1.364. Pull requests merged before this
-one take the next numbers, and the train renumbers. The installer's half of starting
+first, and merging main `3d9d25e6` renumbered this section 1.364. The fixes #456 and #458 then
+took §1.364 on main `17197d8e`, and the train 0.12.60d, which merges this slice with #453 S4, S9
+and S12 (§1.366 to §1.368), renumbered this section 1.365. The installer's half of starting
 paused: S2 (§1.362) made the Runtime hold an entry that declares `start_paused` at its first
 start; this slice writes the member. [install-cli.md](install-cli.md), "Instances, the first
 slice" ("While the Runtime is stopped"), "The Lab's rescue module" ("The composites" and "A
