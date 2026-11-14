@@ -25042,6 +25042,104 @@ whose key it does not know, `config_override_dropped`, and goes on
 sibling key below 0.12.60, which §1.353 does not say. Nothing else is persisted by ORD-1c: the
 member in front and the queue waits live in memory only.
 
+### 1.379 Slice #467 RPT-1 (0.12.61): `report export`, one problem report archive of the errors view (Workflow #467; the owner's words on board #467, as the work order quotes them, are the requirement, with her answers of 11-14 to the design's first page as the coordinator recorded them; the rulings are the coordinator's, not the owner's words; the design `rd-1114/problem-report-export-design.md`, its row RPT-1 of section G; coordinator work orders `rd-1114/brief-467-rpt1-report-export.md`, read on main `1e67d1c5`, and `rd-1115/brief-467-rpt1-cont.md`, its continuation after the first implementer stopped, main `2eaf9b7e` (release 0.12.60) merged)
+
+1.379 is the number the coordinator gave this slice; 1.374 to 1.378 belong to pull requests open
+when it was given. The slice ships in 0.12.61 (release 0.12.60 is cut without it): its codes'
+`since` is 0.12.61. The contract is [problem-report.md](problem-report.md).
+
+**Why.** A tester's task failed, and what he could send (the console's task cards, a window of
+ledger rows, two process logs) did not hold the failure; the evidence was in the Runtime's ledger
+and artifacts and took several Lab commands of someone who knows the Lab to get out. The owner
+asked for one action that exports the error log, in the console and in the Lab, and later that it
+follow the ledger's views (the errors view now, the package view next, RPT-2). This slice is the
+Lab's half of the errors view: one archive, with a page a person reads first.
+
+**Established by reading** (the work order's points, before any code).
+- *The placeholder.* actinglab's own `report export --last-error --out <path>` wrote an archive
+  that held no error data (`apps/actinglab/src/resource_runtime_support.rs`, `run_report` and
+  `REPORT_EXPORT_READS`; the group `report` of `main.rs`'s dispatch and `OWN_GROUPS`; its help in
+  `cli_help.rs`; its read list in `cli_module/own_flags.rs`'s work list; two lines of
+  `gate_434_lab5b5`'s corpus and its line of `LINES`; the inventory `ratchet/actinglab_commands.json`;
+  [lab-two-entries.md](lab-two-entries.md) §9.3, LAB-5B5's list; [actinglab-dry-run.md](actinglab-dry-run.md)).
+  No console code and nothing in `distribution/` but a past release note names it. Deleted here
+  (ruling Q6); the words are the row's.
+- *The reads it calls.* `runs`' listing (`list_contained_runs`: one listing a window and instance,
+  one brief status read a run), `run show`'s and `run evidence`'s reads by request id (every
+  step: one `QueryEvents` page sequence over the run's eight record types), `events`' row shape,
+  `material`'s `resolve` (one page at the reference's sequence) and `read_whole` (verified
+  ranges); a run of a hundred steps costs one evidence read of a few pages. Every read of the
+  module names a request id, or an instance with the report's window (a time-bounded page starts
+  at the window's first record, [ledger-observer.md](ledger-observer.md), "LN-WS"); none reads
+  without an instance, none from the ledger's first record. No row's answer changes: the module
+  calls their code, it extracts nothing.
+- *Ruling Q4.* `task.recognition_completed` holds for each target matched or not (`passed`) and
+  its box, and since ledger revision 4 `candidate_scores`: for each candidate page `passed`,
+  `best_score_milli` and `first_failed_target_id` (at most 16 pages, `omitted` the rest); no
+  target's score and no threshold. So both readings were partly right: the scores come from the
+  diagnostic stream (8 MiB at most), else as far as that record holds them.
+- *The roots.* The installation root is the program's own place (`core_ops::Place::root`), the
+  state root the module's located one. No function compared resolved paths; `report.rs`'s
+  `refuse_output` resolves the longest existing part of a path (`fs::canonicalize`: junctions,
+  links, letter case), keeps the rest as written, takes out `.` and `..`, and compares without
+  regard to ASCII case.
+- *The Runtime.* The row is `runtime: required` in this slice: without a Runtime it answers the
+  Runtime client's failure; the part that needs none comes with RPT-3.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| the module | `crates/lab-ops/src/report.rs` (the request, the runs chosen, the failing step, the frames chosen, the parts, the size bound, the archive's manifest, the answer), `report/source.rs` (the trait `Source`, every method a read, and `RuntimeSource`, which reads through the rows' code within one deadline), `report/scores.rs` (the stream's records, the failing step's span, the scores from the stream or the recognition record, `no_frames`' text removal), `report/summary.rs` (`SUMMARY.md`, `summary.json`, the display line), `report/archive.rs` (the masks, the zip, the write through a partial file) |
+| the row | `contracts/lab-operations.json`: `report export`, module `core`, slice `RPT-1`, eight parameters, `runtime` `required`, `entries` `["lab", "ui"]`, `Status`, `QueryEvents`, `ReadMaterial`; served by `core_ops` (`report_line`), its parameters in `core_reads::READ_HERE`; actinglab offers it (`BUILT_SLICES`), and so does the Lab's MCP server (`ACTINGLAB_SLICES`; `tools::SUPPLIED` gives `out` the export directory, ruling Q7) |
+| the codes | `crates/lab-ops/src/codes.rs` and [outcome-codes/actingctl.json](outcome-codes/actingctl.json): `report_exported`, `report_output_refused`, `report_write_failed`, `report_part_missing`, `report_trimmed` (`report_` is a prefix of the owner `actingctl`) |
+| the dependency | `zip` (the workspace's 0.6, already in the lock file) for `crates/lab-ops` |
+| the placeholder | deleted (above); the inventory is 46 dispatch arms and 101 commands; the help lists 35 own commands of the inventory |
+| the texts | [problem-report.md](problem-report.md) (new, in [README.md](README.md)); [lab-two-entries.md](lab-two-entries.md) §9.3 and the MCP front's own members; [actinglab-dry-run.md](actinglab-dry-run.md); `apps/actinglab-mcp/MANUAL.md`; the inventory's counts in both READMEs |
+
+**What a report holds** (the contract has every member): the summary page, its data, the
+manifest, the versions (each member's build manifest, each game root's bundle source), and for
+each failed or unfinished run of the window (at most `max_runs`, five by default, two at most of
+one package that ended with one code) its status, its steps, its scores, its geometry, the failing
+step's stream excerpt and at most three frames; for each instance the newest 200 rows of its
+errors view. The summary names for each run its terminal code with the catalog's description, the
+step it ended in, the page that step and the run started from, the last page recognised, the
+targets with matched, last and best score, threshold and margin (an OCR target's text and its
+confidence), and one display line ("device 1920×1080, package 1280×720, scale 3/2, recognition
+on the reduced frame", or "… not scaled"); the run that ended normally before the newest on its
+instance is listed in one line. The owner's defaults: frames in unless `no_frames` (which takes
+the text OCR read out too, ruling Q5), 24 hours, five runs, 24 MiB (frames left out first, then
+the stream excerpts, then the errors files; the summary, the manifest and each run's status,
+steps and scores never). What is never in it, whatever the switches: the configuration's salt,
+the state root's key file, a device serial; a path's `\Users\<name>\` segment and the user's and
+computer's names are masked in every text part.
+
+**Tests** (`crates/lab-ops/src/gate_467_rpt1.rs`, a made-up `Source` and temporary folders, no
+Runtime, no clock; `apps/actinglab/src/tests/gate_467_rpt1.rs`; the contract and apps gate maps):
+the summary of two failed runs (the code and its description, the step and its pages, a template
+below its threshold with its last and best score and margin, an OCR target's text, the display
+line of a scaled run and of one of the package's size, the run before the newest, the frames,
+the versions; the archive's name, order and digests; a second export never replaces the first);
+the stream filtered to the failing step, and the scores from the recognition record when the
+stream is above 8 MiB; the frames chosen, each once, a removed frame named missing; the output
+refused inside either root (letter case, `..`, the root itself) and through the row before the
+Runtime is reached; no salt, key, serial or unmasked name in any entry; only reads, no
+confirmation, client action or capture in the module's code; `no_frames`; the size bound's order
+and what it says; each instance's errors view with its counts; every read in order with its
+request id or its instance and window; the table's row; and actinglab's placeholder gone (the
+words are the module's, `--last-error` refused by name, an output inside the state root refused,
+nothing written without a Runtime). Adapted (the requirement changes what they pin): the help's
+own commands (35, `gate_434_cli_help`), LAB-5B5's lines and corpus (`gate_434_lab5b5`), the MCP
+front's own members (`gate_434_lab5g2b`).
+
+**At deploy.** Nothing to configure: the Lab programs of 0.12.61 have the row
+(`actinglab report export --out <dir>`, `ac_report_export` on `actinglab-mcp`). A script that
+called the placeholder gets `actingctl_usage_invalid` for `--last-error`. `actingctl mcp-serve`
+has no tool for it yet (RPT-4); the console's button is the UI repository's (UI-RPT-1).
+
+**Rollback** (below 0.12.61). Nothing is persisted: no ledger record, configuration key, fact or
+interface revision is added. An older actinglab answers the words with its placeholder again.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

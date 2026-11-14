@@ -256,7 +256,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `run open` | no_effect | | |
 | `run summary` | no_effect | | |
 | `run export` | refused | `dry_run_unsupported` | the run id, configuration read, `--out`; no alternative; `details.run_id`; no capability entry |
-| `report export` | refused | `dry_run_unsupported` | `--last-error`, `--out`; no alternative; no capability entry |
+| `report export` | refused | `actingctl_usage_invalid` (exit 1) | since Workflow #467 RPT-1 (0.12.61) the CLI module's core row ([problem-report.md](problem-report.md)), not actinglab's own command, whose placeholder (`--last-error`) is gone: `--dry-run` is no parameter of the row and is refused by name (`argument_problem` `unknown`) before anything is read or written; the row itself only reads and writes its one archive into `--out`; no capability entry |
 
 `record stop` and `session record stop` run the L4 generator and self-checks in memory under
 `--dry-run`, return `dry_run: true` and status `validated`, and preserve the recording and output

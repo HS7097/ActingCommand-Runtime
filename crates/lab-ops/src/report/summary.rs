@@ -16,9 +16,9 @@ use actingcommand_contract::outcome::CodeStr;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// The catalog's description of the code `code`, when the embedded catalog lists it.
-pub(super) fn description(code: &str) -> Option<String> {
-    if let Ok(Answer::Entry(entry)) = code_lookup::read_embedded(&Query::One(code.to_owned())) {
+/// The catalog's description of the code spelled `spelling`, when the embedded catalog lists it.
+pub(super) fn description(spelling: &str) -> Option<String> {
+    if let Ok(Answer::Entry(entry)) = code_lookup::read_embedded(&Query::One(spelling.to_owned())) {
         return entry["description"].as_str().map(str::to_owned);
     }
     None
