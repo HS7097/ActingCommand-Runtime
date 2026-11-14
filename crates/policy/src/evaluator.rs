@@ -241,7 +241,8 @@ pub struct EvaluationFacts {
 /// leaves out whole, because the scheduler workbench cannot compose their game's root
 /// ([`LeftOutFacts::void_targets`]): every candidate of such an instance is computed as a marked
 /// candidate is, as on an instance without a target record, with the reason
-/// `resource_target_root_uncomposed`.
+/// `resource_target_root_uncomposed`. Fix round 3: the void is part of such a candidate's
+/// decision identity (`targets_void_decision_id`); it enters no snapshot.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LeftOutFacts {
     keys: BTreeMap<String, BTreeSet<String>>,
@@ -2599,6 +2600,13 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             time.unix_ms,
             seed,
         );
+        // Workflow #455 G-R2s fix round 3: the void of the instance's targets is part of what
+        // the identity covers ([`targets_void_decision_id`]).
+        let decision_id = if left_out.targets_void(&candidate.instance_id) {
+            targets_void_decision_id(&decision_id)
+        } else {
+            decision_id
+        };
         let reason_chain_id = format!("reason:{decision_id}");
         let intent = DispatchIntent {
             decision_id,
@@ -8053,6 +8061,26 @@ fn deterministic_decision_id(
     hash_part(&mut hasher, fact_snapshot_id.as_bytes());
     hasher.update(unix_ms.to_be_bytes());
     hasher.update(seed.to_be_bytes());
+    format!("decision:{:x}", hasher.finalize())
+}
+
+/// Workflow #455 G-R2s fix round 3 (register §1.365): the part [`targets_void_decision_id`]
+/// hashes before the identity it extends.
+const TARGETS_VOID_IDENTITY_PART: &[u8] = b"targets-void";
+
+/// Workflow #455 G-R2s fix round 3 (register §1.365; `contracts/resource-targets.md`, "A task that
+/// can do something irreversible"): the decision identity of a candidate of an instance whose
+/// resource target record is left out whole because its game's root cannot be composed
+/// ([`LeftOutFacts::targets_void`]): its [`deterministic_decision_id`] `decision_id` hashed once
+/// more after [`TARGETS_VOID_IDENTITY_PART`]. The void changes the decision, and a root that heals
+/// appends nothing to the ledger, so without it two evaluations of one instant, ledger position
+/// and snapshot, one before and one after the heal, would give two decisions one identity
+/// (`policy_decision_identity_conflict`). Every other candidate's identity is
+/// [`deterministic_decision_id`]'s, unchanged.
+fn targets_void_decision_id(decision_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hash_part(&mut hasher, TARGETS_VOID_IDENTITY_PART);
+    hash_part(&mut hasher, decision_id.as_bytes());
     format!("decision:{:x}", hasher.finalize())
 }
 

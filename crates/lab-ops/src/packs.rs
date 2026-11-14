@@ -28,7 +28,7 @@ use crate::instance_selector::SelectorMiss;
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, InstalledProcess, IrreversiblePackages,
+    BundleIndex, BundleMaintenance, DeclaredCapabilities, InstalledProcess, IrreversiblePackages,
     MAX_STANDARD_PACK_UI_BYTES, ProvidedCapability, STANDARD_PACK_BUNDLE_FILE,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
@@ -953,7 +953,14 @@ impl Rows {
                     .ok()
                     .cloned()
             });
-            provides.insert(package_id.to_owned(), capabilities);
+            // G-R2s fix round 3: the remedies are declared in the package's operation, which
+            // lab-ops does not read (the contract's limit: the offline rows can mark fewer tasks
+            // than the Runtime); its reading of `control.json` gives none.
+            let declaration = capabilities.map(|provided| DeclaredCapabilities {
+                provides: provided,
+                remedies: BTreeSet::new(),
+            });
+            provides.insert(package_id.to_owned(), declaration);
         }
         IrreversiblePackages::new(provides)
     }

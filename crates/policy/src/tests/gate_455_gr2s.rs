@@ -18,10 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
-    BundleIndex, GoalReferences, GoalRule, Initiator, IrreversiblePackages,
-    RESOURCE_TARGETS_FACT_KEY, RuntimeChannel, StandardPackProblem, StandardPackRootBytes,
-    check_standard_pack_goal_references, parse_standard_pack_goals, parse_standard_pack_schedule,
-    read_standard_pack_root,
+    BundleIndex, DeclaredCapabilities, Initiator, IrreversiblePackages, RESOURCE_TARGETS_FACT_KEY,
+    RuntimeChannel, StandardPackProblem, StandardPackRootBytes, read_standard_pack_root,
 };
 use serde_json::{Value, json};
 
@@ -37,7 +35,6 @@ use crate::{
     ScopeSelector, StandardPackBinding, StandardPackComposeInput, StandardPackComposition,
     StandardPackGameFiles, TargetSetter, TaskDecision, check_resource_targets,
     compose_standard_pack_rules, parse_resource_targets, project_fact_pools, project_forward,
-    standard_pack_rule_followers,
 };
 
 const V3: &str = "actingcommand.resource-targets.v3";
@@ -638,25 +635,29 @@ fn declared(unread: Option<&str>) -> IrreversiblePackages {
     IrreversiblePackages::new(
         provided(&packages)
             .into_iter()
-            .map(|(package_id, capabilities)| {
-                let read = (Some(package_id.as_str()) != unread).then_some(capabilities);
+            .map(|(package_id, declaration)| {
+                let read = (Some(package_id.as_str()) != unread).then_some(declaration);
                 (package_id, read)
             })
             .collect(),
     )
 }
 
-/// Each package of `packages` with the capabilities it provides, each with its mark.
-fn provided(packages: &[(&str, &[(&str, bool)])]) -> BTreeMap<String, BTreeMap<String, bool>> {
+/// Each package of `packages` with the capabilities it provides, each with its mark, and no
+/// remedy.
+fn provided(packages: &[(&str, &[(&str, bool)])]) -> BTreeMap<String, DeclaredCapabilities> {
     packages
         .iter()
         .map(|(package_id, capabilities)| {
             (
                 (*package_id).to_owned(),
-                capabilities
-                    .iter()
-                    .map(|(capability, marked)| ((*capability).to_owned(), *marked))
-                    .collect(),
+                DeclaredCapabilities {
+                    provides: capabilities
+                        .iter()
+                        .map(|(capability, marked)| ((*capability).to_owned(), *marked))
+                        .collect(),
+                    remedies: BTreeSet::new(),
+                },
             )
         })
         .collect()
@@ -845,9 +846,10 @@ fn gr2s_t5_an_unreadable_package_marks_every_task_of_its_game_and_warns_once() {
 //   edge);
 // - H3's follower C3 is a complete rule, and B3 follows C3 (the coverage lists B3 with C3 alone).
 // B1, B2 and B3 run a package that marks its capability irreversible: H1, H2 and H3 are marked,
-// with C3. H4's one follower F4 runs a package nobody marks: neither carries the member. The goal
-// check reads the same lists: a `tier` entry over the four heads, each of whose packages provides
-// nothing, is refused at H1, H2 and H3 (`goal_governs_irreversible`) and passes H4.
+// with C3. H4's one follower F4 runs a package nobody marks: neither carries the member. Fix round
+// 3 (C.4): the goal check's half, a `tier` entry over the four heads refused at H1, H2 and H3 and
+// passing H4, goes through the resource tools' `goal_issues` over real packages
+// (`actingcommand-resource-tooling`, `gate_455_gr2s::gr2s_t7_the_goal_check_reads_the_same_chain_links`).
 #[test]
 fn gr2s_t7_the_mark_follows_every_chain_link_the_evaluator_reads() {
     let both_ends = json!({
@@ -881,7 +883,7 @@ fn gr2s_t7_the_mark_follows_every_chain_link_the_evaluator_reads() {
     let irreversible = IrreversiblePackages::new(
         provided(&packages)
             .into_iter()
-            .map(|(package_id, capabilities)| (package_id, Some(capabilities)))
+            .map(|(package_id, declaration)| (package_id, Some(declaration)))
             .collect(),
     );
     let composition = compose(&schedule, &irreversible)
@@ -906,52 +908,67 @@ fn gr2s_t7_the_mark_follows_every_chain_link_the_evaluator_reads() {
         .into_iter()
         .collect::<BTreeSet<_>>()
     );
+}
 
-    let bytes = serde_json::to_vec(&schedule).expect("schedule bytes");
-    let parsed = parse_standard_pack_schedule(&bytes)
-        .unwrap_or_else(|issue| panic!("the schedule reads: {issue}"));
-    let lists = standard_pack_rule_followers(&parsed);
-    let mut references = GoalReferences::new(provided(&packages));
-    for rule in &parsed.rules {
-        references.rules.insert(
-            rule.id.clone(),
-            GoalRule {
-                package_id: rule.package_id.clone(),
-                fixed_value: true,
-                followers: lists.get(&rule.id).cloned().unwrap_or_default(),
-            },
-        );
-    }
-    let goals = serde_json::to_vec(&json!({
-        "schema_version": "actingcommand.goals.v1",
-        "game": GAME,
-        "entries": [{
-            "name": "weight", "type": "tier",
-            "governs": {"rules": ["rule.h1", "rule.h2", "rule.h3", "rule.h4"]},
-            "title": {"en": "Weight"}, "default": "normal",
-            "options": [{"value": "normal", "title": {"en": "Normal"}, "scale_milli": 1000},
-                        {"value": "more", "title": {"en": "More"}, "scale_milli": 2000}]
-        }]
-    }))
-    .expect("goals bytes");
-    let goals = parse_standard_pack_goals(&goals, GAME)
-        .unwrap_or_else(|issues| panic!("the declaration reads: {issues:?}"));
-    let refused = check_standard_pack_goal_references(&goals, &references)
-        .iter()
-        .map(|issue| {
-            assert_eq!(
-                issue.problem,
-                StandardPackProblem::GoalGovernsIrreversible,
-                "{issue:?}"
-            );
-            issue.pointer.clone()
-        })
-        .collect::<Vec<_>>();
+// Fix round 3, part B (the coordinator's ruling of 11-14): a package also counts as irreversible
+// when a remedy declaration of its mappings lists a capability some package of the root provides
+// marked irreversible, judged from the declarations alone (every capability the remedy lists).
+// Five rules on an hourly clock, each running the package of its own id:
+// - BLOCKED's package provides nothing; its remedy lists `cap_r` and `cap_q`, and PROVIDER's
+//   package provides `cap_r` marked irreversible: BLOCKED is marked, PROVIDER too;
+// - H5's follower F5 (a plain chain link) runs a package whose remedy lists `cap_r`: both marked,
+//   the mark spreading up the chain by the walk that exists;
+// - KEEPS's package's remedy lists only `cap_q`, which SPARE's package provides unmarked: neither
+//   carries the member.
+#[test]
+fn gr2s_t9_a_remedy_that_lists_an_irreversible_capability_marks_its_package_and_its_chain() {
+    let schedule = schedule_of(vec![
+        rule("rule.blocked", clock(), true),
+        rule("rule.provider", clock(), true),
+        rule("rule.h5", clock(), true),
+        rule("rule.f5", edge("rule.h5"), false),
+        rule("rule.keeps", clock(), true),
+        rule("rule.spare", clock(), true),
+    ]);
+    let declaration = |provides: &[(&str, bool)], remedies: &[&str]| DeclaredCapabilities {
+        provides: provides
+            .iter()
+            .map(|(capability, marked)| ((*capability).to_owned(), *marked))
+            .collect(),
+        remedies: remedies
+            .iter()
+            .map(|capability| (*capability).to_owned())
+            .collect(),
+    };
+    let irreversible = IrreversiblePackages::new(BTreeMap::from([
+        (
+            "rule.blocked".to_owned(),
+            Some(declaration(&[], &["cap_r", "cap_q"])),
+        ),
+        (
+            "rule.provider".to_owned(),
+            Some(declaration(&[("cap_r", true)], &[])),
+        ),
+        ("rule.h5".to_owned(), Some(declaration(&[], &[]))),
+        ("rule.f5".to_owned(), Some(declaration(&[], &["cap_r"]))),
+        ("rule.keeps".to_owned(), Some(declaration(&[], &["cap_q"]))),
+        (
+            "rule.spare".to_owned(),
+            Some(declaration(&[("cap_q", false)], &[])),
+        ),
+    ]));
+    assert_eq!(irreversible.package("rule.blocked"), Some(true));
+    assert_eq!(irreversible.package("rule.f5"), Some(true));
+    assert_eq!(irreversible.package("rule.keeps"), Some(false));
+    assert_eq!(irreversible.package("rule.spare"), Some(false));
+    let composition = compose(&schedule, &irreversible)
+        .unwrap_or_else(|failure| panic!("the shapes compose: {failure}"));
     assert_eq!(
-        refused,
-        (0..3)
-            .map(|index| format!("/entries/0/governs/rules/{index}"))
-            .collect::<Vec<_>>()
+        marked_tasks(&composition),
+        ["rule.blocked", "rule.provider", "rule.h5", "rule.f5"]
+            .map(str::to_owned)
+            .into_iter()
+            .collect::<BTreeSet<_>>()
     );
 }
 

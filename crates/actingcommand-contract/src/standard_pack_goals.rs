@@ -488,28 +488,45 @@ pub struct IrreversiblePackages {
     unreadable: BTreeSet<String>,
 }
 
+/// Workflow #455 G-R2s fix round 3 (register §1.365; contracts/standard-pack-goals.md,
+/// "Irreversibility"): what a reader read of one package's declarations that the rule
+/// ([`IrreversiblePackages::new`]) judges. Both members are required, so no reader leaves the
+/// remedies out by omission; there is no default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredCapabilities {
+    /// The capabilities its control declaration provides (`provides[]`), every one `true` when
+    /// its entry writes `irreversible: true`.
+    pub provides: BTreeMap<String, bool>,
+    /// Every capability a remedy declaration of its mappings lists (`remedy.capabilities`): every
+    /// capability the mapping lists, its default or not, whatever an instance chooses.
+    pub remedies: BTreeSet<String>,
+}
+
 impl IrreversiblePackages {
     /// The packages of a game root whose `bundle.json` lists exactly the packages of `declared`,
-    /// each with the capabilities its control declaration provides (`provides[]`), every one
-    /// `true` when its entry writes `irreversible: true`, or `None` when the reader could not read
-    /// its declaration. A capability is irreversible when any package of the root marks it so
+    /// each with what its declarations say ([`DeclaredCapabilities`]), or `None` when the reader
+    /// could not read them. A capability is irreversible when any package of the root marks it so
     /// (contracts/remedies.md §2.3, "any provider"), and a package can do something irreversible
-    /// when it provides such a capability, marked by itself or not (G-R1 fix round 1).
-    pub fn new(declared: BTreeMap<String, Option<BTreeMap<String, bool>>>) -> Self {
+    /// when it provides such a capability, marked by itself or not (G-R1 fix round 1), or, fix
+    /// round 3 (the coordinator's ruling of 11-14), when a remedy declaration of its mappings lists
+    /// one: its blocked run can lead to that capability's provider.
+    pub fn new(declared: BTreeMap<String, Option<DeclaredCapabilities>>) -> Self {
         let irreversible = declared
             .values()
             .flatten()
-            .flatten()
+            .flat_map(|declaration| &declaration.provides)
             .filter(|(_, marked)| **marked)
             .map(|(capability, _)| capability.clone())
             .collect::<BTreeSet<_>>();
         let mut packages = BTreeMap::new();
         let mut unreadable = BTreeSet::new();
-        for (package_id, capabilities) in declared {
-            match capabilities {
-                Some(capabilities) => {
-                    let can = capabilities
+        for (package_id, declaration) in declared {
+            match declaration {
+                Some(declaration) => {
+                    let can = declaration
+                        .provides
                         .keys()
+                        .chain(&declaration.remedies)
                         .any(|capability| irreversible.contains(capability));
                     packages.insert(package_id, can);
                 }
@@ -576,20 +593,21 @@ impl IrreversiblePackages {
 
 impl GoalReferences {
     /// The references of a game root whose `bundle.json` lists exactly the packages of
-    /// `provides`, each with the capabilities its control declaration provides (`provides[]`),
-    /// every one `true` when its entry writes `irreversible: true`. A capability is irreversible
-    /// when any package of the root marks it so (contracts/remedies.md §2.3, "any provider"), and
-    /// a package can do something irreversible when it provides such a capability, marked by
-    /// itself or not. A package `provides` does not name is no package of the root: an entry that
-    /// governs it, or a rule that runs it, is never passed. The pools and the rules start empty,
-    /// the tables `None`.
-    pub fn new(provides: BTreeMap<String, BTreeMap<String, bool>>) -> Self {
+    /// `declared`, each with what its declarations say ([`DeclaredCapabilities`]: the capabilities
+    /// its control declaration provides, every one `true` when its entry writes `irreversible:
+    /// true`, and, G-R2s fix round 3, every capability its remedies list). A capability is
+    /// irreversible when any package of the root marks it so (contracts/remedies.md §2.3, "any
+    /// provider"), and a package can do something irreversible when it provides such a capability,
+    /// marked by itself or not, or when its remedies list one. A package `declared` does not name
+    /// is no package of the root: an entry that governs it, or a rule that runs it, is never
+    /// passed. The pools and the rules start empty, the tables `None`.
+    pub fn new(declared: BTreeMap<String, DeclaredCapabilities>) -> Self {
         // G-R2s: the rule has one copy, [`IrreversiblePackages::new`]; every package of the
         // check's root was read (a package it cannot read is the check's error).
         let packages = IrreversiblePackages::new(
-            provides
+            declared
                 .into_iter()
-                .map(|(package_id, capabilities)| (package_id, Some(capabilities)))
+                .map(|(package_id, declaration)| (package_id, Some(declaration)))
                 .collect(),
         );
         Self {

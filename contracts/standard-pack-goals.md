@@ -294,11 +294,15 @@ fourteen of the file and `goal_undeclared`) are words of the existing vocabulary
      target record ([resource-targets.md](resource-targets.md), "A task that can do something
      irreversible"), for every version of the record. **One copy of the rule:** the contract
      crate's `IrreversiblePackages` (a capability is irreversible when any package of the root
-     marks it; a package is irreversible when it provides such a capability; a package that could
-     not be read leaves every package of the root counting as irreversible; the walk over the
+     marks it; a package is irreversible when it provides such a capability or, since G-R2s fix
+     round 3 (the coordinator's ruling of 11-14), when a remedy declaration of its mappings lists
+     one, every capability the remedy lists judged from the declarations alone; a package that
+     could not be read leaves every package of the root counting as irreversible; the walk over the
      rules that follow a rule) is what `GoalReferences::new` holds and what the composer takes per
      game root, and the policy crate's `standard_pack_rule_followers` gives both the same lists of
-     followers; there is no second implementation.
+     followers; there is no second implementation. So an entry that governs a package whose
+     blocked run asks for an irreversible provider, a `tier` over its rule, and a `tier` over a
+     rule it follows are `goal_governs_irreversible` too.
   2. **No entry kind writes anything else**: not a remedy choice (those stay in the remedy layer),
      not a run parameter, not a configuration key, not a pack switch. Packages keep their own
      refusals of premium-currency and real-money buttons, and no package reads a goal for them.

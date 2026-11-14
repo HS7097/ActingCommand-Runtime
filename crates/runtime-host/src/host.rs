@@ -294,11 +294,13 @@ pub(crate) use standard_pack::read_registries;
 pub use standard_pack::{StandardPackGameReport, StandardPacksReport, inspect_standard_packs};
 // ROUT-L RL-1b: the scheduler workbench, which composes the standard packs' schedule rules.
 mod standard_pack_schedule;
-#[cfg(test)]
-pub(crate) use standard_pack_schedule::DECLARATION_METADATA_FAILS_FOR_TEST;
 pub use standard_pack_schedule::{
     ConfiguredStandardPackSchedule, StandardPackSchedulePreview, compose_configured_standard_packs,
     preview_standard_pack_schedule,
+};
+#[cfg(test)]
+pub(crate) use standard_pack_schedule::{
+    DECLARATION_METADATA_FAILS_FOR_TEST, REFUSALS_NAME_UNCOMPOSED_FOR_TEST,
 };
 mod startup_package;
 mod state_control;

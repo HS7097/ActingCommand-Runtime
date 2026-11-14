@@ -70,8 +70,9 @@ Workflow #455 G-R2s (0.12.60; register §1.365; the coordinator's rulings of 11-
 **A goal never raises the weight of a task whose package can do something irreversible**, for
 every version of the record. The standard-pack composer marks such a task `irreversible_reach:
 true` (its package, or a rule that follows it by a chain link, directly or further down, can do
-something irreversible by the whole game root's declarations, or a package of its game root could
-not be read: [standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). A
+something irreversible by the whole game root's declarations, its remedies included since fix
+round 3, or a package of its game root could not be read:
+[standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). A
 candidate of a
 marked task on an instance that holds a target record (v1, v2 or v3; active, expired or unreadable)
 is computed **exactly as if the instance had no target record**: its instance is resolved once
@@ -112,14 +113,27 @@ of that game may have changed into one the active generation does not mark. So e
 that game's instances is computed exactly as a marked candidate is, as on an instance without a
 target record, through the same code path, and carries `resource_target_root_uncomposed` (info, no
 key) in place of `resource_target_package_irreversible`, also when its task carries the mark. The
-workbench notes the game at the check that keeps the active generation (with it, every game in use
-whose files the check did not find unchanged since its last composed read: a game whose files have
-not changed is composed in the active generation as it is now) and forgets every note at the first
-composition that succeeds; until then each check reads and composes again. The Runtime tells the
-evaluator per instance, in memory only: never a fact, a snapshot or a decision identity. It also
-covers a current generation composed before 0.12.60, whose first check under this build meets a
-root it cannot compose. An instance of a game whose root composes is not touched, and an
-installation whose roots all compose computes exactly what it computes without this.
+workbench notes the game at the check that keeps the active generation and forgets every note at
+the first composition of every game that succeeds; until then each check reads and composes again.
+Which games are noted (fix round 3, the coordinator's ruling of 11-14): **while a game's own root
+fails** (its metadata cannot be read, or it is damaged), the check still marks, reads and composes
+every other game, without activating that composition (the failed game keeps the active
+generation's rules), and notes the failed games and only those other games the active generation
+does not hold as their files give them now (a task of the game in the active generation that the
+composition does not compose with the same id and procedure, or that the composition marks and the
+active generation does not); so one failing root voids only its own game, at the first check after
+a start too. **When the composition is refused as a whole** (or no refused game can be taken out),
+no composition of the others exists, and the check notes every game in use whose files it did not
+find unchanged since its last composed read (a game whose files have not changed is composed in
+the active generation as it is now), with the failed games. The Runtime tells the evaluator per
+instance, in memory only: never a fact or a snapshot. Fix round 3: the void is part of the
+decision identity of each candidate of a voided instance (its identity hashed once more with it),
+since a root that heals appends nothing to the ledger, and two evaluations at one instant, ledger
+position and snapshot must not give two decisions one identity; every other candidate's identity
+is unchanged. It also covers a current generation composed before 0.12.60, whose first check under
+this build meets a root it cannot compose. An instance of a game whose root composes, and that the
+active generation holds as its files give it, is not touched, and an installation whose roots all
+compose computes exactly what it computes without this.
 
 ## Document `actingcommand.resource-targets.v1`
 

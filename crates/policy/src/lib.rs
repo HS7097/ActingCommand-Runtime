@@ -182,7 +182,10 @@ mod tests {
                 .map(|package_id| {
                     (
                         package_id.to_owned(),
-                        Some(std::collections::BTreeMap::new()),
+                        Some(actingcommand_contract::DeclaredCapabilities {
+                            provides: std::collections::BTreeMap::new(),
+                            remedies: std::collections::BTreeSet::new(),
+                        }),
                     )
                 })
                 .collect(),

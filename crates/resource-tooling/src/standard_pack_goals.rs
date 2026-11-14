@@ -22,7 +22,7 @@ use crate::standard_pack_check::{CHECK_LABEL, root_invalid, root_issue_outcome};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    GoalReferences, GoalRule, IrreversiblePackages, LabError, LabResult,
+    DeclaredCapabilities, GoalReferences, GoalRule, IrreversiblePackages, LabError, LabResult,
     MAX_STANDARD_PACK_GOALS_BYTES, StandardPackRoot, StandardPackRootIssue, StandardPackTable,
     StandardPackTableCell, StandardPackTableReadFailure, check_standard_pack_goal_references,
     parse_standard_pack_goals, parse_standard_pack_schedule, read_standard_pack_table,
@@ -78,15 +78,16 @@ pub(crate) fn goal_issues(
     // G-R1 fix round 1: what every package of the root provides, each capability with its
     // `irreversible` mark, in registry order as the remedy report reads them. The references
     // judge irreversibility per capability across the whole root (contracts/remedies.md §2.3).
-    let mut provides = BTreeMap::new();
+    // Workflow #455 G-R2s fix round 3: and every capability its remedies list.
+    let mut declared = BTreeMap::new();
     for package_id in root.registry.package_ids() {
         let entry = root.registry.get(package_id).ok_or_else(|| {
             LabError::package_invalid(format!("{package_id} is no package of the bundle"))
         })?;
         let capabilities = package_provides(&pack_directory(&entry.directory))?;
-        provides.insert(package_id.to_owned(), capabilities);
+        declared.insert(package_id.to_owned(), capabilities);
     }
-    let mut references = GoalReferences::new(provides);
+    let mut references = GoalReferences::new(declared);
     if let Some((bytes, path)) = schedule {
         let schedule = parse_standard_pack_schedule(bytes)
             .map_err(|issue| root_invalid(game, path, &issue))?;
@@ -136,27 +137,22 @@ pub(crate) fn goal_issues(
 
 /// What the package at `path` provides, read by the Runtime's metadata reader
 /// (`read_remedy_declarations`): each capability of its control declaration's `provides`, `true`
-/// when an entry marks it `irreversible`. A package the reader refuses is `package_invalid`
-/// naming its path.
-fn package_provides(path: &Path) -> LabResult<BTreeMap<String, bool>> {
+/// when an entry marks it `irreversible`, and, Workflow #455 G-R2s fix round 3, every capability
+/// its remedies list (`RemedyDeclarations::declared_capabilities`). A package the reader refuses
+/// is `package_invalid` naming its path.
+fn package_provides(path: &Path) -> LabResult<DeclaredCapabilities> {
     read_provides(path)
         .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))
 }
 
 /// [`package_provides`]'s reading, or the reader's refusal.
-fn read_provides(path: &Path) -> Result<BTreeMap<String, bool>, ContainedTaskError> {
-    let declarations = PreparedContainedTask::read_remedy_declarations(
+fn read_provides(path: &Path) -> Result<DeclaredCapabilities, ContainedTaskError> {
+    PreparedContainedTask::read_remedy_declarations(
         CHECK_LABEL,
         path,
         Instant::now() + PACK_DEADLINE,
-    )?;
-    let mut capabilities = BTreeMap::new();
-    for provided in &declarations.provides {
-        *capabilities
-            .entry(provided.capability().to_owned())
-            .or_insert(false) |= provided.irreversible();
-    }
-    Ok(capabilities)
+    )
+    .map(|declarations| declarations.declared_capabilities())
 }
 
 /// Workflow #455 G-R2s: one game root's packages as the composer takes them

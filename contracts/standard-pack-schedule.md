@@ -535,10 +535,17 @@ can do something irreversible").
 
 - **The rule, one copy.** The contract crate's `IrreversiblePackages` is made only from what a
   reader read of every package `bundle.json` registers: each package with the capabilities its
-  control declaration provides (`provides[]`) and their `irreversible` marks, or "could not be
-  read". A capability is irreversible when any package of the root marks it; a package is
-  irreversible when it provides such a capability, marked by itself or not. The goal check
-  (`GoalReferences::new`) holds the same type; there is no second implementation.
+  control declaration provides (`provides[]`) and their `irreversible` marks and, fix round 3
+  (the coordinator's ruling of 11-14), every capability a remedy declaration of its mappings lists
+  (`DeclaredCapabilities`, both required), or "could not be read". A capability is irreversible
+  when any package of the root marks it; a package is irreversible when it provides such a
+  capability, marked by itself or not, or **when any remedy of its mappings lists one**: a run of
+  it that ends blocked asks for that capability's provider, so a goal that raises its weight makes
+  the irreversible remedy run more often. The remedies are judged from the declarations alone:
+  every capability a remedy lists, its default or not, whatever an instance chooses
+  ([remedies.md](remedies.md)). The Runtime's reader gives both (`read_remedy_declarations`, its
+  `declared_capabilities`). The goal check (`GoalReferences::new`) holds the same type; there is
+  no second implementation.
 - **The mark.** The composer writes the task member `irreversible_reach: true` on every composed
   task of a rule (not held) whose package counts as irreversible, and on every task of a rule that
   a rule running such a package follows, directly or further down. **A rule follows another** when
@@ -552,8 +559,26 @@ can do something irreversible").
   (the independent review): which follower rides with which head the evaluator decides by each
   run's state (the link whose latest run succeeded and is not served yet, its dispatch against the
   next link's), which no composition knows; **so the composer takes the safe side and counts every
-  link**, walked through further followers (each once, so a cycle ends the walk). One copy of the
-  lists and the walk: the policy crate's `standard_pack_rule_followers` gives each rule the rules
+  chain link of that kind**, walked through further followers (each once, so a cycle ends the
+  walk). **What the mark follows, exactly** (fix round 3): the chain links, each a
+  `dependency_completed` reached from a rule's trigger through `all` whose `terminal_states`
+  accepts `succeeded`, walked in the direction from a rule to its followers (a rule is marked when
+  a rule that follows it counts as irreversible; a follower is not marked for the rule it
+  follows); and a package's remedy capabilities (the rule above), so
+  a rule whose package's remedy leads to an irreversible provider is marked and the mark spreads up
+  the chain by the same walk. **What it does not follow**, each another dispatch the evaluator
+  judges by its own weight, which a goal on the rule does not raise:
+  - a `dependency_completed` under `any` or `not`, or one that does not accept `succeeded`: the
+    evaluator reads it as no chain link, so the follower never rides with the rule and is
+    dispatched only when its own trigger holds, weighed by its own value;
+  - a trigger on a fact or a capacity (a reading the rule's run may change): the follower runs
+    when its own reading says so, weighed by its own value, not because the rule was weighed;
+  - a declared `prerequisite_package_id`. **Known limit:** a prerequisite package runs inside the
+    dependent run, so a goal that raises the dependent rule raises it too; the resource side
+    declares no irreversible package as a prerequisite, and the review of resource pull requests
+    holds that line until a later slice checks it.
+
+  One copy of the lists and the walk: the policy crate's `standard_pack_rule_followers` gives each rule the rules
   that follow it, and the contract crate's `IrreversiblePackages::followers_irreversible` walks
   them; the goal check holds a `tier` entry's rule to the same lists (`GoalRule::followers`,
   [standard-pack-goals.md](standard-pack-goals.md)). A package that is no package the reader read
@@ -587,8 +612,11 @@ can do something irreversible").
   a reason outside what lab-ops reads (another file of the package, its operation declaration) is
   unreadable to the Runtime only, so there the offline rows' composition can mark fewer tasks than
   the Runtime's; check-config, the forward projection and the dispatch are the Runtime's and are the
-  truth. For a root whose packages both read, the two inputs are equal (one rule, the same marks).
-  The rows' own `irreversible` member keeps its meaning: the package's own declaration.
+  truth. For a root whose packages both read, the two inputs are equal (one rule, the same marks)
+  but for the remedies (fix round 3): they are declared in a package's operation, which lab-ops
+  does not read, so the offline rows give every package no remedy capability and do not mark a
+  package for its remedies (one more case of the limit above). The rows' own `irreversible` member
+  keeps its meaning: the package's own declaration.
 - **Three scopes of one word.** `irreversible` means today: the package's own declaration (the
   `actingctl packs` row member), the whole root's (a capability any package of the root marks:
   the goal check and this mark), and the providers bound on an instance (the remedy layer's
@@ -627,12 +655,25 @@ can do something irreversible").
   coordinator's ruling of 11-14). Where the workbench keeps the active generation because a check
   cannot compose (a root whose metadata cannot be read, a damaged root, a composition refused as a
   whole, a refusal that cannot be narrowed to a game it composed), that generation may lack the
-  mark of a package changed since; so the game whose root failed, and every game in use whose files
-  the check did not find unchanged since its last composed read, are noted, and every candidate of
-  their instances is computed as on an instance without a target record
-  (`resource_target_root_uncomposed`, [resource-targets.md](resource-targets.md), "A task that can
-  do something irreversible"). The notes are memory only and end at the first composition that
-  succeeds; while one is held, each check reads and composes again even when nothing changed.
+  mark of a package changed since; so noted games' candidates are computed as on an instance
+  without a target record (`resource_target_root_uncomposed`,
+  [resource-targets.md](resource-targets.md), "A task that can do something irreversible"). Fix
+  round 3 (the coordinator's ruling of 11-14): **while a game's own root fails** (its metadata, or
+  its read), the check records it once, goes on for the other games (they are marked, read and
+  composed as ever) and does not activate their composition (the failed game keeps the active
+  generation's rules); it notes the failed games and only those other games whose tasks the active
+  generation does not hold as that composition gives them (a task of the game the composition does
+  not compose with the same id and procedure, or one the composition marks and the active
+  generation does not). One failing root voids only its own game, at the first check after a start
+  too (when the workbench holds no marks). **A composition refused as a whole**, or a refusal no
+  round can narrow, notes the failed games and every game in use whose files the check did not find
+  unchanged since its last composed read. A refusal as a whole is recorded once per set of files
+  composed, as one `standard_pack_root_invalid` per composed game naming that game and its
+  `schedule.json` (it named no game before, which broke its catalog entry), as check-config gives
+  it. A root's metadata failure (`standard_pack_root_unreadable`) is recorded again after that
+  game's root has composed in between. The notes are memory only and end at the first composition
+  of every game that succeeds; while one is held, each check reads and composes again even when
+  nothing changed.
 
 ## Tools
 

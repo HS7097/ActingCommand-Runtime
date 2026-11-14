@@ -3911,3 +3911,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r2_a_composition_refused_as_a_whole_voids_the_goals_of_the_changed_game",
 ]
 incident = ["#455 G-R2s"]
+# Workflow #455 G-R2s fix round 3 (0.12.60; register §1.365; the coordinator's work order of 11-14, C.1, C.2 and C.4; contracts/standard-pack-schedule.md, "The irreversible mark"): on gate_rl1b's bench with two games, goals applied on both: while game A's schedule.json cannot be stat'ed (the gate tests' metadata seam), game A's candidate has the numbers of before any goal and carries resource_target_root_uncomposed, game B (after it in id order) keeps the goal's numbers, the failure is recorded once as standard_pack_root_unreadable naming game A, readable again game A's goal applies, and a second failure after game A composed is recorded again (1); a refusal that names a game no round composed (the gate tests' refusal seam; unreachable from files) records game A's refusal once, keeps the active generation, voids game A only and, game A restored, its goal applies again (2); after a restart with game A's bundle.json damaged, game A's candidate says why and game B's does not, and game B's numbers are those it has once game A's root composes again (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r3_a_root_whose_metadata_fails_voids_only_its_own_game",
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r3_a_refusal_no_round_can_narrow_voids_the_changed_game_only",
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r3_after_a_start_one_failing_root_voids_only_its_own_game",
+]
+incident = ["#455 G-R2s"]

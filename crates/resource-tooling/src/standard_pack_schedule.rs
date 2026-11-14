@@ -108,7 +108,15 @@ pub(crate) fn readable_root(root: &StandardPackRoot) -> IrreversiblePackages {
     IrreversiblePackages::new(
         root.registry
             .package_ids()
-            .map(|package_id| (package_id.to_owned(), Some(BTreeMap::new())))
+            .map(|package_id| {
+                (
+                    package_id.to_owned(),
+                    Some(actingcommand_contract::DeclaredCapabilities {
+                        provides: BTreeMap::new(),
+                        remedies: std::collections::BTreeSet::new(),
+                    }),
+                )
+            })
             .collect(),
     )
 }

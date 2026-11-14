@@ -98,6 +98,10 @@ const DECLARATIONS_LABEL: &str = "standard-pack-workbench";
 /// the remedy table may.
 const DECLARATIONS_BUDGET: Duration = Duration::from_secs(60);
 
+/// The key under which a game's failure to read its root files' metadata is recorded once
+/// (`report_once`); G-R2s fix round 3: cleared when the game's root composes.
+const ROOT_METADATA_KEY: &str = "root:metadata";
+
 /// G-R2s: the mark of one declaration file of a package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DeclarationMark {
@@ -120,14 +124,15 @@ struct GameMarks {
 }
 
 /// G-R2s fix round 1, for the gate tests: the declaration files whose metadata reads fail as a
-/// file the process may not stat fails (another error than its absence), by path. Each test
-/// names files below its own temporary root, so tests running at once do not meet.
+/// file the process may not stat fails (another error than its absence), by path; fix round 3:
+/// and the root files a check stats (`schedule.json`, `bundle.json`). Each test names files below
+/// its own temporary root, so tests running at once do not meet.
 #[cfg(test)]
 pub(crate) static DECLARATION_METADATA_FAILS_FOR_TEST: std::sync::Mutex<BTreeSet<PathBuf>> =
     std::sync::Mutex::new(BTreeSet::new());
 
-/// G-R2s fix round 1: whether a gate test makes the metadata of the declaration file at `path`
-/// fail ([`DECLARATION_METADATA_FAILS_FOR_TEST`]).
+/// G-R2s fix round 1: whether a gate test makes the metadata of the file at `path` fail
+/// ([`DECLARATION_METADATA_FAILS_FOR_TEST`]).
 #[cfg(test)]
 fn metadata_fails_for_test(path: &Path) -> bool {
     DECLARATION_METADATA_FAILS_FOR_TEST
@@ -135,7 +140,7 @@ fn metadata_fails_for_test(path: &Path) -> bool {
         .is_ok_and(|failing| failing.contains(path))
 }
 
-/// G-R2s fix round 1: outside the gate tests no declaration file's metadata is made to fail.
+/// G-R2s fix round 1: outside the gate tests no file's metadata is made to fail.
 #[cfg(not(test))]
 const fn metadata_fails_for_test(_: &Path) -> bool {
     false
@@ -150,9 +155,6 @@ fn declaration_marks(package: &Path) -> Vec<DeclarationMark> {
             let path = parts
                 .iter()
                 .fold(package.to_path_buf(), |path, part| path.join(part));
-            if metadata_fails_for_test(&path) {
-                return DeclarationMark::Failed;
-            }
             match file_mark(&path) {
                 Ok(mark) => DeclarationMark::Read(mark),
                 Err(_) => DeclarationMark::Failed,
@@ -223,32 +225,115 @@ struct WorkbenchState {
     /// How many times each game's `schedule.json` was opened (acceptance A4).
     schedule_reads: BTreeMap<String, u64>,
     /// Workflow #455 G-R2s round 2: the games in use whose root a check could not compose, set
-    /// where the check keeps the active generation ([`note_uncomposed`]) and cleared by the
-    /// first composition that succeeds. Every instance of such a game has no goals in effect.
+    /// where the check keeps the active generation ([`note_uncomposed`]; fix round 3: while a
+    /// game's own root fails, the failed games and the games the active generation holds
+    /// otherwise, [`held_otherwise`]) and cleared by the first composition of every game that
+    /// succeeds. Every instance of such a game has no goals in effect.
     uncomposed: BTreeSet<String>,
 }
 
 /// Workflow #455 G-R2s round 2 (register §1.365; `contracts/resource-targets.md`, "A task that
-/// can do something irreversible"): at a check that keeps the active generation (the root's
-/// metadata cannot be read, the root is damaged, the composition is refused as a whole, or no
-/// refused game can be taken out), notes as uncomposed `failed`, the game whose root failed, and
-/// every game in use whose marks this check did not find equal to those of its last composed read
-/// (`state.marks`): a game whose files have not changed since is composed in the active generation
-/// as it is now, its marks those of its declarations; any other may have changed into something
-/// the active generation does not mark. A game this check did not reach has no marks here, so it
-/// is noted too.
+/// can do something irreversible"): at a check whose composition is refused (as a whole, or no
+/// refused game can be taken out), notes as uncomposed `failed`, the games whose own root failed
+/// at this check (fix round 3), and every game in use whose marks this check did not find equal to
+/// those of its last composed read (`state.marks`): a game whose files have not changed since is
+/// composed in the active generation as it is now, its marks those of its declarations; any other
+/// may have changed into something the active generation does not mark. A game whose metadata
+/// failed has no marks here, so it is noted too. A failed root whose other games compose is
+/// [`held_otherwise`]'s instead.
 fn note_uncomposed(
     state: &mut WorkbenchState,
     games: &BTreeSet<String>,
     marks: &BTreeMap<String, GameMarks>,
-    failed: Option<&str>,
+    failed: &BTreeSet<String>,
 ) {
     for game in games {
         let current = marks.get(game);
-        if failed == Some(game.as_str()) || current.is_none() || current != state.marks.get(game) {
+        if failed.contains(game) || current.is_none() || current != state.marks.get(game) {
             state.uncomposed.insert(game.clone());
         }
     }
+}
+
+/// Workflow #455 G-R2s fix round 3 (register §1.365; C.1, the coordinator's ruling of 11-14):
+/// while a game's own root fails, the games in use whose tasks the active generation `active` does
+/// not hold as `composition`, the other games' roots as they are now, composes them: a task of the
+/// game (its instance bound to it in `bound`) in `active` that `composition` does not compose with
+/// the same id and procedure, or that `composition` marks irreversible (`irreversible_reach`) and
+/// `active` does not. Any other game's tasks run in the active generation as its files give them
+/// now as far as the mark goes, so its goals stay in effect, also at the first check after a start
+/// (when the workbench holds no marks yet). A game whose root failed is in no `composition`, so
+/// each of its tasks in `active` names it too.
+fn held_otherwise(
+    composition: &StandardPackComposition,
+    active: Option<&CompiledCatalog>,
+    bound: &BTreeMap<String, StandardPackBinding>,
+) -> BTreeSet<String> {
+    let composed = composition
+        .compiled()
+        .catalog()
+        .tasks
+        .tasks
+        .iter()
+        .map(|task| (task.id.as_str(), task))
+        .collect::<BTreeMap<_, _>>();
+    let mut games = BTreeSet::new();
+    for task in active
+        .into_iter()
+        .flat_map(|catalog| &catalog.catalog().tasks.tasks)
+    {
+        let actingcommand_policy::ScopeSelector::Instance { instance_id } = &task.scope else {
+            continue;
+        };
+        let Some(binding) = bound.get(instance_id) else {
+            continue;
+        };
+        let held = composed.get(task.id.as_str()).is_some_and(|now| {
+            now.procedure_ref == task.procedure_ref
+                && (task.is_irreversible_reach() || !now.is_irreversible_reach())
+        });
+        if !held {
+            games.insert(binding.game_id.clone());
+        }
+    }
+    games
+}
+
+/// G-R2s fix round 3, for the gate tests: the standard-pack roots whose composer refusals the
+/// workbench takes as refusals of games no round composed, by root, so that its return without
+/// progress ([`take_refused_schedule`]) is reached: a refusal the composer gives names only a game
+/// it composed, so no root on disk reaches it. Each test names its own temporary root.
+#[cfg(test)]
+pub(crate) static REFUSALS_NAME_UNCOMPOSED_FOR_TEST: std::sync::Mutex<BTreeSet<PathBuf>> =
+    std::sync::Mutex::new(BTreeSet::new());
+
+/// The `schedule.json` bytes of the refused game `game`, taken out of `schedules`; `None` when no
+/// round composed it. G-R2s fix round 3, under the gate tests: `None` for every game below a root
+/// [`REFUSALS_NAME_UNCOMPOSED_FOR_TEST`] names, the game taken out all the same.
+#[cfg(test)]
+fn take_refused_schedule(
+    schedules: &mut BTreeMap<String, Vec<u8>>,
+    game: &str,
+    root: Option<&Path>,
+) -> Option<Vec<u8>> {
+    let taken = schedules.remove(game);
+    let uncomposed = root.is_some_and(|root| {
+        REFUSALS_NAME_UNCOMPOSED_FOR_TEST
+            .lock()
+            .is_ok_and(|roots| roots.contains(root))
+    });
+    if uncomposed { None } else { taken }
+}
+
+/// The `schedule.json` bytes of the refused game `game`, taken out of `schedules`; `None` when no
+/// round composed it.
+#[cfg(not(test))]
+fn take_refused_schedule(
+    schedules: &mut BTreeMap<String, Vec<u8>>,
+    game: &str,
+    _root: Option<&Path>,
+) -> Option<Vec<u8>> {
+    schedules.remove(game)
 }
 
 /// The composition record of a composed generation (`standard-packs.json`).
@@ -304,7 +389,8 @@ struct PackageMarks {
 }
 
 /// G-R2s (register §1.365; `contracts/standard-pack-schedule.md`, "The irreversible mark"): what
-/// every package `root`'s registry lists provides, each read below the game root `directory`
+/// every package `root`'s registry lists provides and, fix round 3, what its remedies list
+/// (`RemedyDeclarations::declared_capabilities`), each read below the game root `directory`
 /// through the reader the goal check uses (`PreparedContainedTask::read_remedy_declarations`), into
 /// the one copy of the rule ([`IrreversiblePackages::new`]). Each package's declaration files are
 /// marked first ([`declaration_marks`]), so a file that changes after its mark is seen by the next
@@ -329,15 +415,8 @@ fn read_declarations(directory: &Path, root: &StandardPackRoot) -> RootDeclarati
                 &package,
                 Instant::now() + DECLARATIONS_BUDGET,
             ) {
-                Ok(declarations) => {
-                    let mut capabilities = BTreeMap::new();
-                    for provided in &declarations.provides {
-                        *capabilities
-                            .entry(provided.capability().to_owned())
-                            .or_insert(false) |= provided.irreversible();
-                    }
-                    Some(capabilities)
-                }
+                // Fix round 3: what it provides and what its remedies list.
+                Ok(declarations) => Some(declarations.declared_capabilities()),
                 Err(error) => {
                     refusals.insert(package_id.to_owned(), error.outcome());
                     None
@@ -399,8 +478,16 @@ fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-/// The mark of the file at `path`.
+/// The mark of the file at `path`. G-R2s fix round 3: under the gate tests, a file the metadata
+/// seam names fails as a file the process may not stat ([`DECLARATION_METADATA_FAILS_FOR_TEST`]).
 fn file_mark(path: &Path) -> Result<FileMark, RootFailure> {
+    if metadata_fails_for_test(path) {
+        return Err(RootFailure::Unreadable {
+            path: path.to_owned(),
+            error: io::Error::from(io::ErrorKind::PermissionDenied),
+            op: IoOp::Metadata,
+        });
+    }
     match fs::metadata(path) {
         Ok(metadata) => Ok(Some((metadata.len(), metadata.modified().ok()))),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -754,6 +841,10 @@ impl HostShared {
             .map(|binding| binding.game_id.clone())
             .collect::<BTreeSet<_>>();
         let mut marks = BTreeMap::new();
+        // G-R2s fix round 3 (C.1): the games whose own root failed at this check, its metadata or
+        // its read. Each is recorded and left out of this check's reading; the others are marked,
+        // read and composed as ever.
+        let mut failed_roots = BTreeSet::new();
         if let Some(root) = &root {
             for game in &games {
                 let directory = root.join(game);
@@ -789,23 +880,26 @@ impl HostShared {
                         );
                     }
                     Err(failure) => {
+                        // Recorded once until the game's root composes again (G-R2s fix round
+                        // 3: then the key is cleared, so a later failure is recorded too).
                         self.report_once(
                             state,
                             game,
-                            "root:metadata",
+                            ROOT_METADATA_KEY,
                             failure.outcome(Some(game.as_str())),
                         )?;
-                        // G-R2s round 2: the game, and every game not found unchanged, has no
-                        // goals in effect until a composition succeeds.
-                        note_uncomposed(state, &games, &marks, Some(game.as_str()));
-                        return Ok(());
+                        // G-R2s fix round 3: this game's root failed; the check goes on for the
+                        // games after it, which are marked as ever. The failed game is not read
+                        // below and keeps the active generation's rules.
+                        failed_roots.insert(game.clone());
                     }
                 }
             }
         }
         // G-R2s round 2: while a game is noted uncomposed, the check reads and composes again
         // even when nothing changed, so a root that reads again ends it.
-        if state.active.is_some()
+        if failed_roots.is_empty()
+            && state.active.is_some()
             && state.bound == bound
             && state.marks == marks
             && state.uncomposed.is_empty()
@@ -816,6 +910,9 @@ impl HostShared {
         let mut read = BTreeMap::new();
         if let Some(root) = &root {
             for game in &games {
+                if failed_roots.contains(game) {
+                    continue;
+                }
                 match read_schedule_game(&root.join(game), game, &mut state.schedule_reads) {
                     Ok(Some(files)) => {
                         read.insert(game.clone(), files);
@@ -826,9 +923,9 @@ impl HostShared {
                         // fixed: its registry is what every rule of the game is placed by.
                         let key = format!("root:{:?}", marks.get(game));
                         self.report_once(state, game, &key, failure.outcome(Some(game.as_str())))?;
-                        // G-R2s round 2: as at a metadata failure.
-                        note_uncomposed(state, &games, &marks, Some(game.as_str()));
-                        return Ok(());
+                        // G-R2s fix round 3: as at a metadata failure, the check goes on for the
+                        // other games.
+                        failed_roots.insert(game.clone());
                     }
                 }
             }
@@ -871,7 +968,10 @@ impl HostShared {
             }
             if failed.is_empty() {
                 // A refusal of the composition as a whole (its size) keeps the active
-                // generation; it is recorded once per set of files composed.
+                // generation; it is recorded once per set of files composed. G-R2s fix round 3:
+                // as check-config gives it, it is each composed game's problem, so every
+                // `standard_pack_root_invalid` names its game and that game's `schedule.json`,
+                // the keys its catalog entry requires (before, it named no game).
                 let key = format!(
                     "composition:{:?}",
                     schedules
@@ -879,25 +979,26 @@ impl HostShared {
                         .map(|bytes| sha256(bytes.as_slice()))
                         .collect::<Vec<_>>()
                 );
-                for issue in whole {
-                    let game = issue.game_id.clone().unwrap_or_default();
-                    let outcome = RootFailure::Invalid {
-                        path: root.clone().unwrap_or_default(),
-                        issue: issue.issue.clone(),
+                if let Some(root) = &root {
+                    for issue in whole {
+                        for game in schedules.keys() {
+                            let path = root.join(game).join(STANDARD_PACK_SCHEDULE_FILE);
+                            let refusal = schedule_refusal(game, &path, issue);
+                            self.report_once(state, game, &key, refusal)?;
+                        }
                     }
-                    .outcome(None);
-                    self.report_once(state, &game, &key, outcome)?;
                 }
                 // G-R2s round 2: every game not found unchanged has no goals in effect until a
-                // composition succeeds.
-                note_uncomposed(state, &games, &marks, None);
+                // composition succeeds; fix round 3: and every game whose own root failed.
+                note_uncomposed(state, &games, &marks, &failed_roots);
                 return Ok(());
             }
             // Each round takes out at least one refused game, so the loop ends; a refusal that
             // names no game this round composed keeps the active generation.
             let mut progressed = false;
             for (game, issue) in failed {
-                let Some(bytes) = schedules.remove(&game) else {
+                let Some(bytes) = take_refused_schedule(&mut schedules, &game, root.as_deref())
+                else {
                     if let Some(root) = &root {
                         let path = root.join(&game).join(STANDARD_PACK_SCHEDULE_FILE);
                         let refusal = schedule_refusal(&game, &path, issue);
@@ -930,10 +1031,17 @@ impl HostShared {
             }
             if !progressed {
                 // G-R2s round 2: as at a refusal as a whole.
-                note_uncomposed(state, &games, &marks, None);
+                note_uncomposed(state, &games, &marks, &failed_roots);
                 return Ok(());
             }
         };
+        // G-R2s fix round 3 (C.2): a game whose root composed records a failure of its root's
+        // metadata again.
+        for game in read.keys() {
+            state
+                .reported
+                .remove(&(game.clone(), ROOT_METADATA_KEY.to_owned()));
+        }
 
         for game in composition.games() {
             let Some(sha) = &game.schedule_sha256 else {
@@ -981,6 +1089,23 @@ impl HostShared {
                     .operation(HostLocation::StandardPackRead);
                 self.report_once(state, game, &key, outcome)?;
             }
+        }
+        if !failed_roots.is_empty() {
+            // G-R2s fix round 3 (C.1): a game whose own root failed keeps the active generation's
+            // rules (§3.6), so this composition of the other games is not activated. It tells
+            // which of them the active generation already holds as their files give them now
+            // ([`held_otherwise`]): those keep their goals; the games whose root failed, and any
+            // game the active generation holds otherwise, have none in effect until a
+            // composition of every game succeeds.
+            let active = lock(self.policy()?, HostLocation::StandardPackRead)?.active_loaded();
+            let mut uncomposed = held_otherwise(
+                &composition,
+                active.as_ref().map(|loaded| loaded.compiled()),
+                &bound,
+            );
+            uncomposed.extend(failed_roots);
+            state.uncomposed = uncomposed;
+            return Ok(());
         }
         let record = CompositionRecord::of(&composition);
         let unchanged = state
@@ -1594,18 +1719,23 @@ pub fn preview_standard_pack_schedule(
         }
         Err(failure) => {
             for issue in failure.issues() {
-                let game = issue.game_id.as_deref();
-                let path = match game {
-                    Some(game) => root.join(game).join(STANDARD_PACK_SCHEDULE_FILE),
-                    None => root.to_owned(),
+                // G-R2s fix round 3: a refusal of the composition as a whole is each composed
+                // game's problem, as `compose_configured_standard_packs` and the workbench give
+                // it, so every `standard_pack_root_invalid` names its game and that game's
+                // `schedule.json`, the keys its catalog entry requires (before, it named no game).
+                let games = match &issue.game_id {
+                    Some(game) => vec![game.clone()],
+                    None => inputs.keys().cloned().collect(),
                 };
-                preview.problems.push(
-                    RootFailure::Invalid {
-                        path,
-                        issue: issue.issue.clone(),
-                    }
-                    .outcome(game),
-                );
+                for game in &games {
+                    preview.problems.push(
+                        RootFailure::Invalid {
+                            path: root.join(game).join(STANDARD_PACK_SCHEDULE_FILE),
+                            issue: issue.issue.clone(),
+                        }
+                        .outcome(Some(game.as_str())),
+                    );
+                }
             }
         }
     }
