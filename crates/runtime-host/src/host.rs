@@ -2306,6 +2306,8 @@ impl RuntimeHost {
             #[cfg(test)]
             granted_token_release_for_test: AtomicBool::new(false),
             #[cfg(test)]
+            switch_steps_failure_for_test: AtomicBool::new(false),
+            #[cfg(test)]
             direct_run_terminal_release_off_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             device_keys: config.device_keys,
@@ -6324,6 +6326,10 @@ struct HostShared {
     // settlement takes the granted token, as a build without `HostShared::run_token` there would.
     #[cfg(test)]
     granted_token_release_for_test: AtomicBool,
+    // Workflow #437 ORD-1c fix round 1, test only: the next switch's steps end with a
+    // Runtime-level failure (`Err`) after they ran.
+    #[cfg(test)]
+    switch_steps_failure_for_test: AtomicBool,
     // Workflow #457, test only: while set, a direct run that returns from its terminal step with
     // a failure keeps its lease, as before the fix (`execute_contained_task_with_lease`).
     #[cfg(test)]

@@ -802,13 +802,34 @@ fact, a snapshot or a decision identity, and an instance alone on its device nev
   outside a run (an `ApplicationLifecycle` `launch` or `restart`, the ladder's application restart
   rung). A policy cycle reads it as it builds the device map (`policy_device_groups`,
   `host/policy_dispatch.rs`) and names the member in front by its alias.
+- **Who forgets it** (register §1.364, fix round 1; the coordinator's ruling). One remover,
+  `forget_front` (`host/switch.rs`), called in one line where what is in front changes without a
+  switch's result. It forgets the device's entry whoever it names (*device*) or only while it
+  names the member (*member*):
+  - a Runtime-level failure of the switch's steps (its `Err`), since a stop may already have run
+    then too (device);
+  - an `ApplicationLifecycle` `stop` of the member, and a `launch` or `restart` whose own command
+    fails after the switch put the member in front (`host/input.rs`; member);
+  - the ladder's application restart rung when it fails after it stopped the others
+    (`host/recovery_ladder.rs`; member);
+  - the ladder's emulator restart rung, before its Stop (`host/recovery_ladder.rs`; device);
+  - the idle action's close of the member's application, before the stop is sent
+    (`host/idle.rs`; member).
+
+  The last two are device-level actions a member does not turn on today ("Device-level actions");
+  the forget is in place for when they are made group-aware. Nothing forgets it at the reset after
+  a stopped run (`host/stop_instance_run.rs`), at a person's hold (`host/requests.rs`, not built)
+  or at an operator's emulator control (`host/device_group.rs`, refused for a member).
 - **The queue waits.** Kept beside the eligibility ages in the policy host (`QueueWaits`,
   `crates/runtime-host/src/policy_host.rs`), with their staging: an evaluated cycle's verdicts are
   applied when the next evaluation starts, and that evaluation passes the starts of the members not
   in front. Which decisions start, keep or end a wait is the clock of
   [scheduling/README.md](scheduling/README.md), "Order within one device", "The inputs". The
   admission of a pair's dispatch ends its wait; a member's switch that puts it in front ends every
-  wait of its pairs; a member that loses the front waits anew from the first evaluated round after.
+  wait of its pairs, and an evaluation that read the member as waiting before that switch stages
+  none of its pairs (the members that took the front since the last apply are skipped, and the
+  next apply clears them); a member that loses the front waits anew from the first evaluated round
+  after.
 - **The default limit.** `scheduling.device_group.max_queue_wait_ms` in effect as the cycle starts
   (milliseconds `60000..=86400000`, default `1800000`, settable, `actingd-config` revision 32),
   the limit of a task that declares no `max_queue_wait_ms`. It names no application and has no
@@ -819,12 +840,14 @@ lease, queue or switch cooldown ("Derived, never stored"). After a restart every
 pairs wait from the first evaluated cycle, so a task can wait up to one more limit; with equal
 limits the first pick of a device is the allocation order's, as MAPP-1's.
 
-**What a wrong entry costs.** The member in front is only a preference of the order: a member named
-in front that is not (a person started another application by hand, an emulator stopped or
-restarted, a member's own application stopped) is preferred while its tasks end by the waiting
-tasks' limits, and its next run's switch reads the real foreground and brings it to the front, so
-a wrong entry costs at most one switch. A device with none in front orders every member's pairs as
-waiting. Past a limit nothing is written: no record, no held-set rule, no code.
+**What a stale entry costs.** The member in front is only a preference of the order: a member
+named in front that is not (a person started another application by hand, a run's own steps
+brought another package to the front) is preferred while its tasks end by the waiting tasks'
+limits, and its next run's switch reads the real foreground, brings it to the front and writes
+what is in front. So a stale entry costs at most one switch, and lets a waiting task start at most
+one startup run late: the order counted the named member's next run as needing no switch, and that
+run's switch takes one startup run more. A device with none in front orders every member's pairs
+as waiting. Past a limit nothing is written: no record, no held-set rule, no code.
 
 **A device of one.** The host names only devices of several, so on a host without one the map is
 handed to the evaluator alone, exactly as before ORD-1c, the policy host stages no wait and the

@@ -1123,11 +1123,21 @@ fn queued_in_device(decision: &TaskDecision, in_flight: bool) -> bool {
 /// apply when the next evaluation starts, so an evaluation and the admissions of its intents see
 /// the same starts. Nothing here reaches the ledger, a fact, a snapshot or a decision identity; a
 /// host starts with none, so every wait begins anew after a restart.
+///
+/// Fix round 1 (the review's race): an evaluation reads the members in front before it stages its
+/// verdicts, and a switch may put a member in front between the two. The member's waits are
+/// forgotten then ([`Self::forget_member`]), and the evaluation, which read the member as waiting,
+/// would stage them again. So the members that took the front since the last apply are kept
+/// (`took_front`) and staging skips their pairs; the next apply clears them. That apply comes
+/// before the next evaluation reads the members in front, so a later evaluation reads such a
+/// member as in front, or, if it lost the front again, waiting anew.
 #[derive(Debug, Default)]
 struct QueueWaits {
     since: BTreeMap<(String, String), u64>,
     /// The last evaluated cycle's pairs that keep or begin a wait, and its instant.
     pending: Option<QueueWaitVerdicts>,
+    /// The members (by alias) that took the front of their device since the last apply.
+    took_front: BTreeSet<String>,
 }
 
 #[derive(Debug)]
@@ -1138,8 +1148,10 @@ struct QueueWaitVerdicts {
 
 impl QueueWaits {
     /// The staged verdicts take effect: a pair that waits keeps its start, or begins its wait at
-    /// the instant of the evaluation that staged it; every other pair's wait ends.
+    /// the instant of the evaluation that staged it; every other pair's wait ends. The members
+    /// that took the front since the last apply are cleared, with or without verdicts.
     fn apply_pending(&mut self) {
+        self.took_front.clear();
         let Some(verdicts) = self.pending.take() else {
             return;
         };
@@ -1158,8 +1170,9 @@ impl QueueWaits {
     }
 
     /// The verdicts of `evaluation` at `evaluated_at_unix_ms`: the pairs of the members `queue`
-    /// names that are not in front and stay queued ([`queued_in_device`]). Nothing is staged on a
-    /// host without a device of several.
+    /// names that are not in front and stay queued ([`queued_in_device`]), but none of a member
+    /// that took the front since the last apply (`took_front`). Nothing is staged on a host
+    /// without a device of several.
     fn stage(
         &mut self,
         evaluation: &PolicyEvaluation,
@@ -1176,6 +1189,7 @@ impl QueueWaits {
             .filter_map(|decision| {
                 let instance_id = decision.instance_id.as_deref()?;
                 (queue.waits(instance_id)
+                    && !self.took_front.contains(instance_id)
                     && queued_in_device(
                         decision,
                         in_flight.contains(&(decision.task_id.as_str(), instance_id)),
@@ -1198,8 +1212,10 @@ impl QueueWaits {
         }
     }
 
-    /// Every wait of `alias`'s pairs ends: the member took the front of its device.
+    /// Every wait of `alias`'s pairs ends: the member took the front of its device. An evaluation
+    /// that read the member as waiting before this stages none of its pairs (`took_front`).
     fn forget_member(&mut self, alias: &str) {
+        self.took_front.insert(alias.to_owned());
         self.since.retain(|(_, member), _| member != alias);
         if let Some(pending) = &mut self.pending {
             pending.waiting.retain(|(_, member)| member != alias);

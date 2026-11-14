@@ -18,16 +18,29 @@
 //! the expected runtime off, so the duration a dispatch reserves (`E`) is that minute throughout.
 //! A manual Runtime clock moves only by the kernel's waits and the test's own steps; nothing
 //! waits on the wall clock. Every expected value is the contract's or the coordinator's ruling;
-//! every comparison is within one host but the last test's, which compares two hosts started alike
-//! with the same instance ids by normalised payloads, never by an identity. Neutral names only.
+//! every comparison is within one host but t8's, which compares two hosts started alike with the
+//! same instance ids by normalised payloads, never by an identity. Neutral names only.
+//!
+//! Fix round 1 (the review on board #437): t9 places a switch between an evaluation's read of the
+//! members in front and its staging, through the evaluation's own test hook and two channels (no
+//! sleep); t10 to t14 pin each place outside the switch's own result that forgets the member in
+//! front (a Runtime-level failure of the switch, a stop or a failed start of a member, a ladder
+//! rung that fails after it stopped the others, an emulator restart by a rung, the idle action
+//! closing the application). The ladder's and the idle action's tests wait for their worker's end
+//! as their own gates do.
 
+use super::gate_373_nav3a::StandardRoot;
+use super::instance_workers::wait_until;
 use super::*;
 use crate::codes::HostCode;
+use crate::idle_action::IdlePlan;
 use crate::policy_host::QUEUE_ORDER_OFF_FOR_TEST;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    ConfigParameter, ConfigParameterSource, ConfigSettingChange, FactScalar, RuntimeConfigManifest,
-    RuntimeFactScope, SchedulingPauseReason, SchedulingPauseScope, config_parameters_fact_key,
+    ConfigParameter, ConfigParameterSource, ConfigSettingChange, EmulatorInstanceAction,
+    FactScalar, RecoveryDrillMode, RecoveryRung, RecoveryRungOutcome, RuntimeConfigManifest,
+    RuntimeFactScope, RuntimeLifecyclePhase, RuntimePayload, SchedulingPauseReason,
+    SchedulingPauseScope, config_parameters_fact_key,
 };
 use actingcommand_policy::{DeviceGroupWait, PolicyCode, PolicyEvaluation};
 use actingcommand_runtime_config::scheduling::{
@@ -35,8 +48,8 @@ use actingcommand_runtime_config::scheduling::{
     EXPECTED_RUNTIME_ENABLED,
 };
 use actingcommand_runtime_config::{
-    ConfigCode, DefaultSource, DefaultsFile, KeyRange, Settable, find_row, mechanism_rows,
-    render_parameters,
+    ConfigCode, DefaultSource, DefaultsFile, IdleAction, KeyRange, Settable, find_row,
+    instance_key, mechanism_rows, render_parameters,
 };
 use serde_json::{Value, json};
 
@@ -72,6 +85,13 @@ const COOLDOWN_MS: u64 = MINUTE_MS;
 /// The first evaluation of every test: one minute after the clock's start, so it comes after the
 /// records of a request the test sends before it.
 const T0: u64 = POLICY_NOW_UNIX_MS + MINUTE_MS;
+/// How long a test thread waits for a step another thread takes; only a broken run waits it out.
+const GATE_WAIT: Duration = Duration::from_secs(60);
+/// The game and server of the policy identity t14 gives A, and the standard-pack root's.
+const IDLE_GAME: &str = "neutral";
+const IDLE_SERVER: &str = "test";
+/// A's next work in t14: four hours away, past `idle.min_gap_ms`'s default.
+const IDLE_GAP_MS: u64 = 4 * 60 * MINUTE_MS;
 /// The value key of the device group's wait word, and the order's values.
 const DEVICE_GROUP_WAIT: &str = "device_group_wait";
 const LIMIT_MS: &str = "limit_ms";
@@ -139,6 +159,14 @@ fn one_declared_limit(base: &Value) -> Vec<Value> {
         member_task(base, TASK_A, A, 300, None),
         member_task(base, TASK_B, B, 200, Some(2 * MINUTE_MS)),
         member_task(base, TASK_B2, B, 150, None),
+    ]
+}
+
+/// TASK_A on A (300) declaring a limit of two minutes, TASK_B on B (200) declaring none.
+fn a_declares_two_minutes(base: &Value) -> Vec<Value> {
+    vec![
+        member_task(base, TASK_A, A, 300, Some(2 * MINUTE_MS)),
+        member_task(base, TASK_B, B, 200, None),
     ]
 }
 
@@ -265,9 +293,10 @@ fn parameter(key: &str, value: FactScalar, source: ConfigParameterSource) -> Con
 }
 
 /// The configuration in effect: the expected runtime off, the switch cooldown `COOLDOWN_MS`, and
-/// `scheduling.device_group.max_queue_wait_ms` at `limit_ms` by the file, else at its default.
-fn manifest(limit_ms: Option<u64>) -> RuntimeConfigManifest {
-    let limit = match limit_ms {
+/// `scheduling.device_group.max_queue_wait_ms` at the spec's limit by the file, else at its
+/// default; with the spec's `idle_close_a`, A's own `idle.action` `close_app` (`a`, A's id).
+fn manifest(spec: Spec, a: InstanceId) -> RuntimeConfigManifest {
+    let limit = match spec.limit_ms {
         Some(limit_ms) => parameter(
             DEVICE_GROUP_MAX_QUEUE_WAIT_MS,
             FactScalar::DurationMs(limit_ms),
@@ -292,6 +321,16 @@ fn manifest(limit_ms: Option<u64>) -> RuntimeConfigManifest {
         ),
         limit,
     ];
+    if spec.idle_close_a {
+        parameters.push(parameter(
+            &instance_key(
+                &crate::failure_identity::identifier_text(&a),
+                actingcommand_runtime_config::idle::ACTION,
+            ),
+            FactScalar::String(IdleAction::CloseApp.as_str().to_owned()),
+            ConfigParameterSource::Explicit,
+        ));
+    }
     actingcommand_runtime_config::annotate_settable(&mut parameters)
         .expect("every key is in the key table");
     RuntimeConfigManifest {
@@ -309,6 +348,35 @@ struct Spec {
     grouped: bool,
     /// `scheduling.device_group.max_queue_wait_ms` as the file sets it; its default when `None`.
     limit_ms: Option<u64>,
+    /// Whether B has the startup package (A and C have it in any case).
+    startup_b: bool,
+    /// Whether A's own `idle.action` is `close_app`, with a standard-pack root whose game declares
+    /// A's application for the server `IDLE_SERVER` (no instance names an idle action otherwise).
+    idle_close_a: bool,
+}
+
+/// The fixture's usual host: A and B one device group of several with one task each, the default
+/// limit, every instance with the startup package, no idle action.
+const GROUPED: Spec = Spec {
+    tasks: one_task_each,
+    grouped: true,
+    limit_ms: None,
+    startup_b: true,
+    idle_close_a: false,
+};
+
+/// A standard-pack root under `root` whose game `IDLE_GAME` lists no package and declares A's
+/// application for the server `IDLE_SERVER` (`applications.json`), as the idle action reads it.
+fn idle_packs(root: &TempDir) -> PathBuf {
+    let packs = StandardRoot::new(root.path());
+    packs.write_bundle();
+    let declared = json!({"servers": {IDLE_SERVER: {"application_id": APP_A}}});
+    fs::write(
+        packs.root.join(IDLE_GAME).join("applications.json"),
+        serde_json::to_vec_pretty(&declared).expect("applications JSON"),
+    )
+    .expect("write the declared applications");
+    packs.root
 }
 
 /// Everything a host of the fixture is started from, kept so a restart starts the same one.
@@ -325,8 +393,8 @@ struct Parts {
 
 impl Parts {
     /// A host of A, B and C, A and B one device group of several when the spec says so, each with
-    /// its own application and the startup package, on the manual Runtime clock, the catalog of
-    /// [`sources`] active.
+    /// its own application and the startup package (B's as the spec says), on the manual Runtime
+    /// clock, the catalog of [`sources`] active.
     fn start_host(&self) -> RuntimeHost {
         let ids = &self.ids;
         let entries = [A, B, C]
@@ -351,10 +419,14 @@ impl Parts {
             .with_startup_packages(
                 [A, B, C]
                     .into_iter()
+                    .filter(|alias| self.spec.startup_b || *alias != B)
                     .map(|alias| (alias.to_owned(), startup.clone()))
                     .collect(),
             )
-            .with_config_manifest(manifest(self.spec.limit_ms));
+            .with_config_manifest(manifest(self.spec, ids[A]));
+        if self.spec.idle_close_a {
+            host_config = host_config.with_standard_packs_root(Some(idle_packs(&self.root)));
+        }
         if self.spec.grouped {
             let device = ids[A].min(ids[B]);
             host_config = host_config
@@ -536,13 +608,7 @@ impl Bench {
 
     /// A request on `connection` processed as a client's.
     fn send(&self, operation: RuntimeOperation, connection: u64) -> RuntimeReceipt {
-        let ids = IdentifierIssuer::new().expect("identifier issuer");
-        self.host
-            .process_request_for_test(
-                &runtime_request(&ids, operation),
-                ConnectionId::new(connection).expect("connection"),
-            )
-            .expect("the request's receipt")
+        send_on(&self.host, operation, connection)
     }
 
     /// A direct run of the package on `alias` (a run a person starts), on `connection`.
@@ -560,15 +626,100 @@ impl Bench {
 
     /// An `ApplicationLifecycle` `launch` of `alias`, on `connection`.
     fn launch(&self, alias: &str, connection: u64) -> RuntimeReceipt {
-        let holder = IdentifierIssuer::new().expect("identifier issuer");
-        self.send(
-            RuntimeOperation::ApplicationLifecycle {
-                instance_alias: alias.to_owned(),
-                holder_id: *holder.mint_holder_id().expect("holder").transport(),
-                action: ApplicationLifecycleAction::Launch,
-            },
+        lifecycle(
+            &self.host,
+            alias,
+            ApplicationLifecycleAction::Launch,
             connection,
         )
+    }
+
+    /// An `ApplicationLifecycle` `stop` of `alias`, on `connection`.
+    fn stop(&self, alias: &str, connection: u64) -> RuntimeReceipt {
+        lifecycle(
+            &self.host,
+            alias,
+            ApplicationLifecycleAction::Stop,
+            connection,
+        )
+    }
+
+    /// Every application command that reached `alias`'s device.
+    fn actions(&self, alias: &str) -> Vec<ApplicationLifecycleAction> {
+        self.parts.states[alias]
+            .application_actions
+            .lock()
+            .expect("fake application actions")
+            .clone()
+    }
+
+    /// `alias`'s foreground answers `before` until its first application command, then `own`.
+    fn front_until_started(&self, alias: &str, before: &'static str, own: &'static str) {
+        *self.parts.states[alias]
+            .foreground_script
+            .lock()
+            .expect("foreground script") = Some(Arc::new(move |_: usize, commands: usize| {
+            Some(if commands == 0 { before } else { own }.to_owned())
+        }));
+    }
+
+    /// A person's device drill of `alias`'s recovery ladder (`DrillRecoveryLadder`, mode
+    /// `device`), on `connection`, waited out as the drill's own gate waits for it (its
+    /// `recovery_ladder_finished` recorded and its key released): each rung it finished, with
+    /// its result, in order.
+    fn drill(&self, alias: &str, connection: u64) -> Vec<(RecoveryRung, RecoveryRungOutcome)> {
+        let receipt = self.send(
+            RuntimeOperation::DrillRecoveryLadder {
+                instance_alias: alias.to_owned(),
+                mode: RecoveryDrillMode::Device,
+            },
+            connection,
+        );
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "{receipt:?}"
+        );
+        let Some(RuntimeResult::RecoveryLadderDrillQueued { drill }) = receipt.result() else {
+            panic!("a drill's receipt names the drill: {receipt:?}");
+        };
+        let ladder = drill.ladder_request_id;
+        let phases = || {
+            self.host
+                .query_persisted_events_for_test(EventQuery {
+                    request_id: Some(ladder),
+                    ..EventQuery::default()
+                })
+                .expect("the drill's records")
+                .iter()
+                .filter_map(|event| match event.payload() {
+                    EventPayload::Runtime(RuntimePayload::LifecycleObserved(value)) => {
+                        Some(value.phase())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        wait_until("the drill's end and its release", || {
+            phases()
+                .iter()
+                .any(|phase| matches!(phase, RuntimeLifecyclePhase::RecoveryLadderFinished { .. }))
+                && self
+                    .host
+                    .instance_claims_for_test(alias)
+                    .expect("instance claims")
+                    .0
+                    .is_none()
+        });
+        phases()
+            .into_iter()
+            .filter_map(|phase| match phase {
+                RuntimeLifecyclePhase::RecoveryRungFinished {
+                    rung, rung_result, ..
+                } => Some((rung, rung_result)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// `alias`'s next foreground read fails, as a transient ADB failure.
@@ -634,6 +785,35 @@ impl Bench {
     }
 }
 
+/// A request on `connection` processed by `host` as a client's.
+fn send_on(host: &RuntimeHost, operation: RuntimeOperation, connection: u64) -> RuntimeReceipt {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    host.process_request_for_test(
+        &runtime_request(&ids, operation),
+        ConnectionId::new(connection).expect("connection"),
+    )
+    .expect("the request's receipt")
+}
+
+/// An `ApplicationLifecycle` `action` of `alias` on `host`, on `connection`.
+fn lifecycle(
+    host: &RuntimeHost,
+    alias: &str,
+    action: ApplicationLifecycleAction,
+    connection: u64,
+) -> RuntimeReceipt {
+    let holder = IdentifierIssuer::new().expect("identifier issuer");
+    send_on(
+        host,
+        RuntimeOperation::ApplicationLifecycle {
+            instance_alias: alias.to_owned(),
+            holder_id: *holder.mint_holder_id().expect("holder").transport(),
+            action,
+        },
+        connection,
+    )
+}
+
 /// The intent of `task_id` in `evaluation` and its reason chain.
 fn intent_of(
     evaluation: &PolicyEvaluation,
@@ -667,8 +847,15 @@ fn pair(task_id: &str, alias: &str) -> (String, String) {
     (task_id.to_owned(), alias.to_owned())
 }
 
-/// The last reason of the decision of `task_id` on `alias` in `evaluation`.
-fn last<'a>(evaluation: &'a PolicyEvaluation, task_id: &str, alias: &str) -> &'a Outcome {
+/// The last reason with `code` of the decision of `task_id` on `alias` in `evaluation`. Not the
+/// decision's last reason: on the first evaluation after a start the host adds
+/// `eligible_since_unknown` after the evaluator's own reasons.
+fn reason<'a>(
+    evaluation: &'a PolicyEvaluation,
+    task_id: &str,
+    alias: &str,
+    code: &str,
+) -> &'a Outcome {
     let decision = evaluation
         .decisions
         .iter()
@@ -676,16 +863,27 @@ fn last<'a>(evaluation: &'a PolicyEvaluation, task_id: &str, alias: &str) -> &'a
             decision.task_id == task_id && decision.instance_id.as_deref() == Some(alias)
         })
         .unwrap_or_else(|| panic!("a decision of {task_id} on {alias}: {evaluation:#?}"));
-    &decision
+    decision
         .reasons
-        .last()
-        .unwrap_or_else(|| panic!("a reason of {task_id}: {decision:?}"))
-        .outcome
+        .iter()
+        .rev()
+        .map(|reason| &reason.outcome)
+        .find(|outcome| outcome.code().as_str() == code)
+        .unwrap_or_else(|| panic!("a reason {code} of {task_id}: {decision:?}"))
+}
+
+/// The `device_group_waiting` row of the decision of `task_id` on `alias` in `evaluation`.
+fn waiting<'a>(evaluation: &'a PolicyEvaluation, task_id: &str, alias: &str) -> &'a Outcome {
+    reason(
+        evaluation,
+        task_id,
+        alias,
+        PolicyCode::DeviceGroupWaiting.as_str(),
+    )
 }
 
 /// Whether a reason of the decision of `task_id` on `alias` in `evaluation` has `code`.
-fn has_reason(evaluation: &PolicyEvaluation, task_id: &str, alias: &str, code: HostCode) -> bool {
-    let code = code.as_str();
+fn has_reason(evaluation: &PolicyEvaluation, task_id: &str, alias: &str, code: &str) -> bool {
     evaluation
         .decisions
         .iter()
@@ -771,11 +969,7 @@ fn configure(host: &RuntimeHost, key: &str, value: Value) -> RuntimeReceipt {
 /// device, never has one.
 #[test]
 fn ord1c_t1_a_switch_that_succeeds_puts_its_member_in_front_and_one_that_fails_forgets_it() {
-    let bench = Bench::start(Spec {
-        tasks: one_task_each,
-        grouped: true,
-        limit_ms: None,
-    });
+    let bench = Bench::start(GROUPED);
     assert_eq!(bench.front(A), None, "a start holds none in front");
 
     let receipt = bench.direct_run(B, 81);
@@ -842,11 +1036,7 @@ fn ord1c_t1_a_switch_that_succeeds_puts_its_member_in_front_and_one_that_fails_f
 #[test]
 fn ord1c_t2_a_due_task_waits_from_its_first_queued_round_across_selected_and_held_until_admission()
 {
-    let bench = Bench::start(Spec {
-        tasks: one_task_each,
-        grouped: true,
-        limit_ms: None,
-    });
+    let bench = Bench::start(GROUPED);
     let launched = bench.launch(A, 91);
     assert_eq!(
         launched.state(),
@@ -858,7 +1048,7 @@ fn ord1c_t2_a_due_task_waits_from_its_first_queued_round_across_selected_and_hel
     let first = bench.evaluate(T0);
     assert_eq!(intents(&first), vec![pair(TASK_A, A)]);
     assert_limit_row(
-        last(&first, TASK_B, B),
+        waiting(&first, TASK_B, B),
         A,
         TASK_A,
         DEFAULT_LIMIT_MS,
@@ -877,7 +1067,7 @@ fn ord1c_t2_a_due_task_waits_from_its_first_queued_round_across_selected_and_hel
     let (_, token) = holder.acquire(A);
     let held = bench.evaluate(T0 + MINUTE_MS);
     assert!(intents(&held).is_empty(), "{:?}", intents(&held));
-    let row = last(&held, TASK_B, B);
+    let row = waiting(&held, TASK_B, B);
     assert!(row.is(PolicyCode::DeviceGroupWaiting), "{row:?}");
     assert_eq!(
         row.value(DEVICE_GROUP_WAIT),
@@ -897,7 +1087,7 @@ fn ord1c_t2_a_due_task_waits_from_its_first_queued_round_across_selected_and_hel
     let again = bench.evaluate(later);
     assert_eq!(intents(&again), vec![pair(TASK_A, A)]);
     assert_limit_row(
-        last(&again, TASK_B, B),
+        waiting(&again, TASK_B, B),
         A,
         TASK_A,
         DEFAULT_LIMIT_MS,
@@ -938,8 +1128,8 @@ fn ord1c_t3_taking_the_front_forgets_the_waits_and_two_backlogs_switch_by_the_li
     const LIMIT: u64 = 5 * MINUTE_MS;
     let bench = Bench::start(Spec {
         tasks: two_tasks_of_b,
-        grouped: true,
         limit_ms: Some(LIMIT),
+        ..GROUPED
     });
     let mut picked = Vec::new();
     for round in 0..12_u64 {
@@ -1007,11 +1197,7 @@ fn ord1c_t3_taking_the_front_forgets_the_waits_and_two_backlogs_switch_by_the_li
 /// ends the wait; once the cooldown is over B waits anew.
 #[test]
 fn ord1c_t4_a_pause_a_player_hold_or_a_switch_cooldown_ends_the_wait_and_it_starts_anew() {
-    let bench = Bench::start(Spec {
-        tasks: one_task_each,
-        grouped: true,
-        limit_ms: None,
-    });
+    let bench = Bench::start(GROUPED);
     let launched = bench.launch(A, 101);
     assert_eq!(
         launched.state(),
@@ -1025,7 +1211,7 @@ fn ord1c_t4_a_pause_a_player_hold_or_a_switch_cooldown_ends_the_wait_and_it_star
     pause(&bench.host, B);
     let paused = bench.evaluate(T0 + MINUTE_MS);
     assert_eq!(intents(&paused), vec![pair(TASK_A, A)]);
-    let row = last(&paused, TASK_B, B);
+    let row = waiting(&paused, TASK_B, B);
     assert!(row.is(PolicyCode::DeviceGroupWaiting), "{row:?}");
     assert_eq!(
         row.value(DEVICE_GROUP_WAIT),
@@ -1071,7 +1257,12 @@ fn ord1c_t4_a_pause_a_player_hold_or_a_switch_cooldown_ends_the_wait_and_it_star
     assert_eq!(bench.front(A), None, "B's failed switch forgets the front");
     let cooling = bench.evaluate(T0 + 5 * MINUTE_MS);
     assert!(
-        has_reason(&cooling, TASK_B, B, HostCode::DispatchInstanceCooldown),
+        has_reason(
+            &cooling,
+            TASK_B,
+            B,
+            HostCode::DispatchInstanceCooldown.as_str()
+        ),
         "B waits for its switch cooldown: {cooling:#?}"
     );
     assert_eq!(
@@ -1083,7 +1274,12 @@ fn ord1c_t4_a_pause_a_player_hold_or_a_switch_cooldown_ends_the_wait_and_it_star
     let cooled = T0 + 7 * MINUTE_MS;
     let after = bench.evaluate(cooled);
     assert!(
-        !has_reason(&after, TASK_B, B, HostCode::DispatchInstanceCooldown),
+        !has_reason(
+            &after,
+            TASK_B,
+            B,
+            HostCode::DispatchInstanceCooldown.as_str()
+        ),
         "the cooldown is over: {after:#?}"
     );
     assert_eq!(
@@ -1094,31 +1290,39 @@ fn ord1c_t4_a_pause_a_player_hold_or_a_switch_cooldown_ends_the_wait_and_it_star
     bench.close();
 }
 
-/// A restart forgets the member in front and every wait: before it A is in front and B waits from
-/// T0; after it none is in front and no pair waits, and the first round after it counts B's wait
-/// from that round (its time left is the whole default limit).
+/// A restart forgets the member in front and every wait (fix round 1, point 4: the round after the
+/// restart tells a kept front and a kept wait from forgotten ones). Before it B is in front, B's
+/// one-minute task is picked, and A's task, which declares a limit of two minutes, waits from T0.
+/// After it none is in front and no pair waits. At T0 plus two minutes the round picks A's task
+/// (the allocation order, none in front): with B kept in front it would pick B's task, which ends
+/// by A's fresh limit. A's wait begins at that round: kept, it would begin at T0. B's row shows a
+/// fresh wait (its time left the whole default limit).
 #[test]
 fn ord1c_t5_a_restart_forgets_the_front_and_every_wait() {
     let bench = Bench::start(Spec {
-        tasks: one_task_each,
-        grouped: true,
-        limit_ms: None,
+        tasks: a_declares_two_minutes,
+        ..GROUPED
     });
-    let launched = bench.launch(A, 111);
+    let launched = bench.launch(B, 111);
     assert_eq!(
         launched.state(),
         RuntimeReceiptState::Completed,
         "{launched:?}"
     );
-    bench.evaluate(T0);
-    assert_eq!(bench.front(B).as_deref(), Some(A));
-    assert_eq!(bench.wait(TASK_B, B), Some(T0));
+    let before = bench.evaluate(T0);
+    assert_eq!(
+        intents(&before),
+        vec![pair(TASK_B, B)],
+        "B's task ends by A's limit"
+    );
+    assert_eq!(bench.front(A).as_deref(), Some(B));
+    assert_eq!(bench.wait(TASK_A, A), Some(T0));
 
     let bench = bench.restart();
     assert_eq!(bench.front(A), None, "the front is forgotten");
     assert_eq!(bench.front(B), None);
-    assert_eq!(bench.wait(TASK_B, B), None, "every wait is forgotten");
-    assert_eq!(bench.wait(TASK_A, A), None);
+    assert_eq!(bench.wait(TASK_A, A), None, "every wait is forgotten");
+    assert_eq!(bench.wait(TASK_B, B), None);
     // Past any takeover cooldown the restart gives the device.
     bench.clock().advance(MINUTE_MS);
     let after = T0 + 2 * MINUTE_MS;
@@ -1126,10 +1330,15 @@ fn ord1c_t5_a_restart_forgets_the_front_and_every_wait() {
     assert_eq!(
         intents(&evaluation),
         vec![pair(TASK_A, A)],
-        "none in front, equal fresh limits: the allocation order"
+        "none in front: the allocation order, not B's task in front"
+    );
+    assert_eq!(
+        bench.wait(TASK_A, A),
+        Some(after),
+        "A's wait begins at the first round after the restart, not at T0"
     );
     assert_limit_row(
-        last(&evaluation, TASK_B, B),
+        waiting(&evaluation, TASK_B, B),
         A,
         TASK_A,
         DEFAULT_LIMIT_MS,
@@ -1174,11 +1383,7 @@ fn ord1c_t6_the_key_has_its_range_default_and_rows_and_applies_from_the_next_rou
     assert_eq!(manifest_row.source, ConfigParameterSource::Default);
     assert!(manifest_row.settable);
 
-    let bench = Bench::start(Spec {
-        tasks: one_task_each,
-        grouped: true,
-        limit_ms: None,
-    });
+    let bench = Bench::start(GROUPED);
     assert_eq!(
         bench.parameter_row(DEVICE_GROUP_MAX_QUEUE_WAIT_MS),
         (
@@ -1214,7 +1419,7 @@ fn ord1c_t6_the_key_has_its_range_default_and_rows_and_applies_from_the_next_rou
     );
     let first = bench.evaluate(T0);
     assert_limit_row(
-        last(&first, TASK_B, B),
+        waiting(&first, TASK_B, B),
         A,
         TASK_A,
         DEFAULT_LIMIT_MS,
@@ -1242,7 +1447,7 @@ fn ord1c_t6_the_key_has_its_range_default_and_rows_and_applies_from_the_next_rou
         "A still ends by B's new limit"
     );
     assert_limit_row(
-        last(&next, TASK_B, B),
+        waiting(&next, TASK_B, B),
         A,
         TASK_A,
         SET_MS,
@@ -1263,8 +1468,8 @@ fn ord1c_t7_front_tasks_run_until_a_waiting_task_would_pass_its_limit_then_the_d
     const DECLARED: u64 = 2 * MINUTE_MS;
     let bench = Bench::start(Spec {
         tasks: one_declared_limit,
-        grouped: true,
         limit_ms: Some(DEFAULT),
+        ..GROUPED
     });
     let launched = bench.launch(A, 131);
     assert_eq!(
@@ -1275,8 +1480,8 @@ fn ord1c_t7_front_tasks_run_until_a_waiting_task_would_pass_its_limit_then_the_d
 
     let first = bench.evaluate(T0);
     assert_eq!(intents(&first), vec![pair(TASK_A, A)]);
-    assert_limit_row(last(&first, TASK_B, B), A, TASK_A, DECLARED, DECLARED);
-    assert_limit_row(last(&first, TASK_B2, B), A, TASK_A, DEFAULT, DEFAULT);
+    assert_limit_row(waiting(&first, TASK_B, B), A, TASK_A, DECLARED, DECLARED);
+    assert_limit_row(waiting(&first, TASK_B2, B), A, TASK_A, DEFAULT, DEFAULT);
     bench.dispatch(&first, TASK_A);
 
     let second = bench.evaluate(T0 + MINUTE_MS);
@@ -1286,7 +1491,7 @@ fn ord1c_t7_front_tasks_run_until_a_waiting_task_would_pass_its_limit_then_the_d
         "A's run ends exactly at TASK_B's limit"
     );
     assert_limit_row(
-        last(&second, TASK_B, B),
+        waiting(&second, TASK_B, B),
         A,
         TASK_A,
         DECLARED,
@@ -1300,14 +1505,19 @@ fn ord1c_t7_front_tasks_run_until_a_waiting_task_would_pass_its_limit_then_the_d
         vec![pair(TASK_B, B)],
         "nothing of A ends by TASK_B's limit: the switch"
     );
-    let row = last(&third, TASK_A, A);
+    let row = waiting(&third, TASK_A, A);
     assert!(row.is(PolicyCode::DeviceGroupWaiting), "{row:?}");
     assert_eq!(row.value("alias"), Some(&json!(B)), "{row:?}");
     assert_eq!(number(row, REQUIRED_MS), Some(E_MS), "{row:?}");
     assert_eq!(number(row, REMAINING_MS), Some(0), "{row:?}");
     assert!(
-        last(&third, TASK_B2, B).is(PolicyCode::InstanceAlreadySelected),
-        "TASK_B2 waits behind its own member's pick"
+        has_reason(
+            &third,
+            TASK_B2,
+            B,
+            PolicyCode::InstanceAlreadySelected.as_str()
+        ),
+        "TASK_B2 waits behind its own member's pick: {third:#?}"
     );
     bench.dispatch(&third, TASK_B);
     assert_eq!(bench.front(A).as_deref(), Some(B));
@@ -1385,27 +1595,45 @@ fn root_texts(root: &TempDir) -> Vec<String> {
     texts
 }
 
-/// `value` with its ids, times and places normalised: every member [`time_or_place`] names is
-/// replaced whole, every number is replaced (a measurement of the process clock or of the machine,
-/// as the start's records hold), and every string loses its root path and its identities.
-fn normalised(value: &mut Value, roots: &[String]) {
-    if value.is_number() {
-        *value = json!("<number>");
-        return;
-    }
+/// The members of a record whose value measures the machine, not the Runtime's work (fix round 1,
+/// point 2: named, not every number): the ledger open's phases (`ledger_opened`, measured on the
+/// process clock) and the sampled members of the performance summary record. An evaluation holds
+/// none of them, and its numbers are compared as they are.
+const MACHINE_MEASUREMENTS: [&str; 15] = [
+    "sql_read_ms",
+    "verify_ms",
+    "material_ms",
+    "restore_ms",
+    "meta_ms",
+    "tail_ms",
+    "index_ms",
+    "import_ms",
+    "context",
+    "foreground",
+    "owned_processes",
+    "third_party_high_load",
+    "ledger_commits",
+    "capacity",
+    "pacing",
+];
+
+/// `value` with its ids, times and places normalised: every member [`time_or_place`] names and
+/// every member `measured` names is replaced whole, and every string loses its root path and its
+/// identities. Every other number is kept.
+fn normalised(value: &mut Value, roots: &[String], measured: &[&str]) {
     match value {
         Value::Object(members) => {
             for (key, member) in members.iter_mut() {
-                if time_or_place(key) {
+                if time_or_place(key) || measured.contains(&key.as_str()) {
                     *member = json!("<normalised>");
                 } else {
-                    normalised(member, roots);
+                    normalised(member, roots, measured);
                 }
             }
         }
         Value::Array(items) => {
             for item in items.iter_mut() {
-                normalised(item, roots);
+                normalised(item, roots, measured);
             }
         }
         Value::String(text) => {
@@ -1447,7 +1675,7 @@ fn lone_rounds(ids: &BTreeMap<&'static str, InstanceId>, off: bool) -> Rounds {
         Spec {
             tasks: lone_tasks,
             grouped: false,
-            limit_ms: None,
+            ..GROUPED
         },
     );
     let roots = root_texts(&bench.parts.root);
@@ -1457,7 +1685,7 @@ fn lone_rounds(ids: &BTreeMap<&'static str, InstanceId>, off: bool) -> Rounds {
         let evaluation = bench.evaluate(T0 + round * MINUTE_MS);
         let mut picked = intents(&evaluation);
         let mut value = serde_json::to_value(&evaluation).expect("an evaluation encodes");
-        normalised(&mut value, &roots);
+        normalised(&mut value, &roots, &[]);
         evaluations.push(value);
         for (task_id, _) in &picked {
             bench.dispatch(&evaluation, task_id);
@@ -1477,7 +1705,7 @@ fn lone_rounds(ids: &BTreeMap<&'static str, InstanceId>, off: bool) -> Rounds {
         .map(|event| {
             let mut payload =
                 serde_json::to_value(event.payload()).expect("a record's payload encodes");
-            normalised(&mut payload, &roots);
+            normalised(&mut payload, &roots, &MACHINE_MEASUREMENTS);
             Compared {
                 event_type: event.event_type(),
                 severity: event.severity(),
@@ -1514,9 +1742,17 @@ fn differing<T: std::fmt::Debug + PartialEq>(what: &str, with: &[T], without: &[
 /// instances are each alone on their devices, against the same on a host of this build whose
 /// entries of the slice return at once (the test-only switch, one function per build). The
 /// picks are equal as they are; each round's evaluation and every record of the ledger, record by
-/// record (type, severity and whole payload), are equal with ids, times, numbers, the evaluation's
-/// `seed` and the temporary root normalised, every differing one named in one message. The two
-/// hosts are started alike with the same instance ids; nothing else is compared between them.
+/// record (type, severity and whole payload), are equal with ids, times, the evaluation's `seed`
+/// and the temporary root normalised, and in the records only the named machine measurements
+/// ([`MACHINE_MEASUREMENTS`]); every other number is compared as it is, and every differing one is
+/// named in one message. The two hosts are started alike with the same instance ids; nothing else
+/// is compared between them.
+///
+/// What it proves (fix round 1, point 2): two starts of this build, one with the slice's entries
+/// reachable and one with them returning at once, evaluate and write the same. That a host
+/// without a device of several evaluates and writes as main does rests on reading the code: the
+/// test-only switch turns off each entry the slice adds, and those entries are the slice's only
+/// change on that path.
 #[test]
 fn ord1c_t8_a_host_without_a_device_of_several_evaluates_and_writes_the_same_with_and_without_the_slice()
  {
@@ -1537,4 +1773,333 @@ fn ord1c_t8_a_host_without_a_device_of_several_evaluates_and_writes_the_same_wit
         "the host without a device of several evaluates and writes the same; these differ:\n{}",
         differences.join("\n")
     );
+}
+
+/// Fix round 1, point 1 (the review's race): a switch between an evaluation's read of the members
+/// in front and its staging. With A in front, B waits from T0. The next evaluation reads A in front
+/// (B's row counts B's wait from T0); after that read and before it stages its verdicts, the
+/// evaluation's test hook lets a launch of B on another thread run to its end, which puts B in
+/// front and forgets B's waits. The evaluation then stages none of B's pairs, so the member in
+/// front keeps no wait. The next apply clears what it skipped: once A has taken the front again,
+/// the round after stages B's wait anew. Two channels order the threads; nothing sleeps.
+#[test]
+fn ord1c_t9_a_switch_between_the_front_read_and_the_staging_leaves_its_member_without_a_wait() {
+    let bench = Bench::start(GROUPED);
+    let launched = bench.launch(A, 141);
+    assert_eq!(
+        launched.state(),
+        RuntimeReceiptState::Completed,
+        "{launched:?}"
+    );
+    let first = bench.evaluate(T0);
+    assert_eq!(intents(&first), vec![pair(TASK_A, A)]);
+    assert_eq!(bench.wait(TASK_B, B), Some(T0));
+    bench.dispatch(&first, TASK_A);
+
+    let (reached, at_hook) = mpsc::channel::<()>();
+    let (ended, launch_ended) = mpsc::channel::<()>();
+    bench
+        .host
+        .run_between_policy_sample_and_validation_for_test(Box::new(move || {
+            reached.send(()).expect("the launcher listens");
+            launch_ended
+                .recv_timeout(GATE_WAIT)
+                .expect("B's launch ends while the evaluation waits");
+        }))
+        .expect("the hook");
+    let host = &bench.host;
+    let t1 = T0 + MINUTE_MS;
+    let (raced, relaunched) = thread::scope(|scope| {
+        let launcher = scope.spawn(move || {
+            at_hook
+                .recv_timeout(GATE_WAIT)
+                .expect("the evaluation read the members in front");
+            let receipt = lifecycle(host, B, ApplicationLifecycleAction::Launch, 142);
+            ended.send(()).expect("the evaluation waits");
+            receipt
+        });
+        let raced = bench.evaluate(t1);
+        (raced, launcher.join().expect("the launcher's thread"))
+    });
+    assert_eq!(
+        relaunched.state(),
+        RuntimeReceiptState::Completed,
+        "{relaunched:?}"
+    );
+    assert_eq!(
+        intents(&raced),
+        vec![pair(TASK_A, A)],
+        "the evaluation read A in front"
+    );
+    assert_limit_row(
+        waiting(&raced, TASK_B, B),
+        A,
+        TASK_A,
+        DEFAULT_LIMIT_MS,
+        DEFAULT_LIMIT_MS - MINUTE_MS,
+    );
+    assert_eq!(
+        bench.front(A).as_deref(),
+        Some(B),
+        "B took the front while the evaluation ran"
+    );
+    assert_eq!(
+        bench.wait(TASK_B, B),
+        None,
+        "the evaluation stages no wait of a member that took the front after its read"
+    );
+
+    let back = bench.launch(A, 143);
+    assert_eq!(back.state(), RuntimeReceiptState::Completed, "{back:?}");
+    assert_eq!(bench.front(B).as_deref(), Some(A));
+    let t2 = T0 + 2 * MINUTE_MS;
+    bench.evaluate(t2);
+    assert_eq!(
+        bench.wait(TASK_B, B),
+        Some(t2),
+        "the next apply cleared what was skipped: B, out of the front again, waits anew"
+    );
+    bench.close();
+}
+
+/// Fix round 1, point 3 (the coordinator's ruling): a Runtime-level failure of the switch (its
+/// `Err`; here the test's failure after the switch's steps ran) forgets the device's front,
+/// whoever it names: with A in front, B's launch, whose switch so fails, leaves the device with
+/// none in front.
+#[test]
+fn ord1c_t10_a_runtime_level_failure_of_the_switch_forgets_the_devices_front() {
+    let bench = Bench::start(GROUPED);
+    let launched = bench.launch(A, 151);
+    assert_eq!(
+        launched.state(),
+        RuntimeReceiptState::Completed,
+        "{launched:?}"
+    );
+    assert_eq!(bench.front(B).as_deref(), Some(A));
+    bench
+        .host
+        .fail_next_switch_steps_for_test()
+        .expect("the switch's failure");
+    let failed = bench.launch(B, 152);
+    assert_ne!(failed.state(), RuntimeReceiptState::Completed, "{failed:?}");
+    assert_eq!(
+        bench.front(A),
+        None,
+        "the switch's Runtime-level failure forgets the front, though it named A"
+    );
+    bench.close();
+}
+
+/// Fix round 1, point 3, the `ApplicationLifecycle` request: with A in front, a stop of B, which
+/// is not in front, leaves A there, and a stop of A leaves the device with none. Once B's launch has
+/// put B in front, a launch of A whose switch puts A in front (A's own application in front) and
+/// whose own command then fails leaves the device with none in front.
+#[test]
+fn ord1c_t11_a_stop_or_a_failed_start_of_the_member_in_front_forgets_it() {
+    let bench = Bench::start(GROUPED);
+    let launched = bench.launch(A, 161);
+    assert_eq!(
+        launched.state(),
+        RuntimeReceiptState::Completed,
+        "{launched:?}"
+    );
+    let stopped = bench.stop(B, 162);
+    assert_eq!(
+        stopped.state(),
+        RuntimeReceiptState::Completed,
+        "{stopped:?}"
+    );
+    assert_eq!(
+        bench.front(A).as_deref(),
+        Some(A),
+        "a stop of another member leaves the member in front"
+    );
+    let stopped = bench.stop(A, 163);
+    assert_eq!(
+        stopped.state(),
+        RuntimeReceiptState::Completed,
+        "{stopped:?}"
+    );
+    assert_eq!(bench.front(B), None, "a stop of the member in front");
+
+    let launched = bench.launch(B, 164);
+    assert_eq!(
+        launched.state(),
+        RuntimeReceiptState::Completed,
+        "{launched:?}"
+    );
+    assert_eq!(bench.front(A).as_deref(), Some(B));
+    *bench.parts.states[A]
+        .application_error
+        .lock()
+        .expect("one-shot application error") =
+        Some(DeviceError::transient("fixture launch failed"));
+    let failed = bench.launch(A, 165);
+    assert_ne!(failed.state(), RuntimeReceiptState::Completed, "{failed:?}");
+    assert_ne!(
+        failed.outcome().code().as_str(),
+        HostCode::ApplicationSwitchFailed.as_str(),
+        "the switch passed and the launch's own command failed: {failed:?}"
+    );
+    assert_eq!(
+        bench.front(B),
+        None,
+        "a start that failed after the switch put A in front"
+    );
+    bench.close();
+}
+
+/// Fix round 1, point 3, the ladder's application restart rung: a device drill of B's ladder with
+/// A in front. The rung stops A first (B's device answers A's application in front until B's first
+/// application command), then B's own application, and B's startup run then fails (B's captures
+/// match no page): the rung fails after it stopped the others, and the device has none in front.
+/// B has no emulator control, so the emulator restart rung is skipped and only the failed rung
+/// forgot the front.
+#[test]
+fn ord1c_t12_a_ladder_rung_that_fails_after_it_stopped_the_others_forgets_the_front() {
+    let bench = Bench::start(GROUPED);
+    let launched = bench.launch(A, 171);
+    assert_eq!(
+        launched.state(),
+        RuntimeReceiptState::Completed,
+        "{launched:?}"
+    );
+    assert_eq!(bench.front(B).as_deref(), Some(A));
+    bench.front_until_started(B, APP_A, APP_B);
+    bench.parts.states[B]
+        .unknown_capture
+        .store(true, Ordering::Release);
+    let rungs = bench.drill(B, 172);
+    assert!(
+        rungs.contains(&(
+            RecoveryRung::ApplicationRestart,
+            RecoveryRungOutcome::Failed
+        )),
+        "the application restart rung fails: {rungs:?}"
+    );
+    assert!(
+        rungs.contains(&(RecoveryRung::EmulatorRestart, RecoveryRungOutcome::Skipped)),
+        "no emulator restart: {rungs:?}"
+    );
+    assert_eq!(
+        bench.actions(A).last(),
+        Some(&ApplicationLifecycleAction::Stop),
+        "the rung stopped A, the member in front"
+    );
+    assert_eq!(
+        bench.front(A),
+        None,
+        "a rung that failed after it stopped the others"
+    );
+    bench.close();
+}
+
+/// Fix round 1, point 3, the ladder's emulator restart rung: it forgets the device's front,
+/// whoever it names. B has no startup package and is bound to the fake emulator, so a device drill
+/// of B's ladder skips the application restart and restarts B's emulator; with A in front before
+/// it, the device has none in front after it.
+#[test]
+fn ord1c_t13_an_emulator_restart_by_a_rung_forgets_the_devices_front() {
+    let bench = Bench::start(Spec {
+        startup_b: false,
+        ..GROUPED
+    });
+    let launched = bench.launch(A, 181);
+    assert_eq!(
+        launched.state(),
+        RuntimeReceiptState::Completed,
+        "{launched:?}"
+    );
+    assert_eq!(bench.front(B).as_deref(), Some(A));
+    let state = &bench.parts.states[B];
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    bind_fake_emulator(&bench.host, B, bench.parts.ids[B], state);
+    let rungs = bench.drill(B, 182);
+    assert!(
+        rungs.contains(&(
+            RecoveryRung::ApplicationRestart,
+            RecoveryRungOutcome::Skipped
+        )),
+        "B has no startup package: {rungs:?}"
+    );
+    assert!(
+        rungs
+            .iter()
+            .any(|(rung, result)| *rung == RecoveryRung::EmulatorRestart
+                && *result != RecoveryRungOutcome::Skipped),
+        "the emulator restart rung ran: {rungs:?}"
+    );
+    assert_eq!(
+        state
+            .emulator_actions
+            .lock()
+            .expect("fake emulator actions")
+            .first(),
+        Some(&EmulatorInstanceAction::Stop),
+        "the rung restarted B's emulator"
+    );
+    assert_eq!(
+        bench.front(A),
+        None,
+        "an emulator restart forgets the front, though it named A"
+    );
+    bench.close();
+}
+
+/// Fix round 1, point 3, the idle action: closing the application of the member in front forgets
+/// it. A's own `idle.action` is `close_app` and the standard-pack root declares A's application;
+/// with A in front and its next work four hours away, the idle check closes A's application on the
+/// action's key, and the device has none in front. A member of a group of several names no idle
+/// action today (actingd refuses it at assembly, "Device-level actions"); the host is handed one
+/// here directly, so the forget is in place before the idle action is made group-aware.
+#[test]
+fn ord1c_t14_the_idle_action_closing_the_member_in_front_forgets_it() {
+    let bench = Bench::start(Spec {
+        idle_close_a: true,
+        ..GROUPED
+    });
+    let launched = bench.launch(A, 191);
+    assert_eq!(
+        launched.state(),
+        RuntimeReceiptState::Completed,
+        "{launched:?}"
+    );
+    assert_eq!(bench.front(B).as_deref(), Some(A));
+    bench.clock().set_unix_ms(T0);
+    let plans = BTreeMap::from([(
+        A.to_owned(),
+        IdlePlan {
+            evaluated_at_unix_ms: T0,
+            due_now: false,
+            next_wake_unix_ms: Some(T0 + IDLE_GAP_MS),
+            reading_due_unix_ms: None,
+        },
+    )]);
+    let identities =
+        BTreeMap::from([(A.to_owned(), (IDLE_GAME.to_owned(), IDLE_SERVER.to_owned()))]);
+    bench
+        .host
+        .check_idle_instances_with_identities_for_test(&plans, &identities)
+        .expect("the idle check");
+    assert_eq!(
+        bench.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "A's idle action ended"
+    );
+    assert_eq!(
+        bench.actions(A),
+        [
+            ApplicationLifecycleAction::Launch,
+            ApplicationLifecycleAction::Stop
+        ],
+        "the idle action closed A's application"
+    );
+    assert_eq!(
+        bench.front(B),
+        None,
+        "the idle action closed the member in front"
+    );
+    bench.close();
 }

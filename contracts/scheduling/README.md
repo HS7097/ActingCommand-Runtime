@@ -1457,8 +1457,10 @@ instance alone on its device never reads any of it, and a catalog that declares
   Runtime passes** (ORD-1c, register §1.364; the coordinator's rulings 1, 2 and 4 on board #437):
   - *The member in front* is the member the host holds in front of the device: the member whose
     switch's own steps last ended with its application in front or started, and none once a
-    switch of the device was refused or failed, and none after a start ([device-group.md](../device-group.md),
-    "The member in front").
+    switch of the device was refused or failed (a Runtime-level failure included), once the member's
+    own application was stopped or failed to start, once a ladder rung or the idle action changed
+    what is in front, and none after a start ([device-group.md](../device-group.md), "The member in
+    front", "Who forgets it").
   - *The default limit* is `scheduling.device_group.max_queue_wait_ms` in effect as the cycle
     starts (milliseconds `60000..=86400000`, default `1800000`; [runtime-config.md](../runtime-config.md)),
     so an instruction applies from the next round.
@@ -1481,7 +1483,8 @@ instance alone on its device never reads any of it, and a catalog that declares
     no held-set rule, no code.
   - *Its staging* is the eligibility age's: the verdicts of an evaluated cycle are applied when the
     next evaluation starts, and that evaluation passes the starts applied then, of the members not
-    in front. Memory only: none of it enters the ledger, a fact, a snapshot or a decision identity,
+    in front. An evaluation stages no wait of a member that took the front after it read the
+    members in front (register §1.364, fix round 1). Memory only: none of it enters the ledger, a fact, a snapshot or a decision identity,
     and a start of the Runtime begins with no wait and none in front.
 - **The contenders** of a device are the candidates of its members, but one the Runtime holds
   whole (`InstanceHolds`: UPD-1's hold, a switch cooldown), one whose member is held as the cycle

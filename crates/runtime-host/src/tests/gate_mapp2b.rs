@@ -1505,6 +1505,11 @@ fn mapp2b_a_failed_switch_holds_the_member_for_the_cooldown_while_the_other_memb
     // Workflow #437 ORD-1c (register §1.364): B competes again, but A's run put A in front, so
     // the device stays with A while A's task ends by B's limit; B's wait began at t2, and at its
     // limit nothing of A ends by it and B's task is dispatched (`ord1c_t7`).
+    assert!(
+        dispatches(&again, TASK_A) && !dispatches(&again, TASK_B),
+        "the device stays with A, in front: {:#?}",
+        again.dispatch_intents
+    );
     let t3 = t2 + DEFAULT_LIMIT_MS;
     let due = bench.evaluate(t3);
     assert!(
