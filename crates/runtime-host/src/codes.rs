@@ -2712,6 +2712,9 @@ pub(crate) mod test_spellings {
             ExpireAllQueuedForTest => "expire_all_queued_for_test",
             ExpireDueLeasesForTest => "expire_due_leases_for_test",
             ExpireLeaseOnceForTest => "expire_lease_once_for_test",
+            // Workflow #463 U1, fix round 3: a test makes a scheduled run's read of its runtime
+            // budget's end fail.
+            FailPolicyRunBudgetEndForTest => "fail_policy_run_budget_end_for_test",
             FailScheduledHostClaimForTest => "fail_scheduled_host_claim_for_test",
             FailStartAfterClaimForTest => "fail_start_after_claim_for_test",
             FailStartAfterStartEventForTest => "fail_start_after_start_event_for_test",

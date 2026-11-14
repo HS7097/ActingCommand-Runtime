@@ -231,9 +231,12 @@ next step's page (every candidate of "Optional steps" below).
   that shows only now) leaves the task failed with `page_confirmation_failed` and the detail,
   values and timing of the failed wait. Its frames count for the attempt's loading records as a
   retry decision's do. Its time counts against the task's deadline, but a deadline that cuts it,
-  and every other error of the task inside it, leaves the end the failed wait gave (the run had
-  failed when the wait ended). It is spent on the failing path only: a failing step can now take
-  up to `step_timeout_ms` longer than before, once per run (the run ends there), and a step that
+  and every other error raised by its own capture, recognition or evaluation, whatever its kind
+  (a task error, or an operation error of the device or the runtime), leaves the end the failed
+  wait gave (the run had failed when the wait ended). The one exception is a failure of the
+  Runtime's own bookkeeping, a record it cannot write (what poisons the Runtime anywhere else),
+  which ends the run as it ends any run. It is spent on the failing path only: a failing step can
+  now take up to `step_timeout_ms` longer than before, once per run (the run ends there), and a step that
   declares a retry and whose retry decision saw neither page takes it after that decision. It is
   not made, and the failed wait's end stands, where it cannot name a screen the package never
   recorded: a run that is not a task's own run (a prerequisite, return-home, navigation or
@@ -244,8 +247,12 @@ next step's page (every candidate of "Optional steps" below).
   that ended on the attempt's loading allowance; a package that declares sample consensus (its
   observation gives one verdict for all its sampled frames, none of a frame by itself); and a run
   whose time left before its host deadline or the end of its admitted runtime budget is shorter
-  than `step_timeout_ms` (so that the decision never ends it otherwise, nor makes its settlement
-  find it over its runtime budget, `policy_runtime_budget_exceeded`).
+  than twice `step_timeout_ms` (the decision lasts its bound, and the capture and recognition of
+  its last frame, the evaluation of the package's other pages and the work before the run's
+  settlement come after it; so that the decision never ends the run otherwise, nor makes its
+  settlement find it over its runtime budget, `policy_runtime_budget_exceeded`), or a scheduled
+  run whose budget's end could not be read before it executed (that read is no failure of the
+  run: the run goes on as without it, and only its closing decision is not made).
 
 `executed_steps` counts dispatched operations: a retry adds none.
 
@@ -844,7 +851,7 @@ these hold, and otherwise leaves the end the failed wait gave, code, detail and 
   startup package or a ladder rung, even one that goes through an entry check or a prerequisite
   gate as an ordinary run does), it is not in a restart segment (it made no `launch` or
   `restart` step whose segment no step has closed by arriving on the main interface, R25-1), and
-  its time left is no shorter than the decision's bound ("Retries");
+  its time left is at least twice the decision's bound, its budget's end read ("Retries");
 - the failed wait did not await the intermediate page (a page that flashed past leaves the screen
   on the next page, which the package knows) and did not end on the attempt's loading allowance;
   the package declares no sample consensus (its observation gives one verdict for all its sampled

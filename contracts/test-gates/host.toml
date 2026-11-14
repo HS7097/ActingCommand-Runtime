@@ -3994,3 +3994,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_u1::u1_the_new_code_admits_one_ladder_by_its_class_and_the_paused_pair_is_not_dispatched",
 ]
 incident = ["#463 U1"]
+
+# Workflow #463 U1 fix round 3 (0.12.60; register §1.372, "Fix round 3"; brief rd-1114/brief-1715-fix3.md, items 4 and 5; contracts/linear-steps.md, "Retries" and "A screen the package never recorded"), the host's half, on the manual clock and a fake device: a scheduled run of the package with a retry whose read of its runtime budget's end is made to fail once goes on as without that read: with list after the tap it succeeds after one tap and settles succeeded; on the screen of neither page it fails page_confirmation_failed after one tap, not fatal, its settlement recording that code, class recoverable, disposition continue (1); a linear_steps package without a retry, run directly under a game root with the shared interrupt pages notice and alert: after the tap a black first pixel until the arrival's 100 ms have passed, then the notice alone, or the notice and the alert at once: the closing decision's recognise-only check answers shown on the first such frame, which is taken once, and the run fails page_confirmation_failed after one input, with no handler layer, no InterruptHandled and no InterruptAmbiguous; the same frames through the usual entry: the notice before the tap is handled once by close_notice (count 1) and the run succeeds after two inputs; the notice and the alert on the arrival's first frame record one InterruptAmbiguous of [notice, alert], nothing is handled, and the run succeeds after one input (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_u1::u1_a_scheduled_run_whose_budget_end_cannot_be_read_ends_as_without_the_closing_decision",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::u1_the_recognise_only_entry_answers_shown_and_presses_counts_and_records_nothing",
+]
+incident = ["#463 U1"]

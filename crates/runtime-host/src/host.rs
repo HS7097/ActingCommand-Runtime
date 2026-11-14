@@ -2429,6 +2429,8 @@ impl RuntimeHost {
             #[cfg(test)]
             fail_policy_execution_append_once_for_test: AtomicBool::new(false),
             #[cfg(test)]
+            fail_policy_run_budget_end_once_for_test: AtomicBool::new(false),
+            #[cfg(test)]
             pacing_factor_pins_for_test: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             pacing_stage_pins_for_test: Mutex::new(BTreeMap::new()),
@@ -5185,6 +5187,17 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// Workflow #463 U1, fix round 3 (item 4), test only: the next scheduled run of this host
+    /// cannot read where its admitted runtime budget ends (the read fails as a dispatch without a
+    /// clock fails it), taken once.
+    #[cfg(test)]
+    pub(crate) fn fail_next_policy_run_budget_end_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::FailPolicyRunBudgetEndForTest)?
+            .fail_policy_run_budget_end_once_for_test
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
     /// Workflow #429 R-2, test only: what the shadow measurement's next evaluation reads from the
     /// `performance` section in effect, an instruction value included (the read of every
     /// performance tick).
@@ -6582,6 +6595,10 @@ struct HostShared {
     // `fail_policy_execution_append` does in a child process.
     #[cfg(test)]
     fail_policy_execution_append_once_for_test: AtomicBool,
+    // Workflow #463 U1, fix round 3 (item 4), test only: the next read of a scheduled run's
+    // runtime budget end (`policy_run_budget_end_ms`) fails, taken once.
+    #[cfg(test)]
+    fail_policy_run_budget_end_once_for_test: AtomicBool,
     // #385 P-k, test only: the pacing factor and extra rounds an instance's contained runs are
     // handed, by alias, in place of the shadow measurement's.
     #[cfg(test)]

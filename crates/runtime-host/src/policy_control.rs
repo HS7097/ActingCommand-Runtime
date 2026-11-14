@@ -2353,6 +2353,10 @@ pub(crate) fn runtime_budget_exceeded(
 /// dispatch's expected duration), the smallest of them; `None` when the receipt carries no runtime
 /// dimension. A dimension that carries one member only, or reserves less than the expected
 /// duration or more than its limit, is `policy_budget_receipt_invalid`, as at the settlement.
+/// Fix round 3 (item 4): the last case (a reservation before the run already above its limit),
+/// which the settlement judges over budget whatever the run's runtime, is refused here, and the
+/// scheduled run that meets it goes on with its budget's end unread, as every run whose read fails
+/// does, and makes no closing decision (`HostShared::policy_run_budget_end_ms`).
 pub(crate) fn runtime_budget_allowance_ms(
     intent: &DispatchIntent,
     admission: &PolicyAdmissionRecord,
