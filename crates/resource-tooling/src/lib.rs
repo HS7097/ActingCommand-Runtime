@@ -115,6 +115,11 @@ mod gate_453_s8;
 #[cfg(test)]
 mod gate_455_gr1;
 
+// Workflow #463 V1 (register §1.378): standard-pack check's root check of the variables a game
+// root's packages declare.
+#[cfg(test)]
+mod gate_463_v1;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;

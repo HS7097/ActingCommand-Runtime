@@ -74,7 +74,9 @@ crate::outcome_vocabulary! {
     /// or, since Workflow #451 LOAD-P, a bundle zip's loading templates directory. Since Workflow
     /// #455 G-R1 the root file `goals.json` has the fourteen `goal_*` words of its own (the
     /// fourteenth, `goal_out_of_limits`, since its fix round 1), and a bundle zip that carries it
-    /// `goal_undeclared`.
+    /// `goal_undeclared`. Workflow #463 V1 (since 0.12.60; [`crate::package_variables`]): the
+    /// file's fifteenth, `goal_variable_unknown`, and the root check's three words of a package's
+    /// declared variables, `variable_conflict`, `variable_out_of_limits` and `variable_cap_range`.
     pub enum StandardPackProblem: "standard_pack_problem" {
         /// The file is not JSON of the file's shape and version (for a table: not canonical
         /// JSON either, that is with a floating point number, an unsafe integer or a duplicate
@@ -173,7 +175,8 @@ crate::outcome_vocabulary! {
         /// R-11: a pack's `group` in `ui.json` is not an id of its `groups`.
         UiGroupUnknown => "ui_group_unknown",
         /// R-11: a name under a pack's `parameters` in `ui.json` is not a parameter the package
-        /// declares; until R-10 brings package-level declarations, every name.
+        /// declares. Workflow #463 V1 superseded R-10: a package's variables carry their own
+        /// texts, so `parameters` names nothing and every name is this word.
         UiParameterUndeclared => "ui_parameter_undeclared",
         /// Workflow #407 LOAD-1 (since 0.12.37): a target of `loading.json` or of a pack's loading
         /// copy has an id that is not `loading/<name>` or that the file declares twice, or a
@@ -226,19 +229,23 @@ crate::outcome_vocabulary! {
         /// Workflow #455 G-R1 (since 0.12.60; [`crate::standard_pack_goals`]): an entry of
         /// `goals.json` has a name an earlier entry has.
         GoalNameDuplicate => "goal_name_duplicate",
-        /// G-R1: an entry's `type` is none of the eight types of version 1.
+        /// G-R1: an entry's `type` is none of the types of version 1 (Workflow #463 V1: the five,
+        /// the four types it replaced included).
         GoalTypeUnknown => "goal_type_unknown",
-        /// G-R1: an entry's `block` is not the block its type is shown with.
+        /// G-R1: an entry's `block` is not the block its type is shown with; Workflow #463 V1: or
+        /// a `variable` placement's is not the placed variable's.
         GoalBlockMismatch => "goal_block_mismatch",
         /// G-R1: a `resource` entry's pool is not a pool of the composed schedule.
         GoalPoolUnknown => "goal_pool_unknown",
         /// G-R1: a `resource` entry's pool has no `valuation` with `scale` and `gap`.
         GoalPoolUnvalued => "goal_pool_unvalued",
-        /// G-R1: a governed package is not a package of `bundle.json`.
+        /// G-R1: a governed package is not a package of `bundle.json`; Workflow #463 V1: the
+        /// package a governed rule runs, or one that declares a placed variable, is not.
         GoalPackageUnknown => "goal_package_unknown",
         /// G-R1: a governed package, or (fix round 1) the package a governed rule runs, provides a
         /// capability that a package of the game root marks `irreversible: true` in its control
-        /// declaration's `provides[]`; no goal entry governs such a package or rule.
+        /// declaration's `provides[]`; no goal entry governs such a package or rule. Workflow #463
+        /// V1: nor places a variable such a package declares.
         GoalGovernsIrreversible => "goal_governs_irreversible",
         /// G-R1: a `tier` entry's rule is not a rule of `schedule.json`.
         GoalRuleUnknown => "goal_rule_unknown",
@@ -250,7 +257,8 @@ crate::outcome_vocabulary! {
         /// G-R1: an entry's `default` is not a value of its declaration.
         GoalDefaultInvalid => "goal_default_invalid",
         /// G-R1: an `ordered` entry's table is no table of the game root, or a key under its
-        /// `names` no key of that table.
+        /// `names` no key of that table. Workflow #463 V1 replaced the `ordered` entry, and no
+        /// entry or variable takes a table in it, so nothing gives this word.
         GoalTableUnknown => "goal_table_unknown",
         /// G-R1: a `resource` entry's `rate` has its ceiling below its floor.
         GoalRateInvalid => "goal_rate_invalid",
@@ -261,6 +269,21 @@ crate::outcome_vocabulary! {
         /// below 12. Refused by the installer's `place` at `interfaces.json`, as
         /// `notice_undeclared` is.
         GoalUndeclared => "goal_undeclared",
+        /// Workflow #463 V1 (since 0.12.60): a `variable` entry of `goals.json` places a name no
+        /// package of the game root declares as a variable, at its `name`.
+        GoalVariableUnknown => "goal_variable_unknown",
+        /// Workflow #463 V1: a variable two packages of the root declare with declarations that
+        /// are not byte-identical (at each declaration), or whose name an entry of `goals.json`
+        /// uses for anything but its placement (at each declaration's `name`); no variable of
+        /// that name applies.
+        VariableConflict => "variable_conflict",
+        /// Workflow #463 V1: a variable name after the root's 96th, in registry order and then
+        /// declaration order (at each declaration's `name`); it does not apply.
+        VariableOutOfLimits => "variable_out_of_limits",
+        /// Workflow #463 V1: an `integer` variable a package reads as the cap of a designated
+        /// effect (`max_repeats` `{fact_key: "session.dispatch.parameter.<name>"}`) declares a
+        /// `max` above 1000 (at that package's declaration's `max`); it does not apply.
+        VariableCapRange => "variable_cap_range",
     }
 }
 

@@ -3,18 +3,18 @@
 //! Workflow #455 G-R1 (register §1.356; `contracts/standard-pack-goals.md`): a game root's optional
 //! goal declaration, `goals.json` (`actingcommand.goals.v1`), beside `bundle.json`: the goal entries
 //! the game offers on one page, in file order, each with its stable name, its type, its block, its
-//! texts and what it governs (a pool of `schedule.json`, rules of `schedule.json` or packages of
-//! `bundle.json`).
+//! texts and what it governs (a pool of `schedule.json` or rules of `schedule.json`), or (Workflow
+//! #463 V1) the place on the page of a variable some package of the root declares.
 //!
 //! Two pure steps. [`parse_standard_pack_goals`] reads the file strictly into typed entries: its
-//! shape and limits, the names, the eight types of version 1 and their members, the blocks, the
-//! ranges, the defaults and the rates. [`check_standard_pack_goal_references`] then holds the typed
-//! entries to what the game root offers ([`GoalReferences`]: the composed schedule's pools and
-//! rules, each rule with the package it runs, the bundle's packages, each with what its control
-//! declaration provides, and the root's tables). Every violation is one [`StandardPackRootIssue`]
-//! of [`STANDARD_PACK_GOALS_FILE`] at its JSON pointer, in document order (a member repeated in one
-//! object first), at most [`MAX_STANDARD_PACK_GOALS_ISSUES`]; the references are judged only for a
-//! file the reader accepts.
+//! shape and limits, the names, the five types and their members, the blocks, the ranges, the
+//! defaults and the rates. [`check_standard_pack_goal_references`] then holds the typed entries
+//! to what the game root offers ([`GoalReferences`]: the composed schedule's pools and rules, each
+//! rule with the package it runs, the bundle's packages, each with what its control declaration
+//! provides, and the variables its packages declare). Every violation is one
+//! [`StandardPackRootIssue`] of [`STANDARD_PACK_GOALS_FILE`] at its JSON pointer, in document order
+//! (a member repeated in one object first), at most [`MAX_STANDARD_PACK_GOALS_ISSUES`]; the
+//! references are judged only for a file the reader accepts.
 //!
 //! G-R1 fix round 1 (the independent review): a package can do something irreversible when it
 //! provides a capability that any package of the game root marks irreversible
@@ -24,16 +24,21 @@
 //! that answer empty by omission. G-R1 fix round 2 (the differential review): a `tier` entry is
 //! also held to the packages the rules that follow its rules run ([`GoalRule::followers`]).
 //!
+//! Workflow #463 V1 (`contracts/package-variables.md`): the four types that governed packages
+//! (`integer`, `choice`, `switch`, `ordered`) are replaced by the placement `variable`, and the
+//! value-type code they had moved to [`crate::package_variables`], which reads a package's
+//! `variables` with this module's [`Check`]. A placement is held to the variables the root's
+//! packages declare (`goal_variable_unknown`) and, as a governed package was, to the packages that
+//! declare it (`goal_governs_irreversible`).
+//!
 //! The file stores no value: a value is the installation's, set by a person or an agent in a later
-//! slice. The Runtime interprets no text here: titles, help texts, unit texts, option titles,
-//! names of table keys and locales are opaque, measured in bytes only, and ids and option values
-//! are compared for equality only. No Runtime reader opens the file in this slice (its root reader,
-//! its startup and run preparation, the policy crate and check-config); `actinglab standard-pack
-//! check` reports a refused file without failing the root, and `package bundle --goals` refuses
-//! one.
+//! slice. The Runtime interprets no text here: titles, help texts, unit texts, option titles and
+//! locales are opaque, measured in bytes only, and ids and option values are compared for equality
+//! only. No Runtime reader opens the file in this slice (its root reader, its startup and run
+//! preparation, the policy crate and check-config); `actinglab standard-pack check` reports a
+//! refused file without failing the root, and `package bundle --goals` refuses one.
 
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
-use crate::standard_pack_table::standard_pack_table_id;
 use crate::standard_pack_ui::{
     MAX_PACK_UI_LOCALE_BYTES, MAX_PACK_UI_LOCALES, MAX_PACK_UI_SUMMARY_BYTES,
     MAX_PACK_UI_TITLE_BYTES, at, read_document,
@@ -57,19 +62,17 @@ pub const MAX_STANDARD_PACK_GOALS_ISSUES: usize = 64;
 pub const MAX_GOAL_ENTRIES: usize = 96;
 /// The longest entry name, in bytes.
 pub const MAX_GOAL_NAME_BYTES: usize = 64;
-/// The longest id an entry names (a pool, a rule, a package), and the longest key of a table, in
-/// bytes.
+/// The longest id an entry names (a pool, a rule), in bytes.
 pub const MAX_GOAL_REFERENCE_BYTES: usize = 128;
-/// The most packages or rules one `governs` names.
+/// The most rules one `governs` names.
 pub const MAX_GOAL_GOVERNED: usize = 32;
-/// The fewest options of a `choice` or `tier` entry.
+/// The fewest options of a `tier` entry, and (Workflow #463 V1) of a `choice` variable.
 pub const MIN_GOAL_CHOICE_OPTIONS: usize = 2;
-/// The most options of a `choice` or `tier` entry.
+/// The most options of a `tier` entry, and (Workflow #463 V1) of a `choice` variable.
 pub const MAX_GOAL_CHOICE_OPTIONS: usize = 32;
-/// The most values of an `ordered` entry: its options, or the keys of its table, and the names
-/// under its `from_table`.
+/// Workflow #463 V1: the most options of an `ordered` variable.
 pub const MAX_GOAL_LIST_VALUES: usize = 1024;
-/// The largest `max_count` of an `ordered` entry.
+/// Workflow #463 V1: the largest `max_count` of an `ordered` variable.
 pub const MAX_GOAL_ORDERED_COUNT: u64 = 32;
 /// The longest option value, in bytes.
 pub const MAX_GOAL_VALUE_BYTES: usize = 64;
@@ -78,7 +81,8 @@ pub const MAX_GOAL_SCALE_MILLI: i64 = 1_000_000;
 /// The largest integer of the file, in magnitude: the safe integers of JSON, 2^53 - 1.
 pub const MAX_GOAL_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
-/// The type of an entry (`type`), one of the eight of version 1.
+/// The type of an entry (`type`), one of the five of version 1 (Workflow #463 V1, which replaced
+/// the four types that governed packages by `variable`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GoalType {
     /// A group title between entries; no value, governs nothing.
@@ -87,29 +91,21 @@ pub enum GoalType {
     Note,
     /// A goal on one pool: an amount to hold, later with a deadline.
     Resource,
-    /// A whole number within a range, on a step.
-    Integer,
-    /// One of 2 to 32 options.
-    Choice,
-    /// On or off.
-    Switch,
-    /// An ordered list of values, from options or from a table's keys.
-    Ordered,
     /// One of 2 to 32 tiers, each scaling the fixed value of the rules it governs.
     Tier,
+    /// Workflow #463 V1: the place on the page of a variable a package of the root declares; its
+    /// value, its texts and its block are the variable's.
+    Variable,
 }
 
 impl GoalType {
-    /// The eight types of version 1, in the contract's order.
-    pub const ALL: [Self; 8] = [
+    /// The five types of version 1, in the contract's order.
+    pub const ALL: [Self; 5] = [
         Self::Heading,
         Self::Note,
         Self::Resource,
-        Self::Integer,
-        Self::Choice,
-        Self::Switch,
-        Self::Ordered,
         Self::Tier,
+        Self::Variable,
     ];
 
     /// The type's word in the file.
@@ -118,31 +114,28 @@ impl GoalType {
             Self::Heading => "heading",
             Self::Note => "note",
             Self::Resource => "resource",
-            Self::Integer => "integer",
-            Self::Choice => "choice",
-            Self::Switch => "switch",
-            Self::Ordered => "ordered",
             Self::Tier => "tier",
+            Self::Variable => "variable",
         }
     }
 
-    /// The type a word names; `None` for any other word (a later version's type too).
+    /// The type a word names; `None` for any other word (a later version's type, and the four
+    /// types Workflow #463 V1 replaced, too).
     pub fn from_word(word: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
             .find(|goal_type| goal_type.as_str() == word)
     }
 
-    /// The block every reader shows the type with: the only block version 1 gives it.
-    pub const fn base_block(self) -> GoalBlock {
+    /// The block every reader shows the type with: the only block version 1 gives it. `None` for
+    /// a `variable` placement, which a reader shows with the placed variable's block.
+    pub const fn base_block(self) -> Option<GoalBlock> {
         match self {
-            Self::Heading => GoalBlock::Group,
-            Self::Note => GoalBlock::Text,
-            Self::Resource => GoalBlock::GoalRow,
-            Self::Integer => GoalBlock::Number,
-            Self::Choice | Self::Tier => GoalBlock::Choice,
-            Self::Switch => GoalBlock::Switch,
-            Self::Ordered => GoalBlock::OrderedList,
+            Self::Heading => Some(GoalBlock::Group),
+            Self::Note => Some(GoalBlock::Text),
+            Self::Resource => Some(GoalBlock::GoalRow),
+            Self::Tier => Some(GoalBlock::Choice),
+            Self::Variable => None,
         }
     }
 
@@ -151,47 +144,33 @@ impl GoalType {
         match self {
             Self::Heading | Self::Note => HEADING_REQUIRED,
             Self::Resource => RESOURCE_REQUIRED,
-            Self::Integer => INTEGER_REQUIRED,
-            Self::Choice | Self::Tier => CHOICE_REQUIRED,
-            Self::Switch => SWITCH_REQUIRED,
-            Self::Ordered => ORDERED_REQUIRED,
+            Self::Tier => TIER_REQUIRED,
+            Self::Variable => VARIABLE_REQUIRED,
         }
     }
 
     /// The members an entry of the type may hold besides the required ones.
     const fn optional(self) -> &'static [&'static str] {
         match self {
-            Self::Heading | Self::Note | Self::Choice | Self::Switch | Self::Tier => {
-                COMMON_OPTIONAL
-            }
+            Self::Heading | Self::Note | Self::Tier => COMMON_OPTIONAL,
             Self::Resource => RESOURCE_OPTIONAL,
-            Self::Integer => INTEGER_OPTIONAL,
-            Self::Ordered => ORDERED_OPTIONAL,
+            Self::Variable => VARIABLE_OPTIONAL,
         }
     }
 }
 
 const HEADING_REQUIRED: &[&str] = &["name", "type", "title"];
 const RESOURCE_REQUIRED: &[&str] = &["name", "type", "title", "governs"];
-const INTEGER_REQUIRED: &[&str] = &["name", "type", "title", "governs", "min", "max", "default"];
-const CHOICE_REQUIRED: &[&str] = &["name", "type", "title", "governs", "options", "default"];
-const SWITCH_REQUIRED: &[&str] = &["name", "type", "title", "governs", "default"];
-const ORDERED_REQUIRED: &[&str] = &[
-    "name",
-    "type",
-    "title",
-    "governs",
-    "min_count",
-    "max_count",
-    "default",
-];
+const TIER_REQUIRED: &[&str] = &["name", "type", "title", "governs", "options", "default"];
+/// Workflow #463 V1: a placement writes no texts and no value of its own.
+const VARIABLE_REQUIRED: &[&str] = &["name", "type"];
 const COMMON_OPTIONAL: &[&str] = &["block", "help"];
 const RESOURCE_OPTIONAL: &[&str] = &["block", "help", "rate"];
-const INTEGER_OPTIONAL: &[&str] = &["block", "help", "step", "unit"];
-const ORDERED_OPTIONAL: &[&str] = &["block", "help", "options", "from_table"];
+const VARIABLE_OPTIONAL: &[&str] = &["block"];
 
-/// A block (`block`): how a reader shows an entry. Version 1 gives each type one block, its base
-/// block; a reader that meets a block it does not know shows the type's base block.
+/// A block (`block`): how a reader shows an entry or (Workflow #463 V1) a variable. Version 1
+/// gives each type one block, its base block; a reader that meets a block it does not know shows
+/// the type's base block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GoalBlock {
     /// A heading between entries (`heading`).
@@ -200,17 +179,30 @@ pub enum GoalBlock {
     Text,
     /// An amount to hold on a pool, with its current reading (`resource`).
     GoalRow,
-    /// A number typed in, with its unit and its limits (`integer`).
+    /// A number typed in, with its unit and its limits (an `integer` variable).
     Number,
-    /// One of a few options, side by side up to four, in a drop-down above (`choice`, `tier`).
+    /// One of a few options, side by side up to four, in a drop-down above (`tier`, a `choice`
+    /// variable).
     Choice,
-    /// On or off (`switch`).
+    /// On or off (a `switch` variable).
     Switch,
-    /// Values in an order a person sets, with search when the list is long (`ordered`).
+    /// Values in an order a person sets, with search when the list is long (an `ordered`
+    /// variable).
     OrderedList,
 }
 
 impl GoalBlock {
+    /// The seven blocks of version 1.
+    pub const ALL: [Self; 7] = [
+        Self::Group,
+        Self::Text,
+        Self::GoalRow,
+        Self::Number,
+        Self::Choice,
+        Self::Switch,
+        Self::OrderedList,
+    ];
+
     /// The block's word in the file.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -222,6 +214,20 @@ impl GoalBlock {
             Self::Switch => "switch",
             Self::OrderedList => "ordered_list",
         }
+    }
+
+    /// The block a word names; `None` for any other word.
+    pub fn from_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|block| block.as_str() == word)
+    }
+
+    /// Workflow #463 V1: whether the block is one a variable is shown with (`number`, `choice`,
+    /// `switch`, `ordered_list`), the only blocks a placement may write.
+    pub const fn shows_a_variable(self) -> bool {
+        matches!(
+            self,
+            Self::Number | Self::Choice | Self::Switch | Self::OrderedList
+        )
     }
 }
 
@@ -243,30 +249,14 @@ impl StandardPackGoals {
         self.entries.iter().find(|entry| entry.name == name)
     }
 
-    /// The packages the entries name directly in `governs.packages` (the `integer`, `choice`,
-    /// `switch` and `ordered` entries), and nothing else: not the packages a `tier` entry's rules
-    /// run, nor those of the rules that follow them. Judging what an entry reaches is the
-    /// references' job ([`check_standard_pack_goal_references`]), not this list's (G-R1 fix round
-    /// 2, which renamed it from `governed_packages`).
-    pub fn named_packages(&self) -> BTreeSet<&str> {
+    /// Workflow #463 V1: the names the entries use for anything but a `variable` placement, which
+    /// no variable of the root may have (`variable_conflict` of the root check,
+    /// [`crate::check_root_variables`]).
+    pub fn names_besides_placements(&self) -> BTreeSet<&str> {
         self.entries
             .iter()
-            .flat_map(|entry| entry.kind.packages())
-            .map(String::as_str)
-            .collect()
-    }
-
-    /// Every table an `ordered` entry takes its values from.
-    pub fn tables(&self) -> BTreeSet<&str> {
-        self.entries
-            .iter()
-            .filter_map(|entry| match &entry.kind {
-                DeclaredGoalKind::Ordered {
-                    values: GoalValues::Table { table, .. },
-                    ..
-                } => Some(table.as_str()),
-                _ => None,
-            })
+            .filter(|entry| entry.kind != DeclaredGoalKind::Variable)
+            .map(|entry| entry.name.as_str())
             .collect()
     }
 }
@@ -276,9 +266,13 @@ impl StandardPackGoals {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclaredGoal {
     pub name: String,
-    /// The block written, or the type's base block when the entry writes none.
-    pub block: GoalBlock,
-    pub title: GoalText,
+    /// The block written, or the type's base block when the entry writes none. Workflow #463 V1:
+    /// for a `variable` placement the block it writes, `None` when it writes none (a reader then
+    /// shows the placed variable's block).
+    pub block: Option<GoalBlock>,
+    /// The entry's title. Workflow #463 V1: `None` for a `variable` placement, whose variable
+    /// carries its own texts.
+    pub title: Option<GoalText>,
     pub help: Option<GoalText>,
     pub kind: DeclaredGoalKind,
 }
@@ -300,38 +294,14 @@ pub enum DeclaredGoalKind {
         pool: String,
         rate: Option<GoalRate>,
     },
-    /// `governs.packages`, `min`, `max`, `step` (1 when the entry writes none), `unit` and
-    /// `default`.
-    Integer {
-        packages: Vec<String>,
-        min: i64,
-        max: i64,
-        step: i64,
-        unit: Option<GoalUnit>,
-        default: i64,
-    },
-    Choice {
-        packages: Vec<String>,
-        options: Vec<GoalOption>,
-        default: String,
-    },
-    Switch {
-        packages: Vec<String>,
-        default: bool,
-    },
-    Ordered {
-        packages: Vec<String>,
-        values: GoalValues,
-        min_count: u64,
-        max_count: u64,
-        default: Vec<String>,
-    },
     /// `governs.rules` and its tiers (a later slice compiles them).
     Tier {
         rules: Vec<String>,
         options: Vec<GoalTierOption>,
         default: String,
     },
+    /// Workflow #463 V1: the place of the variable the entry's name names.
+    Variable,
 }
 
 impl DeclaredGoalKind {
@@ -340,22 +310,8 @@ impl DeclaredGoalKind {
             Self::Heading => GoalType::Heading,
             Self::Note => GoalType::Note,
             Self::Resource { .. } => GoalType::Resource,
-            Self::Integer { .. } => GoalType::Integer,
-            Self::Choice { .. } => GoalType::Choice,
-            Self::Switch { .. } => GoalType::Switch,
-            Self::Ordered { .. } => GoalType::Ordered,
             Self::Tier { .. } => GoalType::Tier,
-        }
-    }
-
-    /// The packages the entry governs; none for a type that governs a pool, rules or nothing.
-    pub fn packages(&self) -> &[String] {
-        match self {
-            Self::Integer { packages, .. }
-            | Self::Choice { packages, .. }
-            | Self::Switch { packages, .. }
-            | Self::Ordered { packages, .. } => packages.as_slice(),
-            Self::Heading | Self::Note | Self::Resource { .. } | Self::Tier { .. } => &[],
+            Self::Variable => GoalType::Variable,
         }
     }
 }
@@ -368,8 +324,8 @@ pub struct GoalRate {
     pub ceiling_milli_per_day: i64,
 }
 
-/// An `integer` entry's `unit`: a time word, whose values are milliseconds a reader shows in that
-/// unit, or a text per locale.
+/// An `integer` variable's `unit` (Workflow #463 V1; an `integer` entry's before it): a time word,
+/// whose values are milliseconds a reader shows in that unit, or a text per locale.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalUnit {
     Time(GoalTimeUnit),
@@ -398,12 +354,12 @@ impl GoalTimeUnit {
         }
     }
 
-    fn from_word(word: &str) -> Option<Self> {
+    pub(crate) fn from_word(word: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|unit| unit.as_str() == word)
     }
 }
 
-/// One option of a `choice` or `ordered` entry.
+/// One option of a `choice` or `ordered` variable (Workflow #463 V1; of such an entry before it).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalOption {
     pub value: String,
@@ -417,19 +373,6 @@ pub struct GoalTierOption {
     pub value: String,
     pub title: GoalText,
     pub scale_milli: i64,
-}
-
-/// Where an `ordered` entry's values come from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GoalValues {
-    /// `options`.
-    Options(Vec<GoalOption>),
-    /// `from_table`: the keys of a table of the game root, with the names a reader shows for some
-    /// of them, per locale.
-    Table {
-        table: String,
-        names: Vec<(String, GoalText)>,
-    },
 }
 
 /// A rule of `schedule.json` as the references hold it (G-R1 fix round 1): the package it runs,
@@ -450,6 +393,15 @@ pub struct GoalRule {
     pub followers: Vec<String>,
 }
 
+/// Workflow #463 V1: a variable of the game root as the references hold it: the block its kind is
+/// shown with (the first declaration's, in registry order) and every package that declares it, in
+/// registry order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalVariable {
+    pub block: GoalBlock,
+    pub packages: Vec<String>,
+}
+
 /// What the references of a declaration are held to (`check_standard_pack_goal_references`): what
 /// the game root offers. G-R1 fix round 1: made only by [`GoalReferences::new`], from what every
 /// package of the root provides; there is no default, so a reader cannot leave the answer to
@@ -461,9 +413,9 @@ pub struct GoalReferences {
     pub pools: BTreeMap<String, bool>,
     /// The rules of `schedule.json` by id; none without `schedule.json`.
     pub rules: BTreeMap<String, GoalRule>,
-    /// The tables of the game root by id, each with its distinct keys in row order. `None` when
-    /// the reader holds no tables (`package bundle`): then no table reference is judged.
-    pub tables: Option<BTreeMap<String, Vec<String>>>,
+    /// Workflow #463 V1: the variables the packages of the root declare, by name; none until a
+    /// reader adds them, so that every placement is then `goal_variable_unknown`.
+    pub variables: BTreeMap<String, GoalVariable>,
     /// The packages of the game root's `bundle.json` by id, each `true` when it can do something
     /// irreversible ([`GoalReferences::new`]).
     packages: BTreeMap<String, bool>,
@@ -475,9 +427,9 @@ impl GoalReferences {
     /// every one `true` when its entry writes `irreversible: true`. A capability is irreversible
     /// when any package of the root marks it so (contracts/remedies.md §2.3, "any provider"), and
     /// a package can do something irreversible when it provides such a capability, marked by
-    /// itself or not. A package `provides` does not name is no package of the root: an entry that
-    /// governs it, or a rule that runs it, is never passed. The pools and the rules start empty,
-    /// the tables `None`.
+    /// itself or not. A package `provides` does not name is no package of the root: a rule that
+    /// runs it, or a variable it declares, is never passed. The pools, the rules and the variables
+    /// start empty.
     pub fn new(provides: BTreeMap<String, BTreeMap<String, bool>>) -> Self {
         let irreversible = provides
             .values()
@@ -497,7 +449,7 @@ impl GoalReferences {
         Self {
             pools: BTreeMap::new(),
             rules: BTreeMap::new(),
-            tables: None,
+            variables: BTreeMap::new(),
             packages,
         }
     }
@@ -539,30 +491,26 @@ impl GoalReferences {
 ///
 /// - `goal_out_of_limits` (fix round 1): the file is larger than [`MAX_STANDARD_PACK_GOALS_BYTES`]
 ///   (the whole document); a list, a map, a text's locales, or the bytes of a name, an option
-///   value, an id, a key, a locale or a text outside its limit (at what exceeds);
+///   value, an id, a locale or a text outside its limit (at what exceeds);
 /// - `malformed`: no JSON or no object (the whole document; a byte-order mark too); a member
 ///   repeated in one object, unknown, missing or not of its type (an integer outside the safe
-///   integers too, but for an `integer` entry's `default`), a `schema_version` other than
-///   [`STANDARD_PACK_GOALS_SCHEMA_VERSION`], a name, an option value, an id, a key or a word
-///   outside its form, an `ordered` entry with both `options` and `from_table` (at `from_table`)
-///   or with neither (at `options`);
+///   integers too), a `schema_version` other than [`STANDARD_PACK_GOALS_SCHEMA_VERSION`], a name,
+///   an option value or an id outside its form;
 /// - `game_mismatch`: `game` is not the directory's;
 /// - `goal_name_duplicate`: a name an earlier entry has (at the later `name`);
-/// - `goal_type_unknown`: a `type` that is none of the eight of version 1;
-/// - `goal_block_mismatch`: a `block` other than the type's base block;
-/// - `goal_range_invalid`: what an entry declares as its values cannot hold one (an integer's `min`
-///   above its `max`, a `step` below 1, an option value written twice, an `ordered` entry's
-///   `max_count` of 0 or above [`MAX_GOAL_ORDERED_COUNT`], its `min_count` above its `max_count`
-///   or above the number of its options, a tier's `scale_milli` outside 1 to
-///   [`MAX_GOAL_SCALE_MILLI`]);
-/// - `goal_default_invalid`: a `default` that is not a value of the declaration (an `integer`
-///   entry's that is no whole number in its range on its step, whatever its type or size);
+/// - `goal_type_unknown`: a `type` that is none of the five of version 1 (Workflow #463 V1: the
+///   four types it replaced too);
+/// - `goal_block_mismatch`: a `block` other than the type's base block, or (Workflow #463 V1) a
+///   placement's `block` that is no block a variable is shown with;
+/// - `goal_range_invalid`: an option value written twice, a tier's `scale_milli` outside 1 to
+///   [`MAX_GOAL_SCALE_MILLI`];
+/// - `goal_default_invalid`: a tier's `default` that is none of its option values;
 /// - `goal_rate_invalid`: a `rate` whose ceiling is below its floor.
 pub fn parse_standard_pack_goals(
     bytes: &[u8],
     game: &str,
 ) -> Result<StandardPackGoals, Vec<StandardPackRootIssue>> {
-    let mut check = Check::default();
+    let mut check = Check::new(STANDARD_PACK_GOALS_FILE);
     if bytes.len() > MAX_STANDARD_PACK_GOALS_BYTES {
         check.out_of_limits("");
         return Err(check.issues);
@@ -594,24 +542,24 @@ pub fn parse_standard_pack_goals(
 ///
 /// - `goal_pool_unknown`: a `resource` entry's pool is not a pool of the composed schedule;
 /// - `goal_pool_unvalued`: its pool's `valuation` lacks `scale` or `gap`;
-/// - `goal_package_unknown`: a governed package, or (fix round 1) the package a governed rule
-///   runs, is not a package of `bundle.json`;
-/// - `goal_governs_irreversible`: a governed package, or (fix round 1) the package a governed rule
-///   runs, can do something irreversible ([`GoalReferences::new`]); or (fix round 2, at the
-///   governed rule) a rule that follows it, directly or through further followers, runs such a
-///   package or one the references were not told of;
+/// - `goal_package_unknown`: (fix round 1) the package a governed rule runs, or (Workflow #463 V1)
+///   a package that declares a placed variable, is not a package of `bundle.json`;
+/// - `goal_governs_irreversible`: (fix round 1) the package a governed rule runs can do something
+///   irreversible ([`GoalReferences::new`]); or (fix round 2, at the governed rule) a rule that
+///   follows it, directly or through further followers, runs such a package or one the
+///   references were not told of; or (Workflow #463 V1, at the placement's `name`) a package that
+///   declares the placed variable can;
 /// - `goal_rule_unknown`: a `tier` entry's rule is not a rule of `schedule.json`;
 /// - `goal_tier_without_fixed_value`: that rule, its package and its followers passed, writes no
 ///   `fixed_value_milli`;
-/// - with the root's tables: `goal_table_unknown` (an `ordered` entry's table is no table of the
-///   root, or a key under its `names` no key of that table), `goal_range_invalid` (the table holds
-///   more than [`MAX_GOAL_LIST_VALUES`] keys, or fewer than the entry's `min_count`) and
-///   `goal_default_invalid` (a value of its `default` is no key of the table).
+/// - Workflow #463 V1: `goal_variable_unknown` (a placement names no variable a package of the
+///   root declares, at its `name`) and `goal_block_mismatch` (a placement's `block` is not the
+///   placed variable's, at its `block`).
 pub fn check_standard_pack_goal_references(
     goals: &StandardPackGoals,
     references: &GoalReferences,
 ) -> Vec<StandardPackRootIssue> {
-    let mut check = Check::default();
+    let mut check = Check::new(STANDARD_PACK_GOALS_FILE);
     for (index, goal) in goals.entries.iter().enumerate() {
         let pointer = format!("/entries/{index}");
         let governs = at(&pointer, "governs");
@@ -659,32 +607,30 @@ pub fn check_standard_pack_goal_references(
                     }
                 }
             }
-            DeclaredGoalKind::Integer { packages, .. }
-            | DeclaredGoalKind::Choice { packages, .. }
-            | DeclaredGoalKind::Switch { packages, .. }
-            | DeclaredGoalKind::Ordered { packages, .. } => {
-                let at_packages = at(&governs, "packages");
-                for (position, package_id) in packages.iter().enumerate() {
-                    let at_package = format!("{at_packages}/{position}");
-                    match references.irreversible(package_id) {
-                        None => check.issue(StandardPackProblem::GoalPackageUnknown, at_package),
-                        Some(true) => {
-                            check.issue(StandardPackProblem::GoalGovernsIrreversible, at_package);
-                        }
-                        Some(false) => {}
-                    }
-                }
-                if let (
-                    DeclaredGoalKind::Ordered {
-                        values: GoalValues::Table { table, names },
-                        min_count,
-                        default,
-                        ..
-                    },
-                    Some(tables),
-                ) = (&goal.kind, &references.tables)
-                {
-                    check.table_values(&pointer, table, names, *min_count, default, tables);
+            // Workflow #463 V1: a placement reaches the packages that declare the variable it
+            // places, so it is held to each of them as a governed package was: admission keeps a
+            // variable off a package that marks an irreversible capability itself, and this arm
+            // keeps a placement off one that provides a capability another package marks so.
+            DeclaredGoalKind::Variable => {
+                let at_name = at(&pointer, "name");
+                let Some(variable) = references.variables.get(&goal.name) else {
+                    check.issue(StandardPackProblem::GoalVariableUnknown, at_name);
+                    continue;
+                };
+                let reached = variable
+                    .packages
+                    .iter()
+                    .map(|package_id| references.irreversible(package_id))
+                    .collect::<Vec<_>>();
+                if reached.contains(&None) {
+                    check.issue(StandardPackProblem::GoalPackageUnknown, at_name);
+                } else if reached.contains(&Some(true)) {
+                    check.issue(StandardPackProblem::GoalGovernsIrreversible, at_name);
+                } else if goal.block.is_some_and(|block| block != variable.block) {
+                    check.issue(
+                        StandardPackProblem::GoalBlockMismatch,
+                        at(&pointer, "block"),
+                    );
                 }
             }
         }
@@ -702,7 +648,7 @@ pub fn goal_name(name: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
-/// An option value: 1 to [`MAX_GOAL_VALUE_BYTES`] bytes of `[a-z0-9][a-z0-9_.:-]*`.
+/// A tier's option value: 1 to [`MAX_GOAL_VALUE_BYTES`] bytes of `[a-z0-9][a-z0-9_.:-]*`.
 fn option_value(value: &str) -> bool {
     let mut bytes = value.bytes();
     value.len() <= MAX_GOAL_VALUE_BYTES
@@ -714,16 +660,20 @@ fn option_value(value: &str) -> bool {
         })
 }
 
-/// An id an entry names, or a key of a table: 1 to [`MAX_GOAL_REFERENCE_BYTES`] bytes without a
-/// control character.
+/// An id an entry names: 1 to [`MAX_GOAL_REFERENCE_BYTES`] bytes without a control character.
 fn opaque_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= MAX_GOAL_REFERENCE_BYTES && !id.chars().any(char::is_control)
 }
 
-/// Fix round 1: what is wrong with `text`, a name, an option value, an id or a key of the form
-/// `form`: `goal_out_of_limits` when it is empty or longer than `max` bytes, else `malformed`
-/// when it breaks its form; `None` when it keeps both.
-fn bounded(text: &str, max: usize, form: fn(&str) -> bool) -> Option<StandardPackProblem> {
+/// Fix round 1: what is wrong with `text`, a name, an option value or an id of the form `form`:
+/// `goal_out_of_limits` when it is empty or longer than `max` bytes, else `malformed` when it
+/// breaks its form; `None` when it keeps both. Workflow #463 V1: shared with the reader of a
+/// package's `variables`.
+pub(crate) fn bounded(
+    text: &str,
+    max: usize,
+    form: fn(&str) -> bool,
+) -> Option<StandardPackProblem> {
     if text.is_empty() || text.len() > max {
         Some(StandardPackProblem::GoalOutOfLimits)
     } else if form(text) {
@@ -733,35 +683,47 @@ fn bounded(text: &str, max: usize, form: fn(&str) -> bool) -> Option<StandardPac
     }
 }
 
-/// The checks of one document: the issues found so far.
-#[derive(Default)]
-struct Check {
+/// The checks of one document: the issues found so far. Workflow #463 V1: shared with the reader
+/// of a package's `variables` ([`crate::package_variables`]), which reads the value types this
+/// reader read before it, with the file it reports in.
+pub(crate) struct Check {
+    file: &'static str,
     issues: Vec<StandardPackRootIssue>,
 }
 
 impl Check {
-    fn issue(&mut self, problem: StandardPackProblem, pointer: impl Into<String>) {
-        if self.issues.len() < MAX_STANDARD_PACK_GOALS_ISSUES {
-            self.issues.push(StandardPackRootIssue::new(
-                STANDARD_PACK_GOALS_FILE,
-                problem,
-                pointer,
-            ));
+    /// The checks of a document of `file`, with no issue yet.
+    pub(crate) const fn new(file: &'static str) -> Self {
+        Self {
+            file,
+            issues: Vec::new(),
         }
     }
 
-    fn malformed(&mut self, pointer: impl Into<String>) {
+    /// The issues found so far, in the order they were found.
+    pub(crate) fn issues(&self) -> &[StandardPackRootIssue] {
+        &self.issues
+    }
+
+    pub(crate) fn issue(&mut self, problem: StandardPackProblem, pointer: impl Into<String>) {
+        if self.issues.len() < MAX_STANDARD_PACK_GOALS_ISSUES {
+            self.issues
+                .push(StandardPackRootIssue::new(self.file, problem, pointer));
+        }
+    }
+
+    pub(crate) fn malformed(&mut self, pointer: impl Into<String>) {
         self.issue(StandardPackProblem::Malformed, pointer);
     }
 
     /// Fix round 1: a bound of the shape broken, at what exceeds it.
-    fn out_of_limits(&mut self, pointer: impl Into<String>) {
+    pub(crate) fn out_of_limits(&mut self, pointer: impl Into<String>) {
         self.issue(StandardPackProblem::GoalOutOfLimits, pointer);
     }
 
     /// An object of the members `required` and `optional`: an unknown member and a missing one
     /// are `malformed` at its pointer, a value that is no object at the value's.
-    fn object<'v>(
+    pub(crate) fn object<'v>(
         &mut self,
         value: &'v Value,
         pointer: &str,
@@ -776,7 +738,7 @@ impl Check {
         Some(object)
     }
 
-    fn members(
+    pub(crate) fn members(
         &mut self,
         object: &Map<String, Value>,
         pointer: &str,
@@ -796,7 +758,7 @@ impl Check {
     }
 
     /// A list of `min..=max` items; a count outside is `goal_out_of_limits` at the list.
-    fn list<'v>(
+    pub(crate) fn list<'v>(
         &mut self,
         value: &'v Value,
         pointer: &str,
@@ -814,7 +776,7 @@ impl Check {
 
     /// A string of 1 to `max` bytes, never read further: no string is `malformed`, one of another
     /// length `goal_out_of_limits`.
-    fn string(&mut self, value: &Value, pointer: &str, max: usize) -> Option<String> {
+    pub(crate) fn string(&mut self, value: &Value, pointer: &str, max: usize) -> Option<String> {
         match value.as_str() {
             Some(text) if !text.is_empty() && text.len() <= max => Some(text.to_owned()),
             Some(_) => {
@@ -830,7 +792,7 @@ impl Check {
 
     /// A text: 1 to 16 locales of 1 to 35 bytes each, each text 1 to `max` bytes, as `ui.json`'s;
     /// a count or a length outside is `goal_out_of_limits` at what exceeds.
-    fn text(&mut self, value: &Value, pointer: &str, max: usize) -> Option<GoalText> {
+    pub(crate) fn text(&mut self, value: &Value, pointer: &str, max: usize) -> Option<GoalText> {
         let Some(locales) = value.as_object() else {
             self.malformed(pointer);
             return None;
@@ -855,8 +817,27 @@ impl Check {
         complete.then_some(text)
     }
 
+    /// Workflow #463 V1: an entry's `title` (required, reported missing with its members) and its
+    /// optional `help`, as texts; `None` when either breaks its rules.
+    pub(crate) fn texts(
+        &mut self,
+        object: &Map<String, Value>,
+        pointer: &str,
+    ) -> Option<(GoalText, Option<GoalText>)> {
+        let title = object
+            .get("title")
+            .and_then(|title| self.text(title, &at(pointer, "title"), MAX_PACK_UI_TITLE_BYTES));
+        let help = match object.get("help") {
+            None => Some(None),
+            Some(help) => self
+                .text(help, &at(pointer, "help"), MAX_PACK_UI_SUMMARY_BYTES)
+                .map(Some),
+        };
+        Some((title?, help?))
+    }
+
     /// An integer within the safe integers of JSON.
-    fn integer(&mut self, value: &Value, pointer: &str) -> Option<i64> {
+    pub(crate) fn integer(&mut self, value: &Value, pointer: &str) -> Option<i64> {
         match value.as_i64() {
             Some(integer)
                 if (-MAX_GOAL_SAFE_INTEGER..=MAX_GOAL_SAFE_INTEGER).contains(&integer) =>
@@ -871,7 +852,7 @@ impl Check {
     }
 
     /// A whole number from 0 within the safe integers of JSON.
-    fn count(&mut self, value: &Value, pointer: &str) -> Option<u64> {
+    pub(crate) fn count(&mut self, value: &Value, pointer: &str) -> Option<u64> {
         match value.as_u64() {
             Some(count) if count <= MAX_GOAL_SAFE_INTEGER.unsigned_abs() => Some(count),
             _ => {
@@ -959,39 +940,56 @@ impl Check {
             }
         };
         self.members(object, &pointer, goal_type.required(), goal_type.optional());
-        let base = goal_type.base_block();
-        let block = match object.get("block") {
-            None => Some(base),
-            Some(Value::String(word)) if word == base.as_str() => Some(base),
-            Some(Value::String(_)) => {
-                self.issue(
-                    StandardPackProblem::GoalBlockMismatch,
-                    at(&pointer, "block"),
-                );
-                None
-            }
-            Some(_) => {
-                self.malformed(at(&pointer, "block"));
-                None
-            }
-        };
-        let title = object
-            .get("title")
-            .and_then(|title| self.text(title, &at(&pointer, "title"), MAX_PACK_UI_TITLE_BYTES));
-        let help = match object.get("help") {
-            None => Some(None),
-            Some(help) => self
-                .text(help, &at(&pointer, "help"), MAX_PACK_UI_SUMMARY_BYTES)
-                .map(Some),
+        let block = self.block(object.get("block"), &pointer, goal_type.base_block());
+        // Workflow #463 V1: a placement writes no texts; the placed variable carries its own.
+        let texts = match goal_type {
+            GoalType::Variable => Some((None, None)),
+            _ => self
+                .texts(object, &pointer)
+                .map(|(title, help)| (Some(title), help)),
         };
         let kind = self.kind(goal_type, object, &pointer);
+        let (title, help) = texts?;
         Some(DeclaredGoal {
             name: name?,
             block: block?,
-            title: title?,
-            help: help?,
+            title,
+            help,
             kind: kind?,
         })
+    }
+
+    /// The `block` an entry writes, judged against its type's base block `base`: left out, the
+    /// base block; written, the base block. Workflow #463 V1: a placement (no base block) may
+    /// leave it out (`None`) or write a block a variable is shown with, which the references hold
+    /// to the placed variable's. Any other word is `goal_block_mismatch`. Shared with the reader
+    /// of a package's `variables`, which gives its type's base block.
+    pub(crate) fn block(
+        &mut self,
+        value: Option<&Value>,
+        pointer: &str,
+        base: Option<GoalBlock>,
+    ) -> Option<Option<GoalBlock>> {
+        let at_block = at(pointer, "block");
+        match (value, base) {
+            (None, base) => Some(base),
+            (Some(Value::String(word)), Some(base)) if word == base.as_str() => Some(Some(base)),
+            (Some(Value::String(word)), None) => match GoalBlock::from_word(word) {
+                Some(block) if block.shows_a_variable() => Some(Some(block)),
+                _ => {
+                    self.issue(StandardPackProblem::GoalBlockMismatch, at_block);
+                    None
+                }
+            },
+            (Some(Value::String(_)), Some(_)) => {
+                self.issue(StandardPackProblem::GoalBlockMismatch, at_block);
+                None
+            }
+            (Some(_), _) => {
+                self.malformed(at_block);
+                None
+            }
+        }
     }
 
     /// The entry's name ([`goal_name`]; its length [`bounded`]), once in the file. A missing name
@@ -1039,48 +1037,6 @@ impl Check {
                     rate: rate?,
                 })
             }
-            GoalType::Integer => self.integer_kind(object, pointer),
-            GoalType::Choice => {
-                let packages = self.governs_list(object, pointer, "packages");
-                let options = object.get("options").and_then(|options| {
-                    self.options(
-                        options,
-                        &at(pointer, "options"),
-                        (MIN_GOAL_CHOICE_OPTIONS, MAX_GOAL_CHOICE_OPTIONS),
-                    )
-                });
-                let values = options.as_ref().map(|options| {
-                    options
-                        .iter()
-                        .map(|option| option.value.clone())
-                        .collect::<Vec<_>>()
-                });
-                let default = self.one_of(object, pointer, values.as_deref());
-                Some(DeclaredGoalKind::Choice {
-                    packages: packages?,
-                    options: options?,
-                    default: default?,
-                })
-            }
-            GoalType::Switch => {
-                let packages = self.governs_list(object, pointer, "packages");
-                let default = match object.get("default") {
-                    Some(Value::Bool(default)) => Some(*default),
-                    Some(_) => {
-                        self.issue(
-                            StandardPackProblem::GoalDefaultInvalid,
-                            at(pointer, "default"),
-                        );
-                        None
-                    }
-                    None => None,
-                };
-                Some(DeclaredGoalKind::Switch {
-                    packages: packages?,
-                    default: default?,
-                })
-            }
-            GoalType::Ordered => self.ordered_kind(object, pointer),
             GoalType::Tier => {
                 let rules = self.governs_list(object, pointer, "rules");
                 let options = object
@@ -1099,6 +1055,7 @@ impl Check {
                     default: default?,
                 })
             }
+            GoalType::Variable => Some(DeclaredGoalKind::Variable),
         }
     }
 
@@ -1109,8 +1066,8 @@ impl Check {
         self.reference(governs.get("pool")?, &at(&at_governs, "pool"))
     }
 
-    /// `governs` as `{<member>: [ids]}` (`packages` or `rules`): 1 to [`MAX_GOAL_GOVERNED`] ids,
-    /// each named once.
+    /// `governs` as `{<member>: [ids]}` (`rules`): 1 to [`MAX_GOAL_GOVERNED`] ids, each named
+    /// once.
     fn governs_list(
         &mut self,
         object: &Map<String, Value>,
@@ -1166,117 +1123,6 @@ impl Check {
         })
     }
 
-    fn integer_kind(
-        &mut self,
-        object: &Map<String, Value>,
-        pointer: &str,
-    ) -> Option<DeclaredGoalKind> {
-        let packages = self.governs_list(object, pointer, "packages");
-        let min = object
-            .get("min")
-            .and_then(|min| self.integer(min, &at(pointer, "min")));
-        let max = object
-            .get("max")
-            .and_then(|max| self.integer(max, &at(pointer, "max")));
-        let step = match object.get("step") {
-            None => Some(1),
-            Some(step) => self.integer(step, &at(pointer, "step")),
-        };
-        let unit = match object.get("unit") {
-            None => Some(None),
-            Some(unit) => self.unit(unit, &at(pointer, "unit")).map(Some),
-        };
-        let range = match (min, max, step) {
-            (Some(min), Some(max), Some(step)) => {
-                if min > max {
-                    self.issue(StandardPackProblem::GoalRangeInvalid, at(pointer, "min"));
-                    None
-                } else if step < 1 {
-                    self.issue(StandardPackProblem::GoalRangeInvalid, at(pointer, "step"));
-                    None
-                } else {
-                    Some((min, max, step))
-                }
-            }
-            _ => None,
-        };
-        // The default is judged against a range that holds; a broken range is its own refusal.
-        let default = match (range, object.get("default")) {
-            (Some((min, max, step)), Some(default)) => match default.as_i64() {
-                Some(default)
-                    if (min..=max).contains(&default)
-                        && (i128::from(default) - i128::from(min)) % i128::from(step) == 0 =>
-                {
-                    Some(default)
-                }
-                _ => {
-                    self.issue(
-                        StandardPackProblem::GoalDefaultInvalid,
-                        at(pointer, "default"),
-                    );
-                    None
-                }
-            },
-            _ => None,
-        };
-        let (min, max, step) = range?;
-        Some(DeclaredGoalKind::Integer {
-            packages: packages?,
-            min,
-            max,
-            step,
-            unit: unit?,
-            default: default?,
-        })
-    }
-
-    /// A `unit`: a time word or a text.
-    fn unit(&mut self, value: &Value, pointer: &str) -> Option<GoalUnit> {
-        match value {
-            Value::String(word) => match GoalTimeUnit::from_word(word) {
-                Some(unit) => Some(GoalUnit::Time(unit)),
-                None => {
-                    self.malformed(pointer);
-                    None
-                }
-            },
-            _ => self
-                .text(value, pointer, MAX_PACK_UI_TITLE_BYTES)
-                .map(GoalUnit::Text),
-        }
-    }
-
-    /// `options`: `bounds` options `{value, title}`, each value written once.
-    fn options(
-        &mut self,
-        value: &Value,
-        pointer: &str,
-        bounds: (usize, usize),
-    ) -> Option<Vec<GoalOption>> {
-        let items = self.list(value, pointer, bounds)?;
-        let mut seen = BTreeSet::new();
-        let mut options = Vec::new();
-        let mut complete = true;
-        for (index, item) in items.iter().enumerate() {
-            let at_option = format!("{pointer}/{index}");
-            let Some(option) = self.object(item, &at_option, &["value", "title"], &[]) else {
-                complete = false;
-                continue;
-            };
-            let value = option
-                .get("value")
-                .and_then(|value| self.option_value(value, &at(&at_option, "value"), &mut seen));
-            let title = option.get("title").and_then(|title| {
-                self.text(title, &at(&at_option, "title"), MAX_PACK_UI_TITLE_BYTES)
-            });
-            match (value, title) {
-                (Some(value), Some(title)) => options.push(GoalOption { value, title }),
-                _ => complete = false,
-            }
-        }
-        complete.then_some(options)
-    }
-
     /// A `tier` entry's `options`: 2 to 32 tiers `{value, title, scale_milli}`, each value written
     /// once, each scale from 1 to [`MAX_GOAL_SCALE_MILLI`].
     fn tier_options(&mut self, value: &Value, pointer: &str) -> Option<Vec<GoalTierOption>> {
@@ -1296,9 +1142,9 @@ impl Check {
                 complete = false;
                 continue;
             };
-            let value = option
-                .get("value")
-                .and_then(|value| self.option_value(value, &at(&at_option, "value"), &mut seen));
+            let value = option.get("value").and_then(|value| {
+                self.option_value(value, &at(&at_option, "value"), &mut seen, option_value)
+            });
             let title = option.get("title").and_then(|title| {
                 self.text(title, &at(&at_option, "title"), MAX_PACK_UI_TITLE_BYTES)
             });
@@ -1317,19 +1163,21 @@ impl Check {
         complete.then_some(options)
     }
 
-    /// An option value ([`option_value`]; its length [`bounded`]) not written before in its list
-    /// (`goal_range_invalid`).
-    fn option_value(
+    /// An option value of the form `form` (its length [`bounded`]) not written before in its
+    /// list (`goal_range_invalid`). Workflow #463 V1: a tier's of [`option_value`], a variable's
+    /// of the token form.
+    pub(crate) fn option_value(
         &mut self,
         value: &Value,
         pointer: &str,
         seen: &mut BTreeSet<String>,
+        form: fn(&str) -> bool,
     ) -> Option<String> {
         let Some(word) = value.as_str() else {
             self.malformed(pointer);
             return None;
         };
-        if let Some(problem) = bounded(word, MAX_GOAL_VALUE_BYTES, option_value) {
+        if let Some(problem) = bounded(word, MAX_GOAL_VALUE_BYTES, form) {
             self.issue(problem, pointer);
             return None;
         }
@@ -1354,8 +1202,9 @@ impl Check {
         }
     }
 
-    /// A `choice` or `tier` entry's `default`: one of `values`, judged once the options hold.
-    fn one_of(
+    /// A `tier` entry's or (Workflow #463 V1) a `choice` variable's `default`: one of `values`,
+    /// judged once the options hold.
+    pub(crate) fn one_of(
         &mut self,
         object: &Map<String, Value>,
         pointer: &str,
@@ -1374,210 +1223,6 @@ impl Check {
                     at(pointer, "default"),
                 );
                 None
-            }
-        }
-    }
-
-    fn ordered_kind(
-        &mut self,
-        object: &Map<String, Value>,
-        pointer: &str,
-    ) -> Option<DeclaredGoalKind> {
-        let packages = self.governs_list(object, pointer, "packages");
-        let values = match (object.get("options"), object.get("from_table")) {
-            (Some(options), None) => self
-                .options(options, &at(pointer, "options"), (1, MAX_GOAL_LIST_VALUES))
-                .map(GoalValues::Options),
-            (None, Some(table)) => self.values_of_table(table, &at(pointer, "from_table")),
-            (Some(_), Some(_)) => {
-                self.malformed(at(pointer, "from_table"));
-                None
-            }
-            (None, None) => {
-                self.malformed(at(pointer, "options"));
-                None
-            }
-        };
-        let min_count = object
-            .get("min_count")
-            .and_then(|count| self.count(count, &at(pointer, "min_count")));
-        let max_count = object
-            .get("max_count")
-            .and_then(|count| self.count(count, &at(pointer, "max_count")));
-        let counts = match (min_count, max_count) {
-            (Some(min_count), Some(max_count)) => {
-                let options = match &values {
-                    Some(GoalValues::Options(options)) => Some(options.len() as u64),
-                    _ => None,
-                };
-                if max_count == 0 || max_count > MAX_GOAL_ORDERED_COUNT {
-                    self.issue(
-                        StandardPackProblem::GoalRangeInvalid,
-                        at(pointer, "max_count"),
-                    );
-                    None
-                } else if min_count > max_count
-                    || options.is_some_and(|options| min_count > options)
-                {
-                    self.issue(
-                        StandardPackProblem::GoalRangeInvalid,
-                        at(pointer, "min_count"),
-                    );
-                    None
-                } else {
-                    Some((min_count, max_count))
-                }
-            }
-            _ => None,
-        };
-        let default = match (counts, &values, object.get("default")) {
-            (Some(counts), Some(values), Some(default)) => {
-                self.ordered_default(default, &at(pointer, "default"), counts, values)
-            }
-            _ => None,
-        };
-        let (min_count, max_count) = counts?;
-        Some(DeclaredGoalKind::Ordered {
-            packages: packages?,
-            values: values?,
-            min_count,
-            max_count,
-            default: default?,
-        })
-    }
-
-    /// `from_table`: `{table, names?}`, the table an id of the table rule, each name's key an id
-    /// and its text a title.
-    fn values_of_table(&mut self, value: &Value, pointer: &str) -> Option<GoalValues> {
-        let from_table = self.object(value, pointer, &["table"], &["names"])?;
-        let table = match from_table.get("table")?.as_str() {
-            Some(table) if standard_pack_table_id(table) => Some(table.to_owned()),
-            _ => {
-                self.malformed(at(pointer, "table"));
-                None
-            }
-        };
-        let names = match from_table.get("names") {
-            None => Some(Vec::new()),
-            Some(names) => self.names(names, &at(pointer, "names")),
-        };
-        Some(GoalValues::Table {
-            table: table?,
-            names: names?,
-        })
-    }
-
-    fn names(&mut self, value: &Value, pointer: &str) -> Option<Vec<(String, GoalText)>> {
-        let Some(members) = value.as_object() else {
-            self.malformed(pointer);
-            return None;
-        };
-        let mut complete = members.len() <= MAX_GOAL_LIST_VALUES;
-        if !complete {
-            self.out_of_limits(pointer);
-        }
-        let mut names = Vec::new();
-        for (key, text) in members {
-            let at_key = at(pointer, key);
-            if let Some(problem) = bounded(key, MAX_GOAL_REFERENCE_BYTES, opaque_id) {
-                self.issue(problem, at_key);
-                complete = false;
-                continue;
-            }
-            match self.text(text, &at_key, MAX_PACK_UI_TITLE_BYTES) {
-                Some(text) => names.push((key.clone(), text)),
-                None => complete = false,
-            }
-        }
-        complete.then_some(names)
-    }
-
-    /// An `ordered` entry's `default`: a list of its values, each once, `counts` long. A table's
-    /// keys are judged with the root's tables ([`check_standard_pack_goal_references`]).
-    fn ordered_default(
-        &mut self,
-        value: &Value,
-        pointer: &str,
-        (min_count, max_count): (u64, u64),
-        values: &GoalValues,
-    ) -> Option<Vec<String>> {
-        let Some(items) = value.as_array() else {
-            self.issue(StandardPackProblem::GoalDefaultInvalid, pointer);
-            return None;
-        };
-        let mut seen = BTreeSet::new();
-        let mut chosen = Vec::new();
-        let mut complete = true;
-        for (index, item) in items.iter().enumerate() {
-            let offered = match (item.as_str(), values) {
-                (Some(key), GoalValues::Options(options)) => {
-                    options.iter().any(|option| option.value == key)
-                }
-                (Some(key), GoalValues::Table { .. }) => opaque_id(key),
-                (None, _) => false,
-            };
-            match item.as_str() {
-                Some(key) if offered && seen.insert(key.to_owned()) => chosen.push(key.to_owned()),
-                _ => {
-                    self.issue(
-                        StandardPackProblem::GoalDefaultInvalid,
-                        format!("{pointer}/{index}"),
-                    );
-                    complete = false;
-                }
-            }
-        }
-        if !(min_count..=max_count).contains(&(items.len() as u64)) {
-            self.issue(StandardPackProblem::GoalDefaultInvalid, pointer);
-            complete = false;
-        }
-        complete.then_some(chosen)
-    }
-
-    /// The references of an `ordered` entry at `pointer` whose values are the keys of `table`.
-    fn table_values(
-        &mut self,
-        pointer: &str,
-        table: &str,
-        names: &[(String, GoalText)],
-        min_count: u64,
-        default: &[String],
-        tables: &BTreeMap<String, Vec<String>>,
-    ) {
-        let at_table = at(pointer, "from_table");
-        let Some(keys) = tables.get(table) else {
-            self.issue(
-                StandardPackProblem::GoalTableUnknown,
-                at(&at_table, "table"),
-            );
-            return;
-        };
-        if keys.len() > MAX_GOAL_LIST_VALUES {
-            self.issue(
-                StandardPackProblem::GoalRangeInvalid,
-                at(&at_table, "table"),
-            );
-            return;
-        }
-        let keys = keys.iter().map(String::as_str).collect::<BTreeSet<_>>();
-        let at_names = at(&at_table, "names");
-        for (key, _) in names {
-            if !keys.contains(key.as_str()) {
-                self.issue(StandardPackProblem::GoalTableUnknown, at(&at_names, key));
-            }
-        }
-        if min_count > keys.len() as u64 {
-            self.issue(
-                StandardPackProblem::GoalRangeInvalid,
-                at(pointer, "min_count"),
-            );
-        }
-        for (index, key) in default.iter().enumerate() {
-            if !keys.contains(key.as_str()) {
-                self.issue(
-                    StandardPackProblem::GoalDefaultInvalid,
-                    format!("{pointer}/default/{index}"),
-                );
             }
         }
     }

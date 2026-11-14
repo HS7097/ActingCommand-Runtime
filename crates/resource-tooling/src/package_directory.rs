@@ -362,8 +362,8 @@ fn write_bundle(
             )?;
         }
         // Workflow #455 G-R1 (register §1.356): `--goals`, after the composition; a refused file
-        // refuses the bundle as a refused root file does. The bundle holds no table, so no
-        // table reference is judged here.
+        // refuses the bundle as a refused root file does. Workflow #463 V1: no entry takes a
+        // table any more, and a placement is held to the variables the bundle's packs declare.
         if let Some(goals) = root_files.goals() {
             let issues = goal_issues(
                 &applications.game,
@@ -378,7 +378,6 @@ fn write_bundle(
                     .unwrap_or_default(),
                 &goals.bytes,
                 &|directory: &str| packs_dir.join(directory),
-                None,
             )?;
             refuse_goals(&applications.game, &goals.path, &issues)?;
         }

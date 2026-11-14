@@ -5,31 +5,35 @@
 //! --goals` read it after the composition they already run, with the contract crate's reader
 //! (`parse_standard_pack_goals`), and hold an accepted file's references to the game root
 //! (`check_standard_pack_goal_references`): the pools and rules of `schedule.json`, which the
-//! composition has accepted, each rule with the package it runs; every package of `bundle.json`
-//! with the capabilities its control declaration provides and their `irreversible` marks, read by
-//! the Runtime's metadata reader (G-R1 fix round 1: the whole root, so that a capability any
-//! package marks irreversible makes every package that provides it irreversible); and, for
-//! `standard-pack check` only, the tables of the game root an `ordered` entry takes its values from
-//! (`package bundle` holds no table, so it judges no table reference). Nothing here reads or writes
-//! a value.
+//! composition has accepted, each rule with the package it runs; and every package of
+//! `bundle.json` with the capabilities its control declaration provides and their `irreversible`
+//! marks, read by the Runtime's metadata reader (G-R1 fix round 1: the whole root, so that a
+//! capability any package marks irreversible makes every package that provides it irreversible),
+//! and (Workflow #463 V1) the variables it declares, which a `variable` entry places. Nothing here
+//! reads or writes a value.
 //!
 //! `standard-pack check` reports each problem as a `standard_pack_root_invalid` warning and never
 //! fails the root for it ([`goal_warnings`]); `package bundle` refuses a refused file as it
 //! refuses a refused root file ([`refuse_goals`]).
+//!
+//! Workflow #463 V1 (register §1.378; contracts/package-variables.md): `standard-pack check` also
+//! runs the root check of the variables the root's packages declare ([`variable_report`]): each
+//! problem is a `standard_pack_root_invalid` warning naming the package's `control.json`, the root
+//! is checked as before, and the answer lists each variable that applies by its default's origin.
 
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{CHECK_LABEL, root_invalid, root_issue_outcome};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    GoalReferences, GoalRule, LabError, LabResult, MAX_STANDARD_PACK_GOALS_BYTES, StandardPackRoot,
-    StandardPackRootIssue, StandardPackTable, StandardPackTableCell, StandardPackTableReadFailure,
-    check_standard_pack_goal_references, parse_standard_pack_goals, parse_standard_pack_schedule,
-    read_standard_pack_table,
+    GoalReferences, GoalRule, LabError, LabResult, MAX_STANDARD_PACK_GOALS_BYTES,
+    PACKAGE_CONTROL_FILE, RootPackageVariables, StandardPackRoot, StandardPackRootIssue,
+    VariableOrigins, check_root_variables, check_standard_pack_goal_references, goal_variables,
+    parse_standard_pack_goals, parse_standard_pack_schedule,
 };
 use actingcommand_execution_kernel::PreparedContainedTask;
 use actingcommand_policy::BenefitFollower;
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -53,15 +57,64 @@ pub(crate) fn read_goals_file(path: &Path) -> LabResult<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
+/// What every package of a game root declares, as the Runtime's metadata reader reads it, in
+/// registry order.
+struct PackageDeclarations {
+    /// Each package with the capabilities its control declaration provides, every one `true`
+    /// when it is marked irreversible (G-R1 fix round 1).
+    provides: BTreeMap<String, BTreeMap<String, bool>>,
+    /// Workflow #463 V1: each package with the variables it declares and the fact keys its
+    /// designated effects read their caps from.
+    variables: Vec<RootPackageVariables>,
+}
+
+/// Reads every package of `root` (`pack_directory` is where a registry entry's directory lies)
+/// with the Runtime's metadata reader; a package it refuses is `package_invalid` naming its
+/// directory.
+fn package_declarations(
+    root: &StandardPackRoot,
+    pack_directory: &dyn Fn(&str) -> PathBuf,
+) -> LabResult<PackageDeclarations> {
+    let mut declarations = PackageDeclarations {
+        provides: BTreeMap::new(),
+        variables: Vec::new(),
+    };
+    for package_id in root.registry.package_ids() {
+        let entry = root.registry.get(package_id).ok_or_else(|| {
+            LabError::package_invalid(format!("{package_id} is no package of the bundle"))
+        })?;
+        let path = pack_directory(&entry.directory);
+        let read = PreparedContainedTask::read_remedy_declarations(
+            CHECK_LABEL,
+            &path,
+            Instant::now() + PACK_DEADLINE,
+        )
+        .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))?;
+        let mut capabilities = BTreeMap::new();
+        for provided in &read.provides {
+            *capabilities
+                .entry(provided.capability().to_owned())
+                .or_insert(false) |= provided.irreversible();
+        }
+        declarations
+            .provides
+            .insert(package_id.to_owned(), capabilities);
+        declarations.variables.push(RootPackageVariables {
+            package_id: package_id.to_owned(),
+            variables: read.variables,
+            cap_fact_keys: read.cap_fact_keys,
+        });
+    }
+    Ok(declarations)
+}
+
 /// The problems of the goal declaration `goals` (the bytes of `goals.json`) of the game root
 /// `root` of `game`, in file order: the reader's, or, for a file the reader accepts, its
 /// references'. `schedule` is `schedule.json`'s bytes and path when the root holds one (the
 /// composition has accepted it), and `followers` the chain followers that composition listed
 /// (`benefit_followers`, G-R1 fix round 2; none without it); `pack_directory` is where a registry
-/// entry's directory lies;
-/// `game_root` is the directory whose `tables/` the references are held to, `None` when the caller
-/// holds no tables. Empty for a file that keeps every rule. A package or a table that cannot be
-/// read is the caller's error, not a problem of the file.
+/// entry's directory lies. Empty for a file that keeps every rule. A package that cannot be read
+/// is the caller's error, not a problem of the file.
 pub(crate) fn goal_issues(
     game: &str,
     root: &StandardPackRoot,
@@ -69,7 +122,6 @@ pub(crate) fn goal_issues(
     followers: &[BenefitFollower],
     goals: &[u8],
     pack_directory: &dyn Fn(&str) -> PathBuf,
-    game_root: Option<&Path>,
 ) -> LabResult<Vec<StandardPackRootIssue>> {
     let declared = match parse_standard_pack_goals(goals, game) {
         Ok(declared) => declared,
@@ -78,27 +130,10 @@ pub(crate) fn goal_issues(
     // G-R1 fix round 1: what every package of the root provides, each capability with its
     // `irreversible` mark, in registry order as the remedy report reads them. The references
     // judge irreversibility per capability across the whole root (contracts/remedies.md §2.3).
-    let mut provides = BTreeMap::new();
-    for package_id in root.registry.package_ids() {
-        let entry = root.registry.get(package_id).ok_or_else(|| {
-            LabError::package_invalid(format!("{package_id} is no package of the bundle"))
-        })?;
-        let path = pack_directory(&entry.directory);
-        let declarations = PreparedContainedTask::read_remedy_declarations(
-            CHECK_LABEL,
-            &path,
-            Instant::now() + PACK_DEADLINE,
-        )
-        .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))?;
-        let mut capabilities = BTreeMap::new();
-        for provided in &declarations.provides {
-            *capabilities
-                .entry(provided.capability().to_owned())
-                .or_insert(false) |= provided.irreversible();
-        }
-        provides.insert(package_id.to_owned(), capabilities);
-    }
-    let mut references = GoalReferences::new(provides);
+    let declarations = package_declarations(root, pack_directory)?;
+    let mut references = GoalReferences::new(declarations.provides);
+    // Workflow #463 V1: every variable a package declares, which a placement names.
+    references.variables = goal_variables(&declarations.variables);
     if let Some((bytes, path)) = schedule {
         let schedule = parse_standard_pack_schedule(bytes)
             .map_err(|issue| root_invalid(game, path, &issue))?;
@@ -133,44 +168,7 @@ pub(crate) fn goal_issues(
             );
         }
     }
-    if let Some(game_root) = game_root {
-        let mut tables = BTreeMap::new();
-        for table_id in declared.tables() {
-            match read_standard_pack_table(game_root, game, table_id) {
-                Ok(Some(read)) => {
-                    tables.insert(table_id.to_owned(), table_keys(&read.table));
-                }
-                // A refused table is no table the root offers; the table's own check names why.
-                Ok(None) | Err(StandardPackTableReadFailure::Invalid { .. }) => {}
-                Err(StandardPackTableReadFailure::Unreadable { path, error, .. }) => {
-                    return Err(LabError::usage(format!("{}: {error}", path.display())));
-                }
-            }
-        }
-        references.tables = Some(tables);
-    }
     Ok(check_standard_pack_goal_references(&declared, &references))
-}
-
-/// The distinct keys of `table` (its key column, `row_key[0]`), in row order.
-fn table_keys(table: &StandardPackTable) -> Vec<String> {
-    let Some(column) = table
-        .row_key
-        .first()
-        .and_then(|key| table.columns.iter().position(|column| &column.name == key))
-    else {
-        return Vec::new();
-    };
-    let mut seen = BTreeSet::new();
-    let mut keys = Vec::new();
-    for row in &table.rows {
-        if let Some(StandardPackTableCell::Text(key)) = row.get(column)
-            && seen.insert(key.as_str())
-        {
-            keys.push(key.clone());
-        }
-    }
-    keys
 }
 
 /// `standard-pack check`: one `standard_pack_root_invalid` warning per problem of the file at
@@ -208,4 +206,45 @@ pub(crate) fn refuse_goals(
             .join("; ")
     );
     Err(error)
+}
+
+/// Workflow #463 V1 (contracts/package-variables.md, "The root check"): what `standard-pack check`
+/// says of the variables the packages of the game root `root` of `game` declare: the warnings,
+/// one `standard_pack_root_invalid` per problem of the contract crate's root check
+/// (`check_root_variables`), each naming the declaring package's `control.json`, in the check's
+/// order; and the provenance listing of the variables that apply, `None` when no package declares
+/// one. `goals` is the root's `goals.json` when it holds one: the names an accepted file uses for
+/// anything but a placement are no variable's (a refused file applies no entry, so it takes none).
+pub(crate) fn variable_report(
+    game: &str,
+    root: &StandardPackRoot,
+    goals: Option<&[u8]>,
+    pack_directory: &dyn Fn(&str) -> PathBuf,
+) -> LabResult<(Vec<Outcome>, Option<VariableOrigins>)> {
+    let declarations = package_declarations(root, pack_directory)?;
+    let accepted = goals.and_then(|goals| parse_standard_pack_goals(goals, game).ok());
+    let goal_names = accepted
+        .as_ref()
+        .map(|goals| goals.names_besides_placements())
+        .unwrap_or_default();
+    let checked = check_root_variables(&declarations.variables, &goal_names);
+    let mut warnings = Vec::with_capacity(checked.issues.len());
+    for found in &checked.issues {
+        let entry = root
+            .registry
+            .get(found.package_id.as_str())
+            .ok_or_else(|| {
+                LabError::package_invalid(format!(
+                    "{} is no package of the bundle",
+                    found.package_id
+                ))
+            })?;
+        let path = pack_directory(&entry.directory).join(PACKAGE_CONTROL_FILE);
+        warnings.push(root_issue_outcome(game, &path, &found.issue));
+    }
+    let declares = declarations
+        .variables
+        .iter()
+        .any(|package| !package.variables.is_empty());
+    Ok((warnings, declares.then(|| checked.provenance())))
 }
