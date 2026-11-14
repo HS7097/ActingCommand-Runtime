@@ -1576,11 +1576,13 @@ equal value is accepted.
   screens appearing after the click of the step before them (a pop-up later than its
   `settle_ms`, shown more often than the copies recorded, or never recorded makes the package
   fail loudly). Workflow #463 U1 (since 0.12.60): a screen the recording never met after a
-  step's click, which the step's retry decision (a step recorded with `--click-retry`) or its
-  closing decision (one recorded without, which never clicks again; [linear-steps.md](linear-steps.md),
-  "Retries") sees as neither the next page nor the step's own page and which does not change, ends
-  a run of the package (its own run, outside a restart segment) with
-  `contained_task_linear_unrecorded_screen`, whose `artifact_id` is the frame of that screen; a
+  step's click, which stays still and shows no page of the package, no loading frame and no
+  shared interrupt page for the whole closing decision that follows the failed wait (with or
+  without `--click-retry`; it never clicks; [linear-steps.md](linear-steps.md), "Retries"), ends
+  a run of the package (its own run, outside a restart segment; never a startup package's or a
+  ladder rung's) with `contained_task_linear_unrecorded_screen`, whose `artifact_id` is the frame
+  of that screen; a slow screen nobody recorded that lasts that long is taken for one too, and is
+  declared in the package (a page or a loading page) to tell it apart; a
   scheduled run then pauses its task at once, until the package changes
   ([linear-steps.md](linear-steps.md), "Failure codes";
   [policy-suspension.md](policy-suspension.md), "A failure that pauses at its first occurrence").

@@ -235,12 +235,13 @@ round instead. A linear run that ends on a select step's `on_empty` key (Workflo
 
 ## A failure that pauses at its first occurrence (Workflow #463 U1)
 
-Since 0.12.60 (register §1.369; the owner's ruling on board #463: the code tells an auditing agent
+Since 0.12.60 (register §1.372; the owner's ruling on board #463: the code tells an auditing agent
 that a new result stopped the Runtime, and it affects no other task). A scheduled run that ends
 with `contained_task_linear_unrecorded_screen` (a linear step met a screen its package never
 recorded, [linear-steps.md](linear-steps.md), "Failure codes"; the kernel raises it only in the
-`main` scope, outside the restart segment) pauses its pair (catalog task, instance) at its first
-occurrence, whatever the pair's `on_failure` says:
+`main` scope of a task's own run, outside the restart segment, never in a run the host starts
+itself, a startup package or a ladder rung, so no such run can pause a pair) pauses its pair
+(catalog task, instance) at its first occurrence, whatever the pair's `on_failure` says:
 
 - the failure point marks its task terminal `failure_severe` (the existing member of
   `TaskSemanticFact::TerminalCommitted`), so the policy class is `severe` for the live settlement,

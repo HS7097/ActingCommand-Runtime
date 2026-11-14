@@ -102,7 +102,7 @@ mod gate_450_fl1;
 // Workflow #453 S8: the models a package's recognition pack names, its OCR and NN targets'.
 #[cfg(test)]
 mod gate_453_s8;
-// Workflow #463 U1: a linear step's retry decision on a screen its package never recorded.
+// Workflow #463 U1: a linear step's closing decision on a screen its package never recorded.
 #[cfg(test)]
 mod gate_463_u1;
 // Workflow #463 K1: a linear task runs a select step and ends empty normally.
@@ -2980,6 +2980,33 @@ pub trait ContainedTaskRuntime {
         Ok(SharedInterruptVerdict::NotHandled)
     }
 
+    /// Workflow #463 U1, fix round 2 (rule 3): whether `frame` shows one of the runtime's shared
+    /// interrupt pages that the running package does not declare itself, recognised as
+    /// [`Self::shared_interrupt`] recognises them, one or more, with nothing handled, pressed or
+    /// counted: a linear step's closing decision asks it and never presses. A runtime without
+    /// shared interrupt pages answers `false`.
+    fn shared_interrupt_shown(
+        &mut self,
+        _frame: SharedInterruptFrame<'_>,
+    ) -> Result<bool, ContainedTaskRunError<Self::Error>> {
+        Ok(false)
+    }
+
+    /// Workflow #463 U1, fix round 2 (rule 5): whether the run is one the runtime started itself
+    /// (a startup package, a ladder rung's package), whose end never names a screen its package
+    /// never recorded. A runtime that starts no run of its own answers `false`.
+    fn host_started_run(&self) -> bool {
+        false
+    }
+
+    /// Workflow #463 U1, fix round 2 (rule 6): the runtime-clock time the run has left before the
+    /// runtime would end it otherwise or find it over its budget: its own deadline, or the end of
+    /// its admitted runtime budget, whichever comes first. `None` for a run with neither; a linear
+    /// step's closing decision is not made when less than its bound is left.
+    fn run_time_left(&mut self) -> Option<Duration> {
+        None
+    }
+
     /// Workflow #357 DB-2 (M-357a v1.1 §2.4; register §1.65 TB7): the shared table at `path`
     /// (`tables/<table_id>.json`) as the run's preparation bound it. A runtime reads no file here
     /// and answers the same table for the whole run. A runtime without tables answers `None`,
@@ -4605,6 +4632,23 @@ impl PreparedContainedTask {
         }
     }
 
+    /// Workflow #463 U1, fix round 2 (rule 3): whether `scene` shows one of the runtime's shared
+    /// interrupt pages that this package does not declare itself, offered as
+    /// [`Self::offer_shared_interrupt`] offers it, but only recognised
+    /// ([`ContainedTaskRuntime::shared_interrupt_shown`]): nothing is handled or pressed.
+    fn shown_shared_interrupt<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        scene: &Scene,
+    ) -> Result<bool, ContainedTaskRunError<R::Error>> {
+        let own_pages = self.detector.page_ids().collect::<Vec<_>>();
+        runtime.shared_interrupt_shown(SharedInterruptFrame {
+            scene,
+            game: &self.control.game,
+            own_pages: &own_pages,
+        })
+    }
+
     /// Workflow #373 NAV-6: this package's pages `pages` evaluated on `scene` in one scene
     /// evaluation (one read per distinct request, REC-1), as a shared interrupt check evaluates
     /// its feature package: the ids of the pages that matched, in `pages` order. An evaluation
@@ -5072,9 +5116,12 @@ impl PreparedContainedTask {
                     pacing,
                     store_routing,
                     // Workflow #463 U1: a task's own run, not a layer's, a recovery entry's or a
-                    // run the host starts itself (a startup package, a ladder rung).
+                    // run the host starts itself (a startup package, a ladder rung). Fix round 2
+                    // (rule 5): a run the host starts itself also enters here as an ordinary run
+                    // when its package has an entry page or a prerequisite, so the runtime says.
                     own_task_run: entry == ContainedTaskEntry::Ordinary
-                        && options.application_entry == ApplicationEntryRun::AfterInitialFrame,
+                        && options.application_entry == ApplicationEntryRun::AfterInitialFrame
+                        && !runtime.host_started_run(),
                     restart_segment: false,
                 },
             );

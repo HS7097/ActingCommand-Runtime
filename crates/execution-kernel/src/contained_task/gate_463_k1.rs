@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #463 K1 (register §1.370; contracts/linear-steps.md, "Select steps"; the design note
+// Workflow #463 K1 (register §1.374; contracts/linear-steps.md, "Select steps"; the design note
 // `rd-1114/463-l3l5-design.md`, section A, and the coordinator's rulings on board #463): a
 // `linear_steps` task admits and runs the select step a page-graph task has. Its attempt is the
 // page graph's: the decision on the step's frame, the confirmation on a fresh frame, one tap inside
@@ -1114,14 +1114,21 @@ fn k1_a_selection_sampling_timeout_is_observed_again_without_an_input() {
     assert!(device.inputs().is_empty(), "{:?}", device.inputs());
 }
 
-// A.2 with Workflow #463 U1: after `pick`'s tap the device shows a black screen, neither the
-// detail page nor the list, on every frame. The arrival is the click step's: `pick` declares no
-// retry, so its closing decision sees neither page on a settled screen and the run ends with
-// `contained_task_linear_unrecorded_screen`, the detail `page_confirmation_failed` gives that end,
-// the values naming the step, the pages the decision awaited (the detail page first, the list
-// last) and one attempt; `pick`'s one `StepFinished` names `<unrecognized>`, after its one tap.
+// A.2 with Workflow #463 U1 (its fix round 2): after `pick`'s tap the device shows a black
+// screen, neither the detail page nor the list, on every frame. The arrival is the click step's
+// and runs out; `pick` declares no retry, so that attempt is its last, and the closing decision
+// that follows observes the step timeout, a frame every 50 ms: the screen stays still and shows no
+// page of the package (not the detail page or the list it awaits, nor home or done on its last
+// frame) up to its bound. The run ends with `contained_task_linear_unrecorded_screen`, the detail
+// and the timing `page_confirmation_failed` gives the arrival's end (its 1 000 ms of 1 000), the
+// values naming the step, the pages the decision awaited (the detail page first, the list last)
+// and one attempt; `pick`'s one `StepFinished` names `<unrecognized>`, after its one tap, and the
+// black screen was captured for the arrival's 21 frames and the closing decision's 101.
 #[test]
 fn k1_after_the_select_tap_a_settled_unknown_screen_ends_with_the_unrecorded_screen_code() {
+    // A wait of 1 000 ms and one of 5 000 ms at 50 ms, from a first frame taken at once.
+    const ARRIVAL_FRAMES: usize = 21;
+    const CLOSING_FRAMES: usize = 101;
     let task = base_package();
     let mut device = Device::new(path(
         vec![list((ALPHA, true), (BRAVO, false))],
@@ -1145,10 +1152,28 @@ fn k1_after_the_select_tap_a_settled_unknown_screen_ends_with_the_unrecorded_scr
     assert_eq!(value(&error, "pack_operation_id"), json!("pick"));
     assert_eq!(value(&error, "page_ids"), json!([DETAIL_PAGE, LIST_PAGE]));
     assert_eq!(value(&error, "attempts"), json!(1));
+    assert_eq!(
+        error.timing().map(|timing| (
+            timing.scope,
+            timing.stage,
+            timing.elapsed_ms,
+            timing.limit_ms
+        )),
+        Some((
+            TaskTimingScope::Postcondition,
+            TaskTimingStage::Postcondition,
+            ARRIVAL_MS,
+            ARRIVAL_MS
+        ))
+    );
     assert_eq!(device.inputs().len(), 2, "{:?}", device.inputs());
     assert_eq!(
         device.finished(),
         [(0, "open", LIST_PAGE), (1, "pick", "<unrecognized>")]
+    );
+    assert_eq!(
+        device.script.captures_after(2),
+        ARRIVAL_FRAMES + CLOSING_FRAMES
     );
 }
 

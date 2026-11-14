@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #463 K1 (register §1.370; contracts/linear-steps.md, "Select steps"), the host's half: a
+// Workflow #463 K1 (register §1.374; contracts/linear-steps.md, "Select steps"), the host's half: a
 // `linear_steps` package whose one step is a single-frame select over fixed slots, with
 // `on_empty`, its page mapped to the `on_empty` key, runs directly through the host. Nobody the
 // policy lists is on the list and nothing is unknown, so the step's empty decision ends the run
