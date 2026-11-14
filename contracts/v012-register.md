@@ -23181,6 +23181,123 @@ self-check, a resume or the fence's recheck lifts it.
 **Rollback** (below 0.12.60). Nothing is persisted by the fixes; a build before them reads every
 record they write, and halts again where they fence.
 
+### 1.365 Slice #463 L2 (0.12.60): a recorded step presses what it finds by its name (Workflow #463; the owner's request of 11-14 on board #463, a value read from the screen as the thing a step chooses, and the standing rule that an item is chosen by its name read on the screen, confirmed on a fresh frame before it is pressed; the rulings are the coordinator's, not the owner's words; coordinator work order `rd-1114/brief-463-l2-record-located-text.md`, read on main `17197d8e`)
+
+1.365 was the next free number on main `17197d8e`; pull requests open beside this one may take
+numbers first, and a train renumbers it.
+
+**What it adds.** A Lab recording's step can press what it finds by its name on one screen
+([lab-recording.md](lab-recording.md), "Following a located text"). A hand-written package could
+already do so (an OCR target with `locate`, a `target` or `offset` click on it, its guard
+`verify_text`: [ocr-fields.md](ocr-fields.md), "Located text", Workflow #396 REC-1); the recording
+now writes that form:
+
+- **The mark.** `record mark`'s request (`actingcommand.lab-record-mark.v1`, unchanged) takes an
+  OCR mark with `locate` (`normalize`, `blocks`, `line_merge`, `cells?`) and, with it, `unique`
+  (`{"margin_milli"}`): the task's locate target member for member, every member the author's,
+  the Runtime's declaration rules applied when the mark is recorded (a refusal is
+  `validation_failed`). There is no shortcut flag. `recording.json` keeps `locate` in the mark's
+  `ocr` and the margin in its `unique`.
+- **The follow.** `click.follow` may name a located-text mark of the step (before, `not_template`
+  refused it): alone, the click box is the found block, or the declared cell holding it; with a
+  rectangle, that box's corner plus the rectangle's offset from it on the primary frame, fixed
+  when the click is declared and never scaled. The step's `click.rect` is the box the primary frame
+  gives, which `do --capture --record` presses. The rules of a template follow hold
+  (`not_template` for any other mark, an OCR mark without `locate` among them; `not_required`;
+  `guard_conflict`); `--click-guard` cannot name an OCR mark, so the guard is the followed mark.
+  The followed mark may be removed and added again by one request (its names changed), which
+  keeps the follow.
+- **The self-test**, with the Lab's OCR provider on every live frame, evaluates the target with
+  the recognition pack's own locate evaluation, the one the kernel's guard and page recognition
+  use (`RecognitionEvaluator::evaluate_target`, `crates/recognition-pack/src/text_locate.rs`): a
+  frame without a hit is `self_test_failed` with the evaluation's typed reason as `failure`
+  (`text_locate_not_found`, `text_locate_outside_cells`, `target_match_not_unique` with the
+  second place as `uniqueness`); an evaluation error, `text_read_blocks_truncated` among them,
+  is `self_test_error` with its outcome as `failure`. The follow then checks that the click box
+  lies inside every frame (`click_outside_frame`) and, once the step's click was executed, that
+  its press lies in the box the primary frame gives (`press_outside_found_box`, a new word of
+  `follow_problem`), both under `record_click_follow_invalid` inside `record_mark_rejected`.
+  Without an OCR model the mark is `not_evaluated` (`lab_ocr_unavailable`) as any OCR mark, and
+  `record mark` on a step whose click follows it is refused `lab_ocr_unavailable`: its box comes
+  from the OCR.
+- **The package.** `record stop` writes the mark as an `ocr_targets[]` entry with `locate` and
+  `unique`, the click as `{"kind": "target" | "offset", "target_id", "offset"?}`, its guard
+  `{"page_id", "target_id", "expected_rect": <the region>, "verify_text"}`, and the operation's
+  `"input_recheck": {"kind": "fresh_frame"}` ([linear-steps.md](linear-steps.md), Workflow #411
+  B12; [resource-declarations.md](resource-declarations.md), "Task schema `0.9` observation
+  windows and input rechecks"): after the guard passed on the step's frame the kernel captures one
+  fresh frame, recognizes only the step's page on it, evaluates the guard (the locate target) on
+  it again and draws the input from that frame's found box; a refusal there ends the run with the
+  guard's code, no input. The first decision gives each simulation of step 1 its frame twice, the
+  second time as that fresh frame, and checks the press against the box the admitted evaluator
+  finds on each live frame. A recording without a located-text mark generates the same bytes as
+  before (the code paths it takes are unchanged: the OCR target is the same object, no recheck,
+  one simulated frame).
+
+**Step 1, by reading** (the work order's three questions). The self-test calls the same locate
+evaluation as the kernel (above). A `linear_steps` package with a `verify_text` guard, a `target`
+or `offset` click on a locate target and an input recheck is admitted on main `17197d8e`:
+`TaskProgram::validate_linear` admits an input recheck of any kind
+(`crates/execution-kernel/src/contained_task/linear.rs`, the B12 comment before the
+`observation_window` refusal), `OperationGuard::validate` and `TaskClick::validate`
+(`contained_task.rs`) admit a text guard alone and a `target` or `offset` click on it,
+`validate_text_reads` its locate target, `observation_window::validate_operation` the
+`fresh_frame` kind on a click, and pack containment's guard check a text guard with an `offset`
+click; `linear_input` runs the recheck (`recheck_before_input` with the step's page only). The
+kernel is not changed. No interface revision moves (`component-interfaces.md`): the request and
+`recording.json` are no interface of its vocabulary, and the package uses only members the
+`package` interface already carries.
+
+**What an older build does.** It refuses a request that carries `locate` (an unknown member of
+the mark, `validation_failed`, exit 2), and a `recording.json` that holds a located-text mark does
+not decode there (`ocr` refuses the unknown member): its Lab part is unavailable,
+`lab_recording_unreadable`, and the file is left as it is.
+
+**Known limits.**
+
+- One screen: no scrolling list, and no choice among several screens.
+- A name that is not on the screen at run time refuses the guard and fails the run
+  (`contained_task_guard_refused`, `cause=text_locate_not_found` or the other typed reason), as a
+  hand-written package does; no normal end for "not found" (the select step of a later slice).
+- The `expected` names are the first form of the variable: they change by `record mark` on the
+  existing step, also after `record stop`, and the self-test needs one of them on every live
+  frame of the step; a name on no recorded frame cannot be declared yet (the variable's slice
+  lifts it), nor set from outside the package.
+- Without an OCR model a click cannot follow a located-text mark (`lab_ocr_unavailable`).
+- The recheck is one fresh frame (`fresh_frame`), not a stable or still screen; the default task
+  timeout does not count it.
+
+**Codes, keys and words.** One word: `press_outside_found_box` of `follow_problem`
+(`crates/lab/src/codes.rs`, `contracts/outcome-codes/catalog.json`), with the descriptions of
+`not_template`, `not_required`, `guard_conflict` and `click_outside_frame` and of
+`record_click_follow_invalid` widened to the located text; the index is regenerated. No outcome
+code, value key, configuration key, record type or wire shape is added.
+
+Tests (exec gate row "#463 L2", `crates/lab/src/gate_463_l2.rs`, on synthetic frames with a
+scripted OCR provider; no sleeps, no clock reads): `l2_a_followed_located_text_generates_its_target_click_text_guard_and_recheck`,
+`l2_a_rectangle_with_a_located_text_follow_is_its_offset_from_the_found_block`,
+`l2_a_name_on_no_frame_is_refused_text_locate_not_found`,
+`l2_a_name_outside_every_cell_is_refused_text_locate_outside_cells`,
+`l2_two_matches_within_the_margin_are_refused_target_match_not_unique`,
+`l2_a_click_box_that_leaves_a_sample_frame_is_click_outside_frame`,
+`l2_an_executed_press_outside_the_found_box_is_press_outside_found_box`,
+`l2_a_sample_with_the_name_in_another_cell_is_accepted_and_the_click_follows_it`,
+`l2_the_follow_rules_hold_for_a_located_text_mark`,
+`l2_without_a_located_text_mark_the_package_is_generated_as_before`,
+`l2_without_an_ocr_model_the_mark_is_not_evaluated_and_cannot_be_followed` and
+`l2_record_stop_without_an_ocr_model_reports_the_first_decision_not_evaluated`. The test of a
+recording without a located-text mark compares the generated OCR target and click step with the
+objects main's generator writes for them, and finds no new member in any file; it does not
+compare the whole package with main's bytes, which no test of this build can produce. No test is
+adapted and none leaves the gate map.
+
+**At deploy.** Nothing to do. Do not mix builds during one recording: a recording made with a
+located-text mark is unavailable to a Lab before this slice.
+
+**Rollback** (below 0.12.60). A package generated with a located-text mark runs on any Runtime
+that admits an input recheck under `linear_steps` (Workflow #411 B12); a recording that holds such
+a mark is unavailable to an earlier Lab, as above.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

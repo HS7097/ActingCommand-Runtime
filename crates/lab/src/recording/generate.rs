@@ -1087,11 +1087,26 @@ fn guard_rect(plan: &Plan, mark: &RecordedMark) -> LabResult<RecordRect> {
     }
 }
 
+/// #463 L2: whether the click of `step` follows a located-text mark: its guard is then that
+/// mark's text (`verify_text`), confirmed on a fresh frame before the input.
+pub(crate) fn follows_located_text(plan: &Plan, step: &PlanStep) -> LabResult<bool> {
+    match step
+        .step
+        .click
+        .as_ref()
+        .and_then(|click| click.follow.as_ref())
+    {
+        Some(follow) => Ok(plan.mark(&follow.mark_id)?.locates_text()),
+        None => Ok(false),
+    }
+}
+
 /// The guard target of a click step (section 4.3), only from the page's required marks:
 /// the declared click guard, the click source (not OCR), the first template, the first color
 /// or color digest, the first check. `None` when the page has only OCR marks: the click is
 /// then a trusted coordinate. Workflow #396 REC-4: a click that follows a template is guarded
-/// by that template, which the kernel requires of a `target` or `offset` click.
+/// by that template, which the kernel requires of a `target` or `offset` click; #463 L2: one that
+/// follows a located-text mark by that mark (`verify_text`).
 pub(crate) fn guard_target<'p>(
     plan: &'p Plan,
     step: &PlanStep,
@@ -1109,13 +1124,15 @@ pub(crate) fn guard_target<'p>(
     {
         let id = follow.mark_id.as_str();
         return match required.iter().copied().find(|mark| mark.id == id) {
-            Some(mark) if mark.family == MarkFamily::Template => Ok(Some(mark)),
+            Some(mark) if mark.family == MarkFamily::Template || mark.locates_text() => {
+                Ok(Some(mark))
+            }
             Some(_) => Err(follow_invalid(
                 step.step.index,
                 id,
                 ClickFollowProblem::NotTemplate,
                 format!(
-                    "step {} follows '{id}', which is not a template",
+                    "step {} follows '{id}', which is neither a template nor a located-text mark",
                     step.step.index
                 ),
             )),
@@ -1187,6 +1204,10 @@ fn guard_json(plan: &Plan, step: &PlanStep, page: &str) -> LabResult<Option<Valu
         // #411 Lab B-9: a value test guards the input as a check does.
         MarkFamily::Check | MarkFamily::ValueTest => {
             guard.insert("check".into(), json!(mark.id));
+        }
+        // #463 L2: a located text guards the click that follows it, its own target.
+        MarkFamily::Ocr if mark.locates_text() => {
+            guard.insert("verify_text".into(), json!(mark.id));
         }
         MarkFamily::Ocr => return Ok(None),
     }
@@ -1526,7 +1547,7 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
                         format!("ocr '{}' has no OCR fields", mark.id),
                     )
                 })?;
-                ocr.push(json!({
+                let mut target = json!({
                     "id": mark.id,
                     "region": region_json(mark_region(mark)?),
                     "languages": spec.languages,
@@ -1537,7 +1558,15 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
                     "minimum_confidence": spec.minimum_confidence,
                     "model_ref": spec.model_ref,
                     "model_sha256": spec.model_sha256
-                }));
+                });
+                // #463 L2: a located-text mark is a locate target, with its margin of uniqueness.
+                if let Some(locate) = &spec.locate {
+                    target["locate"] = json!(locate);
+                    if let Some(unique) = &mark.unique {
+                        target["unique"] = json!(unique);
+                    }
+                }
+                ocr.push(target);
             }
             MarkFamily::Check => {
                 let mut target = Map::new();
@@ -1671,6 +1700,12 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
             None => {
                 operation.insert("unguarded_trusted_coordinate".into(), json!(true));
             }
+        }
+        // #463 L2: the guard of a click on located text is evaluated again on one fresh frame of
+        // the step's page, and the input is drawn from that frame (`linear-steps.md`, Workflow
+        // #411 B12): the name is found again just before it is pressed.
+        if follows_located_text(plan, step)? {
+            operation.insert("input_recheck".into(), json!({"kind": "fresh_frame"}));
         }
         operation.insert(
             "expect_after".into(),

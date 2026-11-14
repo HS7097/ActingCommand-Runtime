@@ -648,7 +648,7 @@
     },
     "follow_problem": {
       "type": "vocab:follow_problem",
-      "description": "Why a Lab recording's click that follows a template mark does not hold."
+      "description": "Why a Lab recording's click that follows a template mark or a located-text mark does not hold."
     },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
@@ -4932,20 +4932,20 @@
       }
     },
     "follow_problem": {
-      "description": "Why a Lab recording's click that follows a template mark does not hold (Workflow #396 REC-4).",
+      "description": "Why a Lab recording's click that follows a template mark (Workflow #396 REC-4) or a located-text mark (#463 L2) does not hold.",
       "source": {
         "file": "crates/lab/src/codes.rs",
         "enum": "ClickFollowProblem"
       },
       "tokens": {
         "not_template": {
-          "description": "The followed mark is not a template mark of the step."
+          "description": "The followed mark is neither a template mark nor a located-text mark of the step."
         },
         "not_required": {
-          "description": "The followed template is only a member of an any_of check, not a required mark of the step's page."
+          "description": "The followed mark is only a member of an any_of check, not a required mark of the step's page."
         },
         "guard_conflict": {
-          "description": "The click guard names another mark than the followed template."
+          "description": "The click guard names another mark than the followed one."
         },
         "primary_mismatch": {
           "description": "On the primary frame the template's best match is not at its crop, or not at factor 1000."
@@ -4954,7 +4954,10 @@
           "description": "On a frame the template does not pass in its search area."
         },
         "click_outside_frame": {
-          "description": "On a frame the click box that follows the match leaves the frame."
+          "description": "On a frame the click box that follows the match or the found text leaves the frame."
+        },
+        "press_outside_found_box": {
+          "description": "On the primary frame the press of the step's executed click lies outside the box the followed located text gives there (#463 L2)."
         }
       }
     },

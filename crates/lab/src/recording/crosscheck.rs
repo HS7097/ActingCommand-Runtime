@@ -7,9 +7,9 @@
 //! the first step under an overall darkening). Every refusal is
 //! `record_artifact_admission_failed` or `record_step_self_mismatch`; warnings never refuse.
 
-use super::follow::followed_box;
+use super::follow::followed_evaluation_box;
 use super::frames::LoadedFrame;
-use super::generate::{Plan, PlanStep};
+use super::generate::{Plan, PlanStep, follows_located_text};
 use super::model::{ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame};
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
@@ -177,7 +177,9 @@ fn not_evaluated_warning(reason: &str, message: &str) -> Value {
 }
 
 /// Workflow #396 REC-4: the box a click following a template clicks on `loaded`, as the admitted
-/// evaluator matches the template there; `None` when the template does not pass on it.
+/// evaluator matches the template there; `None` when the template does not pass on it. #463 L2:
+/// for a click following a located-text mark, the box the admitted evaluator finds its names in
+/// there, with the Lab's OCR provider.
 fn followed_rect(
     plan: &Plan,
     evaluator: &RecognitionEvaluator,
@@ -191,16 +193,13 @@ fn followed_rect(
             admission_failed(
                 "first_decision",
                 format!(
-                    "the followed template '{}' cannot be evaluated: {error}",
+                    "the followed mark '{}' cannot be evaluated: {error}",
                     follow.mark_id
                 ),
                 json!({"target": follow.mark_id}),
             )
         })?;
-    Ok(evaluation
-        .template
-        .filter(|_| evaluation.passed)
-        .and_then(|template| followed_box(&template, follow)))
+    Ok(followed_evaluation_box(&evaluation, follow))
 }
 
 /// Section 4.6 item 3 with R24: a package with an application step is simulated on the first
@@ -220,9 +219,16 @@ pub(crate) fn first_decision(
         .steps
         .first()
         .ok_or_else(|| invalid("validation_failed", "the package has no step"))?;
+    // #463 L2: a click on located text confirms its guard on one fresh frame before the input
+    // (`input_recheck`), which the simulation is given as the same recorded frame once more.
+    let rechecks = follows_located_text(plan, first)?;
     let simulate = |frame: &RecordedFrame| -> LabResult<_> {
-        let frame = device_frame(cached(cache, frame)?)?;
-        simulate_contained_task(prepared, vec![frame]).map_err(|error| {
+        let loaded = cached(cache, frame)?;
+        let mut frames = vec![device_frame(loaded)?];
+        if rechecks {
+            frames.push(device_frame(loaded)?);
+        }
+        simulate_contained_task(prepared, frames).map_err(|error| {
             admission_failed(
                 "first_decision",
                 format!("the offline simulation failed: {error}"),
@@ -452,7 +458,7 @@ pub(crate) fn first_decision(
                 ),
                 Some(follow) => format!(
                     "on frame {}, step 1 must give the click {operation} inside the box that \
-                     its followed template '{}' gives there",
+                     its followed mark '{}' gives there",
                     checked_frame.frame_id, follow.mark_id
                 ),
             };

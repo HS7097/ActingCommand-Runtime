@@ -4,7 +4,10 @@
 //! operations. Everything is computed in memory and written once, atomically.
 
 use super::RecordingLock;
-use super::follow::{check_follow_declaration, check_follow_frames, followed_template};
+use super::follow::{
+    FollowFrames, check_follow_declaration, check_follow_frames, check_located_follow_frames,
+    followed_template,
+};
 use super::frames::{
     LoadedFrame, check_frame_size, crop_store_path, frame_store_path, read_frame_file,
     read_stored_frame, rect_inside,
@@ -1452,12 +1455,22 @@ pub(crate) fn apply_marks(
             let named_by_check = step.marks.iter().any(|mark| {
                 mark.check_members().contains(id) && !request.remove.contains(&mark.id)
             });
+            // #463 L2: the followed located-text mark may be declared again by the same request
+            // (its names changed, for one); the click keeps following it.
+            let declared_again = step
+                .marks
+                .iter()
+                .any(|mark| &mark.id == id && mark.locates_text())
+                && request
+                    .add
+                    .iter()
+                    .any(|spec| &spec.id == id && spec.locate.is_some());
             let guard = step.click_guard.as_deref() == Some(id.as_str())
                 || step
                     .click
                     .as_ref()
                     .and_then(|click| click.follow.as_ref())
-                    .is_some_and(|follow| &follow.mark_id == id)
+                    .is_some_and(|follow| &follow.mark_id == id && !declared_again)
                 || anchor.as_ref() == Some(id);
             if elsewhere.contains(id) || named_by_check || guard {
                 return Err(with_details(
@@ -1555,15 +1568,16 @@ pub(crate) fn apply_marks(
     // self-test
     let total = batch.own.len() + batch.reused.len() + forbidden.len();
     let result = evaluate_batch(session, &batch, &live, ocr)?;
-    // Workflow #396 REC-4: a click that follows a template holds on every live frame.
-    let follow_rejection = follow_frames(session, &batch, &result, target, &live)?;
+    // Workflow #396 REC-4: a click that follows a template holds on every live frame; #463 L2: so
+    // does one that follows a located-text mark, which gives the click its box.
+    let followed = follow_frames(session, &batch, &result, target, &live, ocr)?;
     // Workflow #390 LAB-2: the anchor is a required own template mark, and no forbidden mark
     // passes on a live frame of the step.
     let anchor_problem = anchor_rejection(anchor.as_ref(), &result.own, &result.reused);
     let (forbidden_views, forbidden_rejections) =
         evaluate_forbidden(session, &forbidden, &live, ocr)?;
     rejections.extend(result.rejections);
-    rejections.extend(follow_rejection);
+    rejections.extend(followed.rejection);
     rejections.extend(anchor_problem);
     rejections.extend(forbidden_rejections);
     if !rejections.is_empty() {
@@ -1582,6 +1596,13 @@ pub(crate) fn apply_marks(
     step.frames.extend(samples.iter().cloned());
     step.forbidden = forbidden;
     step.anchor = anchor;
+    // #463 L2: a click that follows a located-text mark is the box the primary frame gives it.
+    if let (Some(located), Some(click)) = (followed.located, step.click.as_mut()) {
+        click.rect = located.rect;
+        if let Some(follow) = click.follow.as_mut() {
+            follow.offset = located.offset;
+        }
+    }
     removed.extend(removed_forbidden);
     Ok(MarkApplied {
         step: target,
@@ -1874,14 +1895,14 @@ fn apply_click(
                 (Some(rect), None, None) => (declared_rect(rect)?, "declared", None, None),
                 // Workflow #396 REC-4: the package's click follows a template mark of the step,
                 // its box (`target`) or the declared rectangle's offset from the crop (`offset`).
+                // #463 L2: or a located-text mark; its box, and the offset from it, come from the
+                // primary frame's evaluation in the self-test (`follow_frames`).
                 (region, None, Some(id)) => {
                     let mark = followed_template(target, id, own_or_reused(id))?;
                     let crop = mark.region.ok_or_else(|| {
-                        invalid(
-                            "validation_failed",
-                            format!("template '{id}' has no region"),
-                        )
+                        invalid("validation_failed", format!("mark '{id}' has no region"))
                     })?;
+                    let located = mark.locates_text();
                     let follow = |form, offset| ClickFollow {
                         mark_id: id.clone(),
                         form,
@@ -1896,17 +1917,17 @@ fn apply_click(
                         ),
                         Some(rect) => {
                             let rect = declared_rect(rect)?;
-                            let offset = RecordRect {
+                            let offset = (!located).then(|| RecordRect {
                                 x: rect.x - crop.x,
                                 y: rect.y - crop.y,
                                 width: rect.width,
                                 height: rect.height,
-                            };
+                            });
                             (
                                 rect,
                                 "declared",
                                 None,
-                                Some(follow(ClickFollowForm::Offset, Some(offset))),
+                                Some(follow(ClickFollowForm::Offset, offset)),
                             )
                         }
                     }
@@ -2076,17 +2097,23 @@ fn apply_click(
 }
 
 /// Workflow #396 REC-4: the rejection of a step whose click follows a template that does not
-/// hold on one of its live frames.
+/// hold on one of its live frames. #463 L2: for a click that follows a located-text mark, the
+/// frames are checked with the Lab's OCR provider and give the click its box; without an OCR
+/// model the click cannot be checked, and the command is refused with `lab_ocr_unavailable`.
 fn follow_frames(
     session: &Session,
     batch: &MarkBatch,
     result: &BatchResult,
     target: u32,
     live: &[RecordedFrame],
-) -> LabResult<Option<MarkRejection>> {
+    ocr: &LabOcr,
+) -> LabResult<FollowFrames> {
     let step = effective_step(&session.recording, target)?;
-    let Some(follow) = step.click.as_ref().and_then(|click| click.follow.as_ref()) else {
-        return Ok(None);
+    let Some(click) = step.click.as_ref() else {
+        return Ok(FollowFrames::default());
+    };
+    let Some(follow) = click.follow.as_ref() else {
+        return Ok(FollowFrames::default());
     };
     // `apply_click` checked that the followed template is a mark of the step; a reused source
     // that has gone is already the batch's `reuse_source_missing` rejection.
@@ -2096,16 +2123,7 @@ fn follow_frames(
         .chain(result.reused.iter())
         .find(|mark| mark.id == follow.mark_id)
     else {
-        return Ok(None);
-    };
-    let crop = match batch.new_crops.get(&mark.id) {
-        Some(bytes) => bytes.clone(),
-        None => stored_crop(mark)?.ok_or_else(|| {
-            invalid(
-                "validation_failed",
-                format!("template '{}' has no crop", mark.id),
-            )
-        })?,
+        return Ok(FollowFrames::default());
     };
     let frames = live
         .iter()
@@ -2120,14 +2138,59 @@ fn follow_frames(
                 .ok_or_else(|| invalid("validation_failed", "frame was not loaded"))
         })
         .collect::<LabResult<Vec<_>>>()?;
-    check_follow_frames(
-        follow,
-        mark,
-        &crop,
-        live,
-        &frames,
-        &session.recording.defaults,
-    )
+    if mark.locates_text() {
+        let Some(provider) = ocr.ocr_provider() else {
+            return Err(ocr.unavailable_error(Some(mark.id.as_str())).unwrap_or_else(|| {
+                blocked(
+                    LabCode::LabOcrUnavailable.as_str(),
+                    format!(
+                        "the click follows the located-text mark '{}', which needs an OCR model",
+                        mark.id
+                    ),
+                )
+            }));
+        };
+        let checked = check_located_follow_frames(follow, click, mark, live, &frames, provider)?;
+        // A frame without the located text gives nothing here: the mark's own self-test refused
+        // it, with its typed reason. A click without its box is never recorded.
+        if checked.rejection.is_none()
+            && checked.located.is_none()
+            && !result
+                .rejections
+                .iter()
+                .any(|rejection| rejection.id == mark.id)
+        {
+            return Err(blocked(
+                LabCode::RecordClickFollowInvalid.as_str(),
+                format!(
+                    "the click follows the located-text mark '{}', whose names its self-test \
+                     found but the click check did not; nothing was written",
+                    mark.id
+                ),
+            ));
+        }
+        return Ok(checked);
+    }
+    let crop = match batch.new_crops.get(&mark.id) {
+        Some(bytes) => bytes.clone(),
+        None => stored_crop(mark)?.ok_or_else(|| {
+            invalid(
+                "validation_failed",
+                format!("template '{}' has no crop", mark.id),
+            )
+        })?,
+    };
+    Ok(FollowFrames {
+        rejection: check_follow_frames(
+            follow,
+            mark,
+            &crop,
+            live,
+            &frames,
+            &session.recording.defaults,
+        )?,
+        located: None,
+    })
 }
 
 /// `launch`, `restart` and `stop` as given; `force-stop` is recorded as `stop` (R24 section

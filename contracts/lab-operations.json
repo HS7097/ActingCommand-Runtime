@@ -1857,7 +1857,7 @@
       "module": "authoring",
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
-        {"name": "request", "form": "option", "type": "file", "required": false, "note": "an actingcommand.lab-record-mark.v1 request file"},
+        {"name": "request", "form": "option", "type": "file", "required": false, "note": "an actingcommand.lab-record-mark.v1 request file; only a request declares a located-text mark (an OCR mark with locate), which a click may then follow"},
         {"name": "request_json", "form": "option", "type": "string", "required": false, "note": "the same request as JSON text"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"},
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
@@ -1872,7 +1872,7 @@
         {"name": "remove", "form": "option", "type": "string", "required": false, "repeat": true},
         {"name": "click", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
         {"name": "click_from", "form": "option", "type": "string", "required": false},
-        {"name": "click_follow", "form": "option", "type": "string", "required": false},
+        {"name": "click_follow", "form": "option", "type": "string", "required": false, "note": "a template mark or a located-text mark of the step"},
         {"name": "click_guard", "form": "option", "type": "string", "required": false},
         {"name": "click_retry", "form": "option", "type": "integer", "required": false},
         {"name": "replace_click", "form": "switch", "type": "boolean", "required": false},
@@ -1897,7 +1897,7 @@
         {"name": "duration_ms", "form": "option", "type": "integer", "required": false},
         {"name": "brake_corner", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"}
       ],
-      "help": "Adds marks, a click, samples or a transition to a recorded step and self-tests every mark on the step's frames.",
+      "help": "Adds marks, a click, samples or a transition to a recorded step and self-tests every mark on its frames; a click may follow a template or a name it finds.",
       "output": "as today's command",
       "writes": true,
       "irreversible": false,
