@@ -486,8 +486,8 @@ Alice's answer 4. From LAB-3, in the rescue module:
   another root runs that root's own program. Workflow #453 S4 (since 0.12.60;
   [install-cli.md](install-cli.md), "Fresh root"): `new` is the one row served without a located
   root, so the release's own program and the Lab's MCP server run it before any root exists; its
-  positional is `new_root` and its state root's option `new_state_root`, since the module refuses a
-  parameter named `root` or `state_root` on every row.
+  positional is `new_root` and its state root's option `--new-state-root` (`new_state_root`), never
+  `--state-root`, since the module refuses a parameter named `root` or `state_root` on every row.
 - The configuration file's candidate (`install config …`) becomes `config file …`, distinct from
   the run-time settings `config set` and `config clear`.
 - **As built by LAB-3** (0.12.48; register §1.287, "Slice LAB-3"; [install-cli.md](install-cli.md),

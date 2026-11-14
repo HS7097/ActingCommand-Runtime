@@ -2305,6 +2305,8 @@ impl RuntimeHost {
             run_failure_after_switch_for_test: AtomicBool::new(false),
             #[cfg(test)]
             granted_token_release_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            direct_run_terminal_release_off_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             device_keys: config.device_keys,
             device_group_names: config.device_group_names,
@@ -6321,6 +6323,10 @@ struct HostShared {
     // settlement takes the granted token, as a build without `HostShared::run_token` there would.
     #[cfg(test)]
     granted_token_release_for_test: AtomicBool,
+    // Workflow #457, test only: while set, a direct run that returns from its terminal step with
+    // a failure keeps its lease, as before the fix (`execute_contained_task_with_lease`).
+    #[cfg(test)]
+    direct_run_terminal_release_off_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Workflow #437 MAPP-1b (`contracts/device-group.md`, "Derived, never stored"): the member →

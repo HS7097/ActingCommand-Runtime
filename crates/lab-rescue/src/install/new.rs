@@ -24,8 +24,11 @@
 //!   files into `install\builds\<c>.new-<ms>.part`, with its `release.json`), `verify_tree`,
 //!   `place_build`, one `stage_file` and one `swap_file` for every file of the kept build into
 //!   `runtime\` and `tools\` (all new), `verify_tree` of the live tree, `write_config`,
-//!   `create_state_root` and `record_state`. Each step is skipped when its postcondition holds,
-//!   so `resume` continues it; `undo` sets every written item aside and deletes nothing.
+//!   `create_state_root`, `create_vision_root` (fix round 1: `<new_root>\vision`, empty, when the
+//!   template names no vision root of its own, the root a start resolves by default; a start that
+//!   reads no `vision` section never looks at it) and `record_state`. Each step is skipped when
+//!   its postcondition holds, so `resume` continues it; `undo` sets every written item aside and
+//!   deletes nothing.
 //! - **The first configuration** is the template the Runtime member ships
 //!   (`actingd.config.first.json`), its values the template's; the command fills only
 //!   `state_root` (absolute), `secret_fingerprint_salt` (32 bytes of the operating system's
@@ -78,6 +81,9 @@ const RELEASE_RECORD: &str = "release.json";
 const RELEASE_RECORD_SCHEMA: &str = "actingcommand.install-release.v1";
 /// The state root's folder below the new root when `--new-state-root` is not given.
 const DEFAULT_STATE_FOLDER: &str = "state";
+/// Fix round 1: the vision root a start resolves below its install root when the configuration's
+/// `vision` section names no `root` (`contracts/vision-model-folders.md`, "Vision root").
+const DEFAULT_VISION_FOLDER: &str = "vision";
 /// The members of the first configuration the command fills; every other value is the
 /// template's.
 const STATE_ROOT_MEMBER: &str = "state_root";
@@ -150,6 +156,13 @@ struct ConfigIntent {
 struct StateRootIntent {
     path: String,
     existed: bool,
+}
+
+/// Fix round 1: the intent of `create_vision_root`: the folder, relative to the root.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VisionRootIntent {
+    path: String,
 }
 
 /// What a folder the row is to fill holds.
@@ -254,7 +267,10 @@ pub(crate) fn row(
         let refusal = super::refusal(NEW, InstallRefusal::InterfaceEdge)
             .commit_sha(verified.build.commit.clone())
             .count(1_u32);
-        return Answer::new(refusal).with("edges", [edge]);
+        return with_work_dir(
+            Answer::new(refusal).with("edges", [edge])?,
+            verified.work_dir.as_deref(),
+        );
     }
 
     // The first write: the root's folder, then the writer lock and the operation.
@@ -289,9 +305,7 @@ pub(crate) fn row(
             state: None,
         },
     };
-    let operation = Operation::open(host, &paths, opening, |ms| {
-        steps(&verified.build, &verified.sums, &inputs, ms)
-    })?;
+    let operation = Operation::open(host, &paths, opening, |ms| steps(&verified, &inputs, ms))?;
     let mut answer = match run(operation, &inputs, &settings, verified.notes) {
         Ok(answer) => answer,
         // A step failed after the first write: the journal names the ways on.
@@ -376,6 +390,19 @@ struct Verified {
     work_dir: Option<String>,
     /// What the verification noted (`release_unconfirmed`).
     notes: Vec<Outcome>,
+    /// Fix round 1: whether the template leaves the vision root to the default, which `new`
+    /// creates (`<new_root>\vision`).
+    default_vision_root: bool,
+}
+
+/// Fix round 1 (the coordinator's ruling after the review): a refusal after the release reader
+/// unpacked the release names its work folder, which is left in place (`contracts/install-cli.md`,
+/// "Fresh root").
+fn with_work_dir(answer: Answer, work_dir: Option<&str>) -> Result<Answer, Outcome> {
+    match work_dir {
+        Some(work) => answer.with("work_dir", work),
+        None => Ok(answer),
+    }
 }
 
 /// The SHA-256 of the two manifests of a build folder.
@@ -458,15 +485,21 @@ fn verify_build(host: &dyn Host, dir: &Path) -> Result<Result<Verified, Answer>,
             }
             return Ok(Err(refused));
         }
-        // A UI release is no Runtime build.
-        if read.members.contains_key("member") {
-            return Ok(Err(Answer::new(invalid())));
-        }
         let Some(work) = read.members.get("work_dir").and_then(Value::as_str) else {
             return Ok(Err(Answer::new(invalid())));
         };
+        // A UI release is no Runtime build; the folder it was unpacked into is named.
+        if read.members.contains_key("member") {
+            return with_work_dir(Answer::new(invalid()), Some(work)).map(Err);
+        }
         let facts_value = if facts.is_file() {
-            Some(files::read_json::<Value>(&facts).map_err(|cause| invalid().caused_by(cause))?)
+            match files::read_json::<Value>(&facts) {
+                Ok(value) => Some(value),
+                Err(cause) => {
+                    return with_work_dir(Answer::new(invalid().caused_by(cause)), Some(work))
+                        .map(Err);
+                }
+            }
         } else {
             None
         };
@@ -510,44 +543,60 @@ fn verify_build(host: &dyn Host, dir: &Path) -> Result<Result<Verified, Answer>,
             notes,
         )
     };
+    // Fix round 1: every refusal from here on comes after a release was unpacked, and names the
+    // folder it was unpacked into (none for a kept build folder).
+    let refused = |outcome: Outcome| with_work_dir(Answer::new(outcome), work_dir.as_deref());
     let build = match manifest::verify_build(&source) {
         Ok(build) if build.speaks_agree() => build,
-        Ok(_) | Err(BuildProblem::Commits) => return Ok(Err(Answer::new(invalid()))),
+        Ok(_) | Err(BuildProblem::Commits) => return refused(invalid()).map(Err),
         Err(BuildProblem::Manifest(_, cause)) => {
-            return Ok(Err(Answer::new(match cause {
+            return refused(match cause {
                 Some(cause) => invalid().caused_by(cause),
                 None => invalid(),
-            })));
+            })
+            .map(Err);
         }
         Err(BuildProblem::Files(problems)) => {
-            return Ok(Err(Answer::new(
+            return refused(
                 invalid()
                     .count(problems.len())
                     .files(problems.iter().map(manifest::FileProblem::record)),
-            )));
+            )
+            .map(Err);
         }
     };
     // The first configuration's template is a file of the Runtime member.
+    let template = source.join(Half::Runtime.dir()).join(TEMPLATE_FILE);
     if !build
         .runtime
         .files
         .iter()
         .any(|file| file.path == TEMPLATE_FILE)
     {
-        return Ok(Err(Answer::new(
+        return refused(
             super::refusal(NEW, InstallRefusal::BuildInvalid)
                 .commit_sha(build.commit.clone())
-                .path(source.join(Half::Runtime.dir()).join(TEMPLATE_FILE)),
-        )));
+                .path(&template),
+        )
+        .map(Err);
     }
+    // Fix round 1: the template leaves the vision root to the default unless its `vision`
+    // section names a `root` of its own (a start's rule, `contracts/vision-model-folders.md`).
+    let default_vision_root = match files::read_json::<Value>(&template) {
+        Ok(document) => document
+            .pointer("/vision/root")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty),
+        Err(cause) => return refused(invalid().caused_by(cause)).map(Err),
+    };
     let sum = |half: Half| {
         files::sha256_file(&source.join(half.dir()).join(manifest::MANIFEST_FILE))
             .map(|(sha256, _)| sha256)
-            .map_err(|error| invalid().caused_by(files::os_failure(&source, &error, IoOp::Read)))
+            .map_err(|error| files::os_failure(&source, &error, IoOp::Read))
     };
-    let sums = ManifestSums {
-        runtime: sum(Half::Runtime)?,
-        tools: sum(Half::Tools)?,
+    let sums = match (sum(Half::Runtime), sum(Half::Tools)) {
+        (Ok(runtime), Ok(tools)) => ManifestSums { runtime, tools },
+        (Err(cause), _) | (_, Err(cause)) => return refused(invalid().caused_by(cause)).map(Err),
     };
     Ok(Ok(Verified {
         source,
@@ -558,6 +607,7 @@ fn verify_build(host: &dyn Host, dir: &Path) -> Result<Result<Verified, Answer>,
         release_record,
         work_dir,
         notes,
+        default_vision_root,
     }))
 }
 
@@ -609,12 +659,8 @@ fn half_files<'a>(manifest: &'a BuildManifest, manifest_sum: &'a str) -> Vec<(&'
 }
 
 /// The operation's steps for the operation's milliseconds `ms`.
-fn steps(
-    build: &manifest::Build,
-    sums: &ManifestSums,
-    inputs: &NewInputs,
-    ms: u64,
-) -> Vec<PlannedStep> {
+fn steps(verified: &Verified, inputs: &NewInputs, ms: u64) -> Vec<PlannedStep> {
+    let (build, sums) = (&verified.build, &verified.sums);
     let commit = &build.commit;
     let part = format!("install/builds/{commit}.new-{ms}.part");
     let kept = format!("install/builds/{commit}");
@@ -673,6 +719,14 @@ fn steps(
         inputs.state_root.clone(),
         json!({"path": inputs.state_root, "existed": inputs.state_root_existed}),
     ));
+    // Fix round 1: the default vision root, empty (the new root was empty, so it was not there).
+    if verified.default_vision_root {
+        steps.push((
+            StepKind::CreateVisionRoot,
+            DEFAULT_VISION_FOLDER.to_owned(),
+            json!({"path": DEFAULT_VISION_FOLDER}),
+        ));
+    }
     steps.push((
         StepKind::RecordState,
         "install/state.json".to_owned(),
@@ -969,6 +1023,20 @@ fn run(
                 }
                 evidence = Some(json!({"created": !intent.existed}));
             }
+            // Fix round 1: the default vision root, created empty.
+            StepKind::CreateVisionRoot => {
+                let intent: VisionRootIntent = operation
+                    .intent(n)
+                    .map_err(|cause| operation.interrupted(cause))?;
+                let folder = paths.at(&intent.path);
+                if !folder.is_dir() {
+                    operation
+                        .start(n)
+                        .map_err(|cause| operation.interrupted(cause))?;
+                    files::create_dir_all(&folder).map_err(|cause| operation.interrupted(cause))?;
+                }
+                evidence = Some(json!({"created": true}));
+            }
             StepKind::RecordState => {
                 operation
                     .start(n)
@@ -1120,7 +1188,8 @@ pub(crate) fn resume(operation: Operation<'_>) -> Result<Answer, Outcome> {
 /// `undo` of an operation of this row, unfinished or the last finished one: under the writer lock
 /// and with no Runtime on the root or its state root (the stopped rule: `owner_lock_held`,
 /// `runtime_running`, `processes_unreadable`), every step it began set aside from the last: the
-/// state file, the state root's folder when it made it, the configuration and its part, each
+/// state file, the vision root's folder, the state root's folder when it made it, the
+/// configuration and its part, each
 /// program file it placed, the kept build and its part. Nothing is deleted; the new root's folder,
 /// its `install\` and the journal stay.
 pub(crate) fn undo(
@@ -1158,7 +1227,9 @@ pub(crate) fn undo(
         let evidence = match step.kind {
             StepKind::RecordState => super::undo::set_aside(&paths.state(), "rolledback", ms2)
                 .map(|aside| aside.into_iter().collect::<Vec<_>>()),
-            StepKind::WriteConfig | StepKind::CreateStateRoot => reverse_own(&operation, step, ms2),
+            StepKind::WriteConfig | StepKind::CreateStateRoot | StepKind::CreateVisionRoot => {
+                reverse_own(&operation, step, ms2)
+            }
             _ => super::undo::reverse_step(&operation, step, &previous, ms2),
         }
         .map_err(|cause| operation.interrupted(cause))?;
@@ -1180,7 +1251,9 @@ pub(crate) fn undo(
 /// The reversal of this row's own step kinds (`install undo`'s table): `write_config` sets the
 /// configuration aside as `actingd.config.json.rolledback-<ms2>` and its part as
 /// `actingd.config.json.abandoned-<ms2>`; `create_state_root` sets the state root's folder aside
-/// as `<folder>.rolledback-<ms2>` when the operation made it (one that was there, empty, stays).
+/// as `<folder>.rolledback-<ms2>` when the operation made it (one that was there, empty, stays);
+/// fix round 1: `create_vision_root` sets the vision root's folder aside as
+/// `vision.rolledback-<ms2>`.
 pub(crate) fn reverse_own(
     operation: &Operation<'_>,
     step: &Step,
@@ -1207,6 +1280,14 @@ pub(crate) fn reverse_own(
                     ms2,
                 )?);
             }
+        }
+        StepKind::CreateVisionRoot => {
+            let intent: VisionRootIntent = operation.intent(step.n)?;
+            kept.extend(super::undo::set_aside(
+                &paths.at(&intent.path),
+                "rolledback",
+                ms2,
+            )?);
         }
         _ => {}
     }

@@ -21,7 +21,11 @@
 // - `s4_new_a_crash_after_each_step_resumes_to_the_same_tree`;
 // - `s4_new_undo_after_each_step_sets_the_written_items_aside_and_deletes_nothing`;
 // - `s4_new_mints_no_identity_and_writes_no_state_root_record`;
+// - `s4_new_creates_the_empty_default_vision_root_and_undo_sets_it_aside` (fix round 1);
 // - `s4_new_with_watchdog_registers_it_last_and_starts_nothing`.
+// Fix round 1: no assertion prints the generated salt (it is taken out of every document a
+// failing comparison could print); the refusal after the release was unpacked names its work
+// folder; the undo after each step finds the folders it made set aside.
 // No sleep and no clock read: the fake host's clock moves one millisecond per read; its programs
 // are fakes; no Runtime is started.
 
@@ -129,6 +133,36 @@ fn read_value(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).expect("read a JSON file")).expect("JSON")
 }
 
+/// The configuration's member a failing assertion must never print (fix round 1).
+const SALT: &str = "secret_fingerprint_salt";
+
+/// `bytes` without the salt: a JSON object that names it, re-encoded without it; anything else
+/// as it is. Every comparison that may print a file's bytes compares these.
+fn without_salt(bytes: Vec<u8>) -> Vec<u8> {
+    match serde_json::from_slice::<Value>(&bytes) {
+        Ok(Value::Object(mut members)) if members.contains_key(SALT) => {
+            members.remove(SALT);
+            serde_json::to_vec(&Value::Object(members)).expect("JSON")
+        }
+        _ => bytes,
+    }
+}
+
+/// The one entry of `folder` whose name starts with `prefix`, a folder (a name set aside).
+fn one_folder_named(folder: &Path, prefix: &str) -> PathBuf {
+    let found = fs::read_dir(folder)
+        .expect("list the folder")
+        .map(|entry| entry.expect("a folder entry").path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(prefix))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(found.len(), 1, "one {prefix}: {found:?}");
+    assert!(found[0].is_dir(), "{} is a folder", found[0].display());
+    found[0].clone()
+}
+
 /// The one key of `files` that starts with `prefix`.
 fn one_key<'a>(files: &'a BTreeMap<String, Vec<u8>>, prefix: &str) -> &'a str {
     let keys = files
@@ -188,21 +222,32 @@ fn s4_new_builds_exactly_the_build_the_configuration_the_state_folder_and_the_st
     ]);
     names.sort();
     assert_eq!(files.keys().cloned().collect::<Vec<_>>(), names);
-    // The empty state folder, the default `<new_root>\state`, and no other folder of the root
-    // but the build's and the installer's.
+    // The empty state folder, the default `<new_root>\state`, and (fix round 1) the empty default
+    // vision root `<new_root>\vision`.
     assert!(is_empty_folder(&root.join("state")));
+    assert!(is_empty_folder(&root.join("vision")));
 
-    // The configuration: the template with the state root, the salt, the authoring switch.
-    let config = read_value(&root.join("actingd.config.json"));
+    // The configuration: the template with the state root, the salt, the authoring switch. Fix
+    // round 1: the salt is checked by its shape and taken out before any comparison that may
+    // print it.
+    let mut config = read_value(&root.join("actingd.config.json"));
+    let salt_is_hex_text = config[SALT].as_str().is_some_and(|salt| {
+        salt.len() == 64
+            && salt
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    });
+    assert!(
+        salt_is_hex_text,
+        "the salt is 64 lowercase hexadecimal digits"
+    );
+    config.as_object_mut().expect("an object").remove(SALT);
     let state_root = config["state_root"].as_str().expect("the state root");
     assert!(Path::new(state_root).is_absolute(), "{state_root}");
     assert!(same_folder(Path::new(state_root), &root.join("state")));
-    let salt = config["secret_fingerprint_salt"]
-        .as_str()
-        .expect("the salt");
     let mut template: Value = serde_json::from_str(TEMPLATE).expect("the template");
+    template.as_object_mut().expect("an object").remove(SALT);
     template["state_root"] = json!(state_root);
-    template["secret_fingerprint_salt"] = json!(salt);
     template["lab_module_authoring"] = json!(true);
     assert_eq!(config, template);
     assert_eq!(line["state_root"], state_root, "{line}");
@@ -268,6 +313,7 @@ fn s4_new_builds_exactly_the_build_the_configuration_the_state_folder_and_the_st
         "verify_tree",
         "write_config",
         "create_state_root",
+        "create_vision_root",
         "record_state",
     ]);
     assert_eq!(kinds, order);
@@ -302,11 +348,9 @@ fn s4_new_salt_is_32_bytes_as_text_new_each_run_and_nowhere_else() {
         let (line, exit) = new_line(&setup.host, plain_params(&setup));
         assert_eq!(exit, 0, "{line}");
         let config = read_value(&setup.root.join("actingd.config.json"));
-        let salt = config["secret_fingerprint_salt"]
-            .as_str()
-            .expect("the salt")
-            .to_owned();
-        assert_eq!(salt.len(), 64, "32 bytes as hexadecimal text");
+        let salt = config[SALT].as_str().expect("the salt").to_owned();
+        // Fix round 1: no assertion here prints the salt, only what it is not.
+        assert!(salt.len() == 64, "32 bytes as hexadecimal text");
         assert!(
             salt.bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
@@ -332,7 +376,7 @@ fn s4_new_salt_is_32_bytes_as_text_new_each_run_and_nowhere_else() {
         }
         salts.push(salt);
     }
-    assert_ne!(salts[0], salts[1], "two runs, two salts");
+    assert!(salts[0] != salts[1], "two runs, two salts");
 }
 
 #[test]
@@ -419,6 +463,9 @@ fn s4_new_refuses_an_empty_actingd_config_edge_and_writes_nothing() {
     assert_eq!(line["edges"][0]["interface"], "actingd-config", "{line}");
     assert_eq!(line["edges"][0]["result"], "fail", "{line}");
     assert_eq!(line["edges"][0]["parties"][1]["range"], json!([90, 99]));
+    // Fix round 1: the release was unpacked before the refusal; its folder is left and named.
+    let work_dir = line["work_dir"].as_str().expect("the work folder is named");
+    assert!(Path::new(work_dir).is_dir(), "{work_dir}");
     assert_eq!(whole_tree(&setup.base), before);
     assert!(!setup.root.exists());
 }
@@ -482,7 +529,7 @@ fn normalized(root: &Path) -> BTreeMap<String, Vec<u8>> {
             "actingd.config.json" => {
                 let mut config: Value = serde_json::from_slice(&bytes).expect("config JSON");
                 let members = config.as_object_mut().expect("an object");
-                members.remove("secret_fingerprint_salt");
+                members.remove(SALT);
                 members.remove("state_root");
                 serde_json::to_vec(&config).expect("JSON")
             }
@@ -494,7 +541,9 @@ fn normalized(root: &Path) -> BTreeMap<String, Vec<u8>> {
                 serde_json::to_vec(&state).expect("JSON")
             }
             _ if name.starts_with("install/operations/") => Vec::new(),
-            _ => bytes,
+            // Fix round 1: any other file that holds the salt (a part left behind) without it,
+            // so that a failing comparison never prints it.
+            _ => without_salt(bytes),
         };
         assert!(
             files.insert(name.clone(), bytes).is_none(),
@@ -553,6 +602,7 @@ fn s4_new_a_crash_after_each_step_resumes_to_the_same_tree() {
         );
         assert_eq!(normalized(&setup.root), expected, "step {step}");
         assert!(is_empty_folder(&setup.root.join("state")), "step {step}");
+        assert!(is_empty_folder(&setup.root.join("vision")), "step {step}");
     }
 }
 
@@ -561,7 +611,7 @@ fn s4_new_undo_after_each_step_sets_the_written_items_aside_and_deletes_nothing(
     let reference = setup(&build_spec());
     let (line, _) = new_line(&reference.host, plain_params(&reference));
     let operation_id = line["operation_id"].as_str().expect("the operation id");
-    let steps = read_value(
+    let kinds = read_value(
         &reference
             .root
             .join("install")
@@ -570,8 +620,21 @@ fn s4_new_undo_after_each_step_sets_the_written_items_aside_and_deletes_nothing(
     )["steps"]
         .as_array()
         .expect("the steps")
-        .len();
-    // The contents of every file but the journal and the operation's marker, sorted.
+        .iter()
+        .map(|step| step["kind"].as_str().expect("a kind").to_owned())
+        .collect::<Vec<_>>();
+    let steps = kinds.len();
+    // Fix round 1: the 1-based place of a step kind in the operation.
+    let place = |kind: &str| {
+        kinds
+            .iter()
+            .position(|known| known == kind)
+            .map(|index| index + 1)
+            .expect("the step is planned")
+    };
+    let (state_step, vision_step) = (place("create_state_root"), place("create_vision_root"));
+    // The contents of every file but the journal and the operation's marker, sorted; fix round
+    // 1: each without the salt, so that a failing comparison never prints it.
     let contents = |root: &Path| {
         let mut contents = tree(root)
             .into_iter()
@@ -579,7 +642,7 @@ fn s4_new_undo_after_each_step_sets_the_written_items_aside_and_deletes_nothing(
                 !path.starts_with("install/operations/")
                     && !path.starts_with("install/current.json")
             })
-            .map(|(_, bytes)| bytes)
+            .map(|(_, bytes)| without_salt(bytes))
             .collect::<Vec<_>>();
         contents.sort();
         contents
@@ -615,6 +678,17 @@ fn s4_new_undo_after_each_step_sets_the_written_items_aside_and_deletes_nothing(
         assert!(!files.contains_key("actingd.config.json"), "step {step}");
         assert!(!files.contains_key("install/state.json"), "step {step}");
         assert!(!setup.root.join("state").exists(), "step {step}");
+        assert!(!setup.root.join("vision").exists(), "step {step}");
+        // Fix round 1: the folders the operation made are set aside, not deleted (an empty folder
+        // holds no byte the comparison above would miss).
+        if step >= state_step {
+            let aside = one_folder_named(&setup.root, "state.rolledback-");
+            assert!(is_empty_folder(&aside), "step {step}");
+        }
+        if step >= vision_step {
+            let aside = one_folder_named(&setup.root, "vision.rolledback-");
+            assert!(is_empty_folder(&aside), "step {step}");
+        }
         assert!(
             !setup.root.join("install").join("builds").join(C1).exists(),
             "step {step}"
@@ -646,6 +720,55 @@ fn s4_new_mints_no_identity_and_writes_no_state_root_record() {
     assert!(!setup.root.join("install").join("identity.json").exists());
     assert!(!setup.root.join("state").join("installation.json").exists());
     assert!(is_empty_folder(&setup.root.join("state")));
+}
+
+// Fix round 1 (the coordinator's ruling after the review of `vision place`): the template names
+// no vision root, so `new` makes the default one, `<new_root>\vision`, empty, in a journalled step
+// of its own, and the undo of the operation sets it aside.
+#[test]
+fn s4_new_creates_the_empty_default_vision_root_and_undo_sets_it_aside() {
+    let setup = setup(&build_spec());
+    let (line, exit) = new_line(&setup.host, plain_params(&setup));
+    assert_eq!(exit, 0, "{line}");
+    assert!(is_empty_folder(&setup.root.join("vision")));
+    let operation_id = line["operation_id"].as_str().expect("the operation id");
+    let recorded = read_value(
+        &setup
+            .root
+            .join("install")
+            .join("operations")
+            .join(format!("{operation_id}.json")),
+    );
+    let vision_steps = recorded["steps"]
+        .as_array()
+        .expect("the steps")
+        .iter()
+        .filter(|step| step["kind"] == "create_vision_root")
+        .collect::<Vec<_>>();
+    assert_eq!(vision_steps.len(), 1, "{recorded}");
+    assert_eq!(vision_steps[0]["target"], "vision");
+    assert_eq!(vision_steps[0]["state"], "done");
+
+    // The undo of the operation, the last one of the root.
+    let undone = fixture::run(
+        &setup.host,
+        &[
+            "undo",
+            "--root",
+            word(&setup.root),
+            "--operation",
+            operation_id,
+        ],
+    );
+    assert_eq!(
+        fixture::code(&undone),
+        "install_command_done",
+        "{:?}",
+        undone.outcome
+    );
+    assert!(!setup.root.join("vision").exists());
+    let aside = one_folder_named(&setup.root, "vision.rolledback-");
+    assert!(is_empty_folder(&aside));
 }
 
 #[test]

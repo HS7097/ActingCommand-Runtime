@@ -891,9 +891,10 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
   coordinator's rulings on board #453, not the owner's words). Only the Lab's rescue module serves
   it, as the row `new <new_root> --build <dir> [--new-state-root <dir>] [--mumu-root <dir>]
   [--lab-authoring true|false] [--watchdog]`, so that the Lab's command line and its MCP server both
-  have it; `actingctl install` gains nothing (no `install new`). The positional is named
-  `new_root` and the state root's option `new_state_root`, since the module refuses a parameter
-  named `root` or `state_root` on every row; the row declares every parameter. It is the one rescue
+  have it; `actingctl install` gains nothing (no `install new`). The positional is `new_root` and
+  the state root's option is `--new-state-root` (parameter `new_state_root`), never `--state-root`:
+  the module refuses a parameter named `root` or `state_root` on every row (the coordinator
+  accepted the name after the review); the row declares every parameter. It is the one rescue
   row served without a located root: it acts on the root it names, not on the root of the program
   that runs it, so the release's own `actinglab.exe` (the Tools zip unpacked anywhere) and the
   Lab's MCP server run it before any root exists. Nothing is started; the vision and OCR models
@@ -915,7 +916,10 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
     beside), or for a kept build folder, a UI release or a build without the template
     `build_invalid` (`path`, `count` and `files` for files that differ); an empty `actingd-config`
     edge `I ∩ R` between the running installer and the build, `interface_edge` (`commit_sha`,
-    `count`, the row in `edges`; "Interface checks").
+    `count`, the row in `edges`; "Interface checks"). A refusal that comes after the release
+    reader unpacked a release folder (the edge, a UI release, a build without the template, a
+    facts file or a manifest that cannot be read) names that work folder, `work_dir`, left in
+    place (fix round 1); nothing under the new root or the state root is written.
   - **One journalled operation** of kind `new` (off row 7a″'s pass list, so no watchdog starts a
     Runtime on the root while it is unfinished; a watchdog never starts a root that never started),
     its initiator recorded, under `install\writer.lock`, its steps in this order: `copy_build` (the
@@ -923,7 +927,8 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
     `release.json`), `verify_tree` of that part, `place_build` (renamed `install\builds\<c>`), one
     `stage_file` and then one `swap_file` for every file of the kept build, both manifests included,
     into `tools\` and `runtime\` (all new, no `.old`), `verify_tree` of the live tree,
-    `write_config`, `create_state_root` and `record_state` (`state.json` v1: the live build
+    `write_config`, `create_state_root`, `create_vision_root` (fix round 1, below) and
+    `record_state` (`state.json` v1: the live build
     installed by this operation, the kept build with `origin` `release` or `local_build` and its
     tag, `packs: []`, the configuration's `config_sha256`). After the first write a failed step
     ends `install_operation_interrupted`, the journal and `current.json` kept, `next` naming
@@ -932,7 +937,8 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
     module answers `op resume` and `undo`). `resume` continues each step by its postcondition;
     `undo` (the unfinished operation, or the last finished one, under the writer lock and the
     stopped rule: `owner_lock_held`, `runtime_running`, `processes_unreadable`) sets each written
-    item aside from the last, `state.json.rolledback-<ms2>`, the state root's folder as
+    item aside from the last, `state.json.rolledback-<ms2>`, the vision root's folder as
+    `vision.rolledback-<ms2>`, the state root's folder as
     `<folder>.rolledback-<ms2>` when the operation made it (one that was there, empty, stays),
     `actingd.config.json.rolledback-<ms2>` and the part `actingd.config.json.abandoned-<ms2>`, each
     program file `.rolledback-<ms2>`, each part `.abandoned-<ms2>`, the kept build
@@ -961,6 +967,15 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
     (`installation.json`). It creates the state root's folder, empty, and writes `install\state.json`,
     which makes the root an installation root: its first start mints the identity and claims the
     state root.
+  - **The empty vision root** (fix round 1; the coordinator's ruling of 11-14 after the review of
+    `vision place`, not the owner's words). The rescue row that places a vision root refuses one
+    that does not exist and never creates it, so `new` creates the vision root a start resolves by
+    default, `<new_root>\vision` ([vision-model-folders.md](vision-model-folders.md), "Vision
+    root": a `vision` section without `root`, a daemon run from an install root), empty, as the
+    step `create_vision_root`, when the template's `vision` section names no `root` of its own (the
+    shipped template has no `vision` section). It changes no start: a configuration without a
+    `vision` section is never resolved against it, and with one, a missing root and an empty one
+    are refused alike (`vision_root_unavailable`: the start lists `models\`, which neither holds).
   - **`--watchdog`**: after the operation ended and the writer lock is released, the rescue row
     `watchdog install` for the new root, last; it registers the task and starts nothing (a root
     that never started stays down, [runtime-watchdog.md](runtime-watchdog.md), row 3). Its report
@@ -1606,6 +1621,7 @@ state alone, so a step repeated after a crash is either already true or done aga
 | `pack_item` | INST-4, as `swap_file` per item | | |
 | `write_config` | Workflow #453 S4 (`new`): `actingd.config.json` is in place | check the part (written first when it is not there) with the live build's check-config, then rename it in | `actingd.config.json` → `.rolledback-<ms2>`; its part → `.abandoned-<ms2>` |
 | `create_state_root` | Workflow #453 S4 (`new`): the state root's folder is there | create it | the folder → `<folder>.rolledback-<ms2>` when the operation made it |
+| `create_vision_root` | Workflow #453 S4 fix round 1 (`new`): `<root>\vision` is there | create it | the folder → `vision.rolledback-<ms2>` |
 
 `<ms2>` is the undo's own Unix milliseconds. Crash points: before the first swap the live tree is
 untouched (resume restages, undo abandons the parts); between swaps every file is old or new,
@@ -2906,8 +2922,8 @@ the fragment registers, names the command.
   `state_root_not_empty` (`path`), which only `new` answers; the existing `release_check_failed`,
   `build_invalid`, `interface_edge`, `config_refused_by_target`, `check_config_unanswered`,
   `owner_lock_held`, `runtime_running` and `processes_unreadable`, and the caveat
-  `release_unconfirmed`; the operation kind `new` and the step kinds `write_config` and
-  `create_state_root`; no code or key is new.
+  `release_unconfirmed`; the operation kind `new` and the step kinds `write_config`,
+  `create_state_root` and (fix round 1) `create_vision_root`; no code or key is new.
 - **Workflow #453 S1** (since 0.12.60; "Instances, the first slice", "A first row"):
   `install_instance_add`'s `instance_invalid` gives the existing key `config_key` two more
   values, `policy` and `policy.resources.hosts`, beside those it gave before; no code, location,

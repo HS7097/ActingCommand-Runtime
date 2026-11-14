@@ -10,7 +10,9 @@
 //   the configuration of a temporary install root, it loads and assembles as actingd's start does
 //   (`load`, `assemble_or_refusal`), in composer mode (a `policy` without `catalog`) with one host,
 //   each of its three `*_available_milli` 1000, and no instance in `instances` or in
-//   `policy.facts.instances`; check-config with `--install-root` passes it;
+//   `policy.facts.instances`; check-config with `--install-root` passes it before the state root's
+//   folder exists, as `new` runs it, and again once the empty state root and the empty default
+//   vision root `new` makes are there (fix round 1);
 // - `s4_the_example_configuration_is_unchanged`: `distribution/windows/actingd.config.example.json`
 //   byte for byte as before the slice (CI starts the Runtime from it).
 // No device, no Runtime, no clock: the reader and check-config only read the files.
@@ -70,8 +72,9 @@ fn s4_the_first_configuration_template_decodes_in_composer_mode_with_one_host_an
     let root = temp.path().join("root");
     fs::create_dir_all(root.join("runtime")).expect("the runtime folder");
     fs::write(root.join("runtime").join("BUILD-MANIFEST.json"), b"{}").expect("the manifest");
+    // Fix round 1: in `new`'s order: the configuration is checked before the state root's folder
+    // (and the vision root's) exists; the folders are made after.
     let state = root.join("state");
-    fs::create_dir_all(&state).expect("the state root");
     let mut filled = template.clone();
     filled["state_root"] = json!(state);
     filled["secret_fingerprint_salt"] = json!("0123456789abcdef".repeat(4));
@@ -89,15 +92,28 @@ fn s4_the_first_configuration_template_decodes_in_composer_mode_with_one_host_an
         panic!("assembly refused: {} {outcome}", code.as_str());
     }
     // And this build's check-config passes it, judged as the root's.
-    let words = vec![
-        std::ffi::OsString::from("check-config"),
-        std::ffi::OsString::from("--config"),
-        path.as_os_str().to_owned(),
-        std::ffi::OsString::from("--install-root"),
-        root.as_os_str().to_owned(),
-    ];
-    if let Err(error) = check_config::run(words) {
+    let words = || {
+        vec![
+            std::ffi::OsString::from("check-config"),
+            std::ffi::OsString::from("--config"),
+            path.as_os_str().to_owned(),
+            std::ffi::OsString::from("--install-root"),
+            root.as_os_str().to_owned(),
+        ]
+    };
+    if let Err(error) = check_config::run(words()) {
         panic!("check-config refused: {}", error.outcome());
+    }
+    // Then the empty state root and the empty default vision root `new` makes: the root as its
+    // first start finds it passes as well (the template names no `vision` section, so nothing
+    // reads the vision root).
+    fs::create_dir_all(&state).expect("the state root");
+    fs::create_dir_all(root.join("vision")).expect("the vision root");
+    if let Err(error) = check_config::run(words()) {
+        panic!(
+            "check-config refused the finished root: {}",
+            error.outcome()
+        );
     }
 }
 

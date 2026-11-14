@@ -325,7 +325,7 @@ pub(crate) fn reverse_step(
         StepKind::PackItem => super::place::reverse_item(operation, step, ms2)?,
         // Workflow #453 S4: the configuration and the state root's folder of the rescue module's
         // `new`.
-        StepKind::WriteConfig | StepKind::CreateStateRoot => {
+        StepKind::WriteConfig | StepKind::CreateStateRoot | StepKind::CreateVisionRoot => {
             super::new::reverse_own(operation, step, ms2)?
         }
         // Workflow #421 INST-2: the hold, the close, the start, the checks, the release and

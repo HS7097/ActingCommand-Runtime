@@ -51,9 +51,13 @@ pub(crate) enum StepKind {
     PackItem,
     // Workflow #453 S4 (contracts/install-cli.md, "Fresh root", "Steps"): the rescue module's
     // `new`: the first configuration written beside the live file as a part, checked by the new
-    // live build's check-config and renamed into place; the state root's folder created, empty.
+    // live build's check-config and renamed into place; the state root's folder created, empty;
+    // fix round 1 (the coordinator's ruling after the review of `vision place`): the root's
+    // default vision root `<root>\vision` created, empty, when the template names no root of its
+    // own.
     WriteConfig,
     CreateStateRoot,
+    CreateVisionRoot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
