@@ -2200,11 +2200,13 @@ fn follow_frames(
         // #463 L2 fix 1: a command that changes only the names is the change of the wanted value,
         // not held to the recorded press; nor is one that leaves the mark as it is after such a
         // change. Any other declaration or change is.
-        let change = followed_change(step, follow, mark);
-        let press_check = match change {
-            FollowedChange::NamesOnly => false,
-            FollowedChange::Unchanged => !follow.names_changed_after_press,
-            FollowedChange::Other => true,
+        // Fix 2: a press check names the members, besides the names, the command changed.
+        let change = followed_change(step, follow, mark)?;
+        let unchanged: &[String] = &[];
+        let press_check = match &change {
+            FollowedChange::NamesOnly => None,
+            FollowedChange::Unchanged => (!follow.names_changed_after_press).then_some(unchanged),
+            FollowedChange::Other(members) => Some(members.as_slice()),
         };
         let mut checked =
             check_located_follow_frames(follow, click, mark, live, &frames, provider, press_check)?;
@@ -2212,7 +2214,7 @@ fn follow_frames(
             located.names_changed_after_press = match change {
                 FollowedChange::NamesOnly => click.executed(),
                 FollowedChange::Unchanged => follow.names_changed_after_press,
-                FollowedChange::Other => false,
+                FollowedChange::Other(_) => false,
             };
         }
         // A frame without the located text gives nothing here: the mark's own self-test refused
@@ -2258,46 +2260,95 @@ fn follow_frames(
 }
 
 /// #463 L2 fix 1: what a `record mark` does to the located-text mark a step's click follows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum FollowedChange {
     /// The mark is as it was, or it is reused from another step, which alone changes it.
     Unchanged,
     /// Only its `expected` names differ: the request removed it and added it again with the same
     /// id, region, `locate`, `unique` and other members.
     NamesOnly,
-    /// The mark is new to the step, or another member differs.
-    Other,
+    /// The mark is new to the step, or another member differs; fix 2: those members by name (an
+    /// OCR member by its own name, `languages` for example), none for a mark new to the step.
+    Other(Vec<String>),
 }
 
 /// #463 L2 fix 1: how `mark`, the followed mark after this command, differs from the step's own
-/// mark of that id before it, its self-test, creation time and initiator aside.
+/// mark of that id before it, its self-test, creation time and initiator aside. Every other member
+/// of the mark is compared: `family`, `region`, `unique` and the rest of the recorded mark, and
+/// every member of its OCR fields (`languages`, `timeout_ms`, `match_mode`, `case_sensitive`,
+/// `minimum_confidence`, `model_ref`, `model_sha256`, `locate`) but `expected`.
 fn followed_change(
     step: &RecordingStep,
     follow: &ClickFollow,
     mark: &RecordedMark,
-) -> FollowedChange {
+) -> LabResult<FollowedChange> {
     let Some(old) = step.marks.iter().find(|old| old.id == follow.mark_id) else {
-        return if step.reused.contains(&follow.mark_id) {
+        return Ok(if step.reused.contains(&follow.mark_id) {
             FollowedChange::Unchanged
         } else {
-            FollowedChange::Other
-        };
+            FollowedChange::Other(Vec::new())
+        });
     };
     let mut new = mark.clone();
     new.self_test = old.self_test.clone();
     new.created_at_unix_ms = old.created_at_unix_ms;
     new.initiator = old.initiator.clone();
     if new == *old {
-        return FollowedChange::Unchanged;
+        return Ok(FollowedChange::Unchanged);
     }
     if let (Some(names), Some(before)) = (new.ocr.as_mut(), old.ocr.as_ref()) {
         names.expected = before.expected.clone();
     }
     if new == *old {
-        FollowedChange::NamesOnly
+        Ok(FollowedChange::NamesOnly)
     } else {
-        FollowedChange::Other
+        Ok(FollowedChange::Other(differing_members(old, &new)?))
     }
+}
+
+/// #463 L2 fix 2: the members in which `new` differs from `old`, by name, in the order of their
+/// names; a member of the OCR fields by its own name.
+fn differing_members(old: &RecordedMark, new: &RecordedMark) -> LabResult<Vec<String>> {
+    let encode = |mark: &RecordedMark| {
+        serde_json::to_value(mark).map_err(|error| {
+            invalid(
+                "validation_failed",
+                format!("failed to encode mark '{}': {error}", mark.id),
+            )
+        })
+    };
+    let (recorded, requested) = (encode(old)?, encode(new)?);
+    let mut members = Vec::new();
+    for member in differing_keys(&recorded, &requested) {
+        let (before, after) = (&recorded[member.as_str()], &requested[member.as_str()]);
+        if member == "ocr" && before.is_object() && after.is_object() {
+            members.extend(differing_keys(before, after));
+        } else {
+            members.push(member);
+        }
+    }
+    members.sort();
+    members.dedup();
+    Ok(members)
+}
+
+/// #463 L2 fix 2: the keys whose values differ between two JSON objects (a key that only one of
+/// them has among them); nothing when either is not an object.
+fn differing_keys(old: &Value, new: &Value) -> Vec<String> {
+    let (Some(before), Some(after)) = (old.as_object(), new.as_object()) else {
+        return Vec::new();
+    };
+    before
+        .iter()
+        .filter(|(key, value)| after.get(key.as_str()) != Some(*value))
+        .map(|(key, _)| key.clone())
+        .chain(
+            after
+                .keys()
+                .filter(|key| !before.contains_key(key.as_str()))
+                .cloned(),
+        )
+        .collect()
 }
 
 /// `launch`, `restart` and `stop` as given; `force-stop` is recorded as `stop` (R24 section

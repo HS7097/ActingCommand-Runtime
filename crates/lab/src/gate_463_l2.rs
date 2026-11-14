@@ -21,6 +21,13 @@
 // the followed located-text mark. Every step 1 of the tests before fix 1 now has the color mark
 // `state/page` beside its located-text mark, which recognizes its page.
 //
+// Fix round 2 (brief rd-1114/brief-1716-fix2.md): record stop's cross-check evaluates the guard of
+// every click that follows a located-text mark on its step's live frames (with another OCR model
+// at record stop, `SmudgedOcr`, a frame may show no name), `partially_evaluated` without a model;
+// record status shows a located-text mark as the recording holds it; a press_outside_found_box
+// of a request that declares the mark again lists the members that differ; and four paths of the
+// names' record and of the follow rules each have a test.
+//
 // Frames are synthetic: 96x64 pixels of flat gray. The scripted OCR provider reads one block of
 // 8x6 pixels from each marker pixel inside the requested region, its text chosen by the marker's
 // gray value. No device is used. Requirement basis: brief rd-1114/brief-463-l2-record-located-
@@ -32,8 +39,8 @@ use crate::recording::store::{old_record_path, recording_path};
 use crate::{
     ClickEffect, ClickSpec, CommitClickRequest, LAB_RECORD_MARK_SCHEMA, LabOcr, MarkFamily,
     MarkOutcome, MarkRequest, MarkSpec, PlanClickRequest, RecordRect, RecordStartOptions,
-    RecordStopOptions, RecordingLock, SelfTestStatus, record_commit_click, record_mark,
-    record_plan_click, record_start, record_status, record_stop,
+    RecordStopOptions, RecordingLock, SelfTestStatus, StepAction, StepActionKind,
+    record_commit_click, record_mark, record_plan_click, record_start, record_status, record_stop,
 };
 use actingcommand_contract::{InputAction, LabError};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
@@ -155,6 +162,58 @@ impl VisionProvider for NamesOcr {
     }
 }
 
+// Fix 2: the pixel whose smudge `SmudgedOcr` reads as no text, outside every marked area.
+const SMUDGE: u8 = 230;
+const SMUDGE_X: u32 = 90;
+const SMUDGE_Y: u32 = 2;
+
+// Fix 2: another OCR model at record stop than at record mark: it reads as `NamesOcr` does, except
+// on a frame whose pixel (90, 2) carries the smudge, on which it reads nothing.
+#[derive(Debug)]
+struct SmudgedOcr;
+
+impl VisionProvider for SmudgedOcr {
+    fn require_ocr_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        NamesOcr.require_ocr_model(model_ref, model_sha256)
+    }
+
+    fn require_nn_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        NamesOcr.require_nn_model(model_ref, model_sha256)
+    }
+
+    fn read_text(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderResult, VisionProviderError> {
+        let index = (SMUDGE_Y as usize * request.frame.width as usize + SMUDGE_X as usize) * 3;
+        if request.frame.rgb8_pixels.get(index).copied() == Some(SMUDGE) {
+            return Ok(OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
+                confidence: None,
+                text: String::new(),
+                blocks: Vec::new(),
+                detection: None,
+            });
+        }
+        NamesOcr.read_text(request)
+    }
+
+    fn classify(
+        &self,
+        request: NnProviderRequest<'_>,
+    ) -> Result<NnProviderResult, VisionProviderError> {
+        NamesOcr.classify(request)
+    }
+}
+
 // A deterministic generator of neutral gray noise below every marker value.
 struct Noise(u64);
 
@@ -213,6 +272,26 @@ impl Gray {
             }
         }
         screen
+    }
+
+    // Fix 2: the screen of a plain step 1 before a located-text step: a noise patch at (70, 46).
+    fn first() -> Self {
+        let mut noise = Noise(0x0463_0003);
+        let patch = Self::from_fn(12, 12, |_, _| noise.between(1, 199));
+        let mut screen = Self::from_fn(WIDTH, HEIGHT, |_, _| BACKGROUND);
+        for row in 0..12 {
+            for column in 0..12 {
+                screen.values[((46 + row) * WIDTH + 70 + column) as usize] =
+                    patch.values[(row * 12 + column) as usize];
+            }
+        }
+        screen
+    }
+
+    // Fix 2: the same screen with the smudge, which `SmudgedOcr` reads as no text.
+    fn smudged(mut self) -> Self {
+        self.values[(SMUDGE_Y * self.width + SMUDGE_X) as usize] = SMUDGE;
+        self
     }
 
     fn png(&self) -> Vec<u8> {
@@ -336,12 +415,14 @@ fn assert_guard_refused(decision: &OfflineDecision, cause: RecognitionPackCode) 
 }
 
 // A state directory with an active session of `INSTANCE` and its Lab recording, before any
-// step, with the scripted OCR provider (`ocr`) and without an OCR model (`none`). The lock is
-// dropped before the directory.
+// step, with the scripted OCR provider (`ocr`), without an OCR model (`none`) and (fix 2) with the
+// provider that does not read a smudged frame (`smudged`). The lock is dropped before the
+// directory.
 struct Recording {
     lock: RecordingLock,
     ocr: LabOcr,
     none: LabOcr,
+    smudged: LabOcr,
     temp: TempDir,
 }
 
@@ -379,6 +460,7 @@ impl Recording {
             lock,
             ocr: LabOcr::with_provider(Arc::new(NamesOcr)),
             none: LabOcr::from_vision_root(&temp.path().join("no-vision")),
+            smudged: LabOcr::with_provider(Arc::new(SmudgedOcr)),
             temp,
         }
     }
@@ -481,9 +563,16 @@ impl Recording {
             Some(follow(None)),
         ))
         .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+        let point = self.press_open_step();
+        assert!(inside(point, cell(0)), "{point:?}");
+        point
+    }
+
+    // The click of the open step planned and committed as performed, which closes the step;
+    // returns the pressed point.
+    fn press_open_step(&self) -> (i32, i32) {
         let plan = record_plan_click(&self.lock, &PlanClickRequest::default())
             .unwrap_or_else(|error| panic!("plan click: {}", error.code));
-        assert!(inside((plan.point.x, plan.point.y), cell(0)), "{plan:?}");
         record_commit_click(
             &self.lock,
             &plan,
@@ -506,13 +595,68 @@ impl Recording {
 
     // A request on step 1 that removes the followed mark and adds `spec` with its id again.
     fn declare_again(&self, spec: MarkSpec) -> Result<MarkOutcome, LabError> {
+        self.declare_again_on(1, spec)
+    }
+
+    // Fix 2: the same request on step `step`.
+    fn declare_again_on(&self, step: u32, spec: MarkSpec) -> Result<MarkOutcome, LabError> {
         self.mark(MarkRequest {
             schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
-            step: Some(1),
+            step: Some(step),
             remove: vec![MARK.to_owned()],
             add: vec![spec],
             ..MarkRequest::default()
         })
+    }
+
+    // Fix 2: a plain step 1 before the located-text step: its own screen, a template that
+    // recognizes it and a click on that template's rectangle, which follows nothing.
+    fn mark_plain_first_step(&self) {
+        let frame = self.frame("first", &Gray::first());
+        self.mark(MarkRequest {
+            schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+            frame: Some(frame),
+            add: vec![template("ui/first", rect(70, 46, 12, 12))],
+            click: Some(ClickSpec {
+                region: Some(rect(70, 46, 12, 12)),
+                ..ClickSpec::default()
+            }),
+            ..MarkRequest::default()
+        })
+        .unwrap_or_else(|error| {
+            panic!("record mark of step 1: {} {:?}", error.code, error.details)
+        });
+    }
+
+    // Fix 2: step 2 on `primary` with the sample `sample`: the located-text mark ALPHA with cells
+    // and the page mark, its click following ALPHA.
+    fn located_step_two(&self, primary: &Gray, sample: &Gray) -> MarkRequest {
+        MarkRequest {
+            schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+            frame: Some(self.frame("two", primary)),
+            samples: vec![self.frame("two_sample", sample)],
+            add: vec![located(&["ALPHA"], true, None), page_mark()],
+            click: Some(follow(None)),
+            ..MarkRequest::default()
+        }
+    }
+
+    // Fix 2: the frame ids of the primary frame and of the sample of the recording's step at
+    // `position` (0 for step 1), as the recording holds them.
+    fn frames_of_step(&self, position: usize) -> (String, String) {
+        let recording = self.recording();
+        let frames = recording["steps"][position]["frames"]
+            .as_array()
+            .expect("the step's frames");
+        let id = |role: &str| {
+            frames
+                .iter()
+                .find(|frame| frame["role"] == role)
+                .and_then(|frame| frame["frame_id"].as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| panic!("no {role} frame in {frames:?}"))
+        };
+        (id("primary"), id("sample"))
     }
 
     // The files of the package `record stop` wrote.
@@ -1369,4 +1513,372 @@ fn l2_fix1_the_click_guard_may_name_the_followed_located_text_mark_only() {
     let operation = task(&recording.package(&lab))["operations"][0].clone();
     assert_eq!(operation["guard"]["target_id"], MARK, "{operation}");
     assert_eq!(operation["guard"]["verify_text"], MARK, "{operation}");
+}
+
+// Fix 2, item 1: record stop's cross-check evaluates the guard of a click that follows a
+// located-text mark on every live frame of its step. Step 2 follows ALPHA, on its primary frame
+// and on a smudged sample; with the OCR model that does not read the smudged sample, the
+// cross-check refuses step 2 (record_step_self_mismatch naming the step, the mark, the sample and
+// the kernel's text_locate_not_found) and the recording stays active; with the model the marks
+// were made with, the guard is found on both frames and the cross-check passes, listing them. The
+// guard is on step 2 because the first decision judges step 1's guard before the cross-check.
+#[test]
+fn l2_fix2_the_cross_check_finds_the_guard_on_every_live_frame_or_refuses_the_step() {
+    let recording = Recording::new();
+    recording.mark_plain_first_step();
+    recording
+        .mark(recording.located_step_two(&alpha_in_cell_0(), &alpha_in_cell_0().smudged()))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    recording.mark_next_step();
+    let (primary, sample) = recording.frames_of_step(1);
+
+    let error = match record_stop(
+        &recording.lock,
+        &RecordStopOptions::default(),
+        &recording.smudged,
+    ) {
+        Ok(_) => panic!("the smudged sample shows no name to that model"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, "record_step_self_mismatch", "{}", error.message);
+    let details = error.details.expect("details");
+    assert_eq!(details["step"], 2, "{details}");
+    assert_eq!(details["record_index"], 2, "{details}");
+    assert_eq!(details["mark_id"], MARK, "{details}");
+    assert_eq!(details["frame_id"], sample.as_str(), "{details}");
+    assert_eq!(
+        details["failure"]["code"],
+        RecognitionPackCode::TextLocateNotFound.as_str(),
+        "{details}"
+    );
+    assert_eq!(recording.recording()["status"], "active");
+
+    let lab = recording.stop();
+
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    let cross_check = &lab["cross_check"];
+    assert_eq!(cross_check["status"], "passed", "{cross_check}");
+    assert_eq!(
+        cross_check["located_text_guards"],
+        json!([{
+            "step": 2,
+            "record_index": 2,
+            "mark_id": MARK,
+            "frames": [
+                {"frame_id": primary.as_str(), "result": "found"},
+                {"frame_id": sample.as_str(), "result": "found"}
+            ]
+        }]),
+        "{cross_check}"
+    );
+    assert!(
+        cross_check.get("guards_not_evaluated").is_none(),
+        "{cross_check}"
+    );
+}
+
+// Fix 2, item 1: without an OCR model record stop cannot evaluate the guard of step 1, which
+// follows a located-text mark: its frame is undetermined, the cross-check is partially_evaluated
+// and guards_not_evaluated names step 1.
+#[test]
+fn l2_fix2_without_an_ocr_model_the_guards_leave_the_cross_check_partially_evaluated() {
+    let recording = Recording::new();
+    recording
+        .mark(recording.step_one(
+            &alpha_in_cell_0(),
+            &[],
+            vec![located(&["ALPHA"], true, None), page_mark()],
+            Some(follow(None)),
+        ))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    recording.mark_next_step();
+
+    let lab = recording.stop_with(&recording.none);
+
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    let cross_check = &lab["cross_check"];
+    assert_eq!(
+        cross_check["status"], "partially_evaluated",
+        "{cross_check}"
+    );
+    assert_eq!(
+        cross_check["guards_not_evaluated"],
+        json!([1]),
+        "{cross_check}"
+    );
+    assert_eq!(
+        cross_check["located_text_guards"],
+        json!([{
+            "step": 1,
+            "record_index": 1,
+            "mark_id": MARK,
+            "frames": [{"frame_id": "f0001", "result": "undetermined"}]
+        }]),
+        "{cross_check}"
+    );
+}
+
+// Fix 2, items 1 and 3: on a step whose names were changed after its press, a frame the new names
+// are not found on is listed with the step and does not fail the cross-check. Step 2 is pressed in
+// cell 0 (ALPHA) with a smudged sample, and after record stop its names become BETA; record status
+// shows the mark as the recording holds it, the new names among its members, and nothing of the
+// kind on the page mark; record stop with the model that does not read the smudged sample
+// regenerates the package, the cross-check passing and listing that sample under the step.
+#[test]
+fn l2_fix2_a_frame_without_the_changed_names_is_reported_with_the_step_not_refused() {
+    let recording = Recording::new();
+    recording.mark_plain_first_step();
+    recording
+        .mark(recording.located_step_two(&alpha_and_beta(), &alpha_and_beta().smudged()))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    let pressed = recording.press_open_step();
+    assert!(inside(pressed, cell(0)), "{pressed:?}");
+    recording.mark_next_step();
+    let (primary, sample) = recording.frames_of_step(1);
+    let generated = recording.stop_session();
+    assert_eq!(generated["lab_status"], "generated", "{generated}");
+    recording
+        .declare_again_on(2, located(&["BETA"], true, None))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+
+    let status = recording.status();
+
+    let marks = status["steps"][1]["marks"].as_array().expect("marks");
+    let shown = marks
+        .iter()
+        .find(|mark| mark["id"] == MARK)
+        .expect("the located-text mark");
+    let held = &shown["located_text"];
+    assert_eq!(held["id"], MARK, "{shown}");
+    assert_eq!(held["region"], json!(NAMES), "{shown}");
+    assert_eq!(held["ocr"]["expected"], json!(["BETA"]), "{shown}");
+    assert_eq!(held["ocr"]["locate"], locate(true), "{shown}");
+    assert_eq!(held["ocr"]["languages"], json!(["en"]), "{shown}");
+    let page = marks
+        .iter()
+        .find(|mark| mark["id"] == PAGE)
+        .expect("the page mark");
+    assert!(page.get("located_text").is_none(), "{page}");
+
+    let regenerated = recording.stop_with(&recording.smudged);
+
+    assert_eq!(regenerated["lab_status"], "regenerated", "{regenerated}");
+    let cross_check = &regenerated["cross_check"];
+    assert_eq!(cross_check["status"], "passed", "{cross_check}");
+    assert_eq!(
+        cross_check["names_changed_after_press"],
+        json!([{
+            "step": 2,
+            "record_index": 2,
+            "mark_id": MARK,
+            "recorded_point": {"x": pressed.0, "y": pressed.1},
+            "frames_without_names": [sample.as_str()]
+        }]),
+        "{cross_check}"
+    );
+    assert_eq!(
+        cross_check["located_text_guards"][0]["frames"],
+        json!([
+            {"frame_id": primary.as_str(), "result": "found"},
+            {"frame_id": sample.as_str(), "result": "not_found"}
+        ]),
+        "{cross_check}"
+    );
+}
+
+// Fix 2, item 4: `--reopen-step` clears names_changed_after_press: after the press in cell 0 the
+// names become BETA (the record is set), and reopening the step makes the press an attempt and
+// the click's follow a plain follow again, in the answer, the recording and record status.
+#[test]
+fn l2_fix2_reopen_step_clears_names_changed_after_press() {
+    let recording = Recording::new();
+    recording.executed_in_cell_0();
+    let renamed = recording
+        .declare_again(located(&["BETA"], true, None))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    let click = serde_json::to_value(&renamed.click).expect("click JSON");
+    assert_eq!(
+        click["follow"]["names_changed_after_press"], true,
+        "{click}"
+    );
+
+    let reopened = recording
+        .mark(MarkRequest {
+            schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+            step_action: Some(StepAction {
+                kind: StepActionKind::ReopenStep,
+                step: Some(1),
+            }),
+            ..MarkRequest::default()
+        })
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+
+    assert_eq!(reopened.status, "step_reopened");
+    let click = serde_json::to_value(&reopened.click).expect("click JSON");
+    assert_eq!(
+        click["follow"],
+        json!({"mark_id": MARK, "form": "target"}),
+        "{click}"
+    );
+    assert!(click["execution"].is_null(), "{click}");
+    assert_eq!(
+        click["attempts"].as_array().map(Vec::len),
+        Some(1),
+        "{click}"
+    );
+    assert_eq!(
+        recording.recording()["steps"][0]["click"]["follow"],
+        json!({"mark_id": MARK, "form": "target"})
+    );
+    let status = recording.status();
+    assert!(
+        status["steps"][0]["click"]
+            .get("names_changed_after_press")
+            .is_none(),
+        "{status}"
+    );
+}
+
+// Fix 2, items 3 and 4: after the press in cell 0 and a change of the names to BETA (the record
+// set), a request that also changes minimum_confidence is held to the press: with BETA (cell 1)
+// it is refused press_outside_found_box, the rejection listing minimum_confidence as the member
+// that differs, and nothing is written; with ALPHA (cell 0, where the press lies) it passes the
+// press check and clears the record.
+#[test]
+fn l2_fix2_a_later_change_that_passes_the_press_check_clears_names_changed_after_press() {
+    let recording = Recording::new();
+    recording.executed_in_cell_0();
+    recording
+        .declare_again(located(&["BETA"], true, None))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    let before = recording.recording_bytes();
+    let stricter = |names: &[&str]| MarkSpec {
+        minimum_confidence: Some(0.85),
+        ..located(names, true, None)
+    };
+
+    let error = recording
+        .declare_again(stricter(&["BETA"]))
+        .expect_err("held to the press in cell 0, BETA in cell 1");
+
+    let refused = rejection(error, LabCode::RecordClickFollowInvalid.as_str());
+    assert_follow_outcome(
+        &refused["outcome"],
+        ClickFollowProblem::PressOutsideFoundBox,
+    );
+    assert_eq!(
+        refused["differing_members"],
+        json!(["minimum_confidence"]),
+        "{refused}"
+    );
+    assert_eq!(recording.recording_bytes(), before, "nothing written");
+
+    let marked = recording
+        .declare_again(stricter(&["ALPHA"]))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+
+    let click = serde_json::to_value(&marked.click).expect("click JSON");
+    assert_eq!(
+        click["follow"],
+        json!({"mark_id": MARK, "form": "target"}),
+        "{click}"
+    );
+    assert_eq!(click["rect"], json!(cell(0)), "{click}");
+}
+
+// Fix 2, item 4: a click that follows the located-text mark and names it as its guard cannot keep
+// that guard once the click is replaced by a rectangle that follows nothing:
+// record_guard_family_invalid, and nothing is written.
+#[test]
+fn l2_fix2_a_guard_on_the_ocr_mark_is_refused_after_the_click_stops_following_it() {
+    let recording = Recording::new();
+    let mut named = recording.step_one(
+        &alpha_in_cell_0(),
+        &[],
+        vec![located(&["ALPHA"], true, None), page_mark()],
+        Some(follow(None)),
+    );
+    named.click_guard = Some(MARK.to_owned());
+    recording
+        .mark(named)
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    let before = recording.recording_bytes();
+
+    let error = recording
+        .mark(MarkRequest {
+            schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+            step: Some(1),
+            click: Some(ClickSpec {
+                region: Some(cell(0)),
+                ..ClickSpec::default()
+            }),
+            replace_click: true,
+            ..MarkRequest::default()
+        })
+        .expect_err("the OCR mark guards only a click that follows it");
+
+    assert_eq!(
+        error.code, "record_guard_family_invalid",
+        "{}",
+        error.message
+    );
+    assert!(
+        error
+            .message
+            .contains(&format!("the click guard '{MARK}' is an OCR mark")),
+        "{}",
+        error.message
+    );
+    assert_eq!(recording.recording_bytes(), before, "nothing written");
+}
+
+// Fix 2, item 4: record stop refuses, when it generates the package, a step whose click follows a
+// located-text mark and whose page has no other mark: the recording file was changed by hand and
+// lost step 1's page mark. record_click_follow_invalid with page_needs_followed_text; the
+// recording stays active.
+#[test]
+fn l2_fix2_record_stop_refuses_page_needs_followed_text_when_it_generates() {
+    let recording = Recording::new();
+    recording
+        .mark(recording.step_one(
+            &alpha_in_cell_0(),
+            &[],
+            vec![located(&["ALPHA"], true, None), page_mark()],
+            Some(follow(None)),
+        ))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    recording.mark_next_step();
+    let mut edited = recording.recording();
+    let marks = edited["steps"][0]["marks"]
+        .as_array_mut()
+        .expect("the marks of step 1");
+    marks.retain(|mark| mark["id"] != PAGE);
+    assert_eq!(marks.len(), 1, "only the located-text mark is left");
+    fs::write(
+        recording_path(&recording.temp.path().join("state"), RECORD_ID),
+        serde_json::to_vec_pretty(&edited).expect("recording JSON"),
+    )
+    .expect("recording file");
+
+    let error = match record_stop(
+        &recording.lock,
+        &RecordStopOptions::default(),
+        &recording.ocr,
+    ) {
+        Ok(_) => panic!("step 1's page would need the name"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        error.code,
+        LabCode::RecordClickFollowInvalid.as_str(),
+        "{}",
+        error.message
+    );
+    assert_follow_outcome(
+        &error.details.expect("details")["outcome"],
+        ClickFollowProblem::PageNeedsFollowedText,
+    );
+    assert_eq!(recording.recording()["status"], "active");
 }

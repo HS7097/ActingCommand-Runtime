@@ -1504,6 +1504,8 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
                 },
                 margin: mark.self_test.margin.clone(),
                 value_test: mark.value_test.clone(),
+                // #463 L2 fix 2: where an agent reads the members a change of names repeats.
+                located_text: mark.locates_text().then(|| mark.clone()),
             })
             .collect(),
         reused: step.reused.clone(),

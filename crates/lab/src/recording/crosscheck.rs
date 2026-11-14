@@ -644,6 +644,25 @@ impl Evaluation<'_> {
             margins,
         })
     }
+
+    /// #463 L2 fix 2: the located-text target `id` on `scene`, as the guard of the click that
+    /// follows it evaluates it there; `None` without an OCR model, when OCR is never called.
+    fn located_guard(&self, scene: &Scene, id: &str) -> LabResult<Option<TargetEvaluation>> {
+        if !self.ocr_available {
+            return Ok(None);
+        }
+        let target = self.plan.target_id(id);
+        self.evaluator
+            .evaluate_target(scene, &target)
+            .map(Some)
+            .map_err(|error| {
+                admission_failed(
+                    "cross_check",
+                    format!("target '{target}' cannot be evaluated: {error}"),
+                    json!({"target": target}),
+                )
+            })
+    }
 }
 
 /// The cross-check results the output and the package provenance carry.
@@ -771,6 +790,33 @@ fn self_mismatch(
             ),
         ),
         details,
+    )
+}
+
+/// #463 L2 fix 2: the guard of a step whose click follows a located-text mark, that mark's names,
+/// is not found on one of the step's own frames (`evaluation`, with the kernel's typed reason).
+fn guard_mismatch(
+    step: &PlanStep,
+    mark_id: &str,
+    frame: &RecordedFrame,
+    evaluation: &TargetEvaluation,
+) -> LabError {
+    with_details(
+        blocked(
+            "record_step_self_mismatch",
+            format!(
+                "the guard of step {}, the located-text mark '{mark_id}' its click follows, does \
+                 not pass on its own frame {}: {}",
+                step.step.index, frame.frame_id, evaluation.message
+            ),
+        ),
+        json!({
+            "step": step.number,
+            "record_index": step.step.index,
+            "mark_id": mark_id,
+            "frame_id": frame.frame_id,
+            "failure": evaluation.failure
+        }),
     )
 }
 
@@ -1048,8 +1094,12 @@ fn optional_checks(
 }
 
 /// #463 L2 fix 1: every step whose click follows a located-text mark whose names were changed
-/// after the click was executed, with the followed mark and the recorded press.
-fn names_changed_after_press(plan: &Plan) -> Vec<Value> {
+/// after the click was executed, with the followed mark and the recorded press; fix 2: with the
+/// live frames its new names are not found on (`without_names`, by step), when there are any.
+fn names_changed_after_press(
+    plan: &Plan,
+    without_names: &BTreeMap<u32, Vec<String>>,
+) -> Vec<Value> {
     plan.steps
         .iter()
         .filter_map(|step| {
@@ -1058,12 +1108,16 @@ fn names_changed_after_press(plan: &Plan) -> Vec<Value> {
                 .follow
                 .as_ref()
                 .filter(|follow| follow.names_changed_after_press)?;
-            Some(json!({
+            let mut item = json!({
                 "step": step.number,
                 "record_index": step.step.index,
                 "mark_id": follow.mark_id,
                 "recorded_point": click.execution.as_ref().map(|execution| execution.point)
-            }))
+            });
+            if let Some(frames) = without_names.get(&step.number) {
+                item["frames_without_names"] = json!(frames);
+            }
+            Some(item)
         })
         .collect()
 }
@@ -1134,6 +1188,60 @@ pub(crate) fn cross_check(
                 "frames": results
             }));
         }
+    }
+
+    // #463 L2 fix 2: the guard of every click that follows a located-text mark, its names and no
+    // mark of the page, on the step's own live frames as the pages above. A frame it does not pass
+    // on is the step's mismatch, except on a step whose names were changed after its press: its
+    // frames show the demonstration, not the new value, so such a frame is listed with the step.
+    let mut located_guards = Vec::new();
+    let mut guards_not_evaluated = Vec::new();
+    let mut without_names: BTreeMap<u32, Vec<String>> = BTreeMap::new();
+    for step in &plan.steps {
+        let Some(follow) = step
+            .step
+            .click
+            .as_ref()
+            .and_then(|click| click.follow.as_ref())
+        else {
+            continue;
+        };
+        if !follows_located_text(plan, step)? {
+            continue;
+        }
+        let mut results = Vec::new();
+        let mut undetermined = false;
+        for frame in step.live_frames() {
+            let scene = &cached(cache, frame)?.scene;
+            let result = match evaluation.located_guard(scene, &follow.mark_id)? {
+                None => {
+                    undetermined = true;
+                    "undetermined"
+                }
+                Some(found) if found.passed => "found",
+                Some(_) if follow.names_changed_after_press => {
+                    without_names
+                        .entry(step.number)
+                        .or_default()
+                        .push(frame.frame_id.clone());
+                    "not_found"
+                }
+                Some(refused) => {
+                    return Err(guard_mismatch(step, &follow.mark_id, frame, &refused));
+                }
+            };
+            results.push(json!({"frame_id": frame.frame_id, "result": result}));
+        }
+        if undetermined {
+            partial = true;
+            guards_not_evaluated.push(step.number);
+        }
+        located_guards.push(json!({
+            "step": step.number,
+            "record_index": step.step.index,
+            "mark_id": follow.mark_id,
+            "frames": results
+        }));
     }
 
     // Workflow #339 section 4.7: the optional steps, refusals before any warning.
@@ -1306,9 +1414,20 @@ pub(crate) fn cross_check(
     // #463 L2 fix 1: a step whose located-text names were changed after its press is judged by
     // the box the new names give on its frames, never by the recorded press, which the package
     // does not repeat; the result names each such step.
-    let renamed = names_changed_after_press(plan);
+    let renamed = names_changed_after_press(plan, &without_names);
     if !renamed.is_empty() {
         cross_check.insert("names_changed_after_press".to_string(), json!(renamed));
+    }
+    // #463 L2 fix 2: the guards on located text, and the steps whose guard was not evaluated
+    // (no OCR model), present only when a step has such a guard.
+    if !located_guards.is_empty() {
+        cross_check.insert("located_text_guards".to_string(), json!(located_guards));
+    }
+    if !guards_not_evaluated.is_empty() {
+        cross_check.insert(
+            "guards_not_evaluated".to_string(),
+            json!(guards_not_evaluated),
+        );
     }
     Ok(CrossCheck {
         warnings,

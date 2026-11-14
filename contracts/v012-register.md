@@ -24337,6 +24337,31 @@ and a click that no longer follows the OCR mark its guard names is refused the s
 catalog's texts, the read budget's place (checked only when `record stop` admits the package) and
 every text on a name missing at run time say what fix 1 makes true.
 
+**Fix round 2** (the second review's suggestions, all taken by the coordinator,
+`rd-1114/brief-1716-fix2.md`; main `1e67d1c5` merged, this section staying 1.371). 1. Since fix 1
+no page rule names the followed located-text mark, so `record stop`'s cross-check evaluated it on
+no frame: it now evaluates the guard of every step whose click follows one on that step's live
+frames; not found is `record_step_self_mismatch` (`details{step, record_index, mark_id, frame_id,
+failure}`), except on a step whose names were changed after its press, where the frame is listed in
+`names_changed_after_press[].frames_without_names`; without an OCR model the status is
+`partially_evaluated` and `guards_not_evaluated` lists the steps; `located_text_guards` gives each
+such step's frames. None of the three is written for a recording without a located-text follow.
+2. The refusal `page_needs_followed_text` says what the other mark is for (it tells this screen from
+the task's other screens; one that also holds on the next screen does not help); no behaviour
+changes. 3. `record status` shows a located-text mark as the recording holds it in
+`steps[].marks[].located_text`, where an agent reads the members a change of names repeats (before,
+only `recording.json` and the `record mark` answer that added it held them); a
+`press_outside_found_box` of a request that declares the mark again lists as `differing_members`
+the members besides the names it changed; the catalog's handling text of
+`record_click_follow_invalid` lists every member the comparison covers. Tests (same gate row):
+`l2_fix2_the_cross_check_finds_the_guard_on_every_live_frame_or_refuses_the_step`,
+`l2_fix2_without_an_ocr_model_the_guards_leave_the_cross_check_partially_evaluated`,
+`l2_fix2_a_frame_without_the_changed_names_is_reported_with_the_step_not_refused`,
+`l2_fix2_reopen_step_clears_names_changed_after_press`,
+`l2_fix2_a_later_change_that_passes_the_press_check_clears_names_changed_after_press`,
+`l2_fix2_a_guard_on_the_ocr_mark_is_refused_after_the_click_stops_following_it` and
+`l2_fix2_record_stop_refuses_page_needs_followed_text_when_it_generates`. No earlier test changes.
+
 **At deploy.** Nothing to do. Do not mix builds during one recording: a recording made with a
 located-text mark is unavailable to a Lab before this slice.
 

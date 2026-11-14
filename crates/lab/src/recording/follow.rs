@@ -194,12 +194,14 @@ pub(crate) fn located_page_problem(id: &str, marks: &[&RecordedMark]) -> Option<
     let recognized = marks
         .iter()
         .any(|mark| mark.id != id && !any_of_members.contains(&&mark.id));
+    // #463 L2 fix 2: the message says what the mark is for; the Lab cannot judge its strength.
     (!recognized).then(|| {
         format!(
             "the click follows the located-text mark '{id}', which is its guard and no mark of the \
-             step's page, and the step has no other mark that recognizes its page: add a \
-             template, color, color digest, check or another OCR mark that holds on the step's \
-             frames"
+             step's page, and the step has no other mark that recognizes its page: add a mark \
+             that tells this screen from the other screens of the task, for example a template \
+             of its title or of a fixed element (a color, color digest, check or another OCR mark \
+             also recognizes a page); a mark that also holds on the next screen does not help"
         )
     })
 }
@@ -329,12 +331,14 @@ pub(crate) struct LocatedClick {
 /// which the names are not found (or lie in no cell, or not uniquely) is already the mark's own
 /// self-test refusal, with the kernel's typed reason, and gives nothing here. Otherwise the click
 /// box on each frame lies inside it (`click_outside_frame`) and, when the step's click was
-/// executed and `press_check` holds, the press lies in the box on the primary frame
+/// executed and `press_check` is given, the press lies in the box on the primary frame
 /// (`press_outside_found_box`); the first frame that does not hold gives the rejection. #463 L2
-/// fix 1: `press_check` is false for a command that changes only the mark's names, and for one
-/// that leaves the mark as it is after its names were changed after the press. An `offset` click
-/// declared by this command takes its offset from the declared rectangle and the found box on the
-/// primary frame.
+/// fix 1: `press_check` is `None` for a command that changes only the mark's names, and for one
+/// that leaves the mark as it is after its names were changed after the press; fix 2: otherwise
+/// it holds the members besides the names in which this command changed the mark (none for a
+/// mark that is new or unchanged), which the press's rejection lists as `differing_members`. An
+/// `offset` click declared by this command takes its offset from the declared rectangle and the
+/// found box on the primary frame.
 pub(crate) fn check_located_follow_frames(
     follow: &ClickFollow,
     click: &StepClick,
@@ -342,7 +346,7 @@ pub(crate) fn check_located_follow_frames(
     live: &[RecordedFrame],
     frames: &[EvalFrame<'_>],
     provider: Arc<dyn VisionProvider>,
-    press_check: bool,
+    press_check: Option<&[String]>,
 ) -> LabResult<FollowFrames> {
     let id = follow.mark_id.as_str();
     let evaluations = ocr_frame_evaluations(mark, frames, provider)?;
@@ -388,7 +392,7 @@ pub(crate) fn check_located_follow_frames(
     let executed = click
         .execution
         .as_ref()
-        .filter(|_| press_check && click.executed())
+        .filter(|_| press_check.is_some() && click.executed())
         .map(|execution| execution.point);
     let mut primary_box = None;
     for ((entry, frame), base) in live.iter().zip(&evaluations).zip(&found) {
@@ -414,16 +418,22 @@ pub(crate) fn check_located_follow_frames(
         if let (Some(point), Some(clicked)) = (executed, clicked)
             && !point_in(point, clicked)
         {
+            let mut detail = json!({
+                "frame_id": frame.frame_id,
+                "found_rect": base,
+                "click_rect": clicked,
+                "point": point
+            });
+            // #463 L2 fix 2: why the command is held to the press: the members, besides the
+            // names, in which it changed the mark it declared again.
+            if let Some(members) = press_check.filter(|members| !members.is_empty()) {
+                detail["differing_members"] = json!(members);
+            }
             return Ok(FollowFrames {
                 rejection: Some(follow_rejection(
                     id,
                     ClickFollowProblem::PressOutsideFoundBox,
-                    json!({
-                        "frame_id": frame.frame_id,
-                        "found_rect": base,
-                        "click_rect": clicked,
-                        "point": point
-                    }),
+                    detail,
                 )),
                 located: None,
             });

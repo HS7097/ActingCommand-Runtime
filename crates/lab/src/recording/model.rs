@@ -1206,6 +1206,10 @@ pub struct MarkView {
     /// #411 Lab B-9: a value-test mark's declaration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value_test: Option<ValueTestSpec>,
+    /// #463 L2 fix 2: a located-text mark as the recording holds it, every member that a request
+    /// changing only its names gives again (`region`, `unique`, the OCR fields with `locate`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub located_text: Option<RecordedMark>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
