@@ -3,17 +3,22 @@
 Workflow #455, slice G-R1 (Runtime 0.12.60; [v012-register.md](v012-register.md) §1.356). On board
 #455 a person (through the console) or an agent (through the Lab) sets goals for an application.
 The console only renders: a standard pack says which goal entries its game offers. This document
-is that declaration: where it lives, an entry's members, the five types of version 1, the blocks
+is that declaration: where it lives, an entry's members, the five types of version 2, the blocks
 and the fallback rule, defaults, texts and limits, every refusal of its check with its pointer,
 who reads it, its interface revision, and what is not this file's.
 
 **Workflow #463 V1** (Runtime 0.12.61; [v012-register.md](v012-register.md) §1.378;
 [package-variables.md](package-variables.md)) replaced the four types that governed packages
 (`integer`, `choice`, `switch`, `ordered`) by the type `variable`: a package declares the value it
-reads in its own `control.json`, and an entry of this file only places it on the page. The tag
-`v0.12.60` did not exist when V1's pull request opened, so the file stays version 1 (no pack
-carries one yet, "Before any pack carries the file"): a version 1 file that writes one of the four
-types is `goal_type_unknown` at it.
+reads in its own `control.json`, and an entry of this file only places it on the page. Release
+0.12.60 shipped version 1 with its eight types, and a released format does not change its shape
+in place, so the file of the five types is **version 2** (`actingcommand.goals.v2`; V1 fix round
+3, the coordinator's ruling 2 on the design's questions). This build reads version 2 only: a
+version 1 file is `goal_version_retired` at `/schema_version` and is read no further. No pack
+carries a version 1 file ("Before any pack carries the file"), so nothing is converted and no
+reader of version 1 stays. A version 2 file that writes one of the four types is
+`goal_type_unknown` at it. What a Runtime, an installer and a Lab of 0.12.60 do with a version 2
+file is in "Interface".
 
 **No value is read here.** The values a person or an agent sets, the requests that set and read
 them, the run fact a governed package reads and the scheduler's reading of a resource goal are
@@ -27,8 +32,9 @@ unit text and no option title. They are data for the console.
 
 `goals.json` is an optional root file of the game root, `<standard_packs.root>/<game>/goals.json`,
 beside `bundle.json`, by the root-file rule ([package-reference.md](package-reference.md),
-"Standard package root", "Naming"): `schema_version` `actingcommand.goals.v1` and `game` equal to
-the directory's name.
+"Standard package root", "Naming"): `schema_version` `actingcommand.goals.v2` (Workflow #463 V1
+fix round 3; version 1, `actingcommand.goals.v1`, is what release 0.12.60 read) and `game` equal
+to the directory's name.
 
 - It is not `ui.json`: the Runtime must enforce types and ranges, and `ui.json` is display metadata
   that no Runtime reader opens and that never changes a run.
@@ -36,7 +42,7 @@ the directory's name.
   would refuse the whole schedule.
 
 ```text
-{schema_version: "actingcommand.goals.v1", game,
+{schema_version: "actingcommand.goals.v2", game,
  entries: [{name, type, block?, title: {<locale>: text}, help?: {<locale>: text}, governs?,
             <the type's members>}
          | {name, type: "variable", block?}]}
@@ -53,7 +59,7 @@ The document has exactly the members `schema_version`, `game` and `entries`.
   the stable name the Lab uses; a `variable` entry's name is the name of the variable it places.
   Renaming an entry is removing it and adding another.
 - **Position**: the file's order, one page from top to bottom. Nothing numbers an entry.
-- **Type** (`type`, required): one of the five of version 1 (below).
+- **Type** (`type`, required): one of the five of version 2 (below).
 - **Block** (`block`, optional): how a reader shows the entry (below); absent, the type's base
   block, and for a `variable` entry the placed variable's.
 - **Texts**: `title` (required) and `help` (optional), each a text per locale; a `variable` entry
@@ -67,7 +73,10 @@ The document has exactly the members `schema_version`, `game` and `entries`.
 
 Every other member is refused.
 
-### The five types of version 1
+### The five types of version 2
+
+Version 1, which release 0.12.60 read, had eight: these five without `variable`, and `integer`,
+`choice`, `switch` and `ordered`, which governed packages (Workflow #463 V1 fix round 3).
 
 | `type` | Members besides `name`, `type`, `block`, `title`, `help` | Its value (later slices) |
 |---|---|---|
@@ -97,7 +106,7 @@ Every other member is refused.
 ### Neutral example
 
 ```json
-{"schema_version": "actingcommand.goals.v1", "game": "neutral",
+{"schema_version": "actingcommand.goals.v2", "game": "neutral",
  "entries": [
   {"name": "stock", "type": "heading", "title": {"en": "Stock", "zh-Hans": "储备"}},
   {"name": "points", "type": "resource", "governs": {"pool": "pool.neutral.points"},
@@ -106,12 +115,12 @@ Every other member is refused.
   {"name": "route", "type": "variable"}]}
 ```
 
-The third entry places the variable `route` a package of the root declares (Workflow #463 V1; it
-was a `choice` entry that governed `neutral.collect` before).
+The third entry places the variable `route` a package of the root declares (Workflow #463 V1; in
+version 1 it was a `choice` entry that governed `neutral.collect`).
 
 ## Blocks
 
-Version 1 has seven blocks, one for each type or variable kind, its base block:
+Version 2 has the seven blocks of version 1, one for each type or variable kind, its base block:
 
 | `block` | Type | What a person sees |
 |---|---|---|
@@ -129,7 +138,7 @@ must be the placed variable's base block (Workflow #463 V1); any other is `goal_
 **The fallback rule**: a later version may give a type more blocks (a slider for an `integer`, say);
 a reader that meets a block it does not know shows the type's base block, and one that meets a type
 it does not know shows the entry's title and its value read-only, never writes it, and says so.
-Not in version 1: a slider, multiple choice and a table (later types or blocks), and a picker
+Not in version 2: a slider, multiple choice and a table (later types or blocks), and a picker
 (merged into the ordered list and the single choice).
 
 ## Texts and limits
@@ -171,11 +180,12 @@ against the root.
 
 | `standard_pack_problem` | When | `json_pointer` |
 |---|---|---|
-| `malformed` | the file is no JSON or no object (a file that begins with a byte-order mark too: the reader takes the bytes as they are); a member repeated in one object, unknown, missing or not of its type (an integer outside the safe integers too; a `title` or `help` a `variable` entry writes); another `schema_version`; a name, an option value or an id outside its form; a `governs` id named twice | the member (empty for the whole document) |
+| `malformed` | the file is no JSON or no object (a file that begins with a byte-order mark too: the reader takes the bytes as they are); a member repeated in one object, unknown, missing or not of its type (an integer outside the safe integers too; a `title` or `help` a `variable` entry writes); a `schema_version` that is neither version 2's nor version 1's (a version this build does not know yet, a later one included); a name, an option value or an id outside its form; a `governs` id named twice | the member (empty for the whole document) |
+| `goal_version_retired` | Workflow #463 V1 fix round 3: `schema_version` is `actingcommand.goals.v1`, version 1, which release 0.12.60 read and this build reads no more. The file is read no further: after the members repeated in one object and the document's own members unknown or missing, it is the file's only problem | `/schema_version` |
 | `goal_out_of_limits` | the file is larger than 1 MiB; a list, a map or a text's locales of a count outside its limit; a name, an option value, an id, a locale or a text of a length outside its limit (the "Limits" table; an empty one too). G-R1 fix round 1 | what exceeds: the list, the map, the text or the member (empty for the whole file) |
 | `game_mismatch` | `game` is not the directory's | `/game` |
 | `goal_name_duplicate` | a name an earlier entry has | `/entries/<i>/name`, the later |
-| `goal_type_unknown` | `type` is none of the five, a later version's type included, and (Workflow #463 V1) the four types `variable` replaced, `integer`, `choice`, `switch` and `ordered`; the entry is read no further | `/entries/<i>/type` |
+| `goal_type_unknown` | `type` is none of the five of version 2, a later version's type included, and (Workflow #463 V1) the four types `variable` replaced, `integer`, `choice`, `switch` and `ordered`; the entry is read no further | `/entries/<i>/type` |
 | `goal_block_mismatch` | `block` is not the type's base block; Workflow #463 V1: a `variable` entry's `block` that is none of the four a variable is shown with (by the reader), or not the placed variable's base block (by the references) | `/entries/<i>/block` |
 | `goal_range_invalid` | what the entry declares as its values cannot hold one: an option value written twice (at the later `value`); a tier's `scale_milli` outside 1 to 1,000,000 (at it; one that is no safe integer is `malformed`, as every integer member of the file) | the member named |
 | `goal_default_invalid` | a `tier`'s `default` is not one of its option values, judged once its options hold | `/entries/<i>/default` |
@@ -209,7 +219,8 @@ for that game, and a reader of the declaration says why.
   the root: the pools of `schedule.json` and its rules with the packages they run, and every package
   of `bundle.json` with the capabilities its `control.json` provides and their `irreversible` marks
   and (Workflow #463 V1) the variables it declares (read by the Runtime's metadata reader, as the
-  remedy report reads them); since V1 it reads no table. Each problem is one
+  remedy report reads them); since V1 it reads no table. A version 1 file is the warning
+  `goal_version_retired` and is read no further (V1 fix round 3). Each problem is one
   `standard_pack_root_invalid` warning, after the other warnings (the root check of the packages'
   variables among them, [package-variables.md](package-variables.md)), in file order; the root is
   checked as without the file, and the answer is otherwise what it is without the file. The file
@@ -225,18 +236,23 @@ for that game, and a reader of the declaration says why.
   message), `--out` not written; an accepted one is laid beside `bundle.json` byte for byte. The
   operation table's row `package bundle` has the parameter `goals`; the MCP server serves it as the
   row says. `package bundle` writes no `interfaces.json`, and `resource verify`'s `bundle` step does
-  not pass the file in G-R1: a bundle that carries it is declared `package` [12, 12] by its packer.
+  not pass the file in G-R1: a bundle that carries it is declared `package` [12, 12] by its packer,
+  since Workflow #463 V1 fix round 3 [14, 14], the revision of version 2. A version 1 file refuses
+  the bundle `goal_version_retired`.
   `resource verify` passes over a `goals.json` in a repository without a word: a warning would need
   an outcome code, which G-R1 does not add ("Before any pack carries the file").
 - **The installer's `place`** (the Lab's rescue module) takes `goals.json` from a bundle zip as a root
   file, placed last among them (after `schedule.json`, whose pools and rules its entries name), and
   sets it aside as `goals.json.old-<ms>` when the game root holds one and a later zip carries none;
   `undo` puts it back. A zip that carries the file declares a `package` maximum of 12 at least
-  (G-R1 fix round 1, as a zip that carries the notices directory declares 10): otherwise its plan
-  refuses it `pack_invalid` caused by `standard_pack_root_invalid` with `goal_undeclared` at
-  `<zip>\interfaces.json`, the pointer empty, before the hold and any write. It reads the file's
-  name only; its `post_check` runs `standard-pack check`, which reports a refused file without
-  failing.
+  (G-R1 fix round 1, as a zip that carries the notices directory declares 10), 14 since Workflow
+  #463 V1 fix round 3 (`GOALS_PACKAGE_REVISION`, the revision of version 2, as a zip whose packs
+  declare variables declares 14): otherwise its plan refuses it `pack_invalid` caused by
+  `standard_pack_root_invalid` with `goal_undeclared` at `<zip>\interfaces.json`, the pointer
+  empty, before the hold and any write. A zip that declares 12, as a bundle of version 1 did, is
+  refused so. It reads the file's name only, so the version is not judged here; its `post_check`
+  runs `standard-pack check`, which reports a refused file (a version 1 file
+  `goal_version_retired`) without failing.
 - **The Runtime** opens no `goals.json` in G-R1: its root reader, its startup and run preparation,
   the policy crate and check-config read named files only. A later slice's scheduler workbench reads
   it with `schedule.json`. Since G-R2s (0.12.60) the workbench reads every package's declaration
@@ -246,23 +262,53 @@ for that game, and a reader of the declaration says why.
 ## Interface
 
 `package` revision 12 ([component-interfaces.md](component-interfaces.md)): a bundle that carries
-`goals.json` declares `package` [12, 12] (the contract crate's `GOALS_PACKAGE_REVISION`); a bundle
-without it keeps its revision, and the Runtime declares [3, 12] (since Workflow #463 V1 [3, 14],
-[package-variables.md](package-variables.md), "Interface"). This release's installer refuses a
-zip that carries the file and declares a maximum below 12 (`goal_undeclared`, "Who reads it"). An
+`goals.json` version 1 declares `package` [12, 12] (the contract crate's `GOALS_PACKAGE_REVISION`
+until version 2, below); a bundle without it keeps its revision, and the Runtime declares [3, 12]
+(since Workflow #463 V1 [3, 14], [package-variables.md](package-variables.md), "Interface"). The
+installer of 0.12.60 refuses a zip that carries the file and declares a maximum below 12
+(`goal_undeclared`, "Who reads it"; below 14 since version 2). An
 installer before 0.12.60 refuses such a zip in the plan, before the hold and any write: through its
 `package` edge (`interface_edge`) when the zip declares 12, at its layout check (`pack_invalid`
 naming `goals.json`) when it declares less. A Runtime before 0.12.60 reads a game root that holds
 the file as one without it. **A rollback is not refused**: a Runtime before this slice treats the
 file as absent; an installer before this slice refuses a bundle that carries the file, and when it
 places a bundle without it, it leaves an existing `goals.json` where it is. `ledger`,
-`runtime-client`, `actingd-config` and `runtime-outcomes` do not move: the sixteen words (the
-fifteen of the file, `goal_variable_unknown` the fifteenth since Workflow #463 V1, and
-`goal_undeclared`) are words of the existing vocabulary `standard_pack_problem` under the existing
-code `standard_pack_root_invalid`. Workflow #463 V1 changed what version 1 reads (the placement
-in place of the four types) without a revision of its own: no pack carries the file, and a bundle
-whose packages declare the variables a placement names declares `package` [14, 14]
-([package-variables.md](package-variables.md), "Interface").
+`runtime-client`, `actingd-config` and `runtime-outcomes` do not move: the seventeen words (the
+sixteen of the file, `goal_variable_unknown` the fifteenth since Workflow #463 V1 and
+`goal_version_retired` the sixteenth since its fix round 3, and `goal_undeclared`) are words of
+the existing vocabulary `standard_pack_problem` under the existing code
+`standard_pack_root_invalid`.
+
+**Version 2, `package` revision 14** (Workflow #463 V1 fix round 3, Runtime 0.12.61; register
+§1.378; [component-interfaces.md](component-interfaces.md), the `package` row 14). Release 0.12.60
+read version 1, so the file of the five types is version 2, and a bundle that carries it declares
+`package` [14, 14] (`GOALS_PACKAGE_REVISION` is 14 since; the revision also brings a package's
+`variables`, which a placement names, [package-variables.md](package-variables.md), "Interface").
+This build reads version 2 only (a version 1 file is `goal_version_retired`), and its installer
+refuses a zip that carries the file and declares a maximum below 14 (`goal_undeclared`). What the
+programs of 0.12.60 (`package` [3, 12], version 1 only) do with a version 2 file:
+
+- **The Runtime** opens no `goals.json`: its root reader, its startup and run preparation, the
+  policy crate, check-config and the workbench read named files only (G-R2s reads the packages'
+  declarations, not this file). It reads a game root that holds a version 2 file as one without it.
+- **The installer's `place`** refuses a bundle that declares [14, 14] through its `package` edge:
+  the bundle's maximum is outside its own range [3, 12], so `interface_edge` at
+  `<zip>\interfaces.json`, in the plan, before the hold and any write
+  (`crates/lab-rescue/src/install/place.rs`, the edge check of `plan`). A bundle that carried a
+  version 2 file and declared 12 would pass that edge and its `goal_undeclared`, and be placed;
+  its post check's `standard-pack check` then warns as below and passes.
+- **The Lab** reads `schema_version` `actingcommand.goals.v1` only (the contract crate's reader of
+  0.12.60, `Check::document`): a version 2 file is `malformed` at `/schema_version`, and each
+  `variable` entry `goal_type_unknown` at its `type` (its eight types have no `variable`), the
+  other entries read on. `standard-pack check` reports each problem as a `standard_pack_root_invalid`
+  warning and checks the root as without the file (`crates/resource-tooling/src/standard_pack_goals.rs`,
+  `goal_issues` and `goal_warnings`); `package bundle --goals` refuses the bundle with its first
+  problem, `malformed` at `/schema_version`, `--out` not written (`refuse_goals`).
+
+**A rollback to 0.12.60 is not refused** for the file: no released bundle carries it; a root that
+holds a version 2 file runs as without it on that Runtime, its check warns, and its installer
+refuses a bundle that declares 14 and sets an existing `goals.json` aside when it places a bundle
+without one, as it does today.
 
 ## What is not this file's
 
@@ -332,13 +378,13 @@ whose packages declare the variables a placement names declares `package` [14, 1
      Packages keep their own refusals of
      premium-currency and real-money buttons, and no package reads a goal for them.
   3. **Resource-side review**: the Runtime is game-neutral and cannot know which pool is a premium
-     currency, so no `goals.json` of version 1 declares a premium-currency pool or an entry about
-     spending premium currency, real money, retiring or scrapping.
+     currency, so no `goals.json` of version 2 (as none of version 1) declares a premium-currency
+     pool or an entry about spending premium currency, real money, retiring or scrapping.
 
 ## Before any pack carries the file
 
 What a later slice owes before any standard pack carries `goals.json` (G-R1 fix round 1):
 
 - `resource verify` checks a repository's `goals.json` and the packer declares the revision. Today
-  its `bundle` step neither passes the file nor declares `package` 12, and it says nothing of a
-  `goals.json` it finds.
+  its `bundle` step neither passes the file nor declares `package` 12 (14 since Workflow #463 V1
+  fix round 3, for version 2), and it says nothing of a `goals.json` it finds.

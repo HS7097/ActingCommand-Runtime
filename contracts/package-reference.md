@@ -759,7 +759,7 @@ data files beside its package directories, one directory per game below the conf
   schedule.json      actingcommand.schedule.v1: the game's schedule rules (ROUT-L RL-1a)
   display-layout.json  actingcommand.display-layout.v1: the game's display declaration (#392 DA-4)
   ui.json            actingcommand.ui.v1, optional: display metadata for clients (#429 R-11)
-  goals.json         actingcommand.goals.v1, optional: the goal entries the game offers (#455 G-R1)
+  goals.json         actingcommand.goals.v2, optional: the goal entries the game offers (#455 G-R1; v2 #463 V1)
   loading.json       actingcommand.loading.v1, optional: the game's loading pages, for audit (#407 LOAD-1)
   loading/           the templates loading.json declares (#407 LOAD-1)
   notices/           the package author's notice texts; no reader of the Runtime opens them (#444)
@@ -984,15 +984,19 @@ data files beside its package directories, one directory per game below the conf
     for them. A real standard package's `ui.json` is the resource side's to write.
 - **`goals.json`** (Workflow #455 G-R1, since 0.12.60; `v012-register.md` §1.356;
   [standard-pack-goals.md](standard-pack-goals.md) is the contract). Optional. The goal entries the
-  game offers on one page, in file order: each entry's stable name, its type (one of eight), its
-  block, its texts and what it governs (a pool or rules of `schedule.json`, or packages of
-  `bundle.json`); no value is stored in it. `actinglab standard-pack check` and `package bundle
+  game offers on one page, in file order: each entry's stable name, its type (one of eight in
+  version 1; since Workflow #463 V1, 0.12.61, one of the five of version 2,
+  `actingcommand.goals.v2`, a version 1 file being `goal_version_retired`), its block, its texts
+  and what it governs (a pool or rules of `schedule.json`, or in version 1 packages of
+  `bundle.json`; in version 2 a placement names a variable a package declares instead); no value
+  is stored in it. `actinglab standard-pack check` and `package bundle
   --goals` read it after the composition they already run: the check reports each problem of a
   refused file as a `standard_pack_root_invalid` warning and never fails the root for it, and the
   bundle refuses a refused file. The installer's `place` places it as the last root file and sets it
   aside when a later bundle carries none; a bundle that carries it declares `package` [12, 12]
-  ([component-interfaces.md](component-interfaces.md), row 12), and `place` refuses one that declares
-  a maximum below 12 (`goal_undeclared`, G-R1 fix round 1). The Runtime's root reader, its
+  ([component-interfaces.md](component-interfaces.md), row 12), for version 2 [14, 14] (row 14),
+  and `place` refuses one that declares a maximum below 12 (`goal_undeclared`, G-R1 fix round 1;
+  below 14 since Workflow #463 V1 fix round 3). The Runtime's root reader, its
   startup, a run's preparation, the policy crate and check-config never read it in G-R1, so the
   file changes no run yet.
 - **`loading.json`** (Workflow #407 LOAD-1, since 0.12.37; [resource-declarations.md](resource-declarations.md),

@@ -16,7 +16,8 @@
 //!   the contract crate's notices rules, and, Workflow #451 LOAD-P, the loading templates
 //!   directory `loading/<file>`, exactly the templates the zip's own `loading.json` declares;
 //!   Workflow #455 G-R1 fix round 1: a zip that carries `goals.json` declares `package` 12 at
-//!   least, `goal_undeclared` otherwise; Workflow #463 V1 fix round 1: a zip whose packs'
+//!   least, `goal_undeclared` otherwise, 14 since Workflow #463 V1 fix round 3 (the revision of
+//!   version 2, the version this build reads); Workflow #463 V1 fix round 1: a zip whose packs'
 //!   `control.json` declare `variables` declares `package` 14 at least, `variable_undeclared`
 //!   otherwise), the root files as every reader checks them
 //!   ([`read_standard_pack_root`]), each pack's file count and size, and per item `new`,
@@ -114,8 +115,8 @@ const LAB_PROGRAM: &str = "actinglab.exe";
 /// The root files a bundle zip may carry, in the order they are placed: `bundle.json` first (the
 /// others name its packs), the files the Runtime's readers open, `applications.json`,
 /// `schedule.json` (its rules name packs the placed `bundle.json` lists) and (Workflow #455 G-R1,
-/// `package` 12) `goals.json` last (its entries name the schedule's pools and rules and the
-/// bundle's packs).
+/// `package` 12; version 2 at `package` 14 since Workflow #463 V1 fix round 3) `goals.json` last
+/// (its entries name the schedule's pools and rules and the variables of the bundle's packs).
 const ROOT_FILES: [&str; 10] = [
     STANDARD_PACK_BUNDLE_FILE,
     STANDARD_PACK_PAGES_FILE,
@@ -544,7 +545,11 @@ fn check_notices<'a>(
 /// `package` maximum (`package[1]`) of [`GOALS_PACKAGE_REVISION`] at least, as one that carries the
 /// notices directory declares [`NOTICES_PACKAGE_REVISION`] ([`check_notices`]): otherwise
 /// `pack_invalid` caused by `standard_pack_root_invalid` with `goal_undeclared` at
-/// `<zip>\interfaces.json`, the pointer empty, before anything is held or written.
+/// `<zip>\interfaces.json`, the pointer empty, before anything is held or written. Workflow #463
+/// V1 fix round 3: the revision is 14, which brought version 2, the one version this build reads
+/// (12 brought version 1, which it reads no more); only the file's name is read here, so a zip
+/// that carries `goals.json` of any version declares 14, and the version is the check's
+/// (`goal_version_retired`), which `post_check` runs through `standard-pack check`.
 fn check_goals_declared(zip: &Path, game: &str, package: [u64; 2]) -> Result<(), Outcome> {
     if package[1] < GOALS_PACKAGE_REVISION {
         return Err(invalid(zip).caused_by(

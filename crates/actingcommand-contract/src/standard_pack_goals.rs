@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #455 G-R1 (register §1.356; `contracts/standard-pack-goals.md`): a game root's optional
-//! goal declaration, `goals.json` (`actingcommand.goals.v1`), beside `bundle.json`: the goal entries
+//! goal declaration, `goals.json` (`actingcommand.goals.v2` since Workflow #463 V1 fix round 3;
+//! release 0.12.60 read `actingcommand.goals.v1`), beside `bundle.json`: the goal entries
 //! the game offers on one page, in file order, each with its stable name, its type, its block, its
 //! texts and what it governs (a pool of `schedule.json` or rules of `schedule.json`), or (Workflow
 //! #463 V1) the place on the page of a variable some package of the root declares.
@@ -29,7 +30,12 @@
 //! value-type code they had moved to [`crate::package_variables`], which reads a package's
 //! `variables` with this module's [`Check`]. A placement is held to the variables the root's
 //! packages declare (`goal_variable_unknown`) and, as a governed package was, to the packages that
-//! declare it (`goal_governs_irreversible`).
+//! declare it (`goal_governs_irreversible`). V1 fix round 3 (the coordinator's ruling 2 on the
+//! design's questions, release 0.12.60 having shipped version 1 with its eight types): the
+//! document of the five types is version 2, [`STANDARD_PACK_GOALS_SCHEMA_VERSION`], which a bundle
+//! declares with `package` [`GOALS_PACKAGE_REVISION`]; a version 1 document is
+//! `goal_version_retired` at `/schema_version` and read no further, and a version this build does
+//! not know yet stays `malformed` there.
 //!
 //! The file stores no value: a value is the installation's, set by a person or an agent in a later
 //! slice. The Runtime interprets no text here: titles, help texts, unit texts, option titles and
@@ -48,11 +54,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The game root's goal declaration (G-R1).
 pub const STANDARD_PACK_GOALS_FILE: &str = "goals.json";
-/// The one version of `goals.json` this build reads.
-pub const STANDARD_PACK_GOALS_SCHEMA_VERSION: &str = "actingcommand.goals.v1";
-/// The `package` interface revision a bundle that carries `goals.json` declares, `[12, 12]`
-/// (`contracts/component-interfaces.md`, the `package` row 12).
-pub const GOALS_PACKAGE_REVISION: u64 = 12;
+/// The one version of `goals.json` this build reads: version 2 (Workflow #463 V1 fix round 3),
+/// whose five types place a package's variable where version 1 governed packages.
+pub const STANDARD_PACK_GOALS_SCHEMA_VERSION: &str = "actingcommand.goals.v2";
+/// Workflow #463 V1 fix round 3: version 1, the version release 0.12.60 read with its eight
+/// types, which this build reads no more: a document of it is `goal_version_retired` at
+/// `/schema_version` and is read no further.
+pub const STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION: &str = "actingcommand.goals.v1";
+/// The `package` interface revision a bundle that carries `goals.json` declares: `[14, 14]` since
+/// Workflow #463 V1 fix round 3, the revision that brought version 2, the version this build reads
+/// (`contracts/component-interfaces.md`, the `package` row 14, with a package's `variables`);
+/// revision 12 (the row 12, Workflow #455 G-R1) brought version 1.
+pub const GOALS_PACKAGE_REVISION: u64 = 14;
 /// The largest `goals.json`, in bytes (1 MiB).
 pub const MAX_STANDARD_PACK_GOALS_BYTES: usize = 1_048_576;
 /// The most violations one refused `goals.json` reports; the first ones in document order.
@@ -81,8 +94,8 @@ pub const MAX_GOAL_SCALE_MILLI: i64 = 1_000_000;
 /// The largest integer of the file, in magnitude: the safe integers of JSON, 2^53 - 1.
 pub const MAX_GOAL_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
-/// The type of an entry (`type`), one of the five of version 1 (Workflow #463 V1, which replaced
-/// the four types that governed packages by `variable`).
+/// The type of an entry (`type`), one of the five of version 2 (Workflow #463 V1, which replaced
+/// version 1's four types that governed packages by `variable`; version 2 since its fix round 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GoalType {
     /// A group title between entries; no value, governs nothing.
@@ -99,7 +112,7 @@ pub enum GoalType {
 }
 
 impl GoalType {
-    /// The five types of version 1, in the contract's order.
+    /// The five types of version 2, in the contract's order.
     pub const ALL: [Self; 5] = [
         Self::Heading,
         Self::Note,
@@ -127,7 +140,7 @@ impl GoalType {
             .find(|goal_type| goal_type.as_str() == word)
     }
 
-    /// The block every reader shows the type with: the only block version 1 gives it. `None` for
+    /// The block every reader shows the type with: the only block version 2 gives it. `None` for
     /// a `variable` placement, which a reader shows with the placed variable's block.
     pub const fn base_block(self) -> Option<GoalBlock> {
         match self {
@@ -168,9 +181,9 @@ const COMMON_OPTIONAL: &[&str] = &["block", "help"];
 const RESOURCE_OPTIONAL: &[&str] = &["block", "help", "rate"];
 const VARIABLE_OPTIONAL: &[&str] = &["block"];
 
-/// A block (`block`): how a reader shows an entry or (Workflow #463 V1) a variable. Version 1
-/// gives each type one block, its base block; a reader that meets a block it does not know shows
-/// the type's base block.
+/// A block (`block`): how a reader shows an entry or (Workflow #463 V1) a variable. Version 2, as
+/// version 1, gives each type one block, its base block; a reader that meets a block it does not
+/// know shows the type's base block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GoalBlock {
     /// A heading between entries (`heading`).
@@ -192,7 +205,7 @@ pub enum GoalBlock {
 }
 
 impl GoalBlock {
-    /// The seven blocks of version 1.
+    /// The seven blocks of version 2, version 1's.
     pub const ALL: [Self; 7] = [
         Self::Group,
         Self::Text,
@@ -601,12 +614,16 @@ impl GoalReferences {
 ///   value, an id, a locale or a text outside its limit (at what exceeds);
 /// - `malformed`: no JSON or no object (the whole document; a byte-order mark too); a member
 ///   repeated in one object, unknown, missing or not of its type (an integer outside the safe
-///   integers too), a `schema_version` other than [`STANDARD_PACK_GOALS_SCHEMA_VERSION`], a name,
-///   an option value or an id outside its form;
+///   integers too), a `schema_version` other than [`STANDARD_PACK_GOALS_SCHEMA_VERSION`] and
+///   [`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION`] (a version this build does not know yet), a
+///   name, an option value or an id outside its form;
+/// - `goal_version_retired` (Workflow #463 V1 fix round 3): `schema_version` is
+///   [`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION`], version 1, at `/schema_version`; the document
+///   is read no further;
 /// - `game_mismatch`: `game` is not the directory's;
 /// - `goal_name_duplicate`: a name an earlier entry has (at the later `name`);
-/// - `goal_type_unknown`: a `type` that is none of the five of version 1 (Workflow #463 V1: the
-///   four types it replaced too);
+/// - `goal_type_unknown`: a `type` that is none of the five of version 2 (Workflow #463 V1: the
+///   four types version 1 governed packages with too);
 /// - `goal_block_mismatch`: a `block` other than the type's base block, or (Workflow #463 V1) a
 ///   placement's `block` that is no block a variable is shown with;
 /// - `goal_range_invalid`: an option value written twice, a tier's `scale_milli` outside 1 to
@@ -986,10 +1003,17 @@ impl Check {
 
     fn document(&mut self, value: &Value, game: &str) -> Option<StandardPackGoals> {
         let document = self.object(value, "", &["schema_version", "game", "entries"], &[])?;
-        if let Some(version) = document.get("schema_version")
-            && version.as_str() != Some(STANDARD_PACK_GOALS_SCHEMA_VERSION)
-        {
-            self.malformed("/schema_version");
+        match document.get("schema_version").map(Value::as_str) {
+            None | Some(Some(STANDARD_PACK_GOALS_SCHEMA_VERSION)) => {}
+            // Workflow #463 V1 fix round 3: version 1, which release 0.12.60 read, is read no
+            // more and says so with a word of its own; the document is read no further, as an
+            // entry of an unknown type is not.
+            Some(Some(STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION)) => {
+                self.issue(StandardPackProblem::GoalVersionRetired, "/schema_version");
+                return None;
+            }
+            // Any other version, a later one included, is `malformed` there, as before.
+            Some(_) => self.malformed("/schema_version"),
         }
         match document.get("game").map(Value::as_str) {
             Some(None) => self.malformed("/game"),

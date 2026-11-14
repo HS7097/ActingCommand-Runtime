@@ -135,8 +135,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   the Runtime yet; a bundle without it keeps its revision, so [3, 12]. Revision 13 is reserved
 ///   for Workflow #463 K1 (a `linear_steps` task with a select step). Workflow #463 V1 (0.12.61,
 ///   register §1.378) raises it to 14: a package's `variables` in its `control.json`, which an
-///   earlier Runtime refuses at its declaration gate; a pack without them keeps its revision, so
-///   [3, 14].
+///   earlier Runtime refuses at its declaration gate, and (its fix round 3) version 2 of
+///   `goals.json`, which a bundle that carries it declares with 14; a pack without them keeps its
+///   revision, so [3, 14].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429

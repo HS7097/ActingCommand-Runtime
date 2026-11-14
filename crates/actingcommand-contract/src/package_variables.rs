@@ -97,7 +97,8 @@ impl VariableType {
             .find(|variable_type| variable_type.as_str() == word)
     }
 
-    /// The block every reader shows the type with: the only block of version 1 it takes.
+    /// The block every reader shows the type with: the only block version 2 of `goals.json` gives
+    /// it, version 1's.
     pub const fn base_block(self) -> GoalBlock {
         match self {
             Self::Choice => GoalBlock::Choice,

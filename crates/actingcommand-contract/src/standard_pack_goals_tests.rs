@@ -12,8 +12,10 @@
 //! governed packages by the placement `variable`, so these tests were adapted: the neutral example
 //! places a variable where it held a `choice` entry, each of the five types reads, the four
 //! replaced types are `goal_type_unknown`, and a placement is held, as a governed package was, to
-//! the packages that declare its variable. A made-up game `neutral`; every id, name and text is a
-//! placeholder.
+//! the packages that declare its variable. V1 fix round 3 made the document of the five types
+//! version 2: the fixtures write `actingcommand.goals.v2`, "another version" is a later one, and a
+//! version 1 document is `goal_version_retired` and read no further. A made-up game `neutral`;
+//! every id, name and text is a placeholder.
 
 use super::*;
 use serde_json::{Value, json};
@@ -21,8 +23,9 @@ use serde_json::{Value, json};
 const GAME: &str = "neutral";
 
 /// The design's neutral example, as the contract writes it (Workflow #463 V1: its third entry
-/// places the variable `route` some package of the root declares).
-const NEUTRAL_EXAMPLE: &str = r#"{"schema_version": "actingcommand.goals.v1", "game": "neutral",
+/// places the variable `route` some package of the root declares; version 2 since its fix round
+/// 3).
+const NEUTRAL_EXAMPLE: &str = r#"{"schema_version": "actingcommand.goals.v2", "game": "neutral",
  "entries": [
   {"name": "stock", "type": "heading", "title": {"en": "Stock", "zh-Hans": "储备"}},
   {"name": "points", "type": "resource", "governs": {"pool": "pool.neutral.points"},
@@ -160,11 +163,11 @@ fn goals_neutral_example_reads_to_typed_entries() {
     assert!(issues.is_empty(), "{issues:?}");
 }
 
-/// One entry of each of the five types, each with every member its type has, and a placement
-/// that writes no block.
+/// One entry of each of the five types of version 2, each with every member its type has, and a
+/// placement that writes no block.
 fn every_type() -> Value {
     json!({
-        "schema_version": "actingcommand.goals.v1",
+        "schema_version": "actingcommand.goals.v2",
         "game": GAME,
         "entries": [
             {"name": "group_a", "type": "heading", "block": "group",
@@ -248,7 +251,7 @@ fn goals_each_type_reads_its_members() {
             ("keep", None, &DeclaredGoalKind::Variable),
         ]
     );
-    // Every type of version 1 once or more, in the file's order; the texts as written, and none
+    // Every type of version 2 once or more, in the file's order; the texts as written, and none
     // for a placement.
     assert_eq!(
         goals
@@ -370,9 +373,11 @@ fn goals_reader_is_strict() {
             with(|value| value["entries"][1]["type"] = json!(3)),
             issue(Problem::Malformed, "/entries/1/type"),
         ),
+        // V1 fix round 3: version 2 is the file's; a version this build does not know yet keeps
+        // `malformed`, a word other than version 1's `goal_version_retired`.
         (
-            "another version",
-            with(|value| value["schema_version"] = json!("actingcommand.goals.v2")),
+            "a later version",
+            with(|value| value["schema_version"] = json!("actingcommand.goals.v3")),
             issue(Problem::Malformed, "/schema_version"),
         ),
         (
@@ -408,7 +413,7 @@ fn goals_reader_is_strict() {
     }
 
     // A member written twice in one object, no JSON, and a file over 1 MiB.
-    let repeated = br#"{"schema_version": "actingcommand.goals.v1", "game": "neutral",
+    let repeated = br#"{"schema_version": "actingcommand.goals.v2", "game": "neutral",
         "entries": [{"name": "stock", "name": "stock", "type": "heading", "title": {"en": "Stock"}}]}"#;
     let large = vec![b' '; MAX_STANDARD_PACK_GOALS_BYTES + 1];
     for (case, bytes, expected) in [
@@ -430,6 +435,57 @@ fn goals_reader_is_strict() {
             "{case}"
         );
     }
+}
+
+/// Workflow #463 V1 fix round 3 (register §1.378; the coordinator's ruling 2 on the design's
+/// questions, release 0.12.60 having shipped version 1 with its eight types): this build reads
+/// version 2 only. A version 1 document as release 0.12.60 read it, that release's neutral example
+/// (its third entry a `choice` that governs a package), is refused with one problem,
+/// `goal_version_retired` at `/schema_version`, and read no further: its `choice` entry is not
+/// judged, nor, in the same document of another game, its `game`. The version 2 neutral example
+/// labelled version 1 is the same one problem. (A version this build does not know yet keeps
+/// `malformed`, `goals_reader_is_strict`.)
+#[test]
+fn v1_a_version_1_document_is_refused_goal_version_retired() {
+    let retired = || -> Result<(), Vec<StandardPackRootIssue>> {
+        Err(vec![issue(
+            StandardPackProblem::GoalVersionRetired,
+            "/schema_version",
+        )])
+    };
+    // That release's neutral example, of the game `game`.
+    let released = |game: &str| {
+        json!({
+            "schema_version": "actingcommand.goals.v1",
+            "game": game,
+            "entries": [
+                {"name": "stock", "type": "heading", "title": {"en": "Stock", "zh-Hans": "储备"}},
+                {"name": "points", "type": "resource", "governs": {"pool": "pool.neutral.points"},
+                 "title": {"en": "Points to hold", "zh-Hans": "要攒的点数"},
+                 "rate": {"floor_milli_per_day": 120000, "ceiling_milli_per_day": 900000}},
+                {"name": "route", "type": "choice", "governs": {"packages": ["neutral.collect"]},
+                 "title": {"en": "Route", "zh-Hans": "路线"}, "default": "a",
+                 "options": [{"value": "a", "title": {"en": "Route A"}},
+                             {"value": "b", "title": {"en": "Route B"}}]}
+            ]
+        })
+    };
+    assert_eq!(
+        read(&released(GAME)).map(|_| ()),
+        retired(),
+        "the neutral example of release 0.12.60"
+    );
+    assert_eq!(
+        read(&released("other")).map(|_| ()),
+        retired(),
+        "read no further: its game is not judged"
+    );
+    let relabelled = with(|value| value["schema_version"] = json!("actingcommand.goals.v1"));
+    assert_eq!(
+        read(&relabelled).map(|_| ()),
+        retired(),
+        "version 2's entries labelled version 1"
+    );
 }
 
 /// G-R1 fix round 1 (items 1 to 3), with made-up packages: `neutral.discard` marks the capability
@@ -464,7 +520,7 @@ fn goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root() {
         PACKAGES.map(|package_id| json!({"name": variable_of(package_id), "type": "variable"})),
     );
     let goals = read(&json!({
-        "schema_version": "actingcommand.goals.v1",
+        "schema_version": "actingcommand.goals.v2",
         "game": GAME,
         "entries": entries
     }))

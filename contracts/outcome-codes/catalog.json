@@ -6668,7 +6668,7 @@
           "description": "An entry of goals.json has a name an earlier entry has, at the later name (Workflow #455 G-R1, since 0.12.60)."
         },
         "goal_type_unknown": {
-          "description": "An entry's type in goals.json is none of the types of version 1, a later version's type included (Workflow #455 G-R1, since 0.12.60); since Workflow #463 V1 the five, the four types the placement variable replaced (integer, choice, switch, ordered) included."
+          "description": "An entry's type in goals.json is none of the types of version 1, a later version's type included (Workflow #455 G-R1, since 0.12.60); since Workflow #463 V1 the five of version 2, the four types the placement variable replaced (integer, choice, switch, ordered) included."
         },
         "goal_block_mismatch": {
           "description": "An entry's block in goals.json is not the block its type is shown with (Workflow #455 G-R1, since 0.12.60), or (Workflow #463 V1) a variable entry's block is not the placed variable's."
@@ -6707,10 +6707,13 @@
           "description": "goals.json is larger than 1 MiB, or one of its lists, maps, names, option values, ids, keys, locales or texts is outside its limit, at the pointer of what exceeds (Workflow #455 G-R1 fix round 1, since 0.12.60)."
         },
         "goal_undeclared": {
-          "description": "A bundle zip carries goals.json and declares a package interface maximum below 12. Refused by the installer's place at interfaces.json (Workflow #455 G-R1 fix round 1, since 0.12.60)."
+          "description": "A bundle zip carries goals.json and declares a package interface maximum below 12. Refused by the installer's place at interfaces.json (Workflow #455 G-R1 fix round 1, since 0.12.60); since Workflow #463 V1 fix round 3 (0.12.61) below 14, the revision of goals.json version 2, the version the build reads."
         },
         "goal_variable_unknown": {
           "description": "A variable entry of goals.json places a name no package of the game root declares as a variable in its control.json, at the entry's name (Workflow #463 V1, since 0.12.61)."
+        },
+        "goal_version_retired": {
+          "description": "goals.json is version 1 (actingcommand.goals.v1, which 0.12.60 read), which the build reads no more: it reads version 2. At /schema_version; the file is read no further. A version the build does not know yet is malformed there (Workflow #463 V1 fix round 3, since 0.12.61)."
         },
         "variable_conflict": {
           "description": "A variable several packages of the game root declare with declarations that are not byte-identical (at each declaration in its package's control.json), or whose name an entry of goals.json uses for anything but its placement (at each declaration's name); no variable of that name applies (Workflow #463 V1, since 0.12.61)."

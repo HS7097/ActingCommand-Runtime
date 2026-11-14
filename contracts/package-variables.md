@@ -21,10 +21,13 @@ the place on the goal page, the default's origin, and the interface revision.
   and its provenance listing; since fix round 1 it judges irreversibility over the whole root
   with the goal check's rule (`variable_irreversible_by_root`) and the listing marks such a
   variable as not applying;
-- the `goals.json` entry type `variable`, which places a variable on the page
-  ([standard-pack-goals.md](standard-pack-goals.md));
+- the `goals.json` entry type `variable`, which places a variable on the page, in version 2 of
+  the file (fix round 3: a version 1 file is `goal_version_retired`;
+  [standard-pack-goals.md](standard-pack-goals.md));
 - `package` interface revision 14, and (fix round 1) the installer's `place` refusing a bundle
-  whose packs declare variables and that declares less (`variable_undeclared`).
+  whose packs declare variables and that declares less (`variable_undeclared`); since fix round 3
+  the revision also brings `goals.json` version 2, and `place` refuses a bundle that carries the
+  file and declares less (`goal_undeclared`).
 
 **What does not apply is not enforced at run time yet.** "Does not apply" (a name the root check
 reports, "Shared names and the root check") is in this slice a warning and nothing more. The root
@@ -78,8 +81,8 @@ A top-level member of `control.json`, beside `provides`, never under it:
 ]
 ```
 
-Each entry has the members of the value types `goals.json` version 1 had before V1 replaced them
-(`integer`, `choice`, `switch`, `ordered`), without `governs` (the governed package is the
+Each entry has the members of the value types `goals.json` version 1 had (`integer`, `choice`,
+`switch`, `ordered`; version 2 has none of them), without `governs` (the governed package is the
 declaring one) and without `from_table`, and the optional `default_origin`. The value-type code is
 the goal declaration's, moved into this reader: the same texts, blocks, ranges, steps, counts and
 defaults are judged by the same code.
@@ -172,10 +175,10 @@ after every placement and reads its exit code only, so a warning passes its post
 `package bundle` and the Runtime's host do not run it; and no run reads a variable. The slice
 that hands values to a run (V2) must enforce it in the Runtime, for a conflicting name and for a
 package irreversible by the root alike ("What is built now, and what is not"). A `goals.json` the reader refuses applies
-no entry, so it takes no name. The root check's four words, like V1's two others
-(`goal_variable_unknown` of the placement and, fix round 1, `variable_undeclared` of the
-installer), are words of the existing vocabulary `standard_pack_problem` under the existing code
-`standard_pack_root_invalid`.
+no entry, so it takes no name. The root check's four words, like V1's three others
+(`goal_variable_unknown` of the placement, fix round 1's `variable_undeclared` of the installer
+and fix round 3's `goal_version_retired` of a version 1 `goals.json`), are words of the existing
+vocabulary `standard_pack_problem` under the existing code `standard_pack_root_invalid`.
 
 **The provenance listing.** The answer of `standard-pack check` gains, after `models`,
 `variable_provenance` `{pack: [names], model: [names]}` when a package of the root declares
@@ -201,13 +204,15 @@ covers `control.json`.
 
 `goals.json`'s entry type `variable` (`{name, type: "variable", block?}`) places on the goal page
 the variable of that name that some package of the root declares
-([standard-pack-goals.md](standard-pack-goals.md), "The five types of version 1"). It writes no
+([standard-pack-goals.md](standard-pack-goals.md), "The five types of version 2"). It writes no
 text and no value: the variable carries its own. Its `block`, when written, is the placed
 variable's base block (`goal_block_mismatch` otherwise). A name no package of the root declares is
 `goal_variable_unknown`; a placement is held to every package that declares the variable as a
 governed package was (`goal_governs_irreversible`, `goal_package_unknown`). The type replaces the
-four types that governed packages, in version 1 of the file (the tag `v0.12.60` did not exist when
-V1 opened its pull request, and no pack carries the file).
+four types that governed packages. Release 0.12.60 shipped version 1 with those four, and a
+released format does not change its shape in place, so the file of the five types is version 2
+(`actingcommand.goals.v2`, fix round 3, the coordinator's ruling 2 on the design's questions): a
+version 1 file is `goal_version_retired` at `/schema_version`; no pack carries either.
 
 ## Interface
 
@@ -228,7 +233,18 @@ revision, and the Runtime declares [3, 14].
   caused by `standard_pack_root_invalid` with `variable_undeclared` at `<zip>\interfaces.json`, the
   pointer empty, `package_id` the first such pack, in the plan, before the hold and any write.
   `place` reads only the member's presence; what the variables declare is admission's.
-- **A rollback** below 14 stays open while no root holds a pack that declares variables.
+- **`goals.json` version 2** (fix round 3): the revision also brings version 2 of the goal
+  declaration, whose placements name these variables; a bundle that carries the file declares
+  `package` [14, 14] (`GOALS_PACKAGE_REVISION`), and this build's `place` refuses one that
+  declares a maximum below 14 (`goal_undeclared`, by the mechanism of revision 12). The programs
+  of 0.12.60 read version 1 only: their Runtime opens no `goals.json` and runs the root as without
+  it; their installer (range [3, 12]) refuses a bundle that declares [14, 14] at its `package`
+  edge (`interface_edge`); their Lab's goal check reads a version 2 file as `malformed` at
+  `/schema_version`, each placement `goal_type_unknown`, so `standard-pack check` warns and
+  checks the root as without it, and `package bundle --goals` refuses the bundle
+  ([standard-pack-goals.md](standard-pack-goals.md), "Interface").
+- **A rollback** below 14 stays open while no root holds a pack that declares variables; a root
+  that holds a version 2 `goals.json` runs on 0.12.60 as without the file.
 - `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` do not move: nothing persisted
   carries a variable in V1, and no request or answer of the workbench changes.
 

@@ -25046,7 +25046,7 @@ whose key it does not know, `config_override_dropped`, and goes on
 sibling key below 0.12.60, which §1.353 does not say. Nothing else is persisted by ORD-1c: the
 member in front and the queue waits live in memory only.
 
-### 1.378 Slice V1 (0.12.61): a package declares its variables, `control.json` `variables`, their root check and their place in `goals.json`; `package` revision 14 (Workflow #463 L4; the design `rd-1114/463-l4-design.md`, "Readings: what holds", section A, section D's "goals.json placement", section E, section F's second point, the row V1 of section G and section H items 1, 2, 5, 7 and 9 to 12, with "The coordinator's rulings on I", read on main `155366bb`; the coordinator's rulings of 11-14 in the work order and its two additions of the same night (the `package` revision is 14, revision 13 being Workflow #463 K1's; this section's number), not the owner's words; coordinator work order `rd-1114/brief-463-v1-package-variables.md`, read on main `155366bb`, main `1e67d1c5` merged; fix round 1, after the independent review, coordinator work order `rd-1114/brief-1723-fix1.md`; the closing round, after the review of fix round 1, coordinator work order `rd-1115/brief-1723-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged)
+### 1.378 Slice V1 (0.12.61): a package declares its variables, `control.json` `variables`, their root check and their place in `goals.json`; `package` revision 14 (Workflow #463 L4; the design `rd-1114/463-l4-design.md`, "Readings: what holds", section A, section D's "goals.json placement", section E, section F's second point, the row V1 of section G and section H items 1, 2, 5, 7 and 9 to 12, with "The coordinator's rulings on I", read on main `155366bb`; the coordinator's rulings of 11-14 in the work order and its two additions of the same night (the `package` revision is 14, revision 13 being Workflow #463 K1's; this section's number), not the owner's words; coordinator work order `rd-1114/brief-463-v1-package-variables.md`, read on main `155366bb`, main `1e67d1c5` merged; fix round 1, after the independent review, coordinator work order `rd-1114/brief-1723-fix1.md`; the closing round, after the review of fix round 1, coordinator work order `rd-1115/brief-1723-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged; fix round 3, `goals.json` version 2, coordinator work order `rd-1115/brief-1723-fix3.md`, on main `2eaf9b7e`)
 
 The coordinator gave this slice 1.378: main `1e67d1c5` held the sections up to §1.369 (G-R2s), and
 open pull requests hold 1.370 to 1.377 (main `2eaf9b7e` holds §1.370 to §1.373). The slice ships in
@@ -25088,8 +25088,11 @@ are later slices.
   an `integer` read as a cap above 1000; the answer lists each variable that applies by its
   default's origin.
 - *The placement*: `goals.json`'s type `variable` (`{name, type, block?}`) replaces `integer`,
-  `choice`, `switch` and `ordered` in version 1 (the coordinator's ruling 2 on I: the tag
-  `v0.12.60` did not exist when this pull request opened, so the version stays 1). A placement is
+  `choice`, `switch` and `ordered`. The coordinator's ruling 2 on I made the version hang on
+  release 0.12.60: the tag did not exist when this pull request opened, so the slice first kept
+  version 1; release 0.12.60 then shipped version 1 with its eight types, so fix round 3 made the
+  document of the five types version 2 (`actingcommand.goals.v2`), a version 1 document
+  `goal_version_retired`, and a bundle that carries the file `package` [14, 14]. A placement is
   held to the variables the root's packages declare and, as a governed package was, to the
   packages that declare its variable. With the `ordered` entry its `from_table` went, so no entry
   reads a table: the goal check and `standard-pack check` read none.
@@ -25098,11 +25101,11 @@ are later slices.
 |---|---|---|---|---|---|
 | V1-1 | `control.json` `variables` (`choice`, `integer`, `switch`, `ordered`; `default_origin`) | package file format (`package` revision 14) | V1 | the resource repository (V6), the recording (V4) | read by kernel admission and the source parser; no run reads it |
 | V1-2 | `contained_task_control_invalid` with `reason=variables_invalid`, `variable_name_taken` or `variables_on_irreversible` and `json_pointer=<pointer>` | refusal detail of an existing code | V1 | kernel admission | the source parser: `resource_declaration_invalid`, `invalid_value` at the pointer, the word ending its message |
-| V1-3 | `goal_variable_unknown`, `variable_conflict`, `variable_out_of_limits`, `variable_cap_range`; fix round 1: `variable_irreversible_by_root`, `variable_undeclared` | words of the vocabulary `standard_pack_problem` (code `standard_pack_root_invalid`) | V1 | the goal check; the root check; `place` (`variable_undeclared`) | 6 words (4, and 2 in fix round 1); the vocabulary's descriptions of `goal_type_unknown`, `goal_block_mismatch`, `goal_package_unknown`, `goal_governs_irreversible`, `goal_range_invalid`, `goal_default_invalid`, `goal_table_unknown` (no longer given) and `ui_parameter_undeclared` extended |
-| V1-4 | `goals.json` version 1's type `variable`; `integer`, `choice`, `switch`, `ordered` and `from_table` gone | game root file format, no revision | V1 | the resource repository (G-P1) | no pack carries the file; a file with one of the four types is `goal_type_unknown` |
+| V1-3 | `goal_variable_unknown`, `variable_conflict`, `variable_out_of_limits`, `variable_cap_range`; fix round 1: `variable_irreversible_by_root`, `variable_undeclared`; fix round 3: `goal_version_retired` | words of the vocabulary `standard_pack_problem` (code `standard_pack_root_invalid`) | V1 | the goal check (`goal_version_retired` its reader); the root check; `place` (`variable_undeclared`) | 7 words (4, 2 in fix round 1 and 1 in fix round 3); the vocabulary's descriptions of `goal_type_unknown`, `goal_block_mismatch`, `goal_package_unknown`, `goal_governs_irreversible`, `goal_range_invalid`, `goal_default_invalid`, `goal_table_unknown` (no longer given), `ui_parameter_undeclared` and (fix round 3) `goal_undeclared` (below 14) extended |
+| V1-4 | `goals.json` version 2 (`actingcommand.goals.v2`, fix round 3): the five types, `variable` among them; version 1's `integer`, `choice`, `switch`, `ordered` and `from_table` gone; a version 1 file `goal_version_retired` | game root file format, `package` revision 14 (fix round 3; version 1 was revision 12) | V1 | the resource repository (G-P1) | no pack carries the file; a version 2 file with one of the four types is `goal_type_unknown`; a bundle that carries the file declares [14, 14] (`GOALS_PACKAGE_REVISION`), `goal_undeclared` below |
 | V1-5 | `standard-pack check`'s `variable_provenance` `{pack, model}`; fix round 1: `not_applying` `[{name, standard_pack_problem}]`, absent when empty | Tools answer member (optional, after `models`) | V1 | `standard-pack check` | absent when no package declares a variable |
 | V1-6 | `RemedyDeclarations` `variables`, `cap_fact_keys` | kernel interface (memory only) | V1 | the metadata reader | the host reads neither yet |
-| V1-7 | `package` [3, 12] → [3, 14]; row 13 reserved (Workflow #463 K1, pull request #1720) | interface revision | V1 | `distribution/windows/component-interfaces.json` | a bundle whose packs declare variables declares [14, 14] (`VARIABLES_PACKAGE_REVISION`) |
+| V1-7 | `package` [3, 12] → [3, 14]; row 13 reserved (Workflow #463 K1, pull request #1720) | interface revision | V1 | `distribution/windows/component-interfaces.json` | a bundle whose packs declare variables declares [14, 14] (`VARIABLES_PACKAGE_REVISION`); fix round 3: so does a bundle that carries `goals.json` version 2 (`GOALS_PACKAGE_REVISION`, 12 before) |
 
 **What programs of an earlier release do.** A Runtime before this slice refuses a pack that
 declares `variables` at its declaration gate (`resource_declaration_invalid`, `UnknownField` at
@@ -25111,12 +25114,24 @@ reader (whose serde type ignores an unknown member) sees it, so nothing ignores 
 silently. An installer whose `package` range ends below 14 refuses a bundle that declares
 [14, 14] through its edge (`interface_edge`), in the plan, before the hold. This build's `place`
 (fix round 1) refuses a bundle whose packs declare variables and that declares less
-(`variable_undeclared`). A `goals.json` with a placement is refused by the earlier goal check
-(`goal_type_unknown`); no pack carries one.
+(`variable_undeclared`). Fix round 3, the programs of 0.12.60 (`package` [3, 12], `goals.json`
+version 1 only) with a version 2 `goals.json` (read in main's code): **the Runtime** opens no
+`goals.json` (no reader of `runtime-host`, the policy crate, `actingd`, `actingctl`, the kernel
+or the containment names the file), so it runs a root that holds one as without it; **the
+installer**'s `place` refuses a bundle that declares [14, 14] at its `package` edge
+(`interface_edge` at `<zip>\interfaces.json`, the bundle's maximum outside its own [3, 12], in the
+plan, before the hold; `crates/lab-rescue/src/install/place.rs`, the edge check of `plan`), and a
+bundle that wrongly declared 12 would pass and be placed, its post check warning as the Lab does;
+**the Lab**'s goal check (the contract crate's reader of 0.12.60, `Check::document`) takes
+`actingcommand.goals.v1` only, so a version 2 file is `malformed` at `/schema_version` and each
+placement `goal_type_unknown` at its `type`: `standard-pack check` reports them as warnings and
+checks the root as without the file (`crates/resource-tooling/src/standard_pack_goals.rs`,
+`goal_issues`, `goal_warnings`), and `package bundle --goals` refuses the bundle with the first,
+`--out` not written (`refuse_goals`). No pack carries the file.
 
 **Not moved.** `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` do not move:
-nothing persisted carries a variable, no request or answer of the workbench changes, the six words
-are words of an existing vocabulary and the three reasons details of an existing code. No
+nothing persisted carries a variable, no request or answer of the workbench changes, the seven
+words are words of an existing vocabulary and the three reasons details of an existing code. No
 configuration key.
 
 **At deploy.** Nothing changes for an installation in use: no released pack declares `variables`
@@ -25129,7 +25144,11 @@ check --root <game root>` shows no `variable_conflict`, `variable_out_of_limits`
 once a later slice reads values). The installer's post check runs that check too but passes on its
 warnings and keeps no answer of a passed check, so the warnings are read from a check run by hand.
 **Rollback** below this release stays open while no root holds a pack that declares variables; an
-earlier Runtime refuses such a pack at admission.
+earlier Runtime refuses such a pack at admission. `goals.json` (fix round 3) does not close it: no
+released bundle carries the file, and a root that holds a version 2 file runs on 0.12.60 as
+without it, its `standard-pack check` warning (`malformed`) and its installer refusing a bundle
+that declares 14 at its edge. A bundle that carries the file declares `package` [14, 14] from this
+release on.
 
 **Limits.** Admission judges a package's own `irreversible` marks only: a package that provides
 unmarked a capability another package marks irreversible, or whose remedies list one, may declare
@@ -25253,6 +25272,51 @@ command's answer before it writes anything, the recording staying active and unc
 round 1 that answer's `detail` and message carry the declaration gate's developer text after the
 location (`; <text>`) where the gate wrote one. No test is new or adapted beyond the rename; no
 golden changes; no test leaves the gate map.
+
+**Fix round 3** (coordinator work order `rd-1115/brief-1723-fix3.md`, the coordinator's ruling on
+the closing round's own question; main `2eaf9b7e` unmoved, not merged again). Release 0.12.60
+exists and ships `goals.json` version 1 with its eight types; a released format does not change
+its shape in place, so the condition of ruling 2 on I holds: **the document this slice reads is
+version 2** (`STANDARD_PACK_GOALS_SCHEMA_VERSION` `actingcommand.goals.v2`), the five types
+(heading, note, resource, tier, variable). (1) A version 1 document
+(`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION`) is refused with the new word `goal_version_retired`
+(the goals family's prefix; a word of the vocabulary `standard_pack_problem`, not a code, so the
+outcome-code index does not list it) at `/schema_version`, and is read no further, as an entry of
+an unknown type is not: after the members repeated in one object and the document's own members
+unknown or missing, it is the file's only problem. A version this build does not know yet keeps
+`malformed` there. No pack carries a version 1 file, so nothing is converted and no reader of
+version 1 stays. (2) The installer's edge, by the mechanism of revision 12 (`check_goals_declared`,
+`goal_undeclared`): `GOALS_PACKAGE_REVISION` is 14, the revision that brought version 2 (row 14 of
+[component-interfaces.md](component-interfaces.md), with the variables its placements name), so
+`place` refuses a zip that carries `goals.json` and declares a maximum below 14; it still reads
+the file's name only, the version being the goal check's, which `post_check` runs. (3) What the
+programs of 0.12.60 do with a version 2 file is in "What programs of an earlier release do" and
+"At deploy" above, in [standard-pack-goals.md](standard-pack-goals.md), "Interface", in
+[package-variables.md](package-variables.md), "Interface", and in row 14. (4) Texts: those two
+contracts, rows 12 and 14 of `component-interfaces.md`, `package-reference.md` (the root listing
+and the `goals.json` paragraph), `install-cli.md` (the rescue face and the `pack place` edge),
+the index of `README.md`, the catalog's `goal_type_unknown`, `goal_undeclared` and the new word,
+this section's "The placement", V1-3, V1-4, V1-7, "What programs of an earlier release do", "Not
+moved" (seven words) and "Rollback", and the comments of the code and the gate rows that named
+version 1 or revision 12 for the file. No console read face in the contracts names the file's
+version, the Lab's rows name no version, and the branch has no release notes section for 0.12.61.
+New tests: the contract crate's
+`standard_pack_goals::tests::v1_a_version_1_document_is_refused_goal_version_retired` (release
+0.12.60's neutral example, its `choice` governing a package, the same of another game, and version
+2's entries labelled version 1: each the one problem `goal_version_retired` at `/schema_version`)
+and the rescue module's
+`install::gate_463_v1::v1_a_bundle_that_carries_goals_version_2_below_revision_14_is_refused_goal_undeclared`
+(on an installer of [3, 14], a bundle with a version 2 `goals.json` and a pack without variables
+declaring [12, 12] is refused `pack_invalid` caused by `goal_undeclared` at its `interfaces.json`
+before the hold; declaring [14, 14] it is planned with `goals.json` new). Adapted because the
+requirement changes what they pin, names kept: every fixture that carried version 1 carries
+version 2 (the contract crate's `NEUTRAL_EXAMPLE`, `every_type`, the repeated member and the
+references' test, and `package_variables::tests::v1_a_placement_is_held_to_the_variables_the_root_declares`;
+the resource tools' `gate_455_gr1`, `gate_455_gr2s` and `gate_463_v1` goal files; the rescue
+module's `gate_455_gr1` goal bytes), `goals_reader_is_strict`'s "another version" is a later one
+(`actingcommand.goals.v3`, still `malformed`), and the rescue module's three `gate_455_gr1` tests
+read `GOALS_PACKAGE_REVISION`, so their installer declares [3, 14] and their goals bundle [14, 14]
+(the gate row gains the incident `#463 V1`). No golden changes; no test leaves the gate map.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

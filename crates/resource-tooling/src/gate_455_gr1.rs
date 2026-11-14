@@ -316,10 +316,10 @@ fn table() -> Value {
 
 /// A `goals.json` that keeps every rule against this root: one entry of each of the types and
 /// (Workflow #463 V1) a placement of each variable the packages declare, at the positions the
-/// four replaced types held.
+/// four replaced types held; version 2 since V1 fix round 3.
 fn goals() -> Value {
     json!({
-        "schema_version": "actingcommand.goals.v1",
+        "schema_version": "actingcommand.goals.v2",
         "game": GAME,
         "entries": [
             {"name": "stock", "type": "heading", "title": {"en": "Stock"}},

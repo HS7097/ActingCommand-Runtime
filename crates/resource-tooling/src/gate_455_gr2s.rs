@@ -229,10 +229,10 @@ fn installed(packs: Vec<Pack>, rules: Vec<Value>) -> (TempDir, PathBuf, Standard
     (temp, game_root, root, schedule)
 }
 
-/// `goals.json` with `entries`.
+/// `goals.json` with `entries` (version 2 since Workflow #463 V1 fix round 3).
 fn goals(entries: Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
-        "schema_version": "actingcommand.goals.v1",
+        "schema_version": "actingcommand.goals.v2",
         "game": GAME,
         "entries": entries
     }))

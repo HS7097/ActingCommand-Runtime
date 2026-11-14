@@ -78,7 +78,8 @@ crate::outcome_vocabulary! {
     /// file's fifteenth, `goal_variable_unknown`, and the root check's three words of a package's
     /// declared variables, `variable_conflict`, `variable_out_of_limits` and `variable_cap_range`;
     /// its fix round 1, the root check's fourth, `variable_irreversible_by_root`, and a bundle zip
-    /// whose packs declare variables `variable_undeclared`.
+    /// whose packs declare variables `variable_undeclared`; its fix round 3, the file's sixteenth,
+    /// `goal_version_retired`, of a version 1 file, the file being version 2 since.
     pub enum StandardPackProblem: "standard_pack_problem" {
         /// The file is not JSON of the file's shape and version (for a table: not canonical
         /// JSON either, that is with a floating point number, an unsafe integer or a duplicate
@@ -231,8 +232,8 @@ crate::outcome_vocabulary! {
         /// Workflow #455 G-R1 (since 0.12.60; [`crate::standard_pack_goals`]): an entry of
         /// `goals.json` has a name an earlier entry has.
         GoalNameDuplicate => "goal_name_duplicate",
-        /// G-R1: an entry's `type` is none of the types of version 1 (Workflow #463 V1: the five,
-        /// the four types it replaced included).
+        /// G-R1: an entry's `type` is none of the types of version 1 (Workflow #463 V1: the five
+        /// of version 2, the four types it replaced included).
         GoalTypeUnknown => "goal_type_unknown",
         /// G-R1: an entry's `block` is not the block its type is shown with; Workflow #463 V1: or
         /// a `variable` placement's is not the placed variable's.
@@ -268,12 +269,17 @@ crate::outcome_vocabulary! {
         /// option values, ids, keys, locales or texts is outside its limit.
         GoalOutOfLimits => "goal_out_of_limits",
         /// G-R1 fix round 1: a bundle zip carries `goals.json` and declares a `package` maximum
-        /// below 12. Refused by the installer's `place` at `interfaces.json`, as
+        /// below 12 (Workflow #463 V1 fix round 3, since 0.12.61: below 14, the revision of
+        /// version 2). Refused by the installer's `place` at `interfaces.json`, as
         /// `notice_undeclared` is.
         GoalUndeclared => "goal_undeclared",
         /// Workflow #463 V1 (since 0.12.61): a `variable` entry of `goals.json` places a name no
         /// package of the game root declares as a variable, at its `name`.
         GoalVariableUnknown => "goal_variable_unknown",
+        /// Workflow #463 V1 fix round 3 (since 0.12.61): `goals.json` is version 1, which this
+        /// build reads no more (it reads version 2), at its `schema_version`; the file is read no
+        /// further. A version this build does not know yet is `malformed` there.
+        GoalVersionRetired => "goal_version_retired",
         /// Workflow #463 V1: a variable two packages of the root declare with declarations that
         /// are not byte-identical (at each declaration), or whose name an entry of `goals.json`
         /// uses for anything but its placement (at each declaration's `name`); no variable of

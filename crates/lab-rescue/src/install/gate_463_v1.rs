@@ -17,10 +17,18 @@
 //   `v1_a_bundle_whose_packs_declare_variables_below_revision_14_is_refused_variable_undeclared`:
 //   on this build's installer, the same bundle declaring [3, 13] is refused `pack_invalid` caused
 //   by `variable_undeclared` at its `interfaces.json`, naming the pack, before the hold, as a
-//   bundle that carries `goals.json` and declares less than 12 is refused `goal_undeclared`.
+//   bundle that carries `goals.json` and declares less than 12 (14 since fix round 3) is refused
+//   `goal_undeclared`;
+// - fix round 3 (`rd-1115/brief-1723-fix3.md`, items 3 and 6),
+//   `v1_a_bundle_that_carries_goals_version_2_below_revision_14_is_refused_goal_undeclared`: on
+//   this build's installer, a bundle that carries a version 2 `goals.json` and declares [12, 12],
+//   what a bundle that carried version 1 declared, its pack declaring no variable, is refused
+//   `pack_invalid` caused by `goal_undeclared` at its `interfaces.json` before the hold; declaring
+//   [14, 14], it is planned with `goals.json` new.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
 // sleep; every root is a temporary folder with neutral files. `place` reads of a pack's control
-// only whether it declares `variables` (fix round 1): what the variables declare is admission's.
+// only whether it declares `variables` (fix round 1): what the variables declare is admission's;
+// of `goals.json` it reads the name only.
 
 use super::fixture::{BuildSpec, C1, FakeHost, code, live_root, run, speaks, word, write_json};
 use super::manifest::parse_declaration;
@@ -55,6 +63,15 @@ const UNDECLARED_BUNDLE_PACKAGE: [u64; 2] = [3, VARIABLES_PACKAGE_REVISION - 1];
 /// A made-up control declaration with one variable; `place` reads only that it declares
 /// `variables` (fix round 1).
 const CONTROL: &[u8] = br#"{"package_id": "neutral.pack", "variables": [{"name": "extra", "type": "switch", "title": {"en": "Extra"}, "default": false}]}"#;
+/// Fix round 3: a made-up control declaration that declares no variable, so that only the bundle's
+/// `goals.json` asks for a revision.
+const PLAIN_CONTROL: &[u8] = br#"{"package_id": "neutral.pack"}"#;
+/// Fix round 3: what a bundle that carried `goals.json` version 1 declared, the revision that
+/// brought version 1.
+const VERSION_1_BUNDLE_PACKAGE: [u64; 2] = [12, 12];
+/// Fix round 3: what a bundle that carries `goals.json` version 2 declares, the revision that
+/// brought version 2 (the contract crate's `GOALS_PACKAGE_REVISION`).
+const VERSION_2_BUNDLE_PACKAGE: [u64; 2] = [14, 14];
 
 #[test]
 fn v1_the_build_declares_package_through_revision_14() {
@@ -70,8 +87,14 @@ fn v1_the_build_declares_package_through_revision_14() {
 
 /// Writes the neutral bundle zip of [`GAME`] to `path`: its `bundle.json`, an `interfaces.json`
 /// that declares `package` `package` ([`VARIABLES_BUNDLE_PACKAGE`] for a bundle that declares
-/// the revision), and the pack [`PACK`], every member stored.
+/// the revision), and the pack [`PACK`] with [`CONTROL`], every member stored.
 fn write_bundle(path: &Path, package: [u64; 2]) {
+    write_bundle_with(path, package, CONTROL, None);
+}
+
+/// Fix round 3: [`write_bundle`] with the pack's control declaration `control` and, when `goals`
+/// holds bytes, the root file `goals.json` of those bytes.
+fn write_bundle_with(path: &Path, package: [u64; 2], control: &[u8], goals: Option<&[u8]>) {
     let mut declared = speaks();
     declared["package"] = json!(package);
     let interfaces = serde_json::to_vec(&json!({
@@ -88,15 +111,18 @@ fn write_bundle(path: &Path, package: [u64; 2]) {
             "entry_task_id": "neutral.entry",
             "path": format!("packs/{PACK}"),
             "file_count": 1,
-            "byte_count": CONTROL.len(),
+            "byte_count": control.len(),
         }],
     }))
     .expect("JSON");
-    let entries = [
+    let mut entries = vec![
         ("bundle.json".to_owned(), index),
         ("interfaces.json".to_owned(), interfaces),
-        (format!("packs/{PACK}/control.json"), CONTROL.to_vec()),
+        (format!("packs/{PACK}/control.json"), control.to_vec()),
     ];
+    if let Some(goals) = goals {
+        entries.push(("goals.json".to_owned(), goals.to_vec()));
+    }
     let mut writer = zip::ZipWriter::new(fs::File::create(path).expect("create the bundle"));
     for (name, bytes) in entries {
         writer
@@ -322,4 +348,98 @@ fn v1_a_bundle_whose_packs_declare_variables_below_revision_14_is_refused_variab
             .is_none(),
         "the game root holds nothing"
     );
+}
+
+/// Fix round 3: the bytes of a version 2 `goals.json` of [`GAME`]: one made-up heading. `place`
+/// reads its name only.
+fn goals_version_2() -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "schema_version": "actingcommand.goals.v2",
+        "game": GAME,
+        "entries": [{"name": "stock", "type": "heading", "title": {"en": "Stock"}}]
+    }))
+    .expect("JSON")
+}
+
+// Fix round 3 (`rd-1115/brief-1723-fix3.md`, items 3 and 6), as
+// `goals_bundle_that_does_not_declare_revision_12_is_refused_goal_undeclared` holds version 1's
+// revision: on this build's installer ([3, 14]) a bundle that carries a version 2 `goals.json` and
+// declares [12, 12], what a bundle that carried version 1 declared, within the installer's range
+// and its pack declaring no variable, is refused `pack_invalid` caused by
+// `standard_pack_root_invalid` with `goal_undeclared` at its `interfaces.json`, the pointer empty,
+// in the plan: no pause, no journal, nothing in the game root. The same bundle declaring [14, 14]
+// is planned, `goals.json` new and the last root file.
+#[test]
+fn v1_a_bundle_that_carries_goals_version_2_below_revision_14_is_refused_goal_undeclared() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, game_root) = prepared(temp.path(), &host, INSTALLER_PACKAGE);
+    let before = journal_count(&root);
+    let goals = goals_version_2();
+    let zip = temp.path().join("neutral-goals-at-12.zip");
+    write_bundle_with(
+        &zip,
+        VERSION_1_BUNDLE_PACKAGE,
+        PLAIN_CONTROL,
+        Some(goals.as_slice()),
+    );
+    let (refused, exit) = place(&host, &root, &zip, false);
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(
+        refused["outcome"]["code"], "install_command_refused",
+        "{refused}"
+    );
+    assert_eq!(
+        refused["outcome"]["values"]["install_refusal"], "pack_invalid",
+        "{refused}"
+    );
+    let cause = values_of(&refused, "standard_pack_root_invalid")
+        .unwrap_or_else(|| panic!("no standard_pack_root_invalid in {refused}"));
+    let canonical = fs::canonicalize(&zip).expect("the canonical bundle");
+    assert_eq!(
+        cause["standard_pack_problem"],
+        StandardPackProblem::GoalUndeclared.as_str(),
+        "{cause}"
+    );
+    assert_eq!(
+        cause["path"],
+        json!(canonical.join("interfaces.json").to_string_lossy()),
+        "{cause}"
+    );
+    assert_eq!(cause["json_pointer"], "", "{cause}");
+    assert_eq!(cause["game"], GAME, "{cause}");
+    assert!(
+        calls_of(&host, "pause ").is_empty(),
+        "{:?}",
+        host.runtime.calls.borrow()
+    );
+    assert_eq!(journal_count(&root), before);
+    assert!(
+        fs::read_dir(&game_root)
+            .expect("the game root")
+            .next()
+            .is_none(),
+        "the game root holds nothing"
+    );
+
+    // Declaring the revision of version 2, the same bundle is planned.
+    let declared = temp.path().join("neutral-goals-at-14.zip");
+    write_bundle_with(
+        &declared,
+        VERSION_2_BUNDLE_PACKAGE,
+        PLAIN_CONTROL,
+        Some(goals.as_slice()),
+    );
+    let (planned, exit) = place(&host, &root, &declared, true);
+    assert_eq!(exit, 0, "{planned}");
+    assert_eq!(
+        items(&planned),
+        [
+            "neutral.pack pack new",
+            "bundle.json root new",
+            "goals.json root new"
+        ],
+        "{planned}"
+    );
+    assert!(calls_of(&host, "pause ").is_empty());
 }
