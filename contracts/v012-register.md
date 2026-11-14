@@ -24300,11 +24300,34 @@ tools reach their commands and answer the envelope, and `ac_lab_do` hands the on
   before the press (actinglab's command line), an exported answer keeping `next_frame` inline on
   today's MCP server and on the Lab's (`serve_calls::mcp_lab_overflow_rule_keeps_next_frame_inline`).
 
+Fix round 2 (after the second review; no behaviour of a press, a code or the recording changes):
+- *The repeat's words.* The refusal of the same call sent again no longer says that the press was
+  not performed: it says that the step holds its marks (and its click, when the request declared
+  one) and that the recording holds no outcome of a press, which can mean the press was not
+  performed or was performed and could not be recorded (`record_append_failed_after_input` means
+  performed); look at the screen first (`observe --capture` without `--record`, MCP
+  `ac_lab_observe` with `capture`) or read `record status` (`ac_record_status`), and only while the
+  step's own page is still shown send the same call without the mark request. "One call per step"
+  says the same.
+- *`--tap-rect` (or `--swipe`) with a request without a click.* The step then holds its marks and no
+  click, and the same call again ends `record_mark_id_conflict`: when the request is for the open
+  step and every mark it adds is on the step with the same members (`declares_mark`), that
+  refusal carries the same guidance, with `--tap-rect` or `--swipe` kept. `record_mark_id_conflict`
+  for a mark that differs keeps `record mark`'s own message.
+- *Tool names.* The refusal and the contract name both servers' tools: `ac_lab_do` with `mark`
+  (today's server) and `ac_do` with `mark_request_json` or `mark_request` (the Lab's), and
+  `ac_lab_observe` and `ac_record_status`, which both servers call so.
+- *Test* (apps gate map): a `--tap-rect` step whose press was not performed, sent again: the
+  guidance and both servers' names in the message, nothing pressed or written; a mark of the same
+  id with another region keeps `record mark`'s message; the same call without the request presses
+  the step.
+
 **At deploy.** Nothing to configure. Recordings, packages and the MCP registration stay as they
 are; `actingctl mcp-serve --tier author` lists the five new tools after a client reloads its tools
 (the stable entry switches its child as for every update). An agent records a step with one
-`ac_lab_do` call (`capture`, `record`, `mark`, `next_frame_after_ms`): read the answer's
-`next_frame` (its `out` file) before the next call.
+`ac_lab_do` call (`capture`, `record`, `mark`, `next_frame_after_ms`), or on the Lab's MCP server
+one `ac_do` call (`capture`, `record`, `mark_request_json`, `next_frame_after_ms`): read the
+answer's `next_frame` (its `out` file) before the next call.
 
 **Rollback** (below 0.12.60). Nothing is persisted that an older build does not read: the
 recordings are the three calls' files. An older actinglab refuses the four flags (unread), and an

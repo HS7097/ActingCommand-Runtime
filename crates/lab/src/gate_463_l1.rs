@@ -35,6 +35,13 @@
 //   while step 2 is open;
 // - `l1_fix1_a_frame_file_is_refused`: a request whose `frame`, a file of another screen, replaced
 //   the open step's frame (its outcome carries the frame).
+// Fix round 2 (brief rd-1114/brief-1717-fix2.md, items 1 to 3):
+// - `l1_fix2_a_tap_rect_step_sent_again_says_what_to_look_at_before_its_press`: a request without a
+//   click, its press declared by `--tap-rect` and not performed, leaves its marks and no click; the
+//   same call again is `record_mark_id_conflict`, nothing pressed or written, its message saying
+//   that the recording holds no outcome of a press, what to look at first and what to send, with
+//   both MCP servers' tools; a mark of the same id with another region keeps `record mark`'s
+//   message; the same call without the mark request presses the step.
 // Frames are synthetic gray noise; no Runtime, no device; the tests read no clock and never sleep.
 
 use crate::recording::store::{lab_dir, old_record_path, recording_path};
@@ -888,4 +895,81 @@ fn l1_fix1_a_frame_file_is_refused() {
         ..step_request(1)
     });
     assert_held_to_the_open_step(&bench, &request, "frame");
+}
+
+#[test]
+fn l1_fix2_a_tap_rect_step_sent_again_says_what_to_look_at_before_its_press() {
+    // Step 2 open without a click: the one call marks it, `--tap-rect` declares its press, and the
+    // Runtime does not perform it. The step holds its marks and no click.
+    let bench = second_step_open();
+    let request = tap_rect_on_step_2(final_request(1));
+    let mut runtime = FakeRuntime::new(Answer::NotPerformed, "req-tap-rect", Some(2));
+    let error = bench
+        .one_call(&request, &mut runtime)
+        .expect_err("the press not performed");
+    assert_eq!(error.code, LabError::device("").code, "{}", error.message);
+    let step = bench.recording()["steps"][1].clone();
+    assert_eq!(step["marks"][0]["id"], json!(button_id(1)), "{step}");
+    assert!(step["click"].is_null(), "{step}");
+
+    // The same call again: `record mark`'s own refusal, nothing pressed or written, and its message
+    // says what the recording holds, what to look at first and what to send, on both MCP servers.
+    let before = bench.files();
+    let mut again = FakeRuntime::new(Answer::Performed, "req-again", Some(2));
+    let error = bench
+        .one_call(&request, &mut again)
+        .expect_err("the same call again");
+    assert_eq!(error.code, "record_mark_id_conflict", "{}", error.message);
+    for words in [
+        "no outcome of a press",
+        "record_append_failed_after_input",
+        "observe --capture without --record",
+        "record status",
+        "without the mark request",
+        "--tap-rect",
+        "ac_lab_observe",
+        "ac_record_status",
+        "ac_lab_do",
+        "ac_do with tap_rect",
+        "mark_request_json",
+    ] {
+        assert!(error.message.contains(words), "{words}: {}", error.message);
+    }
+    assert!(again.seen.is_empty(), "{:?}", again.seen);
+    assert_eq!(bench.files(), before, "a file changed");
+
+    // A mark of the same id with another region is not the step's mark: `record mark`'s message.
+    let other = tap_rect_on_step_2(MarkRequest {
+        add: vec![MarkSpec::region_only(
+            button_id(1),
+            MarkFamily::Template,
+            rect(40, 24, 10, 10),
+        )],
+        ..final_request(1)
+    });
+    let error = bench
+        .one_call(&other, &mut again)
+        .expect_err("another mark of the same id");
+    assert_eq!(error.code, "record_mark_id_conflict", "{}", error.message);
+    assert!(
+        !error.message.contains("no outcome of a press"),
+        "{}",
+        error.message
+    );
+    assert!(again.seen.is_empty(), "{:?}", again.seen);
+
+    // The same call without the mark request presses step 2, and `--tap-rect` declares its click.
+    let without = RecordStepRequest {
+        mark: None,
+        ..request
+    };
+    let pressed = bench
+        .one_call(&without, &mut again)
+        .unwrap_or_else(|error| panic!("the press: {}: {:?}", error.code, error.details));
+    assert!(pressed.click.step_closed);
+    assert_eq!(again.seen, ["press 2"]);
+    let step = &bench.recording()["steps"][1];
+    assert_eq!(step["click"]["rect"], json!(BUTTONS[1]), "{step}");
+    assert_eq!(step["click"]["source"], "tap_rect", "{step}");
+    assert_eq!(step["closed"], true, "{step}");
 }

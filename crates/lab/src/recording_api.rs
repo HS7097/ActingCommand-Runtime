@@ -18,7 +18,7 @@ use crate::recording::generate::{
     application_steps_summary, optional_steps_summary, plan as generate_plan, render,
     transitions_summary, validate_timeout_option,
 };
-use crate::recording::marks::match_metric;
+use crate::recording::marks::{declares_mark, match_metric};
 use crate::recording::model::{
     ApplicationPlan, AttachFrameOutcome, AttachFrameRequest, ClickEffect, ClickPlan, ClickView,
     CommitApplicationOutcome, CommitApplicationRequest, CommitClickOutcome, CommitClickRequest,
@@ -26,9 +26,9 @@ use crate::recording::model::{
     LAB_RECORDING_MAX_SETTLE_MS, LabRecording, LabRecordingStart, LabStatus, LabStatusView,
     MarkOutcome, MarkRequest, MarkStatusView, MarkView, NextFrameOutcome, OpaqueJson,
     PlanApplicationRequest, PlanClickRequest, RecordStartOptions, RecordStepOutcome,
-    RecordStepRequest, RecordStopOptions, RecordStopOutcome, RecordedFrame, RecordingArtifact,
-    RecordingDefaults, RecordingStep, SelfTestStatus, StepClick, StepOptionalView, StepStateView,
-    StepTransition, StepView, TransitionSpec, TransitionView,
+    RecordStepRequest, RecordStopOptions, RecordStopOutcome, RecordedFrame, RecordedMark,
+    RecordingArtifact, RecordingDefaults, RecordingStep, SelfTestStatus, StepClick,
+    StepOptionalView, StepStateView, StepTransition, StepView, TransitionSpec, TransitionView,
 };
 use crate::recording::steps::{
     ArrivalMode, FrameMeta, Session, application_action, application_with_click, apply_marks,
@@ -1355,8 +1355,8 @@ pub struct PlannedStep {
 /// that refused, `record mark`'s or `do --capture --record`'s, and nothing is written or sent. A
 /// stopped recording takes no device command (`record_session_not_active`). Fix round 1: the
 /// request is for the open step and nothing else ([`hold_to_open_step`]), and a refusal of a
-/// request whose open step already holds its marks and an unpressed click says how the press is
-/// repeated ([`repeat_without_mark`]).
+/// request whose open step already holds its marks and no outcome of a press says what to look at
+/// before the press is repeated, and how ([`repeat_without_mark`], fix round 2).
 pub fn record_plan_step(
     lock: &RecordingLock,
     request: &RecordStepRequest,
@@ -1374,7 +1374,7 @@ pub fn record_plan_step(
         .as_ref()
         .map(|mark| {
             mark_session(&mut session, mark, false, ocr)
-                .map_err(|error| repeat_without_mark(error, unpressed.as_ref()))
+                .map_err(|error| repeat_without_mark(error, unpressed.as_ref(), mark))
         })
         .transpose()?;
     let plan = plan_click(&session.recording, &request.click)?;
@@ -1509,13 +1509,18 @@ fn hold_to_open_step(
     ))
 }
 
-/// #463 L1 fix round 1: the open step, when it declares a click that has no outcome on record:
-/// what a one-call step leaves whose press was not performed or whose device operation the
-/// Runtime refused (its marks and its click written, no execution).
+/// #463 L1 fix rounds 1 and 2: the open step while the recording holds no outcome of a press for
+/// it: what a one-call step leaves whose press was not performed, whose device operation the
+/// Runtime refused, or which was performed and could not be recorded
+/// (`record_append_failed_after_input`). Its marks are written, and its click when the request
+/// declared one; with `--tap-rect` or `--swipe` the click is declared only when the press is
+/// recorded, so the step has none.
 struct UnpressedStep {
     index: u32,
-    /// The step's own mark ids.
-    marks: Vec<String>,
+    /// The step declares its click (and no execution of it is on record).
+    declares_click: bool,
+    /// The step's own marks.
+    marks: Vec<RecordedMark>,
 }
 
 fn unpressed_open_step(recording: &LabRecording, open: Option<u32>) -> Option<UnpressedStep> {
@@ -1523,40 +1528,77 @@ fn unpressed_open_step(recording: &LabRecording, open: Option<u32>) -> Option<Un
         .steps
         .iter()
         .find(|step| Some(step.index) == open)?;
-    let click = step.click.as_ref()?;
-    click.execution.is_none().then(|| UnpressedStep {
+    let no_outcome = match &step.click {
+        Some(click) => click.execution.is_none(),
+        None => step.application.is_none(),
+    };
+    no_outcome.then(|| UnpressedStep {
         index: step.index,
-        marks: step.marks.iter().map(|mark| mark.id.clone()).collect(),
+        declares_click: step.click.is_some(),
+        marks: step.marks.clone(),
     })
 }
 
-/// #463 L1 fix round 1 (the coordinator's ruling): the same one-call step sent again after its
-/// press was not performed is refused by `record mark`'s own check, `record_click_exists` for its
-/// click or `record_mark_id_conflict` for a mark of the step it adds again, and nothing is pressed
-/// a second time. The refusal keeps its code and says that the step holds its marks and its click
-/// and that the press is repeated by the same call without the mark request.
-fn repeat_without_mark(mut error: LabError, unpressed: Option<&UnpressedStep>) -> LabError {
+/// #463 L1 fix rounds 1 and 2 (the coordinator's rulings): the same one-call step sent again on
+/// the open step is refused by `record mark`'s own check, `record_click_exists` for its declared
+/// click, or `record_mark_id_conflict` when every mark the request adds is on the step already,
+/// member for member ([`declares_mark`]; also with `--tap-rect` or `--swipe`, where the step has
+/// no click yet), and nothing is pressed a second time. The refusal keeps its code and says that
+/// the recording holds no outcome of a press, which can mean that the press was not performed or
+/// that it was performed and could not be recorded: look at the screen, or read `record status`,
+/// and only while the step's own page is still shown send the same call without the mark request.
+fn repeat_without_mark(
+    mut error: LabError,
+    unpressed: Option<&UnpressedStep>,
+    request: &MarkRequest,
+) -> LabError {
     let Some(step) = unpressed else {
         return error;
     };
-    let again = match error.code.as_str() {
-        "record_click_exists" => true,
-        "record_mark_id_conflict" => error
-            .details
-            .as_ref()
-            .and_then(|details| details.get("id"))
-            .and_then(Value::as_str)
-            .is_some_and(|id| step.marks.iter().any(|mark| mark == id)),
-        _ => false,
-    };
-    if again {
-        error.message = format!(
-            "{}; step {} already holds its marks and its click, and its press was not performed: \
-             repeat the press with the same call without the mark request (do --capture --record \
-             without --mark-request or --mark-request-json; ac_lab_do without mark)",
-            error.message, step.index
-        );
+    let on_open_step = request.step_action.is_none()
+        && request.transition.is_none()
+        && request.step.is_none_or(|index| index == step.index);
+    let again = on_open_step
+        && match error.code.as_str() {
+            "record_click_exists" => step.declares_click,
+            "record_mark_id_conflict" => {
+                !request.add.is_empty()
+                    && request
+                        .add
+                        .iter()
+                        .all(|spec| step.marks.iter().any(|mark| declares_mark(spec, mark)))
+            }
+            _ => false,
+        };
+    if !again {
+        return error;
     }
+    let (holds, send) = if step.declares_click {
+        (
+            "its marks and its click",
+            "the same call without the mark request (do --capture --record without \
+             --mark-request and --mark-request-json; MCP: ac_lab_do without mark, on the Lab's MCP \
+             server ac_do without mark_request_json and mark_request)",
+        )
+    } else {
+        (
+            "its marks and no click yet (--tap-rect or --swipe declares it when the press is \
+             recorded)",
+            "the same call without the mark request, its --tap-rect or --swipe kept (do --capture \
+             --record without --mark-request and --mark-request-json; MCP: ac_lab_do with tap_rect \
+             or swipe and without mark, on the Lab's MCP server ac_do with tap_rect or swipe and \
+             without mark_request_json and mark_request)",
+        )
+    };
+    error.message = format!(
+        "{}; step {} already holds {holds}, and the recording holds no outcome of a press for it: \
+         the press was not performed, or it was performed and could not be recorded (an earlier \
+         answer record_append_failed_after_input means it was performed). Look at the screen \
+         first, with observe --capture without --record (MCP: ac_lab_observe with capture and \
+         without record, on both servers), or read record status (MCP: ac_record_status): only \
+         while the screen still shows step {}'s own page, send {send}",
+        error.message, step.index, step.index
+    );
     error
 }
 

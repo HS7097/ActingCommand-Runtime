@@ -818,16 +818,32 @@ takes the row's parameters (`mark_request`, `mark_request_json`, `next_frame_aft
   declared and no outcome, and the operation's own error; performed with a failure,
   `record_click_performed_with_failure`; indeterminate, `record_click_indeterminate`. Every error
   after the marks are written names them in its details (`mark`, the `record mark` output).
-- **Repeating a press that was not performed** (fix round 1, the coordinator's ruling). The step
-  then holds its marks and its click. The same call sent again is refused by `record mark`'s own
-  check, `record_click_exists` for its click or `record_mark_id_conflict` for a mark it adds again,
-  and nothing is pressed a second time; its message says that the step holds its marks and its
-  click and that the press is repeated by the same call without the mark request. So repeat it
-  with the same command line without `--mark-request` and `--mark-request-json` (MCP: `ac_lab_do`
-  with the same arguments without `mark`), `--next-frame-after-ms` kept; do not take a frame first
-  (a device frame on that step is `record_step_click_not_executed`). To change the marks or the
-  click first, send a `record mark` request (`replace_click` replaces the click), then the call
-  without the request.
+- **Repeating a press** (fix rounds 1 and 2, the coordinator's rulings). After a call that wrote
+  the marks and recorded no outcome of its press (the press not performed, refused by the Runtime
+  or unanswered, `record_append_failed_after_input`, or the call cut off between the press and its
+  record), the step holds its marks, and its click when the request declared one (with
+  `--tap-rect` or `--swipe` and a request without a click, the click is declared only when the
+  press is recorded, so the step holds its marks and no click), and **the recording holds no
+  outcome of a press** for it. That can mean the press was not performed, or that it was performed
+  and could not be recorded: the earlier call's answer tells (`record_append_failed_after_input`
+  means it was performed; a call cut off leaves no answer). The same call sent again is refused by
+  `record mark`'s own check, `record_click_exists` for the step's click or
+  `record_mark_id_conflict` for its marks, and nothing is pressed a second time. When the request
+  is for the open step and every mark it adds is on the step already with the same members
+  (`record_mark_id_conflict`), or the step's click exists (`record_click_exists`), the refusal
+  keeps its code and its message says all of this: look at the screen first, with `observe
+  --capture` without `--record` (MCP: `ac_lab_observe` with `capture` and without `record`, on
+  today's server and the Lab's alike), or read `record status` (MCP: `ac_record_status`, on both
+  servers); a frame with `--record` on that step is refused (`record_step_click_not_executed` for a
+  declared click, `record_step_click_missing` without one). Only while the screen still shows the
+  step's own page, send the same call without
+  the mark request: the same command line without `--mark-request` and `--mark-request-json`,
+  `--next-frame-after-ms` kept and, for a step without a click, its `--tap-rect` or `--swipe` kept
+  (MCP: `ac_lab_do` with the same arguments without `mark`; the Lab's MCP server's `ac_do` with the
+  same arguments without `mark_request_json` and `mark_request`; `tap_rect` or `swipe` kept for a
+  step without a click). If the screen shows the page the press leads to, the press was performed:
+  do not send it again. To change the marks or the click first, send a `record mark` request
+  (`replace_click` replaces the click), then the call without the request.
 - **The next frame.** `--next-frame-after-ms <ms>`, 0 to 60000 as a settle is (`validation_failed`
   otherwise; `--next-frame-out` needs it): after a press performed without a failure the command
   waits that long, takes one frame through the Runtime as `capture --record` takes it (its
@@ -926,8 +942,10 @@ step
  "next_frame_after_ms": 800, "next_frame_out": "C:\\ActingCommand\\frames\\step-2.png"}
 ```
 
-as the arguments of `ac_lab_do`, then `ac_record_mark` of the final screen, `ac_record_stop` with
-`dry_run` and `ac_record_stop`.
+as the arguments of `ac_lab_do` (on the Lab's MCP server `ac_do`, with the request as
+`mark_request_json`, its JSON text, or `mark_request`, a file, in place of `mark`), then
+`ac_record_mark` of the final screen, `ac_record_stop` with `dry_run` and `ac_record_stop` (the same
+names on both servers).
 
 ## Application steps
 

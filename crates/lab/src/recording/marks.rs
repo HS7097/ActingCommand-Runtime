@@ -529,6 +529,32 @@ pub(crate) fn prepare_mark(
     }
 }
 
+/// #463 L1 fix round 2: `mark` is the mark `spec` declares, member for member: its id, family and
+/// region, and every other member as [`prepare_mark`] keeps it (a template's search area where the
+/// spec declares one, the OCR reading, a value test's sides). What is measured on the frame (a
+/// template's crop, a color's mean, a digest's cells) and the self-test are not the request's. A
+/// one-call step sent again after its press asks for the marks its step already holds so.
+pub(crate) fn declares_mark(spec: &MarkSpec, mark: &RecordedMark) -> bool {
+    mark.id == spec.id
+        && mark.family == spec.family
+        && mark.region == spec.region
+        && spec.search.is_none_or(|search| mark.search == Some(search))
+        && mark.threshold == spec.threshold
+        && mark.max_distance == spec.max_distance
+        && mark.columns == spec.columns
+        && mark.rows == spec.rows
+        && mark.max_mean_milli == spec.max_mean_milli
+        && mark.max_cell == spec.max_cell
+        && mark.exclude_cells == spec.exclude_cells
+        && mark.all_of == spec.all_of
+        && mark.any_of == spec.any_of
+        && mark.scales == spec.scales
+        && mark.mask == spec.mask
+        && mark.unique == spec.unique
+        && mark.ocr == ocr_spec(spec).ok()
+        && mark.value_test == value_test_spec(spec).ok()
+}
+
 /// #411 Lab B-9: the declaration rules of a value-test mark, as the Runtime's value test declares
 /// them (`contracts/resource-declarations.md`, section Task schema `0.9` value tests): each side
 /// an OCR read with non-empty languages, `timeout_ms > 0`, `minimum_confidence` in 0..=1, a model
