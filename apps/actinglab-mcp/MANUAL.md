@@ -211,6 +211,15 @@ naming this file.
   table, and leaves the session header, another recording's, as it is (`lab.session_header`).
   `ac_record_reopen` makes an archived recording active again, so that `ac_record_mark` and
   `ac_record_stop` can build its package later.
+- **Adoption** (Workflow #464 P1, 0.12.60; `contracts/standard-pack-authoring.md`).
+  `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, `replace`, `state_dir`)
+  makes a stopped recording's package, or any package, a member of its game's standard pack in a
+  resource repository's checkout, through a child: the pack directory, its rule (or held entry, or
+  maintenance entry) and the `requires` words, each derived member answered with where it came
+  from. Every check runs before the first write; a refusal is `adopt_refused`, its
+  `adopt_problem` naming the check, and wrote nothing; with `dry_run` nothing is written in the
+  checkout. Its `value` is `"pending"` or a number of the pack's own: a decision that names the
+  origin `model` is refused (`value_origin_model`).
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

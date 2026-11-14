@@ -23181,6 +23181,83 @@ self-check, a resume or the fence's recheck lifts it.
 **Rollback** (below 0.12.60). Nothing is persisted by the fixes; a build before them reads every
 record they write, and halts again where they fence.
 
+### 1.365 Slice #464 P1 (0.12.60): `actinglab standard-pack adopt` makes a recorded package a member of its game's standard pack in a resource repository's checkout (Workflow #464; the design `rd-1114/464-pack-build-design.md`, sections A, B, C.1, C.2, D and the row "P1 adopt" of G with its tests, and the coordinator's rulings 1, 2, 7 and 8 on board #464, not the owner's words; the coordinator's ruling on the value's origin, sent during the slice: adopt never writes `fixed_value_origin: "model"` on a caller's word; coordinator work order `rd-1114/brief-464-p1-adopt.md`, read on main `17197d8e`)
+
+This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364). The
+operation, its decision document, its checks, what it derives and what it writes are
+[standard-pack-authoring.md](standard-pack-authoring.md); this entry records what the slice
+established, built and left.
+
+**Established before building (the design's open points).** (1) An outcome predicate on the rule
+itself must name an outcome key its package declares: a scheduled run is refused for a key the
+package does not declare, so the derivation takes the first key of the entry task's
+`scheduling_outcome.mappings` for every such predicate, the file's most frequent `feedback_stop`
+renamed to the rule included, and gives none (the decision must name it) when the package declares
+none. The Tools do not check that key themselves (`standard-pack check` composes a rule on an
+undeclared key), so the derivation is where it is kept. (2) Whether a recording's first decision
+was evaluated is read from the package itself: the entry task's provenance (`source` `lab_record`,
+`record_id`, `cross_check.status`, `warnings` with `first_decision_not_evaluated`,
+`steps[].click.needs_review`, [lab-recording.md](lab-recording.md)), and an application step,
+which the offline simulation never passes; nothing of the recording's state directory is read for
+it. (3) Nothing is deleted on any path, so a replaced pack directory is moved, not copied and
+removed: with the state directory on another volume than the checkout the move fails
+`adopt_write_failed`, the new directory left as its `.part`, both named. (4) `--dry-run` runs the
+check tree too, which is written under the state directory only; nothing of the checkout is
+written. None of the four changes the operation's shape, so the slice was built as designed.
+
+**Built.**
+
+| Part | Where |
+|---|---|
+| The operation (repository, recording, package and decision read; the checks; the plan; the check tree; the writes) | `crates/resource-tooling/src/adopt.rs`, `standard_pack_adopt` |
+| The canonical form of a JSON document, shared | `crates/actingcommand-contract/src/standard_pack_schedule.rs`, `canonical_json_bytes` |
+| The command line, the version control's answer (`git status --porcelain=v1 -z --untracked-files=all`, `GIT_OPTIONAL_LOCKS=0`, the redirecting variables removed) | `apps/actinglab/src/standard_pack_cli.rs`, `run_adopt`, `GitWorktree` |
+| The row `standard-pack adopt` (authoring, slice `SP-ADOPT`, built: actinglab's `BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`), its command, its strict flag lists, its census group, its capability, its options in `help`, its dry-run mode (preview `dry_run`), the inventory (103 commands) | `contracts/lab-operations.json`; `apps/actinglab/src/cli_module/{words,engine,own_flags}.rs`; `apps/actinglab-mcp/src/tools.rs`; `apps/actinglab/src/{commands/capabilities,cli_information,dry_run_gate}.rs`; `ratchet/actinglab_commands.json` |
+| Two codes, one value key and its vocabulary | below |
+
+**The value's origin (the coordinator's ruling).** A decided value is `"pending"` or a number of
+the pack's own, written as `fixed_value_milli` without `fixed_value_origin` and answered in
+`given` with the origin `pack`; a decision that names the origin `model` is refused
+`value_origin_model` at `/value/origin` before anything is written. A rule met again that carries
+`fixed_value_origin: "model"` keeps both members whatever the decision names, answered in
+`model_kept`. [standard-pack-schedule.md](standard-pack-schedule.md) ("The fixed value") gained
+that `acmodel bindings apply` is not built yet and that no writer of `model` exists today.
+
+**Outcome codes** (since 0.12.60; catalog domain `adopt_`, owners `resource-tooling` and
+`runtime-host`).
+
+| Code | Category, ladder | Values |
+|---|---|---|
+| `adopt_refused` | error, none | `adopt_problem` (required); `path`, `entry`, `json_pointer`, `package_id`, `member`, `count` |
+| `adopt_write_failed` | error, none | `path` (required); `paths` |
+
+The value key `adopt_problem` (codes mode kept) takes the vocabulary `adopt_problem`:
+`repository_invalid`, `recording_not_current`, `package_invalid`, `package_mismatch`,
+`pack_exists`, `pack_dirty`, `recording_unreviewed`, `local_path`, `decision_invalid`,
+`value_origin_model`, `rule_refused`, `root_file_not_canonical`
+(`crates/resource-tooling/src/codes.rs`, `AdoptProblem`).
+
+**Tests** (exec gate `#464 P1`, `crates/resource-tooling/src/gate_464_p1.rs`, a made-up repository
+of the game `neutral`, server `test`): the first adoption's exact writes and the post-check bundle;
+a second adoption refused; `--replace` keeping the rule byte for byte and the old directory; the
+model's value kept through three re-adoptions and the `model` origin refused; every check's
+refusal writing nothing; the classes `held` and `maintenance`; a pending value's coverage;
+`--dry-run`; a JSON container and a ZIP alike.
+
+**What is not added.** No configuration key, record type, payload member, fact, wire shape or
+interface revision; no persisted structure of the Runtime changes. No file of the recording, the
+rescue module, the kernel or `package bundle` changes.
+
+**What is left (reported, not built here).** The readiness of an adopted package (the slice
+`standard-pack ready`), building a pack without a recording (`standard-pack build`), the
+repository's regression case, catalog section and census row (named in the answer's `next`), and a
+writer of `fixed_value_origin: "model"`.
+
+**At deploy.** Nothing to do: the operation runs offline, on a checkout a person names.
+
+**Rollback** (below 0.12.60). Nothing is persisted; a build before the slice has no row
+`standard-pack adopt` and leaves an adopted checkout as it is.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

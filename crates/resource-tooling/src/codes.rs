@@ -131,5 +131,37 @@ actingcommand_contract::outcome_codes! {
         RecognitionPackUndeclared => "recognition_pack_undeclared": warning / none,
         // Resource conversion source reads (`resource_convert`).
         SelectionPolicyLimitExceeded => "selection_policy_limit_exceeded": error / none,
+        // Workflow #464 P1: `actinglab standard-pack adopt` (`adopt`).
+        /// Workflow #464 P1 (contracts/standard-pack-authoring.md, "The checks"): a check of the
+        /// adoption refused before anything was written in the repository (key `adopt_problem`;
+        /// optional `path`, `entry`, `json_pointer`, `package_id`, `member`, `count`; the refusal
+        /// of the loader, the reader or the composer as its cause).
+        AdoptRefused => "adopt_refused": error / none,
+        /// Workflow #464 P1 (contracts/standard-pack-authoring.md, "What it writes"): a write of
+        /// the adoption failed (key `path`, where it stopped; optional `paths`, what it had
+        /// written or moved before; the operating system's refusal as its cause); nothing is
+        /// removed.
+        AdoptWriteFailed => "adopt_write_failed": error / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #464 P1: which check of `actinglab standard-pack adopt` refused (vocabulary
+    /// `adopt_problem`, the value `adopt_problem` of `adopt_refused`).
+    pub enum AdoptProblem: "adopt_problem" {
+        RepositoryInvalid => "repository_invalid",
+        RecordingNotCurrent => "recording_not_current",
+        PackageInvalid => "package_invalid",
+        PackageMismatch => "package_mismatch",
+        PackExists => "pack_exists",
+        PackDirty => "pack_dirty",
+        RecordingUnreviewed => "recording_unreviewed",
+        LocalPath => "local_path",
+        DecisionInvalid => "decision_invalid",
+        /// The decision's `value` names the origin `model`, which only the model's export writes
+        /// (the coordinator's ruling on #464).
+        ValueOriginModel => "value_origin_model",
+        RuleRefused => "rule_refused",
+        RootFileNotCanonical => "root_file_not_canonical",
     }
 }

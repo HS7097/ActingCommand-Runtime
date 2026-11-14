@@ -181,6 +181,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `package fmt` | mixed | | `--check`: no_effect; without `--check`: refused, `dry_run_unsupported`, flag parsing only, alternative `package fmt --check` (Workflow #390 TOOL-1) |
 | `package loading` | mixed | | `--check`: no_effect; `--write`: preview, `dry_run`: every check of `--write` runs and nothing is written; `status: "preview"`, `written: false`, a pack `--write` would write with `state: "stale"` (Workflow #407 LOAD-1) |
 | `package edit` | preview | `dry_run` | the edits are applied and the edited package admitted in memory; `validated`, `written: false`, `persisted: false`, no file written (Workflow #390 TOOL-1) |
+| `standard-pack adopt` | preview | `dry_run` | every check runs, the check tree under the state directory's `adopt-check/` included; `validated`, `written` empty and `would_write` what it would write; nothing is written in the repository and no copy is kept (Workflow #464 P1) |
 | `operation validate` | no_effect | | |
 | `operation inspect` | no_effect | | |
 | `operation explain` | no_effect | | |

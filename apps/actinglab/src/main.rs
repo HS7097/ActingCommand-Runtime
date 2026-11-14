@@ -610,7 +610,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
             run_resource(sub, &invocation.global, &invocation.args)
         }
         // Workflow #373 NAV-T: `standard-pack check --root <game root>`; ROUT-L RL-1a:
-        // `standard-pack compose`.
+        // `standard-pack compose`; Workflow #464 P1: `standard-pack adopt`.
         [group, sub] if group == "standard-pack" => {
             standard_pack_cli::run_standard_pack(sub, &invocation.global, &invocation.args)
         }

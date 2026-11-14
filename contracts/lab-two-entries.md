@@ -1085,9 +1085,10 @@ sentence fails that test.
     - *Which.* A row the server gives neither to `lab_ops::core_ops` nor to the rescue module, and
       that is not refused for a reason of its own (a rescue row where the module does not run,
       which is not offered), is served by a child: one rule (`tools::serving`, `Serving::Child`),
-      no list of row names. On Windows all 143 offered rows are served (49 by `core_ops` and 33 by
+      no list of row names. On Windows all 144 offered rows are served (49 by `core_ops` and 33 by
       the rescue module in the server's process, `deploy` and `rollback` among them since
-      LAB-6S0, 61 by children); elsewhere all 110 are served (49 and 61).
+      LAB-6S0, 62 by children, `standard-pack adopt` among them since Workflow #464 P1); elsewhere
+      all 111 are served (49 and 62).
     - *The children.* `actinglab.exe` beside the server's own file, started as `actinglab.exe
       serve --stdio --front mcp` (section 8.2) with the environment today's server gives its Lab
       child: `ACTINGCOMMAND_RUNTIME_STATE_ROOT` set to the server's state root when it is known,

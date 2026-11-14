@@ -2708,6 +2708,10 @@
     "application_switch_step": {
       "type": "vocab:application_switch_step",
       "description": "Which step of the switch that brings a member of a device group to the front before its run failed (Workflow #437 MAPP-2a, since 0.12.59)."
+    },
+    "adopt_problem": {
+      "type": "vocab:adopt_problem",
+      "description": "Which check of actinglab standard-pack adopt refused (Workflow #464 P1, since 0.12.60)."
     }
   },
   "vocabularies": {
@@ -9401,6 +9405,52 @@
           "description": "The run's renewal of its lease after the startup run handed the key back was refused or failed: the lease lost, lapsed or taken over (failure_code the scheduler's refusal). The member's application was started and no task of the run ran (Workflow #437 MAPP-2d, since 0.12.60)."
         }
       }
+    },
+    "adopt_problem": {
+      "description": "Which check of actinglab standard-pack adopt refused, the value adopt_problem of adopt_refused (Workflow #464 P1, contracts/standard-pack-authoring.md \"The checks\", since 0.12.60).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "AdoptProblem"
+      },
+      "tokens": {
+        "repository_invalid": {
+          "description": "--repo holds no applications.json, maintenance.json or packs directory, one of them or its schedule.json does not read, or a .part of a root file is left there."
+        },
+        "recording_not_current": {
+          "description": "The recording --record-id names is not as its last record stop left it: no recording.json, not stopped, marked again since, or without its package."
+        },
+        "package_invalid": {
+          "description": "The package is not admitted as package preflight admits it, or its package_id names no directory packs/<package_id>."
+        },
+        "package_mismatch": {
+          "description": "The package's game is not applications.json's, or its server is none of that file's servers."
+        },
+        "pack_exists": {
+          "description": "The package was adopted before (its directory, its .part, its rule, its held entry or its maintenance entry is there) and --replace is not given, or the kept copy's place is taken."
+        },
+        "pack_dirty": {
+          "description": "With --replace, the version control shows a change not committed below packs/<package_id>, or cannot tell."
+        },
+        "recording_unreviewed": {
+          "description": "The package is not run through (its provenance is no recording's, its cross-check did not pass, its first decision was not evaluated, or a step needs review) and the class is not held."
+        },
+        "local_path": {
+          "description": "A text file of the package holds an absolute local path or the state directory."
+        },
+        "decision_invalid": {
+          "description": "The decision document breaks its schema, misses a member the class or a first adoption needs, names a pool the file does not declare, or names a derived member that cannot be derived without it."
+        },
+        "value_origin_model": {
+          "description": "The decision's value names the origin model, which only the model's export writes; the number is given with the origin pack, or the value is pending."
+        },
+        "rule_refused": {
+          "description": "The composer refuses schedule.json as it would be written, or the adopted package comes out unclassified."
+        },
+        "root_file_not_canonical": {
+          "description": "schedule.json or maintenance.json must change and is not in the canonical form package fmt writes."
+        }
+      }
     }
   },
   "domains": {
@@ -9573,6 +9623,7 @@
       "runtime-host"
     ],
     "adopt_": [
+      "resource-tooling",
       "runtime-host"
     ],
     "advance_": [
