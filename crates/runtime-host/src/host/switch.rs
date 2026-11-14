@@ -34,6 +34,18 @@
 //! (`HostShared::renew_after_switch`), before its request lifecycle. The renewal keeps the lease
 //! and replaces its token, so the run's later steps resolve the token the scheduler holds
 //! ([`HostShared::run_token`]).
+//!
+//! Workflow #437 ORD-1c (register §1.373; `contracts/device-group.md`, "The member in front"):
+//! the member in front. The function the switch's two entries share notes what its own steps left
+//! in front of the member's device, in one in-memory map by device key (`HostShared::note_front`,
+//! its one writer): the member once its application is in front or started, none once the switch
+//! was refused or failed. Fix round 1: one remover, [`HostShared::forget_front`], at a
+//! Runtime-level failure of the switch and where what is in front changes without a switch (a stop
+//! or a failed start of a member, a ladder rung, the idle action's close). Fix round 2: a task
+//! step's own application effect by the same rule, a start of it that succeeded noting the member
+//! through the one writer ([`HostShared::front_after_own_application_effect`]). A policy cycle reads
+//! the map for the order within one device (`HostShared::policy_device_groups`); a start begins
+//! with none, and a stale entry costs at most one switch, which reads the real foreground.
 
 use super::resource_fence::UnconfirmedResources;
 use super::*;
@@ -67,6 +79,18 @@ impl RunNeed {
             Self::Renews => 0,
         }
     }
+}
+
+/// Workflow #437 ORD-1c fix round 1: what a change outside the switch's own result does to the
+/// member in front of a device ([`HostShared::forget_front`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FrontLoss {
+    /// The member's own application stopped, or failed after it was started: the device has
+    /// none in front if the member was the one in front.
+    Member,
+    /// Every application of the device may have stopped (an emulator restart, a switch's
+    /// Runtime-level failure): the device has none in front, whoever was.
+    Device,
 }
 
 /// Workflow #437 MAPP-2b: a Runtime-level failure of the switch before a run (the `Err` of its
@@ -392,6 +416,15 @@ impl HostShared {
     /// and 2 always, and with `startup` (the run's request and its need) the time check before
     /// any stop and step 3, the startup run on the borrowed key ([`Self::switch_application`],
     /// [`Self::stop_others_before_start`]).
+    ///
+    /// Workflow #437 ORD-1c (`contracts/device-group.md`, "The member in front"): the function both
+    /// entries share notes, for a member of a device group of several, what the steps left in
+    /// front of its device ([`Self::note_front`]): the member when they ended with its
+    /// application in front or started (`Ok(Ok)`), none when the switch was refused or failed
+    /// (`Ok(Err)`), and (fix round 1, the coordinator's ruling) none when the steps end with a
+    /// Runtime-level failure (`Err`), since a stop may already have run then too. A lease renewal
+    /// after the steps (`HostShared::switch_before_run`) changes nothing here: the device's state
+    /// is what counts.
     fn switch_front(
         &self,
         links: EventLinksDraft,
@@ -405,6 +438,120 @@ impl HostShared {
         if !self.in_group_of_several(member) {
             return Ok(Ok(ApplicationSwitch::default()));
         }
+        let steps = self.switch_steps(links, token, connection_id, startup);
+        #[cfg(test)]
+        let steps = self.take_switch_steps_failure_for_test().map_or(steps, Err);
+        let switched = match steps {
+            Ok(switched) => switched,
+            Err(error) => {
+                self.forget_front(member, FrontLoss::Device)?;
+                return Err(error);
+            }
+        };
+        self.note_front(member, switched.is_ok())?;
+        Ok(switched)
+    }
+
+    /// Workflow #437 ORD-1c fix round 1 (the review's point 3, as the coordinator ruled on board
+    /// #437; register §1.373): the one remover of the member in front outside the switch's own
+    /// result, called where what is in front of `member`'s device changes without a switch, each
+    /// call one line: `FrontLoss::Device` forgets the
+    /// device's entry whoever it names (an emulator restart, a switch's Runtime-level failure),
+    /// `FrontLoss::Member` forgets it only while it names `member` (its application stopped, or
+    /// started and then failed). Nothing for an instance alone on its device. The map's lock is a
+    /// leaf: nothing else is taken while it is held.
+    pub(super) fn forget_front(
+        &self,
+        member: InstanceId,
+        loss: FrontLoss,
+    ) -> RuntimeHostResult<()> {
+        if !crate::policy_host::queue_order_on() || !self.in_group_of_several(member) {
+            return Ok(());
+        }
+        let device = self.device_key(member);
+        let mut fronts = lock(&self.device_fronts, HostLocation::SwitchApplication)?;
+        if matches!(loss, FrontLoss::Device) || fronts.get(&device) == Some(&member) {
+            fronts.remove(&device);
+        }
+        Ok(())
+    }
+
+    /// Workflow #437 ORD-1c fix round 2 (the review on board #437; `contracts/device-group.md`,
+    /// "Who forgets it"): what a task step's own application effect on `member` (`stop`, `launch`
+    /// or `restart`, on its run's key) leaves in front of the member's device, by the rule of the
+    /// `ApplicationLifecycle` request (`host/input.rs`). A stop, and a launch or restart whose
+    /// command failed (`succeeded` false), forget the member ([`Self::forget_front`], member). A
+    /// launch or restart that succeeded leaves the member's own application in front or started,
+    /// so the member is noted in front as the switch's own steps note it ([`Self::note_front`]),
+    /// for a member the switch applies to: after a stop by an earlier step of the same run, the
+    /// device would otherwise keep none in front until the member's next switch. Nothing for an
+    /// instance alone on its device.
+    pub(super) fn front_after_own_application_effect(
+        &self,
+        member: InstanceId,
+        action: ApplicationLifecycleAction,
+        succeeded: bool,
+    ) -> RuntimeHostResult<()> {
+        if !succeeded || matches!(action, ApplicationLifecycleAction::Stop) {
+            return self.forget_front(member, FrontLoss::Member);
+        }
+        if !self.switch_applies(member) {
+            return Ok(());
+        }
+        self.note_front(member, true)
+    }
+
+    /// Workflow #437 ORD-1c (`contracts/device-group.md`, "The member in front"; the
+    /// coordinator's rulings 1 and 4 on board #437): the one writer of the map of the members in
+    /// front (`HostShared::device_fronts`). `in_front`: `member`, of a device group of several, is
+    /// now in front of its device, and every queue wait of its pairs is forgotten (the policy
+    /// host's `PolicyHost::forget_queue_waits_of`); otherwise its device has none in front. Memory
+    /// only. The device's other members' waits are left as they are: a member that lost the front
+    /// waits anew from the first evaluated round after it.
+    fn note_front(&self, member: InstanceId, in_front: bool) -> RuntimeHostResult<()> {
+        if !crate::policy_host::queue_order_on() {
+            return Ok(());
+        }
+        let device = self.device_key(member);
+        {
+            let mut fronts = lock(&self.device_fronts, HostLocation::SwitchApplication)?;
+            if in_front {
+                fronts.insert(device, member);
+            } else {
+                fronts.remove(&device);
+            }
+        }
+        if !in_front {
+            return Ok(());
+        }
+        let Some(registration) = self.switch_registration(member)? else {
+            return Ok(());
+        };
+        lock(self.policy()?, HostLocation::SwitchApplication)?
+            .forget_queue_waits_of(&registration.instance_alias);
+        Ok(())
+    }
+
+    /// Workflow #437 ORD-1c: the member the host holds in front of each device of several, by
+    /// device key, as a policy cycle reads it (`HostShared::policy_device_groups`).
+    pub(super) fn device_fronts(&self) -> RuntimeHostResult<BTreeMap<InstanceId, InstanceId>> {
+        Ok(lock(
+            &self.device_fronts,
+            HostLocation::ReadPolicyInstanceRegistry,
+        )?
+        .clone())
+    }
+
+    /// The switch's steps for `token`'s member, a member of a device group of several
+    /// ([`Self::switch_front`]).
+    fn switch_steps(
+        &self,
+        links: EventLinksDraft,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        startup: Option<(RequestId, RunNeed)>,
+    ) -> RuntimeHostResult<Result<ApplicationSwitch, RuntimeHostError>> {
+        let member = token.instance_id();
         let Some(resolved) = self.switch_registration(member)? else {
             return Ok(Err(member_mismatch()));
         };
@@ -827,6 +974,21 @@ impl HostShared {
             })
     }
 
+    /// Workflow #437 ORD-1c fix round 1: once, when a test asked for it
+    /// ([`RuntimeHost::fail_next_switch_steps_for_test`]), a Runtime-level failure of the switch's
+    /// steps after they ran (`backend_operation_failed`, not fatal); `None` otherwise.
+    fn take_switch_steps_failure_for_test(&self) -> Option<RuntimeHostError> {
+        self.switch_steps_failure_for_test
+            .swap(false, Ordering::AcqRel)
+            .then(|| {
+                RuntimeHostError::request(
+                    RuntimeErrorCode::BackendOperationFailed,
+                    HostLocation::SwitchApplication,
+                    RuntimeErrorCode::BackendOperationFailed,
+                )
+            })
+    }
+
     /// Workflow #437 MAPP-2d fix round 1: once, when a test asked for it
     /// ([`RuntimeHost::release_failed_policy_run_with_granted_token_for_test`]), `granted`, the
     /// token a policy run was granted, for the release of its failed settlement in place of the
@@ -1009,6 +1171,49 @@ impl RuntimeHost {
                 .get(decision_id)
                 .map(|clock| clock.switch_ms),
         )
+    }
+
+    /// Workflow #437 ORD-1c: the alias of the member the host holds in front of `alias`'s device,
+    /// `None` when it holds none (as the map of the members in front has it, in memory).
+    pub(crate) fn device_front_for_test(&self, alias: &str) -> RuntimeHostResult<Option<String>> {
+        let location = crate::codes::test_spellings::TestLocation::QueueOrderForTest;
+        let shared = self.shared_ref(location)?;
+        let member = shared
+            .resolve_instance(alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let Some(front) = lock(&shared.device_fronts, location)?
+            .get(&shared.device_key(member))
+            .copied()
+        else {
+            return Ok(None);
+        };
+        Ok(lock(&shared.registered_instances, location)?
+            .get(&front)
+            .map(|instance| instance.instance_alias.clone()))
+    }
+
+    /// Workflow #437 ORD-1c fix round 1: the next switch's steps run and then end with a
+    /// Runtime-level failure (`HostShared::take_switch_steps_failure_for_test`), as a failure of
+    /// their own records would.
+    pub(crate) fn fail_next_switch_steps_for_test(&self) -> RuntimeHostResult<()> {
+        let location = crate::codes::test_spellings::TestLocation::QueueOrderForTest;
+        self.shared_ref(location)?
+            .switch_steps_failure_for_test
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Workflow #437 ORD-1c: the start of the queue wait of `task_id` on `alias` that the next
+    /// evaluation passes, the last evaluation's verdicts applied; `None` when the pair has none.
+    pub(crate) fn queue_wait_start_for_test(
+        &self,
+        task_id: &str,
+        alias: &str,
+    ) -> RuntimeHostResult<Option<u64>> {
+        let location = crate::codes::test_spellings::TestLocation::QueueOrderForTest;
+        let shared = self.shared_ref(location)?;
+        Ok(lock(shared.policy()?, location)?.queue_wait_start_for_test(task_id, alias))
     }
 
     /// How many times the switch's entry was reached since the host started.

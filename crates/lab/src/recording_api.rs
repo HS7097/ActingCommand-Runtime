@@ -18,19 +18,20 @@ use crate::recording::generate::{
     application_steps_summary, optional_steps_summary, plan as generate_plan, render,
     transitions_summary, validate_timeout_option,
 };
-use crate::recording::marks::match_metric;
+use crate::recording::marks::{declares_mark, match_metric};
 use crate::recording::model::{
     ApplicationPlan, AttachFrameOutcome, AttachFrameRequest, ClickEffect, ClickPlan, ClickView,
     CommitApplicationOutcome, CommitApplicationRequest, CommitClickOutcome, CommitClickRequest,
-    FrameView, LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_MAX_SETTLE_MS, LabRecording,
-    LabRecordingStart, LabStatus, LabStatusView, MarkOutcome, MarkRequest, MarkStatusView,
-    MarkView, OpaqueJson, PlanApplicationRequest, PlanClickRequest, RecordStartOptions,
-    RecordStopOptions, RecordStopOutcome, RecordedFrame, RecordingArtifact, RecordingDefaults,
-    RecordingStep, SelfTestStatus, StepClick, StepOptionalView, StepStateView, StepTransition,
-    StepView, TransitionSpec, TransitionView,
+    FrameView, LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_MAX_NEXT_FRAME_MS,
+    LAB_RECORDING_MAX_SETTLE_MS, LabRecording, LabRecordingStart, LabStatus, LabStatusView,
+    MarkOutcome, MarkRequest, MarkStatusView, MarkView, NextFrameOutcome, OpaqueJson,
+    PlanApplicationRequest, PlanClickRequest, RecordStartOptions, RecordStepOutcome,
+    RecordStepRequest, RecordStopOptions, RecordStopOutcome, RecordedFrame, RecordedMark,
+    RecordingArtifact, RecordingDefaults, RecordingStep, SelfTestStatus, StepClick,
+    StepOptionalView, StepStateView, StepTransition, StepView, TransitionSpec, TransitionView,
 };
 use crate::recording::steps::{
-    ArrivalMode, FrameMeta, application_action, application_with_click, apply_marks,
+    ArrivalMode, FrameMeta, Session, application_action, application_with_click, apply_marks,
     apply_step_action, apply_transition, arrive, check_device_arrival, commit_application,
     commit_click, default_recording_defaults, effective_indices, new_recording, not_active,
     open_session, open_session_for_marks, open_step, plan_application, plan_click, save,
@@ -48,7 +49,8 @@ use crate::recording::{
 use actingcommand_contract::{LabError, LabErrorClass, LabResult};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Defaults of a new recording from `record start` options (validated before any write).
 pub fn record_start_defaults(options: &RecordStartOptions) -> LabResult<RecordingDefaults> {
@@ -1096,6 +1098,25 @@ pub fn record_mark(
             return Err(stopped_change("an application operation"));
         }
     }
+    let outcome = mark_session(&mut session, request, dry_run, ocr)?;
+    if !dry_run {
+        if session.stopped {
+            session.recording.amended_at_unix_ms = Some(now_unix_ms());
+        }
+        save(&mut session)?;
+    }
+    Ok(outcome)
+}
+
+/// `record mark`'s work on an opened session: every check and the self-test, the session changed
+/// in memory only; the caller writes it. #463 L1: the one-call form of `do --capture --record`
+/// ([`record_plan_step`]) applies its mark request with it, the same code.
+fn mark_session(
+    session: &mut Session,
+    request: &MarkRequest,
+    dry_run: bool,
+    ocr: &LabOcr,
+) -> LabResult<MarkOutcome> {
     let mut outcome = MarkOutcome {
         status: if dry_run {
             "marks_validated"
@@ -1121,16 +1142,16 @@ pub fn record_mark(
         after_stop: session.stopped,
     };
     let step = if let Some(action) = &request.step_action {
-        let (status, step) = apply_step_action(&mut session, action)?;
+        let (status, step) = apply_step_action(session, action)?;
         outcome.status = status.to_string();
         step
     } else if let Some(spec) = &request.transition {
-        let applied = apply_transition(&mut session, request, spec, ocr)?;
+        let applied = apply_transition(session, request, spec, ocr)?;
         outcome.marks = applied.marks;
         outcome.reused = applied.reused;
         applied.step
     } else {
-        let applied = apply_marks(&mut session, request, ocr)?;
+        let applied = apply_marks(session, request, ocr)?;
         outcome.step_opened = applied.opened;
         outcome.closed_step = applied.closed_step;
         outcome.frame = applied.frame;
@@ -1152,12 +1173,6 @@ pub fn record_mark(
         outcome.application = recorded.application.clone();
         outcome.transition = recorded.transition.as_ref().map(transition_view);
         outcome.step_state = Some(step_state(recorded));
-    }
-    if !dry_run {
-        if session.stopped {
-            session.recording.amended_at_unix_ms = Some(now_unix_ms());
-        }
-        save(&mut session)?;
     }
     Ok(outcome)
 }
@@ -1293,6 +1308,398 @@ pub fn record_commit_click(
         .with_details(json!({"record": to_json(&outcome)})));
     }
     Ok(outcome)
+}
+
+/// The `actingcommand.lab-record-mark.v1` request in `text`, as `record mark --request` and
+/// `--request-json` read it: text that does not decode into one (an unknown member at any level, a
+/// member of the wrong type) is `validation_failed`. #463 L1: `do --capture --record
+/// --mark-request` and `--mark-request-json` read theirs with it.
+pub fn parse_mark_request(text: &str) -> LabResult<MarkRequest> {
+    serde_json::from_str::<MarkRequest>(text)
+        .map_err(|error| LabError::usage(format!("invalid record mark request: {error}")))
+}
+
+/// #463 L1 (`contracts/lab-recording.md`, "One call per step"): what the one-call form of `do
+/// --capture --record` asks of its caller: the Runtime's press and capture, and the caller's
+/// clock. actinglab gives the Runtime's ("`--record` on device commands"); a test gives fakes.
+pub trait RecordStepPorts {
+    /// Sends the planned input to the Runtime once, as `do --capture --record` sends it. `Ok`: the
+    /// Runtime performed it, with or without a failure, or its outcome is unknown; what the
+    /// recording takes of the answer. `Err`: it was not performed, or no answer came: the
+    /// operation's own error, and nothing of the press is recorded.
+    fn press(&mut self, plan: &ClickPlan) -> LabResult<CommitClickRequest>;
+
+    /// Waits `duration` on the caller's clock.
+    fn wait(&mut self, duration: Duration);
+
+    /// Takes one frame through the Runtime, as `capture --record` takes it.
+    fn capture(&mut self) -> LabResult<AttachFrameRequest>;
+}
+
+/// #463 L1: a one-call step planned under its recording lock: the mark request applied to the
+/// open recording in memory by `record mark`'s own code and self-tested, and the press planned on
+/// the open step by `do --capture --record`'s; nothing is written and nothing is sent until
+/// [`PlannedStep::perform`].
+pub struct PlannedStep {
+    session: Session,
+    mark: Option<MarkOutcome>,
+    plan: ClickPlan,
+    next_frame_after_ms: Option<u64>,
+    next_frame_out: Option<PathBuf>,
+}
+
+/// #463 L1: plans a one-call step. In order: the next frame's bounds; the mark request's checks
+/// and `record mark`'s work on the open recording, with its self-test on the step's live frames;
+/// then the press, by `do --capture --record`'s rules (its point, `--tap`, `--seed`, a declared
+/// drag or long press; the gestures it refuses stay refused). A refusal is the code of the check
+/// that refused, `record mark`'s or `do --capture --record`'s, and nothing is written or sent. A
+/// stopped recording takes no device command (`record_session_not_active`). Fix round 1: the
+/// request is for the open step and nothing else ([`hold_to_open_step`]), and a refusal of a
+/// request whose open step already holds its marks and no outcome of a press says what to look at
+/// before the press is repeated, and how ([`repeat_without_mark`], fix round 2).
+pub fn record_plan_step(
+    lock: &RecordingLock,
+    request: &RecordStepRequest,
+    ocr: &LabOcr,
+) -> LabResult<PlannedStep> {
+    validate_next_frame(request)?;
+    if let Some(mark) = &request.mark {
+        validate_mark_request(mark)?;
+    }
+    let mut session = open_session(lock)?;
+    let open = open_step(&session.recording);
+    let unpressed = unpressed_open_step(&session.recording, open);
+    let mark = request
+        .mark
+        .as_ref()
+        .map(|mark| {
+            mark_session(&mut session, mark, false, ocr)
+                .map_err(|error| repeat_without_mark(error, unpressed.as_ref(), mark))
+        })
+        .transpose()?;
+    let plan = plan_click(&session.recording, &request.click)?;
+    if let (Some(mark_request), Some(outcome)) = (&request.mark, &mark) {
+        hold_to_open_step(mark_request, open, outcome)?;
+    }
+    Ok(PlannedStep {
+        session,
+        mark,
+        plan,
+        next_frame_after_ms: request.next_frame_after_ms,
+        next_frame_out: request.next_frame_out.clone(),
+    })
+}
+
+impl PlannedStep {
+    /// The press this step plans: the input the caller sends.
+    pub fn plan(&self) -> &ClickPlan {
+        &self.plan
+    }
+
+    /// #463 L1: performs the planned step under the same lock: the marks written once, as `record
+    /// mark` writes them; the press sent through `ports` and recorded as `do --capture --record`
+    /// records it; then, only after a performed press without a failure and only when asked for,
+    /// the wait and the next frame, which arrives as `capture --record`'s does (it opens the next
+    /// step). A press that was not performed leaves the marks recorded and answers the operation's
+    /// own error; one performed with a failure or indeterminate answers as `do --capture --record`
+    /// does; neither takes a next frame. A next frame that cannot be taken answers the capture's
+    /// own error, and the press and its closed step stand: nothing is rolled back. Every error
+    /// after the marks are written names them in its details (`mark`).
+    pub fn perform(
+        mut self,
+        lock: &RecordingLock,
+        ports: &mut impl RecordStepPorts,
+    ) -> LabResult<RecordStepOutcome> {
+        if self.mark.is_some() {
+            save(&mut self.session)?;
+        }
+        let mark = self.mark;
+        let pressed = ports
+            .press(&self.plan)
+            .map_err(|error| with_detail(error, "mark", mark.as_ref().map(to_json)))?;
+        let click = record_commit_click(lock, &self.plan, &pressed)
+            .map_err(|error| with_detail(error, "mark", mark.as_ref().map(to_json)))?;
+        let Some(after_ms) = self.next_frame_after_ms else {
+            return Ok(RecordStepOutcome {
+                mark,
+                click,
+                next_frame: None,
+            });
+        };
+        ports.wait(Duration::from_millis(after_ms));
+        let (record, out) = next_frame(lock, ports, self.next_frame_out.as_deref())
+            .map_err(|error| next_frame_failed(error, after_ms, &click, mark.as_ref()))?;
+        Ok(RecordStepOutcome {
+            mark,
+            click,
+            next_frame: Some(NextFrameOutcome {
+                after_ms,
+                out,
+                record,
+            }),
+        })
+    }
+}
+
+/// #463 L1: the next frame's wait is 0 to [`LAB_RECORDING_MAX_NEXT_FRAME_MS`] milliseconds, and its
+/// file is named only with a wait: `validation_failed` otherwise, before anything is read.
+fn validate_next_frame(request: &RecordStepRequest) -> LabResult<()> {
+    match request.next_frame_after_ms {
+        Some(after_ms) if after_ms > LAB_RECORDING_MAX_NEXT_FRAME_MS => {
+            Err(LabError::usage(format!(
+                "--next-frame-after-ms must be in 0..={LAB_RECORDING_MAX_NEXT_FRAME_MS}, got \
+                 {after_ms}"
+            ))
+            .with_details(json!({
+                "next_frame_after_ms": after_ms,
+                "max_next_frame_after_ms": LAB_RECORDING_MAX_NEXT_FRAME_MS
+            })))
+        }
+        None if request.next_frame_out.is_some() => Err(LabError::usage(
+            "--next-frame-out names the file of the next frame: give --next-frame-after-ms with it",
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// #463 L1 fix round 1: the one-call form's mark request is for the open step and nothing else.
+/// A step operation, a transition, a step other than the open one, or a frame file that opened or
+/// replaced a step would make the press the click of a step the request did not mark, or a press
+/// by the coordinates of a file: each is `validation_failed` (`member` names it), after the press
+/// is planned and before anything is written or sent; `record mark` takes such a request.
+fn hold_to_open_step(
+    request: &MarkRequest,
+    open: Option<u32>,
+    outcome: &MarkOutcome,
+) -> LabResult<()> {
+    let (member, what) = if request.step_action.is_some() {
+        ("step_action", "a step operation (step_action)".to_owned())
+    } else if request.transition.is_some() {
+        ("transition", "a transition (transition)".to_owned())
+    } else if let Some(step) = request.step.filter(|step| Some(*step) != open) {
+        (
+            "step",
+            format!("step {step} (step), which is not the open step"),
+        )
+    } else if outcome.frame.is_some() {
+        (
+            "frame",
+            "a frame file (frame), which opened or replaced a step and would make the press \
+             follow the coordinates of a file"
+                .to_owned(),
+        )
+    } else {
+        return Ok(());
+    };
+    let open_text = open.map_or_else(
+        || "no step was open".to_owned(),
+        |step| format!("the open step is {step}"),
+    );
+    Err(with_details(
+        invalid(
+            "validation_failed",
+            format!(
+                "the mark request of do --capture --record is for the open step and its press \
+                 alone, and this one gives {what} ({open_text}): send it with record mark \
+                 (ac_record_mark), then press with do --capture --record; nothing was written or \
+                 pressed"
+            ),
+        ),
+        json!({"member": member, "open_step": open}),
+    ))
+}
+
+/// #463 L1 fix rounds 1 and 2: the open step while the recording holds no outcome of a press for
+/// it: what a one-call step leaves whose press was not performed, whose device operation the
+/// Runtime refused, or which was performed and could not be recorded
+/// (`record_append_failed_after_input`). Its marks are written, and its click when the request
+/// declared one; with `--tap-rect` or `--swipe` the click is declared only when the press is
+/// recorded, so the step has none.
+struct UnpressedStep {
+    index: u32,
+    /// The step declares its click (and no execution of it is on record).
+    declares_click: bool,
+    /// The step's own marks.
+    marks: Vec<RecordedMark>,
+}
+
+fn unpressed_open_step(recording: &LabRecording, open: Option<u32>) -> Option<UnpressedStep> {
+    let step = recording
+        .steps
+        .iter()
+        .find(|step| Some(step.index) == open)?;
+    let no_outcome = match &step.click {
+        Some(click) => click.execution.is_none(),
+        None => step.application.is_none(),
+    };
+    no_outcome.then(|| UnpressedStep {
+        index: step.index,
+        declares_click: step.click.is_some(),
+        marks: step.marks.clone(),
+    })
+}
+
+/// #463 L1 fix rounds 1 and 2 (the coordinator's rulings): the same one-call step sent again on
+/// the open step is refused by `record mark`'s own check, `record_click_exists` for its declared
+/// click, or `record_mark_id_conflict` when every mark the request adds is on the step already,
+/// member for member ([`declares_mark`]; also with `--tap-rect` or `--swipe`, where the step has
+/// no click yet), and nothing is pressed a second time. The refusal keeps its code and says that
+/// the recording holds no outcome of a press, which can mean that the press was not performed or
+/// that it was performed and could not be recorded: look at the screen, or read `record status`,
+/// and only while the step's own page is still shown send the same call without the mark request.
+fn repeat_without_mark(
+    mut error: LabError,
+    unpressed: Option<&UnpressedStep>,
+    request: &MarkRequest,
+) -> LabError {
+    let Some(step) = unpressed else {
+        return error;
+    };
+    let on_open_step = request.step_action.is_none()
+        && request.transition.is_none()
+        && request.step.is_none_or(|index| index == step.index);
+    let again = on_open_step
+        && match error.code.as_str() {
+            "record_click_exists" => step.declares_click,
+            "record_mark_id_conflict" => {
+                !request.add.is_empty()
+                    && request
+                        .add
+                        .iter()
+                        .all(|spec| step.marks.iter().any(|mark| declares_mark(spec, mark)))
+            }
+            _ => false,
+        };
+    if !again {
+        return error;
+    }
+    let (holds, send) = if step.declares_click {
+        (
+            "its marks and its click",
+            "the same call without the mark request (do --capture --record without \
+             --mark-request and --mark-request-json; MCP: ac_lab_do without mark, on the Lab's MCP \
+             server ac_do without mark_request_json and mark_request)",
+        )
+    } else {
+        (
+            "its marks and no click yet (--tap-rect or --swipe declares it when the press is \
+             recorded)",
+            "the same call without the mark request, its --tap-rect or --swipe kept (do --capture \
+             --record without --mark-request and --mark-request-json; MCP: ac_lab_do with tap_rect \
+             or swipe and without mark, on the Lab's MCP server ac_do with tap_rect or swipe and \
+             without mark_request_json and mark_request)",
+        )
+    };
+    error.message = format!(
+        "{}; step {} already holds {holds}, and the recording holds no outcome of a press for it: \
+         the press was not performed, or it was performed and could not be recorded (an earlier \
+         answer record_append_failed_after_input means it was performed). Look at the screen \
+         first, with observe --capture without --record (MCP: ac_lab_observe with capture and \
+         without record, on both servers), or read record status (MCP: ac_record_status): only \
+         while the screen still shows step {}'s own page, send {send}",
+        error.message, step.index, step.index
+    );
+    error
+}
+
+/// #463 L1: the next frame after a performed press, as `capture --record` takes it: the open
+/// recording must accept a device frame, then the capture, its PNG written to `out` when that is
+/// named, then the frame recorded. Answers the recorded frame and the file written.
+fn next_frame(
+    lock: &RecordingLock,
+    ports: &mut impl RecordStepPorts,
+    out: Option<&Path>,
+) -> LabResult<(AttachFrameOutcome, Option<String>)> {
+    record_frame_preflight(lock)?;
+    let frame = ports.capture()?;
+    let written = out
+        .map(|path| write_next_frame(path, &frame.png))
+        .transpose()?;
+    Ok((record_attach_frame(lock, frame)?, written))
+}
+
+/// The next frame's PNG written to `path`, its directory made first, as `capture --record --out`
+/// writes its frame (a failure is a device error there too).
+fn write_next_frame(path: &Path, png: &[u8]) -> LabResult<String> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            LabError::device(format!("failed to create {}: {error}", parent.display()))
+        })?;
+    }
+    std::fs::write(path, png).map_err(|error| {
+        LabError::device(format!("failed to write {}: {error}", path.display()))
+    })?;
+    Ok(path.display().to_string())
+}
+
+/// #463 L1: the error of a next frame that could not be taken: the capture's own code and class,
+/// its message saying that the press stands, its details naming the recorded press (`record`), the
+/// wait (`next_frame`) and the marks (`mark`). Fix round 1: `record` and `next_frame` lead the
+/// details, before the capture's own members, so that a copy of the details cut at a bound (the
+/// MCP server's `raw_text` keeps their first 4096 bytes) still tells this press from one that was
+/// not performed, whose details have neither.
+fn next_frame_failed(
+    mut error: LabError,
+    after_ms: u64,
+    click: &CommitClickOutcome,
+    mark: Option<&MarkOutcome>,
+) -> LabError {
+    error.message = format!(
+        "{}; the press of step {} was performed and recorded and the step is closed: take the \
+         next frame with capture --record or observe --capture --record (MCP: ac_lab_observe \
+         with capture and record), do not press again",
+        error.message, click.step
+    );
+    let error = with_leading_details(
+        error,
+        [
+            ("record", to_json(click)),
+            ("next_frame", json!({"after_ms": after_ms, "taken": false})),
+        ],
+    );
+    with_detail(error, "mark", mark.map(to_json))
+}
+
+/// `error` whose details begin with `leading`, then keep the members they had (other details move
+/// to `details`); a member of `leading` replaces one of the same name.
+fn with_leading_details<const N: usize>(
+    mut error: LabError,
+    leading: [(&str, Value); N],
+) -> LabError {
+    let mut details = leading
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value))
+        .collect::<Map<String, Value>>();
+    match error.details.take() {
+        Some(Value::Object(members)) => {
+            for (name, value) in members {
+                details.entry(name).or_insert(value);
+            }
+        }
+        Some(other) => {
+            details.entry("details".to_owned()).or_insert(other);
+        }
+        None => {}
+    }
+    error.with_details(Value::Object(details))
+}
+
+/// `error` with `value`, when there is one, as the member `name` of its details: the members of
+/// object details are kept, other details move to `details`.
+fn with_detail(mut error: LabError, name: &str, value: Option<Value>) -> LabError {
+    let Some(value) = value else {
+        return error;
+    };
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        Some(other) => Map::from_iter([("details".to_owned(), other)]),
+        None => Map::new(),
+    };
+    details.insert(name.to_owned(), value);
+    error.with_details(Value::Object(details))
 }
 
 /// Before `session app <verb> --record` sends anything: the step the application operation
@@ -1504,6 +1911,8 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
                 },
                 margin: mark.self_test.margin.clone(),
                 value_test: mark.value_test.clone(),
+                // #463 L2 fix 2: where an agent reads the members a change of names repeats.
+                located_text: mark.locates_text().then(|| mark.clone()),
             })
             .collect(),
         reused: step.reused.clone(),
@@ -1515,6 +1924,10 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
             attempts: click.attempts.len(),
             needs_review: click.needs_review,
             gesture: click.gesture,
+            names_changed_after_press: click
+                .follow
+                .as_ref()
+                .is_some_and(|follow| follow.names_changed_after_press),
         }),
         application: step.application.clone(),
         optional: optional_view(step),

@@ -393,6 +393,38 @@ fn e3_g3_the_screen_disagrees_with_the_pack_codes_reach_pack_logic_and_sampling_
     }
 }
 
+// Workflow #463 U1 (the owner's ruling on board #463: the ladder starts at once): a linear step
+// that met a screen its package never recorded ends with `contained_task_linear_unrecorded_screen`,
+// ladder class `pack_logic_mismatch`, which reaches the default trigger item `pack_logic` by its
+// class at the task stage, as `page_confirmation_failed`, the code the same end had before, does.
+// The ladder and the pause are two consequences: the pair's pause at the first occurrence stays
+// the host's, asserted by its gate `gate_463_u1` (a scheduled run pauses its pair at once).
+#[test]
+fn u1_the_unrecorded_screen_code_reaches_pack_logic_as_page_confirmation_failed_does() {
+    let ladder = default_ladder();
+    for code in [
+        "contained_task_linear_unrecorded_screen",
+        "page_confirmation_failed",
+    ] {
+        assert_eq!(
+            ladder_class_of(code),
+            Some(LadderClass::PackLogicMismatch),
+            "{code}"
+        );
+        match ladder.classify(RecoveryTriggerStage::Task, code) {
+            TriggerVerdict::Matched { item, by } => {
+                assert_eq!(item.id, "pack_logic", "{code}");
+                assert_eq!(
+                    by,
+                    MatchedBy::Class(LadderClass::PackLogicMismatch),
+                    "{code}"
+                );
+            }
+            other => panic!("{code} does not reach pack_logic: {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn rb_h3_rung_three_s_bounds_are_the_configuration_s() {
     let shipped = shipped();

@@ -592,6 +592,11 @@ impl Run {
 fn run(host: &RuntimeHost, temp: &TempDir, name: &str, target: &[u8]) -> Run {
     let path = temp.path().join(format!("{name}.zip"));
     fs::write(&path, target).expect("write run package");
+    run_at(host, &path)
+}
+
+/// The direct run of the package at `path` (a zip or a source package directory).
+fn run_at(host: &RuntimeHost, path: &Path) -> Run {
     let task_request = ContainedTaskRequest::new(path.display().to_string()).expect("task request");
     let mut client = TestClient::connect(host);
     client.set_receipt_read_timeout();
@@ -1504,6 +1509,257 @@ fn n6_8_two_interrupt_pages_on_one_frame_are_recorded_and_none_is_handled() {
     );
     assert_eq!(outcome.category(), Category::Warning);
     assert_eq!(strings(outcome, "page_ids"), ["notice", "alert"]);
+}
+
+// ---- Workflow #463 U1, fix round 3 (`rd-1114/brief-1715-fix3.md`, item 5; contracts/linear-steps.md,
+// "A screen the package never recorded"): the recognise-only entry of the shared interrupt pages.
+
+/// The arrival budget of the step of [`write_linear_away_to_home`].
+const U1_ARRIVAL_MS: u64 = 100;
+const U1_CONFIRMATION_FAILED: &str =
+    actingcommand_execution_kernel::ExecutionKernelCode::PageConfirmationFailed.as_str();
+
+/// A `linear_steps` source package at `directory`: one tap `go` from `away` to `home`, expected
+/// within `U1_ARRIVAL_MS`, with no retry, so that a failed arrival is followed by the step's
+/// closing decision, which waits the step timeout of 600 ms and never inputs.
+fn write_linear_away_to_home(directory: &Path) {
+    let control = json!({
+        "schema_version": "Lab-1y.control.v2",
+        "package_id": "neutral.test.linear",
+        "execution_mode": "linear_steps",
+        "game": "neutral",
+        "server": "test",
+        "resolution": {"width": 16, "height": 9},
+        "entry_task_id": "task",
+        "capture_interval_ms": 10,
+        "step_timeout_ms": 600,
+        "timeout_ms": 8000,
+        "max_steps": 1
+    });
+    let task = json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "locale": "en-US",
+        "goal": "neutral interrupt fixture",
+        "coordinate_space": {"width": 16, "height": 9},
+        "defaults": {"template_threshold": 0.9, "color_max_distance": 0.0},
+        "color_probes": [probe("first_red"), probe("first_blue"), probe("second_green")],
+        "page_rules": {
+            "away": {"required": ["first_red"]},
+            "home": {"required": ["first_blue", "second_green"]}
+        },
+        "entry_page": "away",
+        "target_page": "home",
+        "max_steps": 1,
+        "operations": [{
+            "id": "go",
+            "from": "away",
+            "to": "home",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true,
+            "expect_after": {"page_id": "home", "timeout_ms": U1_ARRIVAL_MS}
+        }]
+    });
+    for (path, value) in [
+        ("control.json", control),
+        (
+            "resources/operations/resources.json",
+            json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
+        ),
+        ("resources/operations/task/task.json", task),
+    ] {
+        let path = directory.join(path);
+        fs::create_dir_all(path.parent().expect("package file parent")).expect("package dir");
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&value).expect("package JSON"),
+        )
+        .expect("write package file");
+    }
+}
+
+/// The interrupt pages `notice` and `alert`, each with its handler (to `away`).
+fn notice_and_alert_root(base: &Path) -> GameRoot {
+    let mut root = GameRoot::new(base);
+    root.features()
+        .pack(
+            CLOSE_NOTICE,
+            "navigable_route",
+            handler_task("notice", "first_white", TO_AWAY),
+        )
+        .pack(
+            CLOSE_ALERT,
+            "navigable_route",
+            handler_task("alert", "third_white", TO_AWAY),
+        )
+        .bundle()
+        .pages()
+        .interrupts(json!([
+            interrupt("notice", CLOSE_NOTICE, json!("resume"), 1),
+            interrupt("alert", CLOSE_ALERT, json!("resume"), 1)
+        ]));
+    root
+}
+
+/// The `InterruptAmbiguous` records of `run`, by their pages.
+fn ambiguous_pages(run: &Run) -> Vec<Vec<String>> {
+    run.facts()
+        .into_iter()
+        .filter_map(|fact| match fact {
+            TaskSemanticFact::InterruptAmbiguous { page_ids, .. } => Some(page_ids.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Fix round 3, item 5: a frame on which the run's shared interrupt pages are shown (the notice
+/// alone, or the notice and the alert at once), asked through the recognise-only entry, is answered
+/// as shown, and that call presses, counts and records nothing. After the tap of the linear step
+/// above, the first pixel is black (no page of the run or of the feature package) until the
+/// arrival's 100 ms on the Runtime clock have passed, then the frame shows the interrupt pages: the
+/// arrival's frames and the closing decision's first frame are black, its next frame shows them.
+/// The closing decision ends on that frame with nothing classified: the run fails
+/// `page_confirmation_failed` after its one tap, and the frame was taken once (an answer `not shown`
+/// would have the decision observe it to its bound); no handler ran, nothing was handled or counted
+/// (no `InterruptHandled`) and no `InterruptAmbiguous` was recorded. The same frame offered through
+/// the usual entry is handled as before: the notice alone, shown before the tap, is handled once (its
+/// handler's tap the run's first input, then the step's tap) and the run succeeds; the notice and
+/// the alert, shown on the arrival's first frame, record one `InterruptAmbiguous` naming both,
+/// nothing is handled or pressed, and the run succeeds on `home` after it.
+#[test]
+fn u1_the_recognise_only_entry_answers_shown_and_presses_counts_and_records_nothing() {
+    let notice = frame(RED, Some(Overlay::Notice));
+    let notice_and_alert = vec![(0, WHITE), (2, WHITE)];
+    for (case, popup) in [
+        ("the notice", notice),
+        ("the notice and the alert", notice_and_alert.clone()),
+    ] {
+        let state = Arc::new(FakeState::default());
+        let temp = TempDir::new().expect("tempdir");
+        let root = notice_and_alert_root(temp.path());
+        let package = temp.path().join("linear");
+        write_linear_away_to_home(&package);
+        let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+        let script_clock = Arc::clone(&clock);
+        let shown = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let shown_frames = Arc::clone(&shown);
+        let tapped_at = std::sync::Mutex::new(None::<u64>);
+        script(&state, move |_capture, inputs| {
+            if inputs == 0 {
+                return frame(RED, None);
+            }
+            let now_ms = script_clock.monotonic_ms();
+            let tapped_ms = *tapped_at
+                .lock()
+                .expect("the tap's time")
+                .get_or_insert(now_ms);
+            if now_ms - tapped_ms <= U1_ARRIVAL_MS {
+                frame(BLACK, None)
+            } else {
+                shown_frames.fetch_add(1, Ordering::AcqRel);
+                popup.clone()
+            }
+        });
+        let host = start_with(
+            config(&temp).with_runtime_clock(clock.clone()),
+            &state,
+            Some(&root),
+        );
+        let run = run_at(&host, &package);
+        host.close().expect("close runtime host");
+
+        assert_eq!(
+            run.receipt.state(),
+            RuntimeReceiptState::Failed,
+            "{case}: {:?}",
+            run.receipt
+        );
+        assert_eq!(
+            run.failure().code().as_str(),
+            U1_CONFIRMATION_FAILED,
+            "{case}"
+        );
+        assert_eq!(
+            state.input_count.load(Ordering::Acquire),
+            1,
+            "{case}: nothing pressed"
+        );
+        assert_eq!(
+            shown.load(Ordering::Acquire),
+            1,
+            "{case}: answered as shown on the first frame that shows it"
+        );
+        assert!(
+            run.handled().is_empty(),
+            "{case}: nothing handled or counted"
+        );
+        assert_eq!(run.handler_layers().0, 0, "{case}: no handler ran");
+        assert!(ambiguous_pages(&run).is_empty(), "{case}: nothing recorded");
+    }
+
+    // The usual entry, the notice alone before the tap: handled once.
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let root = notice_and_alert_root(temp.path());
+    let package = temp.path().join("linear");
+    write_linear_away_to_home(&package);
+    overlay_then_away_then_home(&state, 0, Overlay::Notice);
+    let host = start_with(
+        config(&temp).with_runtime_clock(Arc::new(ManualRuntimeClock::new(1_000, 0))),
+        &state,
+        Some(&root),
+    );
+    let run = run_at(&host, &package);
+    host.close().expect("close runtime host");
+    assert!(run.succeeded(), "{:?}", run.receipt);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 2);
+    let handled = run.handled();
+    let [(page, handler, _, count, _)] = handled.as_slice() else {
+        panic!("one handled interrupt: {handled:?}");
+    };
+    assert_eq!(page, "notice");
+    assert_eq!(handler, CLOSE_NOTICE);
+    assert_eq!(*count, 1);
+    assert!(ambiguous_pages(&run).is_empty());
+
+    // The usual entry, the notice and the alert on the arrival's first frame: recorded, none
+    // handled.
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let root = notice_and_alert_root(temp.path());
+    let package = temp.path().join("linear");
+    write_linear_away_to_home(&package);
+    let first_after_tap = std::sync::Mutex::new(None::<usize>);
+    script(&state, move |capture, inputs| {
+        if inputs == 0 {
+            return frame(RED, None);
+        }
+        let first = *first_after_tap
+            .lock()
+            .expect("the first frame after the tap")
+            .get_or_insert(capture);
+        if capture == first {
+            notice_and_alert.clone()
+        } else {
+            frame(BLUE, None)
+        }
+    });
+    let host = start_with(
+        config(&temp).with_runtime_clock(Arc::new(ManualRuntimeClock::new(1_000, 0))),
+        &state,
+        Some(&root),
+    );
+    let run = run_at(&host, &package);
+    host.close().expect("close runtime host");
+    assert!(run.succeeded(), "{:?}", run.receipt);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert!(run.handled().is_empty());
+    assert_eq!(
+        ambiguous_pages(&run),
+        [vec!["notice".to_owned(), "alert".to_owned()]]
+    );
 }
 
 /// N6-9: `then: end_run`: after its handler the run ends with

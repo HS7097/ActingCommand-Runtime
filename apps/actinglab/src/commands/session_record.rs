@@ -15,8 +15,8 @@ use actingcommand_lab::{
     ApplicationSpec, ClickRetry, ClickSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest,
     MarkSpec, RecordArchiveOptions, RecordRect, RecordReopenOptions, RecordStartOptions,
     RecordStopOptions, RecordingLock, StepAction, StepActionKind, TemplateScalesSpec,
-    TransitionSpec, record_archive, record_archive_copy, record_instance_check, record_mark,
-    record_reopen, record_start, record_start_defaults, record_status, record_stop,
+    TransitionSpec, parse_mark_request, record_archive, record_archive_copy, record_instance_check,
+    record_mark, record_reopen, record_start, record_start_defaults, record_status, record_stop,
     record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
@@ -2941,23 +2941,29 @@ fn run_record_mark(
                     "record mark --request cannot be combined with {shortcut}"
                 )));
             }
-            let text = match (file, text) {
-                (Some(path), _) => fs::read_to_string(&path).map_err(|error| {
-                    CliError::usage(format!(
-                        "failed to read record mark request {path}: {error}"
-                    ))
-                })?,
-                (None, Some(text)) => text,
-                (None, None) => String::new(),
-            };
-            serde_json::from_str::<MarkRequest>(&text)
-                .map_err(|error| CliError::usage(format!("invalid record mark request: {error}")))?
+            match (file, text) {
+                (Some(path), _) => read_mark_request_file(&path)?,
+                (None, Some(text)) => parse_mark_request(&text)?,
+                (None, None) => parse_mark_request("")?,
+            }
         }
     };
     let dry_run = global.dry_run || record_flag_switch(flags, "--dry-run")?;
     let outcome = record_mark(lock, &request, dry_run, crate::offline_ocr::lab_ocr())?;
     serde_json::to_value(outcome)
         .map_err(|error| CliError::usage(format!("failed to encode record mark output: {error}")))
+}
+
+/// The request of `record mark --request <file>`: the file's text, decoded as `--request-json`'s
+/// (`parse_mark_request`). #463 L1: `do --capture --record --mark-request <file>` reads its request
+/// with it too.
+pub(crate) fn read_mark_request_file(path: &str) -> CliOutcome<MarkRequest> {
+    let text = fs::read_to_string(path).map_err(|error| {
+        CliError::usage(format!(
+            "failed to read record mark request {path}: {error}"
+        ))
+    })?;
+    parse_mark_request(&text)
 }
 
 /// Workflow #449 REC-ARCH: `record archive [--record-id <id>] [--copy-to <dir>]`

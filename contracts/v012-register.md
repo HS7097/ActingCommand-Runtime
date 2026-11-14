@@ -24180,6 +24180,868 @@ the resource tools and `gate_rl1b`, actingd's `gate_rl1c`) give each package its
 whole (`DeclaredCapabilities`, no remedy), pinning what they pinned. No golden changes; no test
 leaves the gate map.
 
+### 1.370 Slice #463 L1 (0.12.60): a recording step in one call (its marks, its press, the next frame), and MCP tools for the recording commands that had none (Workflow #463; the owner's words on board #463, as the work order quotes them, are the requirement; the rules are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-463-l1-record-one-call.md`, read on main `17197d8e`)
+
+This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364). The
+train 0.12.60d gave 1.365 to 1.368 to #453 S3, S4, S9 and S12 (main `155366bb`), #455 G-R2s took
+1.369 (main `1e67d1c5`), and the coordinator gave this slice 1.370.
+
+**Why.** Packages are made from now on by an agent that plays through the Lab with the recording
+on (the owner: recording stays on while an agent operates, the click and recognition boxes and how
+to recognise are marked live, every parameter can be changed through MCP, that is the Lab). A step
+cost three calls ([lab-recording.md](lab-recording.md), "`--record` on device commands" and
+"Steps, frames and remediation"): the frame arrives, `record mark` declares and self-tests the
+marks and the click, `do --capture --record` presses and closes the step. The owner found the
+agents slow; and her standing rule holds that whatever the Lab has is a command and a tool of the
+Lab's MCP server.
+
+**Established by reading (step 1 of the work order).**
+- *Where.* `record mark` is `recording_api::record_mark` (`crates/lab/src/recording_api.rs`) over
+  `recording::steps`' `apply_marks`, `apply_transition`, `apply_step_action` and `save`; `do
+  --capture --record` is actinglab's `lab2_cli/operation.rs` (`run_contained_lab_do`: the plan by
+  `record_plan_click`, the Runtime's `RunContainedLabOperation`, the outcome by
+  `record_commit_click`); the MCP side is `apps/actingctl/src/mcp/lab.rs` and `tools.rs`
+  (`ac_lab_do`, `ac_record_*`), and the Lab's MCP server (`apps/actinglab-mcp`) generates `ac_do`
+  from the row `do`. The mark request is applied by the code `record mark` uses, called, not
+  copied: `record_mark`'s body after its session is opened is one function now, `mark_session`,
+  which `record_mark` and the one-call form both call; `record mark` writes and answers as before.
+- *The next frame.* The operation record's `after_frame` (the click record's `after`, marked
+  `informational`) is the Runtime's frame right after the input is acknowledged, or with an arrival
+  condition its last sample; no wait the caller declares stands before it. So it cannot be the next
+  step's frame "after the declared wait": the next frame is one more capture after the wait, the
+  `CaptureSequence` `capture --record` sends (`capture_for_command`), attached as `capture
+  --record` attaches it. No new Runtime operation.
+- *Interface revisions.* None moves ([component-interfaces.md](component-interfaces.md) names no
+  interface for actinglab's command line, the recording files or the MCP tool table): no request
+  kind, wire shape, record, ledger member, configuration key or outcome code is added, and
+  `actingcommand.lab-recording.v1` and `actingcommand.lab-record-mark.v1` keep their schemas.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| One call (the Lab) | `record_plan_step` checks the next frame's bounds, applies the request with `validate_mark_request` and `mark_session` to the open session in memory, and plans the press with `plan_click` on that session; nothing is written or sent. `PlannedStep::perform` writes the marks once (`save`), sends the input through `RecordStepPorts::press`, records the answer with `record_commit_click`, and after a press performed without a failure, when asked, `wait`s, checks the arrival (`record_frame_preflight`), `capture`s, writes `--next-frame-out` and attaches the frame (`record_attach_frame`); an error after the marks are written carries them as `mark`, a next frame that is not taken its capture's own error with `record`, `next_frame {after_ms, taken: false}` and `mark` |
+| The command | `do --capture --record` takes `--mark-request <file>` or `--mark-request-json <json>`, `--next-frame-after-ms <0..60000>` and `--next-frame-out <png>` (`begin_record_step`, `RuntimeStep`, `recorded_answer`); the four are in the read list of `do --capture` and, as `--tap-rect`, accepted only with `--record` (`RECORD_ONLY_FLAGS`). `record mark --request` and `--request-json` read their request with the same parse (`parse_mark_request`, `read_mark_request_file`). The plain `do --capture --record` goes through the same planned step with no request, its answer and records unchanged |
+| MCP (today's server) | `ac_lab_do` takes `mark` (`--mark-request-json`), `next_frame_after_ms` and `next_frame_out`, each also refused with `operation`; five author tools, each its command with its read list's flags: `ac_record_candidates`, `ac_record_amend`, `ac_record_step`, `ac_record_archive`, `ac_record_reopen` (46 tools; author 12) |
+| The table | the row `do`: the four parameters, its help, its output, `CaptureSequence` beside `RunContainedLabOperation`, its notes; the five rows' `source` names their tools |
+
+**The recording family on both sides** (after this slice; "today's MCP" is `actingctl mcp-serve`,
+"the Lab's MCP" is `actinglab-mcp`, which offers every planned row of its slices):
+
+| Row or form | Command line | Today's MCP | The Lab's MCP |
+|---|---|---|---|
+| `record start`, `mark`, `status`, `stop` | yes | `ac_record_start`, `ac_record_mark`, `ac_record_status`, `ac_record_stop` | the same names |
+| `record candidates`, `amend`, `step`, `archive`, `reopen` | yes | new here: `ac_record_candidates`, `ac_record_amend`, `ac_record_step`, `ac_record_archive`, `ac_record_reopen` | the same names |
+| `record draft` | yes | `ac_binding_draft` | `ac_record_draft` |
+| `observe --capture --record`, `do --capture --record` | yes | `ac_lab_observe`, `ac_lab_do` with `record` | `ac_lab_observe`, `ac_do` with `record` |
+| `capture --record`, `session capture --record` | yes | none (the first frame is `ac_lab_observe` with `record`) | none (`capture` is no row) |
+| `session app --record`, `session instance app --record` | yes | none (`ac_app` never passes `--record`) | none (the rows `app launch\|restart\|stop` do not reach it) |
+| `replay`, `regression` | yes | none (a later slice) | `ac_replay`, `ac_regression` |
+
+`session app --record` has no MCP tool on either server, so an agent cannot record an application
+step through MCP; the coordinator takes it as the next small slice (fix round 1).
+
+**What differs from the three calls, and why it must.** Nothing in `recording.json`: the same
+steps, frames, marks, crops, clicks and executions, the times and the Runtime's ids aside; the
+package `record stop` generates is the same. The answer differs: `record.mark` and `next_frame`
+are new members of `do --capture --record`'s answer, present only with a mark request and a next
+frame. The marks are written right before the input is sent, after every check of both commands
+and of `do`'s own (the package, the Runtime connection): a refusal writes nothing, and a press that
+fails leaves the marks as the two calls leave them.
+
+**Tests** (`crates/lab/src/gate_463_l1.rs` on the Lab's fixtures with a fake Runtime and a fake
+clock; `apps/actinglab/src/tests/gate_463_l1.rs`; `apps/actingctl/src/mcp/lab/tests/gate_463_l1.rs`;
+apps gate map): one call writes the step table and the frame and crop files three calls write;
+a failed self-test, a click outside the frame and an unknown member are refused with `record
+mark`'s code, no input seen, every file unchanged; a press not performed, performed with a failure
+or indeterminate keeps the marks, the click's outcome as before, no wait and no capture; the next
+frame comes after the declared wait, opens step 2 and is written to its file, none without the
+option, and a failing capture leaves the closed step and answers its own error; a whole recording
+in the fewest calls generates the package of three calls a step; the command refuses `--dry-run`
+with the one-call form (`record_flag_unsupported`) and the four flags without `--record`; the five
+tools reach their commands and answer the envelope, and `ac_lab_do` hands the one-call form on.
+
+**Fix round 1** (after the independent review; coordinator work order
+`rd-1114/brief-1717-fix1.md`; mains `155366bb` and `1e67d1c5` merged, this section renumbered
+1.370):
+- *The open step and nothing else.* The mark request could write its marks to another step
+  (`step`), open a step from a file (`frame`) whose coordinates the device then pressed, or carry a
+  `transition` or a `step_action`, while the press was the open step's click. After `record mark`'s
+  checks and the press's plan, and before anything is written or sent, each is now
+  `validation_failed` with `details{member, open_step}` and a message naming `record mark`
+  (`hold_to_open_step`).
+- *The next frame's device configuration* is resolved in `begin_record_step`, after the lock, for
+  the instance the lock names, and before the step is planned (`next_frame_device_config`); it was
+  resolved after the press, so an error in it came only once the press was done.
+- *The exported MCP answer.* `next_frame` joined today's MCP server's frame parts, before
+  `after_attachment` (`FRAME_PARTS`, five): an answer exported over the budget keeps the next
+  screen inline, where before only the operation's own after frame stayed, which an agent took
+  for the next screen. The Lab's MCP server's own list (`after_child.rs`, `FRAME_PARTS`, five)
+  gained `next_frame` in the same place, so both servers keep the same parts (the owner's rule:
+  whatever the Lab has, both faces have, and they behave alike).
+- *A press that was not performed after the marks were written* (the coordinator's ruling: the
+  behaviour stays). The same call again is refused by `record mark`'s own check
+  (`record_click_exists`, or `record_mark_id_conflict` for a mark of the step it adds again), and
+  that refusal's message now says that the step holds its marks and its click and that the press is
+  repeated by the same call without the mark request (`repeat_without_mark`). A next frame's error
+  puts `record` and `next_frame` first in its details, before the capture's own members and `mark`:
+  today's MCP server keeps the first 4096 bytes of the details (`raw_text`) with `--detail full`;
+  with `--detail codes` it keeps no foreign text, so the two `device_error`s read alike there, and
+  `ac_record_status` (the step and its click's execution) tells them apart.
+- *Texts.* "One call per step" says the open-step rule, what a carrier package gives, that the
+  Runtime's admission answers the press after the marks are written, how a press that was not
+  performed is repeated, how the two errors are told apart, that the lock is taken after the flags
+  and the request are read, that the last screen needs its `page`, and that under MCP a missing
+  frame is taken with `ac_lab_observe`; its example runs as typed in PowerShell 7.3. Every tool the
+  slice's texts name exists under that name (today's server's table, the Lab's server's rows).
+- *CI*: a test of `ac_lab_do` took a `Result` whose error (`ToolError`) has no `Debug` with
+  `expect`; it matches the result as its neighbours do.
+- *Tests* (apps gate map): four refusals of the open-step rule, the device configuration resolved
+  before the press (actinglab's command line), an exported answer keeping `next_frame` inline on
+  today's MCP server and on the Lab's (`serve_calls::mcp_lab_overflow_rule_keeps_next_frame_inline`).
+
+Fix round 2 (after the second review; no behaviour of a press, a code or the recording changes):
+- *The repeat's words.* The refusal of the same call sent again no longer says that the press was
+  not performed: it says that the step holds its marks (and its click, when the request declared
+  one) and that the recording holds no outcome of a press, which can mean the press was not
+  performed or was performed and could not be recorded (`record_append_failed_after_input` means
+  performed); look at the screen first (`observe --capture` without `--record`, MCP
+  `ac_lab_observe` with `capture`) or read `record status` (`ac_record_status`), and only while the
+  step's own page is still shown send the same call without the mark request. "One call per step"
+  says the same.
+- *`--tap-rect` (or `--swipe`) with a request without a click.* The step then holds its marks and no
+  click, and the same call again ends `record_mark_id_conflict`: when the request is for the open
+  step and every mark it adds is on the step with the same members (`declares_mark`), that
+  refusal carries the same guidance, with `--tap-rect` or `--swipe` kept. `record_mark_id_conflict`
+  for a mark that differs keeps `record mark`'s own message.
+- *Tool names.* The refusal and the contract name both servers' tools: `ac_lab_do` with `mark`
+  (today's server) and `ac_do` with `mark_request_json` or `mark_request` (the Lab's), and
+  `ac_lab_observe` and `ac_record_status`, which both servers call so.
+- *Test* (apps gate map): a `--tap-rect` step whose press was not performed, sent again: the
+  guidance and both servers' names in the message, nothing pressed or written; a mark of the same
+  id with another region keeps `record mark`'s message; the same call without the request presses
+  the step.
+
+**At deploy.** Nothing to configure. Recordings, packages and the MCP registration stay as they
+are; `actingctl mcp-serve --tier author` lists the five new tools after a client reloads its tools
+(the stable entry switches its child as for every update). An agent records a step with one
+`ac_lab_do` call (`capture`, `record`, `mark`, `next_frame_after_ms`), or on the Lab's MCP server
+one `ac_do` call (`capture`, `record`, `mark_request_json`, `next_frame_after_ms`): read the
+answer's `next_frame` (its `out` file) before the next call.
+
+**Rollback** (below 0.12.60). Nothing is persisted that an older build does not read: the
+recordings are the three calls' files. An older actinglab refuses the four flags (unread), and an
+older MCP server the five tools and the three `ac_lab_do` members (`unknown`).
+
+### 1.371 Slice #463 L2 (0.12.60): a recorded step presses what it finds by its name (Workflow #463; the owner's request of 11-14 on board #463, a value read from the screen as the thing a step chooses, and the standing rule that an item is chosen by its name read on the screen, confirmed on a fresh frame before it is pressed; the rulings are the coordinator's, not the owner's words; coordinator work order `rd-1114/brief-463-l2-record-located-text.md`, read on main `17197d8e`)
+
+1.365 was the next free number on main `17197d8e`; merging main `155366bb` (sections 1.365 to
+1.368) renumbered this section 1.371, the number assigned to it.
+
+**What it adds.** A Lab recording's step can press what it finds by its name on one screen
+([lab-recording.md](lab-recording.md), "Following a located text"). A hand-written package could
+already do so (an OCR target with `locate`, a `target` or `offset` click on it, its guard
+`verify_text`: [ocr-fields.md](ocr-fields.md), "Located text", Workflow #396 REC-1); the recording
+now writes that form:
+
+- **The mark.** `record mark`'s request (`actingcommand.lab-record-mark.v1`, unchanged) takes an
+  OCR mark with `locate` (`normalize`, `blocks`, `line_merge`, `cells?`) and, with it, `unique`
+  (`{"margin_milli"}`): the task's locate target member for member, every member the author's,
+  the Runtime's declaration rules applied when the mark is recorded (a refusal is
+  `validation_failed`). There is no shortcut flag. `recording.json` keeps `locate` in the mark's
+  `ocr` and the margin in its `unique`.
+- **The follow.** `click.follow` may name a located-text mark of the step (before, `not_template`
+  refused it): alone, the click box is the found block, or the declared cell holding it; with a
+  rectangle, that box's corner plus the rectangle's offset from it on the primary frame, fixed
+  when the click is declared and never scaled. The step's `click.rect` is the box the primary frame
+  gives, which `do --capture --record` presses. The followed mark is the click's guard and target
+  and no mark of the step's page (fix 1): the step needs another mark that recognizes its page
+  (`page_needs_followed_text` otherwise, also for a check of the step that names the located
+  text). The other rules of a template follow hold (`not_template` for any other mark, an OCR
+  mark without `locate` among them; `not_required` for a member of an `any_of` check;
+  `guard_conflict`); `--click-guard` may name the followed located-text mark and no other OCR
+  mark. The followed mark may be removed and added again by one request, which keeps the follow;
+  a request that changes only its names is not held to the recorded press (fix 1).
+- **The self-test**, with the Lab's OCR provider on every live frame, evaluates the target with
+  the recognition pack's own locate evaluation, the one the kernel's guard and page recognition
+  use (`RecognitionEvaluator::evaluate_target`, `crates/recognition-pack/src/text_locate.rs`): a
+  frame without a hit is `self_test_failed` with the evaluation's typed reason as `failure`
+  (`text_locate_not_found`, `text_locate_outside_cells`, `target_match_not_unique` with the
+  second place as `uniqueness`); an evaluation error, `text_read_blocks_truncated` among them,
+  is `self_test_error` with its outcome as `failure`. The follow then checks that the click box
+  lies inside every frame (`click_outside_frame`) and, once the step's click was executed and
+  unless the request changes only the mark's names, that its press lies in the box the primary
+  frame gives (`press_outside_found_box`, a new word of `follow_problem`), both under
+  `record_click_follow_invalid` inside `record_mark_rejected`. The step's page is recognized on
+  every live frame without the followed mark, each of its other marks passing there.
+  Without an OCR model the mark is `not_evaluated` (`lab_ocr_unavailable`) as any OCR mark, and
+  `record mark` on a step whose click follows it is refused `lab_ocr_unavailable`: its box comes
+  from the OCR.
+- **The package.** `record stop` writes the mark as an `ocr_targets[]` entry with `locate` and
+  `unique`, named by no page rule (fix 1), the click as `{"kind": "target" | "offset", "target_id", "offset"?}`, its guard
+  `{"page_id", "target_id", "expected_rect": <the region>, "verify_text"}`, and the operation's
+  `"input_recheck": {"kind": "fresh_frame"}` ([linear-steps.md](linear-steps.md), Workflow #411
+  B12; [resource-declarations.md](resource-declarations.md), "Task schema `0.9` observation
+  windows and input rechecks"): after the guard passed on the step's frame the kernel captures one
+  fresh frame, recognizes only the step's page on it, evaluates the guard (the locate target) on
+  it again and draws the input from that frame's found box; a refusal there ends the run with the
+  guard's code, no input. The first decision gives each simulation of step 1 its frame twice, the
+  second time as that fresh frame, and checks the press against the box the admitted evaluator
+  finds on each live frame. A recording without a located-text mark generates the same bytes as
+  before (the code paths it takes are unchanged: the OCR target is the same object, no recheck,
+  one simulated frame).
+
+**Step 1, by reading** (the work order's three questions). The self-test calls the same locate
+evaluation as the kernel (above). A `linear_steps` package with a `verify_text` guard, a `target`
+or `offset` click on a locate target and an input recheck is admitted on main `17197d8e`:
+`TaskProgram::validate_linear` admits an input recheck of any kind
+(`crates/execution-kernel/src/contained_task/linear.rs`, the B12 comment before the
+`observation_window` refusal), `OperationGuard::validate` and `TaskClick::validate`
+(`contained_task.rs`) admit a text guard alone and a `target` or `offset` click on it,
+`validate_text_reads` its locate target, `observation_window::validate_operation` the
+`fresh_frame` kind on a click, and pack containment's guard check a text guard with an `offset`
+click; `linear_input` runs the recheck (`recheck_before_input` with the step's page only). The
+kernel is not changed. No interface revision moves (`component-interfaces.md`): the request and
+`recording.json` are no interface of its vocabulary, and the package uses only members the
+`package` interface already carries.
+
+**What an older build does.** It refuses a request that carries `locate` (an unknown member of
+the mark, `validation_failed`, exit 2), and a `recording.json` that holds a located-text mark does
+not decode there (`ocr` refuses the unknown member, and `follow` refuses
+`names_changed_after_press`): its Lab part is unavailable, `lab_recording_unreadable`, and the
+file is left as it is.
+
+**Known limits.**
+
+- One screen: no scrolling list, and no choice among several screens.
+- A name that is not on the screen at run time leaves the step's page recognized by its other
+  marks (fix 1) and refuses the guard: the run fails with `contained_task_guard_refused` and the
+  typed cause (`cause=text_locate_not_found` or the other typed reason), no input, as a
+  hand-written package does, also on the recheck's fresh frame; no normal end for "not found"
+  (the select step of a later slice).
+- The `expected` names are the first form of the variable: they change by one `record mark` on
+  the existing step that removes the followed mark and adds it again with only new names, also
+  after `record stop` and after the step's press (fix 1: not held to the press, remembered and
+  reported), and the self-test needs one of them on every live frame of the step; a name on no
+  recorded frame cannot be declared yet (the variable's slice lifts it), nor set from outside the
+  package.
+- The static OCR read budget is checked only when `record stop` admits the package, never at mark
+  time.
+- Without an OCR model a click cannot follow a located-text mark (`lab_ocr_unavailable`).
+- The recheck is one fresh frame (`fresh_frame`), not a stable or still screen; the default task
+  timeout does not count it.
+
+**Codes, keys and words.** Two words of `follow_problem`: `press_outside_found_box` and (fix 1)
+`page_needs_followed_text` (`crates/lab/src/codes.rs`, `contracts/outcome-codes/catalog.json`),
+with the descriptions of `not_template`, `not_required`, `guard_conflict` and
+`click_outside_frame`, of `record_click_follow_invalid` (and, fix 1, its `common_causes` and
+`handling`, those of `lab_ocr_unavailable` and the location `record_click_follow_check`) widened
+to the located text; the index is regenerated. No outcome code, value key, configuration key or
+record type is added; fix 1 adds the optional member `names_changed_after_press` (present only
+when true) to a click's `follow` in `recording.json` and `record mark`'s `click`, to `record
+status`'s click view and, as a list, to `record stop`'s `cross_check`.
+
+Tests (exec gate row "#463 L2", `crates/lab/src/gate_463_l2.rs`, on synthetic frames with a
+scripted OCR provider; no sleeps, no clock reads): `l2_a_followed_located_text_generates_its_target_click_text_guard_and_recheck`,
+`l2_a_rectangle_with_a_located_text_follow_is_its_offset_from_the_found_block`,
+`l2_a_name_on_no_frame_is_refused_text_locate_not_found`,
+`l2_a_name_outside_every_cell_is_refused_text_locate_outside_cells`,
+`l2_two_matches_within_the_margin_are_refused_target_match_not_unique`,
+`l2_a_click_box_that_leaves_a_sample_frame_is_click_outside_frame`,
+`l2_an_executed_press_outside_the_found_box_is_press_outside_found_box`,
+`l2_a_sample_with_the_name_in_another_cell_is_accepted_and_the_click_follows_it`,
+`l2_the_follow_rules_hold_for_a_located_text_mark`,
+`l2_without_a_located_text_mark_the_package_is_generated_as_before`,
+`l2_without_an_ocr_model_the_mark_is_not_evaluated_and_cannot_be_followed`,
+`l2_record_stop_without_an_ocr_model_reports_the_first_decision_not_evaluated` and, fix 1,
+`l2_fix1_the_followed_located_text_guards_the_click_and_is_no_mark_of_the_page`,
+`l2_fix1_a_page_that_needs_the_followed_text_is_refused_page_needs_followed_text`,
+`l2_fix1_names_changed_after_the_press_are_accepted_remembered_and_regenerated`,
+`l2_fix1_after_the_press_a_name_on_no_frame_is_still_refused_text_locate_not_found` and
+`l2_fix1_the_click_guard_may_name_the_followed_located_text_mark_only`. The test of a
+recording without a located-text mark compares the generated OCR target and click step with the
+objects main's generator writes for them, and finds no new member in any file; it does not
+compare the whole package with main's bytes, which no test of this build can produce. Fix 1
+adapts the tests before it: every step 1 that follows a located-text mark has a color mark that
+recognizes its page beside it (the ruling makes a step without one a refusal), and
+`l2_an_executed_press_outside_the_found_box_is_press_outside_found_box` declares the mark again
+with wider cells as well as another name (a change of the names alone is no longer held to the
+press). None leaves the gate map.
+
+**Fix round 1** (the independent review's findings, the coordinator's rulings 1 to 3 in
+`rd-1114/brief-1716-fix1.md`; the owner's words on the variable, board #463, 11-14). 1. The
+followed located-text mark was a required mark of the step's page, so a screen without the name
+was no page of the package (`contained_task_page_unknown` on step 1, a failed arrival of the step
+before on a later step) and the guard's typed refusal was never reached: it is now the click's
+guard and target only, named by no page rule (`plan` leaves it out of the step's required marks,
+`guard_target` takes it from the step's marks), the step needs another mark that recognizes its
+page (`page_needs_followed_text`, at every `record mark` of the step and again by the generator),
+and the first decision is not evaluated without an OCR model when step 1's guard reads OCR. 2. A
+request that removes the followed mark and adds it again changing only its `expected` names is not
+held to the recorded press, nor is a later request that leaves the mark as it is; the self-test
+still needs the new names on every live frame (a name on no frame stays `text_locate_not_found`),
+the click's `follow` keeps `names_changed_after_press: true` when the click was executed (cleared
+by `--reopen-step` and by a later change that passes the press check), `record status` shows it,
+and `record stop`'s cross-check lists the step in `names_changed_after_press` without failing it:
+no check compares the recorded press with the generated click, the first decision judging the
+press by the box the names give on each frame. 3. `--click-guard` may name the followed
+located-text mark; another OCR mark is refused with a message naming the mark the click follows,
+and a click that no longer follows the OCR mark its guard names is refused the same way; the
+catalog's texts, the read budget's place (checked only when `record stop` admits the package) and
+every text on a name missing at run time say what fix 1 makes true.
+
+**Fix round 2** (the second review's suggestions, all taken by the coordinator,
+`rd-1114/brief-1716-fix2.md`; main `1e67d1c5` merged, this section staying 1.371). 1. Since fix 1
+no page rule names the followed located-text mark, so `record stop`'s cross-check evaluated it on
+no frame: it now evaluates the guard of every step whose click follows one on that step's live
+frames; not found is `record_step_self_mismatch` (`details{step, record_index, mark_id, frame_id,
+failure}`), except on a step whose names were changed after its press, where the frame is listed in
+`names_changed_after_press[].frames_without_names`; without an OCR model the status is
+`partially_evaluated` and `guards_not_evaluated` lists the steps; `located_text_guards` gives each
+such step's frames. None of the three is written for a recording without a located-text follow.
+2. The refusal `page_needs_followed_text` says what the other mark is for (it tells this screen from
+the task's other screens; one that also holds on the next screen does not help); no behaviour
+changes. 3. `record status` shows a located-text mark as the recording holds it in
+`steps[].marks[].located_text`, where an agent reads the members a change of names repeats (before,
+only `recording.json` and the `record mark` answer that added it held them); a
+`press_outside_found_box` of a request that declares the mark again lists as `differing_members`
+the members besides the names it changed; the catalog's handling text of
+`record_click_follow_invalid` lists every member the comparison covers. Tests (same gate row):
+`l2_fix2_the_cross_check_finds_the_guard_on_every_live_frame_or_refuses_the_step`,
+`l2_fix2_without_an_ocr_model_the_guards_leave_the_cross_check_partially_evaluated`,
+`l2_fix2_a_frame_without_the_changed_names_is_reported_with_the_step_not_refused`,
+`l2_fix2_reopen_step_clears_names_changed_after_press`,
+`l2_fix2_a_later_change_that_passes_the_press_check_clears_names_changed_after_press`,
+`l2_fix2_a_guard_on_the_ocr_mark_is_refused_after_the_click_stops_following_it` and
+`l2_fix2_record_stop_refuses_page_needs_followed_text_when_it_generates`. No earlier test changes.
+
+**At deploy.** Nothing to do. Do not mix builds during one recording: a recording made with a
+located-text mark is unavailable to a Lab before this slice.
+
+**Rollback** (below 0.12.60). A package generated with a located-text mark runs on any Runtime
+that admits an input recheck under `linear_steps` (Workflow #411 B12); a recording that holds such
+a mark is unavailable to an earlier Lab, as above.
+
+### 1.372 Slice #463 U1 (0.12.60): a recorded package that meets a screen it does not know ends with a code of its own, and only its own task pauses (Workflow #463; the owner's four sentences on board #463 and the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-463-u1-unrecorded-screen.md`, read on main `17197d8e`)
+
+1.365 was the next free number on main `17197d8e` (#1707, §1.364, merged). The train merged
+on main `155366bb` took §1.365 to §1.368, and merging it renumbered this section 1.369;
+#455 G-R2s then took §1.369 on main `1e67d1c5`, and merging that renumbered this section
+1.372, the number the coordinator assigned it (fix round 2; §1.370 and §1.371 are #1717's
+and #1716's).
+
+**What it is.** A `linear_steps` step's retry decision that saw neither its gate nor the step's
+own page, on a screen whose last two frames the Runtime's one frame-change measure finds unchanged
+(the whole frame at the default threshold, #411 A43b's comparison), and that ended on its budget,
+not on its loading allowance, met a screen the package never recorded. In a task's own run
+(scheduled or direct; not a prerequisite, return-home, navigation or interrupt layer, a startup
+package or a ladder rung) and outside a restart segment the run ends with the new code
+`contained_task_linear_unrecorded_screen` in place of `page_confirmation_failed`, with the detail
+that code gave and no further input ([linear-steps.md](linear-steps.md), "Failure codes"). A
+scheduled run that fails so pauses its pair at once, whatever its `on_failure`
+([policy-suspension.md](policy-suspension.md), "A failure that pauses at its first occurrence").
+Every other end of a step keeps its code; page-graph packages are unchanged.
+
+**Where, by reading (step 1 of the work order).** The decision is `run_linear_step`'s retry
+decision branch `Err(..)` (`contained_task/linear.rs`); there the wait has evaluated the gate and
+the step's own page on every frame and knows whether it ended on its loading allowance. The other
+`page_confirmation_failed` ends of a step (no attempt left after the arrival, a seen intermediate
+page, a seen skip target, the continued wait after a late gate) evaluate only the candidates, so
+nothing judges the step's own page there: they keep their code, and a step without a declared
+retry (`--click-retry`) never reaches the new code (until fix round 1 below, which gives such a
+step a closing decision). The measure is `StillScreen::WHOLE_FRAME`
+(`contracts/color-digest.md`, "Frame change") on the frames the decision captured, a
+`SettledScreen` of the decision's wait: no capture, no recognition and no time is added; a loading
+frame, a handled shared interrupt page and a failed observation start it afresh. The ladder's
+settled check (#411 A49) probes with captures of its own, and the failure-frame comparison
+(`policy-suspension.md`, "Error frames") reads stored frames after the run, so neither fits a wait.
+
+**The pause.** The host's kernel-failure path marks the terminal `failure_severe` for the code
+(`host/contained_task.rs`); the policy class follows it (`scheduled_failure_class`) in the live
+settlement, the startup reconciliation and the ledger's re-derivation, so the settlement writes
+`paused_task` with no retry time (no R22 rerun). `failure_identity.rs` lists the code with the
+accumulating main-scope codes, so its identity names the error frame and the packages' content
+hashes, and the pause lifts by "Lifting (R19)". The host also names the frame of the run's
+`Failure` pin (`artifact_id`) on the terminal and the receipt, as #411 A15 does for
+`contained_task_step_unconfirmed`. No ledger event type, enum value, persisted member or
+configuration key is added.
+
+**The code.** `contained_task_linear_unrecorded_screen` (`execution-kernel`, error, ladder class
+`pack_logic_mismatch` since the closing round below, pending, since 0.12.60; values
+`pack_operation_id`, `page_ids`, `attempts` required, `artifact_id` optional). Its class is the one
+row 4 of the decision table of [runtime-outcomes.md](runtime-outcomes.md) gives (the screen differs
+from what the package declares), and it reaches the default trigger item `pack_logic` as
+`page_confirmation_failed` does. (Until the closing round it was `none`, by the coordinator's
+interim ruling that the next package went first.) The index is regenerated.
+
+**Interface.** No revision moves: a new code is a string of the catalog (`runtime-outcomes` stays
+1, [component-interfaces.md](component-interfaces.md): new codes in the catalog only); the ledger's
+records keep their shapes and `failure_severe` is an existing member.
+
+Tests: kernel `gate_463_u1.rs` (exec gate row "#463 U1"): the settled screen of neither page
+(the code, the detail `page_confirmation_failed` gives, the values, the timing, one input); the
+own page with no attempt left, the decision ended on its loading allowance and a screen still
+changing (each `page_confirmation_failed` with the detail before). Host `gate_463_u1.rs` (host gate
+row "#463 U1"): a scheduled run pauses its pair at once under `continue` with no retry and under
+the recommended value, while a swallowed tap still follows `on_failure`; another task of the
+instance is dispatched, admitted and dispatched again while the pair stays paused; a changed
+package lifts the pause; a direct run names the `Failure` pin's frame on its terminal and receipt
+and pauses nothing; and `ladder_tests.rs` (since the closing round
+`u1_the_unrecorded_screen_code_reaches_pack_logic_as_page_confirmation_failed_does`): the code
+reaches `pack_logic` by its class, as `page_confirmation_failed` does. No existing test pins `page_confirmation_failed`
+for the end this slice renames (the linear retry tests end on the gate, the own page or a loading
+allowance); none is adapted, no golden changes, no test leaves the gate map (fix round 1 below
+adapts three).
+
+**Fix round 1** (the coordinator's ruling on board #463, read in `rd-1114/brief-1715-fix1.md`:
+the owner's requirement is every recorded step). A step that declares no retry, whose failed wait
+ends the run with `page_confirmation_failed` (the arrival, the next page after a seen intermediate
+page, a seen skip target's candidates; not on the attempt's loading allowance), makes one closing
+decision before its `StepFinished`, in a task's own run outside a restart segment: the retry
+decision's own wait (the step timeout at the capture interval, its sampling, its frames for the
+settled comparison, the attempt's allowance), made at once on the pages the failed wait awaited
+and then the step's own page ([linear-steps.md](linear-steps.md), "Retries"). One function,
+`linear_decision`, classifies both decisions (gate, own page, neither and whether unrecorded); the
+retry decision's handling of each is unchanged. The closing decision never inputs and never goes
+on with the attempt: a page that passes on it, a screen not settled or a decision on its loading
+allowance leaves the end, code, detail and timing, as it was; only neither page on a settled
+screen gives the new code, with that end's detail and timing and the values above. A deadline
+that cuts it leaves that end too (the closing round below). A failing step without a retry can so take up to the step timeout longer (a window more
+for each observe-only sampling retry) and at most the captures of one retry decision; the success
+path is unchanged. A package with sample consensus whose closing pages' recognition does not fit
+the step timeout makes none (admission checks that bound only for a retry decision). Known
+limits: the kernel sees only the restart segments of its own steps, not a restart inside a shared
+interrupt handler; "settled" compares the decision's observations frame against frame, so a
+screen that changes with a period can be judged either way.
+- **Ladder class.** It stayed `none` in this round, pending the owner's choice; the closing round
+  below sets it.
+- **`performance.calibration.trouble_codes`** names the step codes the pacing self-calibration
+  (PERF §4.5.1, P-a) counts as trouble, a sign that the device is too slow for its pace; nothing
+  in this release reads it yet, and it decides nothing about a pair's pause, which the settlement
+  takes from the terminal's severity. The new code is not on it, since a screen settled on a page
+  the package never recorded is no sign of pace; leaving it out makes no paused pair count as
+  healthy, so the list is unchanged.
+- **Tests.** Kernel `gate_463_u1.rs` (exec gate row "#463 U1 fix round 1"), a step without a
+  retry: a settled screen of neither page (the new code, the arrival's detail and timing, the
+  values, one input); its own page still shown, an awaited page only on the closing decision and
+  a screen still changing (each `page_confirmation_failed` with the arrival's detail and timing,
+  one input); the task's deadline inside the closing decision (since the closing round
+  `page_confirmation_failed` as the arrival ended it); and the closing decision makes no input and
+  as many captures as the retry decision of the same step with a retry. Host `gate_463_u1.rs` (host gate row "#463 U1 fix round 1"): a direct run of the
+  package without a retry names the `Failure` pin's frame on its terminal and receipt. The PR's
+  own tests of a step with a retry are unchanged. Adapted, because a step without a retry now
+  makes a closing decision: `gate_382_e3::gate_e3_g3_consensus_not_met_at_the_linear_next_page_ends_with_page_confirmation_failed`
+  (it asserted `page_confirmation_failed` for both cases; `next` on one frame of two now ends
+  `contained_task_linear_unrecorded_screen`, every observation's last frame being the same),
+  `gate_e5_linear::gate_linear_only_a_swallowed_input_is_retried` (it asserted that no
+  recognition after the input awaited the step's own page; the last one now is the closing
+  decision's) and `gate_load4::linear_loading_pauses_the_arrival_budget` (it asserted twenty
+  pauses and 22 evaluations under off and shadow; the closing decision adds nineteen pauses until
+  `result` and, under shadow, its evaluations and the stretch's `left`). No golden changes and no
+  test leaves the gate map.
+
+**Closing round** (the coordinator's work order after fix round 1, with the owner's ruling of
+11-14 on board #463 that the ladder starts at once, before the next package runs).
+- **Ladder class `pack_logic_mismatch`**, the class row 4 of the decision table gives: the
+  catalog entry, its twin in `codes.rs`, the index; the code reaches `pack_logic` as
+  `page_confirmation_failed` does. The order is now: the code, the pair's pause, the ladder, then
+  the next task. The ladder and the pause are two separate consequences: the pause still comes from
+  the terminal's `failure_severe`, at the first occurrence. The sentence that explained `none` in
+  [runtime-outcomes.md](runtime-outcomes.md) is gone; the table's own row decides.
+- **A deadline that cuts the closing decision** leaves `page_confirmation_failed` with the failed
+  wait's detail and timing: the decision only classifies a failure already decided when the wait
+  ended. A deadline inside the retry decision of a step that declares a retry still ends the run
+  `contained_task_timeout`.
+- **Texts**: [linear-steps.md](linear-steps.md) ("Retries": the deadline, the four cases in which
+  no closing decision is made, and the known limit that a screen changing with a period can be
+  judged settled or not, both results failures of the run that differ only in the code and the
+  pause; "Failure codes": the class, and the exception to "none of them starts the stuck-recovery
+  ladder"), [policy-suspension.md](policy-suspension.md), [emulator-control.md](emulator-control.md)
+  (the code beside `contained_task_navigation_entry_unconfirmed` under `pack_logic`), the catalog
+  entry's description.
+- **Tests**: `ladder_tests.rs::u1_the_unrecorded_screen_code_reaches_no_default_trigger_item` is
+  renamed `u1_the_unrecorded_screen_code_reaches_pack_logic_as_page_confirmation_failed_does`
+  (both codes of class `pack_logic_mismatch`, both matched by `pack_logic` by class at the task
+  stage); the host test `u1_a_scheduled_run_on_an_unrecorded_screen_pauses_its_pair_at_once` keeps
+  the pause at the first occurrence. The kernel test of the deadline is renamed
+  `u1_without_a_retry_the_task_deadline_inside_the_closing_decision_keeps_page_confirmation_failed`
+  (the arrival's code, detail and timing, one input, fewer frames than a whole decision). Both
+  renamed tests are new in this pull request, so none leaves a gate map of `main`.
+
+**Fix round 2** (the coordinator's rulings on board #463 after the independent review, read in
+`rd-1114/brief-1715-fix2.md`; they replace the settled comparison of the slice and of fix round 1,
+and the one classification fix round 1 shared with the retry decision). The code now means: the
+screen stood still and nothing the package declares was on it ([linear-steps.md](linear-steps.md),
+"Retries" and "A screen the package never recorded").
+- **Only the closing decision raises it** (rule 2). The retry decision is main's again, byte for
+  byte in what it waits, evaluates, offers and presses; where it sees neither page it raises
+  nothing, and the closing decision follows it. The closing decision is a wait of its own
+  (`linear_closing_decision` in `contained_task/linear.rs`): the step timeout at the capture
+  interval, a first frame at once, on the pages the failed wait awaited, then the step's own page.
+  It ends with nothing at the first frame on which one of them passes (each frame is evaluated by
+  itself), at a transition frame (LOAD-4, under `on`), and at a frame that shows a shared interrupt
+  page; it raises the code only when its bound ends with its last two captures and its first and
+  last frame alike (rules 1 (b), 1 (c) and 2).
+- **Rule 1 (a)**: after a wait that missed the intermediate page, and after a retry decision that
+  follows such a miss, no closing decision is made.
+- **Rule 1 (b), sample consensus**: the sampler gives no result of a frame by itself:
+  `capture_frame_gated` (`contained_task.rs`, near 7672) keeps the sampled scenes to itself and
+  evaluates them in one consensus context (near 7919), returning only the last frame's scene (near
+  8073); returning them and evaluating each sample alone would change that function for every wait
+  of both execution modes, more than a small change. So a package that declares sample consensus
+  makes no closing decision and never gets the code, as the contract says; `gate_382_e3` is main's
+  again.
+- **Rule 1 (d)** is built: before the code is raised, the last frame is evaluated once, with
+  `matching_pages_on_scene` (no capture, no record), against every page and loading page the
+  package declares that the decision did not evaluate; one that passes, or an error, leaves the
+  failed wait's end.
+- **Rule 3**: the shared interrupt layer had no entry that recognises without acting; the smallest
+  one is added, `ContainedTaskRuntime::shared_interrupt_shown` (default `false`), which the host
+  answers from the matching its offer makes (`matched_shared_interrupts`, extracted from
+  `check_shared_interrupt` with no change to the offer), handling, counting and recording nothing.
+  Every task error inside the closing decision (the deadline, a capture or recognition that failed,
+  that check failing) ends it with the failed wait's code, detail and timing; a failure of the
+  run's boundary or device is the run's, as anywhere (fix round 3 narrows that exception to the
+  Runtime's own bookkeeping, below).
+- **Rule 4**: the closing decision runs wherever main ends a step `page_confirmation_failed` after a
+  wait: the last attempt's arrival of a step with or without retries, the next page after a seen
+  intermediate page, a seen skip target's candidates (main ends there at once, as after a seen
+  intermediate page: the input took effect, and the screen left a page the package knows, which
+  rule 1 (d) covers), the continued wait after a late gate, and a retry decision that saw neither
+  page. It does not run where it cannot name the screen: after a missed intermediate page, after a
+  wait or a retry decision that ended on its loading allowance, in a run that is not a task's own
+  run or is in a restart segment, for a package with sample consensus, and when the run's time
+  left is shorter than its bound.
+- **Rule 5**: it could be reached. A run the host starts itself (`prepare_package_run`, a startup
+  package or a ladder rung) whose package has an entry page goes through
+  `run_preflighted_contained_task` to `prepared.run` (`host/contained_task.rs`, near 8779 and
+  9724), and one with a prerequisite through `prerequisite::run_gated` to `run_main`
+  (`host/prerequisite.rs` 339): both are the kernel's ordinary run, whose `own_task_run` was true.
+  Closed by `ContainedTaskRuntime::host_started_run` (default `false`), which the host answers from
+  the run's control (`is_host_package`); `own_task_run` requires it false (`contained_task.rs`,
+  near 5121).
+- **Rule 6**: it could be reached. The settlement compares the run's own time with its admitted
+  runtime budget (`policy_control.rs`, `preview_paced_settlement`, by
+  `PolicyBudgetReceipt::runtime_exceeded`) and rewrites a run over it to
+  `policy_runtime_budget_exceeded`, while the kernel's deadline is the package's task timeout, so
+  the closing decision's time could push a run over its budget. Now a scheduled run notes before
+  it executes the Runtime-clock instant at which its own time reaches the largest runtime its
+  admission still admits (`policy_control::runtime_budget_allowance_ms`, the same rule; the
+  dispatch clock's start plus the switch), and `ContainedTaskRuntime::run_time_left` (default
+  `None`) answers the time left before the earlier of that instant and the run's host deadline;
+  with less than the closing bound left no closing decision is made (fix round 3: less than twice
+  the bound, below). A paced run's settlement compares its budget time, never more than this wall
+  time.
+- **Time**: a failing step can now take up to one step timeout longer than on main, once per run
+  (the run ends there); a step with a retry whose retry decision saw neither page takes it after
+  that decision.
+- **Tests.** Kernel `gate_463_u1.rs` is rewritten (exec gate row "#463 U1 with fix rounds 1 and 2"),
+  the arrival 600 ms and the step timeout 1 000 ms so that `limit_ms` tells the timers apart: the
+  still unknown screen without a retry (the code, 13 + 21 frames, the shared interrupt pages asked
+  on every closing frame and offered none); a page before the bound; the code after a retry
+  decision (13 + 21 + 21 frames); the last attempt of a step with retries; the intermediate page
+  that flashed past; the last two captures, and the first and last frame, compared; another page
+  of the package on the last frame; a shared interrupt page recognised and not pressed; a failed
+  recognising check; the task's deadline; a run the runtime started; less time left than the
+  bound; and the earlier own-page, loading-allowance and changing-screen cases. The scripted
+  runtime (`tests/scripted.rs`) answers the three new seams. Host `gate_463_u1.rs` (host gate row
+  "#463 U1 fix round 2"): a startup package with an entry page on the unknown screen ends
+  `page_confirmation_failed` and pauses nothing; a scheduled run with 490 ms of its 1 300 ms budget
+  left keeps `page_confirmation_failed`, recoverable, `continue`; and the new code admits one
+  ladder (task stage, `pack_logic`, class `pack_logic_mismatch`) and the paused pair is not
+  dispatched after it. Changed earlier tests: `gate_382_e3::gate_e3_g3_consensus_not_met_at_the_linear_next_page_ends_with_page_confirmation_failed`
+  is main's again (rule 1 (b)); `gate_e5_linear::gate_linear_an_intermediate_page_must_be_seen_before_the_next_step`,
+  whose retried case now gets a closing decision after the seen intermediate page (rule 4): its
+  device shows the step's own page after more frames than the arrival takes, so the end is
+  unchanged, and it asserts that no retry wait ran and that only the last recognitions await the
+  step's own page. Round 1's adaptations of `gate_e5_linear::gate_linear_only_a_swallowed_input_is_retried`
+  and `gate_load4::linear_loading_pauses_the_arrival_budget` still hold.
+
+**Fix round 3** (the closing points of the second review, the coordinator's rulings, read in
+`rd-1114/brief-1715-fix3.md`; no merge of main, the section keeps its number).
+- **The budget's edge** (item 1): the closing decision lasts at least its bound, and the capture
+  and recognition of its last frame, the evaluation of the package's other pages and the work
+  before the settlement come after it, so a run with between one and two bounds left could still
+  be rewritten to `policy_runtime_budget_exceeded`. It now runs only when the run has at least
+  twice its bound left (`linear_closing_pages` in `contained_task/linear.rs`); the contract
+  ("Retries" and "A screen the package never recorded") and the catalog entry say so.
+- **Errors inside the closing decision** (item 3): an error raised by its own capture, recognition
+  or evaluation ends it with no classification whatever its kind, a task error or an operation
+  error of the device or the runtime (`ContainedTaskRunError::operation` made such a capture
+  failure a boundary error the decision passed on): the failed wait's code, detail and timing. The
+  one exception is a failure of the Runtime's own bookkeeping, a record it cannot write, which ends
+  the run as it ends any run: the new seam `ContainedTaskRuntime::is_bookkeeping_failure` (default
+  `true`, every boundary failure passed on) tells it, and the host answers it from the failure's
+  poison mark (`RequestFailure::poison_runtime`, what poisons the Runtime anywhere else). The
+  contract, the catalog entry and this section's rule 3 bullet name that exception.
+- **The budget's end unread** (item 4): a scheduled run read where its admitted runtime budget ends
+  before it executed, and a failed read poisoned the Runtime, a new way for every scheduled run to
+  fail. Now a failed read is noted (`RuntimeBudgetEnd::Unread` on the run's control) and nothing
+  else: the run goes on as on main, nothing is poisoned or recorded, and
+  `RuntimeContainedTask::run_time_left` answers no time left, so no closing decision is made in
+  that run. A reservation before the run already above its limit, which the settlement judges over
+  budget, is refused by `policy_control::runtime_budget_allowance_ms` as before, so such a run goes
+  on with its budget's end unread. The code `policy_budget_receipt_invalid` at
+  `read_policy_runtime_budget` stays in that function; its catalog entry names no locations, so
+  the pair is admitted.
+- **Tests.** Kernel `gate_463_u1.rs` (exec gate row "#463 U1 with fix rounds 1, 2 and 3"):
+  `u1_an_intermediate_page_that_flashed_past_keeps_page_confirmation_failed` now rests on a dark
+  screen after the flash and counts 7 + 21 frames after the tap (a closing decision would take 21
+  more and name the screen); `u1_a_decision_ended_on_its_loading_allowance_keeps_page_confirmation_failed`
+  counts 6 + 1 frames (a closing decision would take one more); `u1_a_run_with_less_time_left_than_the_closing_bound_makes_no_closing_decision`
+  leaves 1 999 ms (no closing decision) and 2 000 ms (the code) of a bound of 1 000 ms; new,
+  `u1_a_capture_error_inside_the_closing_decision_keeps_page_confirmation_failed` (an operation
+  error of the device's capture on the closing decision's first frame). The scripted runtime's
+  `as_host_started_run` is renamed `host_started` (clippy `wrong_self_convention`, which failed
+  `lint` on the round 2 head), and it may fail its captures from a given one on. Host (host gate
+  row "#463 U1 fix round 3"): `gate_463_u1::u1_a_scheduled_run_whose_budget_end_cannot_be_read_ends_as_without_the_closing_decision`
+  (a success settles succeeded; the unknown screen fails `page_confirmation_failed`, recoverable,
+  `continue`), with a test-only failure of the read; and `gate_373_nav6::u1_the_recognise_only_entry_answers_shown_and_presses_counts_and_records_nothing`
+  (a notice, or a notice and an alert at once, recognised by the closing decision: one frame
+  taken, one input, no handler, no `InterruptHandled`, no `InterruptAmbiguous`; the same frames
+  through the usual entry: the notice handled once, the pair recorded `InterruptAmbiguous`).
+
+**At deploy.** Installed `linear_steps` packages change behaviour with this version, with no
+change to any package: a run of a task (scheduled, direct or Lab) whose step ends
+`page_confirmation_failed` after a wait and whose screen then stays still, with nothing the package
+declares on it, for one more step timeout ends `contained_task_linear_unrecorded_screen` instead,
+pauses its pair at the first occurrence and starts the ladder as before (`pack_logic`); then the
+instance goes on with its other tasks. A startup package or a ladder rung never ends so. A failing
+step takes up to one step timeout longer before the run ends, unless the run's deadline or its
+runtime budget leaves less than two step timeouts. A slow static screen nobody declared can now pause its task: declare it
+(a page or a loading page). List paused pairs with `actingd suspended` (`suspended[]`: the code in
+`failure`, its `artifact_id`, `lifts_when` `content_hash_changes`) or `ac_diagnose` (its
+`suspended` rows; `failures_grouped`). A pause lifts when the package's content changes (add the
+ending recorded from the named frame), at the pair's next due evaluation after the lift check's
+interval (60 s by default), with no restart.
+
+**Rollback** (below 0.12.60). No record shape changes (the code is a string, `failure_severe` an
+existing member); a pause the ledger recorded is rebuilt from its execution record and lifts by
+the same package change.
+
+### 1.373 Slice ORD-1c (0.12.60): the host passes the order within one device: the member in front, the queue waits and the default limit; `actingd-config` revision 32 (Workflow #437; the owner's rulings on board #437 as the coordinator recorded them, not the owner's words; the design note `rd-1114/ord1-design.md`, its sections 1 ("Default (ORD-1c)"), 2.1, 2.2, 3.6, 7 and its row ORD-1c of section 8, with the coordinator's four rulings of board #437 comment 6859534064, which override its 2.2 where they differ; coordinator work order `rd-1114/brief-437-ord1c.md`, read on main `e44fecb4`)
+
+1.373 is the number the train 0.12.60e gave this slice, the next free one after §1.372. The slice
+took 1.363 on its base `e44fecb4`, 1.364 when main `3d9d25e6` (defect #457, §1.363) was merged into
+it, and the next number when main `17197d8e` (fixes #456 and #458, §1.364) was merged into it in
+fix round 2; main then gave that number and the next three to #453 S3, S4, S9 and S12 (the train
+0.12.60d, main `155366bb`) and §1.369 to #455 G-R2s (main `1e67d1c5`), and #463 L1, L2 and U1 took
+§1.370 to §1.372 in this train. ORD-1b (§1.352) built the selection among the
+members of one device in the policy crate, with its three inputs beside the device map; the host
+passed none (`DeviceGroups::new`), so a device of several still picked as MAPP-1. This slice makes
+the host keep and pass them. The load still refuses every group of several
+(`several_members_unsupported`, unchanged), so nothing of it is reachable on any installation; its
+tests hand the host the member → device key map and the group's name as the assembly builds them.
+
+| Part | Built | Where |
+|---|---|---|
+| the member in front | yes | `HostShared::device_fronts` (`crates/runtime-host/src/host.rs`, memory only): one map from a device key to the member in front. Its one writer is `HostShared::note_front`, called by the function the switch's two entries share (`switch_front`, `host/switch.rs`) for a member of a device group of several, never at the call sites: the member when the switch's own steps end with its application in front or started (`Ok(Ok)`, whether or not the run's lease renewal after them fails), removed when the switch is refused or fails (`Ok(Err)`); empty at a start; fix round 2: also called, for a member the switch applies to, after a task step's own launch or restart of the member's application succeeded (`HostShared::front_after_own_application_effect`, `host/switch.rs`, called by `control_application` in `host/contained_task.rs`). Its one remover outside the switch's own result is `HostShared::forget_front` (`host/switch.rs`, fix round 1, the coordinator's ruling): a Runtime-level failure of the steps (`Err`) and five places where what is in front changes without a switch call it, each in one line (see "Who writes and who forgets the member in front" below). Read by `policy_device_groups` (`host/policy_dispatch.rs`) through `HostShared::device_fronts()` |
+| the queue waits | yes | `QueueWaits` beside `EligibilityAges` in the policy host (`crates/runtime-host/src/policy_host.rs`), with its staging: `stage` after an evaluated cycle (in `PolicyHost::evaluate`, right after the eligibility ages'), `apply_pending` when the next evaluation starts (`PolicyHost::apply_queue_wait_verdicts`, called with `apply_eligibility_verdicts` under the same policy guard, which returns the starts that evaluation passes), `forget` at the admission of the pair's dispatch (`commit_admission`), `forget_member` when the member takes the front (`PolicyHost::forget_queue_waits_of`, called by `note_front`). Kept only for pairs whose alias the cycle's `DeviceQueue` names as a member of a device of several not in front. Fix round 1: `took_front`, the members that took the front since the last apply (`forget_member` adds, `apply_pending` clears, `stage` skips their pairs; see "The switch between an evaluation's read and its staging" below). Memory only: nothing reaches the ledger, a fact, a snapshot or a decision identity |
+| the pass | yes | `policy_device_groups` (`host/policy_dispatch.rs`): when the map names at least one device of several, `DeviceGroups::with_order` with the members in front by alias, the applied starts of the members not in front, and `scheduling.device_group.max_queue_wait_ms` in effect (`HostShared::max_queue_wait_ms`, `host/runtime_config.rs`, read at every such cycle); and the `DeviceQueue` (each member of a device of several with whether it is in front) for the staging. Otherwise the map alone and an empty `DeviceQueue`, exactly what it returned before (the same map, `DeviceGroups::new`), and no configuration read |
+| the key | yes | `scheduling.device_group.max_queue_wait_ms` (`crates/runtime-config/src/scheduling.rs`, `DEVICE_GROUP_MAX_QUEUE_WAIT_MS`, `DeviceGroupFile::max_queue_wait_ms`, `MAX_QUEUE_WAIT_RANGE` `60000..=86400000`, its `ROWS` row with `since` 0.12.60, reader `ORD-1c`, settable, default from the file; `SchedulingConfig::max_queue_wait_ms`; `distribution/windows/actingd.defaults.json` `1800000`), declared as its sibling `switch_failure_cooldown_ms` is; no per-instance form, naming no application |
+| the interface | yes | `actingd-config` [5, 32] (`distribution/windows/component-interfaces.json`; the architecture test `tools/actinglab-architecture/tests/component_interfaces.rs`; [component-interfaces.md](component-interfaces.md), row 32): 31 is #453 S2's (§1.362) |
+
+**The wait's clock (the coordinator's rulings 1 and 2).** A pair (task, member) has a wait only
+while its member belongs to a device of several, is not the member the host holds in front, and the
+pair is queued. Queued, after the design note's 2.2 row "Start, or keep, the wait": eligibility
+`true`, not blocked, and either selected (its dispatch not admitted yet) or its last reason
+`instance_already_selected`, `device_group_waiting` `held`, `device_group_waiting` `selected` *with*
+`limit_ms`, `dispatch_instance_held`, `policy_chain_handover_waiting`,
+`policy_concurrent_runs_deferred`, `heavy_scene_budget_deferred` or `heavy_scene_budget_exhausted`.
+A `device_group_waiting` `selected` row without the order's values is a member held as the cycle
+starts behind another member's pick (§1.352, "For the host's slice of the order"): it starts and
+keeps no wait (ruling 2). Every other decision ends the wait (not due, a person's hold, a pause, a
+fence, a takeover or switch cooldown, the task's own gates), as does the admission of the pair's
+dispatch. When a member's switch puts it in front, every wait of its pairs is forgotten, the staged
+ones included; a member that loses the front has no wait (it had none while in front), so its
+queued pairs' waits begin at the first evaluated round after, from that round's instant; with none
+in front every member's queued pairs wait. Past its limit a wait writes nothing (ruling 3).
+
+**Where the build completes the rulings.**
+
+1. *A pair with a dispatch in flight* starts and keeps no wait, as the eligibility age starts none
+   and the held records skip it. In flight is what the code reads for the eligibility ages too:
+   the policy host's seen dispatches whose lifecycle is `Intent` (an earlier evaluation's intent
+   not admitted yet) or `Admitted` (not settled yet). An admitted dispatch is what the pair waited
+   for, and its admission has just ended the wait; an earlier intent not admitted yet is the
+   pair's pick still on its way to the admission. Without this, a member's pair whose run was
+   admitted but whose switch had not yet run would begin a new wait behind its own run
+   (`dispatch_instance_held`).
+2. *The forgetting at the front* runs where the front is written: `note_front` releases the front
+   map's guard and then takes the policy host's guard to forget the member's waits. The switch's
+   callers (a policy run, a direct run, an `ApplicationLifecycle` request, a ladder rung) run on
+   their own threads outside every evaluation and admission. An evaluation can still have read
+   the members in front before the switch and stage its verdicts after it: that is the race fix
+   round 1 cures (below). A member that took the front and lost it again before the next
+   evaluation keeps no wait from before.
+3. *The starts passed* are those applied at the evaluation's start, read under the same guard as
+   the eligibility ages are applied, and filtered by the fronts read for the map: a member in
+   front is passed no start.
+
+**The staging gives an evaluation and its admissions the same starts.** No admission reads a start;
+an admission only ends its pair's wait (`commit_admission`), and the verdicts of an evaluation are
+applied only when the next evaluation starts, as the eligibility ages'.
+
+**The switch between an evaluation's read and its staging (fix round 1, point 1; the review's
+race and its cure).** An evaluation reads the members in front (`policy_device_groups`) before it
+stages its verdicts (`PolicyHost::evaluate`). A switch that puts a member in front between the two
+forgets the member's waits, and the evaluation, which read the member as waiting, would stage them
+again: the member in front would keep a wait. The cure: `QueueWaits` keeps the members that took
+the front since the last apply (`took_front`, added by `forget_member`), `stage` skips their
+pairs, and `apply_pending` clears the set, with or without verdicts to apply. The apply comes
+before the next evaluation reads the members in front, so that evaluation reads such a member in
+front, or, if it lost the front again meanwhile, waiting anew from that round. Test:
+`ord1c_t9_a_switch_between_the_front_read_and_the_staging_leaves_its_member_without_a_wait`, which
+places a launch of B, on a thread of its own, at the evaluation's test hook between the read and
+the validation before the staging (`run_between_policy_sample_and_validation_for_test`), ordered by
+two channels with no sleep; without the cure the member in front keeps a wait from that round.
+
+**Who writes and who forgets the member in front (fix round 1, point 3; the coordinator's
+ruling).** The switch writes it (`note_front`, above). `forget_front` (`host/switch.rs`, one
+remover, one line at each place) forgets it in two ways: `FrontLoss::Device` forgets the device's
+entry whoever it names; `FrontLoss::Member` forgets it only while it names that member. Fix round
+2 (the review of fix round 1): a task step's own application effect follows the rule of the
+`ApplicationLifecycle` request through one function, `front_after_own_application_effect`
+(`host/switch.rs`), which `control_application` (`host/contained_task.rs`) calls after the step's
+command and before its failure is returned: a stop, and a launch or restart whose command failed,
+forget the member (`forget_front`, member); a launch or restart that succeeded notes the member in
+front through the one writer (`note_front`), for a member the switch applies to. On the head of
+fix round 1 such a step did nothing to the map: after a step's restart that succeeded the map
+named the member as its run's switch had written it, which was right, unless an earlier step of
+the same run had stopped the application, and after a stop or a failed start it kept naming the
+member.
+
+| Where | What changed | Loss | Test |
+|---|---|---|---|
+| `switch_front` (`host/switch.rs`), the steps' `Err` | a Runtime-level failure of the switch: a stop may already have run | device | `ord1c_t10_a_runtime_level_failure_of_the_switch_forgets_the_devices_front` (a test-only failure after the steps ran, `fail_next_switch_steps_for_test`) |
+| `application_lifecycle` (`host/input.rs`), after `application_control` | a `stop` of the member, or a `launch` or `restart` whose own command failed after the switch | member | `ord1c_t11_a_stop_or_a_failed_start_of_the_member_in_front_forgets_it` (a stop of another member leaves the front) |
+| `control_application` (`host/contained_task.rs`), after the step's command (fix round 2) | a task step's `stop` of its member's application, or its `launch` or `restart` whose command failed | member | `ord1c_t15_a_task_steps_failed_restart_forgets_the_member_in_front` (a direct run whose one step's restart fails; a run whose restart succeeds leaves the member in front) |
+| `recovery_application_restart` (`host/recovery_ladder.rs`) | the application restart rung failed after it stopped the others; fix round 2: or ended with a Runtime-level failure after the stop, forgotten before that error is returned as it is | member | `ord1c_t12_a_ladder_rung_that_fails_after_it_stopped_the_others_forgets_the_front` (a device drill); the Runtime-level failure rests on reading: no fixture makes `restart_assigned_application` return a Runtime error without halting the Runtime and the drill with it |
+| `recovery_emulator_restart` (`host/recovery_ladder.rs`), before its Stop | an emulator restart by a rung stops every application of the device | device | `ord1c_t13_an_emulator_restart_by_a_rung_forgets_the_devices_front` (a device drill on a member bound to the fake emulator, without a startup package) |
+| `idle_close_app` (`host/idle.rs`), before the stop is sent | the idle action closes the member's application | member | `ord1c_t14_the_idle_action_closing_the_member_in_front_forgets_it` |
+
+The ladder's emulator restart rung and the idle action are device-level actions a member of a
+group of several does not turn on today (actingd refuses them at assembly,
+[device-group.md](device-group.md), "Device-level actions"); t13 and t14 hand the host the member
+directly, so the forget is in place before those actions are made group-aware. Not at
+`host/stop_instance_run.rs` (the reset after a stopped run), `host/requests.rs` (a person's hold,
+`AcquirePlayerHold`, is not built) or `host/device_group.rs` (an operator's emulator control is
+refused for a member), as ruled. What still changes what is in front without the map knowing
+(fix round 2, the review): an emulator or an application that crashes, a person's work by hand on
+the device, a Lab raw input, a run's own inputs that bring another package to the front (a store
+update package's), and the three places above. Each leaves a member named in front that is not,
+which is only a preference: it costs at most one switch more, which reads the real foreground and
+writes what is really in front, and lets a waiting task start at most one run later (the order
+counts the named member's next run as one needing no switch; that run's switch, which then starts
+its application, takes one startup run more); no task waits without end, since the waiting
+member's wait still counts and its limit still binds. What is forgotten although the member's
+application may still be in front: a stop command that failed (the `ApplicationLifecycle`
+request's, a task step's, the idle action's) and the emulator restart rung when it returns before
+its Stop. That costs at most one switch made early: with none in front the order may pick another
+member's waiting task before the member that is really in front would have had to give way.
+
+**The code.** No code, value key or word is added; no location of the catalog either (the new
+guards reuse `HostLocation::SwitchApplication` and `HostLocation::ReadPolicyInstanceRegistry`); the
+test build gains the test location `queue_order_for_test`. The index is not regenerated. `runtime-outcomes` stays 1.
+
+**Tests.** `crates/runtime-host/src/tests/gate_ord1c.rs` (gate map `host.toml`, "#437 ORD-1c"):
+`ord1c_t1_a_switch_that_succeeds_puts_its_member_in_front_and_one_that_fails_forgets_it`,
+`ord1c_t2_a_due_task_waits_from_its_first_queued_round_across_selected_and_held_until_admission`,
+`ord1c_t3_taking_the_front_forgets_the_waits_and_two_backlogs_switch_by_the_limit_not_per_dispatch`
+(twelve dispatches, A five, B six, A once: two switches),
+`ord1c_t4_a_pause_a_player_hold_or_a_switch_cooldown_ends_the_wait_and_it_starts_anew`,
+`ord1c_t5_a_restart_forgets_the_front_and_every_wait`,
+`ord1c_t6_the_key_has_its_range_default_and_rows_and_applies_from_the_next_round`,
+`ord1c_t7_front_tasks_run_until_a_waiting_task_would_pass_its_limit_then_the_device_switches`,
+`ord1c_t8_a_host_without_a_device_of_several_evaluates_and_writes_the_same_with_and_without_the_slice`,
+from fix round 1 `ord1c_t9` to `ord1c_t14` (the race and the places above), and from fix round 2
+`ord1c_t15_a_task_steps_failed_restart_forgets_the_member_in_front`. The
+fixture's catalog is the generic task declared V2, every task due at every evaluation and
+declaring one minute, the expected runtime off by the file, so `E` is one minute throughout; the
+fake devices answer each member's own application in front. A row is looked up by its code in the
+decision's reasons, not taken as the last reason: on the first evaluation after a start the host
+adds `eligible_since_unknown` after the evaluator's own reasons (the cause of the four failures of
+the first CI run). **t5** pins that nothing of the order outlives a restart: before it B is in
+front and A's task, which declares two minutes, waits from T0; after it the round picks A's task
+(with B kept in front it would pick B's one-minute task) and A's wait begins at that round (kept,
+it would begin at T0). **What t8 proves, and what rests on reading.** It compares two hosts of this
+build started alike with the same instance ids, whose instances are each alone on their devices:
+one as built, one with the test-only switch (`QUEUE_ORDER_OFF_FOR_TEST`, `policy_host.rs`, one
+function per build, `queue_order_on`) that turns off every entry the slice adds (the order's branch
+of `policy_device_groups`, the staging, `note_front`, `forget_front`). Over the whole start and
+three rounds (each intent admitted, run and settled) the picks are equal as they are, and the
+evaluations and every record are equal record by record, type, severity and whole payload, with
+ids, times, the evaluation's `seed` and the temporary root normalised, and, inside the performance
+summary records only (fix round 2, the review: the same names occur in fact snapshots, timing and
+artifact failure records, which were masked with them), their sampled members of the machine
+(`PERFORMANCE_SAMPLES`: `context`, `foreground`, `owned_processes`, `third_party_high_load`,
+`ledger_commits`, `capacity`, `pacing`). The ledger open's phases, which fix round 1 named too, are
+in no record of the ledger (the start reports them as its `ledger_opened` daemon line and in its
+start report), so fix round 2 replaces none of them. Every other number is compared as it is, in
+the evaluations all of them, and every difference is named in one message. So t8
+proves that two starts of this build, the slice's entries reachable or turned off, evaluate and
+write the same. That such a host evaluates and writes byte for byte as main does rests on reading,
+not on t8: the switch turns off exactly those entries, `policy_device_groups` builds the same map
+as before and calls `DeviceGroups::new` with it, the admission's `forget` finds nothing, and the
+evaluator is handed what it was handed on main. **Adapted on purpose** (the requirement moves what
+they pin): `gate_mapp1b.rs`
+`mapp1b_a_member_waits_held_behind_the_others_holder_and_runs_after_it` (A's last row gains the
+order's `limit_ms` 1 800 000 and `remaining_ms` 1 680 000: no member is in front, and A has waited
+since the first round, behind B's pick and then behind its own lease; the winner is the same) and
+`mapp1b_a_hold_or_a_fence_of_one_member_holds_the_other_and_the_holds_end_frees_it` (B's row after
+the hold gains `limit_ms` and `remaining_ms` 1 800 000: the hold ended every wait; the winner is the
+same); `gate_mapp2b.rs`
+`mapp2b_a_failed_switch_holds_the_member_for_the_cooldown_while_the_other_member_runs` (after the
+cooldown A, in front after its run, keeps the device while its task ends by B's limit: the first
+round after the cooldown dispatches A's task and not B's, asserted since fix round 1, and B's task
+is dispatched in the round its limit comes) and
+`mapp2b_the_switch_cooldown_also_holds_the_rerun_the_member_is_owed` (A's dispatch now runs, so A is
+in front and its wait over, and B's owed rerun goes in the round its limit comes: without the run,
+A's wait from the cooldown's round would be the earlier deadline in every round); the architecture
+test of the interface declarations pins `actingd-config` [5, 32]. The other MAPP-1b, MAPP-2b and
+MAPP-2d tests pick as before: their devices have none in front, or one evaluation, where equal
+fresh limits leave the allocation order's pick.
+
+**Fix round 2** (the independent review of fix round 1 and CI on its head; main `17197d8e`, §1.364,
+merged, so this entry took 1.365, the number main then had free, and the train 0.12.60e gave it
+1.373; only the register conflicted). (1) A task step's own
+application effect and the application restart rung's Runtime-level failure forget the member,
+above. (2) t14 never ran: its host's start was refused `config_value_invalid` at
+`record_runtime_config`. The start's check of an instance's own idle keys (`check_instance`,
+`crates/runtime-config/src/instance.rs`, through `idle::instance_idle`) reads each member the
+instance does not name from the section's key in the configuration, not from the defaults file,
+and the fixture named only A's `idle.action`, so its first such read, `idle.min_gap_ms`, had no
+value (`wrong_type`). The fixture now carries the `idle` section's keys as the assembly renders
+them from the shipped defaults file, as actingd's manifest always does. The refusal was the
+fixture's and would meet an instance alone on its device too; it is not the rule that a member of
+a device of several names no idle action, which the configuration's own check makes for the members
+its `device_group` keys name (`EffectiveConfig::check_device_groups`, "Device-level actions") and
+which this fixture, handing the host the device map directly, does not meet. Read again against the idle check: it acts only on an instance
+whose emulator it read running, and A, without emulator control, registered with its emulator
+unknown, so A is now emulator-controlled from the start and registers with it running. (3) t8
+replaces the machine's samples inside the performance summary records only, above. (4) Three rows
+that were looked up by their code and then asserted to have it now assert the member they name
+(t2's held row: A, whose lease holds the device; t4's row behind A's pick: A) or the winner's task
+(t7's row of A: `TASK_B`).
+
+**At deploy.** Every root gains the key's manifest row and its `config.parameters.scheduling` row,
+`scheduling.device_group.max_queue_wait_ms` with its default `1800000`, and the shipped defaults
+file's digest in `config.selection` changes. The Runtime declares `actingd-config` [5, 32]: the
+consoles and installers that read `actingd-config` must accept 32 before an installation is moved
+to a release that carries this slice (the console pins released Runtime commits, so its release
+that accepts 32 follows the Runtime's release and precedes that deployment; the UI repository's
+work). Nothing else changes on an installation without a device of several, which is every
+installation until the load accepts a group of several: no order input, no wait, no front.
+
+**Rollback** (below 0.12.60, or to a 0.12.60 build before this slice). As §1.353 says for the
+sibling key: a file that names `scheduling.device_group.max_queue_wait_ms` must drop it, since the
+earlier build's `device_group` member denies unknown members. An instruction recorded while running
+that names it (a `host.config_overrides` row) needs nothing: an earlier build's restore drops a row
+whose key it does not know, `config_override_dropped`, and goes on
+(`crates/runtime-config/src/effective.rs`, `EffectiveConfig::restore`); the same holds for the
+sibling key below 0.12.60, which §1.353 does not say. Nothing else is persisted by ORD-1c: the
+member in front and the queue waits live in memory only.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
