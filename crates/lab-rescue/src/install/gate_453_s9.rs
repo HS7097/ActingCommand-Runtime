@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #453 S9 (register §1.363; contracts/install-cli.md, "The Lab's rescue module",
+// Workflow #453 S9 (register §1.364; contracts/install-cli.md, "The Lab's rescue module",
 // `vision place`; contracts/vision-model-folders.md, "Placing a vision root from a folder";
 // coordinator work order rd-1114/brief-453-s9-vision-place.md; design note
 // rd-1113/fresh-root-design.md §3(c)): the rescue row `vision place --from <dir>` places the files
