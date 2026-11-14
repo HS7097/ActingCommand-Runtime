@@ -586,6 +586,54 @@
       "common_causes": "The disk is full; the directory is read-only or locked.",
       "handling": "Free space or choose a writable directory, then run the wrapper again with a new --report."
     },
+    "standard_pack_build_output_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "actinglab standard-pack build was given an --out that is a file, a directory that is not empty, a path whose parent is no directory, or a place inside --repo. It refuses before it reads anything; nothing is written or overwritten (Workflow #464 P2, contracts/resource-verify.md).",
+      "common_causes": "An output directory reused from an earlier build; a mistyped parent directory; an output directory inside the resource checkout.",
+      "handling": "Give a new directory, or an empty one, outside the checkout. Do not delete an earlier build to reuse its name."
+    },
+    "standard_pack_build_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "failed_step_count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "actinglab standard-pack build ran the steps of resource verify on the commit and they did not all pass. Its cause is the steps' outcome: resource_verify_failed with each failed step's first failure, or the code of the precondition that failed (a tree with a change, an untracked file or an ignored file where the build reads is resource_verify_checkout_dirty). No zip, SHA256SUMS or build.json is written into --out; the steps' work stays under <out>/work, and the details are the steps' report (Workflow #464 P2).",
+      "common_causes": "Uncommitted changes in the checkout; a declaration, pack, table or root file the Runtime's checks refuse.",
+      "handling": "Read the cause and the report's failed steps, fix and commit, then build again into a new directory."
+    },
+    "standard_pack_build_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.60",
+      "description": "actinglab standard-pack build could not make --out, could not write a file of its product into it (the copy of the steps' zip, SHA256SUMS, or build.json as build.json.part renamed to build.json), or found the steps' zip changed since they read it back; the cause is the OS failure where there is one. The files already written stay; nothing is deleted (Workflow #464 P2).",
+      "common_causes": "The disk is full; the directory is read-only or locked; another program changed the work directory during the build.",
+      "handling": "Free space or choose a writable directory, then build again into a new directory."
+    },
     "resource_check_release_retired": {
       "category": "error",
       "ladder_class": "none",

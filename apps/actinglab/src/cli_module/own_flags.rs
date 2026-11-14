@@ -53,8 +53,9 @@ use crate::{
 };
 
 /// The strict rows: [`accepted`] answers for each of them and, beside them, for the rows of
-/// [`CORE_STRICT_ROWS`] only.
-pub(crate) const STRICT_ROWS: [&str; 30] = [
+/// [`CORE_STRICT_ROWS`] only. Workflow #464 P2: `standard-pack build`, checked against its list
+/// as `resource verify` is.
+pub(crate) const STRICT_ROWS: [&str; 31] = [
     "tap",
     "swipe",
     "long-tap",
@@ -81,6 +82,7 @@ pub(crate) const STRICT_ROWS: [&str; 30] = [
     "resource verify",
     "resource restore",
     "standard-pack compose",
+    "standard-pack build",
     "scheduling compile",
     "scheduling timeline",
     "regression",
@@ -364,6 +366,8 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
         "resource restore" => from_lists(resource_restore::RESTORE_FLAGS, &[], none),
         "standard-pack check" => from_lists(standard_pack_cli::CHECK_FLAGS, &[], none),
         "standard-pack compose" => from_lists(standard_pack_cli::COMPOSE_FLAGS, &[], none),
+        // Workflow #464 P2.
+        "standard-pack build" => from_lists(resource_verify::BUILD_FLAGS, &[], none),
         "scheduling compile" => from_lists(scheduling_cli::COMPILE_FLAGS, &[], none),
         "scheduling timeline" => from_lists(scheduling_cli::TIMELINE_FLAGS, &[], none),
         "regression" => from_lists(recognition_regression::REGRESSION_FLAGS, &[], none),
@@ -456,7 +460,8 @@ pub(crate) const UNROWED_READS: [&FlagReads; 4] = [
 /// CLI-COMP (register §1.318): `completion`, parsed by its read list, and `__complete`, the
 /// completion scripts' callback, which reads every word of its line (its options, the index, the
 /// typed words in their form) and answers a line it cannot read with no candidate, ignoring none.
-pub(crate) const REFUSING_COMMANDS: [&str; 61] = [
+/// Workflow #464 P2: `standard-pack build`, against its strict list.
+pub(crate) const REFUSING_COMMANDS: [&str; 62] = [
     "schema",
     "touch-probe",
     "tap",
@@ -508,6 +513,7 @@ pub(crate) const REFUSING_COMMANDS: [&str; 61] = [
     "resource verify",
     "standard-pack check",
     "standard-pack compose",
+    "standard-pack build",
     "runtime reset",
     "runtime observe",
     "session backend",

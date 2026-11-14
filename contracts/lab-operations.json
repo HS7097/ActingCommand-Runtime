@@ -2374,6 +2374,28 @@
       "status": "planned"
     },
     {
+      "name": "standard-pack build",
+      "module": "authoring",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true, "note": "the top of a clean Git work tree of a game's working root; its HEAD is the commit built"},
+        {"name": "source_repository", "form": "option", "type": "string", "required": true, "note": "owner/name"},
+        {"name": "out", "form": "option", "type": "dir", "required": true, "note": "a new directory whose parent exists, or an empty one; never inside repo"},
+        {"name": "commit", "form": "option", "type": "string", "required": false, "note": "40 hex, must be HEAD"}
+      ],
+      "help": "Builds a game's whole standard pack from one clean commit of its working root: the zip, SHA256SUMS and build.json, ready to be placed.",
+      "output": "build: the build.json document (schema actingcommand.standard-pack-build.v1); out; files: the zip, SHA256SUMS, build.json and the work directory; steps: resource verify's steps",
+      "writes": true,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab standard-pack build"],
+      "new": "#464",
+      "slice": "LAB-2",
+      "status": "planned",
+      "notes": "Workflow #464 P2 (0.12.60; contracts/resource-verify.md, standard-pack build; contracts/package-reference.md, The built standard pack): it runs resource verify's steps on their one function, its work under out/work, and writes the product into out only when every step passed; build.json names the source repository, the commit, the tree and the Tools, and, read from the zip, the package range, the root files, the packs and the zip; the package revision is computed from the content; nothing is written into repo and nothing is deleted. Its slice is LAB-2's, whose words serve actinglab's own commands, so that the command line and the MCP server offer it as they offer resource verify"
+    },
+    {
       "name": "resource restore",
       "module": "authoring",
       "params": [

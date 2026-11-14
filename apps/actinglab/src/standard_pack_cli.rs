@@ -11,6 +11,12 @@
 //! <standard_packs.root> --instance <alias>=<game>/<server>... --out <new directory>` composes
 //! the schedule rules of the bound games as the Runtime composes them and writes the four V2
 //! documents and the manifest. It writes a new directory, so `--dry-run` refuses it.
+//!
+//! Workflow #464 P2 (contracts/resource-verify.md, "`standard-pack build`"): `actinglab
+//! standard-pack build --repo <checkout> --source-repository <owner>/<name> --out <directory>
+//! [--commit <40-hex>]` builds a game's whole standard pack from one commit of its working root, on
+//! the steps of `resource verify` (`crate::resource_verify`). It writes a directory, so `--dry-run`
+//! refuses it.
 
 use crate::{CliError, CliOutcome, FlagArgs, GlobalOptions};
 use actingcommand_resource_tooling::{
@@ -109,6 +115,8 @@ pub(crate) fn run_standard_pack(
                 CliError::device(format!("failed to serialize the composition: {error}"))
             })
         }
+        // Workflow #464 P2: a game's whole standard pack from one commit of its working root.
+        "build" => crate::resource_verify::run_standard_pack_build(global, args),
         other => Err(CliError::usage(format!(
             "unknown standard-pack command: {other}"
         ))),

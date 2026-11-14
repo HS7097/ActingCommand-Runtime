@@ -504,10 +504,45 @@ declarations" below). `tables` is optional (M-357a TB12): at most 64 unique tabl
 directory; a reader checks it (`invalid_bundle_index`) and otherwise ignores it, and only an
 updater uses it: it replaces exactly the listed tables, leaves the root's other tables alone,
 and replaces the tables before the package directories. `package bundle` writes no `tables`
-member; the resource repositories' bundle script adds it (PKG-S7). Bundle index versions 1, 2
+member; the resource repositories' bundle script adds it (PKG-S7), and so does `standard-pack
+build` (Workflow #464 P2, "The built standard pack" below). Bundle index versions 1, 2
 and 3 (`actingcommand.bundle.v1`, `.v2`, `.v3`) are other shapes no reader of this build
 accepts: a root whose `bundle.json` holds one is `standard_pack_root_invalid` with
 `standard_pack_problem` `malformed` (no old version is read).
+
+### The built standard pack
+
+Workflow #464 P2 (since 0.12.60; [resource-verify.md](resource-verify.md), "`standard-pack
+build`"; register [v012-register.md](v012-register.md) §1.365). `actinglab standard-pack build
+--repo <checkout> --source-repository <owner>/<name> --out <directory> [--commit <40-hex>]` builds
+one game's whole standard pack from one commit of its working root (a resource repository checkout
+in the source layout: the root files at its top, `packs/<package_id>/`, `tables/`, `notices/`), on
+the steps of `resource verify`, and writes it into a new or empty directory, never into the
+repository:
+
+```text
+<out>/<game>-resources-<sha7>.zip   the bundle as place takes it: applications.json, bundle.json
+                                    (with tables when the repository has some), interfaces.json,
+                                    the root files and directories the repository holds
+                                    (pages.json, interrupts.json, navigation.json, schedule.json,
+                                    display-layout.json, goals.json, loading.json with loading/,
+                                    notices/, tables/), packs/<package_id>/
+<out>/SHA256SUMS                    <hex>  <zip name>
+<out>/build.json                    actingcommand.standard-pack-build.v1
+<out>/work/                         the steps' work, kept
+```
+
+**What it is.** The zip is what `place <zip> --sums <SHA256SUMS>` places ([install-cli.md](install-cli.md)):
+its `interfaces.json` declares `package [r, r]`, `r` computed from the content (resource-verify.md,
+"The `package` revision"; 12 with `goals.json`, 10 with `notices/`, a pack feature's revision where
+a pack uses it), never written by hand.
+
+**How it is identified.** By its source commit: `bundle.json` carries `source {repository,
+commit}` and no version or tag (above), and `build.json` names the source repository, the commit
+and its tree, the Tools head and the executable's SHA-256 that built it, and, read back from the
+zip, the game, the `package` range, the root files and directories, every pack with its file count
+and size, and the zip's name, SHA-256 and size. The build refuses a tree with any change, so every
+build has a commit; no digest names a pack. `build.json` has no readiness member yet.
 
 ### Maintenance declarations
 

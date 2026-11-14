@@ -226,6 +226,124 @@ reuses carry the optional keys this slice declares on them: `resource_declaratio
 0.12.47 (Workflow #434 LAB-2) the word is gone, an unknown resource command, and the code is
 retired.
 
+Workflow #464 P2 (since 0.12.60), `standard-pack build`'s own codes, in the same fragment:
+`standard_pack_build_output_invalid` (`path`), `standard_pack_build_failed`
+(`failed_step_count`) and `standard_pack_build_write_failed` (`path`).
+
+## `standard-pack build`
+
+Workflow #464 P2 (register [v012-register.md](v012-register.md) §1.365; the coordinator's rulings
+on board #464, not the owner's words): one operation from a game's working root to the thing an
+installation's placement accepts.
+
+```text
+actinglab [--json] standard-pack build --repo <checkout> --source-repository <owner>/<name>
+    --out <directory> [--commit <40-hex>]
+```
+
+- **One function.** It runs the steps above, `tools` to `bundle`, every one of them, on the one
+  function `resource verify` runs them on, its work under `<out>/work/` as `resource verify`'s is
+  under `--work` (`packs-root/`, `bundle/`, `out/`, `read-back/`, `installed/`). `resource verify`
+  runs them as before, so its report is the same for the same input. The build differs in four
+  things only:
+  - the checkout's read paths are every input its bundle carries: besides those of "Clean" above,
+    `schedule.json`, `display-layout.json`, `loading.json`, `goals.json` and every file under
+    `loading/`, `notices/` and `tables/`, each the committed blob and none an ignored file;
+  - `package bundle` is given `goals.json` too when the repository holds it (`--goals`);
+  - the repository's tables, `tables/<table_id>.json` at its root, read as the Runtime reads a game
+    root's tables (`read_standard_pack_tables`; a refused table fails the `bundle` step with its
+    `standard_pack_table_invalid` or `standard_pack_table_unreadable` and is not carried), go into
+    the zip as `tables/<file>`, byte for byte, and into the installed root, and the zip's
+    `bundle.json` lists them in `tables`, in file name order (the index member an updater reads,
+    [package-reference.md](package-reference.md)); without a table the zip's `bundle.json` is the
+    one `package bundle` wrote;
+  - `interfaces.json` declares the `package` revision the zip's content needs ("The `package`
+    revision" below), not resource verify's 3 or 10.
+
+  `ui.json` is not carried: `package bundle` has no flag for it.
+- **Clean, and bound to its commit.** The `checkout` precondition refuses a tree with a change, an
+  untracked file or an ignored file where the build reads, so every build has a commit and a tree.
+  `--commit`, when given, must be HEAD. There is no `--base`.
+- **`--out`** is a directory that does not exist, whose parent does (the build makes it), or an
+  existing empty directory, and never `--repo` or a place inside it (by their real paths). Anything
+  else is `standard_pack_build_output_invalid` (`path`), before anything is read.
+- **The product**, written only when every step passed: the steps' zip
+  `<out>/<game>-resources-<sha7>.zip`, copied byte for byte from `<out>/work/out/`,
+  `<out>/SHA256SUMS` (`<hex>  <name>\n`), and `<out>/build.json`, written as `build.json.part` and
+  renamed. For a commit whose repository holds no `goals.json` and no table and whose packs need no
+  revision above 3, the zip is `resource verify`'s zip of that commit, byte for byte.
+- **Steps that did not all pass** write no product: `standard_pack_build_failed`
+  (`failed_step_count`), caused by the steps' outcome (`resource_verify_failed` with each failed
+  step's first failure, or the precondition's own code, `resource_verify_checkout_dirty` for a dirty
+  tree); its details are `{outcome, report}`, `report` the steps' `actinglab.resource-verify.v1`
+  document, which is no file. `--out` then holds what the steps wrote below `work/` and nothing
+  else. A file of the product that cannot be written is `standard_pack_build_write_failed`
+  (`path`, caused by the OS failure); the files already written stay.
+- **The answer** (exit 0, the CLI module's line, its members flat): `build` (the document of
+  `build.json`), `out`, `files` (`zip`, `sums`, `build`, `work`, absolute paths) and `steps` (each
+  step as the report lists it).
+- **Refusals** as `resource verify`'s: global `--dry-run` `dry_run_unsupported`, after flag parsing
+  only, with no alternative; the device, Runtime and instance options
+  `offline_device_scope_forbidden`; any other flag, a flag twice, a flag without its value, a
+  positional, a `--commit` that is no 40 lowercase hexadecimal characters or a
+  `--source-repository` that is no `<owner>/<name>` `validation_failed`.
+- It writes nothing into the repository and deletes nothing. The MCP tool of its row is
+  `ac_standard_pack_build` ([lab-operations.json](lab-operations.json)), served through a `serve`
+  child. `capabilities` lists it with `build_schema: "actingcommand.standard-pack-build.v1"`.
+
+### `build.json`
+
+`actingcommand.standard-pack-build.v1`, exactly these members:
+
+```json
+{
+  "schema_version": "actingcommand.standard-pack-build.v1",
+  "game": "<the zip's bundle.json game>",
+  "source_repository": "<owner>/<name>",
+  "commit": "<40 hex: HEAD>",
+  "tree": "<40 hex: HEAD^{tree}>",
+  "tools": {"runtime_head": "<40 hex, compiled in>", "executable_sha256": "<64 hex>"},
+  "package": [12, 12],
+  "root_files": ["applications.json", "bundle.json", "goals.json", "interfaces.json"],
+  "root_directories": ["notices"],
+  "packs": [{"package_id": "…", "server": "…", "entry_task_id": "…", "file_count": 4, "byte_count": 1234}],
+  "zip": {"name": "<game>-resources-<sha7>.zip", "sha256": "<64 hex>", "bytes": 0}
+}
+```
+
+`game`, `package` (the range of the zip's `interfaces.json`), `root_files` (the files at the zip's
+root, in byte order), `root_directories` (its directories but `packs`, in byte order) and `packs`
+(its `bundle.json` packs in their order, without `path`) are read back from the zip written, whose
+name, SHA-256 (the one `SHA256SUMS` names) and size `zip` gives; `commit` and `tree` are the
+checkout's, `executable_sha256` the `tools` step's. It has no readiness member: whether a pack is
+ready to be dispatched is judged by another slice's function, which a later slice adds here.
+
+### The `package` revision
+
+[component-interfaces.md](component-interfaces.md): "A bundle writes `package`: its `max` is the
+revision its packs need. Give `min` the same value." The build declares `[r, r]`, `r` the highest
+revision any entry of its zip needs, 3 (the bundle formats of Runtime v0.12.0) when none needs a
+later one; each row below is that document's `package` row of the revision:
+
+| Revision | What in the zip needs it |
+|---|---|
+| 4 | a member `remedy` in an object of a member `mappings` (a `scheduling_outcome` mapping); a member `provides` (`control.json`) |
+| 5 | a member `kind` that holds `single_touch_path_drag_v1` |
+| 6 | a member `tables` (a selection document); a member `source` that holds `table`; a member `post_admission_ocr`; a member `target_present`, `target_gone`, `loading` or `wait_page` of an `expect_after`; a pack's loading copy, `resources/loading.json` or a file under `resources/loading/` |
+| 7 | a member `value` that holds `anchor_milli` in an object of a member `features`; a member `confirm` that holds `track`, or a member `track_px`, of a `select`; a task's `repeated_anchor` layout whose `anchor` names a target of its `anchors` that declares `mask`, `maskRange` or `scales` |
+| 8 | a member `read_list`; a member `source` that holds `table_max_over_list` |
+| 9 | a member `lower_bound_column` |
+| 10 | a file under `notices/` |
+| 11 | a member `field_lists` |
+| 12 | `goals.json` |
+
+A member counts in any JSON file below `packs/<package_id>/`, found by its name and its place, not
+by the declaration reader: the same name elsewhere in a pack's JSON counts too, so the declaration
+may be higher than the pack needs, never lower than a row names. A JSON file that does not read
+needs nothing here (the `format` step refuses it). A feature that adds a `package` revision adds its
+row, in its own slice (`apps/actinglab/src/resource_verify/revision.rs`). `resource verify` keeps
+its rule: 3, or 10 with `notices/`.
+
 ## What stays in the wrapper
 
 The repository wrapper keeps what is the repository's policy, not a Runtime rule:

@@ -258,6 +258,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("standard-pack compose", UNSUPPORTED),
     // Workflow #411 RV-1: it writes its work directory and report; no read-only alternative.
     ("resource verify", UNSUPPORTED),
+    // Workflow #464 P2: it writes its product and its work; no read-only alternative.
+    ("standard-pack build", UNSUPPORTED),
     ("package run", UNSUPPORTED),
     ("resource restore", UNSUPPORTED),
     ("lab run", Mode::Refused("explicit_offline_entry_required")),

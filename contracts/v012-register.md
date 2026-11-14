@@ -23181,6 +23181,96 @@ self-check, a resume or the fence's recheck lifts it.
 **Rollback** (below 0.12.60). Nothing is persisted by the fixes; a build before them reads every
 record they write, and halts again where they fence.
 
+### 1.365 Slice #464 P2 (0.12.60): `standard-pack build`, a game's whole standard pack from one commit of its working root, on the steps of `resource verify` (Workflow #464; the owner asked on 11-14 that the Lab build a game's standard pack by itself, board #464; the design `rd-1114/464-pack-build-design.md`, its sections A, C.1, C.2, D and E and the row "P2 build" of its section G, read on main `17197d8e`, with the coordinator's rulings on its section H, not the owner's words; coordinator work order `rd-1114/brief-464-p2-build.md`, read on main `17197d8e`)
+
+**What it is.** A new authoring row of the operation table, `standard-pack build` (command `actinglab
+standard-pack build --repo <checkout> --source-repository <owner>/<name> --out <directory>
+[--commit <40-hex>]`, MCP tool `ac_standard_pack_build`, served through a `serve` child), which
+builds one game's whole standard pack from one commit of its working root and writes it, ready for
+`place`, into a new or empty directory: the zip, `SHA256SUMS` and `build.json`
+([resource-verify.md](resource-verify.md), "`standard-pack build`"; [package-reference.md](package-reference.md),
+"The built standard pack").
+
+**What the code showed before the build** (the work order's three questions). (1) `resource
+verify`'s steps live in `apps/actinglab/src/resource_verify.rs` and its `steps.rs`, `bundle.rs` and
+`git.rs`, which call the library code of `crates/resource-tooling` (`package_bundle`,
+`check_standard_pack_root`): one function, `verify`, ran them in order, so it could become the one
+both rows call (`run_steps`, with the row as `StepsFor`) without a change to what `resource verify`
+reports. The function stays in the Lab, where the steps are, not in `crates/resource-tooling` as the
+design's slice table says; that changes no step. (2) `package bundle` lays `pages.json`,
+`interrupts.json`, `navigation.json`, `schedule.json`, `display-layout.json`, `loading.json` with
+`loading/`, `notices/` and, since G-R1 (§1.356), `goals.json`; `resource verify` passes all of them
+but `goals.json`. `tables/`: the contract defines the zip's `tables/<listed id>.json` (the
+installer's `place`) and the index member `tables`, which `package bundle` does not write (the
+repositories' bundle script was to add it); the build adds both. `ui.json`: `place` carries it,
+`package bundle` has no flag for it, so the build does not carry it. (3) The range is the zip's
+`interfaces.json` `package [r, r]`, `r` fixed: 3, or 10 with `notices/`. The content decides more
+than the design's three cases: [component-interfaces.md](component-interfaces.md)'s `package` rows
+4 to 9 and 11 are members of a pack's files (remedies, the path drag, selection tables and the final
+states and loading members, the layout anchor's mask and scales and the tracked confirmation, list
+readings, the lower bound, field lists), all on main, which `resource verify` does not count (a pack
+with a remedy is declared 3); the build computes them with the root's 10 and 12.
+
+**One function.** `resource verify` calls `run_steps` with `StepsFor::Verify` and passes what it
+passed before: its report is the same for the same input. `standard-pack build` calls it with
+`StepsFor::Build`, its work in `<out>/work/`, and differs in four things: the checkout's read paths
+are every input its bundle carries (`schedule.json`, `display-layout.json`, `loading.json`,
+`goals.json` and the files under `loading/`, `notices/` and `tables/` besides `resource verify`'s);
+`package bundle` gets `goals.json` (`--goals`); the repository's tables, read as the Runtime reads a
+game root's (`read_standard_pack_tables`), go into the zip and its installed root, listed in the
+zip's `bundle.json` `tables`; and `interfaces.json` declares the revision the content needs. The
+product is written only when every step passed: the zip copied from `<out>/work/out/`, `SHA256SUMS`
+and `build.json` (`actingcommand.standard-pack-build.v1`; the source repository, the commit, its
+tree, the Tools head and executable SHA-256, and, read back from the zip, the game, the range, the
+root files and directories, the packs and the zip's name, SHA-256 and size; no readiness member,
+which the readiness slice's function adds later). A tree with any change is refused by the
+precondition; `--out` that is a file, a directory that is not empty, one whose parent is no
+directory or one inside `--repo` is refused before anything is read. Nothing is written into the
+repository and nothing is deleted.
+
+**The revision, computed.** The table of resource-verify.md, "The `package` revision": 3; the
+members of a pack's JSON files the rows 4 to 9 and 11 name (by name and place, so the declaration may
+be higher than a pack needs, never lower than a row names), a pack's loading copy 6, `notices/` 10,
+`goals.json` 12; the highest. A feature that adds a `package` revision adds its row there
+(`apps/actinglab/src/resource_verify/revision.rs`) in its own slice.
+
+**The row's slice.** The row's `slice` is `LAB-2`, the slice whose words serve actinglab's own
+commands, so that actinglab's words (`BUILT_SLICES`) and the MCP server (`ACTINGLAB_SLICES`) offer
+it without a new slice word in those two lists; its `new` and `notes` name #464 P2.
+
+**Codes.** Three, in the actinglab fragment, since 0.12.60, review pending:
+`standard_pack_build_output_invalid` (`path`), `standard_pack_build_failed` (`failed_step_count`,
+caused by the steps' outcome) and `standard_pack_build_write_failed` (`path`). No key, word or
+vocabulary is added; a dirty tree's refusal is caused by `resource_verify_checkout_dirty`. The
+outcome code index is regenerated (actinglab 43 codes).
+
+**Counts.** The command inventory (`ratchet/actinglab_commands.json`) 103 commands, 47 arms; the
+strict rows 31, the census's group (a) 62, the commands of actinglab's own rows
+(`engine::COMMANDS`) 64.
+
+**Tests.** `apps/actinglab/src/tests/gate_464_p2.rs` (gate map `apps.toml`, "#464 P2"), on a neutral
+fixture repository made with git (RV-1's files): `resource verify` of a commit reports what RV-1
+pins and `standard-pack build` of it writes that zip byte for byte and the same `SHA256SUMS`;
+`notices/` gives 10 and `goals.json` 12 (and `resource verify` of that commit still leaves
+`goals.json` out and declares 10); a tracked change and an untracked file are refused
+`standard_pack_build_failed` caused by `resource_verify_checkout_dirty`, nothing built, and an
+`--out` that holds a file or lies inside the repository `standard_pack_build_output_invalid`;
+`build.json` matches the zip and has no other member. No test is adapted.
+
+**What is not changed.** `package bundle`'s behaviour and flags; `place` and the rescue module;
+`resource verify`'s report; the recording and the kernel; no interface revision, configuration key,
+record type or wire shape moves.
+
+**At deploy.** Nothing changes for an installation: the operation is offline and the Runtime does
+not run it. Once a Tools release carries it, the resource repositories' scripts can shrink (a later
+slice, one pull request per repository): the release script to the Tools pin check, one
+`standard-pack build` and the publication of its zip and `SHA256SUMS`; its workflow's sparse
+checkout to the whole tree without LFS.
+
+**Rollback** (below 0.12.60). Nothing is persisted; an earlier Tools has no `standard-pack build`
+and refuses the words, and a built zip places on any installer whose `package` range holds its
+declared maximum.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

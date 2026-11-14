@@ -138,6 +138,20 @@ actingcommand_contract::outcome_codes! {
         // Workflow #434 LAB-2 fix 1: `resource_check_release_retired` is retired in 0.12.47 with
         // the word `resource check-release` (catalog `status` `retired`).
         // ---- end of #411 RV-1
+        // ---- Workflow #464 P2 (pending): `actinglab standard-pack build`
+        // (contracts/resource-verify.md, "`standard-pack build`").
+        /// Error. `--out` names a file, a directory that is not empty, a path whose parent is no
+        /// directory, or a place inside `--repo`; nothing was read or written (keys `path`).
+        StandardPackBuildOutputInvalid => "standard_pack_build_output_invalid": error / none,
+        /// Error. The steps of `resource verify` did not all pass; the cause is their outcome
+        /// (`resource_verify_failed`, or the code of the precondition that failed), and nothing
+        /// of the product was written (keys `failed_step_count`).
+        StandardPackBuildFailed => "standard_pack_build_failed": error / none,
+        /// Error. A file of the product (the zip's copy, `SHA256SUMS`, `build.json`) or `--out`
+        /// itself could not be written, or the steps' zip no longer reads as they wrote it; the
+        /// files already written stay (keys `path`).
+        StandardPackBuildWriteFailed => "standard_pack_build_write_failed": error / none,
+        // ---- end of #464 P2
         // ---- Workflow #411 B34 (slice E4, pending): `package check` warns on a click box of one
         // point.
         /// Warning. `package check` admitted the package, and an operation's click declares a
