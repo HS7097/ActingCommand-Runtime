@@ -1798,8 +1798,10 @@ is held again.
   (`config_key_not_settable`): it takes effect at the next start only, through the file.
 - **A non-boolean** is refused as the entry's other members are: the entry does not decode
   (`config_decode_failed`), at a start and in check-config alike.
-- **The installer** writes it on an instance it adds while the Runtime is stopped (S3, not built
-  by this slice); nothing in this repository writes it yet.
+- **The installer** writes it on an instance it adds while the Runtime is stopped: the Lab's
+  rescue module's `instance add` with no Runtime answering (Workflow #453 S3, since 0.12.60;
+  [install-cli.md](install-cli.md), "Instances, the first slice", "While the Runtime is stopped"),
+  on the new entry only. Nothing else in this repository writes it.
 - **The tag list.** `host.start_pause_applied` is in the default of
   `ledger_observer.tag.workbench_patterns`. Today's start replays the program facts from the latest
   snapshot and every later record whatever the tags, so it reads the fact with or without the key

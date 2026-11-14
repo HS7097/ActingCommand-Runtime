@@ -2939,7 +2939,8 @@
       "module": "rescue",
       "params": [
         {"name": "op", "form": "positional", "type": "operation_id", "required": false, "note": "absent: the installation's state; on the command line also --op <op>, in place of the positional, or the installer's own --operation <op>"},
-        {"name": "check_rollback", "form": "switch", "type": "boolean", "required": false}
+        {"name": "check_rollback", "form": "switch", "type": "boolean", "required": false},
+        {"name": "state_root_installation", "form": "switch", "type": "boolean", "required": false, "note": "#453 S12: also answer state_root {path, installation}, the configured state root and its installation state as the live build's check-config reports it, which starts that program; off by default (no process is started); left out while an installer operation is unfinished"}
       ],
       "help": "Reads the installation's state of this root, or one installer operation's progress.",
       "output": "the installation's state, or one operation's progress",
@@ -2951,7 +2952,7 @@
       "source": ["actingctl install status"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: install status"
+      "notes": "LAB-3: install status. #453 S12 fix 1: the switch state_root_installation is the module's own, never handed to install status; without it the row starts no process and answers what install status answers; with it and no unfinished operation, also state_root from the live build's check-config --install-root <root> (contracts/install-cli.md, The Lab's rescue module)"
     },
     {
       "name": "op resume",
@@ -3027,21 +3028,24 @@
       "name": "new",
       "module": "rescue",
       "params": [
-        {"name": "root", "form": "positional", "type": "dir", "required": true},
-        {"name": "build", "form": "option", "type": "dir", "required": true},
-        {"name": "lab_authoring", "form": "option", "type": "boolean", "required": false, "note": "the authoring module installed or not"}
+        {"name": "new_root", "form": "positional", "type": "dir", "required": true, "note": "the folder of the new root, absent or empty; named new_root, since the module refuses a parameter named root"},
+        {"name": "build", "form": "option", "type": "dir", "required": true, "note": "a release folder that verifies (both zips, SHA256SUMS, release-facts.json when it is there) or a kept build folder; nothing is downloaded"},
+        {"name": "new_state_root", "form": "option", "type": "dir", "required": false, "note": "--new-state-root, never --state-root: the module refuses a parameter named state_root on every row; the state root, absent or empty; absent: the new root's folder state"},
+        {"name": "mumu_root", "form": "option", "type": "dir", "required": false, "note": "written as the first configuration's mumu_root"},
+        {"name": "lab_authoring", "form": "option", "type": "boolean", "required": false, "note": "the first configuration's lab_module_authoring; absent: true"},
+        {"name": "watchdog", "form": "switch", "type": "boolean", "required": false, "note": "registers the watchdog's task for the new root last; nothing is started"}
       ],
-      "params_more": "actingctl install new (without --lab-debugging)",
-      "output": "the fresh root; nothing started",
+      "help": "Builds a fresh installation root from a verified release or kept build, with its first configuration and an empty state root; starts nothing.",
+      "output": "the operation id, the root, the state root, the configuration's SHA-256, lab_options_enabled, the build and next (place, instance add, up from the new root's program); never the salt",
       "writes": true,
       "irreversible": false,
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
       "source": ["actingctl install new", "acsetup: first-install wizard"],
-      "slice": "LAB-3",
+      "slice": "S4",
       "status": "planned",
-      "notes": "LAB-3: not served yet: its source, actingctl install new (INST-6, R-15e), is not built; the slice that builds it opens the row"
+      "notes": "#453 S4 (0.12.60; contracts/install-cli.md, Fresh root): the module's own command; actingctl install new is not built and actingctl install gains nothing. The one rescue row served without a located root: it acts on the root it names, so the release's own program and the Lab's MCP server run it before any root exists. Refused before anything is written: a new root or a state root that exists and is not empty (root_not_empty, state_root_not_empty), a build that does not verify (release_check_failed with the release reader's failures, or build_invalid, also for a build whose Runtime member has no actingd.config.first.json), an empty actingd-config edge between the running installer and the build (interface_edge). One journal of kind new (off the watchdog's pass list): copy_build, verify_tree, place_build, stage_file and swap_file for each file of the build into runtime and tools, verify_tree, write_config (the template filled with state_root, a 32-byte salt from the operating system's generator, lab_module_authoring and mumu_root when given, checked by the new live build's check-config with --install-root before it is renamed into place; a refusal ends the operation refused with the part kept), create_state_root (the folder, empty), create_vision_root (fix round 1: the default vision root <new_root>\\vision, empty, when the template names no vision root of its own), record_state; a refusal after the release was unpacked names its work folder (work_dir); no installation identity and no state-root record (the first start's, #453 S11); with watchdog, watchdog install last; resume and undo by install resume and install undo of the root (undo sets aside, deletes nothing)"
     },
     {
       "name": "release verify",
@@ -3135,7 +3139,7 @@
       "source": ["script rd-1108/dml_switch.ps1"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "guards, stop with hold, backup kept, swap, check-config, start, alive, release. LAB-3: check-config of the file before anything changes, the replaced file kept as actingd.config.json.prev-<ms>; journal kind config_replace; without a running Runtime only the swap"
+      "notes": "guards, stop with hold, backup kept, swap, check-config, start, alive, release. LAB-3: check-config of the file before anything changes, the replaced file kept as actingd.config.json.prev-<ms>; journal kind config_replace; without a running Runtime only the swap. Workflow #453 S3: without one, the swap only after the update path's stopped rule under the writer lock (an actingd under the root runtime_running, the state root's owner lock held owner_lock_held, a probe that cannot decide processes_unreadable), so a starting Runtime's file is not swapped (before, one status read decided); undo and op resume of such an operation take the writer lock and the same stopped rule first"
     },
     {
       "name": "config restore",
@@ -3154,7 +3158,7 @@
       "source": ["script rd-1108/dml_switch.ps1 restore", "actingctl install config restore"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: config replace with the kept file (operation install_config_restore); actingctl install config restore (INST-3) is not built. LAB-5B1c: declares sha as config replace does: config replace's path read it for this row since LAB-3 (the table follows the code)"
+      "notes": "LAB-3: config replace with the kept file (operation install_config_restore); actingctl install config restore (INST-3) is not built. LAB-5B1c: declares sha as config replace does: config replace's path read it for this row since LAB-3 (the table follows the code). Workflow #453 S3: without a running Runtime, as config replace, the swap only after the update path's stopped rule under the writer lock: an actingd under the root runtime_running, the state root's owner lock held owner_lock_held, a probe that cannot decide processes_unreadable; undo and op resume of such an operation take the writer lock and the same stopped rule first"
     },
     {
       "name": "config file show",
@@ -3301,17 +3305,17 @@
         {"name": "capture_backend", "form": "option", "type": "string", "required": true, "note": "no default"},
         {"name": "application_id", "form": "option", "type": "string", "required": false, "note": "the instance's application id, of the form the configuration takes; without it the one the game's applications.json declares for the server, refused when it declares none"}
       ],
-      "help": "Adds one emulator instance to this root's configuration and restarts the Runtime under a hold; the new instance starts paused.",
+      "help": "Adds one emulator instance to this root's configuration, restarting the Runtime under a hold; with the Runtime stopped it is written to start paused.",
       "output": "the operation id, the instance added, the backup kept and each step's result; never the file's content",
       "writes": true,
       "irreversible": true,
-      "runtime": "required",
+      "runtime": "optional",
       "entries": ["lab"],
       "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
       "source": ["actingctl install instance add"],
       "slice": "INST-5",
       "status": "planned",
-      "notes": "INST-5 first slice (an emulator instance; a handset, remove and INST-3's candidate commands later): the entry and its policy.facts.instances row written together until INST-R, a minted instance_id no present or journalled instance used; the entry's application_id the one given, else the one the game's root declares for the server (Workflow #452); the candidate beside the live file is committed by config replace's path (journal kind config_replace with the input instance_add and the initiator; actingd.config.json.prev-<ms> kept); after the start the new instance is paused with the reason instance.added, then the hold is handed back. Refused runtime_not_running without a Runtime; the source command actingctl install instance add is not built"
+      "notes": "INST-5 first slice (an emulator instance; a handset, remove and INST-3's candidate commands later): the entry and its policy.facts.instances row written together until INST-R, a minted instance_id no present or journalled instance used; the entry's application_id the one given, else the one the game's root declares for the server (Workflow #452); the candidate beside the live file is committed by config replace's path (journal kind config_replace with the input instance_add and the initiator; actingd.config.json.prev-<ms> kept); after the start the new instance is paused with the reason instance.added, then the hold is handed back. Workflow #453 S3: with the Runtime stopped the instance is written to start paused: after the update path's stopped rule (runtime_running, owner_lock_held, processes_unreadable, before the candidate is written and again under the writer lock), the new entry, and no other, declares start_paused true and the swap alone commits it (steps check_config and swap, runtime_running false, no pause_added); the Runtime's next start holds it with instance.added until a person resumes it; undo and op resume of such an operation take the writer lock and the same stopped rule first. A live build before 0.12.60 refuses the member (config_refused_by_target). Not used on the production root before LAB-7; the source command actingctl install instance add is not built"
     },
     {
       "name": "instance remove",
@@ -3403,6 +3407,25 @@
       "notes": "the caller passes no confirmation; the initiator is recorded (lab-two-entries.md section 5). LAB-3: the live build's actingd unlock-owner with the initiator as --actor and actingd's --confirm-resources-released, which goes with LAB-7"
     },
     {
+      "name": "state-root claim",
+      "module": "rescue",
+      "params": [
+        {"name": "new_identity", "form": "switch", "type": "boolean", "required": false, "note": "only when this installation's identity file cannot be read: it is set aside under a kept name and a new identity minted; refused while the identity file can be read"}
+      ],
+      "help": "Hands the state root of this root's configuration over to this installation with the live build's actingd, keeping the old record.",
+      "output": "actingd claim-state-root's report (actor, changed, identity, record, claimed_at_unix_ms, kept, kept_record) and, when a record was replaced, previous {claimed_at_unix_ms}; the caveat fingerprints_discontinuous with the kept record when one was replaced, or written beside an old record kept before",
+      "writes": true,
+      "irreversible": true,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actingd claim-state-root"],
+      "new": "#453 S12 (a state root another installation claimed, handed over to this one by a command instead of by hand)",
+      "slice": "S12",
+      "status": "planned",
+      "notes": "#453 S12: the live build's actingd claim-state-root --config <this root's configuration> --actor <initiator> (and --new-identity when given), within install.child.check_config_timeout_ms, only while the Runtime is stopped by the update path's stopped rule (owner_lock_held, runtime_running, processes_unreadable); actingd takes the owner as a start does (owner_conflict while a Runtime holds it), never opens the ledger, mints an identity only when there is none (or, with new_identity, when it cannot be read) and sets every replaced file aside as <file>.old-<ms>, deleting nothing (contracts/state-root-installation.md, Handing a state root over); install_command_done with actingd's report, previous {claimed_at_unix_ms} when a record was replaced, and the note install_caveat_noted fingerprints_discontinuous whenever a record of another installation or one that cannot be read was replaced, with that kept record as path (fix 1: also when a record was written while the state root holds an old record an earlier hand-over kept, the newest one as path); actingd's refusal is the answer as unlock's is; no report is install_command_refused with state_root_claim_unanswered. Not used on the production root until LAB-7, as every compound operation of the module"
+    },
+    {
       "name": "check-config",
       "module": "rescue",
       "params": [
@@ -3488,6 +3511,25 @@
       "slice": "S7",
       "status": "planned",
       "notes": "#453 S7 fix 1: the Tools' standard-pack check of each game root below standard_packs.root within 300 s each, then the live build's actingd vision check --config <this root's configuration> --install-root <root> --model <each model they need> within 160 s (it hashes at most 512 MiB), every child ended at its bound, the row within 900 s in all (the refusal then has timeout_ms: the child's bound, or 900000); every entry below standard_packs.root not checked is named in standard_packs.skipped with why (link, name_not_utf8, no_bundle, not_a_folder); read only: no state root, no owner lock, no ledger, nothing written, nothing downloaded (contracts/vision-model-folders.md, The manifest); install_command_done when every file and model matches, else install_caveat_noted with install_caveat vision_incomplete and count; a refusal is install_command_refused with vision_root_unresolved (actingd refused the configuration or its vision root), vision_report_unanswered (actingd gave no usable report), config_unreadable (the standard-pack root) or pack_invalid (a game root's check, naming the root), the child's outcome or failure as its cause"
+    },
+    {
+      "name": "vision place",
+      "module": "rescue",
+      "params": [
+        {"name": "from", "form": "option", "type": "dir", "required": true, "note": "a folder laid out as a vision root: each file the manifest names at its vision_root_path below it; files it does not name are ignored"}
+      ],
+      "help": "Places the files this root's vision root lacks or holds wrong from a folder laid out as a vision root, each verified first, while the Runtime is stopped.",
+      "output": "provider, vision_root, from, ignored (the files below from the manifest does not name), placed (each file with the name it kept a replaced one under), checks (the vision check after them) and next (its undo); a complete root: placed [] and actingd's report",
+      "writes": true,
+      "irreversible": true,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actingd vision check"],
+      "new": "#453 S9 (a fresh root's vision files placed from a folder a person gives, verified against the installed build's manifest, without a download)",
+      "slice": "S9",
+      "status": "planned",
+      "notes": "#453 S9: the live build's actingd vision check --config <this root's configuration> --install-root <root> within 160 s (ended there) names the configured vision root, its provider and every manifest file with its size, SHA-256 and state; every file whose state is not ok is read below from first and compared by size and SHA-256 (one missing or different refuses vision_source_invalid with its path, nothing written; a file the manifest does not name is never read or copied, counted in ignored); then under the writer lock, with no operation unfinished, the update path's stopped rule (owner_lock_held, runtime_running, processes_unreadable); one journalled operation vision_place (off watchdog row 7a'' pass list): one vision_file step per file (<dst>.new-<ms>.part checked, a file in place kept as <dst>.old-<ms>, the part renamed in and checked again), then post_check, the same vision check: every file ok and every model's identity matching, else post_check_failed with undo as next; a complete root answers installation_changed false and opens no operation; nothing is fetched, deleted or named by address (contracts/install-cli.md, The Lab's rescue module; contracts/vision-model-folders.md, Placing a vision root from a folder); op resume and undo apply the stopped rule again; not used on the production root until LAB-7"
     },
     {
       "name": "watchdog install",
