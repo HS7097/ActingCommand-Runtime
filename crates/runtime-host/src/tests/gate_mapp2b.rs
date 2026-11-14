@@ -84,6 +84,9 @@ const MAX_RUNTIME_MS: u64 = 300_000;
 const LONGEST_DEADLINE_MS: u64 = 1_800_000;
 /// `scheduling.device_group.switch_failure_cooldown_ms`'s default.
 const DEFAULT_COOLDOWN_MS: u64 = 300_000;
+/// Workflow #437 ORD-1c: `scheduling.device_group.max_queue_wait_ms`'s default, the limit of a task
+/// that declares none.
+const DEFAULT_LIMIT_MS: u64 = 1_800_000;
 /// The wait a queued claim asks: the longest the fixture's scheduler takes.
 const QUEUE_TIMEOUT_MS: u64 = DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS;
 /// The connection of every policy run's key (the host's `POLICY_CONNECTION_VALUE`).
@@ -1417,9 +1420,15 @@ fn mapp2b_a_failure_at_each_step_settles_the_run_failed_releases_the_key_and_sta
 /// the key set to 120 s by the file: B's next candidate is deferred `dispatch_instance_cooldown`
 /// with `failure_code` `application_switch_failed`, `next_eligible_unix_ms` the cooldown's end and
 /// its wake there, while A's task is dispatched and runs on the device; once the cooldown has
-/// ended B's task is dispatched again. A second failed switch starts the cooldown again, and a
-/// restart drops it: B's candidates carry no switch cooldown after it. The key: default `300000`,
-/// range `1..=3600000`, settable.
+/// ended B's candidate carries no cooldown and B's task is dispatched again. A second failed
+/// switch starts the cooldown again, and a restart drops it: B's candidates carry no switch
+/// cooldown after it. The key: default `300000`, range `1..=3600000`, settable.
+///
+/// Adapted by Workflow #437 ORD-1c (register §1.365), which passes the order within one device:
+/// A's run put A in front, so after the cooldown the device stays with A while A's task ends by
+/// B's limit, and B's task is dispatched in the round its limit (the default
+/// `scheduling.device_group.max_queue_wait_ms`, 1 800 000, from the first round after the
+/// cooldown) comes; MAPP-1's pick gave it the device in the first round after the cooldown.
 #[test]
 fn mapp2b_a_failed_switch_holds_the_member_for_the_cooldown_while_the_other_member_runs() {
     const COOLDOWN_MS: u64 = 120_000;
@@ -1491,11 +1500,26 @@ fn mapp2b_a_failed_switch_holds_the_member_for_the_cooldown_while_the_other_memb
     );
     let t2 = t1 + COOLDOWN_MS + MINUTE_MS;
     let again = bench.evaluate(t2);
-    assert!(dispatches(&again, TASK_B), "B is tried again: {again:#?}");
     let (reasons, _) = decision_of(&again, TASK_B, B);
     assert!(switch_cooldown_reason(reasons).is_none());
+    // Workflow #437 ORD-1c (register §1.365): B competes again, but A's run put A in front, so
+    // the device stays with A while A's task ends by B's limit; B's wait began at t2, and at its
+    // limit nothing of A ends by it and B's task is dispatched (`ord1c_t7`).
+    assert!(
+        dispatches(&again, TASK_A) && !dispatches(&again, TASK_B),
+        "the device stays with A, in front: {:#?}",
+        again.dispatch_intents
+    );
+    let t3 = t2 + DEFAULT_LIMIT_MS;
+    let due = bench.evaluate(t3);
+    assert!(
+        dispatches(&due, TASK_B),
+        "B is tried again once its limit came: {due:#?}"
+    );
+    let (reasons, _) = decision_of(&due, TASK_B, B);
+    assert!(switch_cooldown_reason(reasons).is_none());
 
-    let context = bench.grant(&again, TASK_B);
+    let context = bench.grant(&due, TASK_B);
     bench.run(&context).expect_err("the switch fails again");
     assert_eq!(
         bench
@@ -1514,7 +1538,7 @@ fn mapp2b_a_failed_switch_holds_the_member_for_the_cooldown_while_the_other_memb
         None,
         "a restart drops the cooldown"
     );
-    let restarted = bench.evaluate(t2 + MINUTE_MS);
+    let restarted = bench.evaluate(t3 + MINUTE_MS);
     let (reasons, _) = decision_of(&restarted, TASK_B, B);
     assert!(
         switch_cooldown_reason(reasons).is_none(),
@@ -1866,6 +1890,13 @@ fn mapp2b_a_direct_run_and_a_launch_of_a_member_stop_the_member_in_front_first()
 /// `application_switch_failed`, its wake the cooldown's end, the rerun stays owed, and A's task is
 /// dispatched. After the cooldown B's task is dispatched again as the owed rerun
 /// (`policy_rerun_owed`).
+///
+/// Adapted by Workflow #437 ORD-1c (register §1.365), which passes the order within one device:
+/// A's dispatch now runs (A in front, its task's wait over), and after the cooldown B's owed rerun
+/// waits for A until its limit (the default `scheduling.device_group.max_queue_wait_ms`,
+/// 1 800 000, from the first round after the cooldown) and is dispatched in the round it comes;
+/// before ORD-1c A's dispatch was left unadmitted and MAPP-1's pick gave B the device in the first
+/// round after the cooldown, which the order would give A's waiting task instead.
 #[test]
 fn mapp2b_the_switch_cooldown_also_holds_the_rerun_the_member_is_owed() {
     const COOLDOWN_MS: u64 = 120_000;
@@ -1918,9 +1949,22 @@ fn mapp2b_the_switch_cooldown_also_holds_the_rerun_the_member_is_owed() {
         "A's task is dispatched meanwhile"
     );
     assert!(bench.owes_rerun(B, TASK_B), "the rerun is still owed");
+    // Workflow #437 ORD-1c (register §1.365): A's dispatch runs, so A is in front and its task's
+    // wait ends; after the cooldown B's owed rerun waits for A by its limit (it gains no
+    // precedence over the member in front) and goes in the round that limit comes.
+    let a = bench.grant(&held, TASK_A);
+    bench.run_and_settle(&a);
 
     bench.clock().advance(COOLDOWN_MS);
-    let again = bench.evaluate(t1 + COOLDOWN_MS + MINUTE_MS);
+    let t2 = t1 + COOLDOWN_MS + MINUTE_MS;
+    let after = bench.evaluate(t2);
+    let (reasons, _) = decision_of(&after, TASK_B, B);
+    assert!(
+        switch_cooldown_reason(reasons).is_none(),
+        "the cooldown is over: {reasons:#?}"
+    );
+    assert!(bench.owes_rerun(B, TASK_B), "the rerun is still owed");
+    let again = bench.evaluate(t2 + DEFAULT_LIMIT_MS);
     let (_, chain) = intent_of(&again, TASK_B);
     let codes = chain
         .reasons

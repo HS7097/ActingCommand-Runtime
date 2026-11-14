@@ -1108,6 +1108,19 @@ impl HostShared {
         )
     }
 
+    /// Workflow #437 ORD-1c (`contracts/scheduling/README.md`, "Order within one device"):
+    /// `scheduling.device_group.max_queue_wait_ms` in effect, read at every policy cycle of a host
+    /// with a device of several (`HostShared::policy_device_groups`), so an instruction applies from
+    /// the next round.
+    pub(super) fn max_queue_wait_ms(&self) -> RuntimeHostResult<u64> {
+        Ok(
+            lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+                .scheduling()
+                .map_err(remedy_config_failure)?
+                .max_queue_wait_ms,
+        )
+    }
+
     /// Workflow #386 SR-2b-1: the `scheduling.rerun` values in effect, read at each live
     /// settlement and online reconciliation, which decide a run's `condition` by them.
     pub(super) fn rerun_condition_rule(

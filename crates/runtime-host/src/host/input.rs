@@ -1189,14 +1189,21 @@ impl HostShared {
                 }
             }
         }
-        let executed = match self.application_control(
+        let controlled = self.application_control(
             request,
             &token,
             action,
             connection_id,
             None,
             ApplicationKey::Own,
-        ) {
+        );
+        // Workflow #437 ORD-1c fix round 1 (`contracts/device-group.md`, "The member in front"): a
+        // stop of the member in front, or a launch or restart whose own command failed after the
+        // switch put the member in front, leaves its device with none in front.
+        if controlled.is_err() || matches!(action, ApplicationLifecycleAction::Stop) {
+            self.forget_front(resolved.instance_id(), super::switch::FrontLoss::Member)?;
+        }
+        let executed = match controlled {
             Ok(success) => success,
             Err(failure) => {
                 return Err(self.cleanup_composite_failure(token, connection_id, failure));

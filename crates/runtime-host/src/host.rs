@@ -2351,6 +2351,8 @@ impl RuntimeHost {
             #[cfg(test)]
             granted_token_release_for_test: AtomicBool::new(false),
             #[cfg(test)]
+            switch_steps_failure_for_test: AtomicBool::new(false),
+            #[cfg(test)]
             direct_run_terminal_release_off_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             device_keys: config.device_keys,
@@ -2358,6 +2360,7 @@ impl RuntimeHost {
             start_paused: config.start_paused,
             start_pause_unapplied: Mutex::new(BTreeSet::new()),
             switch_cooldowns: Mutex::new(BTreeMap::new()),
+            device_fronts: Mutex::new(BTreeMap::new()),
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
             ladder_busy_holds: Mutex::new(BTreeMap::new()),
@@ -6430,6 +6433,10 @@ struct HostShared {
     // settlement takes the granted token, as a build without `HostShared::run_token` there would.
     #[cfg(test)]
     granted_token_release_for_test: AtomicBool,
+    // Workflow #437 ORD-1c fix round 1, test only: the next switch's steps end with a
+    // Runtime-level failure (`Err`) after they ran.
+    #[cfg(test)]
+    switch_steps_failure_for_test: AtomicBool,
     // Workflow #457, test only: while set, a direct run that returns from its terminal step with
     // a failure keeps its lease, as before the fix (`execute_contained_task_with_lease`).
     #[cfg(test)]
@@ -6455,6 +6462,11 @@ struct HostShared {
     // member of a device group of several whose switch failed, with the Runtime-clock (monotonic)
     // instant its switch cooldown ends. Memory only, never stored: a restart drops it.
     switch_cooldowns: Mutex<BTreeMap<InstanceId, u64>>,
+    // Workflow #437 ORD-1c (`contracts/device-group.md`, "The member in front"): the member the
+    // host holds in front of each device of several, by device key, as the switch's own steps
+    // left it (`switch.rs`, `HostShared::note_front`, its one writer). Memory only, never stored: a
+    // start begins with none. A wrong entry is only a preference of the order within one device.
+    device_fronts: Mutex<BTreeMap<InstanceId, InstanceId>>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the
     // per-instance ladder window.
     stuck_recovery: OnceLock<BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>>,
