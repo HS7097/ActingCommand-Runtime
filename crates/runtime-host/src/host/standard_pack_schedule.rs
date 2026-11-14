@@ -51,10 +51,10 @@ use actingcommand_contract::outcome::{IoOp, Outcome, Record};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, CONFIG_CATALOG_PROVENANCE_FACT_KEY,
     CONFIG_CATALOG_WARNINGS_FACT_KEY, CatalogProvenanceEntry, CatalogValueKind, CatalogValueOrigin,
-    ConfigCatalogProvenance, ConfigCatalogWarnings, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    ConfigCatalogProvenance, ConfigCatalogWarnings, IrreversiblePackages,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    IrreversiblePackages, STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot, StandardPackRootBytes,
+    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot, StandardPackRootBytes,
     read_standard_pack_root,
 };
 use actingcommand_policy::{
@@ -769,9 +769,7 @@ impl HostShared {
             .saturating_add(1);
         let mut fallen_back = BTreeSet::new();
         let composition = loop {
-            let inputs = composer_inputs(&read, |game| {
-                schedules.get(game).map(Vec::as_slice)
-            });
+            let inputs = composer_inputs(&read, |game| schedules.get(game).map(Vec::as_slice));
             let failure = match compose_standard_pack_rules(&StandardPackComposeInput {
                 instances: &bound,
                 games: &inputs,
@@ -1026,26 +1024,20 @@ impl HostShared {
         let mut marks = marks;
         state.packages.clear();
         for (game, files) in &read {
-            let read_marks = files
+            let mut read_marks = BTreeMap::new();
+            let mut directories = BTreeMap::new();
+            for (package_id, package) in files
                 .declarations
                 .iter()
                 .flat_map(|declarations| &declarations.marks)
-                .collect::<Vec<_>>();
-            if let Some(game_marks) = marks.get_mut(game) {
-                game_marks.packages = read_marks
-                    .iter()
-                    .map(|(package_id, package)| ((*package_id).clone(), package.marks.clone()))
-                    .collect();
+            {
+                read_marks.insert(package_id.clone(), package.marks.clone());
+                directories.insert(package_id.clone(), package.directory.clone());
             }
-            state.packages.insert(
-                game.clone(),
-                read_marks
-                    .iter()
-                    .map(|(package_id, package)| {
-                        ((*package_id).clone(), package.directory.clone())
-                    })
-                    .collect(),
-            );
+            if let Some(game_marks) = marks.get_mut(game) {
+                game_marks.packages = read_marks;
+            }
+            state.packages.insert(game.clone(), directories);
         }
         state.marks = marks;
         Ok(())
@@ -1470,8 +1462,7 @@ pub fn preview_standard_pack_schedule(
     }
     // G-R2s: with each game's package declarations, read as the workbench reads them.
     let inputs = composer_inputs(&read, |game| {
-        read.get(game)
-            .and_then(|files| files.schedule.as_deref())
+        read.get(game).and_then(|files| files.schedule.as_deref())
     });
     match compose_standard_pack_rules(&StandardPackComposeInput {
         instances: &bound,

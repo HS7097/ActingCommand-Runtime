@@ -231,6 +231,32 @@ pub(super) fn bundle(game: &str, server: &str, packages: &[&str]) -> Value {
     })
 }
 
+/// Workflow #455 G-R2s: the composer's input for `root` when every package its registry lists
+/// reads and provides nothing.
+pub(super) fn readable_root(
+    root: &actingcommand_contract::StandardPackRoot,
+) -> actingcommand_contract::IrreversiblePackages {
+    actingcommand_contract::IrreversiblePackages::new(
+        root.registry
+            .package_ids()
+            .map(|package_id| (package_id.to_owned(), Some(BTreeMap::new())))
+            .collect(),
+    )
+}
+
+/// Workflow #455 G-R2s: the composer's input for `root` when no package its registry lists reads,
+/// as the workbench reads a root whose packages have no files.
+pub(super) fn unread_root(
+    root: &actingcommand_contract::StandardPackRoot,
+) -> actingcommand_contract::IrreversiblePackages {
+    actingcommand_contract::IrreversiblePackages::new(
+        root.registry
+            .package_ids()
+            .map(|package_id| (package_id.to_owned(), None))
+            .collect(),
+    )
+}
+
 pub(super) fn write_json(path: &Path, value: &Value) {
     fs::create_dir_all(path.parent().expect("a parent directory")).expect("create the game root");
     fs::write(
@@ -1003,12 +1029,15 @@ fn rl1b_a9_the_first_composition_switches_from_a_configured_catalog_with_the_sam
     .expect("a sound root")
     .expect("a game root");
     let schedule_bytes = serde_json::to_vec_pretty(&schedule).expect("schedule bytes");
+    // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+    let irreversible = readable_root(&root);
     let games = BTreeMap::from([(
         GAME_A.to_owned(),
         StandardPackGameFiles {
             schedule: &schedule_bytes,
             root: &root,
             maintenance: &[],
+            irreversible: &irreversible,
         },
     )]);
     let composed = compose_standard_pack_rules(&StandardPackComposeInput {
@@ -1329,12 +1358,16 @@ fn compose_a(bench: &Bench, bound: &[Bound]) -> actingcommand_policy::StandardPa
     .expect("a sound root")
     .expect("a game root");
     let schedule_bytes = fs::read(bench.path(GAME_A, "schedule.json")).expect("schedule bytes");
+    // Workflow #455 G-R2s: the bench places no package files, so the workbench reads none of
+    // them and marks every task; the same input here.
+    let irreversible = unread_root(&root);
     let games = BTreeMap::from([(
         GAME_A.to_owned(),
         StandardPackGameFiles {
             schedule: &schedule_bytes,
             root: &root,
             maintenance: &[],
+            irreversible: &irreversible,
         },
     )]);
     compose_standard_pack_rules(&StandardPackComposeInput {

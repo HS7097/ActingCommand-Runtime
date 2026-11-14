@@ -2249,6 +2249,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                                             tie: candidate.tie.clone(),
                                             chain_head: candidate.chain_head.clone(),
                                             benefit: None,
+                                            targets_left_out: false,
                                         });
                                         candidates.push(*candidate);
                                     }
@@ -3114,6 +3115,10 @@ struct RankRecord {
     chain_head: Option<String>,
     /// SS-2b: a judged candidate's known net benefit B and expected duration E.
     benefit: Option<KnownBenefit>,
+    /// Workflow #455 G-R2s: its instance's target record was left out for the candidate (its
+    /// task carries the irreversible mark), so its dispatch decision record names the instance's
+    /// targets as an instance without a record would.
+    targets_left_out: bool,
 }
 
 /// SS-2b (register §1.225): whether the catalog marks a task as judged by its net benefit. A
@@ -3474,10 +3479,22 @@ fn decision_record(
         breakdown,
         bounded_detail(rank_breakdown_detail(rank, record, lead)),
     ));
+    // Workflow #455 G-R2s: a winner its instance's record was left out for names the instance's
+    // targets as an instance without the record would.
+    let policy = target_policies.get(instance_id);
+    let without_record = policy.map(|policy| InstanceTargetPolicy {
+        state: None,
+        ignored: policy.ignored,
+    });
+    let policy = if record.targets_left_out {
+        without_record.as_ref()
+    } else {
+        policy
+    };
     reasons.push(reason_with(
         record_outcome,
         bounded_detail(decision_record_detail(
-            &target_policy_field(target_policies.get(instance_id)),
+            &target_policy_field(policy),
             related.len(),
             shown,
             &omitted_why,
@@ -4456,8 +4473,8 @@ fn apply_priority_selection(
     // (its server- or game-scoped note kept), so every number of it is the one of an instance
     // without a record; the record's own resolution, which every other candidate reads, is left
     // as it is.
-    let mut left_out = BTreeSet::new();
-    let mut unrecorded = BTreeMap::new();
+    let mut left_out = BTreeSet::<usize>::new();
+    let mut unrecorded = BTreeMap::<&str, crate::resource_targets::InstanceTargets>::new();
     for candidate in &candidates {
         let Some(recorded) = target_policies
             .get(&candidate.instance_id)
@@ -4622,6 +4639,9 @@ fn apply_priority_selection(
             }
             if left {
                 task_work.reasons.push(irreversible_left_out_reason());
+                if let Some(record) = task_work.record.as_mut() {
+                    record.targets_left_out = true;
+                }
             }
             if let Some(base) = &base {
                 task_work.reasons.extend(base.reasons(None, 0));
@@ -4836,6 +4856,7 @@ fn apply_priority_selection(
             disposition,
             ScoreDisposition::Promoted { .. } | ScoreDisposition::AgingCap { .. }
         );
+        record.targets_left_out = left;
         task_work
             .reasons
             .push(reason(PolicyCode::ScoreComputed, detail));
@@ -11260,6 +11281,7 @@ pub(crate) mod tests {
             tie: TieKey::runtime_task(),
             chain_head: None,
             benefit: None,
+            targets_left_out: false,
         });
         selected.rank = Some(rank);
         let mut reason_chains = vec![DecisionReasonChain {

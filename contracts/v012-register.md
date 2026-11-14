@@ -22636,6 +22636,113 @@ slice changes and changes with it, keeping its name:
 wrote `actingcommand.resource-targets.v3` as "a version no reader takes" and now writes `.v4`. No
 golden changes; no test leaves the gate map.
 
+### 1.363 Slice G-R2s (0.12.60): a goal never raises the weight of a task whose package can do something irreversible (Workflow #455; the design `rd-1114/455-goals-design-final.md` §1.4 and §3.11 items 4 and 5 with the paragraph "Re-sliced by the coordinator"; the read-only survey `rd-1114/455-gr2a-irreversible-input.md`; the coordinator's rulings on board #455, comment 6863374335, and the two rulings of 11-14 on the workbench's re-read and on lab-ops's reading, not the owner's words; coordinator work order `rd-1114/brief-455-gr2s-irreversible-line.md`, read on main `f19756db38`)
+
+[resource-targets.md](resource-targets.md) ("A task that can do something irreversible") and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The irreversible mark") are the contract;
+[scheduling/README.md](scheduling/README.md) (the net benefit's `W`, the zero tier, the spend
+values), [scheduling/v2/README.md](scheduling/v2/README.md) (the task member),
+[instance-fact-store.md](instance-fact-store.md) and [remedies.md](remedies.md) (`gap_remaining`
+and `run_cap`) and [standard-pack-goals.md](standard-pack-goals.md) (the one copy of the rule)
+follow it. The base (`f19756db38`) ended at §1.361; main then took §1.362 (#453 S2), so this
+section is 1.363; a train renumbers it.
+
+**What.** The goal check (G-R1) refuses an entry that governs an irreversible package but not a
+goal on an ordinary pool such a package also produces; the scheduler keeps the line itself.
+
+- **One copy of the rule.** `actingcommand_contract::IrreversiblePackages` (made only by `new`,
+  from every package of a root, each with its provided capabilities and marks or "could not be
+  read"; no default): a capability is irreversible when any package of the root marks it, a package
+  when it provides such a capability; `counts_irreversible` is the safe side (true for every
+  package while one could not be read, and for a package no reader read); `followers_irreversible`
+  is G-R1 fix round 2's walk over the riding followers. `GoalReferences` holds one; the composer
+  takes one per game root.
+- **The composer's input** `StandardPackGameFiles.irreversible`, required. Its six callers read
+  every package of the root's `bundle.json`: the workbench and check-config's two compositions
+  (`compose_configured_standard_packs`, `preview_standard_pack_schedule`) and the resource tools'
+  two (`report_schedule` for `standard-pack check` and `package bundle --schedule`,
+  `compose_standard_packs`) with the reader the goal check uses (`read_remedy_declarations`);
+  `actingctl packs` with its own reading of each `control.json` (ruling 2: lab-ops gains no
+  dependency on `execution-kernel`, whose architecture guard stays; the limit is the contract's).
+- **The mark** `irreversible_reach: true`, a composer-only task member, on a task whose package
+  counts as irreversible and on a chain head a riding follower of which does; absent when false; a
+  rule that writes it is refused (`schedule_invalid` at it). While a package of a root could not be
+  read, every task of the game is marked and the composition warns
+  `standard_pack_package_unreadable` (new contract code, warning; keys `game`, `package_id`), which
+  the workbench records once while the package stays unreadable (with the reader's refusal as its
+  cause) and the tools list.
+- **The evaluator**: a marked candidate on an instance that holds a record reads its instance
+  resolved as without the record: no target term (v1 effect, override and wakes dropped, base term
+  kept; v2 and v3 term dropped, base-valuation term computed and used), the benefit on base weights,
+  no `gap_remaining` and no goal term in `run_cap`, the decision record's `targets=` of no record,
+  none of the record's policy-level reasons, and one new reason `resource_target_package_irreversible`
+  (info, no key). Every other candidate reads the record's own resolution, unchanged (a v1 `U` keeps
+  the marked task's yield).
+- **The workbench's re-read** (ruling 1): the marks it compares per game gain, for each package the
+  root registered at its last read, the length and modification time of `control.json` and
+  `resources/operations/resources.json` (the reader opens the package's whole content directory, a
+  set that follows the listing, so the two files it opens by name are marked); a changed mark
+  re-reads the root as a changed `bundle.json` does; a metadata failure there is a mark of its own,
+  never stops the check, and leaves that package unreadable. The files are marked just before the
+  reader reads each package, and those marks are the ones compared. A check stats 2 + 2N files for
+  a root of N packages, once per `standard_packs.check_interval_ms` (default 60 000); the N package
+  reads happen only when a mark changed.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GR2S-1 | the V2 task member `irreversible_reach` (`TaskSpec::irreversible_reach`, `IRREVERSIBLE_REACH_MEMBER`) | catalog format addition | G-R2s | the standard-pack composer | absent when false: a catalog without it keeps its bytes and hash; refused in V1 (`unknown_field`) and on a `schedule.json` rule |
+| GR2S-2 | `IrreversiblePackages` (`new`, `package`, `unreadable`, `counts_irreversible`, `followers_irreversible`) | contract crate type | G-R2s | the tools, the workbench, lab-ops | the one copy of G-R1's rule; `GoalReferences` holds it |
+| GR2S-3 | `StandardPackGameFiles.irreversible` and `StandardPackComposition::unreadable_packages` | composer input and output | G-R2s | its six callers | required, no default |
+| GR2S-4 | `resource_target_package_irreversible` (policy, info, no key) | decision reason | G-R2s | the evaluator | a new code is no revision |
+| GR2S-5 | `standard_pack_package_unreadable` (contract, warning; `game`, `package_id`) | composition warning, `standard_pack_read` lifecycle record | G-R2s | the composer, the workbench | a new code is no revision |
+| GR2S-6 | the workbench's per-package declaration marks | behaviour of the check | G-R2s | the host | memory only |
+
+**Interface.** No revision moves: no `package`, `ledger`, `runtime-client`, `actingd-config` or
+`runtime-outcomes` shape changes (a catalog member the composer writes, two codes).
+
+**At deploy.** A root that holds an irreversible package (by the whole root's declarations, a
+riding follower included, or a package that cannot be read) composes one new catalog generation
+whose tasks of it carry the mark; nothing else changes. A root without one composes the bytes, the
+catalog hash and the rules digest of before. The first workbench check after the start reads each
+root's packages once more (its marks start empty, as before).
+
+**Rollback** (below 0.12.60). After a marked generation has dispatched, a build before this slice
+refuses that generation at its start (it compiles every generation its dispatches and decision
+memories name, and its reader refuses the member, `unknown_field`), as for SCHED-C1a (§1.299): before
+rolling back, hold the marked rules (their packages) and let the pairs dispatch under an unmarked
+generation. A rollback inside a deployment's own hold, nothing dispatched under the marked
+generation yet, needs nothing.
+
+**Limits.** A catalog written by hand is not covered: no composer writes it, and only a task that
+carries the member is left out. The offline pack rows read `control.json` only (the contract's
+limit). The workbench's marks are length and modification time.
+
+Tests (policy, host and apps gate rows "#455 G-R2s"): the policy crate's
+`gate_455_gr2s::gr2s_t1_a_marked_candidate_under_each_record_equals_it_without_a_record`,
+`gr2s_t2_every_unmarked_candidate_keeps_its_numbers`,
+`gr2s_t3_named_tasks_and_an_override_are_void_for_the_marked_task_only`,
+`gr2s_t4_the_composer_marks_irreversible_packages_and_the_chain_heads_they_ride_with`,
+`gr2s_t5_an_unreadable_package_marks_every_task_of_its_game_and_warns_once`,
+`gr2s_t6_the_forward_projection_reads_the_mark` and
+`gate_rl1a::gr2s_a_root_without_an_irreversible_package_composes_the_bytes_and_hash_of_before`;
+the host's `gate_455_gr2s::gr2s_host_the_marks_follow_the_declaration_files_with_bundle_json_unchanged`
+and `gr2s_host_check_config_composes_the_mark` (packages written by `gate_442_rem1`'s
+`write_package`, now visible to its sibling); lab-ops's
+`packs::tests::gr2s_the_offline_input_follows_the_whole_root_rule_and_an_unreadable_package`.
+Existing tests adapted because the composer's input is now required, pinning what they pinned:
+the policy gates that compose (`gate_386_cf4`, `gate_386_cf5`, `gate_411_p19`, `gate_ord1`,
+`gate_rl1a`, `gate_sched_c1a`, `gate_sched_c1c`, `gate_sched_c1f1`, `gate_ss2b`, `gate_ss2c`,
+`gate_ss2d`, `gate_ss2h`, `gate_ss4`, `gate_ss5`) pass every package read and none irreversible;
+the host's `gate_rl1b` composes with no package read for `compose_a`, as its bench's workbench
+does, and with every package read for A9's configured catalog; actingd's `gate_rl1c` builds C-3's
+configured catalog with every package read; the resource tools' `report_schedule`
+and `check_schedule` callers (`gate_386_cf4`, `gate_386_cf5`, `gate_cov1`, `gate_sched_c1a`,
+`gate_sched_c1f1`, `gate_ss2b`, `gate_ss2c`) pass every package read. Two tests pinned what this
+slice changes: actinglab's `gate_386_rlt::rlt_1_standard_pack_compose_receives_every_instance_of_its_command_line`
+and `gate_434_lab2b::own_commands_print_the_cli_line` (its `standard-pack compose` line) composed a root with no package files and
+pinned no warning; they now pin one `standard_pack_package_unreadable` per registered package. No
+golden changes; no test leaves the gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

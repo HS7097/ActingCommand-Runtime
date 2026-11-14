@@ -232,7 +232,9 @@ for that game, and a reader of the declaration says why.
   failing.
 - **The Runtime** opens no `goals.json` in G-R1: its root reader, its startup and run preparation,
   the policy crate and check-config read named files only. A later slice's scheduler workbench reads
-  it with `schedule.json`.
+  it with `schedule.json`. Since G-R2s (0.12.60) the workbench reads every package's declaration
+  as this check does, with the same reader and the same rule, for the composer's irreversible mark
+  ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark").
 
 ## Interface
 
@@ -278,8 +280,17 @@ fourteen of the file and `goal_undeclared`) are words of the existing vocabulary
      rule of that package, and a goal's shortfall raises the weight of what produces the pool. The
      check does not refuse such an entry (it would forbid goals on ordinary pools); the rule
      belongs to the scheduler, and this check leaves it to the evaluator: **a goal's shortfall
-     never raises the weight of a rule whose package can do something irreversible**, and the slice
-     that makes the evaluator read goal entries must build it.
+     never raises the weight of a rule whose package can do something irreversible**. Workflow
+     #455 G-R2s (0.12.60, register §1.363) builds it: the composer marks such a rule's tasks
+     (`irreversible_reach`, [standard-pack-schedule.md](standard-pack-schedule.md), "The
+     irreversible mark") and the evaluator weighs a marked candidate as on an instance without a
+     target record ([resource-targets.md](resource-targets.md), "A task that can do something
+     irreversible"), for every version of the record. **One copy of the rule:** the contract
+     crate's `IrreversiblePackages` (a capability is irreversible when any package of the root
+     marks it; a package is irreversible when it provides such a capability; a package that could
+     not be read leaves every package of the root counting as irreversible; the walk over the
+     followers that ride with a rule) is what `GoalReferences::new` holds and what the composer
+     takes per game root; there is no second implementation.
   2. **No entry kind writes anything else**: not a remedy choice (those stay in the remedy layer),
      not a run parameter, not a configuration key, not a pack switch. Packages keep their own
      refusals of premium-currency and real-money buttons, and no package reads a goal for them.

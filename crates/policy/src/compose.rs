@@ -1354,10 +1354,7 @@ pub fn compose_standard_pack_rules(
 /// with, [`chain_followers`]) include one, directly or further down, that runs such a package, by
 /// the walk the goal check runs ([`IrreversiblePackages::followers_irreversible`]). A follower
 /// the walk cannot place counts as irreversible.
-fn irreversible_rules<'a>(
-    game: &'a ReadGame<'_>,
-    riding: &[BenefitFollower],
-) -> BTreeSet<&'a str> {
+fn irreversible_rules<'a>(game: &'a ReadGame<'_>, riding: &[BenefitFollower]) -> BTreeSet<&'a str> {
     let irreversible = game.files.irreversible;
     // A follower with the rule it rides with, as the goal check's references list them (a
     // follower of a follower rides with the same rule).

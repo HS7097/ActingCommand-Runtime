@@ -1420,3 +1420,17 @@ tests = [
     "actingcommand-policy::lib::tests::gate_455_gr2a::gr2a_t8_a_v2_documents_receipt_over_a_v3_record_is_the_one_it_answers_over_none",
 ]
 incident = ["#455 G-R2a"]
+
+# Workflow #455 G-R2s (0.12.60; register §1.363; contracts/resource-targets.md, "A task that can do something irreversible"; contracts/standard-pack-schedule.md, "The irreversible mark"; coordinator work order rd-1114/brief-455-gr2s-irreversible-line.md), policy half: on gate_ss1's catalog with readings that open goal-a's gap, a judged task carrying irreversible_reach alone under a v1 record naming it, a v2 and a v3 record of goal-a has the whole decision (state, rank, every reason with its values, the benefit its rank_breakdown names, its dispatch's values, its own wake) of the same candidate without a record, but for resource_target_package_irreversible, which it carries once, while the same records weigh the unmarked task (1); with task A marked and task B not, under each record task B's rank and score-stage reasons equal those of the unmarked catalog and task A's do not (2); a v1 and a v2 override naming both tasks are void for marked task A (the new reason, no applied target, no override, the effective score without a record, term 1000) and task B keeps the override and its numbers (3); the composer marks a task whose package marks a capability irreversible, one whose capability another package marks (the whole-root rule), and a chain head whose riding follower is irreversible, not one whose capability nobody marks, writes the member exactly where it is read, and refuses a rule that writes it at /rules/4/irreversible_reach (4); an unreadable package marks every task of its game and the composition warns standard_pack_package_unreadable once naming it (5); the forward projection's first step runs the unmarked task a strong goal lifts and, marked, the other task (6); T1's catalog-a fixture composed with every package read and none irreversible equals the as-is documents whole under the composition's descriptor, carries no mark and has their catalog hash (7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t1_a_marked_candidate_under_each_record_equals_it_without_a_record",
+    "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t2_every_unmarked_candidate_keeps_its_numbers",
+    "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t3_named_tasks_and_an_override_are_void_for_the_marked_task_only",
+    "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t4_the_composer_marks_irreversible_packages_and_the_chain_heads_they_ride_with",
+    "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t5_an_unreadable_package_marks_every_task_of_its_game_and_warns_once",
+    "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t6_the_forward_projection_reads_the_mark",
+    "actingcommand-policy::lib::tests::gate_rl1a::gr2s_a_root_without_an_irreversible_package_composes_the_bytes_and_hash_of_before",
+]
+incident = ["#455 G-R2s"]

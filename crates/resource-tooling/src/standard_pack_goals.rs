@@ -22,10 +22,9 @@ use crate::standard_pack_check::{CHECK_LABEL, root_invalid, root_issue_outcome};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     GoalReferences, GoalRule, IrreversiblePackages, LabError, LabResult,
-    MAX_STANDARD_PACK_GOALS_BYTES, StandardPackRoot,
-    StandardPackRootIssue, StandardPackTable, StandardPackTableCell, StandardPackTableReadFailure,
-    check_standard_pack_goal_references, parse_standard_pack_goals, parse_standard_pack_schedule,
-    read_standard_pack_table,
+    MAX_STANDARD_PACK_GOALS_BYTES, StandardPackRoot, StandardPackRootIssue, StandardPackTable,
+    StandardPackTableCell, StandardPackTableReadFailure, check_standard_pack_goal_references,
+    parse_standard_pack_goals, parse_standard_pack_schedule, read_standard_pack_table,
 };
 use actingcommand_execution_kernel::PreparedContainedTask;
 use actingcommand_policy::BenefitFollower;

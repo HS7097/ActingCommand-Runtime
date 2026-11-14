@@ -417,8 +417,11 @@ ledger.
 
 **Inputs.** The bound instances (alias → game and server, from `policy.facts.instances`); for
 each game root that holds `schedule.json`, that file's bytes, the root as
-`read_standard_pack_root` reads it, and the bundle's `maintenance[]` entries; the subsystems
-`requires` must name, or none (the tools); the catalog version.
+`read_standard_pack_root` reads it, the bundle's `maintenance[]` entries and, Workflow #455 G-R2s
+(since 0.12.60), which packages of the root can do something irreversible and which could not be
+read (`IrreversiblePackages`, a required input without a default: "The irreversible mark" below);
+the subsystems `requires` must name, or none (the tools); the catalog version. The composer stays
+pure: its caller reads the packages.
 
 **Steps.**
 
@@ -452,7 +455,9 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    task does not carry `limited`); SCHED-C1a (since 0.12.52): and one that carries
    `fixed_value_milli` gains `benefit_fixed_value_milli` with its value ("The fixed value" above;
    the composed task carries neither `fixed_value_milli` nor `fixed_value_origin`, and a composed
-   pool no `valuation_origin`).
+   pool no `valuation_origin`); Workflow #455 G-R2s (since 0.12.60): a rule whose package, or a
+   chain follower that rides with it, can do something irreversible gains `irreversible_reach:
+   true` ("The irreversible mark" below), judged or not.
 4. **Ids.** An item copied to exactly one instance keeps the file's id, so one instance per
    (game, server) composes ids byte-identical to the file. An item copied to two or more
    instances gets the id `<id>@<alias>` in each copy; every reference inside that copy (an
@@ -515,6 +520,81 @@ mark, not from the value. A new code, because no code says "a rule's declaration
 disagree": `standard_pack_priority_tiers_exceeded` counts values. Only `actinglab standard-pack
 check` and `package bundle --schedule` report it, after the `standard_pack_benefit_undeclared`
 warnings; `standard-pack compose` and the Runtime's workbench do not.
+
+## The irreversible mark
+
+Workflow #455 G-R2s (since 0.12.60; register §1.363; the coordinator's rulings of 11-14 on board
+#455). A resource goal raises the weight of whatever produces its pool, and a rule of a package
+that can do something irreversible (retire, scrap, spend what cannot be had back) may be among the
+producers. The goal check ([standard-pack-goals.md](standard-pack-goals.md)) refuses an entry that
+governs such a package, but cannot refuse a goal on an ordinary pool such a package also produces,
+so the scheduler keeps the line: **a goal never raises the weight of a task whose package can do
+something irreversible.** The composer marks the task; the evaluator weighs a marked candidate as
+on an instance without a target record ([resource-targets.md](resource-targets.md), "A task that
+can do something irreversible").
+
+- **The rule, one copy.** The contract crate's `IrreversiblePackages` is made only from what a
+  reader read of every package `bundle.json` registers: each package with the capabilities its
+  control declaration provides (`provides[]`) and their `irreversible` marks, or "could not be
+  read". A capability is irreversible when any package of the root marks it; a package is
+  irreversible when it provides such a capability, marked by itself or not. The goal check
+  (`GoalReferences::new`) holds the same type; there is no second implementation.
+- **The mark.** The composer writes the task member `irreversible_reach: true` on every composed
+  task of a rule (not held) whose package counts as irreversible, and on every task of a rule that
+  heads a chain in which a follower that rides with it (the followers `benefit_followers` lists,
+  direct or further down; the walk the goal check runs for a tier, each follower once) runs such a
+  package or one the walk cannot place. A package that is no package the reader read counts as
+  irreversible. **While any package of a game root could not be read, every composed task of that
+  game is marked** (a capability it might mark is unknown), and the composition warns
+  `standard_pack_package_unreadable` once per such package (keys `game`, `package_id`), after its
+  other warnings. The member is absent when false, so a root with no irreversible package composes
+  the bytes, the catalog hash and the rules digest of before; a root with one composes one new
+  generation. A rule of `schedule.json` that writes `irreversible_reach` itself is refused
+  (`schedule_invalid` at `/rules/<i>/irreversible_reach`), as the other composer-only members are.
+  A V2 catalog written by hand may carry the member; no composer writes one, and such a catalog is
+  not covered by the line.
+- **Who reads the packages.** The Runtime's workbench, check-config and `actingd suspended`
+  (`compose_configured_standard_packs`, check-config's preview) and the resource tools
+  (`standard-pack check`, `standard-pack compose`, `package bundle --schedule`) read each
+  registered package below the game root with the package reader the goal check uses (the
+  Runtime's metadata reader, `read_remedy_declarations`), for a game root that holds
+  `schedule.json`. A package the reader refuses could not be read: the workbench records the
+  warning with the reader's refusal as its cause; the tools list it in `warnings`.
+- **The offline pack rows** (`actingctl packs`, and `ac_packs`, which answers the same rows;
+  the coordinator's ruling 2 of 11-14) compose with their own reading of each registered package's
+  `control.json` (the reading their `irreversible` row member uses, giving each provided capability
+  with its mark), through the same rule; lab-ops does not reach the Runtime's package reader (the
+  architecture guard keeps `execution-kernel` to the daemon's crates). A package whose control file
+  cannot be read is unreadable there (its `package_binding_unreadable`, at its row or, for a
+  package without a row, once after the rows). **Limit:** a package the Runtime's reader refuses for
+  a reason outside what lab-ops reads (another file of the package, its operation declaration) is
+  unreadable to the Runtime only, so there the offline rows' composition can mark fewer tasks than
+  the Runtime's; check-config, the forward projection and the dispatch are the Runtime's and are the
+  truth. For a root whose packages both read, the two inputs are equal (one rule, the same marks).
+  The rows' own `irreversible` member keeps its meaning: the package's own declaration.
+- **Three scopes of one word.** `irreversible` means today: the package's own declaration (the
+  `actingctl packs` row member), the whole root's (a capability any package of the root marks:
+  the goal check and this mark), and the providers bound on an instance (the remedy layer's
+  request flag, [remedies.md](remedies.md) §2.3). This mark uses the whole root's.
+- **The workbench reads the declarations again** when a package's declaration files change (the
+  coordinator's ruling 1 of 11-14). The marks it compares at each check ("The scheduler workbench"
+  below) are, per game in use, those of `schedule.json` and `bundle.json` and, for each package
+  the root registered when the workbench last read it (no extra read of `bundle.json` per check),
+  the marks of the files the declaration reader opens by name: the reader reads the package's whole
+  content directory, a set that follows the directory's listing and is not fixed, so the two files
+  it opens by name before any file says anything are marked: the control file `control.json` and
+  the package's own manifest `resources/operations/resources.json`; not the package's other files.
+  Each mark is the file's length and modification time, absent when the file does not exist: the
+  standard the workbench already uses for the two root files. **Its limit:** a change that keeps
+  both the length and the modification time of both files is not seen until another change, a
+  change of `bundle.json` or `schedule.json`, or a start. A changed mark is handled as a changed
+  `bundle.json`: the root and its declarations are read again and the rules composed again, so a
+  package replaced in place, by `place` or by hand, is seen at the next check, and a package
+  readable again when one of its marked files changes. A metadata failure on a marked file (other
+  than its absence) is a mark of its own and never stops the check: the root is read once and that
+  package is unreadable there. Each package's files are marked just before the reader reads it, and
+  those marks are the ones the next check compares, so no root keeps unmarked tasks from an earlier
+  read while a marked file is known to have changed.
 
 ## Tools
 
@@ -596,9 +676,12 @@ nothing.
   `standard_packs.check_interval_ms` (default 60 000) and at the first cycle. The games in use are
   the games of the configured instances (`policy.facts.instances`). A whole-instance pause does
   not unload a game's rules (pending decision 58, recommended answer A). Each check `stat`s
-  `schedule.json` and `bundle.json` of each game in use and reads the game roots only when one of
-  them, or the bound instances, changed: 「用到的时候再加载」. A game root without a bound
-  instance is never read.
+  `schedule.json` and `bundle.json` of each game in use and, since Workflow #455 G-R2s (0.12.60),
+  the declaration files of each package the root registered when it was last read ("The
+  irreversible mark" above), and reads the game roots only when one of them, or the bound
+  instances, changed: 「用到的时候再加载」. A game root without a bound instance is never read.
+  A check that reads a root of N packages stats 2 + 2N files; the declarations are read (N package
+  reads) only when one of those marks changed.
 - **Compose and activate.** The roots are composed with `compose_standard_pack_rules`, its
   `requires` checked against the configuration manifest's subsystems (this build names
   `standard_pack_schedule`), and the catalog version is the ledger head plus one. A composition
@@ -685,7 +768,10 @@ other games are composed.
   composed tasks that run its package in id order (the rule's id, or `<rule id>@<alias>` for a
   rule composed for two or more instances), `irreversible` when the package's `control.json`
   reads, and its game's `ui.json` entry for the package and `display`
-  ([runtime-interface.md](runtime-interface.md), `packs`).
+  ([runtime-interface.md](runtime-interface.md), `packs`). Workflow #455 G-R2s (since 0.12.60):
+  their composition takes the composer's irreversible input from that same reading of every
+  registered package's `control.json` ("The irreversible mark", its limit there); the row member
+  `irreversible` stays the package's own declaration.
 
 ## The store update rule (UPD-1, since 0.12.30)
 

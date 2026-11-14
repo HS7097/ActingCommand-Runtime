@@ -349,6 +349,17 @@ file then names `queue_wait` in `requires`. Refused, at the member: in a V1 docu
 `type_mismatch`; one outside the range `limit_exceeded`. A task without the member serializes,
 hashes and decides exactly as before.
 
+Workflow #455 G-R2s (since 0.12.60; register §1.363; [../../resource-targets.md](../../resource-targets.md),
+"A task that can do something irreversible"), V2 only: a task may carry `irreversible_reach`, a
+boolean. With `true` its package, or a chain follower that rides with it, can do something
+irreversible by its game root's declarations (or a package of the root could not be read), and a
+resource target never weighs its candidate: the candidate is computed as on an instance without a
+target record. The standard-pack composer writes it ([../../standard-pack-schedule.md](../../standard-pack-schedule.md),
+"The irreversible mark") and refuses a rule that writes it itself; a catalog written by hand may
+carry it. With `false` it is as without the member. A V1 document that names it is refused as an
+unknown field at the member. A task without the member serializes, hashes and decides exactly as
+before.
+
 SS-2g (since 0.12.34; register §1.232; `../README.md`, "Expected quantities (v2)"): a `consumes`
 entry may declare `expected_amount_milli` instead of `amount`, as a `produces` entry may: an
 integer in `0..=9007199254740991` thousandths of a unit per run, at most a constant capacity ×

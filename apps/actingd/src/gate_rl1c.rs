@@ -21,7 +21,9 @@
 //   catalog, not the game root's `schedule.json`, and `suspended` reads that catalog.
 
 use super::*;
-use actingcommand_contract::{IdentifierIssuer, StandardPackRootBytes, read_standard_pack_root};
+use actingcommand_contract::{
+    IdentifierIssuer, IrreversiblePackages, StandardPackRootBytes, read_standard_pack_root,
+};
 use actingcommand_policy::{
     DEFAULT_HEAVY_THRESHOLD_MILLI, EvaluationFacts, EvaluationResources, HostResourceSnapshot,
     InstanceSnapshot, STANDARD_PACK_OPERATION_ID, StandardPackBinding, StandardPackComposeInput,
@@ -277,12 +279,21 @@ impl Fixture {
                 server_id: SERVER.to_owned(),
             },
         )]);
+        // Workflow #455 G-R2s: the composer's required input, every package read and none
+        // irreversible; the notes compared read no mark.
+        let irreversible = IrreversiblePackages::new(
+            root.registry
+                .package_ids()
+                .map(|package_id| (package_id.to_owned(), Some(BTreeMap::new())))
+                .collect(),
+        );
         let games = BTreeMap::from([(
             GAME.to_owned(),
             StandardPackGameFiles {
                 schedule: schedule.as_slice(),
                 root: &root,
                 maintenance: &[],
+                irreversible: &irreversible,
             },
         )]);
         let composition: StandardPackComposition =

@@ -31,8 +31,7 @@ use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, IrreversiblePackages, LabError, LabErrorClass, LabResult,
-    STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
     StandardPackRoot, StandardPackRootBytes, read_standard_pack_root, validate_instance_alias,
 };

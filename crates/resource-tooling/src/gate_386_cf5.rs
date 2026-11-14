@@ -46,8 +46,15 @@ fn cf5_standard_pack_check_accepts_both_forms_its_requires_names_and_reports_the
         ("both forms", reference, "/rules/0/trigger/value"),
         ("the capacity alone", json!(80), "/pools/0/capacity"),
     ] {
-        let error = check_schedule(GAME, &root, &[], &schedule(false, value), path, &irreversible)
-            .expect_err("a reference without its requires entry is reported");
+        let error = check_schedule(
+            GAME,
+            &root,
+            &[],
+            &schedule(false, value),
+            path,
+            &irreversible,
+        )
+        .expect_err("a reference without its requires entry is reported");
         assert_eq!(
             error.code,
             SharedCode::StandardPackRootInvalid.as_str(),

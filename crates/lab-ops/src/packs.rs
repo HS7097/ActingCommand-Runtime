@@ -28,13 +28,14 @@ use crate::instance_selector::SelectorMiss;
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, InstalledProcess, MAX_STANDARD_PACK_UI_BYTES,
-    ProvidedCapability, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, STANDARD_PACK_UI_FILE,
-    StandardPackRegistry, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
-    StandardPackTableReport, StandardPackUi, parse_standard_pack_ui, read_standard_pack_root,
-    read_standard_pack_root_with_ui, read_standard_pack_tables,
+    BundleIndex, BundleMaintenance, InstalledProcess, IrreversiblePackages,
+    MAX_STANDARD_PACK_UI_BYTES, ProvidedCapability, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_TABLES_DIRECTORY, STANDARD_PACK_UI_FILE, StandardPackRegistry, StandardPackRoot,
+    StandardPackRootBytes, StandardPackRootIssue, StandardPackTableReport, StandardPackUi,
+    parse_standard_pack_ui, read_standard_pack_root, read_standard_pack_root_with_ui,
+    read_standard_pack_tables,
 };
 use actingcommand_policy::{
     STANDARD_PACK_OPERATION_ID, StandardPackBinding, StandardPackComposeInput,
@@ -718,20 +719,34 @@ impl Rows {
                     .map(|schedule| (game.clone(), schedule))
             })
             .collect::<BTreeMap<_, _>>();
+        // Workflow #455 G-R2s (the coordinator's ruling 2 of 11-14): each game's packages read by
+        // this crate's own reading of their control files, the composer's required input.
+        let mut declared = BTreeMap::new();
+        let irreversible = schedules
+            .keys()
+            .filter_map(|game| {
+                read.get(game).map(|files| {
+                    (
+                        game.clone(),
+                        Self::game_irreversibility(&root, game, files, &mut declared),
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
         let composition = loop {
             let inputs = read
                 .iter()
                 .filter_map(|(game, files)| {
-                    schedules.get(game).map(|schedule| {
-                        (
-                            game.clone(),
-                            StandardPackGameFiles {
-                                schedule,
-                                root: &files.root,
-                                maintenance: files.maintenance.as_slice(),
-                            },
-                        )
-                    })
+                    let schedule = schedules.get(game)?;
+                    Some((
+                        game.clone(),
+                        StandardPackGameFiles {
+                            schedule,
+                            root: &files.root,
+                            maintenance: files.maintenance.as_slice(),
+                            irreversible: irreversible.get(game)?,
+                        },
+                    ))
                 })
                 .collect::<BTreeMap<_, _>>();
             let failure = match compose_standard_pack_rules(&StandardPackComposeInput {
@@ -787,7 +802,7 @@ impl Rows {
                 .or_default()
                 .insert(task.id.as_str());
         }
-        composition
+        let rows = composition
             .iter()
             .flat_map(StandardPackComposition::manifest)
             .map(|procedure| {
@@ -813,12 +828,34 @@ impl Rows {
                             .map(|task_id| (*task_id).to_owned())
                             .collect(),
                     ),
-                    irreversible: self.irreversible(&path, readable),
+                    irreversible: self.irreversible(&path, readable, &declared),
                     ui: ui.and_then(|ui| ui.pack(&procedure.package_id)).cloned(),
                     display: ui.and_then(StandardPackUi::display).cloned(),
                 }
             })
-            .collect()
+            .collect::<Vec<_>>();
+        // G-R2s: a package of a composed game with no row whose control file could not be read
+        // marks every task of its game; its warning is given here, once.
+        let listed = composition
+            .iter()
+            .flat_map(StandardPackComposition::manifest)
+            .map(|procedure| root.join(&procedure.game_id).join(&procedure.directory))
+            .collect::<BTreeSet<_>>();
+        let composed = composition
+            .iter()
+            .flat_map(StandardPackComposition::games)
+            .filter(|game| game.schedule_sha256.is_some())
+            .map(|game| root.join(&game.game_id))
+            .collect::<Vec<_>>();
+        for (path, read) in &declared {
+            if let Err(warning) = read
+                && !listed.contains(path)
+                && composed.iter().any(|game| path.starts_with(game))
+            {
+                self.warn(warning.clone());
+            }
+        }
+        rows
     }
 
     /// Workflow #429 R-11 (register §1.240): the `ui.json` of the game root `directory` of
@@ -864,43 +901,61 @@ impl Rows {
     /// declares no `provides`. `None` when the package's place cannot be read (`readable` false,
     /// already warned), and when its control file cannot be read, is larger than 1 MiB or does
     /// not decode: `package_binding_unreadable` with the control file's path and the failure
-    /// beneath it.
-    fn irreversible(&mut self, package: &Path, readable: bool) -> Option<bool> {
+    /// beneath it ([`control_provides`]). Workflow #455 G-R2s: the package's own declaration
+    /// still (the package's own scope of the word); `declared` holds the control files already
+    /// read for the composition's input, each read once.
+    fn irreversible(
+        &mut self,
+        package: &Path,
+        readable: bool,
+        declared: &BTreeMap<PathBuf, Result<BTreeMap<String, bool>, Outcome>>,
+    ) -> Option<bool> {
         if !readable {
             return None;
         }
-        let path = package.join(CONTROL_FILE);
-        let unreadable = Outcome::new(ActingctlCode::PackageBindingUnreadable).path(&path);
-        let bytes = match read_capped(&path, MAX_CONTROL_BYTES) {
-            Ok(bytes) if bytes.len() as u64 <= MAX_CONTROL_BYTES => bytes,
-            Ok(_) => {
-                self.warn(unreadable);
-                return None;
-            }
-            Err(error) => {
-                self.warn(unreadable.caused_by(Outcome::from_io_error(&error, IoOp::Read)));
-                return None;
-            }
+        let provides = match declared.get(package) {
+            Some(read) => read.clone(),
+            None => control_provides(package),
         };
-        match serde_json::from_slice::<ControlProvides>(&bytes) {
-            Ok(control) => Some(
-                control
-                    .provides
-                    .iter()
-                    .flatten()
-                    .any(ProvidedCapability::irreversible),
-            ),
-            Err(error) => {
-                self.warn(
-                    unreadable.caused_by(
-                        Outcome::new(ContractCode::ForeignDataError)
-                            .raw_source(RawSource::Json)
-                            .raw_text(error.to_string()),
-                    ),
-                );
+        match provides {
+            Ok(capabilities) => Some(capabilities.values().any(|marked| *marked)),
+            Err(warning) => {
+                self.warn(warning);
                 None
             }
         }
+    }
+
+    /// Workflow #455 G-R2s (register §1.363; `contracts/standard-pack-schedule.md`, "The
+    /// irreversible mark", the coordinator's ruling 2 of 11-14): the composer's required input for
+    /// the game root `files` of `game` below the standard-pack root `root`: every package its
+    /// registry lists, read by this crate's own reading of its `control.json`
+    /// ([`control_provides`]; lab-ops does not reach the Runtime's package reader), through the one
+    /// copy of the rule ([`IrreversiblePackages::new`]). A package whose control file cannot be
+    /// read could not be read: every task of the game is then marked. Each control file is read
+    /// once into `declared`; its warning is given where its row is built, or, for a package
+    /// without a row, after the rows.
+    fn game_irreversibility(
+        root: &Path,
+        game: &str,
+        files: &ScheduleGame,
+        declared: &mut BTreeMap<PathBuf, Result<BTreeMap<String, bool>, Outcome>>,
+    ) -> IrreversiblePackages {
+        let directory = root.join(game);
+        let mut provides = BTreeMap::new();
+        for package_id in files.root.registry.package_ids() {
+            let capabilities = files.root.registry.get(package_id).and_then(|entry| {
+                let path = directory.join(&entry.directory);
+                declared
+                    .entry(path.clone())
+                    .or_insert_with(|| control_provides(&path))
+                    .as_ref()
+                    .ok()
+                    .cloned()
+            });
+            provides.insert(package_id.to_owned(), capabilities);
+        }
+        IrreversiblePackages::new(provides)
     }
 
     /// Workflow #357 DB-1 (register §1.65 TB3, TB4): the tables of every sound game root below
@@ -1034,6 +1089,39 @@ fn read_capped(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
         .take(limit.saturating_add(1))
         .read_to_end(&mut bytes)?;
     Ok(bytes)
+}
+
+/// Workflow #429 R-11, Workflow #455 G-R2s: what the package at `package` provides by its
+/// `control.json` (contracts/remedies.md §2.2): each capability of its `provides`, `true` when an
+/// entry marks it `irreversible`; none without `provides`. When the control file cannot be read,
+/// is larger than 1 MiB or does not decode, the warning `package_binding_unreadable` with the
+/// control file's path and the failure beneath it.
+fn control_provides(package: &Path) -> Result<BTreeMap<String, bool>, Outcome> {
+    let path = package.join(CONTROL_FILE);
+    let unreadable = Outcome::new(ActingctlCode::PackageBindingUnreadable).path(&path);
+    let bytes = match read_capped(&path, MAX_CONTROL_BYTES) {
+        Ok(bytes) if bytes.len() as u64 <= MAX_CONTROL_BYTES => bytes,
+        Ok(_) => return Err(unreadable),
+        Err(error) => {
+            return Err(unreadable.caused_by(Outcome::from_io_error(&error, IoOp::Read)));
+        }
+    };
+    match serde_json::from_slice::<ControlProvides>(&bytes) {
+        Ok(control) => {
+            let mut capabilities = BTreeMap::new();
+            for provided in control.provides.iter().flatten() {
+                *capabilities
+                    .entry(provided.capability().to_owned())
+                    .or_insert(false) |= provided.irreversible();
+            }
+            Ok(capabilities)
+        }
+        Err(error) => Err(unreadable.caused_by(
+            Outcome::new(ContractCode::ForeignDataError)
+                .raw_source(RawSource::Json)
+                .raw_text(error.to_string()),
+        )),
+    }
 }
 
 /// ROUT-L RL-1c: one game root as the composer reads it: the root, the bundle's maintenance
@@ -1908,5 +1996,91 @@ mod tests {
             "{:?}",
             answer.warnings()
         );
+    }
+
+    /// Workflow #455 G-R2s (register §1.363; the coordinator's ruling 2 of 11-14): the composer's
+    /// input lab-ops gives, from its own reading of each registered package's control file
+    /// through the contract crate's one rule. A package that provides a capability another
+    /// package of the root marks irreversible is irreversible (the whole-root rule), one whose
+    /// capabilities nobody marks is not. With a package whose control file cannot be read, that
+    /// package is unreadable and every package counts as irreversible; the answer names the
+    /// control file once, as before.
+    #[test]
+    fn gr2s_the_offline_input_follows_the_whole_root_rule_and_an_unreadable_package() {
+        const SHARED: &str = "fixture.shared";
+        const UNREAD: &str = "fixture.unread";
+        for unread in [false, true] {
+            let root = TempDir::new().expect("tempdir");
+            let mut packages: Vec<R11Package> = vec![
+                (
+                    "fixture.one",
+                    IRREVERSIBLE,
+                    Some(irreversible_control(IRREVERSIBLE)),
+                ),
+                (
+                    "fixture.two",
+                    SHARED,
+                    Some(serde_json::json!({
+                        "package_id": SHARED,
+                        "provides": [{"capability": "cap_b"}]
+                    })),
+                ),
+                ("fixture.three", PLAIN, Some(plain_control(PLAIN))),
+            ];
+            if unread {
+                packages.push(("fixture.four", UNREAD, None));
+            }
+            let config = r11_install(root.path(), &[(GAME, packages)], &[("node-a", GAME)]);
+            let packs = root.path().join("packages");
+            let files = schedule_game(&packs.join(GAME), GAME)
+                .unwrap_or_else(|warning| panic!("the root reads: {warning:?}"))
+                .expect("a game root");
+            let mut declared = BTreeMap::new();
+            let irreversible = Rows::game_irreversibility(&packs, GAME, &files, &mut declared);
+            assert_eq!(irreversible.package(IRREVERSIBLE), Some(true), "{unread}");
+            assert_eq!(
+                irreversible.package(SHARED),
+                Some(true),
+                "{unread}: whole root"
+            );
+            assert_eq!(irreversible.package(PLAIN), Some(false), "{unread}");
+            assert_eq!(
+                declared.len(),
+                packages_count(unread),
+                "{unread}: each read once"
+            );
+            if unread {
+                assert_eq!(
+                    irreversible.unreadable(),
+                    &BTreeSet::from([UNREAD.to_owned()])
+                );
+                assert_eq!(irreversible.package(UNREAD), None);
+                assert!(irreversible.counts_irreversible(PLAIN), "the safe side");
+                let answer = r11_answer(&config);
+                let rows = rows_by_package(&answer);
+                let control = Path::new(rows[UNREAD]["path"].as_str().expect("the package's path"))
+                    .join(CONTROL_FILE);
+                let unreadable = answer
+                    .warnings()
+                    .iter()
+                    .filter(|warning| warning.is(ActingctlCode::PackageBindingUnreadable))
+                    .map(|warning| warning.value("path").cloned())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    unreadable,
+                    vec![Some(Value::from(control.display().to_string()))],
+                    "{:?}",
+                    answer.warnings()
+                );
+            } else {
+                assert!(irreversible.unreadable().is_empty());
+                assert!(!irreversible.counts_irreversible(PLAIN));
+            }
+        }
+    }
+
+    /// How many packages the G-R2s fixture registers.
+    fn packages_count(unread: bool) -> usize {
+        if unread { 4 } else { 3 }
     }
 }

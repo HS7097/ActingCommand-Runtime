@@ -3853,3 +3853,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_gr2a::gr2a_h7_a_v3_records_view_decodes_through_the_contracts_strict_types_and_passes_validate",
 ]
 incident = ["#455 G-R2a"]
+# Workflow #455 G-R2s (0.12.60; register §1.363; contracts/standard-pack-schedule.md, "The irreversible mark"; coordinator work order rd-1114/brief-455-gr2s-irreversible-line.md and the coordinator's ruling 1 of 11-14), host half, a composer-mode host over one game root of two real packages whose declaration files' times the test sets: the first check composes both unmarked, a check with no file changed returns before reading the root, a same-length control file that marks the capability irreversible (bundle.json byte for byte unchanged) is read at the next check and marks its task, the reverse takes the mark away, an unreadable control file marks every task of the game and is recorded standard_pack_package_unreadable once, and readable again the marks follow the declarations (1); check-config's composition marks the same task (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2s_host_the_marks_follow_the_declaration_files_with_bundle_json_unchanged",
+    "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2s_host_check_config_composes_the_mark",
+]
+incident = ["#455 G-R2s"]
