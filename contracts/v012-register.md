@@ -25003,7 +25003,8 @@ MAPP-2d tests pick as before: their devices have none in front, or one evaluatio
 fresh limits leave the allocation order's pick.
 
 **Fix round 2** (the independent review of fix round 1 and CI on its head; main `17197d8e`, §1.364,
-merged, which renumbered this entry 1.373; only the register conflicted). (1) A task step's own
+merged, so this entry took 1.365, the number main then had free, and the train 0.12.60e gave it
+1.373; only the register conflicted). (1) A task step's own
 application effect and the application restart rung's Runtime-level failure forget the member,
 above. (2) t14 never ran: its host's start was refused `config_value_invalid` at
 `record_runtime_config`. The start's check of an instance's own idle keys (`check_instance`,
