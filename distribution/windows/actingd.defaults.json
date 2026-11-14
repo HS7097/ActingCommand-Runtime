@@ -384,7 +384,8 @@
       "after_ms": 1800000
     },
     "device_group": {
-      "switch_failure_cooldown_ms": 300000
+      "switch_failure_cooldown_ms": 300000,
+      "max_queue_wait_ms": 1800000
     }
   },
   "ledger_observer": {

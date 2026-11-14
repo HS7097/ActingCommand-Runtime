@@ -172,7 +172,9 @@ Only these failures can pause a task by repeating:
   `contained_task_guard_refused`: the main package's own steps no longer match the screen. A
   page-graph step unconfirmed after all its retries (`contained_task_step_unconfirmed`) is the
   graph counterpart of a linear intermediate page not seen (Workflow #390 EXEC-3, wave 14
-  ruling 4);
+  ruling 4). Workflow #463 U1: `contained_task_linear_unrecorded_screen` writes its identity as
+  these do, though it pauses at its first occurrence ("A failure that pauses at its first
+  occurrence" below);
 - the `prepare` scope with a `contained_task_prerequisite_*` refusal: a reproducible
   configuration problem (a package the registry does not list, a package id that does not
   match, an incompatible package);
@@ -229,6 +231,42 @@ A run that ends on a mapped key whose mapping declares a remedy (Workflow #411 B
 [remedies.md](remedies.md)) is a success: it never accumulates, records no failure identity and
 clears the pair's streak and immediate-rerun round; a block that repeats is bounded by its remedy
 round instead.
+
+## A failure that pauses at its first occurrence (Workflow #463 U1)
+
+Since 0.12.60 (register §1.372; the owner's ruling on board #463: the code tells an auditing agent
+that a new result stopped the Runtime, and it affects no other task). A scheduled run that ends
+with `contained_task_linear_unrecorded_screen` (a linear step met a screen its package never
+recorded, [linear-steps.md](linear-steps.md), "Failure codes"; the kernel raises it only in the
+`main` scope of a task's own run, outside the restart segment, never in a run the host starts
+itself, a startup package or a ladder rung, so no such run can pause a pair) pauses its pair
+(catalog task, instance) at its first occurrence, whatever the pair's `on_failure` says:
+
+- the failure point marks its task terminal `failure_severe` (the existing member of
+  `TaskSemanticFact::TerminalCommitted`), so the policy class is `severe` for the live settlement,
+  the startup reconciliation and the ledger's re-derivation alike (`scheduled_failure_class`), and
+  the settlement writes `paused_task` with `retry_attempt` 0 and no retry time: no immediate rerun
+  (R22), and no escalation count is needed. The record's severity stays its outcome's category
+  (`error`);
+- the failure identity is written as for an accumulating failure ("Failure identity": its `F` the
+  run's error frame, its main package and layers with the content hashes measured now);
+- it lifts as every policy suspension does ("Lifting (R19)"): the main package's content (or a
+  layer's the identity names) changed, at the pair's next due evaluation after the lift check's
+  interval. No manual lift is added.
+
+The code's ladder class is `pack_logic_mismatch` (the owner's ruling on board #463: the ladder
+starts at once), so under the default triggers it starts the stuck-recovery ladder through
+`pack_logic` as `page_confirmation_failed` does; the ladder and the pause are two separate
+consequences, and the order on the instance is the code, the pair's pause, the ladder, then the
+next due pair. Nothing else changes: the pause neither pauses nor fences the instance, no other
+pair's admission, order or timing moves, the next due pair is dispatched as before (its entry gate
+does what it did). Every other failure code follows `on_failure` exactly as before. No configuration key, ledger event type,
+enum value or persisted member is added: the rule is code, as UPD-1's is. A direct run of the
+package fails with the same code and pauses nothing. The pair shows in `actingd suspended` under
+`suspended` (`failure` with the code and its values, `artifact_id` among them, `previous` `null`,
+`effective_class` `severe`, `lifts_when` `content_hash_changes`), in `ac_diagnose` (its `suspended`
+rows and `failures_grouped` by the code), and in `ac_schedule` as a candidate row whose `why` is
+`policy_task_paused`.
 
 ## Settlement of an accumulating failure
 

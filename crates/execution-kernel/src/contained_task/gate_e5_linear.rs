@@ -983,10 +983,18 @@ fn gate_linear_an_intermediate_page_must_be_seen_before_the_next_step() {
             )],
         ),
     );
-    let mut device = Device::new(vec![
+    // Workflow #463 U1, fix round 2 (rule 4; contracts/linear-steps.md, "A screen the package
+    // never recorded"): the end after the seen intermediate page gets the closing decision, on
+    // the next step's page and the step's own page, which only classifies it; the step's own page
+    // shows after more frames than the arrival takes, so it passes on a frame of the closing
+    // decision and the end stays the one below.
+    let after_tap = [
+        vec![Screen::Loading],
+        vec![Screen::Blank; 20],
         vec![Screen::Home],
-        vec![Screen::Loading, Screen::Blank],
-    ]);
+    ]
+    .concat();
+    let mut device = Device::new(vec![vec![Screen::Home], after_tap]);
     let error = failed(retried.run(&mut device));
     assert_eq!(error.code().as_str(), "page_confirmation_failed", "{error}");
     let tokens = detail(&error);
@@ -1008,10 +1016,25 @@ fn gate_linear_an_intermediate_page_must_be_seen_before_the_next_step() {
     assert_eq!(device.inputs(), 1);
     assert_eq!(device.started(), ["0 open neutral/home"]);
     assert_eq!(device.finished(), ["0 open <unrecognized>"]);
+    // No retry decision: no retry wait, and only the closing decision's recognitions, the last
+    // ones, await the step's own page, after the next step's page.
+    assert!(device.boundaries(TaskTimingBoundary::RetryWait).is_empty());
     let awaited = device.recognitions_after_first_input();
+    let closing = awaited
+        .iter()
+        .position(|pages| pages.iter().any(|page| page == "neutral/home"))
+        .unwrap_or_else(|| panic!("no closing decision: {awaited:?}"));
     assert!(
-        awaited.iter().flatten().all(|page| page != "neutral/home"),
-        "a retry decision awaited the step's own page: {awaited:?}"
+        awaited[..closing]
+            .iter()
+            .all(|pages| *pages == ["neutral/loading"] || *pages == ["neutral/list"]),
+        "{awaited:?}"
+    );
+    assert!(
+        awaited[closing..]
+            .iter()
+            .all(|pages| *pages == ["neutral/list", "neutral/home"]),
+        "{awaited:?}"
     );
 }
 
@@ -1281,9 +1304,18 @@ fn gate_linear_only_a_swallowed_input_is_retried() {
     assert_eq!(device.inputs(), 1);
     assert_eq!(device.started(), ["0 open neutral/home"]);
     assert_eq!(device.finished(), ["0 open <unrecognized>"]);
+    // Workflow #463 U1, fix round 1 ("Retries"): the operation's one closing decision awaits the
+    // next step's page, then the step's own page, which passes on its first frame; it inputs
+    // nothing and the task fails as above. Every recognition before it awaited the next step's
+    // page alone.
     let awaited = device.recognitions_after_first_input();
+    let Some((closing, arrival)) = awaited.split_last() else {
+        panic!("no recognition after the input");
+    };
+    assert_eq!(*closing, ["neutral/list", "neutral/home"], "{awaited:?}");
+    assert!(!arrival.is_empty(), "{awaited:?}");
     assert!(
-        awaited.iter().all(|pages| *pages == ["neutral/list"]),
+        arrival.iter().all(|pages| *pages == ["neutral/list"]),
         "a retry decision ran: {awaited:?}"
     );
 }
