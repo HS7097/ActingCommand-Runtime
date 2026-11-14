@@ -81,6 +81,10 @@ mod gate_453_s10;
 // Test-only: Workflow #453 S11, check-config's `state_root_installation`.
 #[cfg(test)]
 mod gate_453_s11;
+// Test-only: Workflow #453 S4, the first configuration's template judged by this build's reader
+// and check-config.
+#[cfg(test)]
+mod gate_453_s4;
 // Test-only: Workflow #453 S7, `actingd vision manifest|check` on an injected pin table and
 // temporary vision roots.
 #[cfg(test)]

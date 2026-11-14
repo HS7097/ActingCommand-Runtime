@@ -61,8 +61,8 @@ kept there too. The single-location kept files:
 `<ms>` is the operation's Unix milliseconds (`op-<ms>`), so each kept name says which operation
 made it. `.old-<unix_ms>` and `.part` are names the bundle grammar reserves for exactly this
 (`package.rs`, reserved ids), so they never collide with a pack directory. No installer command
-touches the state root or the ledger; `install new` (INST-6) only creates the empty state-root
-directory.
+touches the state root or the ledger; the rescue module's `new` (INST-6, built by Workflow #453
+S4) only creates the empty state-root directory.
 
 ## Common rules
 
@@ -141,7 +141,12 @@ Tools names a URL. A downloaded file is used only after its SHA-256 matches its 
 a mismatch refuses as the local checks do (`digest_mismatch`). No other network access: Tools
 reads no token and no `gh` configuration. INST-1 does not download: its `release verify` and
 `release stage` read a folder the fetch script or a downloader filled; the download comes in a
-later slice (with INST-6's fresh root, whose vision models need it).
+later slice (with INST-6's fresh root, whose vision models need it). **Amended by Workflow #453
+S4** (the coordinator's ruling on board #453, not the owner's words): a fresh root downloads
+nothing, so `install new` and the fresh root's models leave this paragraph, which now holds for
+`release stage` only. The rescue module's `new` takes a release folder or a kept build folder
+that is already there (`--build`); a fresh root's vision and OCR models come by the rescue row
+that places a vision root, never by a download.
 
 Checks (every failure is listed, not only the first; each is a `release_check` token):
 
@@ -723,8 +728,10 @@ actingctl install pack plan    --root <root> --zip <bundle.zip> --sums <SHA256SU
 actingctl install pack place   --root <root> --zip … --sums … [--facts …] --plan <id> [--hot [--known-pause …]] [--accept-restart-needed] [--ack-guard <id>]...
 actingctl install pack remove  plan|apply --root <root> --game <game> [--plan <id>] [--hot]
 actingctl install pack restore --root <root> --operation <id>
-actingctl install new --root <new root> --build <kept build dir or verified release dir> [--state-root <dir>] [--vision-from <dir>] [--mumu-root <dir>] [--watchdog] [--lab-authoring true|false] [--lab-debugging true|false]
+actinglab new <new_root> --build <kept build dir or verified release dir> [--new-state-root <dir>] [--mumu-root <dir>] [--lab-authoring true|false] [--watchdog]
 ```
+
+(The last line is the Lab's rescue row, Workflow #453 S4: `actingctl install` has no `new`.)
 
 - **Configuration** (INST-3). Every write goes to the candidate; the first write copies the live
   file and records its SHA-256 in `base.json` (refused `config_base_changed` once the live file
@@ -806,7 +813,7 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     commit and every other refusal are those of a configuration with rows, and a configuration
     with rows composes the same bytes as before (`runtime_not_running` stays: a commit while the
     Runtime is stopped is a later slice). `install new` is what writes a first `policy`; this
-    slice writes none.
+    slice writes none (Workflow #453 S4: the rescue module's `new`, "Fresh root").
   - **The commit** is `config replace`'s ("The Lab's rescue module"): the candidate, written
     beside the live file as `actingd.config.json.new-<ms>.part` (`<ms>` the command's own
     milliseconds) so that its relative paths resolve as the live file's, passes the live build's
@@ -880,11 +887,91 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
   declared `package` range, never a digest (done; `instances_not_idle`, the instances staying
   paused; the caveat `pack_full_check_skipped`). `remove` renames the game root
   `packages\<game>.old-<ms>`; `restore` puts one pack operation's kept items back.
-- **Fresh root** (INST-6). `new` refuses a non-empty root or state root, copies and verifies the
-  build into `runtime\`, `tools\` and `install\builds\<c>\`, writes the first configuration (the
-  salt 32 bytes from the OS CSPRNG, never shown), runs its check-config and writes `state.json`;
-  nothing is started (done). The vision and OCR models come from
-  `--vision-from` or from the downloads above.
+- **Fresh root** (INST-6; built by Workflow #453 S4, since 0.12.60; register, "Slice #453 S4"; the
+  coordinator's rulings on board #453, not the owner's words). Only the Lab's rescue module serves
+  it, as the row `new <new_root> --build <dir> [--new-state-root <dir>] [--mumu-root <dir>]
+  [--lab-authoring true|false] [--watchdog]`, so that the Lab's command line and its MCP server both
+  have it; `actingctl install` gains nothing (no `install new`). The positional is named
+  `new_root` and the state root's option `new_state_root`, since the module refuses a parameter
+  named `root` or `state_root` on every row; the row declares every parameter. It is the one rescue
+  row served without a located root: it acts on the root it names, not on the root of the program
+  that runs it, so the release's own `actinglab.exe` (the Tools zip unpacked anywhere) and the
+  Lab's MCP server run it before any root exists. Nothing is started; the vision and OCR models
+  are not this row's (the vision root is placed by its own rescue row, never by a download).
+  - **`--build`**: a release folder that verifies, read by the release reader as `release verify`
+    reads it (both zips, `SHA256SUMS`, and `release-facts.json` in the folder when it is there;
+    without it the answer carries the caveat `release_unconfirmed` as a `note` and the kept build
+    is recorded `origin` `local_build`), its zips extracted into a new work folder that is left in
+    place and named (`work_dir`); or a kept build folder (`runtime\BUILD-MANIFEST.json` in it,
+    checked against its own manifests, its `release.json` taken with it). The build's Runtime
+    member must carry the first configuration's template, `actingd.config.first.json`.
+  - **The state root**: `--new-state-root`, else `<new_root>\state`, written absolute.
+  - **Refused before anything is written** (`install_command_refused` of `install_new`, each its
+    own token): a `new_root` that exists and is not an empty folder, `root_not_empty` (`path`; a
+    root that holds an unfinished operation of `new` also names it, `install_operation_id`, and
+    `next` the ways on); a state root that exists and is not an empty folder,
+    `state_root_not_empty` (`path`); a `--build` that does not verify, the release reader's
+    `release_check_failed` (`release_checks`, the reader's refusal as the cause, its `failures`
+    beside), or for a kept build folder, a UI release or a build without the template
+    `build_invalid` (`path`, `count` and `files` for files that differ); an empty `actingd-config`
+    edge `I ∩ R` between the running installer and the build, `interface_edge` (`commit_sha`,
+    `count`, the row in `edges`; "Interface checks").
+  - **One journalled operation** of kind `new` (off row 7a″'s pass list, so no watchdog starts a
+    Runtime on the root while it is unfinished; a watchdog never starts a root that never started),
+    its initiator recorded, under `install\writer.lock`, its steps in this order: `copy_build` (the
+    build's listed files and both manifests into `install\builds\<c>.new-<ms>.part`, with its
+    `release.json`), `verify_tree` of that part, `place_build` (renamed `install\builds\<c>`), one
+    `stage_file` and then one `swap_file` for every file of the kept build, both manifests included,
+    into `tools\` and `runtime\` (all new, no `.old`), `verify_tree` of the live tree,
+    `write_config`, `create_state_root` and `record_state` (`state.json` v1: the live build
+    installed by this operation, the kept build with `origin` `release` or `local_build` and its
+    tag, `packs: []`, the configuration's `config_sha256`). After the first write a failed step
+    ends `install_operation_interrupted`, the journal and `current.json` kept, `next` naming
+    `actingctl install resume|undo --root <new_root> --operation <id>` (until LAB-7; any build of
+    this release or later runs them, and once the configuration is in place the new root's own
+    module answers `op resume` and `undo`). `resume` continues each step by its postcondition;
+    `undo` (the unfinished operation, or the last finished one, under the writer lock and the
+    stopped rule: `owner_lock_held`, `runtime_running`, `processes_unreadable`) sets each written
+    item aside from the last, `state.json.rolledback-<ms2>`, the state root's folder as
+    `<folder>.rolledback-<ms2>` when the operation made it (one that was there, empty, stays),
+    `actingd.config.json.rolledback-<ms2>` and the part `actingd.config.json.abandoned-<ms2>`, each
+    program file `.rolledback-<ms2>`, each part `.abandoned-<ms2>`, the kept build
+    `<c>.rolledback-<ms2>`: nothing is deleted, and the root's folder, its `install\` and the
+    journal stay.
+  - **The first configuration** comes from the template the Runtime member ships beside the
+    example, `actingd.config.first.json` (the example is unchanged: CI starts the Runtime from it):
+    the example's members, a composer-mode `policy` (no `catalog`) with one host and no instance,
+    and `standard_packs.root` `packages`, relative to the configuration's folder, the new root.
+    The host's `cpu_available_milli`, `gpu_available_milli` and `io_available_milli` are 1000
+    each, the most a host may declare: the evaluator's placement check only asks that a task's own
+    load fit them, and the performance controller overlays a host's responsiveness, third-party
+    pressure and heavy-dispatch budget, never these. The command fills only `state_root`
+    (absolute), `secret_fingerprint_salt` (32 bytes of the operating system's generator written
+    as 64 lowercase hexadecimal digits; never printed, journalled, diffed, logged or answered),
+    `lab_module_authoring` (`--lab-authoring`; absent: `true`) and `mumu_root` when
+    `--mumu-root` is given; nothing in Tools names a configuration value. `write_config` writes it
+    beside the live file as `actingd.config.json.new-<ms>.part` (a part an earlier attempt wrote
+    is checked as it is, its salt kept), runs the new live build's check-config with
+    `--install-root <new_root>` and renames it `actingd.config.json`; a refusal ends the operation
+    refused, `config_refused_by_target` (`path` the part, check-config's outcome as the cause),
+    the part kept, `next` naming its undo; a check-config that does not answer is
+    `install_operation_interrupted` with `check_config_unanswered`.
+  - **Not this command's** (Workflow #453 S11, [state-root-installation.md](state-root-installation.md)):
+    `new` mints no installation identity (`install\identity.json`) and writes no state-root record
+    (`installation.json`). It creates the state root's folder, empty, and writes `install\state.json`,
+    which makes the root an installation root: its first start mints the identity and claims the
+    state root.
+  - **`--watchdog`**: after the operation ended and the writer lock is released, the rescue row
+    `watchdog install` for the new root, last; it registers the task and starts nothing (a root
+    that never started stays down, [runtime-watchdog.md](runtime-watchdog.md), row 3). Its report
+    is the answer's `watchdog`; a registration that failed is the answer's top, the root's members
+    beside it, and `next` names the row again.
+  - **Its answer**: `install_command_done` (`install_new`, `install_operation_id`, `commit_sha`,
+    `installation_changed: true`) with `operation_id`, `root`, `state_root`, `config_sha256`,
+    `lab_options_enabled` (`["lab_module_authoring"]` or `[]`), `build` (`commit`, `origin`, `tag`,
+    `source`), `check_config`, `work_dir` for a release folder, and `next` naming the rows that
+    follow, each run by the new root's own `tools\actinglab.exe`: `place` (standard packs),
+    `instance add` and `up`.
 - **Lab options** (Alice, ruling 44, #421 comment 6380164338; INST-3 and INST-6). The CLI install
   asks for each Lab option (`lab_module_authoring`, `lab_module_debugging`) in the middle of
   `install new` when it runs interactively (its console is a terminal), with the labels of the
@@ -900,8 +987,11 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
   **always** passes both, `--lab-authoring true|false` and `--lab-debugging true|false`, with the
   person's choice on its Lab page; it never leaves either out, so the non-interactive default
   (both on) never decides for it. It shows the result's `lab_options_enabled` to the person as
-  the CLI returns it, neither recomputed nor filtered. `install new` is not built yet (INST-6,
-  slice R-15e), so this rule has no code before it; no flag of an existing command changes.
+  the CLI returns it, neither recomputed nor filtered. Workflow #453 S4 built the command as the
+  rescue row `new` ("Fresh root" above): it asks nothing and takes `--lab-authoring true|false`
+  only, absent `true`; `lab_module_debugging` is retired ([lab-two-entries.md](lab-two-entries.md)
+  §8.3) and `--lab-debugging` is refused as an unknown option, so a wizard passes
+  `--lab-authoring` alone. No flag of an existing command changes.
 
 ## The Lab's rescue module (Workflow #434 LAB-3, since 0.12.48)
 
@@ -1241,7 +1331,7 @@ will run, **B** a placed bundle (the register's declared range) or a new one (it
 | update, rollback | `ledger`: Rp.max ∈ R\*; R\*.max > Rp.max needs `--accept-ledger-one-way` (journalled; it closes later rollbacks by the same edge). `runtime-outcomes`: R\*.max ∈ I. `install-control`: I ∩ Rp and I ∩ R\*. `runtime-client`: I ∩ Rp and I ∩ R\*. `package`: every placed B.max ∈ R\* (unknown: the warning). `actingd-config`: C passes R\*'s check-config, and I's key table knows every key C names in the sections the configuration mechanism resolves. Each build's Runtime and Tools manifests declare equal `speaks`. |
 | config commit, restore | C passes the check-config of the build in `runtime\`. |
 | pack place | B.max ∈ the live Runtime's `package` and ∈ I's, checked before the layout; a bundle that carries `notices/` declares B.max ≥ 10 (`pack_invalid`, `notice_undeclared`); from 0.12.60 a bundle that carries `goals.json` declares B.max ≥ 12 (`pack_invalid`, `goal_undeclared`). |
-| new | I ∩ R for `actingd-config`; R's check-config passes. |
+| new | I ∩ R for `actingd-config` (Workflow #453 S4: `installer_meets_next`, before anything is written); R's check-config passes the first configuration (`write_config`). |
 
 An edge row is `{interface, check, result: pass | fail | warning, parties: [{party, source,
 range}]}` (`source` `manifest`, `register` or `bundle`); every failed edge names both parties,
@@ -1287,7 +1377,7 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 | `pack place` (INST-4) | any (cold when stopped; `--hot` when running) | — | taken | hot: its guards |
 | `start` (INST-2) | stopped | unlocked | taken (or already held) + `run.lock` | configuration passes check-config |
 | `stop` (INST-2) | running | — | not taken alone; taken inside an update | its guards |
-| `new` (INST-6) | — | — | created | empty root and state root |
+| `new` (INST-6; the rescue row, Workflow #453 S4) | — (never started) | — | created | the root and the state root absent or empty folders; the build verifies; I ∩ R for `actingd-config` |
 
 ### Locks and the watchdog
 
@@ -1309,7 +1399,9 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
   (INST-1b-F fix round 1, review S1 F7); a `current.json` that cannot be read still does. The
   code lists the kinds that pass (`release_stage`, `adopt`, `stop`, `start`, `release_hold`);
   every other kind stands aside. R-15c adds `prepare` and `clean` to the pass list; `convert` and
-  `restart` stay off it (design v4.1 §3.4; "The A/B layout" below).
+  `restart` stay off it (design v4.1 §3.4; "The A/B layout" below). Workflow #453 S4's kind `new`
+  is off it too: a root `new` is building is not started (a watchdog before the kind reads the
+  file as unreadable and stands aside as well).
 - `owner.lock` is only read, never locked. The ledger verification and check-config take their
   own locks as their contracts say.
 
@@ -1422,7 +1514,9 @@ The person's notice before a change (D0) is no guard; every plan prints the fact
 
 ### Secrets, identifiers, digests
 
-The salt never leaves the configuration file and the candidate. No device serial is read or
+The salt never leaves the configuration file and the candidate. The rescue module's `new`
+(Workflow #453 S4) makes a fresh root's salt from 32 bytes of the operating system's generator and
+writes it only into the first configuration's part. No device serial is read or
 written by any install command. No package digest is computed, pinned or compared; zip SHA-256
 values appear only as the download check's evidence.
 
@@ -1464,7 +1558,9 @@ any other schema (`state_invalid`).
 The Lab's rescue module (LAB-3) adds two members after `installer`, which `actingctl install`
 never writes: `"initiator": "<word>"` (lab-two-entries.md §4.1) and `"one_way": true` (a one-way
 ledger edge it applied; absent otherwise); its undo record carries `"initiator"` too. Kinds
-`config_replace` and `pack_place` are the module's. An older reader that refuses unknown members
+`config_replace` and `pack_place` are the module's, and (Workflow #453 S4) `new`, whose inputs
+record the build, the folder it is copied from, the state root and the options, never the salt;
+its `record_state` step's undo sets `state.json` aside (there is no previous state). An older reader that refuses unknown members
 does not read such a journal; `install-root` does not change (lab-two-entries.md, open point 5).
 LAB-3 fix 1: the evidence of the module's `pause` step carries `"own_pauses": {"reason",
 "owner_epoch", "revisions": {"<alias>": <revision>}}`, the pauses it set; with the step's
@@ -1508,6 +1604,8 @@ state alone, so a step repeated after a crash is either already true or done aga
 | `reverse_files` | the previous build verified in place | reverse what is not yet reversed | — |
 | `config_swap` | INST-3 | | |
 | `pack_item` | INST-4, as `swap_file` per item | | |
+| `write_config` | Workflow #453 S4 (`new`): `actingd.config.json` is in place | check the part (written first when it is not there) with the live build's check-config, then rename it in | `actingd.config.json` → `.rolledback-<ms2>`; its part → `.abandoned-<ms2>` |
+| `create_state_root` | Workflow #453 S4 (`new`): the state root's folder is there | create it | the folder → `<folder>.rolledback-<ms2>` when the operation made it |
 
 `<ms2>` is the undo's own Unix milliseconds. Crash points: before the first swap the live tree is
 untouched (resume restages, undo abandons the parts); between swaps every file is old or new,
@@ -2802,6 +2900,14 @@ the fragment registers, names the command.
   and `pack_invalid` (`game`, `path`, `timeout_ms`) for the standard-pack root and a game root's
   check; no code or key is new here (actingd's `vision_manifest_reported` and
   `vision_check_completed` are actingd's own).
+- **Workflow #453 S4** (since 0.12.60; "Fresh root"): the location `install_new` (registered by
+  INST-0) is answered, by the rescue module's `new` only; `install_refusal` `root_not_empty`
+  (`path`, and `install_operation_id` for a root holding an unfinished `new`) and
+  `state_root_not_empty` (`path`), which only `new` answers; the existing `release_check_failed`,
+  `build_invalid`, `interface_edge`, `config_refused_by_target`, `check_config_unanswered`,
+  `owner_lock_held`, `runtime_running` and `processes_unreadable`, and the caveat
+  `release_unconfirmed`; the operation kind `new` and the step kinds `write_config` and
+  `create_state_root`; no code or key is new.
 - **Workflow #453 S1** (since 0.12.60; "Instances, the first slice", "A first row"):
   `install_instance_add`'s `instance_invalid` gives the existing key `config_key` two more
   values, `policy` and `policy.resources.hosts`, beside those it gave before; no code, location,

@@ -38,6 +38,8 @@ pub(crate) mod journal;
 pub(crate) mod launch;
 pub(crate) mod lock;
 pub(crate) mod manifest;
+// Workflow #453 S4: the rescue module's `new`, a fresh root with its first configuration.
+pub(crate) mod new;
 // Workflow #434 LAB-5G5b: the rescue module's `mcp config`, the second generation's snippet.
 pub(crate) mod mcp_config;
 // Workflow #421 MCP-ENTRY: `mcp-entry plan|list`; Workflow #434 LAB-5G5b: and the rescue module's
@@ -150,6 +152,9 @@ mod gate_453_s7;
 // Test-only: Workflow #454, a post-start check that fails closes its step with what it read.
 #[cfg(test)]
 mod gate_454_postcheck;
+// Test-only: Workflow #453 S4, the rescue row `new` on the release fixture and temporary roots.
+#[cfg(test)]
+mod gate_453_s4;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
@@ -555,6 +560,8 @@ fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
         | OperationKind::ReleaseHold
         | OperationKind::ConfigReplace
         | OperationKind::PackPlace => update::resume(operation)?,
+        // Workflow #453 S4: the rescue module's `new`.
+        OperationKind::New => new::resume(operation)?,
     };
     Ok(resumed(operation_id, answer))
 }

@@ -38,7 +38,7 @@ The current release is **v0.12.10** (pre-release) on this repository's [Releases
 
 | Zip | Layout | Contents |
 | --- | --- | --- |
-| `actingcommand-runtime-<sha>.zip` | `distribution-v1` | `actingcommand-actingd.exe`, `actingctl.exe`, `actingd.config.example.json`, `actingd.defaults.json` (the defaults the program embeds; a configuration names only the keys it changes), `INSTALL.md`, `RELEASE-NOTES.md` |
+| `actingcommand-runtime-<sha>.zip` | `distribution-v1` | `actingcommand-actingd.exe`, `actingctl.exe`, `actingd.config.example.json`, `actingd.config.first.json` (from v0.12.60: the first configuration's template, which the Lab's `new` fills), `actingd.defaults.json` (the defaults the program embeds; a configuration names only the keys it changes), `INSTALL.md`, `RELEASE-NOTES.md` |
 | `actingcommand-tools-<sha>.zip` | `platform-tools-v3` | `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`, the watchdog `actingwatch.exe` (from v0.12.47 it runs the watchdog's tick itself), and Google's official Android platform-tools 37.0.1 under `platform-tools/` (`adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt`, `source.properties`) |
 
 Vision models and the ONNX Runtime never ship with a release: the OCR/NN engine is linked into `actingcommand-actingd.exe` and reads its models from `<vision root>\models\<model_ref>\`; without them, a target that needs OCR fails explicitly. `actingcommand-actingd.exe` also carries the official scrcpy server 5.0.1 and OpenH264 for the real-device capture backend; their notices are in RELEASE-NOTES.md.

@@ -1631,7 +1631,8 @@ pub(crate) fn finish(
                 .install_operation_id(operation_id.clone())
                 .installation_changed(true)
         }
-        OperationKind::ReleaseStage | OperationKind::Adopt => {
+        // Workflow #453 S4: the rescue module's `new` ends by its own code (`super::new`).
+        OperationKind::ReleaseStage | OperationKind::Adopt | OperationKind::New => {
             return Err(operation.interrupted(state_invalid(
                 command,
                 paths.journal(&operation_id),

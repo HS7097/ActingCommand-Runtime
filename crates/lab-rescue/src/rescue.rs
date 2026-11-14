@@ -109,8 +109,9 @@ const USAGE: &str = "usage: actinglab [--json] <rescue operation> [<positionals>
 
 /// The rows of module `rescue` this slice serves, by the table's name (Workflow #421 INST-5: and
 /// `instance add`; Workflow #434 LAB-5G5b: and the three MCP rows; Workflow #453 S10: and
-/// `emulators`; Workflow #453 S7: and `vision manifest` and `vision check`).
-pub const SERVED: [&str; 36] = [
+/// `emulators`; Workflow #453 S7: and `vision manifest` and `vision check`; Workflow #453 S4: and
+/// `new`).
+pub const SERVED: [&str; 37] = [
     "up",
     "restart",
     "down",
@@ -126,6 +127,7 @@ pub const SERVED: [&str; 36] = [
     "release verify",
     "release stage",
     "adopt",
+    "new",
     "config replace",
     "config restore",
     "instance add",
@@ -226,6 +228,10 @@ pub(crate) fn answer_with(
     name: &str,
     params: &Map<String, Value>,
 ) -> Answered {
+    // Workflow #453 S4: `new` acts on the root it names, not on this one.
+    if name == crate::install::new::ROW {
+        return answer_new(context.host, context.initiator, params);
+    }
     if let Some(refused) = refused_parameter(params) {
         return Answered::Line(cli_line::failure(&refused, Some(USAGE)));
     }
@@ -2626,10 +2632,36 @@ pub(crate) fn agent_words(
 /// The rescue module's answer of a row actinglab's parser gave, located from this process: the
 /// root of the running program ([`actingcommand_lab_ops::locate::locate`]).
 pub fn answer_here(name: &str, params: &Map<String, Value>, initiator: Initiator) -> Answered {
+    // Workflow #453 S4: `new` builds the root it names, so it runs wherever the program does (the
+    // release's own program, before any root exists); the one row served without a located root.
+    if name == crate::install::new::ROW {
+        return answer_new(&SystemHost::of(Some(initiator)), initiator, params);
+    }
     match actingcommand_lab_ops::locate::locate() {
         Ok(location) => answer(name, params, &location, initiator),
         Err(outcome) => Answered::Line(cli_line::failure(&outcome, None)),
     }
+}
+
+/// Workflow #453 S4: the row `new` (`crate::install::new`) on `host`, as `initiator`: the
+/// parameters the module refuses on every row refused first, then the row read through its
+/// constant; a usage refusal with the module's usage.
+pub(crate) fn answer_new(
+    host: &dyn Host,
+    initiator: Initiator,
+    params: &Map<String, Value>,
+) -> Answered {
+    let row = crate::install::new::ROW;
+    if let Some(refused) = refused_parameter(params) {
+        return Answered::Line(cli_line::failure(&refused, Some(USAGE)));
+    }
+    let Some(read) = rescue_reads::read_here(row, params) else {
+        return Answered::Line(unknown_row(row));
+    };
+    Answered::Line(match crate::install::new::row(host, initiator, read) {
+        Ok(answer) => install::print(answer),
+        Err(refused) => module_refusal(&refused),
+    })
 }
 
 /// Whether a path is the root of `location` (for the tests' fake roots).

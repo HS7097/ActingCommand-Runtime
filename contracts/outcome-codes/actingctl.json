@@ -3415,7 +3415,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install new (Workflow #421 INST-6; contracts/install-cli.md)."
+      "description": "The operation of the Lab's rescue module's new (Workflow #453 S4, since 0.12.60; contracts/install-cli.md, Fresh root), a fresh installation root built from a verified release or kept build with its first configuration; the command actingctl install new that INST-6 planned is not built, and actingctl install gains nothing."
     },
     "install_prepare": {
       "owner": "actingctl",
