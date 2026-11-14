@@ -16,6 +16,9 @@ mod owner_unlock;
 mod process_priority;
 // WD-MT (Workflow #421): the daemon's own stdout and stderr, made not inheritable at its start.
 mod standard_handles;
+// Workflow #453 S12: `actingd claim-state-root`, the hand-over of a state root to the installation
+// the command runs from.
+mod state_root_claim;
 mod suspended;
 // Workflow #453 S7: `actingd vision manifest|check`, what a vision root must hold and whether it
 // does, read only.
@@ -81,6 +84,10 @@ mod gate_453_s10;
 // Test-only: Workflow #453 S11, check-config's `state_root_installation`.
 #[cfg(test)]
 mod gate_453_s11;
+// Test-only: Workflow #453 S4, the first configuration's template judged by this build's reader
+// and check-config.
+#[cfg(test)]
+mod gate_453_s4;
 // Test-only: Workflow #453 S7, `actingd vision manifest|check` on an injected pin table and
 // temporary vision roots.
 #[cfg(test)]
@@ -163,6 +170,13 @@ fn main() -> ExitCode {
             suspended::SCHEMA_VERSION,
             ActingdCode::SuspendedReportEncodeFailed,
             installed(running).and_then(|()| suspended::run(arguments)),
+        ),
+        // Workflow #453 S12: writes the state root as a start's claim does (its owner journal, its
+        // record, the installation's identity), so it runs as a start runs.
+        Some("claim-state-root") => subcommand_report(
+            state_root_claim::SCHEMA_VERSION,
+            SharedCode::SerializationFailed,
+            installed(running).and_then(|()| state_root_claim::run(arguments)),
         ),
         // Workflow #453 S10: read only, judged as check-config judges a configuration. Fix 1
         // (review): before it does anything, its own stdout and stderr are made not inheritable,

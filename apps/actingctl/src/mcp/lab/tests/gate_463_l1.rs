@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // #463 L1 (contracts/lab-recording.md, "One call per step"; contracts/lab-operations.json, the rows
-// of the recording family; register §1.365): whatever the Lab has is a command and a tool.
+// of the recording family; register §1.370): whatever the Lab has is a command and a tool.
 // - `l1_each_new_record_tool_reaches_its_command_and_answers_its_envelope`: `ac_record_candidates`,
 //   `ac_record_amend`, `ac_record_step`, `ac_record_archive` and `ac_record_reopen` are author tools
 //   whose input schema is their command's flags; each runs `actinglab --json --via mcp record

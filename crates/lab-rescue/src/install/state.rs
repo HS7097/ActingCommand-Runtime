@@ -239,6 +239,10 @@ impl KindLocation for OperationKind {
             // Workflow #434 LAB-3: the rescue module's composites.
             Self::ConfigReplace => InstallLocation::ConfigReplace,
             Self::PackPlace => InstallLocation::PackPlace,
+            // Workflow #453 S4: the rescue module's `new`.
+            Self::New => InstallLocation::New,
+            // Workflow #453 S9: the rescue module's `vision place`.
+            Self::VisionPlace => InstallLocation::VisionPlace,
         }
     }
 }

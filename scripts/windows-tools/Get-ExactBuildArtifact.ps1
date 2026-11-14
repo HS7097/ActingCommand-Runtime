@@ -492,6 +492,21 @@ try {
         if ($declaresDefaults) {
             $expectedFiles += 'actingd.defaults.json'
         }
+        # Workflow #453 S4: a Runtime built from S4 on also ships the first configuration's
+        # template actingd.config.first.json; earlier artifacts do not declare it. Declared, it is
+        # required, as the defaults file is.
+        $declaresFirstConfig = (
+            $manifest.PSObject.Properties.Name -contains 'files' -and
+            @(
+                @($manifest.files) | Where-Object { $null -ne $_ } | ForEach-Object {
+                    $path = $_.PSObject.Properties['path']
+                    if ($null -ne $path) { [string]$path.Value }
+                }
+            ) -ccontains 'actingd.config.first.json'
+        )
+        if ($declaresFirstConfig) {
+            $expectedFiles += 'actingd.config.first.json'
+        }
     }
 
     # A Tools manifest with tools_payload_layout 'platform-tools-v1' adds the official

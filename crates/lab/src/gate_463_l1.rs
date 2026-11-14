@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// #463 L1 (contracts/lab-recording.md, "One call per step"; register §1.365): `do --capture
+// #463 L1 (contracts/lab-recording.md, "One call per step"; register §1.370): `do --capture
 // --record` records a whole step in one call. On a recording of device frames, attached as
 // `capture --record` attaches them, `record_plan_step` applies the step's mark request with `record
 // mark`'s own code and plans the press with `do --capture --record`'s, and `PlannedStep::perform`

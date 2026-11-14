@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // #463 L1 (contracts/lab-recording.md, "One call per step" and "`--record` on device commands";
-// register §1.365): the one-call form of `do --capture --record` keeps the device form's refusal of
+// register §1.370): the one-call form of `do --capture --record` keeps the device form's refusal of
 // a dry run, and its mark request and next frame are read with `--record` only.
 // - `l1_the_device_form_refuses_dry_run_and_its_flags_need_record`: `do --capture --record` with a
 //   mark request and a next frame and with `--dry-run`, after the command or as the global option,

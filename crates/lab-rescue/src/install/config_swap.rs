@@ -113,6 +113,56 @@ pub(crate) struct Staged {
 /// The input of a `config_replace` journal that records the instance `instance add` added.
 pub(crate) const ADDED_INPUT: &str = "instance_add";
 
+/// The input of a `config_replace` journal that names the file the swap keeps the live one as.
+const BACKUP_INPUT: &str = "backup";
+
+/// Workflow #453 S3 fix 1 (the coordinator's answer 3): whether the `config_replace` `operation`
+/// began while no Runtime answered (`config replace`, `config restore` or `instance add` while the
+/// Runtime is stopped): its journal holds no hold and no S0. Its `resume` and `undo` apply the
+/// stopped rule before anything is moved, as those of a placement begun while stopped do.
+pub(crate) fn is_cold(operation: &Operation<'_>) -> bool {
+    let journal = operation.journal();
+    journal.s0.is_none() && journal.inputs.get("hold").is_none_or(Value::is_null)
+}
+
+/// Workflow #453 S3 fix 1: the state root and the writer lock's wait (`install.lock_wait_ms`) the
+/// undo of a cold `config_replace` `operation` judges by: from the live configuration, or, when
+/// there is none (a swap stopped between its two renames), from the file the swap kept it as (the
+/// input `backup`), so that the undo still puts that file back. A file that cannot be read refuses
+/// `config_unreadable` of `command`, an `install` section that does not read
+/// `install_section_invalid`.
+pub(crate) fn stopped_target(
+    paths: &Paths,
+    operation: &Operation<'_>,
+    command: InstallLocation,
+) -> Result<(PathBuf, u64), Outcome> {
+    let live = paths.config();
+    let path = if live.exists() {
+        live
+    } else {
+        operation
+            .journal()
+            .inputs
+            .get(BACKUP_INPUT)
+            .and_then(Value::as_str)
+            .map_or(live, PathBuf::from)
+    };
+    let unreadable = || super::refusal(command, InstallRefusal::ConfigUnreadable).path(&path);
+    let config = files::read_json::<Value>(&path).map_err(|cause| unreadable().caused_by(cause))?;
+    let settings = actingcommand_runtime_config::install::settings(&config).map_err(|failure| {
+        super::refusal(command, InstallRefusal::InstallSectionInvalid)
+            .path(&path)
+            .caused_by(failure.outcome())
+    })?;
+    let state_root = config
+        .get(super::plan::STATE_ROOT_MEMBER)
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .filter(|root| root.is_absolute())
+        .ok_or_else(unreadable)?;
+    Ok((state_root, settings.lock_wait_ms))
+}
+
 /// The steps: with a hold, the pause and the close first, and after the swap the start, its
 /// checks and the release; the swap alone otherwise. The part is `staged`'s when given (INST-5).
 fn steps(
@@ -230,7 +280,7 @@ pub(crate) fn open<'h>(
             .join(format!("{CONFIG_FILE}.prev-{}", operation.ms())),
     );
     operation
-        .set_input("backup", Value::String(backup))
+        .set_input(BACKUP_INPUT, Value::String(backup))
         .map_err(|cause| operation.interrupted(cause))?;
     if let Some(begun) = hold {
         operation

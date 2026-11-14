@@ -14,9 +14,10 @@ use crate::watchdog::observe;
 use crate::watchdog::start::{self, StartedProcess, Target, TickSeams};
 use actingcommand_contract::outcome::{Category, IoOp, Outcome};
 use actingcommand_contract::{
-    CONFIG_OVERRIDES_FACT_KEY, CONFIG_PARAMETERS_FACT_PREFIX, CONFIG_START_FACT_KEY, FactScalar,
-    FactValue, OwnerEpoch, RuntimeResult, ScheduleCandidateEligibility, SchedulingPauseExpectation,
-    SchedulingPauseReason, SchedulingPauseScope,
+    CONFIG_OVERRIDES_FACT_KEY, CONFIG_PARAMETERS_FACT_PREFIX, CONFIG_START_FACT_KEY,
+    ControlGateCode, FactScalar, FactValue, OwnerEpoch, RuntimeResult,
+    ScheduleCandidateEligibility, SchedulingPauseExpectation, SchedulingPauseReason,
+    SchedulingPauseScope,
 };
 use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_runtime_client::RuntimeClient;
@@ -104,6 +105,36 @@ impl PlanSeen {
     }
 }
 
+/// What an instance resume did (Workflow #453 S3; `contracts/scheduling-pause.md`, "Pauses held at
+/// a first start"): the pause lifted, or the instance held again by the Runtime with
+/// `instance.added` at the new pause's `revision`, which a Runtime with Workflow #453 S2 answers
+/// for an entry that declares `start_paused` and that its start left unapplied (the answer
+/// `SchedulingResumed` whose self-check's `failure_code` is the instance's control gate,
+/// `dispatch_paused_instance`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Resumed {
+    Lifted,
+    HeldAgain { revision: u64 },
+}
+
+/// Workflow #453 S3: an instance resume's answer as [`Resumed`] reads it.
+fn resumed_of(answered: &RuntimeResult) -> Resumed {
+    match answered {
+        RuntimeResult::SchedulingResumed {
+            revision,
+            selfcheck: Some(selfcheck),
+            ..
+        } if selfcheck.failure_code.as_deref()
+            == Some(ControlGateCode::DispatchPausedInstance.as_str()) =>
+        {
+            Resumed::HeldAgain {
+                revision: *revision,
+            }
+        }
+        _ => Resumed::Lifted,
+    }
+}
+
 /// The runs an instance pause drained: `finished` ended on their own, `cancelled` were asked to
 /// stop at their next checkpoint after the drain timeout.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -161,14 +192,15 @@ pub(crate) trait RuntimeLink {
             })
             .collect()
     }
-    /// Lifts exactly the pause of `alias` the caller saw: in `owner_epoch` at `revision`.
+    /// Lifts exactly the pause of `alias` the caller saw: in `owner_epoch` at `revision`; what the
+    /// Runtime did (Workflow #453 S3: it may hold the instance again, [`Resumed`]).
     fn resume(
         &self,
         state_root: &Path,
         alias: &str,
         owner_epoch: &str,
         revision: u64,
-    ) -> Result<(), Outcome>;
+    ) -> Result<Resumed, Outcome>;
     /// Workflow #421 INST-5b: sets the global pause with `reason` (`drain_timeout_ms` is checked
     /// as for every pause; a global pause drains nothing); the revision it answers.
     fn pause_global(
@@ -257,14 +289,14 @@ fn start_row(row: &BTreeMap<String, FactScalar>) -> Value {
 }
 
 /// Lifts exactly the pause of `scope` the caller saw: in `owner_epoch` at `revision`, on a
-/// connection that declares `initiator`.
+/// connection that declares `initiator`; the Runtime's answer.
 fn resume_seen(
     state_root: &Path,
     initiator: Option<Initiator>,
     scope: SchedulingPauseScope,
     owner_epoch: &str,
     revision: u64,
-) -> Result<(), Outcome> {
+) -> Result<RuntimeResult, Outcome> {
     let owner_epoch = serde_json::from_value::<OwnerEpoch>(Value::String(owner_epoch.to_owned()))
         .map_err(|error| super::files::json_failure(&error))?;
     let client = connect(state_root, initiator)?;
@@ -276,7 +308,6 @@ fn resume_seen(
                 revision,
             },
         )
-        .map(drop)
         .map_err(|error| error.outcome())
 }
 
@@ -455,7 +486,7 @@ impl RuntimeLink for SystemRuntime {
         alias: &str,
         owner_epoch: &str,
         revision: u64,
-    ) -> Result<(), Outcome> {
+    ) -> Result<Resumed, Outcome> {
         resume_seen(
             state_root,
             self.initiator,
@@ -465,6 +496,7 @@ impl RuntimeLink for SystemRuntime {
             owner_epoch,
             revision,
         )
+        .map(|answered| resumed_of(&answered))
     }
 
     fn pause_global(
@@ -503,6 +535,7 @@ impl RuntimeLink for SystemRuntime {
             owner_epoch,
             revision,
         )
+        .map(drop)
     }
 
     fn shutdown(&self, root: &Path, state_root: &Path, wait_ms: u64) -> Result<Closed, Outcome> {
