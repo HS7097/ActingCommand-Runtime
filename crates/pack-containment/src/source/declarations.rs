@@ -209,6 +209,8 @@ impl Declaration<'_> {
                 "prerequisite_package_id",
                 "provides",
                 "store_update",
+                // Workflow #463 V1 (contracts/package-variables.md).
+                "variables",
             ],
         )?;
         if object.contains_key("phases")
@@ -221,6 +223,9 @@ impl Declaration<'_> {
         }
         if let Some(store_update) = object.get("store_update") {
             self.store_update(store_update)?;
+        }
+        if let Some(variables) = object.get("variables") {
+            self.variables(variables, object.get("provides"))?;
         }
         for (field, value) in object {
             let pointer = child("", field);
@@ -3999,6 +4004,28 @@ impl Declaration<'_> {
         })
     }
 
+    /// Workflow #463 V1 (contracts/package-variables.md): a control declaration's `variables`,
+    /// read by the contract crate's one reader ([`actingcommand_contract::parse_package_variables`])
+    /// against the capabilities `provides` declares (already checked; none without it), and
+    /// refused at the member that breaks a rule as `invalid_value`, its word
+    /// (`variables_invalid`, `variable_name_taken`, `variables_on_irreversible`) in the message.
+    fn variables(&self, value: &Value, provides: Option<&Value>) -> CliOutcome<()> {
+        let provides: Vec<actingcommand_contract::ProvidedCapability> = match provides {
+            None => Vec::new(),
+            Some(provides) => serde_json::from_value(provides.clone())
+                .map_err(|_| self.error("/provides", ResourceDeclarationReason::InvalidValue))?,
+        };
+        actingcommand_contract::parse_package_variables(value, &provides)
+            .map(|_| ())
+            .map_err(|violation| {
+                self.refuse(
+                    &violation.pointer,
+                    ResourceDeclarationReason::InvalidValue,
+                    violation.problem.as_str(),
+                )
+            })
+    }
+
     /// STORE-FG-1 (contracts/resource-declarations.md, "Store update packages"): a control
     /// declaration's `store_update`, its members closed and typed, then the member's own rules
     /// ([`actingcommand_contract::validate_store_update`]), refused at the member that breaks
@@ -5978,6 +6005,105 @@ mod tests {
                 Value::from("invalid_value")
             )
         );
+    }
+
+    // Workflow #463 V1 (contracts/package-variables.md): the source parser's control gate takes
+    // `variables` beside `provides`, read by the contract crate's one reader, with and without a
+    // reversible `provides`; it refuses a rule broken at the member's pointer in `control.json` as
+    // `invalid_value`, the rule's word ending its message: a member a variable does not have and a
+    // default off its step (`variables_invalid`), a name a parameter of `provides` has
+    // (`variable_name_taken`), and any variable on a package that provides an irreversible
+    // capability (`variables_on_irreversible`, at `/variables`). Names are made up.
+    #[test]
+    fn v1_source_parser_takes_variables_and_refuses_each_at_its_pointer() {
+        let control = |provides: Option<Value>, variables: Value| {
+            let mut control = serde_json::json!({
+                "schema_version": "Lab-1y.control.v2", "package_id": "neutral.test.variables",
+                "execution_mode": "navigable_route", "game": "neutral", "server": "test",
+                "resolution": {"width": 16, "height": 9}, "entry_task_id": "task",
+                "variables": variables
+            });
+            if let Some(provides) = provides {
+                control["provides"] = provides;
+            }
+            control
+        };
+        let provides = |irreversible: bool| {
+            serde_json::json!([{"capability": "cap_x", "irreversible": irreversible,
+                "parameters": [{"name": "param_p", "options": ["opt_1", "opt_2"],
+                                "default": "opt_1"}]}])
+        };
+        let variables = serde_json::json!([
+            {"name": "floor", "type": "integer", "title": {"en": "Keep at least"},
+             "min": 0, "max": 200, "step": 10, "default": 0},
+            {"name": "pick", "type": "choice", "title": {"en": "Item"},
+             "options": [{"value": "item_a", "title": {"en": "Item A"}},
+                         {"value": "item_b", "title": {"en": "Item B"}}],
+             "default": "item_a", "default_origin": "model"}
+        ]);
+        for accepted in [
+            control(None, variables.clone()),
+            control(Some(provides(false)), variables.clone()),
+        ] {
+            validate_control_declarations(Path::new("control.json"), &accepted)
+                .unwrap_or_else(|error| panic!("{accepted}: {}", error.message));
+        }
+
+        let mut unknown = variables.clone();
+        unknown[1]["governs"] = serde_json::json!({"packages": ["neutral.collect"]});
+        let mut off_step = variables.clone();
+        off_step[0]["default"] = serde_json::json!(5);
+        let mut parameter = variables.clone();
+        parameter[1]["name"] = serde_json::json!("param_p");
+        for (case, declaration, pointer, word) in [
+            (
+                "a member a variable does not have",
+                control(None, unknown),
+                "/variables/1/governs",
+                "variables_invalid",
+            ),
+            (
+                "a default off its step",
+                control(None, off_step),
+                "/variables/0/default",
+                "variables_invalid",
+            ),
+            (
+                "a name a parameter has",
+                control(Some(provides(false)), parameter),
+                "/variables/1/name",
+                "variable_name_taken",
+            ),
+            (
+                "a package that provides an irreversible capability",
+                control(Some(provides(true)), variables.clone()),
+                "/variables",
+                "variables_on_irreversible",
+            ),
+        ] {
+            let error = validate_control_declarations(Path::new("control.json"), &declaration)
+                .expect_err(case);
+            assert_eq!(error.code, "resource_declaration_invalid", "{case}");
+            assert!(
+                error.message.ends_with(&format!("; {word}")),
+                "{case}: {}",
+                error.message
+            );
+            let issue = error.details.expect("declaration issue");
+            assert_eq!(
+                (
+                    issue["declaration_file"].clone(),
+                    issue["field_path"].clone(),
+                    issue["reason"].clone()
+                ),
+                (
+                    Value::from("control.json"),
+                    Value::from(pointer),
+                    Value::from("invalid_value")
+                ),
+                "{case}"
+            );
+        }
     }
 
     // STORE-FG-1 T14 (design-store-fg §5 row T14, §3): the source parser's control gate takes

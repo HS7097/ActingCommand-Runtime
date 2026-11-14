@@ -5582,6 +5582,8 @@ that cannot be read) are reused, their descriptions extended. No code, key or lo
 **Decisions within the work order.** (a) Package-level parameter declarations (A.7.2) arrive with
 R-10; until then no package declares one, so any name under a pack's `parameters` is
 `ui_parameter_undeclared`, and a valid file has none. R-10 gives the check its declarations.
+(Workflow #463 V1, §1.378: R-10 is superseded and not built; a package's variables carry their own
+texts, so `parameters` names nothing and every name stays `ui_parameter_undeclared`.)
 (b) An aspect ratio is checked for the form `<w>:<h>` only, its numbers never used; every other
 string is opaque and only measured in bytes. (c) A refused `ui.json`, like a refused table, never
 breaks its game root, and `ui.json` alone makes a directory a game root for its readers only
@@ -15640,7 +15642,9 @@ while the view refuses an unknown alias; the Lab's scope word.
 
 **Left for later slices.** R-9: the standard package's default layer (`pack_default`, a `source`
 `pack_default`, a risk package closed by default, never a recognition maintenance package). R-10:
-a package's parameters (`session.pack.parameters`, its own family). A row boundary is judged at
+a package's parameters (`session.pack.parameters`, its own family), superseded by Workflow #463
+V1's variables (§1.378; their values are entry rows of `session.resource_targets`), not built. A
+row boundary is judged at
 the evaluation, not again at admission (a record written meanwhile is, as `policy_facts_stale`).
 
 **Interface.** None raised ([component-interfaces.md](component-interfaces.md)): `runtime-client`,
@@ -25042,6 +25046,174 @@ whose key it does not know, `config_override_dropped`, and goes on
 sibling key below 0.12.60, which §1.353 does not say. Nothing else is persisted by ORD-1c: the
 member in front and the queue waits live in memory only.
 
+### 1.374 Slice #463 K1 (0.12.61): a `linear_steps` task runs a select step, and an empty decision with `on_empty` ends it normally (Workflow #463; the owner's requirement on board #463 that an item of a list is chosen by what the screen shows, and the coordinator's rulings on the design note `rd-1114/463-l3l5-design.md`, not the owner's words; coordinator work order `rd-1114/brief-463-k1-linear-select.md`, read on the head `e045e3ae` of #1715; fix round 1, after an independent review, coordinator work order `rd-1114/brief-1720-fix1.md`, #1715's head `4d82081d` merged; closing round, coordinator work order `rd-1115/brief-1720-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged)
+
+1.374 is the number the coordinator assigned this section when #1715's head `4d82081d` was merged
+into this branch: that head brought main `1e67d1c5`, whose §1.369 is #455 G-R2s, and kept #1715's
+own section as §1.372; the numbers between were assigned to other open pull requests. The train
+0.12.60e then merged #1715 (U1, §1.372) with #463 L1 (§1.370), L2 (§1.371) and ORD-1c (§1.373),
+and release 0.12.60 was cut after it; the closing round merged main `2eaf9b7e` (release 0.12.60)
+into this branch, and 1.374 is still the next free number. The slice ships in 0.12.61 (release
+0.12.60 is cut without it).
+
+**What it is.** The kernel's half of the design's L3: a recorded (`linear_steps`) package may
+declare the select step a page-graph package has ([linear-steps.md](linear-steps.md), "Select
+steps"). Its attempt is the page graph's `select_attempt`: the decision on the step's frame by its
+policy, the confirmation on a fresh frame, one tap inside the chosen candidate's click box bound to
+that frame; the step then goes on as a click step does (U1's closing decision included, since a
+select step declares no retry). An `empty` decision of a step that declares `on_empty`, with
+nothing unknown, taps nothing and ends the run Completed on the step's page with its key, through
+the page graph's `finish_success_with_key`, with no run state machine. The recording side, endings
+(L5), the variable and the Lab are later slices; page-graph tasks are unchanged.
+
+**Where, by reading (the design's points it did not verify).**
+- `TaskOperation::validate`, which `validate_linear` calls before its own rules, treats a select
+  step under `linear_steps` as the page graph does (a guard and an `expect_after` required, no
+  trusted coordinate, the declaration's shape); and it already refuses an `input_recheck` beside
+  `select` in every mode (`contained_task_operation_invalid`, `field=input_recheck`,
+  `observation_window::validate_operation`), so the design's reason `select_recheck` would never
+  be reached and is not added.
+- The page graph gives a scan select no helper of its own: the step's window is
+  `scan_max_ms().map_or(step_timeout, ..)`, the deadline `with_deadline(now + window)` capped by
+  the task's. The linear step computes the same window (`run_linear_step`); for every other step it
+  is the step timeout, as before.
+- A `scheduling_outcome` mapping's terminal page enters a source package's page set by itself
+  (`build_pages` adds the mappings' pages), and linear admission resolves it against the detector;
+  no linear wait evaluates it unless a step names it. The `on_empty` page is the select step's own
+  `from`, already on the path, so K1 adds no page to any wait.
+- The selection-policy document is read for a linear task by the same reader
+  (`prepare_select_steps`, `read_policy`, run for every mode before the second `validate_linear`).
+- `declaration.validate()` already refuses a page in two mappings of one effect condition
+  (`mapping_overlap`); a linear task has only `no_designated_effect` mappings.
+- Not in the design: the select step's confirmation frame and a sampled layout's frames are
+  captured and recognized as on the page graph, against the package's whole page set, not only the
+  step's page; a confirmation frame on which another page of the package also passes fails
+  `selection_page_changed`, loudly, before any tap.
+
+**Admission** (`contained_task_linear_invalid`, `operation=<id>`): the effect `select` beside
+`click` and `application` (`on_error` stays `operation_effect`); new reasons `select_optional`,
+`select_retry` (any of `retryable`, `max_attempts`, `retry_interval_ms`, as `application_retry`),
+`expect_identity` (an `expect_identity` whose `choice_of` names a select step) and
+`select_on_empty_terminal` (the one keyed-terminal rule, `keyed_terminal_holds`, over the
+`no_designated_effect` mappings) and (fix round 1) `select_on_empty_target` (the `on_empty` page
+is not the task's target page); `any_requires_application` covers a select step; `terminal_page`
+admits the page of a select step that declares `on_empty`. A package with such a step stays no
+prerequisite and no return-home package (`select_on_empty`, unchanged).
+
+**Execution and records.** `run_linear_step` returns `LinearStepEnd` (the frame reached, or the
+empty end); `linear_select_input` makes the attempt and sends the tap through
+`linear_send_input`, the click's former tail, now shared. An observation whose sampling timed out
+is made again on a fresh frame of the step's page (Workflow #386 SR-1); any other failure, and every
+failure of a scan, ends the run with its own code before any tap. The select codes keep their
+catalog classes (the coordinator's ruling 2). Records are the page graph's: `task.selection_evaluated`,
+then the tap's `EffectIntent` and `EffectCompleted`, or, on an empty end, the step's `StepFinished`
+on its page, `Finalizing` and a terminal Completed on that page whose key the host's existing rule
+derives from that `StepFinished`.
+
+**A task without a select step** is admitted, run and recorded as before: the lines it executes
+compute the same values (the effect match, the window `step_timeout`, the boxed frame of
+`LinearStepEnd::Reached`, the click's tail moved into `linear_send_input` in its order).
+
+**Interface: `package` 13** (the coordinator's ruling in fix round 1, after the review found two
+precedents that contradict each other: revision 6 rose for a linear task's `wait_page`, which older
+builds refuse only at admission, and #411 B12-4 did not rise for `input_recheck`). By
+[component-interfaces.md](component-interfaces.md) ("What a range means": a bundle's maximum is
+the revision its packs need), a `linear_steps` task with a select step needs `package` 13: every
+Runtime before this slice refuses such a package at admission (`reason=operation_effect`, before
+`PackageAdmitted`), so an installer must refuse to place it on such an installation instead of
+every run failing. The Runtime declares `package` [3, 14] (13 is this slice's, 14 Workflow #463
+V1's, the same train; `distribution/windows/component-interfaces.json`; the architecture pin
+`the_runtime_declares_each_v0120_interface_revision_once`; the contract's row 13). A pack without
+a select step under `linear_steps` keeps its revision; a bundle whose packs declare one declares
+[13, 13], which the `package` edge of an earlier installer (its range [3, 12]) refuses in the
+plan, before the hold and any write. The new reasons are detail values of
+an existing code; no record, member, code or configuration key is added, and `ledger`,
+`runtime-client`, `actingd-config` and `runtime-outcomes` do not move.
+
+**Nobody checks the 13** (closing round). That 13 is written by the resource repository's
+packaging (the bundle's `interfaces.json`); no component checks it: `place` holds a bundle's
+maximum to its own range and asks 10 only of a bundle with the notices directory and 14 only of
+one with `goals.json` or one whose packs declare `variables`
+(`crates/lab-rescue/src/install/place.rs`, `check_notices`, `check_goals_declared` and
+`check_variables_declared`), never 13 of a select step, and the Runtime does not check a package's
+declared range at admission (as for revision 11, §1.343). So an earlier installer places a bundle
+whose packs declare a select step and that declares less than 13, and an earlier Runtime then
+refuses that package at every run (`contained_task_linear_invalid`, `reason=operation_effect`).
+
+**Fix round 1** (the coordinator's work order `rd-1114/brief-1720-fix1.md`, after an independent
+review and the first CI run).
+- *#1715's fix round 2 merged.* `linear.rs` was then #1715's head `4d82081d` with this slice's
+  additions put back (since the closing round it is main's, below): the select branch of
+  `run_linear_step`, `LinearStepEnd` and the boxed returns of the gate branch, the empty end in
+  `run_linear_steps` (before the restart segment's close), the admission rules,
+  `linear_select_input` and `linear_send_input`. A select step declares no retry,
+  so its one attempt is its last: where its arrival fails with `page_confirmation_failed`, #1715's
+  `linear_closing` runs exactly as for a click step's last attempt, and only a screen unknown and
+  still for the whole closing bound ends `contained_task_linear_unrecorded_screen`; nothing of
+  #1715's functions changed.
+- *The `on_empty` page is not the target page* (`select_on_empty_target`): otherwise the page's one
+  mapping is the `on_empty` key's, and the host, which keys a run by the page it finished on, would
+  record a run that reached the target as one that found nothing, without an error.
+- *`package` 13*, above.
+- *Texts*: [linear-steps.md](linear-steps.md) "Select steps" (the closing decision after the tap)
+  and "Tools" (a first select step's decision offline; an empty first step reports
+  `offline_simulation_executed_step_invariant`, as a page-graph task's does), "Older builds".
+- *Lint*: three `.err().expect()` of the first CI run became `.expect_err()`.
+
+**Closing round** (the coordinator's work order `rd-1115/brief-1720-fix2.md`, after the review of
+the fix round found nothing that must change).
+- *Main of release 0.12.60 merged* (`2eaf9b7e`, which holds #1715's last head `263af541` through
+  the train 0.12.60e). `linear.rs` is now main's of release 0.12.60 with this slice's additions;
+  the merge met no conflict in code (only in the exec gate map and in this register, both sides
+  kept in section order). The slice moves to 0.12.61: this section, the contract's sentences
+  ([linear-steps.md](linear-steps.md), the admission row, "Select steps", "Older builds"), the
+  row 13 of component-interfaces.md, the architecture pin's comment and the gate rows. It adds no
+  code, so no `since` moves.
+- *U1's code after a select step's tap.* The description of
+  `contained_task_linear_unrecorded_screen` now begins "after the input of a linear_steps click or
+  select step": a select step's tap reaches the same closing decision. The code is U1's, since
+  0.12.60, review `pending`. A release file fixes a code's signature only (category, ladder class,
+  review, status, and its values' types and required set; [runtime-outcomes.md](runtime-outcomes.md),
+  "Release files"), never its text, and `released/0.12.60.json` holds no entry, so the text may
+  change. [linear-steps.md](linear-steps.md) names no click step in U1's text. The index is
+  regenerated.
+- *`package` 13 is checked by nobody*: "Interface" above, the contract's row 13 and "Older builds".
+- *Tests* (exec gate rows "#463 K1", (10)): the kernel test device answers
+  `is_bookkeeping_failure` as the scripted runtime it wraps does (`false`; it answered the trait's
+  default `true`) and keeps the frame reference each input is bound to; the scan test asserts that
+  its tap is bound to the frame its confirmation record names (`IdentityMatched`'s `frame_id`).
+
+Tests: kernel `gate_463_k1.rs` (exec gate rows "#463 K1"): admission of a fixed-slots select with
+`on_empty` and of a select over a scan; each refusal with its reason, the `input_recheck` refusal,
+the prerequisite and return-home refusal; (fix round 1) an `on_empty` page that is the target page
+(`select_on_empty_target`); a selected card tapped once after its confirmation and the next step
+run; an empty end Completed on the list with its key; an unreadable card
+(`selection_result_blocked`); `insufficient` and `ambiguous` (`selection_not_selected`); a changed
+confirmation frame (`selection_projection_mismatch`); a selection sampling timeout observed again
+without an input; an unknown still screen after the select tap (U1's code; adapted in fix round 1
+to #1715's closing decision, which observes to its bound: it also pins the arrival's timing and the
+closing decision's 101 frames after the arrival's 21); (fix round 1) with an action gap, the
+decision on the fresh frame after the gap; the sampling deadline passed before the press, observed
+again with a retry and `recognition_sample_deadline_exceeded` without one; a select over a scan
+run on the SEL-L6b list of six cards, which fits one screen, on a device that commits its frames
+as the host does (the fixtures of `gate_308_l3`'s kernel path and `gate_308_l6b`, its steps widened
+to the admission's static checks). Host `gate_463_k1.rs` (host gate row "#463 K1"): a direct run
+that ends empty gets its `on_empty` key from the host's scheduling disposition. The architecture
+pin holds `package` [3, 14] (13 is this slice's, 14 Workflow #463 V1's, the same train). No golden
+changes and no test leaves the gate map.
+
+**At deploy.** Nothing installed changes: no installed `linear_steps` package declares a select
+step (an older build refused one). The Runtime declares `package` [3, 14] (13 is this slice's, 14
+Workflow #463 V1's, the same train): a bundle that declares 13 is placed only by this build's
+installer or a later one. The recording side that generates
+such packages is a later slice.
+
+**Rollback** (below 0.12.61). No record shape changes; a build below refuses a linear package with
+a select step at admission (`reason=operation_effect`), before any lease, and its installer refuses
+a bundle that declares `package` 13 through its `package` edge. A rollback stays open while no root
+is placed from such a bundle. A bundle with such a package that declares less than 13 is placed by
+an earlier installer too, and every run of that package is refused (closing round, "Interface").
+
 ### 1.376 Slice #464 P2 (0.12.61): `standard-pack build`, a game's whole standard pack from one commit of its working root, on the steps of `resource verify` (Workflow #464; the owner asked on 11-14 that the Lab build a game's standard pack by itself, board #464; the design `rd-1114/464-pack-build-design.md`, its sections A, C.1, C.2, D and E and the row "P2 build" of its section G, read on main `17197d8e`, with the coordinator's rulings on its section H, not the owner's words; coordinator work orders `rd-1114/brief-464-p2-build.md`, read on main `17197d8e`, `rd-1114/brief-1719-fix1.md` (fix round 1, after the independent review and CI), `rd-1114/brief-1719-fix2.md` (fix round 2, after the second review) and `rd-1115/brief-1719-main.md` (after release 0.12.60); main `155366bb` merged, then main `1e67d1c5` in fix round 1, then main `2eaf9b7e` (release 0.12.60); the number 1.376 is the coordinator's, the numbers between belong to other open pull requests)
 
 **What it is.** A new authoring row of the operation table, `standard-pack build` (command `actinglab
@@ -25192,6 +25364,279 @@ checkout to the whole tree without LFS.
 **Rollback** (below 0.12.61). Nothing is persisted; an earlier Tools has no `standard-pack build`
 and refuses the words, and a built zip places on any installer whose `package` range holds its
 declared maximum.
+
+### 1.378 Slice V1 (0.12.61): a package declares its variables, `control.json` `variables`, their root check and their place in `goals.json`; `package` revision 14 (Workflow #463 L4; the design `rd-1114/463-l4-design.md`, "Readings: what holds", section A, section D's "goals.json placement", section E, section F's second point, the row V1 of section G and section H items 1, 2, 5, 7 and 9 to 12, with "The coordinator's rulings on I", read on main `155366bb`; the coordinator's rulings of 11-14 in the work order and its two additions of the same night (the `package` revision is 14, revision 13 being Workflow #463 K1's; this section's number), not the owner's words; coordinator work order `rd-1114/brief-463-v1-package-variables.md`, read on main `155366bb`, main `1e67d1c5` merged; fix round 1, after the independent review, coordinator work order `rd-1114/brief-1723-fix1.md`; the closing round, after the review of fix round 1, coordinator work order `rd-1115/brief-1723-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged; fix round 3, `goals.json` version 2, coordinator work order `rd-1115/brief-1723-fix3.md`, on main `2eaf9b7e`)
+
+The coordinator gave this slice 1.378: main `1e67d1c5` held the sections up to §1.369 (G-R2s), and
+open pull requests hold 1.370 to 1.377 (main `2eaf9b7e` holds §1.370 to §1.373). The slice ships in
+0.12.61 (release 0.12.60 is cut without it). [package-variables.md](package-variables.md) is the
+contract; [standard-pack-goals.md](standard-pack-goals.md) (the type `variable` in place of the four
+types that governed packages), [remedies.md](remedies.md) §1.2 item 2 and §2.4 rule 3,
+[resource-declarations.md](resource-declarations.md) (the `control.json` members and static rule 3),
+[instance-fact-store.md](instance-fact-store.md) (R-10 superseded),
+[package-reference.md](package-reference.md) (`standard-pack check`, `ui.json` `parameters`), the
+`package` row 14 of [component-interfaces.md](component-interfaces.md) (row 13 is Workflow #463
+K1's, a `linear_steps` task with a select step) and the index of [README.md](README.md) change
+with it. Board #463: a package made by recording leaves a named slot
+("which one", "how many", "in which order") that a person, an agent or the package's default fills.
+This slice gives the package the declaration. **Nothing reads a value**: no run, no overlay of
+`session.dispatch.parameter.<name>`, no reason, no request, no view and no recording changes; a
+package without `variables` reads, serializes and runs byte for byte as before. V2 (the run), V3
+(the Lab and the view), V4 (the recording), V5 (the console) and V6 (the resource repositories)
+are later slices.
+
+**What it builds.**
+
+- *The declaration*: `control.json`'s optional top-level member `variables`, 1 to 16 entries of the
+  kinds `choice`, `integer`, `switch` and `ordered`, each `name` (the parameter grammar), `type`,
+  `title`, `help?`, `block?` (the kind's base block), the kind's members, `default` and the
+  optional `default_origin: "model"`. One reader, the contract crate's `parse_package_variables`,
+  called by kernel admission (`parse_task_control_declaration`, beside `provides` and
+  `store_update`) and by the source parser's control gate. The value-type code is the goal
+  declaration's, **moved**: the bodies of `goals.json`'s `integer`, `choice`, `switch` and
+  `ordered` readers left `standard_pack_goals.rs` for `package_variables.rs`, without `governs`
+  and `from_table`, and both read with the one `Check` (made shareable: the file it reports in,
+  the helpers `pub(crate)`, an option value's form a parameter: a tier's `[a-z0-9][a-z0-9_.:-]*`,
+  a variable's the token form).
+- *The line of irreversibility*: a package that provides an irreversible capability declares no
+  variable (`variables_on_irreversible`), judged from its own `provides`; names are unique across
+  the variables and every parameter of `provides` (`variable_name_taken`).
+- *The root check* of `actinglab standard-pack check`: the metadata reader answers each package's
+  variables and the fact keys its designated effects read their caps from; the contract crate's
+  `check_root_variables` shares a name only between byte-identical declarations and reports a
+  differing one, a name a `goals.json` entry uses for anything but its placement, a 97th name and
+  an `integer` read as a cap above 1000; the answer lists each variable that applies by its
+  default's origin.
+- *The placement*: `goals.json`'s type `variable` (`{name, type, block?}`) replaces `integer`,
+  `choice`, `switch` and `ordered`. The coordinator's ruling 2 on I made the version hang on
+  release 0.12.60: the tag did not exist when this pull request opened, so the slice first kept
+  version 1; release 0.12.60 then shipped version 1 with its eight types, so fix round 3 made the
+  document of the five types version 2 (`actingcommand.goals.v2`), a version 1 document
+  `goal_version_retired`, and a bundle that carries the file `package` [14, 14]. A placement is
+  held to the variables the root's packages declare and, as a governed package was, to the
+  packages that declare its variable. With the `ordered` entry its `from_table` went, so no entry
+  reads a table: the goal check and `standard-pack check` read none.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| V1-1 | `control.json` `variables` (`choice`, `integer`, `switch`, `ordered`; `default_origin`) | package file format (`package` revision 14) | V1 | the resource repository (V6), the recording (V4) | read by kernel admission and the source parser; no run reads it |
+| V1-2 | `contained_task_control_invalid` with `reason=variables_invalid`, `variable_name_taken` or `variables_on_irreversible` and `json_pointer=<pointer>` | refusal detail of an existing code | V1 | kernel admission | the source parser: `resource_declaration_invalid`, `invalid_value` at the pointer, the word ending its message |
+| V1-3 | `goal_variable_unknown`, `variable_conflict`, `variable_out_of_limits`, `variable_cap_range`; fix round 1: `variable_irreversible_by_root`, `variable_undeclared`; fix round 3: `goal_version_retired` | words of the vocabulary `standard_pack_problem` (code `standard_pack_root_invalid`) | V1 | the goal check (`goal_version_retired` its reader); the root check; `place` (`variable_undeclared`) | 7 words (4, 2 in fix round 1 and 1 in fix round 3); the vocabulary's descriptions of `goal_type_unknown`, `goal_block_mismatch`, `goal_package_unknown`, `goal_governs_irreversible`, `goal_range_invalid`, `goal_default_invalid`, `goal_table_unknown` (no longer given), `ui_parameter_undeclared` and (fix round 3) `goal_undeclared` (below 14) extended |
+| V1-4 | `goals.json` version 2 (`actingcommand.goals.v2`, fix round 3): the five types, `variable` among them; version 1's `integer`, `choice`, `switch`, `ordered` and `from_table` gone; a version 1 file `goal_version_retired` | game root file format, `package` revision 14 (fix round 3; version 1 was revision 12) | V1 | the resource repository (G-P1) | no pack carries the file; a version 2 file with one of the four types is `goal_type_unknown`; a bundle that carries the file declares [14, 14] (`GOALS_PACKAGE_REVISION`), `goal_undeclared` below |
+| V1-5 | `standard-pack check`'s `variable_provenance` `{pack, model}`; fix round 1: `not_applying` `[{name, standard_pack_problem}]`, absent when empty | Tools answer member (optional, after `models`) | V1 | `standard-pack check` | absent when no package declares a variable |
+| V1-6 | `RemedyDeclarations` `variables`, `cap_fact_keys` | kernel interface (memory only) | V1 | the metadata reader | the host reads neither yet |
+| V1-7 | `package` [3, 13] → [3, 14]; row 13 is Workflow #463 K1's (pull request #1720, a `linear_steps` task with a select step) | interface revision | V1 | `distribution/windows/component-interfaces.json` | a bundle whose packs declare variables declares [14, 14] (`VARIABLES_PACKAGE_REVISION`); fix round 3: so does a bundle that carries `goals.json` version 2 (`GOALS_PACKAGE_REVISION`, 12 before) |
+
+**What programs of an earlier release do.** A Runtime before this slice refuses a pack that
+declares `variables` at its declaration gate (`resource_declaration_invalid`, `UnknownField` at
+`/variables`), which every admission path runs on the control declaration before the kernel's own
+reader (whose serde type ignores an unknown member) sees it, so nothing ignores the member
+silently. An installer whose `package` range ends below 14 refuses a bundle that declares
+[14, 14] through its edge (`interface_edge`), in the plan, before the hold. This build's `place`
+(fix round 1) refuses a bundle whose packs declare variables and that declares less
+(`variable_undeclared`). Fix round 3, the programs of 0.12.60 (`package` [3, 12], `goals.json`
+version 1 only) with a version 2 `goals.json` (read in main's code): **the Runtime** opens no
+`goals.json` (no reader of `runtime-host`, the policy crate, `actingd`, `actingctl`, the kernel
+or the containment names the file), so it runs a root that holds one as without it; **the
+installer**'s `place` refuses a bundle that declares [14, 14] at its `package` edge
+(`interface_edge` at `<zip>\interfaces.json`, the bundle's maximum outside its own [3, 12], in the
+plan, before the hold; `crates/lab-rescue/src/install/place.rs`, the edge check of `plan`), and a
+bundle that wrongly declared 12 would pass and be placed, its post check warning as the Lab does;
+**the Lab**'s goal check (the contract crate's reader of 0.12.60, `Check::document`) takes
+`actingcommand.goals.v1` only, so a version 2 file is `malformed` at `/schema_version` and each
+placement `goal_type_unknown` at its `type`: `standard-pack check` reports them as warnings and
+checks the root as without the file (`crates/resource-tooling/src/standard_pack_goals.rs`,
+`goal_issues`, `goal_warnings`), and `package bundle --goals` refuses the bundle with the first,
+`--out` not written (`refuse_goals`). No pack carries the file.
+
+**Not moved.** `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` do not move:
+nothing persisted carries a variable, no request or answer of the workbench changes, the seven
+words are words of an existing vocabulary and the three reasons details of an existing code. No
+configuration key.
+
+**At deploy.** Nothing changes for an installation in use: no released pack declares `variables`
+and no released bundle carries `goals.json`. The Runtime's `package` range becomes [3, 14]; a
+bundle that declares 13 or 14 is placed by this installer. Before a resource repository publishes a
+pack that declares variables, the Runtime and Tools of this release are deployed first (an earlier
+Runtime refuses the pack), its bundle declares `package` [14, 14], and `actinglab standard-pack
+check --root <game root>` shows no `variable_conflict`, `variable_out_of_limits`,
+`variable_irreversible_by_root` or `variable_cap_range` warning (such a variable would not apply
+once a later slice reads values). The installer's post check runs that check too but passes on its
+warnings and keeps no answer of a passed check, so the warnings are read from a check run by hand.
+**Rollback** below this release stays open while no root holds a pack that declares variables; an
+earlier Runtime refuses such a pack at admission. `goals.json` (fix round 3) does not close it: no
+released bundle carries the file, and a root that holds a version 2 file runs on 0.12.60 as
+without it, its `standard-pack check` warning (`malformed`) and its installer refusing a bundle
+that declares 14 at its edge. A bundle that carries the file declares `package` [14, 14] from this
+release on.
+
+**Limits.** Admission judges a package's own `irreversible` marks only: a package that provides
+unmarked a capability another package marks irreversible, or whose remedies list one, may declare
+variables; the goal check refuses a placement of them (`goal_governs_irreversible`), the root
+check (fix round 1) reports each of them `variable_irreversible_by_root` and lists it as not
+applying, and V2 must run such a package on its defaults (the design, section B). "Does not apply"
+is a warning of `standard-pack check` only, wherever it runs: the installer's `place` runs it in
+its post check after every placement (`crates/lab-rescue/src/install/place.rs`, `check_step`) and
+reads only its exit code, which a warning leaves 0, so the placement passes; `package bundle` and
+the host run no root check; and V2 must enforce it in the Runtime, for a conflicting name and a
+package irreversible by the root alike. The cap check reads a designated effect's
+cap key from the same package only; an `integer` read anywhere else as a count is not judged.
+`package bundle` runs no root check of variables. Byte identity is of the entry as written in
+compact JSON: two declarations that differ only in member order are a conflict.
+
+Tests (contract, exec and apps gate rows "#463 V1"): the contract crate's
+`package_variables::tests::v1_each_kind_reads_with_its_members` (the four kinds with every member,
+a time unit, a help text and sixteen entries),
+`v1_each_refusal_is_at_its_pointer` (thirty cases, each word at its pointer: the list, the entry,
+unknown and missing members, `governs` and `from_table`, the name's form and length, the type, the
+block, options, ranges, steps, counts, defaults, `default_origin`, a name an earlier variable or a
+parameter has, an irreversible package),
+`v1_root_check_shares_identical_declarations_and_refuses_the_rest` (identical sharing, a differing
+range and a differing member order, a goals name, the 97th name, a cap above 1000 at the reading
+package only, a cap of 1000 and an unread one passing),
+`v1_provenance_lists_each_variable_by_its_default_s_origin` and
+`v1_a_placement_is_held_to_the_variables_the_root_declares` (`goal_variable_unknown` and
+`goal_block_mismatch`); the execution kernel's
+`contained_task::gate_463_v1::v1_variables_violations_are_refused_with_their_reason_and_pointer`
+and `v1_a_package_with_variables_is_admitted_and_answers_as_without_them` (the descriptor, the
+parameter defaults and the parameters of a run without a dispatch as without them); the source
+parser's `source::declarations::tests::v1_source_parser_takes_variables_and_refuses_each_at_its_pointer`;
+the resource tools' `gate_463_v1::v1_check_reports_each_problem_at_the_package_and_lists_what_applies`
+and `v1_a_root_without_variables_answers_without_the_listing`; the rescue module's
+`install::gate_463_v1::v1_the_build_declares_package_through_revision_14` and
+`v1_a_bundle_at_revision_14_is_planned_here_and_refused_by_an_earlier_installer`.
+Existing tests adapted because the requirement changes what they pin: the contract crate's four
+goal tests (G-R1, §1.356: the neutral example's `choice` entry is a placement, the five types,
+the four replaced types `goal_type_unknown`, and the references' test holds four placements where a
+`switch` governed four packages) and the resource tools' eight `gate_455_gr1` tests (the packages
+declare the variables the valid file places where it held the four types; the refusals the check
+can still give, `goal_variable_unknown` among them and `goal_package_unknown` and
+`goal_table_unknown` no longer reachable; the irreversible package's variable fails the check and
+the bundle; the unmarked provider's placement refused at its `name`) and main's
+`gate_455_gr2s::gr2s_r3_a_remedy_that_lists_an_irreversible_capability_makes_its_package_irreversible`
+(§1.369: its `switch` over two packages is the placement of the variable both declare, refused at
+its `name`), each test name kept; mechanically, for the new members: the host's
+`gate_411_b15p_host` (`RemedyDeclarations` gains `variables` and `cap_fact_keys`, both empty) and
+the resource tools' `gate_cov1` and `gate_sched_c1f1` (the answer gains `variable_provenance`,
+absent). No golden changes; no test leaves the gate map.
+
+**Fix round 1** (coordinator work order `rd-1114/brief-1723-fix1.md`, after the independent
+review; the coordinator's ruling of 11-14 on the review's suggestions 2 to 4). (1) The
+architecture pin `the_runtime_declares_each_v0120_interface_revision_once`
+(`tools/actinglab-architecture/tests/component_interfaces.rs`) holds `package` [3, 14], its
+comment naming row 13 (Workflow #463 K1's, a `linear_steps` task with a select step) and row 14
+(a package's `variables`); no other statement of the range was stale. (2) The root
+check takes the root's judgement of irreversibility, the one copy the goal check uses
+(`check_root_variables(packages, goal_names, irreversible: &IrreversiblePackages)`, the Tools
+building it with `IrreversiblePackages::new` from what the metadata reader read of every
+package): after the two conflicts and before the cap, a name some package that counts as
+irreversible declares (`IrreversiblePackages::counts_irreversible`: it provides unmarked a
+capability another package marks, or its remedies list one; a package the judgement was not told
+of counts) is `variable_irreversible_by_root` at each such package's declaration, applies in no
+package, and the provenance listing gains `not_applying` `[{name, standard_pack_problem}]` with it
+(absent when empty). [package-variables.md](package-variables.md) and
+[standard-pack-goals.md](standard-pack-goals.md) say what is enforced: admission refuses
+`variables` on a package whose own `provides` marks the capability; the root check only warns
+(the installer's post check runs it and passes on a warning; `package bundle` and the host run
+none; corrected in the closing round, which found that this round had written that the installer
+runs none), and V2 must enforce "does not apply" in the Runtime for a conflicting name and a
+package irreversible by the root alike. (3) The containment
+keeps the developer text the declaration gate appends to a refusal's location
+(`declaration_error`, `crates/pack-containment/src/lib.rs`, into
+`ContainmentError::ResourceDeclaration`'s `detail`), so an admission by path names the rule
+(`variables_on_irreversible` among them) as the source parser does; the two `gate_455_gr1`
+assertions that any refusal satisfied now hold that word. (4) `place` refuses a bundle zip whose
+packs' `control.json` hold the member `variables` and that declares a `package` maximum below 14
+(`pack_invalid` caused by `standard_pack_root_invalid` with `variable_undeclared` at
+`<zip>\interfaces.json`, the pointer empty, `package_id` the first such pack, in the plan, as
+`goal_undeclared`); and `variable_cap_range` also holds a variable read as a cap to the type
+`integer` (at its `type`) and to a `min` of 0 at least (at its `min`). New tests: the contract
+crate's `package_variables::tests::v1_root_check_holds_a_variable_of_a_package_irreversible_by_the_root`,
+`v1_a_cap_variable_with_a_negative_min_is_reported_at_its_min` and
+`v1_a_cap_read_from_a_variable_of_another_type_is_reported_at_its_type`; the rescue module's
+`install::gate_463_v1::v1_a_bundle_whose_packs_declare_variables_below_revision_14_is_refused_variable_undeclared`.
+Adapted because the requirement changes what they pin: `gate_455_gr1::gr1_governs_irreversible_is_refused_by_the_check_and_the_bundle`
+(the word, for the check and the bundle) and
+`gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused` (the unmarked
+provider's variable is also `variable_irreversible_by_root` at its declaration, before the goal
+warning, and the listing marks it), and the architecture pin; mechanically, the contract crate's
+root-check tests call the check through a helper that judges every package reversible. Not in
+this round: `goal_table_unknown` stays registered and unraised until the slice that brings
+`from_table` back for variables (the design, V7); this pull request is merged together with
+Workflow #463 K1 (pull request #1720, `package` 13, a `linear_steps` task with a select step), so
+every build that declares [3, 14] holds row 13 as well.
+
+**Closing round** (coordinator work order `rd-1115/brief-1723-fix2.md`, after the review of fix
+round 1; main `2eaf9b7e`, which holds release 0.12.60, merged). The slice did not ship in 0.12.60,
+so each statement of it says 0.12.61: this section's heading, the `since` of its six words in the
+catalog, `package-variables.md`, `standard-pack-goals.md`, `package-reference.md`,
+`install-cli.md`, row 14 of `component-interfaces.md`, the index of `README.md`, the comments of
+its gate rows and of its code; a statement of a slice that shipped in 0.12.60 keeps its number. The
+tag `v0.12.60` did not exist when this pull request opened, and does not yet, so `goals.json`
+stays version 1 (the coordinator's ruling 2 on I). (1) Fix round 1 wrote that the installer runs
+no root check. It does: the post check of `place` (`crates/lab-rescue/src/install/place.rs`,
+`check_step`) runs the installation's `actinglab --json standard-pack check --root <game root>`
+after every placement and reads only its exit code, which a warning leaves 0, so a variable warning
+does not stop a placement, the row `standard_pack_check` is `pass` with `{exit: 0}`, and the answer
+is kept only when the check fails. [package-variables.md](package-variables.md) ("What is built
+now, and what is not", "Shared names and the root check") and this section ("Limits", fix round
+1's paragraph, "At deploy") say so now. (2) The root check's word, one letter from admission's
+refusal `variables_on_irreversible` in its first name, is `variable_irreversible_by_root`: the
+vocabulary, the enum's `VariableIrreversibleByRoot`, the contracts, the tests and this section;
+neither name was released. The outcome-code index did not change: it lists codes, not the words of
+a vocabulary, so no word of this slice is in it (fix round 1's "index updated" changed no file).
+(3) Read only: the Lab's `record stop` stores no refused admission on disk. `crosscheck::admit`
+(`crates/lab/src/recording/crosscheck.rs`) turns the kernel's refusal into
+`record_artifact_admission_failed` with `details.detail`, which `generate_and_write` returns as the
+command's answer before it writes anything, the recording staying active and unchanged; since fix
+round 1 that answer's `detail` and message carry the declaration gate's developer text after the
+location (`; <text>`) where the gate wrote one. No test is new or adapted beyond the rename; no
+golden changes; no test leaves the gate map.
+
+**Fix round 3** (coordinator work order `rd-1115/brief-1723-fix3.md`, the coordinator's ruling on
+the closing round's own question; main `2eaf9b7e` unmoved, not merged again). Release 0.12.60
+exists and ships `goals.json` version 1 with its eight types; a released format does not change
+its shape in place, so the condition of ruling 2 on I holds: **the document this slice reads is
+version 2** (`STANDARD_PACK_GOALS_SCHEMA_VERSION` `actingcommand.goals.v2`), the five types
+(heading, note, resource, tier, variable). (1) A version 1 document
+(`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION`) is refused with the new word `goal_version_retired`
+(the goals family's prefix; a word of the vocabulary `standard_pack_problem`, not a code, so the
+outcome-code index does not list it) at `/schema_version`, and is read no further, as an entry of
+an unknown type is not: after the members repeated in one object and the document's own members
+unknown or missing, it is the file's only problem. A version this build does not know yet keeps
+`malformed` there. No pack carries a version 1 file, so nothing is converted and no reader of
+version 1 stays. (2) The installer's edge, by the mechanism of revision 12 (`check_goals_declared`,
+`goal_undeclared`): `GOALS_PACKAGE_REVISION` is 14, the revision that brought version 2 (row 14 of
+[component-interfaces.md](component-interfaces.md), with the variables its placements name), so
+`place` refuses a zip that carries `goals.json` and declares a maximum below 14; it still reads
+the file's name only, the version being the goal check's, which `post_check` runs. (3) What the
+programs of 0.12.60 do with a version 2 file is in "What programs of an earlier release do" and
+"At deploy" above, in [standard-pack-goals.md](standard-pack-goals.md), "Interface", in
+[package-variables.md](package-variables.md), "Interface", and in row 14. (4) Texts: those two
+contracts, rows 12 and 14 of `component-interfaces.md`, `package-reference.md` (the root listing
+and the `goals.json` paragraph), `install-cli.md` (the rescue face and the `pack place` edge),
+the index of `README.md`, the catalog's `goal_type_unknown`, `goal_undeclared` and the new word,
+this section's "The placement", V1-3, V1-4, V1-7, "What programs of an earlier release do", "Not
+moved" (seven words) and "Rollback", and the comments of the code and the gate rows that named
+version 1 or revision 12 for the file. No console read face in the contracts names the file's
+version, the Lab's rows name no version, and the branch has no release notes section for 0.12.61.
+New tests: the contract crate's
+`standard_pack_goals::tests::v1_a_version_1_document_is_refused_goal_version_retired` (release
+0.12.60's neutral example, its `choice` governing a package, the same of another game, and version
+2's entries labelled version 1: each the one problem `goal_version_retired` at `/schema_version`)
+and the rescue module's
+`install::gate_463_v1::v1_a_bundle_that_carries_goals_version_2_below_revision_14_is_refused_goal_undeclared`
+(on an installer of [3, 14], a bundle with a version 2 `goals.json` and a pack without variables
+declaring [12, 12] is refused `pack_invalid` caused by `goal_undeclared` at its `interfaces.json`
+before the hold; declaring [14, 14] it is planned with `goals.json` new). Adapted because the
+requirement changes what they pin, names kept: every fixture that carried version 1 carries
+version 2 (the contract crate's `NEUTRAL_EXAMPLE`, `every_type`, the repeated member and the
+references' test, and `package_variables::tests::v1_a_placement_is_held_to_the_variables_the_root_declares`;
+the resource tools' `gate_455_gr1`, `gate_455_gr2s` and `gate_463_v1` goal files; the rescue
+module's `gate_455_gr1` goal bytes), `goals_reader_is_strict`'s "another version" is a later one
+(`actingcommand.goals.v3`, still `malformed`), and the rescue module's three `gate_455_gr1` tests
+read `GOALS_PACKAGE_REVISION`, so their installer declares [3, 14] and their goals bundle [14, 14]
+(the gate row gains the incident `#463 V1`). No golden changes; no test leaves the gate map.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

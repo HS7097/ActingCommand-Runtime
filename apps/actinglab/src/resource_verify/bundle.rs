@@ -211,8 +211,10 @@ fn lay_out(
             loading: root_file(LOADING_FILE),
             notices: notices.then(|| inputs.repo.join(STANDARD_PACK_NOTICES_DIRECTORY)),
             // Workflow #455 G-R1 (register §1.356): `resource verify` does not pass `goals.json`
-            // and declares no `package` 12 (`goals.json` is none of its root files). Workflow #464
-            // P2: `standard-pack build` passes it, and its revision is computed from the content.
+            // and declares no `package` 12 (`goals.json` is none of its root files); the packer of
+            // a bundle that carries it declares [12, 12], since Workflow #463 V1 fix round 3
+            // (register §1.378) [14, 14], the revision of version 2. Workflow #464 P2:
+            // `standard-pack build` passes it, and its revision is computed from the content.
             goals: root_file(STANDARD_PACK_GOALS_FILE),
         },
     })
