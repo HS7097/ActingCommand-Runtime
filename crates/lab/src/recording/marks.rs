@@ -177,7 +177,7 @@ fn not_digest(spec: &MarkSpec) -> [(&'static str, bool); 5] {
     ]
 }
 
-fn not_ocr(spec: &MarkSpec) -> [(&'static str, bool); 8] {
+fn not_ocr(spec: &MarkSpec) -> [(&'static str, bool); 9] {
     [
         ("languages", spec.languages.is_some()),
         ("timeout_ms", spec.timeout_ms.is_some()),
@@ -187,6 +187,8 @@ fn not_ocr(spec: &MarkSpec) -> [(&'static str, bool); 8] {
         ("minimum_confidence", spec.minimum_confidence.is_some()),
         ("model_ref", spec.model_ref.is_some()),
         ("model_sha256", spec.model_sha256.is_some()),
+        // #463 L2.
+        ("locate", spec.locate.is_some()),
     ]
 }
 
@@ -516,8 +518,30 @@ pub(crate) fn prepare_mark(
             reject_fields(spec, &not_template(spec))?;
             reject_fields(spec, &not_color(spec))?;
             reject_fields(spec, &not_digest(spec))?;
-            reject_fields(spec, &not_exact_template(spec))?;
+            // #463 L2: a located-text mark may declare `unique`, as the task's locate target
+            // does; no OCR mark declares factors or a mask.
+            reject_fields(
+                spec,
+                &[
+                    ("scales", spec.scales.is_some()),
+                    ("mask", spec.mask.is_some()),
+                    ("unique", spec.unique.is_some() && spec.locate.is_none()),
+                ],
+            )?;
             mark.ocr = Some(ocr_spec(spec)?);
+            if spec.locate.is_some() {
+                mark.unique = spec.unique;
+                // #463 L2: the Runtime's declaration rules of a locate target, applied when the
+                // mark is recorded, with or without an OCR model.
+                load_pack_from_json_str(&ocr_pack(&mark, primary.size())?.to_string()).map_err(
+                    |error| {
+                        invalid(
+                            "validation_failed",
+                            format!("ocr '{}' cannot be declared: {error}", spec.id),
+                        )
+                    },
+                )?;
+            }
             Ok(Ok(PreparedMark {
                 mark,
                 crop_png: None,
@@ -730,6 +754,7 @@ fn ocr_spec(spec: &MarkSpec) -> LabResult<OcrSpec> {
             .model_sha256
             .clone()
             .ok_or_else(|| missing("model_sha256"))?,
+        locate: spec.locate.clone(),
     };
     let sha_valid = ocr.model_sha256.len() == 64
         && ocr
@@ -978,8 +1003,9 @@ pub(crate) fn template_evaluator(
         })
 }
 
-/// Workflow #396 REC-4: a template mark evaluated on one frame as the Runtime evaluates the
-/// target the package declares for it; an evaluation error keeps its text.
+/// Workflow #396 REC-4: a template mark (#463 L2: or a located-text mark) evaluated on one frame
+/// as the Runtime evaluates the target the package declares for it; an evaluation error keeps its
+/// text.
 pub(crate) struct FrameTemplateEvaluation<'a> {
     pub(crate) frame_id: &'a str,
     pub(crate) size: RecordSize,
@@ -1210,16 +1236,10 @@ fn evaluate_digest(
     Ok((test, failure))
 }
 
-/// Workflow #396 LAB-3: an OCR mark is the OCR target the package declares for it, evaluated
-/// on every frame by the recognition pack with the Lab's OCR provider, as the Runtime
-/// evaluates it. A frame whose text or confidence does not pass fails the mark; a provider or
-/// evaluation error fails it as `self_test_error`.
-fn evaluate_ocr(
-    mark: &RecordedMark,
-    frames: &[EvalFrame<'_>],
-    count: u32,
-    provider: Arc<dyn VisionProvider>,
-) -> LabResult<(SelfTest, Option<Value>)> {
+/// The one-target recognition pack `0.7` of an OCR mark over frames of `size`: the OCR target
+/// the package declares for it, its region and OCR members and (#463 L2) a located-text mark's
+/// `locate` and `unique`.
+fn ocr_pack(mark: &RecordedMark, size: RecordSize) -> LabResult<Value> {
     let region = region_of(mark)?;
     let spec = mark.ocr.as_ref().ok_or_else(|| {
         invalid(
@@ -1227,29 +1247,41 @@ fn evaluate_ocr(
             format!("ocr '{}' has no OCR fields", mark.id),
         )
     })?;
-    let mut test = self_test(SelfTestStatus::Passed, count);
-    let Some(primary) = frames.first() else {
-        return Ok((test, None));
-    };
-    let size = primary.frame.size();
-    let pack = json!({
+    let mut target = json!({
+        "type": "ocr",
+        "id": mark.id,
+        "region": {"x": region.x, "y": region.y, "width": region.width, "height": region.height},
+        "languages": spec.languages,
+        "timeout_ms": spec.timeout_ms,
+        "match_mode": spec.match_mode,
+        "expected": spec.expected,
+        "case_sensitive": spec.case_sensitive,
+        "minimum_confidence": spec.minimum_confidence,
+        "model_ref": spec.model_ref,
+        "model_sha256": spec.model_sha256
+    });
+    if let Some(locate) = &spec.locate {
+        target["locate"] = json!(locate);
+        if let Some(unique) = &mark.unique {
+            target["unique"] = json!(unique);
+        }
+    }
+    Ok(json!({
         "schema_version": "0.7",
         "coordinate_space": {"width": size.width, "height": size.height},
-        "targets": [{
-            "type": "ocr",
-            "id": mark.id,
-            "region": {"x": region.x, "y": region.y, "width": region.width, "height": region.height},
-            "languages": spec.languages,
-            "timeout_ms": spec.timeout_ms,
-            "match_mode": spec.match_mode,
-            "expected": spec.expected,
-            "case_sensitive": spec.case_sensitive,
-            "minimum_confidence": spec.minimum_confidence,
-            "model_ref": spec.model_ref,
-            "model_sha256": spec.model_sha256
-        }]
-    });
-    let evaluator = load_pack_from_json_str(&pack.to_string())
+        "targets": [target]
+    }))
+}
+
+/// The recognition evaluator of an OCR mark's target ([`ocr_pack`]) over frames of `size`, with
+/// the Lab's OCR provider: the recognition pack's own OCR evaluation, which (#463 L2) finds a
+/// located-text mark's names as the Runtime's guard and page recognition find them.
+pub(crate) fn ocr_evaluator(
+    mark: &RecordedMark,
+    size: RecordSize,
+    provider: Arc<dyn VisionProvider>,
+) -> LabResult<RecognitionEvaluator> {
+    load_pack_from_json_str(&ocr_pack(mark, size)?.to_string())
         .and_then(|pack| {
             RecognitionEvaluator::with_vision_provider(
                 pack,
@@ -1262,11 +1294,75 @@ fn evaluate_ocr(
                 "validation_failed",
                 format!("ocr '{}' cannot be evaluated: {error}", mark.id),
             )
-        })?;
+        })
+}
+
+/// #463 L2: a located-text mark evaluated on every frame with [`ocr_evaluator`].
+pub(crate) fn ocr_frame_evaluations<'a>(
+    mark: &RecordedMark,
+    frames: &[EvalFrame<'a>],
+    provider: Arc<dyn VisionProvider>,
+) -> LabResult<Vec<FrameTemplateEvaluation<'a>>> {
+    let Some(first) = frames.first() else {
+        return Ok(Vec::new());
+    };
+    let evaluator = ocr_evaluator(mark, first.frame.size(), provider)?;
+    Ok(frames
+        .iter()
+        .map(|eval| FrameTemplateEvaluation {
+            frame_id: eval.id,
+            size: eval.frame.size(),
+            evaluation: evaluator
+                .evaluate_target(&eval.frame.scene, &mark.id)
+                .map_err(|error| error.to_string()),
+        })
+        .collect())
+}
+
+/// Workflow #396 LAB-3: an OCR mark is the OCR target the package declares for it, evaluated
+/// on every frame by the recognition pack with the Lab's OCR provider, as the Runtime
+/// evaluates it. A frame whose text or confidence does not pass fails the mark; a provider or
+/// evaluation error fails it as `self_test_error`. #463 L2: a located-text mark fails a frame on
+/// which its names are not found, the found name lies in no cell or a second matching block lies
+/// within its margin of uniqueness, with the evaluation's typed reason as `failure` (and the
+/// second place as `uniqueness`); an evaluation error (a truncated read among them) keeps its
+/// outcome as `failure` too.
+fn evaluate_ocr(
+    mark: &RecordedMark,
+    frames: &[EvalFrame<'_>],
+    count: u32,
+    provider: Arc<dyn VisionProvider>,
+) -> LabResult<(SelfTest, Option<Value>)> {
+    let spec = mark.ocr.as_ref().ok_or_else(|| {
+        invalid(
+            "validation_failed",
+            format!("ocr '{}' has no OCR fields", mark.id),
+        )
+    })?;
+    let locates = spec.locate.is_some();
+    let mut test = self_test(SelfTestStatus::Passed, count);
+    let Some(primary) = frames.first() else {
+        return Ok((test, None));
+    };
+    let evaluator = ocr_evaluator(mark, primary.frame.size(), provider)?;
     let mut failure = None;
     for eval in frames {
         match evaluator.evaluate_target(&eval.frame.scene, &mark.id) {
             Ok(evaluation) if evaluation.passed => {}
+            Ok(evaluation) if locates => {
+                test.status = SelfTestStatus::Failed;
+                test.reason = Some("self_test_failed".to_string());
+                let mut detail = json!({
+                    "frame_id": eval.id,
+                    "failure": evaluation.failure,
+                    "expected": spec.expected,
+                    "minimum_confidence": spec.minimum_confidence
+                });
+                if let Some(uniqueness) = &evaluation.uniqueness {
+                    detail["uniqueness"] = json!(uniqueness);
+                }
+                failure.get_or_insert(detail);
+            }
             Ok(evaluation) => {
                 test.status = SelfTestStatus::Failed;
                 test.reason = Some("self_test_failed".to_string());
@@ -1282,10 +1378,14 @@ fn evaluate_ocr(
             Err(error) => {
                 test.status = SelfTestStatus::Failed;
                 test.reason = Some("self_test_error".to_string());
-                failure.get_or_insert(json!({
+                let mut detail = json!({
                     "frame_id": eval.id,
                     "error": error.to_string()
-                }));
+                });
+                if locates && let Some(outcome) = error.outcome() {
+                    detail["failure"] = json!(outcome);
+                }
+                failure.get_or_insert(detail);
             }
         }
     }

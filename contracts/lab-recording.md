@@ -92,7 +92,14 @@ command deletes nothing and names the files it already wrote.
   execution's `to_point` and `duration_ms`, and the recording's `amended_at_unix_ms` (see
   "Forbidden marks and anchors", "Drags and long presses" and "Marking after stop"). #411 Lab
   B-9: a value-test mark keeps its declaration in `value_test: {left, op, right?}`, absent on
-  every other mark, and has no `region` (see "Value tests").
+  every other mark, and has no `region` (see "Value tests"). #463 L2: a located-text mark keeps
+  its `locate` in its `ocr` and its margin in `unique`, both absent on every other OCR mark (see
+  "Following a located text"), and (fix 1) a click's `follow` keeps
+  `names_changed_after_press: true` only when the followed mark's names were changed after the
+  click was executed. A build before #463 L2 does not decode a `recording.json` that holds one
+  (`ocr` and `follow` refuse the unknown member): its Lab part is unavailable,
+  `lab_recording_unreadable`, and the file is left as it is; do not mix versions during a
+  recording.
 
 ## Commands
 
@@ -230,6 +237,23 @@ uniqueness (Workflow #396 REC-4, see "Following a template"):
 
 `"click":{"region":{…},"follow":"ui/a"}` declares the offset form.
 
+A click that follows a located-text mark, the card whose name is `BETA` in a row of four cards,
+on a screen its title template recognizes (#463 L2, see "Following a located text"):
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","frame":"D:\\frames\\cards.png",
+ "samples":["D:\\frames\\cards_shuffled.png"],
+ "add":[{"id":"ui/title","family":"template","region":{"x":40,"y":40,"width":200,"height":48}},
+        {"id":"text/card","family":"ocr","region":{"x":100,"y":200,"width":600,"height":240},
+         "languages":["en"],"timeout_ms":1000,"match_mode":"exact","expected":["BETA"],
+         "case_sensitive":false,"minimum_confidence":0.8,"model_ref":"model","model_sha256":"<64 hex>",
+         "locate":{"normalize":"identity_v1","blocks":"detect","line_merge":{"gap_factor":0},
+                   "cells":{"x":0,"y":0,"width":140,"height":240,"pitch_x":150,"pitch_y":240,
+                            "columns":4,"rows":1}},
+         "unique":{"margin_milli":50}}],
+ "click":{"follow":"text/card"}}
+```
+
 A page that forbids a mark of another step and is anchored by its own template, and the
 gestures (Workflow #390 LAB-2, see "Forbidden marks and anchors" and "Drags and long presses"):
 
@@ -295,12 +319,16 @@ Rules:
   a mark of the step (`--click-from`, copying the mark's region; for a template that is
   the crop, not the search area; a check or a value test has no region:
   `record_click_source_invalid`), and a
-  template mark of the step the click follows (`--click-follow`, alone or with `--click`; see
-  "Following a template"). `follow` with `from` is `validation_failed`.
+  template mark or (#463 L2) a located-text mark of the step the click follows
+  (`--click-follow`, alone or with `--click`; see "Following a template" and "Following a
+  located text"). `follow` with `from` is `validation_failed`.
   A second click needs `--replace-click` (`record_click_exists`); an executed click
   cannot be replaced before `--reopen-step` (`record_click_executed`). `--click-guard`
-  names a template, color, color digest, check or value-test mark of the step
-  (`record_guard_family_invalid`). `--click-retry <n>` declares `{max_attempts n (2..5),
+  names a template, color, color digest, check or value-test mark of the step, or (#463 L2
+  fix 1) the located-text mark the click follows, which is its guard anyway
+  (`record_guard_family_invalid` for any other mark, an OCR mark the click does not follow among
+  them, the message naming the mark the click follows; a click that no longer follows the OCR
+  mark its guard names is refused the same way). `--click-retry <n>` declares `{max_attempts n (2..5),
   interval_ms 1000}`; the request form takes any `interval_ms` in 1..5000.
 
 Output: `{status, record_id, step, step_opened, frame, samples, marks, reused, removed,
@@ -321,9 +349,10 @@ reason}`, or
 {record_id, status, coordinate_space, defaults, open_step,
  steps:[{index, artifact_step|null, page, dropped, converted_to_transition,
          frames[{frame_id, role, sha256, w, h, superseded}],
-         marks[{id, family, self_test{status}, margin, value_test?}], reused,
+         marks[{id, family, self_test{status}, margin, value_test?, located_text?}], reused,
          entry: "any" | "page",
-         click{rect, source, executed, outcome, attempts, needs_review, gesture?}|null,
+         click{rect, source, executed, outcome, attempts, needs_review, gesture?,
+               names_changed_after_press?}|null,
          application{action, cli_verb, source, executed, attempts[], needs_review}|null,
          optional: null | {settle_ms},
          transition: null | {kind:"page", frames, marks, timeout_ms, source} | {kind:"window", min_ms, max_ms},
@@ -334,7 +363,12 @@ reason}`, or
 Workflow #390 LAB-2: `gesture`, `forbidden` and `anchor` are present only on a drag or long
 press, a page that forbids marks and an anchored page; `amended_at_unix_ms` only on a stopped
 recording marked again since its package was generated ("Marking after stop"). #411 Lab B-9:
-`value_test` is present only on a value-test mark, its declaration ("Value tests").
+`value_test` is present only on a value-test mark, its declaration ("Value tests"). #463 L2 fix 1:
+`names_changed_after_press: true` is present only on a click whose followed located-text mark had
+its names changed after the click was executed: its `rect` is where the new names are found, and
+the recorded press is not what the package presses ("Following a located text"). #463 L2 fix 2:
+`located_text` is present only on a located-text mark (an OCR mark that declares `locate`): the
+mark as the recording holds it, every member a request that changes only its names gives again.
 
 `click.outcome` is `declared` (no outcome yet), `executed` (Performed) or `indeterminate`
 (the outcome of the last `do --capture --record` is unknown); `attempts` counts the earlier
@@ -364,7 +398,7 @@ samples, not superseded frames). The result is `passed`, `failed` or `not_evalua
 | template | `region` (crop), `search?` (must contain it and lie in the frame; Workflow #390 LAB-2: by default the crop grown by 48 px on each side and clamped to the frame, never the crop alone where the frame leaves room, so a control that moved a little still matches; `--template <id>=x,y,w,h@x,y,w,h` or the request's `search` replaces it), `threshold?`; Workflow #396 REC-4: `scales?` (`{"factors_milli"}`, REC-5; `--scales f,…` gives every `--template` of the command these factors), `mask?` (`{"type": "range", "lower", "upper"}`, REC-7), `unique?` (`{"margin_milli"}`, REC-2), as the task's `verify_templates[]` declares them, never added on their own | the crop from the primary frame is matched in `search` with the recording metric; every frame needs score ≥ threshold; `min_score`, `margin` = min score − threshold, `matched_rect`, `location_ambiguous` (a match elsewhere than the crop still passes). A mark with `scales`, `mask` or `unique` is evaluated on every frame as the Runtime evaluates the target the package declares for it (a recognition pack `0.7` template target; a declaration its rules refuse is `validation_failed`): with `scales`, `matched_scales_milli` lists the factors it passed at, and an own mark must pass at every factor on at least one frame of its step (put a sample of each zoom in the step); with `unique`, a second place within the margin fails the frame and the failure gives it as `uniqueness{score_milli, second_score_milli, margin_milli, second_rect}`, so the author can set the margin |
 | color | `region`, `max_distance?` | `expected` is the mean color of `region` on the primary frame; every frame's mean color must be within the distance; `margin` = limit − largest distance |
 | color_digest | `region`, `columns`, `rows`, `max_mean_milli`, `max_cell?`, `exclude_cells?` (no defaults) | `cells` from the primary frame (`color_digest.v1`); every frame must pass; `margin` = `{mean_milli, max_cell}` limits minus the worst values |
-| ocr | `region`, `languages`, `timeout_ms`, `match_mode` (`exact`/`contains`), `expected`, `case_sensitive`, `minimum_confidence`, `model_ref`, `model_sha256`, all required | the OCR target the package declares for the mark is evaluated on every frame with the Lab's OCR provider (see "OCR in the Lab"); every frame must pass; a provider or evaluation error is `failed` with `self_test_error`. Without an OCR model it is `not_evaluated` (`lab_ocr_unavailable`), and not evaluated is never reported as passed |
+| ocr | `region`, `languages`, `timeout_ms`, `match_mode` (`exact`/`contains`), `expected`, `case_sensitive`, `minimum_confidence`, `model_ref`, `model_sha256`, all required; #463 L2: `locate?` (`normalize`, `blocks`, `line_merge`, `cells?`, as the task's `ocr_targets[].locate` declares them) and, with it, `unique?` (`{"margin_milli"}`), never added on their own | the OCR target the package declares for the mark is evaluated on every frame with the Lab's OCR provider (see "OCR in the Lab"); every frame must pass; a provider or evaluation error is `failed` with `self_test_error`. Without an OCR model it is `not_evaluated` (`lab_ocr_unavailable`), and not evaluated is never reported as passed. #463 L2: a located-text mark passes a frame when one of its names is found there (in a cell when `cells` is declared, alone within the margin when `unique` is declared); a frame on which it does not is `self_test_failed` with the evaluation's typed reason as `failure` (`text_locate_not_found`, `text_locate_outside_cells`, `target_match_not_unique` with the second place as `uniqueness`), and an evaluation error (`text_read_blocks_truncated` among them) is `self_test_error` with its outcome as `failure`; a declaration the Runtime refuses is `validation_failed` (see "Following a located text") |
 | check | `all_of` or `any_of`: 2..8 distinct marks of the step, no checks | derived: all_of fails on any failed member and passes when all pass; any_of passes on any passed member and fails when all fail; otherwise not evaluated |
 | `value_test` | `left`, `op`, `right?` (each side an OCR read: `region`, `languages`, `timeout_ms`, `minimum_confidence`, `model_ref`, `model_sha256`, `trim`, `value`, `part?`; the right side may be `{const}` or a side with `mul` and `add`) | the value test the package declares for the mark is evaluated on every frame with the Lab's OCR provider; every frame must hold; `value_test_unresolved` / `value_test_not_met` are the failure's details; without an OCR model it is `not_evaluated` (`lab_ocr_unavailable`) |
 
@@ -427,7 +461,8 @@ reused) instead of clicking a fixed rectangle, for a button whose position moves
   top-left corner (width and height kept). For a template with `scales` the kernel scales the
   offset by the factor it matched at. `click.rect` is the declared rectangle, `click.source`
   `declared`.
-- `recording.json` records `click.follow{mark_id, form: "target" | "offset", offset?}`. The
+- `recording.json` records `click.follow{mark_id, form: "target" | "offset", offset?,
+  names_changed_after_press?}` (the last only on a located-text follow, #463 L2 fix 1). The
   recorded rectangle is what `do --capture --record` executes and `record status` shows.
 - The click's guard is the followed template: `target_id` the template, `verify_template` its
   asset, `expected_rect` its search area. A step without `follow` generates the same bytes as
@@ -441,9 +476,10 @@ checked again on every `record mark` of the step:
 
 | `follow_problem` | when |
 |---|---|
-| `not_template` | the followed mark is not a template mark of the step |
-| `not_required` | the template is a member of an `any_of` check of the step, so it is not a required mark of the page (the guard comes from the required marks) |
+| `not_template` | the followed mark is neither a template mark nor (#463 L2) a located-text mark of the step |
+| `not_required` | the template is a member of an `any_of` check of the step, so it is not a required mark of the page (the guard comes from the required marks); #463 L2: so is a followed located-text mark that an `any_of` check of the step names |
 | `guard_conflict` | `--click-guard` (or the step's guard) names another mark |
+| `page_needs_followed_text` | #463 L2 fix 1, a click that follows a located-text mark: the step's page would need the located text to be recognized, because no other mark of the step recognizes the page or a check of the step names the located text ("Following a located text") |
 
 The followed template cannot be removed while the click follows it (`record_mark_in_use`). On
 every live frame of the step (the primary frame and the samples) the click must hold too;
@@ -456,10 +492,160 @@ not hold:
 | `primary_mismatch` | on the primary frame the template's best match is not the crop itself (an earlier equal match elsewhere wins), or a template with `scales` matches there at another factor than 1000 |
 | `template_unmatched` | on a frame the template does not pass in its search area |
 | `click_outside_frame` | on a frame the followed box (with the scaled offset) does not lie inside the frame |
+| `press_outside_found_box` | #463 L2, a click that follows a located-text mark: on the primary frame the press of the step's executed click lies outside the box the names are found in there ("Following a located text") |
 
 The search area should cover every position the template moves to; with a search area equal
 to the crop the generated box is the recorded rectangle. Whether the whole box is harmless to
 click on every frame is for the author to check on the frames.
+
+### Following a located text
+
+#463 L2 (the owner's rule: an item is chosen by its name read on the screen, never by its
+position; it is confirmed on a fresh frame before it is pressed; a name that is not found ends
+with a named result, never with a guess). A click may follow a located-text mark instead of a
+template: one screen, the name found on it, no scrolling.
+
+- **The mark.** An OCR mark of the request form that declares `locate` is a located-text mark:
+  the task's locate target ([ocr-fields.md](ocr-fields.md), "Located text") member for member.
+  `locate` has `normalize` (`identity_v1`), `blocks` (`detect` or `region`), `line_merge`
+  (`"none"` or `{"gap_factor": n}`, exactly with `detect`) and the optional `cells`
+  (`x`, `y`, `width`, `height`, `pitch_x`, `pitch_y`, `columns`, `rows`, the grid relative to the
+  region's corner); the mark may add `unique` (`{"margin_milli"}`, 1 to 1000). Its `expected`
+  names, `match_mode`, `minimum_confidence`, `case_sensitive` (false, as normalized names are
+  compared) and model are the OCR mark's own. Every member is the author's; the Lab adds no
+  default the task format does not give. The Runtime's declaration rules are applied when the
+  mark is recorded, with or without an OCR model: a declaration they refuse (a `line_merge`
+  with `region`, a grid that leaves the region, `case_sensitive: true`, a name that normalizes
+  to nothing) is `validation_failed` (exit 2). `locate` or `unique` on another family, and
+  `unique` on an OCR mark without `locate`, are `validation_failed` too. There is no shortcut
+  flag: the request form (`record mark --request` or `--request-json`, MCP `ac_record_mark`)
+  declares the mark, and `--click-follow` may then follow it.
+- **The click.** `"click": {"follow": "<id>"}` clicks the box the names are found in on the
+  frame the package runs on: the found block, or the declared cell holding the block's center
+  when `cells` is declared (`{"kind": "target", "target_id": "<id>"}`). The step's `click.rect`
+  is that box on the primary frame, `click.source` `followed_mark`. `"click": {"region": {…},
+  "follow": "<id>"}` clicks that box's top-left corner plus the offset (`{"kind": "offset",
+  "target_id", "offset"}`), the offset being the rectangle minus the box's corner on the primary
+  frame, width and height kept, never scaled; `click.rect` is the declared rectangle,
+  `click.source` `declared`. The offset is fixed when the click is declared; on every later
+  `record mark` of the step `click.rect` is the box the primary frame gives (the found box, or
+  its corner plus the offset), which `do --capture --record` presses.
+- **The guard, not the page** (fix 1, the coordinator's ruling; "the wanted thing is not on the
+  screen today" must not look like "the package does not know this screen"). The followed
+  located-text mark is the click's target and its guard's target and no mark of the step's page:
+  the page rule does not list it, and the step's page is recognized by its other marks. So the
+  step needs at least one other mark that recognizes its page (a template, a color, a color
+  digest, a check or an OCR mark that is not the followed one); a step without one, and a step
+  with a check that names the located-text mark (the page would need the name through it), are
+  refused `record_click_follow_invalid` with `follow_problem` `page_needs_followed_text`, checked
+  on every `record mark` of the step as the other follow rules are (removing the step's only
+  other mark is refused the same way), and nothing is written; `record stop` refuses a recording
+  in that state the same way when it generates the package. The Lab cannot judge how well a mark
+  recognizes the page; the refusal says what the mark is for (fix 2): it tells this screen from
+  the other screens of the task, for example a template of the screen's title or of a fixed
+  element, and a mark that also holds on the next screen does not help. The rule of "Following a template"
+  that the followed mark is a required mark of the page does not apply; the others hold with the
+  followed mark in the template's place: `not_template` names a followed mark that is neither a
+  template nor a located-text mark (an OCR mark without `locate` among them), `not_required` one
+  that an `any_of` check of the step names, `guard_conflict` a click guard that names another
+  mark. `--click-guard` may name the followed located-text mark, the guard the package has
+  anyway; another OCR mark is refused `record_guard_family_invalid`, the message naming the mark
+  the click follows. The followed mark cannot be removed while the click follows it, except by a
+  request that removes it and adds a located-text mark of the same id again, which the click then
+  follows (see "The names" below).
+- **The self-test**, on every live frame of the step with the Lab's OCR provider, as the Runtime's
+  guard evaluates the target: the mark's own self-test (one of its names found, in a cell, unique
+  within the margin, with the kernel's typed reason otherwise, see the table above), and the
+  step's page recognized on every live frame without it (each of the step's other marks passes on
+  every live frame, as every mark's self-test requires); then `record_click_follow_invalid` under
+  `record_mark_rejected`, naming the frame, when the click box on a frame does not lie inside it
+  (`click_outside_frame`) or, once the step's click was executed, when its press lies outside the
+  box the primary frame gives (`press_outside_found_box`: the recording would say one thing and
+  the package do another). The press check holds whenever the follow is declared or the mark is
+  changed in any way other than its names; a request that changes only the names is not held to
+  it (below). Without an OCR model the mark is `not_evaluated` (`lab_ocr_unavailable`) as any OCR
+  mark, and a click that follows it cannot be declared or checked: `record mark` on its step is
+  refused `lab_ocr_unavailable` (exit 3, `blocked_by: ["ocr_model"]`, the mark as `target_id`) and
+  nothing is written.
+- **The names are the first form of a variable** (the owner: the variable can also be changed
+  after the recording by an agent through the Lab or in the package). An agent changes them, also
+  after `record stop` ("Marking after stop"), with one `record mark` on the existing step that
+  removes the followed mark and adds it again with the same id and every other member equal and
+  only its new `expected`. "Every other member" is every member the recording holds but the
+  mark's `self_test`, `created_at_unix_ms` and `initiator`: for a located-text mark its `family`,
+  `region` and `unique` and its OCR members `languages`, `timeout_ms`, `match_mode`,
+  `case_sensitive`, `minimum_confidence`, `model_ref`, `model_sha256` and `locate`, which the
+  request gives at its top level. The agent reads them in `record status`, which shows a
+  located-text mark as the recording holds it in `steps[].marks[].located_text` (fix 2; the OCR
+  members there are under `ocr`); elsewhere only `recording.json` and the `marks` of the
+  `record mark` answer that added the mark hold them:
+
+  ```json
+  {"schema_version":"actingcommand.lab-record-mark.v1","step":1,"remove":["text/card"],
+   "add":[{"id":"text/card","family":"ocr","region":{"x":100,"y":200,"width":600,"height":240},
+           "languages":["en"],"timeout_ms":1000,"match_mode":"exact","expected":["GAMMA"],
+           "case_sensitive":false,"minimum_confidence":0.8,"model_ref":"model","model_sha256":"<64 hex>",
+           "locate":{"normalize":"identity_v1","blocks":"detect","line_merge":{"gap_factor":0},
+                     "cells":{"x":0,"y":0,"width":140,"height":240,"pitch_x":150,"pitch_y":240,
+                              "columns":4,"rows":1}},
+           "unique":{"margin_milli":50}}]}
+  ```
+
+  Such a request is the change of the wanted value, not of the demonstration: the press check is
+  not applied to it, nor to a later `record mark` that leaves the mark as it is. The self-test
+  still needs one of the new names on every live frame of the step, by the same rules, and the
+  step's `click.rect` becomes the box the new names give on the primary frame. When the step's
+  click was executed, the click's `follow` records `names_changed_after_press: true`, which
+  `record mark`'s `click` and `record status` show (the recorded press is then not what the
+  package presses), and `record stop`'s cross-check lists the step in
+  `names_changed_after_press` (see "Package generation"). A request that changes any other member
+  of the mark (its region, its cells, its `locate`, its `minimum_confidence`, any member listed
+  above) is held to the press again, and a passing one clears the record; when its press lies
+  outside the box, the `press_outside_found_box` rejection lists the members besides the names in
+  which the request differs from the recorded mark, by name, as `differing_members` (fix 2).
+  `record mark --reopen-step` clears the record too, the press becoming an attempt. A
+  name that is on no recorded frame cannot be declared yet (`text_locate_not_found`): record a
+  sample that shows it; a later slice, the variable's, lifts this limit.
+- **The package** (see "Package generation"): the mark is an `ocr_targets[]` entry with its
+  `locate` and `unique`, named by no page rule; the click step's guard is `{"page_id",
+  "target_id": "<id>", "expected_rect": <the region>, "verify_text": "<id>"}`, and the step
+  declares `"input_recheck": {"kind": "fresh_frame"}` ([linear-steps.md](linear-steps.md),
+  Workflow #411 B12; [resource-declarations.md](resource-declarations.md), "Task schema `0.9`
+  observation windows and input rechecks"): after the guard passed on the step's frame, one fresh
+  frame is captured, only the step's page is recognized on it, the guard (the locate target) is
+  evaluated on it again, and the input is drawn from that frame's found box. A name that is not on
+  the screen at run time leaves the step's page recognized by its other marks, and the guard
+  refuses: the run fails with `contained_task_guard_refused` and the typed cause
+  (`cause=text_locate_not_found` or the other typed reason), with no input, as a hand-written
+  package does; the same on the fresh frame of the recheck. There is no normal end for "not found"
+  yet.
+
+A screen with a row of four cards, the wanted card found by its name: the request above
+("record mark") declares the title template `ui/title`, which recognizes the screen, and
+`text/card` over the row, the four cards as cells, the name `BETA` and a margin of 50, and the
+click on the found cell. On the primary frame `BETA` stands in cell 1, so
+the step's click is cell 1 (`{"x": 250, "y": 200, "width": 140, "height": 240}`); on the sample,
+where the cards were shuffled, it stands in cell 3 and the self-test passes there too, its cell
+inside the frame. The package declares:
+
+```json
+"ocr_targets": [{"id": "text/card", "region": {"mode": "rect", "rect": {"x": 100, "y": 200, "width": 600, "height": 240}},
+  "languages": ["en"], "timeout_ms": 1000, "match_mode": "exact", "expected": ["BETA"],
+  "case_sensitive": false, "minimum_confidence": 0.8, "model_ref": "model", "model_sha256": "<64 hex>",
+  "locate": {"normalize": "identity_v1", "blocks": "detect", "line_merge": {"gap_factor": 0},
+             "cells": {"x": 0, "y": 0, "width": 140, "height": 240, "pitch_x": 150, "pitch_y": 240, "columns": 4, "rows": 1}},
+  "unique": {"margin_milli": 50}}],
+"operations": [{"id": "step_01_click", "from": "step_01", "to": "step_02",
+  "click": {"kind": "target", "target_id": "text/card"},
+  "guard": {"page_id": "step_01", "target_id": "text/card",
+            "expected_rect": {"x": 100, "y": 200, "width": 600, "height": 240}, "verify_text": "text/card"},
+  "input_recheck": {"kind": "fresh_frame"}, "…": "…"}],
+"page_rules": {"step_01": {"required": ["ui/title"]}, "…": "…"}
+```
+
+and its run presses the cell that holds `BETA` on the fresh frame, wherever the card stands; on a
+day without `BETA` on the row the screen is still `step_01` and the guard refuses with
+`cause=text_locate_not_found`, no input.
 
 ### Forbidden marks and anchors
 
@@ -580,7 +766,10 @@ purpose is to evaluate an OCR target:
   `lab_ocr_unavailable` (exit 3, `blocked_by: ["ocr_model"]`, `details.outcome` the outcome with
   the OCR target as `target_id`) before evaluating anything;
 - an OCR or value-test mark's self-test and `record stop`'s first decision report it as their
-  reason;
+  reason (#463 L2 fix 1: the first decision also when step 1's page reads no OCR but its click
+  follows a located-text mark, whose guard reads it); #463 L2: `record mark` on a step whose
+  click follows a located-text mark refuses with it (the click's box comes from the OCR,
+  "Following a located text");
 - an `observe` action whose target is an OCR target or a value test is not evaluated, as before,
   and the output names it in `ocr.not_evaluated`, also beside a provider that serves NN models
   only;
@@ -1454,7 +1643,8 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   step has no page and its operation starts `from: "any"` (`entry_page: "any"`). A page
   transition after step k is the page `transition_kk`. Each page's rule is
   `{"required": [...]}`: the step's (or transition's) own marks and reused marks, without the
-  members of its `any_of` checks. Workflow #390 LAB-2: a step's page adds `"forbidden": [...]`,
+  members of its `any_of` checks and (#463 L2 fix 1) without the located-text mark its click
+  follows, which is the click's guard only. Workflow #390 LAB-2: a step's page adds `"forbidden": [...]`,
   the marks it forbids ("Forbidden marks and anchors"); its anchor is not listed in `required`
   (the anchor declares the page, which requires the anchor's target `page/<page>`), and a page
   whose rule would be empty then has none. A page transition's rule only requires.
@@ -1501,16 +1691,19 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   corner hold; see "Drags and long presses"),
   `expect_after.timeout_ms` the arrival timeout T (`--arrival-timeout-ms`, default 15000),
   `interval_ms` 500, `post_delay_ms` 200, and `retryable`, `max_attempts`,
-  `retry_interval_ms` only when the step declares a retry. Its guard target comes from the
-  page's required marks only: the template a click follows, the click guard, the click source
-  unless it is OCR, the first template, the first color or color digest, the first check. A
-  followed template that is not a required template mark of the page is refused with
-  `record_click_follow_invalid`. The guard's `expected_rect` is
+  `retry_interval_ms` only when the step declares a retry. Its guard target is (#463 L2 fix 1)
+  the located-text mark a click follows, a mark of the step and of no page rule; otherwise it
+  comes from the page's required marks only: the template a click follows, the click guard, the
+  click source unless it is OCR, the first template, the first color or color digest, the first
+  check. A followed template that is not a required mark of the page, and a followed located-text
+  mark that an `any_of` check names or whose page would need it (`page_needs_followed_text`), are
+  refused with `record_click_follow_invalid`. The guard's `expected_rect` is
   the template's search area, the color or digest region, or the bounding box of the check's
   members. #411 Lab B-9: a value test named by `--click-guard` guards as a check does,
   `"check": "<id>"`, with `expected_rect` the bounding box of its sides' regions (a value-test
   member of a check counts with that box). A page with only OCR marks gives no guard and
-  `unguarded_trusted_coordinate: true`.
+  `unguarded_trusted_coordinate: true`, unless the click follows one of them, a located-text
+  mark, which then guards it (`verify_text`).
 - An application step's operation is `step_ii_app`: `application: {"action"}`,
   `expect_after.timeout_ms` the application arrival timeout A
   (`--application-arrival-timeout-ms`, default 90000), `post_delay_ms` 1000, no guard and no
@@ -1540,6 +1733,15 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   and margin, click, application, transition), the warnings, `arrival_by_time_window` and the
   cross-check. `generated_at_unix_ms` is the recording's `updated_at_unix_ms`, so the same
   recording generates the same bytes again.
+- #463 L2: a located-text mark is its `ocr_targets[]` entry with `locate` and, when declared,
+  `unique`; a click that follows it is `{"kind": "target", …}` or `{"kind": "offset", …}` on it,
+  guarded by it (`verify_text`, `expected_rect` its region) and (fix 1) named by no page rule,
+  and its operation adds
+  `"input_recheck": {"kind": "fresh_frame"}`: the guard is evaluated again on one fresh frame
+  of the step's page and the input drawn from that frame ("Following a located text"). The
+  default task timeout does not count that fresh frame (one capture of the step's page, within
+  the margins of the usual path). A recording without a located-text mark generates the same
+  bytes as before.
 
 ### Container and name
 
@@ -1576,7 +1778,12 @@ guard execution still requires the corresponding frames, provider and Runtime ev
 2. **Admission.** The kernel admits the files as actingd loads a content directory: source
    compilation, declarations and the `linear_steps` rules, with the Lab's OCR
    provider when it has one (admission never calls it). A refusal is `record_artifact_admission_failed` (3) with
-   `details{stage, loader_code, detail, declaration{file, pointer, reason}}`.
+   `details{stage, loader_code, detail, declaration{file, pointer, reason}}`. #463 L2 fix 1: the
+   static read budget of OCR targets ([ocr-fields.md](ocr-fields.md)), a guard's reads (a
+   located-text guard's among them) and a page's, is checked only here, never when a mark is
+   recorded (a mark's self-test evaluates its one target alone): an author learns of an exceeded
+   budget at `record stop`, for a guard as `loader_code` `resource_declaration_invalid` with the
+   pointer `/operations/<i>/guard`.
 3. **First decision.** The offline simulation of the package on recorded frames:
    - a package with an application step, on its first live frame, must be refused with
      `application_effect_requires_assigned_application` before any capture:
@@ -1585,7 +1792,8 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      click was not simulated;
    - without an OCR model, a step 1 that involves OCR (an OCR or, #411 Lab B-9, value-test
      mark, or a check with such a member, among its required marks, which includes a
-     trusted-coordinate step) is not
+     trusted-coordinate step; #463 L2 fix 1: or a click that follows a located-text mark, whose
+     guard reads OCR though the page does not) is not
      simulated: `first_decision{status:"not_evaluated", reason:"lab_ocr_unavailable"}` and the
      warning `first_decision_not_evaluated`; with one it is simulated like any other step;
    - otherwise step 1's primary frame must give `would_click` of `step_01_click` with the
@@ -1593,8 +1801,12 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      every live frame of step 1 (the primary frame and the samples) is simulated, and each must
      give the point inside the box the followed template gives on that frame, as the admitted
      evaluator matches it (the match box, or its corner plus the scaled offset); the decision
-     shown is the primary frame's. Workflow #390 LAB-2: a drag must be a swipe from inside its
-     rectangle to inside its destination over its duration, a long press a long tap at its
+     shown is the primary frame's. #463 L2: a click that follows a located-text mark is checked
+     the same way, against the box the admitted evaluator finds its names in on each frame; as
+     its operation rechecks its guard on one fresh frame, each simulation is given the frame
+     twice, the second time as that fresh frame. Workflow #390 LAB-2: a drag must be a swipe
+     from inside its rectangle to inside its destination over its duration, a long press a long
+     tap at its
      point over its duration. #411 Lab BD: a brake drag must be the kernel's
      `SingleTouchDragWithVerticalBrakeV1` with (x1, y1) inside its rectangle, (x2, y2) inside
      its corner box, x3 = x2 and y3 = y2 − 100, and the four constants (200, 150, 100, 200).
@@ -1613,6 +1825,19 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      never a superseded frame; a page transition on its own frames) matches or is
      undetermined; a page that does not match one of its own frames is
      `record_step_self_mismatch` (3) naming the frame.
+   - **Guards on located text** (#463 L2 fix 2). The followed located-text mark is no mark of a
+     page, so the pages above do not evaluate it: for every step whose click follows one, its
+     guard (the located-text target, by the names the mark now holds) is evaluated on every live
+     frame of the step as a page's targets are. Found on each is a pass. Not found on a frame is
+     `record_step_self_mismatch` (3, `details{step, record_index, mark_id, frame_id, failure}`,
+     `failure` the kernel's typed reason), except on a step whose names were changed after its
+     press: its recorded frames show the demonstration, not the new value, so such a frame is
+     listed with the step in `names_changed_after_press[].frames_without_names` and does not fail
+     the cross-check. Without an OCR model the guard is undetermined, the status is
+     `partially_evaluated` and `guards_not_evaluated` lists those steps. The result lists each such
+     step in `located_text_guards[{step, record_index, mark_id, frames[{frame_id, result:
+     "found" | "not_found" | "undetermined"}]}]`. The first decision (item 3) evaluates step 1's
+     guard before, on the same frames, and refuses a frame on which the names are not found.
    - **Arrival gate.** After the effect of step k the run first waits for its gate: the page
      transition, or page k+1; without a page transition, the gate of a step followed by a run
      of optional steps is the run's skip target N, and an optional step's gate is checked in
@@ -1625,8 +1850,17 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      do not see an overall darkening: when a pop-up darkens the background, mark a darkened
      bright area with `--color` or a color digest, or declare a window. The gate of the
      application entry step is `not_applicable`.
+   - **Names changed after the press** (#463 L2 fix 1). No check compares a step's recorded
+     press with its generated click: a step 1 that follows a located-text mark is judged by the
+     box its names give on each frame (item 3). A step whose names were changed after its press
+     ("Following a located text") therefore neither fails for the difference nor passes
+     silently: it is listed in `names_changed_after_press[{step, record_index, mark_id,
+     recorded_point, frames_without_names?}]`, present only when a step is.
    - The result is `cross_check{status: "passed" | "partially_evaluated", self, gates,
-     margins, single_sample_steps}`, also in the package provenance.
+     margins, single_sample_steps, names_changed_after_press?, located_text_guards?,
+     guards_not_evaluated?}`, also in the package provenance; `located_text_guards` is present
+     only when a step's click follows a located-text mark, `guards_not_evaluated` only when such
+     a guard was undetermined.
 5. **Entry overlay.** Step 1's page is evaluated on its live frames with every channel times
    0.45, rounded down. When it still matches, the warning `entry_overlay_insensitive` asks for
    a `--color` or color digest mark on a fixed bright area: a darkening pop-up over step 1
