@@ -231,6 +231,27 @@ pub(super) fn bundle(game: &str, server: &str, packages: &[&str]) -> Value {
     })
 }
 
+/// Workflow #455 G-R2s: the composer's input for `root` when every package its registry lists
+/// reads and provides nothing.
+pub(super) fn readable_root(
+    root: &actingcommand_contract::StandardPackRoot,
+) -> actingcommand_contract::IrreversiblePackages {
+    actingcommand_contract::IrreversiblePackages::new(
+        root.registry
+            .package_ids()
+            .map(|package_id| {
+                (
+                    package_id.to_owned(),
+                    Some(actingcommand_contract::DeclaredCapabilities {
+                        provides: BTreeMap::new(),
+                        remedies: BTreeSet::new(),
+                    }),
+                )
+            })
+            .collect(),
+    )
+}
+
 pub(super) fn write_json(path: &Path, value: &Value) {
     fs::create_dir_all(path.parent().expect("a parent directory")).expect("create the game root");
     fs::write(
@@ -455,11 +476,22 @@ impl Bench {
         self.packs.path().join(game).join(file)
     }
 
+    /// Places `bundle.json` registering `packages` and `schedule` (none removes the file).
+    /// Workflow #455 G-R2s fix round 1: with a readable package, providing nothing, in the
+    /// directory the bundle names for each package that has none yet, so the workbench reads every
+    /// package and marks no task (the whole-game mark of a package it cannot read is
+    /// `gate_455_gr2s`'s).
     fn place(&self, game: &str, server: &str, packages: &[&str], schedule: Option<&Value>) {
         write_json(
             &self.path(game, "bundle.json"),
             &bundle(game, server, packages),
         );
+        for package_id in packages {
+            let directory = self.path(game, package_id);
+            if !directory.join("control.json").exists() {
+                super::gate_442_rem1::write_package(&directory, package_id, None, None);
+            }
+        }
         match schedule {
             Some(schedule) => write_json(&self.path(game, "schedule.json"), schedule),
             None => match fs::remove_file(self.path(game, "schedule.json")) {
@@ -1003,12 +1035,15 @@ fn rl1b_a9_the_first_composition_switches_from_a_configured_catalog_with_the_sam
     .expect("a sound root")
     .expect("a game root");
     let schedule_bytes = serde_json::to_vec_pretty(&schedule).expect("schedule bytes");
+    // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+    let irreversible = readable_root(&root);
     let games = BTreeMap::from([(
         GAME_A.to_owned(),
         StandardPackGameFiles {
             schedule: &schedule_bytes,
             root: &root,
             maintenance: &[],
+            irreversible: &irreversible,
         },
     )]);
     let composed = compose_standard_pack_rules(&StandardPackComposeInput {
@@ -1329,12 +1364,16 @@ fn compose_a(bench: &Bench, bound: &[Bound]) -> actingcommand_policy::StandardPa
     .expect("a sound root")
     .expect("a game root");
     let schedule_bytes = fs::read(bench.path(GAME_A, "schedule.json")).expect("schedule bytes");
+    // Workflow #455 G-R2s: the bench places a readable package for each, providing nothing, so
+    // the workbench marks no task; the same input here.
+    let irreversible = readable_root(&root);
     let games = BTreeMap::from([(
         GAME_A.to_owned(),
         StandardPackGameFiles {
             schedule: &schedule_bytes,
             root: &root,
             maintenance: &[],
+            irreversible: &irreversible,
         },
     )]);
     compose_standard_pack_rules(&StandardPackComposeInput {
@@ -1652,4 +1691,466 @@ fn sched_c1b_b_a_generation_without_values_records_no_fact() {
     assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
     assert!(catalog_provenance_fact(&bench).is_none());
     bench.close();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Workflow #455 G-R2s round 2 (register §1.369; the coordinator's ruling of 11-14 on the
+// workbench's early returns; contracts/resource-targets.md, "A task that can do something
+// irreversible"): while a game's root cannot be composed, every candidate of that game's instances
+// is computed as on an instance without a target record, until a composition of it succeeds
+// ---------------------------------------------------------------------------------------------
+
+/// The reason of a candidate whose game's root cannot be composed.
+const ROOT_UNCOMPOSED: &str = "resource_target_root_uncomposed";
+
+/// Game A and game B, each on its own instance, with each instance's inventory of its pool read
+/// (catalog-a's pools observe `resource.primary`): 10 units, a minute before the fixture's time.
+fn gr2s_two_games() -> Bench {
+    let mut facts = facts(&[BOUND_A, BOUND_B]);
+    for (instance, _, _) in [BOUND_A, BOUND_B] {
+        facts.facts.push(actingcommand_policy::ObservedFact {
+            scope: actingcommand_policy::ScopeSelector::Instance {
+                instance_id: instance.to_owned(),
+            },
+            fact_key: "resource.primary".to_owned(),
+            value: actingcommand_policy::FactValue::Integer(10),
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS - 60_000,
+            expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 24 * HOUR_MS),
+            confidence_milli: 1000,
+        });
+    }
+    let bench = Bench::with_facts(&[BOUND_A, BOUND_B], &[POOL_A, POOL_B], true, None, facts);
+    bench.place(
+        GAME_A,
+        SERVER_A,
+        &[PACKAGE_1],
+        Some(&schedule_a(&[(RULE_1, PACKAGE_1, 100)])),
+    );
+    bench.place(GAME_B, SERVER_B, &[PACKAGE_B], Some(&schedule_b(100, true)));
+    bench
+}
+
+/// A candidate's numbers in `cycle`: its rank and its score-stage reasons (code and detail), and
+/// whether it carries [`ROOT_UNCOMPOSED`].
+type Numbers = (
+    Option<actingcommand_policy::TaskRank>,
+    Vec<(String, String)>,
+    bool,
+);
+
+fn gr2s_numbers(cycle: &PolicyCycle, task_id: &str, instance_id: &str) -> Numbers {
+    let decision = cycle
+        .evaluation
+        .as_ref()
+        .and_then(|evaluation| {
+            evaluation.decisions.iter().find(|decision| {
+                decision.task_id == task_id && decision.instance_id.as_deref() == Some(instance_id)
+            })
+        })
+        .unwrap_or_else(|| panic!("a decision of {task_id} on {instance_id}: {cycle:#?}"));
+    let reasons = decision
+        .reasons
+        .iter()
+        .filter(|reason| {
+            let code = reason.outcome.code().as_str();
+            code == "score_computed"
+                || code == "resource_weights"
+                || (code.starts_with("resource_target")
+                    && code != ROOT_UNCOMPOSED
+                    && code != "resource_target_package_irreversible")
+        })
+        .map(|reason| {
+            (
+                reason.outcome.code().as_str().to_owned(),
+                reason.detail.clone(),
+            )
+        })
+        .collect();
+    let uncomposed = decision
+        .reasons
+        .iter()
+        .any(|reason| reason.outcome.code().as_str() == ROOT_UNCOMPOSED);
+    (decision.rank.clone(), reasons, uncomposed)
+}
+
+/// The numbers of rule 1 on instance A and of rule B on instance B in `cycle`.
+fn gr2s_both(cycle: &PolicyCycle) -> (Numbers, Numbers) {
+    (
+        gr2s_numbers(cycle, RULE_1, INSTANCE_A),
+        gr2s_numbers(cycle, RULE_B, INSTANCE_B),
+    )
+}
+
+impl Bench {
+    /// `ApplyResourceTargets` of a v2 goal of `instance` on `pool`: at least 100 (its inventory
+    /// reads 10), step 1, importance 1000, for a day. The Runtime takes it.
+    fn apply_goal(&self, instance: &str, pool: &str) {
+        let document = json!({
+            "schema_version": "actingcommand.resource-targets.v2",
+            "instance": instance,
+            "valid_until_unix_ms": POLICY_NOW_UNIX_MS + 24 * HOUR_MS,
+            "targets": [{
+                "id": "neutral.floor",
+                "resource": pool,
+                "condition": {"kind": "at_least", "amount": 100},
+                "scale": 1,
+                "importance_milli": 1000,
+                "apply": {"mode": "adjust", "weight": "score_stage"}
+            }]
+        });
+        let mut client = TestClient::connect(&self.host);
+        let request = client.request(RuntimeOperation::ApplyResourceTargets {
+            document_json: document.to_string(),
+            expected_version: None,
+        });
+        let receipt = client.send(&request);
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "the goal is taken: {receipt:?}"
+        );
+    }
+}
+
+/// The two games composed and evaluated before any goal, then with a goal on each instance's
+/// pool: the numbers before, and with the goals (each goal moves its game's candidate).
+fn gr2s_goals_in_effect(bench: &Bench) -> ((Numbers, Numbers), (Numbers, Numbers)) {
+    let before = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 0));
+    bench.apply_goal(INSTANCE_A, POOL_A);
+    bench.apply_goal(INSTANCE_B, POOL_B);
+    let weighed = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, INTERVAL_MS));
+    assert_ne!(weighed.0.0, before.0.0, "the goal moves game A's candidate");
+    assert_ne!(weighed.1.0, before.1.0, "the goal moves game B's candidate");
+    assert!(!weighed.0.2 && !weighed.1.2, "no root is refused yet");
+    (before, weighed)
+}
+
+/// Round 2, a damaged root (the workbench's broken-root return): game A's `bundle.json` is
+/// damaged. While it is, game A's candidate is the one before any goal (rank and score-stage
+/// reasons) and carries `resource_target_root_uncomposed`; game B's candidate keeps every number
+/// the goal gives it (fix round 3: the check goes on and composes game B without activating it;
+/// the active generation holds game B as its files give it). Repaired, game A composes again (the
+/// same rules digest, no new activation) and its goal applies as before; fix round 3: the cycles
+/// share their instant, ledger position and snapshot, and the void is part of game A's decision
+/// identities, so no identity names two decisions.
+#[test]
+fn gr2s_r2_a_damaged_root_voids_the_goals_of_its_game_until_it_composes() {
+    let bench = gr2s_two_games();
+    let (before, weighed) = gr2s_goals_in_effect(&bench);
+    let activations = bench.events(EventType::CatalogActivated).len();
+
+    let bundle = bench.path(GAME_A, "bundle.json");
+    let good = fs::read(&bundle).expect("game A's bundle");
+    fs::write(&bundle, b"{").expect("damage game A's bundle");
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS));
+    assert_eq!(
+        (&a.0, &a.1),
+        (&before.0.0, &before.0.1),
+        "game A as without a goal"
+    );
+    assert!(a.2, "game A says why");
+    assert_eq!(b, weighed.1, "game B is what it was");
+
+    fs::write(&bundle, &good).expect("repair game A's bundle");
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 3 * INTERVAL_MS));
+    assert_eq!(a, weighed.0, "game A's goal applies again");
+    assert_eq!(b, weighed.1);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), activations);
+    bench.close();
+}
+
+/// Round 2, a composition refused as a whole (the workbench's whole-refusal return): game A's
+/// `schedule.json` gains 1 023 more pools, so game A alone holds the catalog's 1 024 pools and
+/// the two games together one too many (`limit_exceeded` at `/pools`, which names no game). While
+/// it is refused, game A's candidate is the one before any goal and says why; game B's root did
+/// not change, so the active generation composes it as it is and its candidate keeps the goal's
+/// numbers. Game A's file restored, the two compose again and game A's goal applies as before.
+/// Fix round 3: the refusal is recorded naming each composed game and its `schedule.json` (it
+/// named none, which broke its catalog entry).
+#[test]
+fn gr2s_r2_a_composition_refused_as_a_whole_voids_the_goals_of_the_changed_game() {
+    let bench = gr2s_two_games();
+    let (before, weighed) = gr2s_goals_in_effect(&bench);
+    let activations = bench.events(EventType::CatalogActivated).len();
+
+    let schedule = bench.path(GAME_A, "schedule.json");
+    let good = fs::read(&schedule).expect("game A's schedule.json");
+    let mut crowded = schedule_a(&[(RULE_1, PACKAGE_1, 100)]);
+    let pools = crowded["pools"].as_array_mut().expect("game A's pools");
+    for index in 0..1023 {
+        pools.push(pool(&format!("fixture-pool-x{index:04}")));
+    }
+    write_json(&schedule, &crowded);
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS));
+    assert_eq!(
+        bench.events(EventType::CatalogActivated).len(),
+        activations,
+        "the composition is refused and the active generation kept"
+    );
+    for game in [GAME_A, GAME_B] {
+        let refused = bench.reads_of(SharedCode::StandardPackRootInvalid, Some(game));
+        assert_eq!(refused.len(), 1, "{game}: {refused:#?}");
+        let path = bench.path(game, "schedule.json");
+        let expected = path.to_string_lossy();
+        assert_eq!(
+            refused[0].value("path").and_then(Value::as_str),
+            Some(&*expected),
+            "{game}"
+        );
+    }
+    assert_eq!(
+        (&a.0, &a.1),
+        (&before.0.0, &before.0.1),
+        "game A as without a goal"
+    );
+    assert!(a.2, "game A says why");
+    assert_eq!(b, weighed.1, "game B is what it was");
+
+    fs::write(&schedule, &good).expect("restore game A's schedule.json");
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 3 * INTERVAL_MS));
+    assert_eq!(a, weighed.0, "game A's goal applies again");
+    assert_eq!(b, weighed.1);
+    bench.close();
+}
+
+/// Fix round 3 (C.1, C.2, C.4), the metadata return: the metadata of game A's `schedule.json`
+/// cannot be read (another error than its absence; the gate tests' seam
+/// `DECLARATION_METADATA_FAILS_FOR_TEST`, for this test's own root). Game A's candidate is the one
+/// before any goal and says why; game B, after game A in id order, keeps the goal's numbers (the
+/// check went on: game B is marked, read and composed, and the active generation holds it as its
+/// files give it). The failure is recorded once (`standard_pack_root_unreadable` naming game A).
+/// Readable again, game A's goal applies as before; a second failure, after game A's root composed
+/// in between, is recorded again.
+#[test]
+fn gr2s_r3_a_root_whose_metadata_fails_voids_only_its_own_game() {
+    let bench = gr2s_two_games();
+    let (before, weighed) = gr2s_goals_in_effect(&bench);
+    let failing = bench.path(GAME_A, "schedule.json");
+    let seam = || {
+        crate::host::DECLARATION_METADATA_FAILS_FOR_TEST
+            .lock()
+            .expect("the metadata seam")
+    };
+    let unreadable = || {
+        bench
+            .reads_of(HostCode::StandardPackRootUnreadable, Some(GAME_A))
+            .len()
+    };
+
+    seam().insert(failing.clone());
+    let cycle = bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS);
+    seam().remove(&failing);
+    let (a, b) = gr2s_both(&cycle);
+    assert_eq!(
+        (&a.0, &a.1),
+        (&before.0.0, &before.0.1),
+        "game A as without a goal"
+    );
+    assert!(a.2, "game A says why");
+    assert_eq!(b, weighed.1, "game B keeps its goal");
+    assert_eq!(unreadable(), 1, "the failure is recorded");
+
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 3 * INTERVAL_MS));
+    assert_eq!(a, weighed.0, "game A's goal applies again");
+    assert_eq!(b, weighed.1);
+
+    seam().insert(failing.clone());
+    let cycle = bench.cycle(POLICY_NOW_UNIX_MS, 4 * INTERVAL_MS);
+    seam().remove(&failing);
+    let (a, b) = gr2s_both(&cycle);
+    assert!(a.2, "game A says why again");
+    assert_eq!(b, weighed.1);
+    assert_eq!(unreadable(), 2, "the second failure is recorded too");
+    bench.close();
+}
+
+/// Fix round 3 (C.4), the return without progress: a composer refusal that names a game no round
+/// of the check composed (unreachable from files, since the composer names only a game it
+/// composed; the gate tests' seam `REFUSALS_NAME_UNCOMPOSED_FOR_TEST`, for this test's own root,
+/// takes game A's refusal for one). Game A's `schedule.json` is broken: its refusal is recorded
+/// once naming game A, the active generation is kept, game A's candidate is the one before any
+/// goal and says why, and game B, whose files did not change, keeps the goal's numbers. Game A's
+/// file restored (the seam gone), the two compose again and game A's goal applies as before.
+#[test]
+fn gr2s_r3_a_refusal_no_round_can_narrow_voids_the_changed_game_only() {
+    let bench = gr2s_two_games();
+    let (before, weighed) = gr2s_goals_in_effect(&bench);
+    let activations = bench.events(EventType::CatalogActivated).len();
+    let root = bench.packs.path().to_path_buf();
+    let seam = || {
+        crate::host::REFUSALS_NAME_UNCOMPOSED_FOR_TEST
+            .lock()
+            .expect("the refusal seam")
+    };
+
+    let schedule = bench.path(GAME_A, "schedule.json");
+    let good = fs::read(&schedule).expect("game A's schedule.json");
+    fs::write(&schedule, b"{").expect("break game A's schedule.json");
+    seam().insert(root.clone());
+    let cycle = bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS);
+    seam().remove(&root);
+    let (a, b) = gr2s_both(&cycle);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), activations);
+    let refused = bench.reads_of(SharedCode::StandardPackRootInvalid, Some(GAME_A));
+    assert_eq!(refused.len(), 1, "{refused:#?}");
+    assert_eq!(
+        (&a.0, &a.1),
+        (&before.0.0, &before.0.1),
+        "game A as without a goal"
+    );
+    assert!(a.2, "game A says why");
+    assert_eq!(b, weighed.1, "game B keeps its goal");
+
+    fs::write(&schedule, &good).expect("restore game A's schedule.json");
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 3 * INTERVAL_MS));
+    assert_eq!(a, weighed.0, "game A's goal applies again");
+    assert_eq!(b, weighed.1);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), activations);
+    bench.close();
+}
+
+/// Fix round 3 (C.1, C.4), after a start: game A's `bundle.json` is damaged while the Runtime is
+/// stopped. At the first check after the start the workbench holds no marks; game A's candidate
+/// says why its goal is void, and game B's does not: the check composed game B and found it held
+/// by the active generation as its files give it, so game B's candidate is the one it is once every
+/// root composes again. Repaired, game A's goal moves its candidate again.
+#[test]
+fn gr2s_r3_after_a_start_one_failing_root_voids_only_its_own_game() {
+    let bench = gr2s_two_games();
+    gr2s_goals_in_effect(&bench);
+    let bundle = bench.path(GAME_A, "bundle.json");
+    let good = fs::read(&bundle).expect("game A's bundle");
+    fs::write(&bundle, b"{").expect("damage game A's bundle");
+
+    // The restarted host evaluates at the fixture's restart instant, after every record of the
+    // first start (board #71, TCLOCK), its monotonic clock moving on from the first start's.
+    let bench = bench.restart(true);
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_RESTART_UNIX_MS, 2 * INTERVAL_MS));
+    assert!(a.2, "game A says why");
+    assert!(!b.2, "game B's goal stays in effect");
+
+    fs::write(&bundle, &good).expect("repair game A's bundle");
+    let (repaired_a, repaired_b) = gr2s_both(&bench.cycle(POLICY_RESTART_UNIX_MS, 3 * INTERVAL_MS));
+    assert!(!repaired_a.2, "every root composes");
+    assert_ne!(repaired_a.0, a.0, "game A's goal moves its candidate again");
+    assert_eq!(b, repaired_b, "game B as with every root composed");
+    bench.close();
+}
+
+/// Fix round 4 (item 3, the coordinator's ruling on round 3's addition: kept as the rule, and
+/// recorded): game A's `bundle.json` is damaged and, at the same check, game B's package comes to
+/// provide a capability marked irreversible, so the composition the check makes of game B (and
+/// does not activate) marks rule B while the active generation does not: the active generation
+/// holds game B otherwise, and game B's goals are void too. Game A's and game B's candidates say
+/// why, game B's has the numbers of before any goal, and the check records one
+/// `resource_target_root_uncomposed` naming game B and none naming game A (game A's own root's
+/// record names it). Game A repaired, every game composes (rule B now carries the mark): neither
+/// candidate says its root is uncomposed, and nothing more is recorded.
+#[test]
+fn gr2s_r4_a_game_the_active_generation_holds_otherwise_is_voided_and_recorded() {
+    let bench = gr2s_two_games();
+    let (before, _) = gr2s_goals_in_effect(&bench);
+    let recorded = |game: &str| {
+        bench.reads_of(
+            actingcommand_policy::PolicyCode::ResourceTargetRootUncomposed,
+            Some(game),
+        )
+    };
+
+    let bundle = bench.path(GAME_A, "bundle.json");
+    let good = fs::read(&bundle).expect("game A's bundle");
+    fs::write(&bundle, b"{").expect("damage game A's bundle");
+    // An irreversible capability declares its parameters (the package reader refuses one without).
+    super::gate_442_rem1::write_package(
+        &bench.path(GAME_B, PACKAGE_B),
+        PACKAGE_B,
+        None,
+        Some(
+            json!([{"capability": "cap_x", "irreversible": true, "parameters": [
+                {"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_1"}
+            ]}]),
+        ),
+    );
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS));
+    assert!(a.2, "game A says why");
+    assert!(b.2, "game B says why");
+    assert_eq!(
+        (&b.0, &b.1),
+        (&before.1.0, &before.1.1),
+        "game B as without a goal"
+    );
+    assert_eq!(recorded(GAME_B).len(), 1, "{:#?}", recorded(GAME_B));
+    assert!(recorded(GAME_A).is_empty(), "{:#?}", recorded(GAME_A));
+
+    fs::write(&bundle, &good).expect("repair game A's bundle");
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 3 * INTERVAL_MS));
+    assert!(!a.2 && !b.2, "every root composes");
+    assert_eq!(recorded(GAME_B).len(), 1, "nothing more is recorded");
+    assert!(recorded(GAME_A).is_empty());
+    bench.close();
+}
+
+/// Fix round 4 (item 5): check-config's preview of a composition refused as a whole. Game A's
+/// `schedule.json` holds 1 023 more pools, so game A alone holds the catalog's 1 024 pools and the
+/// two games together one too many (`limit_exceeded` at `/pools`, which names no game). The
+/// preview gives only `standard_pack_root_invalid` problems, each naming a composed game and that
+/// game's `schedule.json` (the keys the code's catalog entry requires), both games named, and
+/// leaves no game out.
+#[test]
+fn gr2s_r4_check_configs_preview_names_each_game_of_a_composition_refused_as_a_whole() {
+    let packs = TempDir::new().expect("standard-pack root");
+    let mut crowded = schedule_a(&[(RULE_1, PACKAGE_1, 100)]);
+    let pools = crowded["pools"].as_array_mut().expect("game A's pools");
+    for index in 0..1023 {
+        pools.push(pool(&format!("fixture-pool-x{index:04}")));
+    }
+    for (game, server, package, schedule) in [
+        (GAME_A, SERVER_A, PACKAGE_1, crowded),
+        (GAME_B, SERVER_B, PACKAGE_B, schedule_b(100, true)),
+    ] {
+        let directory = packs.path().join(game);
+        write_json(
+            &directory.join("bundle.json"),
+            &bundle(game, server, &[package]),
+        );
+        super::gate_442_rem1::write_package(&directory.join(package), package, None, None);
+        write_json(&directory.join("schedule.json"), &schedule);
+    }
+    let instances = [BOUND_A, BOUND_B]
+        .map(|(alias, game, server)| (alias.to_owned(), game.to_owned(), server.to_owned()));
+
+    let preview =
+        crate::host::preview_standard_pack_schedule(Some(packs.path()), &instances, None, true);
+    assert!(preview.left_out.is_empty(), "{preview:#?}");
+    let named = preview
+        .problems
+        .iter()
+        .map(|problem| {
+            assert!(
+                problem.is(SharedCode::StandardPackRootInvalid),
+                "{problem:?}"
+            );
+            (
+                problem
+                    .value("game")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                problem
+                    .value("path")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let expected = [GAME_A, GAME_B]
+        .map(|game| {
+            let path = packs.path().join(game).join("schedule.json");
+            (
+                Some(game.to_owned()),
+                Some(path.to_string_lossy().into_owned()),
+            )
+        })
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(named, expected, "{preview:#?}");
 }

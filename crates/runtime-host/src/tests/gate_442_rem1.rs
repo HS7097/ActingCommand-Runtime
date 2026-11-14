@@ -45,8 +45,8 @@ const REQUESTED: &str = "policy_remedy_requested";
 
 // One package: from `home` to `page_b` or `result` when it declares `remedy` on the mapping of
 // `page_b`, otherwise from `home` to `result` with no outcome declaration; with `provides` when
-// one is given.
-fn write_package(
+// one is given. Workflow #455 G-R2s: `gate_455_gr2s` places its packages with it too.
+pub(super) fn write_package(
     directory: &Path,
     package_id: &str,
     remedy: Option<Value>,

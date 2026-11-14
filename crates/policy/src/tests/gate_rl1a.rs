@@ -610,17 +610,20 @@ fn compose(
                 .expect("a bundle index")
                 .maintenance()
                 .to_vec();
+            // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+            let irreversible = super::readable_root(&root);
             (
                 fixture.game,
                 fixture.schedule.as_ref().map(bytes),
                 root,
                 maintenance,
+                irreversible,
             )
         })
         .collect::<Vec<_>>();
     let games = read
         .iter()
-        .filter_map(|(game, schedule, root, maintenance)| {
+        .filter_map(|(game, schedule, root, maintenance, irreversible)| {
             schedule.as_ref().map(|schedule| {
                 (
                     (*game).to_owned(),
@@ -628,6 +631,7 @@ fn compose(
                         schedule: schedule.as_slice(),
                         root,
                         maintenance: maintenance.as_slice(),
+                        irreversible,
                     },
                 )
             })
@@ -892,6 +896,75 @@ fn rl1a_t1_catalog_a_converted_by_the_as_is_rules_composes_back_and_decides_alik
     assert!(
         runs > 0 && waits > 0,
         "the grid holds steps that run and steps that do not ({runs}, {waits})"
+    );
+}
+
+/// Workflow #455 G-R2s (register §1.369; work order tests 4, the last item): a root without an
+/// irreversible package composes the bytes and the catalog hash of before. T1's fixture, composed
+/// with every package of the root read and none irreversible, composes back to T1's as-is
+/// documents (catalog-a's example on disk in the as-is shape, built by this test file, not by the
+/// composer) whole, under the composition's descriptor; no task carries the irreversible mark; and
+/// its catalog hash is the hash of those documents compiled by the composer's compiler.
+#[test]
+fn gr2s_a_root_without_an_irreversible_package_composes_the_bytes_and_hash_of_before() {
+    let as_is = catalog_a_as_is();
+    let bundle = bundle(
+        GAME_A,
+        &[
+            (PACKAGE, SERVER_A),
+            (RETURN_PACKAGE, SERVER_A),
+            (EXTRA_PACKAGE, SERVER_A),
+        ],
+        &[
+            (PACKAGE, SERVER_A, "startup"),
+            (RETURN_PACKAGE, SERVER_A, "return_home"),
+        ],
+    );
+    let schedule = convert_as_is(&as_is, INSTANCE_A, &bundle);
+    let composition = composed(
+        &[GameRoot {
+            game: GAME_A,
+            schedule: Some(schedule),
+            bundle,
+        }],
+        &[(INSTANCE_A, GAME_A, SERVER_A)],
+        Some(&BTreeSet::new()),
+    );
+    let descriptor =
+        json!({"catalog_id": "standard-packs", "catalog_version": 1, "approval_refs": []});
+    let documents = composed_documents(&composition);
+    let mut before = as_is.clone();
+    for ((list, expected), (composed_list, document)) in before.iter_mut().zip(&documents) {
+        assert_eq!(list, composed_list);
+        expected["catalog"] = descriptor.clone();
+        assert_eq!(document, expected, "{list}: the document of before");
+    }
+    for task in documents[0].1["tasks"]
+        .as_array()
+        .expect("the composed tasks")
+    {
+        assert!(
+            task.get(crate::IRREVERSIBLE_REACH_MEMBER).is_none(),
+            "{task}"
+        );
+    }
+    let source = |index: usize| {
+        CatalogDocumentSource::new(
+            format!("memory://fixture-gr2s/{}.json", before[index].0),
+            bytes(&before[index].1),
+        )
+    };
+    let compiled = crate::compile_composed_catalog(&CatalogSources {
+        tasks: source(0),
+        pools: source(1),
+        activity: source(2),
+        timeline: source(3),
+        selection: None,
+    })
+    .unwrap_or_else(|failure| panic!("the documents compile: {:?}", failure.diagnostics()));
+    assert_eq!(
+        composition.compiled().catalog_hash(),
+        compiled.catalog_hash()
     );
 }
 

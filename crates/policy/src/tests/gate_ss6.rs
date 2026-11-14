@@ -36,24 +36,24 @@ use crate::{
 const A: &str = "instance-a";
 const GAME: &str = "game-a";
 const OPERATION: &str = "operation.run";
-const TASK_A: &str = "task_a";
+pub(super) const TASK_A: &str = "task_a";
 const TASK_B: &str = "task_b";
 const TASK_N: &str = "task_n";
 /// Consumes 40 of pool A and ran after its latest reading: consumption the reading does not show.
 const TASK_P: &str = "task_p";
 const PENDING: u64 = 40;
 /// Spent; no valuation.
-const POOL_A: &str = "pool_a";
-const POOL_A_KEY: &str = "resource.pool_a";
+pub(super) const POOL_A: &str = "pool_a";
+pub(super) const POOL_A_KEY: &str = "resource.pool_a";
 /// Produced toward a goal; no valuation, so no base weight.
-const POOL_B: &str = "pool_b";
-const POOL_B_KEY: &str = "resource.pool_b";
+pub(super) const POOL_B: &str = "pool_b";
+pub(super) const POOL_B_KEY: &str = "resource.pool_b";
 /// Produced; valued at `base_weight_milli` 500.
 const POOL_C: &str = "pool_c";
 const POOL_C_KEY: &str = "resource.pool_c";
 /// Spent; no valuation.
-const POOL_D: &str = "pool_d";
-const POOL_D_KEY: &str = "resource.pool_d";
+pub(super) const POOL_D: &str = "pool_d";
+pub(super) const POOL_D_KEY: &str = "resource.pool_d";
 /// Produced toward a goal; no valuation, so no base weight.
 const POOL_E: &str = "pool_e";
 const POOL_E_KEY: &str = "resource.pool_e";
@@ -572,18 +572,19 @@ fn ss6_t8_incomplete_declarations_give_no_run_cap_and_overflow_neither_panics_no
 // ---- Fixture.
 
 /// One task of the fixture: its id, priority, consumption, reserves and production per pool, and
-/// whether it opts in to Workflow #411 B8's values.
-struct TaskDecl {
-    id: &'static str,
-    priority: i16,
-    consumes: &'static [(&'static str, u64)],
-    reserves: &'static [(&'static str, u64)],
-    produces: &'static [(&'static str, u64)],
-    dispatch_parameters: bool,
+/// whether it opts in to Workflow #411 B8's values. (Workflow #455 G-R2s's gate tests read the
+/// fixture too.)
+pub(super) struct TaskDecl {
+    pub(super) id: &'static str,
+    pub(super) priority: i16,
+    pub(super) consumes: &'static [(&'static str, u64)],
+    pub(super) reserves: &'static [(&'static str, u64)],
+    pub(super) produces: &'static [(&'static str, u64)],
+    pub(super) dispatch_parameters: bool,
 }
 
 impl TaskDecl {
-    const fn new(id: &'static str, priority: i16) -> Self {
+    pub(super) const fn new(id: &'static str, priority: i16) -> Self {
         Self {
             id,
             priority,
@@ -610,7 +611,7 @@ fn production(pool_id: &str, quantity: Value) -> Value {
     entry
 }
 
-fn task(declared: &TaskDecl) -> Value {
+pub(super) fn task(declared: &TaskDecl) -> Value {
     let produces = declared
         .produces
         .iter()
@@ -742,7 +743,7 @@ fn pending_run() -> TaskRuntimeSnapshot {
 }
 
 /// The fixture catalog, `actingcommand.scheduling.v2`, with these tasks and the five pools.
-fn catalog(tasks: &[Value]) -> CompiledCatalog {
+pub(super) fn catalog(tasks: &[Value]) -> CompiledCatalog {
     let header = json!({
         "catalog_id": "fixture.spend-allowance",
         "catalog_version": 1,
@@ -812,7 +813,7 @@ fn source(name: &str, document: &Value) -> CatalogDocumentSource {
 
 /// A v2 goal on `pool` to hold at least `at_least`, step 1 and importance 1000 of its own (pool B
 /// has no valuation to take them from).
-fn goal(pool: &str, at_least: u64) -> Value {
+pub(super) fn goal(pool: &str, at_least: u64) -> Value {
     json!({
         "id": format!("goal-{pool}"),
         "resource": pool,
@@ -824,7 +825,7 @@ fn goal(pool: &str, at_least: u64) -> Value {
 }
 
 /// An active v2 document of `targets`, valid for a day.
-fn goals(targets: &[Value]) -> Value {
+pub(super) fn goals(targets: &[Value]) -> Value {
     json!({
         "schema_version": V2,
         "instance": A,
@@ -834,7 +835,7 @@ fn goals(targets: &[Value]) -> Value {
 }
 
 /// The record the formal entry stores for `document`, checked against `catalog` at `checked_at`.
-fn stored(catalog: &CompiledCatalog, document: &Value, checked_at: u64) -> ObservedFact {
+pub(super) fn stored(catalog: &CompiledCatalog, document: &Value, checked_at: u64) -> ObservedFact {
     let parsed = parse_resource_targets(&serde_json::to_vec(document).expect("document bytes"))
         .unwrap_or_else(|error| panic!("the fixture document parses: {error:?}"));
     let checked = check_resource_targets(&parsed, catalog, &inputs(Vec::new()), time(checked_at))
@@ -855,7 +856,7 @@ fn stored(catalog: &CompiledCatalog, document: &Value, checked_at: u64) -> Obser
 }
 
 /// A reading of a pool's key on the instance, a minute before NOW, fresh for a day.
-fn reading_of(fact_key: &str, value: i64) -> ObservedFact {
+pub(super) fn reading_of(fact_key: &str, value: i64) -> ObservedFact {
     fact(A, fact_key, value, NOW - 60_000, Some(NOW + DAY_MS))
 }
 
@@ -880,7 +881,7 @@ fn inputs(facts: Vec<ObservedFact>) -> EvaluationFacts {
 
 /// One round at NOW. The pools' values are the ones the Runtime derives from the readings; the
 /// instance has its own host and every candidate is admitted.
-fn round(catalog: &CompiledCatalog, facts: Vec<ObservedFact>) -> PolicyEvaluation {
+pub(super) fn round(catalog: &CompiledCatalog, facts: Vec<ObservedFact>) -> PolicyEvaluation {
     round_after(catalog, facts, Vec::new())
 }
 
@@ -961,7 +962,10 @@ fn dispatched_chain<'a>(
 }
 
 /// The one `policy_dispatch_parameters` of `task_id`'s dispatch chain, if it has one.
-fn parameters<'a>(evaluation: &'a PolicyEvaluation, task_id: &str) -> Option<&'a DecisionReason> {
+pub(super) fn parameters<'a>(
+    evaluation: &'a PolicyEvaluation,
+    task_id: &str,
+) -> Option<&'a DecisionReason> {
     let chain = dispatched_chain(evaluation, task_id)?;
     let reasons = chain
         .reasons

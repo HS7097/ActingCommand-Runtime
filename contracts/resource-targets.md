@@ -36,8 +36,11 @@ it was stored).
 **One-way guard.** Resource weight feeds task weight, never the reverse (ruling 100). The
 resource layer, the pool weights `W = B + Γ` and each task's term `R`, reads the pools'
 valuation, the instance's inventory readings, the stored targets and each task's own `produces`
-only: never a task's enablement, an instance override, a priority, a manual offset or a run
-state. Changing any of them for one task changes no pool weight and no other task's term. A
+only, and, since Workflow #455 G-R2s (0.12.60), each task's composer mark `irreversible_reach`,
+which decides only whether the targets weigh that task's own candidate ("A task that can do
+something irreversible" below): never a task's enablement, an instance override, a priority, a
+manual offset or a run state. Changing any of them for one task changes no pool weight and no
+other task's term. A
 target that names a task an instance override disables keeps covering it (the task has no
 candidate, and the disablement is only reported in `resource_target_tasks_unevaluable`); a v2
 target without `tasks` that no enabled task produces still resolves and is only reported as
@@ -47,8 +50,10 @@ override disables ("Evaluation" below).
 Two document versions exist. `actingcommand.resource-targets.v1` (Workflow #308 RT-S1) is
 frozen: its fields, rejections, rows and identity stay exactly as specified here, and its
 evaluation too, except that since SS-1 (0.12.30) its `U` includes the named tasks an instance
-override disables ("One-way guard" above, "Evaluation" below); its override still supersedes
-the manual offset. `actingcommand.resource-targets.v2` (Workflow #335 S2b) weighs every
+override disables ("One-way guard" above, "Evaluation" below), and that since Workflow #455 G-R2s
+(0.12.60) a candidate whose task carries the irreversible mark meets no effect of it, though it
+names the task, while the other tasks' `U` keeps counting that task's yield ("A task that can do
+something irreversible" below); its override still supersedes the manual offset. `actingcommand.resource-targets.v2` (Workflow #335 S2b) weighs every
 produced resource of the instance with the pool's declared `valuation`
 (`contracts/scheduling/README.md`, "Pool Valuation") plus its target's shortfall ("Document
 `actingcommand.resource-targets.v2`" and "Resource weights (v2)" below). Agents submit v2; a v1
@@ -58,6 +63,91 @@ every instance whatever its record ("Base valuation on every instance" above). S
 document's value store: v2 targets, each with a lifetime of its own, and the values of named
 entries, in the same record ("Document `actingcommand.resource-targets.v3`" below); the
 evaluator reads its targets as a v2 policy's.
+
+## A task that can do something irreversible
+
+Workflow #455 G-R2s (0.12.60; register §1.369; the coordinator's rulings of 11-14 on board #455).
+**A goal never raises the weight of a task whose package can do something irreversible**, for
+every version of the record. The standard-pack composer marks such a task `irreversible_reach:
+true` (its package, or a rule that follows it by a chain link, directly or further down, can do
+something irreversible by the whole game root's declarations, its remedies included since fix
+round 3, or a package of its game root could not be read:
+[standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). A
+candidate of a
+marked task on an instance that holds a target record (v1, v2 or v3; active, expired or unreadable)
+is computed **exactly as if the instance had no target record**: its instance is resolved once
+more as without the record (a server- or game-scoped record it ignores stays ignored), and the
+candidate reads that resolution for everything the record would give it:
+
+- **The score stage.** No target term: under a v1 record the effect, its override and its wakes
+  are dropped and the base term is kept; under a v2 or v3 record the whole term `R` is dropped and
+  the base-valuation term of an instance without a record (`W = B`, `policy=none`) is used, which is
+  computed for such an instance too. A target's explicit `tasks` and its `apply.mode: override` are
+  void for the candidate: it meets the normal thresholds again.
+- **The net benefit** of a judged candidate reads the pools' base weights only.
+- **Its dispatch's values**: its `gap_remaining` facts and the goal term of its `run_cap` take the
+  values of an instance without a record (none and no goal term).
+- **Its reasons** are those of an instance without a record: the record's policy-level reasons
+  (`resource_target_policy_unreadable`, `resource_target_policy_expired`,
+  `resource_target_tasks_unevaluable`) are not attached to it, and the base term's
+  `resource_weights` (`policy=none`) is; and it carries one reason more,
+  `resource_target_package_irreversible` (info, no key), after the reasons of the resolution
+  without the record and before `resource_weights`.
+
+**No other candidate's number changes.** The record's own resolution, which every unmarked
+candidate reads, is left as it is: a v2 or v3 target still resolves and lapses as before, and a v1
+target's best useful contribution `U` keeps counting the marked task's yield (as it keeps an
+instance override's disabled task). Only the marked candidate is computed apart. On an instance
+without a record a marked candidate is the one of before: there is nothing to leave out and it
+carries no new reason. A marked candidate's rank can fall, so another candidate can be selected in
+its place; its numbers are its own. Its dispatch's `decision_record` still names the instance's
+targets as they are (`targets=` the instance's record, fix round 1): that field says what the
+instance holds, not what weighed the candidate; the new reason says the record was left out.
+
+**A game whose root cannot be composed has no goals in effect until it composes** (round 2, the
+coordinator's ruling of 11-14). The active catalog generation carries the marks of the
+declarations it was composed from; while the Runtime's scheduler workbench cannot compose a game's
+root as it is now (the root's metadata cannot be read, the root is damaged, the composition is
+refused as a whole, or a refused composition cannot be narrowed to a game it composed), a package
+of that game may have changed into one the active generation does not mark. So every candidate of
+that game's instances is computed exactly as a marked candidate is, as on an instance without a
+target record, through the same code path, and carries `resource_target_root_uncomposed` (info)
+in place of `resource_target_package_irreversible`, also when its task carries the mark. The
+workbench voids games at a check that keeps the active generation, by these rules (fix rounds 3
+and 4, the coordinator's rulings of 11-14):
+
+- **A game whose own root fails** (its metadata cannot be read, or it is damaged) is voided. The
+  check still marks, reads and composes every other game, and does not activate that composition:
+  the failed game keeps the active generation's rules.
+- **While a game's own root fails, a game the active generation holds otherwise is voided too**:
+  a game for which the active generation lacks the marks the present composition of its files
+  gives it, or holds a task that composition does not give (a task of the game in the active
+  generation that the composition does not compose with the same id and procedure, or that the
+  composition marks and the active generation does not). Otherwise a task newly marked in a composition that cannot be activated would still
+  take a goal's boost. The check records each game voided this way: one
+  `resource_target_root_uncomposed` (info) naming it (`game`) at each check that voids it; a game
+  whose own root fails is named by that root's own record. Every other game keeps its goals, so one
+  failing root voids only its own game, at the first check after a start too.
+- **When the composition is refused as a whole** (or no refused game can be taken out), no
+  composition of the others exists: every game in use whose files the check did not find unchanged
+  since its last composed read is voided, with the failed games (a game whose files have not
+  changed is composed in the active generation as it is now). The workbench holds no marks at the
+  first check after a start, so there such a refusal voids every game in use.
+
+Every void ends at the first composition of every game that succeeds; until then each check reads
+and composes again. The Runtime tells the evaluator per instance, in memory only: never a fact or
+a snapshot. The void is part of the decision identity of each candidate of a voided instance that
+holds a target record, the only candidates it changes (the identity hashed once more with it): a
+root that heals appends nothing to the ledger, and two evaluations at one instant, ledger position
+and snapshot must not give two decisions one identity. Every other candidate's identity is
+unchanged, a voided instance's without a record included. It also covers a current generation
+composed before 0.12.60, whose first check under this build meets a root it cannot compose. An
+instance of a game whose root composes, and that the active generation holds as its files give it,
+is not touched, and an installation whose roots all compose computes exactly what it computes
+without this. **Known limit:** the forward projection does not read the void: while a game is
+voided, its steps still weigh that game's candidates with their goals (it would need the voided
+instances as an input, and its answer has no member for a candidate's reason); a later slice
+changes it.
 
 ## Document `actingcommand.resource-targets.v1`
 
@@ -558,7 +648,9 @@ effect:
 
 A named task that can have no candidate on the instance (unknown, out of scope or disabled) is
 listed on every candidate of the instance as `resource_target_tasks_unevaluable`, so a target
-never lapses silently.
+never lapses silently. Since Workflow #455 G-R2s (0.12.60) a candidate whose task carries the
+irreversible mark meets the effect `none` whatever names it, and carries none of these reasons
+("A task that can do something irreversible" above).
 
 "Unchanged" in this table is the target's own part only: since SS-1 every effect leaves the base
 term of a candidate that produces a valued pool in place ("Base valuation on every instance"
@@ -702,7 +794,12 @@ R(k)   = min(sum of T(k,p) + floor(sum of F(k,p)), 1_000_000) ("capped" at the b
 
 A pool takes part for `k` when `r(k,p) > 0` and it declares a valuation or a target covering
 `k` names it. `W` belongs to the resource; a target's scope only decides who gets the
-shortfall part. Only `produces` count: `consumes` still drives urgency alone. `Γ`, `W`, `T` and
+shortfall part. Since Workflow #455 G-R2s (0.12.60) a candidate whose task carries the irreversible
+mark is computed apart: the record's own resolution, `scope(t)` included, is left as it is (a
+marked task a target names stays in its `scope(t)`, and its yield still counts where the record
+reads it), and the marked candidate reads, in its place, the resolution of its instance without
+the record, so for it `W(k,p) = B_p` and none of the rest of this section applies ("A task that
+can do something irreversible" above). Only `produces` count: `consumes` still drives urgency alone. `Γ`, `W`, `T` and
 `R` never fall as the gap grows; at `g = 0` the base weight stays. A task's catalog `reserves`
 (Workflow #411 B16 part 2) are a separate hard gate after the score stage, not a term of `R`:
 of two candidates whose consumption fits a reserve alone but not together, the one with the
@@ -754,11 +851,11 @@ projections run the same evaluator and include the resource term.
 
 | Code | Detail |
 | --- | --- |
-| policy level (as v1, at most one) | `resource_target_policy_ignored`, `resource_target_policy_unreadable` or `resource_target_tasks_unevaluable` (items in target order, `<target>/<task>:<why>` for a named task as v1 and `<id>@<pool>:<unknown_resource\|resource_not_observable\|resource_out_of_scope\|no_producing_task>` for a lapsed target without `tasks`, joined by `,`, at most 1010 bytes, the rest as `+<n>more`), on every candidate of the instance; after expiry `resource_target_policy_expired` on every candidate the policy would weigh |
+| policy level (as v1, at most one) | `resource_target_policy_ignored`, `resource_target_policy_unreadable` or `resource_target_tasks_unevaluable` (items in target order, `<target>/<task>:<why>` for a named task as v1 and `<id>@<pool>:<unknown_resource\|resource_not_observable\|resource_out_of_scope\|no_producing_task>` for a lapsed target without `tasks`, joined by `,`, at most 1010 bytes, the rest as `+<n>more`), on every candidate of the instance but one whose task carries the irreversible mark (G-R2s, which carries `resource_target_package_irreversible` instead); after expiry `resource_target_policy_expired` on every candidate the policy would weigh |
 | `resource_targets` | the targets covering the candidate in document order, joined by `; `, each `<id>@<pool>:applied current=<c> at_least=<T> gap=<g> step=<S> importance=<I> gap_weight=<Γ>[ capped]`, `<id>@<pool>:satisfied current=<c> at_least=<T> gap=0 gap_weight=0`, `<id>@<pool>:pending reason=<missing\|expired\|low_confidence\|invalid_value> gap_weight=pending` or `<id>@<pool>:unresolved why=<valuation_missing\|gap_missing> gap_weight=0` |
 | `resource_target_unmapped` | as v1, for a task a target names explicitly |
 | `resource_target_override` | `superseded score=<s\|none>; offset=<o> kept (manual_offset=keep); utility kept` or `superseded score=<s\|none> offset=<o> (manual_offset=supersede); utility kept` |
-| `resource_weights` | `policy=<sha>@<applied_at> term=<R>[ capped] items=<pool>:r=<r>,per=<Q>,base=<B>,gap=<Γ>,effective=<W>,term=<T>;…`, items by `T` descending then pool id; only for a candidate with at least one item. On an instance that is not enabled (SS-1) the base term alone, `policy=none` and every `gap=0`, after the reasons of its record |
+| `resource_weights` | `policy=<sha>@<applied_at> term=<R>[ capped] items=<pool>:r=<r>,per=<Q>,base=<B>,gap=<Γ>,effective=<W>,term=<T>;…`, items by `T` descending then pool id; only for a candidate with at least one item. On an instance that is not enabled (SS-1), and for a candidate whose task carries the irreversible mark on any instance (G-R2s), the base term alone, `policy=none` and every `gap=0`, after the reasons of its record (of no record for the marked candidate) |
 
 List details are counted while joining and stay within 1010 bytes; items that do not fit fold
 into `+<n>more`. On an enabled instance `score_computed` ends with ` resources=<R>` and, under an
@@ -780,7 +877,9 @@ above are unchanged. A pool whose `valuation` is the pending marker has no valua
 SS-2d (since 0.12.35; register §1.235): the same `W(k,p)` and `Q_p` bound the rounding of that
 net benefit (scheduling/README.md, "Within tolerance"), and a candidate within it is released only
 while a pool it produces has `W(k,p) > 0` on its instance, a goal's shortfall `Γ` included; a goal
-that lifts the benefit above the bound makes it positive. Nothing here changes.
+that lifts the benefit above the bound makes it positive. Nothing here changes. G-R2s (since
+0.12.60): a candidate whose task carries the irreversible mark reads the base weights only, so no
+goal lifts its benefit ("A task that can do something irreversible" above).
 
 ## Choosing scale and importance
 
