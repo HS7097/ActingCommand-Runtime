@@ -895,11 +895,19 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     `install_command_done` (`install_instance_add`, `install_operation_id`, `alias`, `game`), the
     steps `check_config` and `swap` (no `pause_added`), `backup`, `runtime_running: false` and
     `added`. A failure after the first rename is `install_operation_interrupted`, the journal and
-    `current.json` kept for `resume` and `undo` as for every `config_replace` (neither applies a
-    stopped rule of its own); while it is unfinished the watchdog stands aside (`config_replace`
-    is off row 7a″'s pass list). With a Runtime answering, the candidate, its commit and its answer
-    are as before: no entry gains the member. Not on the production root before LAB-7 ("Journals
-    across versions").
+    `current.json` kept for `resume` and `undo`; while it is unfinished the watchdog stands aside
+    (`config_replace` is off row 7a″'s pass list). The `resume` and the `undo` of a
+    `config_replace` begun while no Runtime answered (its journal holds no hold and no S0: this
+    path, and `config replace` and `config restore` while stopped) take the writer lock and apply
+    the same stopped rule before anything is moved (`owner_lock_held`, `runtime_running`,
+    `processes_unreadable` of `install_resume` or `install_undo`; no status read comes first, so a
+    running Runtime is `owner_lock_held`), as those of `place` while stopped do; those of a
+    `config_replace` begun with a Runtime are unchanged. A crash between the swap's two renames
+    leaves no live configuration: `undo` (which then reads the file the swap kept, the input
+    `backup`) puts it back, while `resume` cannot load the root (`config_unreadable`), a known
+    limit of every `config_replace` that a later slice lifts. With a Runtime answering, the
+    candidate, its commit and its answer are as before: no entry gains the member. Not on the
+    production root before LAB-7 ("Journals across versions").
   - **Taking it back**: `config restore <backup>` puts the kept file back by the same path. Its
     post-start checks judge the pauses from before the restore, so the instance it removes shows
     as a `pauses` failure (the hold's pause on it is not restored): it ends `post_check_failed`
@@ -1021,8 +1029,9 @@ the rescue face:
   reason `instance.added` and the revision the Runtime answered: it stays paused as a newly added
   instance and waits for a person's resume. `held_again` is absent when no instance was held
   again, so every other release records and answers as before. No vocabulary word is added.
-  `actingctl install release-hold` (its revision-1 face) is unchanged and still lists such an
-  instance as resumed.
+  `actingctl install release-hold` (its revision-1 face, whose answer is the step's evidence) is
+  unchanged and still lists such an instance as resumed, while the instance really stays paused
+  with `instance.added`: the safe side.
 - **Ways out of a kept hold** (fix 2). Every answer of the module whose own pauses stay says `hold`
   `kept: true` and gives in `next` only ways out that work today, none naming another party's
   hold: `release_hold`, the module's own `release-hold <reason>`; until LAB-7 deletes actingctl,
@@ -1065,7 +1074,9 @@ the rescue face:
   root refuses `runtime_running` (`path`, `pid`), the state root's owner lock held
   `owner_lock_held` (`path`), a probe that cannot decide `processes_unreadable`, nothing swapped
   (before, one status read decided, and a Runtime that was starting, which answers none yet,
-  could have its file swapped under it); `place <bundle.zip>` checks the `package` edge
+  could have its file swapped under it), and the `resume` and `undo` of such an operation apply
+  the rule again first ("Instances, the first slice", "While the Runtime is stopped");
+  `place <bundle.zip>` checks the `package` edge
   first (of the zip's `interfaces.json` it reads `schema_version`, which must be
   `actingcommand.component-interfaces.v1`, and `speaks`, where, by the parse rules of
   [component-interfaces.md](component-interfaces.md), every value under any name must be a pair of
@@ -2872,7 +2883,9 @@ the fragment registers, names the command.
   existing `runtime_running` (`path`, `pid`), `owner_lock_held` (`path`) and
   `processes_unreadable`, no longer `runtime_not_running` (which it still answers when a Runtime
   ran at its first read and none answers at the commit), and `install_config_replace` and
-  `install_config_restore` refuse with the same three; no code, location, key or word is new.
+  `install_config_restore` refuse with the same three, as do `install_resume` and
+  `install_undo` of a `config_replace` begun while no Runtime answered (fix 1); no code,
+  location, key or word is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

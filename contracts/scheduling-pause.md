@@ -432,7 +432,7 @@ it on an instance it adds while the Runtime is stopped (Workflow #453 S3, 0.12.6
   `instance.added`, the revision answered), not among the instances `resumed`, in its journal and
   its answer ([install-cli.md](install-cli.md), "A hand-back the Runtime answers by holding the
   instance again"); `actingctl install release-hold`, whose face does not change, still lists it
-  as resumed.
+  as resumed while it stays paused: the safe side.
 - **Who lifts it, and how.** A person, by a resume of the instance: the console's resume,
   `actingctl resume --state-root <s> --instance <alias>` (below) or the Lab's `resume <alias>`.
   Once lifted, the applied row keeps it from coming back.

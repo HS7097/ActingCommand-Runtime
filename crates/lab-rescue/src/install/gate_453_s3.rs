@@ -41,6 +41,23 @@
 //   the post-start row `pauses`, which names it in `start_paused`, and the answer carries no
 //   `post_check_mismatch`; the same start with another reason on the new instance fails the row
 //   and is the caveat `post_check_mismatch`.
+// Fix 1 (the coordinator's answers to the slice's four questions and the independent review):
+// - `s3_fix1_resume_of_a_cold_commit_applies_the_stopped_rule`: a cold add stopped after its first
+//   step; `op resume` under an owner lock held is `owner_lock_held`, with an actingd under the root
+//   `runtime_running`, each with the root and the journal as they were; once stopped it is done;
+// - `s3_fix1_undo_of_a_cold_commit_applies_the_stopped_rule_and_restores_a_half_done_swap`: a cold
+//   add stopped between the swap's two renames (no live configuration); `undo` under an owner lock
+//   held and with an actingd under the root refuses the same way, nothing moved; once stopped it
+//   puts the kept file back byte for byte and sets the candidate aside, no part left;
+// - `s3_fix1_an_added_pause_on_an_entry_without_the_member_still_fails_the_row`: the start after a
+//   cold add whose entry no longer declares `start_paused` (a person took the member out) holds the
+//   new instance with `instance.added`: the row `pauses` fails, names no `start_paused`, and the
+//   answer is the caveat `post_check_mismatch`;
+// - `s3_fix1_the_hot_path_records_no_start_paused`: with a Runtime answering, the answer's `added`
+//   and the journal's input `instance_add` carry no `start_paused`, the new entry is the six members
+//   of before and no entry carries the member;
+// - `s3_fix1_config_restore_with_no_runtime_applies_the_stopped_rule_then_swaps`: `config restore`
+//   with no Runtime answering refuses the same three as `config replace`, then swaps when stopped.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
 // emulator, no sleep; every root is a temporary folder with neutral files.
 
@@ -184,10 +201,20 @@ fn location(root: &Path) -> actingcommand_lab_ops::locate::Location {
 
 /// The rescue row `name` with `params` on `root`, as [`WORD`]; its one line and exit code.
 fn rescue_line(host: &FakeHost, root: &Path, name: &str, params: Value) -> (Value, u8) {
-    let location = location(root);
+    rescue_at(host, &location(root), name, params)
+}
+
+/// The rescue row `name` with `params` at `location` (read before the live configuration went
+/// away), as [`WORD`]; its one line and exit code.
+fn rescue_at(
+    host: &FakeHost,
+    location: &actingcommand_lab_ops::locate::Location,
+    name: &str,
+    params: Value,
+) -> (Value, u8) {
     let context = Context {
         host,
-        location: &location,
+        location,
         initiator: WORD,
     };
     let params = match params {
@@ -639,9 +666,10 @@ fn s3_cold_add_a_refused_candidate_is_kept_and_listed() {
     );
 }
 
-// Build point 4 and ruling 2: `config replace` with no Runtime answering.
-#[test]
-fn s3_config_replace_with_no_runtime_applies_the_stopped_rule_then_swaps() {
+/// Build point 4 and ruling 2: the rescue row `row` (`config replace` or `config restore`, whose
+/// file is its parameter `member` and whose outcomes name `operation`) with no Runtime answering:
+/// the three refusals of the stopped rule, nothing swapped; then, stopped, the swap alone.
+fn swap_while_stopped(row: &str, member: &str, operation: &str) {
     let temp = TempDir::new().expect("tempdir");
     let host = FakeHost::new(&temp.path().join("work"));
     let root = installed(temp.path(), "replace", &host);
@@ -654,7 +682,8 @@ fn s3_config_replace_with_no_runtime_applies_the_stopped_rule_then_swaps() {
         serde_json::to_vec(&config_of(&root)).expect("JSON"),
     )
     .expect("the candidate");
-    let params = json!({"file": word(&candidate)});
+    let mut params = json!({});
+    params[member] = json!(word(&candidate));
     let journals_before = journals(&root);
     let nothing_swapped = |case: &str| {
         assert_eq!(
@@ -672,8 +701,8 @@ fn s3_config_replace_with_no_runtime_applies_the_stopped_rule_then_swaps() {
 
     host.processes
         .replace(vec![actingd_image(&root, STARTING_PID)]);
-    let (refused, exit) = rescue_line(&host, &root, "config replace", params.clone());
-    assert_refused(&refused, exit, "install_config_replace", "runtime_running");
+    let (refused, exit) = rescue_line(&host, &root, row, params.clone());
+    assert_refused(&refused, exit, operation, "runtime_running");
     assert_eq!(
         top_value(&refused, "pid"),
         &json!(STARTING_PID),
@@ -683,19 +712,14 @@ fn s3_config_replace_with_no_runtime_applies_the_stopped_rule_then_swaps() {
     host.processes.replace(Vec::new());
 
     let owner = hold_owner_lock(&state);
-    let (refused, exit) = rescue_line(&host, &root, "config replace", params.clone());
+    let (refused, exit) = rescue_line(&host, &root, row, params.clone());
     drop(owner);
-    assert_refused(&refused, exit, "install_config_replace", "owner_lock_held");
+    assert_refused(&refused, exit, operation, "owner_lock_held");
     nothing_swapped("owner_lock_held");
 
     unreadable_owner_journal(&state);
-    let (refused, exit) = rescue_line(&host, &root, "config replace", params.clone());
-    assert_refused(
-        &refused,
-        exit,
-        "install_config_replace",
-        "processes_unreadable",
-    );
+    let (refused, exit) = rescue_line(&host, &root, row, params.clone());
+    assert_refused(&refused, exit, operation, "processes_unreadable");
     nothing_swapped("processes_unreadable");
 
     // Stopped (an owner journal no Runtime holds): the swap alone, as before.
@@ -704,10 +728,10 @@ fn s3_config_replace_with_no_runtime_applies_the_stopped_rule_then_swaps() {
         format!("{}\n", owner_record()).as_bytes(),
     )
     .expect("the owner journal");
-    let (replaced, exit) = rescue_line(&host, &root, "config replace", params);
+    let (replaced, exit) = rescue_line(&host, &root, row, params);
     assert_eq!(exit, 0, "{replaced}");
     assert_eq!(top_code(&replaced), "install_command_done", "{replaced}");
-    assert_eq!(top_value(&replaced, "operation"), "install_config_replace");
+    assert_eq!(top_value(&replaced, "operation"), operation, "{replaced}");
     assert_eq!(replaced["runtime_running"], json!(false), "{replaced}");
     assert_eq!(
         step_names(&replaced),
@@ -730,9 +754,22 @@ fn s3_config_replace_with_no_runtime_applies_the_stopped_rule_then_swaps() {
     assert!(calls(&host).is_empty(), "{:?}", calls(&host));
 }
 
+// Build point 4 and ruling 2: `config replace` with no Runtime answering.
+#[test]
+fn s3_config_replace_with_no_runtime_applies_the_stopped_rule_then_swaps() {
+    swap_while_stopped("config replace", "file", "install_config_replace");
+}
+
+// Fix 1 (the review): `config restore`, on `config replace`'s path, with no Runtime answering.
+#[test]
+fn s3_fix1_config_restore_with_no_runtime_applies_the_stopped_rule_then_swaps() {
+    swap_while_stopped("config restore", "backup", "install_config_restore");
+}
+
 // Build point 2 and the work order's crash test: a crash after each of the operation's two steps.
-// (A crash between the two renames of the swap leaves no live configuration; that resume is
-// `config replace`'s as on main and is not in this slice: see the register.)
+// (A crash between the two renames of the swap leaves no live configuration, which `resume` cannot
+// load, a known limit of every `config_replace`; `undo` puts it back:
+// `s3_fix1_undo_of_a_cold_commit_applies_the_stopped_rule_and_restores_a_half_done_swap`.)
 #[test]
 fn s3_a_crash_after_each_step_resumes_to_the_same_tree() {
     let temp = TempDir::new().expect("tempdir");
@@ -874,9 +911,15 @@ fn s3_a_hand_back_that_meets_an_unapplied_entry_records_it_held_again() {
 }
 
 /// Ruling 5: on a root `name` below `base` whose Runtime runs `neutral.a` and `neutral.b`, `down`
-/// with [`HOLD`], a cold add of [`ADDED`], then `up`, whose Runtime registers the new instance and
-/// holds it with `reason`; the answer of `up`, its exit code and its post-start row `pauses`.
-fn start_after_cold_add(base: &Path, name: &str, reason: &str) -> (Value, u8, Value) {
+/// with [`HOLD`], a cold add of [`ADDED`] (fix 1: then, unless `declares`, its entry rewritten
+/// without `start_paused`, as a person may), then `up`, whose Runtime registers the new instance
+/// and holds it with `reason`; the answer of `up`, its exit code and its post-start row `pauses`.
+fn start_after_cold_add(
+    base: &Path,
+    name: &str,
+    reason: &str,
+    declares: bool,
+) -> (Value, u8, Value) {
     let host = FakeHost::new(&base.join(format!("{name}-work")));
     let root = installed(base, name, &host);
     host.runtime.boot(&["neutral.a", "neutral.b"]);
@@ -886,6 +929,18 @@ fn start_after_cold_add(base: &Path, name: &str, reason: &str) -> (Value, u8, Va
     let (added, exit) = add(&host, &root);
     assert_eq!(exit, 0, "{name}: {added}");
     assert_eq!(added["runtime_running"], json!(false), "{name}: {added}");
+    if !declares {
+        let mut config = config_of(&root);
+        if let Some(Value::Array(entries)) = config.get_mut("instances") {
+            for entry in entries.iter_mut().filter(|entry| entry["alias"] == ADDED) {
+                if let Value::Object(members) = entry {
+                    members.remove("start_paused");
+                }
+            }
+        }
+        assert!(starting_paused(&config).is_empty(), "{name}: {config}");
+        write_json(&root.join("actingd.config.json"), &config);
+    }
     host.runtime
         .registers_at_start
         .borrow_mut()
@@ -914,7 +969,7 @@ fn s3_a_start_after_a_cold_add_expects_the_first_start_pause() {
     let mismatch = json!("post_check_mismatch");
 
     // The new instance held with `instance.added`, its entry declaring `start_paused`: expected.
-    let (up, exit, pauses) = start_after_cold_add(temp.path(), "expected", "instance.added");
+    let (up, exit, pauses) = start_after_cold_add(temp.path(), "expected", "instance.added", true);
     assert_eq!(exit, 0, "{up}");
     assert_eq!(pauses["result"], "pass", "{pauses}");
     assert_eq!(pauses["values"]["start_paused"], json!([ADDED]), "{pauses}");
@@ -933,7 +988,8 @@ fn s3_a_start_after_a_cold_add_expects_the_first_start_pause() {
     );
 
     // Another reason on the new instance is an extra pause: the row fails, the caveat says so.
-    let (up, exit, pauses) = start_after_cold_add(temp.path(), "other", "neutral-other-party");
+    let (up, exit, pauses) =
+        start_after_cold_add(temp.path(), "other", "neutral-other-party", true);
     assert_eq!(exit, 0, "{up}");
     assert_eq!(pauses["result"], "fail", "{pauses}");
     assert!(pauses["values"].get("start_paused").is_none(), "{pauses}");
@@ -946,4 +1002,222 @@ fn s3_a_start_after_a_cold_add_expects_the_first_start_pause() {
         carries(&up, "install_caveat_noted", "install_caveat", &mismatch),
         "{up}"
     );
+}
+
+// Fix 1 (the review): `instance.added` on an instance whose entry does not declare `start_paused`
+// is not the Runtime's first-start hold: the row fails, and the start's answer is the caveat.
+#[test]
+fn s3_fix1_an_added_pause_on_an_entry_without_the_member_still_fails_the_row() {
+    let temp = TempDir::new().expect("tempdir");
+    let (up, exit, pauses) =
+        start_after_cold_add(temp.path(), "undeclared", "instance.added", false);
+    assert_eq!(exit, 0, "{up}");
+    assert_eq!(pauses["result"], "fail", "{pauses}");
+    assert!(pauses["values"].get("start_paused").is_none(), "{pauses}");
+    assert_eq!(
+        pauses["values"]["actual"][ADDED], "instance.added",
+        "{pauses}"
+    );
+    assert!(
+        pauses["values"]["expected"].get(ADDED).is_none(),
+        "{pauses}"
+    );
+    assert_eq!(up["post_check"]["failed"], json!(["pauses"]), "{up}");
+    assert!(
+        carries(
+            &up,
+            "install_caveat_noted",
+            "install_caveat",
+            &json!("post_check_mismatch")
+        ),
+        "{up}"
+    );
+}
+
+// Fix 1 (the review): with a Runtime answering, the answer's `added`, the journal's input and the
+// file carry no `start_paused`.
+#[test]
+fn s3_fix1_the_hot_path_records_no_start_paused() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = installed(temp.path(), "hot", &host);
+    host.runtime.boot(&["neutral.a", "neutral.b"]);
+    host.runtime
+        .registers_at_start
+        .borrow_mut()
+        .push(ADDED.to_owned());
+    let before = journals(&root);
+
+    let (line, exit) = add(&host, &root);
+    assert_eq!(exit, 0, "{line}");
+    assert_eq!(line["runtime_running"], json!(true), "{line}");
+    assert_eq!(
+        step_names(&line),
+        ["check_config", "swap", "pause_added", "alive", "release"],
+        "{line}"
+    );
+    assert_eq!(line["added"]["alias"], ADDED, "{line}");
+    assert!(line["added"].get("start_paused").is_none(), "{line}");
+
+    let config = config_of(&root);
+    let added = member_of(&config, "/instances", "alias", ADDED).expect("the instance's entry");
+    assert_eq!(
+        members_of(added),
+        COLD_ENTRY_MEMBERS[..6].to_vec(),
+        "{added}"
+    );
+    assert!(starting_paused(&config).is_empty(), "{config}");
+
+    let written = new_journals(&root, &before);
+    let operation = written
+        .iter()
+        .find(|(_, journal)| journal["kind"] == "config_replace")
+        .map(|(_, journal)| journal)
+        .unwrap_or_else(|| panic!("a config_replace journal: {written:?}"));
+    let recorded = &operation["inputs"]["instance_add"];
+    assert_eq!(recorded["alias"], ADDED, "{recorded}");
+    assert!(recorded.get("start_paused").is_none(), "{recorded}");
+    assert_eq!(
+        host.runtime.pause_of(ADDED).as_deref(),
+        Some("instance.added")
+    );
+}
+
+/// Fix 1: a cold add a crash of the fake host stopped: the root, its state root, the location read
+/// before the crash, the configuration before the add and the interrupted operation's id.
+struct Interrupted {
+    root: PathBuf,
+    state: PathBuf,
+    located: actingcommand_lab_ops::locate::Location,
+    old: Vec<u8>,
+    operation_id: String,
+}
+
+/// Fix 1: a cold add on a root `name` below `base` stopped by the fake host's crash `crash`.
+fn interrupted_cold_add(
+    base: &Path,
+    name: &str,
+    host: &FakeHost,
+    crash: impl Fn(&FakeHost),
+) -> Interrupted {
+    let root = installed(base, name, host);
+    let located = location(&root);
+    let old = fs::read(root.join("actingd.config.json")).expect("the configuration");
+    let before = journals(&root);
+    crash(host);
+    let (stopped, exit) = add(host, &root);
+    assert_ne!(exit, 0, "{name}: {stopped}");
+    assert_eq!(
+        top_code(&stopped),
+        "install_operation_interrupted",
+        "{name}: {stopped}"
+    );
+    let written = new_journals(&root, &before);
+    assert_eq!(written.len(), 1, "{name}: {written:?}");
+    assert!(root.join("install").join("current.json").exists(), "{name}");
+    Interrupted {
+        root,
+        state: state_of(base, name),
+        located,
+        old,
+        operation_id: written[0].0.clone(),
+    }
+}
+
+// Fix 1 (the coordinator's answer 3): the resume of a cold commit applies the stopped rule first.
+#[test]
+fn s3_fix1_resume_of_a_cold_commit_applies_the_stopped_rule() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let Interrupted {
+        root,
+        state,
+        located,
+        operation_id,
+        ..
+    } = interrupted_cold_add(temp.path(), "resume", &host, |host| {
+        host.crash_after.set(Some(1));
+    });
+    let halfway = tree(&root);
+    let resume = json!({"op": operation_id});
+
+    let owner = hold_owner_lock(&state);
+    let (refused, exit) = rescue_at(&host, &located, "op resume", resume.clone());
+    drop(owner);
+    assert_refused(&refused, exit, "install_resume", "owner_lock_held");
+    assert_eq!(tree(&root), halfway, "owner_lock_held");
+
+    host.processes
+        .replace(vec![actingd_image(&root, STARTING_PID)]);
+    let (refused, exit) = rescue_at(&host, &located, "op resume", resume.clone());
+    assert_refused(&refused, exit, "install_resume", "runtime_running");
+    assert_eq!(
+        top_value(&refused, "pid"),
+        &json!(STARTING_PID),
+        "{refused}"
+    );
+    assert_eq!(tree(&root), halfway, "runtime_running");
+    host.processes.replace(Vec::new());
+
+    // Stopped again: the swap finished, the operation done.
+    let (resumed, exit) = rescue_at(&host, &located, "op resume", resume);
+    assert_eq!(exit, 0, "{resumed}");
+    assert_eq!(top_code(&resumed), "install_command_done", "{resumed}");
+    assert_eq!(starting_paused(&config_of(&root)), [ADDED]);
+    assert!(parts(&root).is_empty(), "{:?}", parts(&root));
+    assert!(!root.join("install").join("current.json").exists());
+    assert!(calls(&host).is_empty(), "{:?}", calls(&host));
+}
+
+// Fix 1 (the coordinator's answer 3): the undo of a cold commit applies the stopped rule first, and
+// puts back a swap stopped between its two renames, which left no live configuration.
+#[test]
+fn s3_fix1_undo_of_a_cold_commit_applies_the_stopped_rule_and_restores_a_half_done_swap() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let Interrupted {
+        root,
+        state,
+        located,
+        old,
+        operation_id,
+    } = interrupted_cold_add(temp.path(), "undo", &host, |host| {
+        host.crash_between_renames.set(Some(2));
+    });
+    assert!(!root.join("actingd.config.json").exists());
+    let halfway = tree(&root);
+    let undo = json!({"op": operation_id});
+
+    let owner = hold_owner_lock(&state);
+    let (refused, exit) = rescue_at(&host, &located, "undo", undo.clone());
+    drop(owner);
+    assert_refused(&refused, exit, "install_undo", "owner_lock_held");
+    assert_eq!(tree(&root), halfway, "owner_lock_held");
+
+    host.processes
+        .replace(vec![actingd_image(&root, STARTING_PID)]);
+    let (refused, exit) = rescue_at(&host, &located, "undo", undo.clone());
+    assert_refused(&refused, exit, "install_undo", "runtime_running");
+    assert_eq!(tree(&root), halfway, "runtime_running");
+    host.processes.replace(Vec::new());
+
+    // Stopped: the kept file back in place byte for byte, the candidate set aside, no part.
+    let (undone, exit) = rescue_at(&host, &located, "undo", undo);
+    assert_eq!(exit, 0, "{undone}");
+    assert_eq!(top_code(&undone), "install_command_done", "{undone}");
+    assert_eq!(top_value(&undone, "operation"), "install_undo", "{undone}");
+    assert_eq!(
+        fs::read(root.join("actingd.config.json")).expect("the configuration"),
+        old
+    );
+    assert!(parts(&root).is_empty(), "{:?}", parts(&root));
+    let aside = tree(&root)
+        .into_iter()
+        .filter(|(name, _)| !name.contains('/') && name.contains(".abandoned-"))
+        .map(|(_, bytes)| bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(aside.len(), 1, "one candidate set aside");
+    let candidate: Value = serde_json::from_slice(&aside[0]).expect("the candidate's JSON");
+    assert_eq!(starting_paused(&candidate), [ADDED], "{candidate}");
+    assert!(calls(&host).is_empty(), "{:?}", calls(&host));
 }

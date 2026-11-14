@@ -201,14 +201,24 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
     // with no hold, so its undo takes the writer lock and then applies the stopped rule the
     // placement applied (`launch::refuse_running`: `owner_lock_held`, `runtime_running`,
     // `processes_unreadable`), before anything is moved; the undo of any other operation is
-    // unchanged.
+    // unchanged. Workflow #453 S3 fix 1: so does the undo of a `config_replace` begun while no
+    // Runtime answered (no hold, no S0), judged by the live configuration or, after a swap stopped
+    // between its two renames, by the file the swap kept (`config_swap::stopped_target`).
     let cold = kind == OperationKind::PackPlace && super::place::is_cold(&operation);
+    let cold_config =
+        kind == OperationKind::ConfigReplace && super::config_swap::is_cold(&operation);
     let _lock = if changes_program || cold {
         let loaded = plan::load(&paths, UNDO)?;
         let lock = WriterLock::take(&paths, loaded.settings.lock_wait_ms, UNDO)?;
         if cold {
             super::launch::refuse_running(host, &paths, &loaded.state_root, UNDO)?;
         }
+        Some(lock)
+    } else if cold_config {
+        let (state_root, lock_wait_ms) =
+            super::config_swap::stopped_target(&paths, &operation, UNDO)?;
+        let lock = WriterLock::take(&paths, lock_wait_ms, UNDO)?;
+        super::launch::refuse_running(host, &paths, &state_root, UNDO)?;
         Some(lock)
     } else {
         None
