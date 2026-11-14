@@ -104,6 +104,8 @@ fn answer(report: ScheduleReport) -> Value {
         notices: None,
         // Workflow #453 S8: the answer's struct gained this member.
         models: Vec::new(),
+        // Workflow #463 V1: the answer's struct gained this member.
+        variable_provenance: None,
     })
     .expect("the answer")
 }

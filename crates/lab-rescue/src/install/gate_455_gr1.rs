@@ -19,6 +19,11 @@
 //   installer, a bundle that carries `goals.json` and declares [3, 11] is refused `pack_invalid`
 //   caused by `goal_undeclared` at its `interfaces.json` before the hold, as a bundle that carries
 //   the notices directory and declares less than 10 is refused `notice_undeclared`.
+// Workflow #463 V1 fix round 3 (register §1.378; `rd-1115/brief-1723-fix3.md`): the file is
+// version 2 and `GOALS_PACKAGE_REVISION` is 14, the revision that brought it, so the revision 12
+// above reads 14 in these tests: this build's installer declares [3, 14] and the bundle [14, 14];
+// the earlier installer ([3, 11]) and the undeclared bundle ([3, 11]) are as they were. A version
+// 2 file in a bundle that declares [12, 12] is `install::gate_463_v1`'s.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
 // sleep; every root is a temporary folder with neutral files. `place` reads the file's name only;
 // what it declares is `standard-pack check`'s, which the fixture's root does not carry (its row is
@@ -53,10 +58,11 @@ const PLAIN_BUNDLE_PACKAGE: [u64; 2] = [3, 5];
 const UNDECLARED_BUNDLE_PACKAGE: [u64; 2] = [3, 11];
 const CONTROL: &[u8] = br#"{"neutral": 1}"#;
 
-/// The bytes of a `goals.json` of [`GAME`]: one made-up heading.
+/// The bytes of a `goals.json` of [`GAME`]: one made-up heading (version 2 since Workflow #463 V1
+/// fix round 3).
 fn goals_bytes() -> Vec<u8> {
     serde_json::to_vec(&json!({
-        "schema_version": "actingcommand.goals.v1",
+        "schema_version": "actingcommand.goals.v2",
         "game": GAME,
         "entries": [{"name": "stock", "type": "heading", "title": {"en": "Stock"}}]
     }))
@@ -307,8 +313,9 @@ fn prepared(base: &Path, host: &FakeHost, installer: [u64; 2]) -> (PathBuf, Path
     (root, game_root)
 }
 
-// A bundle that carries `goals.json` and declares [12, 12]: planned with `goals.json` `new`, the
-// last root file; placed byte for byte, the journal's plan declaring [12, 12]. A later bundle
+// A bundle that carries `goals.json` and declares [12, 12] ([14, 14] since Workflow #463 V1 fix
+// round 3): planned with `goals.json` `new`, the last root file; placed byte for byte, the
+// journal's plan declaring what the bundle declares. A later bundle
 // without it: `goals.json` `retire` before the root files it places, set aside as
 // `goals.json.old-<ms>` and kept; `undo` puts it back.
 #[test]
@@ -391,8 +398,9 @@ fn goals_file_is_placed_last_and_retired_when_a_later_bundle_carries_none() {
 }
 
 // The `package` edge, as `notices_edge_is_checked_before_the_layout` holds it: an installer whose
-// range ends at 11 refuses a bundle that carries `goals.json` and declares [12, 12]
-// `interface_edge` at its `interfaces.json`, in the plan; nothing is held or written.
+// range ends at 11 refuses a bundle that carries `goals.json` and declares [12, 12] ([14, 14] since
+// Workflow #463 V1 fix round 3) `interface_edge` at its `interfaces.json`, in the plan; nothing is
+// held or written.
 #[test]
 fn goals_bundle_is_refused_by_an_installer_before_revision_12() {
     let temp = TempDir::new().expect("tempdir");
@@ -428,7 +436,8 @@ fn goals_bundle_is_refused_by_an_installer_before_revision_12() {
 }
 
 // Fix round 1, as `notices_refusals_come_before_the_hold` holds `notice_undeclared`: on this
-// build's installer ([3, 12]) a bundle that carries `goals.json` and declares [3, 11], within the
+// build's installer ([3, 12]; [3, 14] since Workflow #463 V1 fix round 3) a bundle that carries
+// `goals.json` and declares [3, 11], within the
 // installer's range, is refused `pack_invalid` caused by `standard_pack_root_invalid` with
 // `goal_undeclared` at its `interfaces.json`, the pointer empty, in the plan: no pause, no journal,
 // nothing in the game root.
