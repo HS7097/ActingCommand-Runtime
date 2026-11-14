@@ -4794,6 +4794,50 @@ impl RuntimeHost {
             .map_err(|failure| *failure.error)
     }
 
+    /// Workflow #463 U1, fix round 2 (rule 5): runs the startup package of `instance_alias` on
+    /// the test's thread, on the key `token` that `request` (the lease's `AcquireLease`) holds on
+    /// `connection_id`, as a granted startup claim runs it (`run_package_on_key`, its scheduling
+    /// intent recorded first): the run's failure code when it failed.
+    #[cfg(test)]
+    pub(crate) fn run_startup_package_on_key_for_test(
+        &self,
+        instance_alias: &str,
+        request: RuntimeRequest,
+        token: LeaseToken,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<Result<(), &'static str>> {
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::ScheduleStartupPackageForTest,
+        )?;
+        let resolved = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?;
+        let links = shared.events.system_links()?.with_instance_id(
+            shared
+                .events
+                .issuer()
+                .issue_registered_instance(resolved.instance_id()),
+        );
+        let control_request_id = *shared
+            .events
+            .issuer()
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        let pending = shared
+            .prepare_startup_package(&resolved, links, control_request_id)
+            .map_err(|failure| *failure.error)?
+            .expect("the instance's startup package");
+        let mut key = host_claims::HostKey {
+            request,
+            token,
+            connection_id,
+        };
+        Ok(shared
+            .run_package_on_key(&pending, &mut key, None)?
+            .map(drop))
+    }
+
     /// Workflow #369 W-2: the next payload any instance worker takes panics at its start.
     #[cfg(test)]
     pub(crate) fn inject_instance_worker_panic_for_test(&self) -> RuntimeHostResult<()> {

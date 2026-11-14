@@ -24326,17 +24326,106 @@ screen that changes with a period can be judged either way.
   (the arrival's code, detail and timing, one input, fewer frames than a whole decision). Both
   renamed tests are new in this pull request, so none leaves a gate map of `main`.
 
+**Fix round 2** (the coordinator's rulings on board #463 after the independent review, read in
+`rd-1114/brief-1715-fix2.md`; they replace the settled comparison of the slice and of fix round 1,
+and the one classification fix round 1 shared with the retry decision). The code now means: the
+screen stood still and nothing the package declares was on it ([linear-steps.md](linear-steps.md),
+"Retries" and "A screen the package never recorded").
+- **Only the closing decision raises it** (rule 2). The retry decision is main's again, byte for
+  byte in what it waits, evaluates, offers and presses; where it sees neither page it raises
+  nothing, and the closing decision follows it. The closing decision is a wait of its own
+  (`linear_closing_decision` in `contained_task/linear.rs`): the step timeout at the capture
+  interval, a first frame at once, on the pages the failed wait awaited, then the step's own page.
+  It ends with nothing at the first frame on which one of them passes (each frame is evaluated by
+  itself), at a transition frame (LOAD-4, under `on`), and at a frame that shows a shared interrupt
+  page; it raises the code only when its bound ends with its last two captures and its first and
+  last frame alike (rules 1 (b), 1 (c) and 2).
+- **Rule 1 (a)**: after a wait that missed the intermediate page, and after a retry decision that
+  follows such a miss, no closing decision is made.
+- **Rule 1 (b), sample consensus**: the sampler gives no result of a frame by itself:
+  `capture_frame_gated` (`contained_task.rs`, near 7672) keeps the sampled scenes to itself and
+  evaluates them in one consensus context (near 7919), returning only the last frame's scene (near
+  8073); returning them and evaluating each sample alone would change that function for every wait
+  of both execution modes, more than a small change. So a package that declares sample consensus
+  makes no closing decision and never gets the code, as the contract says; `gate_382_e3` is main's
+  again.
+- **Rule 1 (d)** is built: before the code is raised, the last frame is evaluated once, with
+  `matching_pages_on_scene` (no capture, no record), against every page and loading page the
+  package declares that the decision did not evaluate; one that passes, or an error, leaves the
+  failed wait's end.
+- **Rule 3**: the shared interrupt layer had no entry that recognises without acting; the smallest
+  one is added, `ContainedTaskRuntime::shared_interrupt_shown` (default `false`), which the host
+  answers from the matching its offer makes (`matched_shared_interrupts`, extracted from
+  `check_shared_interrupt` with no change to the offer), handling, counting and recording nothing.
+  Every task error inside the closing decision (the deadline, a capture or recognition that failed,
+  that check failing) ends it with the failed wait's code, detail and timing; a failure of the
+  run's boundary or device is the run's, as anywhere.
+- **Rule 4**: the closing decision runs wherever main ends a step `page_confirmation_failed` after a
+  wait: the last attempt's arrival of a step with or without retries, the next page after a seen
+  intermediate page, a seen skip target's candidates (main ends there at once, as after a seen
+  intermediate page: the input took effect, and the screen left a page the package knows, which
+  rule 1 (d) covers), the continued wait after a late gate, and a retry decision that saw neither
+  page. It does not run where it cannot name the screen: after a missed intermediate page, after a
+  wait or a retry decision that ended on its loading allowance, in a run that is not a task's own
+  run or is in a restart segment, for a package with sample consensus, and when the run's time
+  left is shorter than its bound.
+- **Rule 5**: it could be reached. A run the host starts itself (`prepare_package_run`, a startup
+  package or a ladder rung) whose package has an entry page goes through
+  `run_preflighted_contained_task` to `prepared.run` (`host/contained_task.rs`, near 8779 and
+  9724), and one with a prerequisite through `prerequisite::run_gated` to `run_main`
+  (`host/prerequisite.rs` 339): both are the kernel's ordinary run, whose `own_task_run` was true.
+  Closed by `ContainedTaskRuntime::host_started_run` (default `false`), which the host answers from
+  the run's control (`is_host_package`); `own_task_run` requires it false (`contained_task.rs`,
+  near 5121).
+- **Rule 6**: it could be reached. The settlement compares the run's own time with its admitted
+  runtime budget (`policy_control.rs`, `preview_paced_settlement`, by
+  `PolicyBudgetReceipt::runtime_exceeded`) and rewrites a run over it to
+  `policy_runtime_budget_exceeded`, while the kernel's deadline is the package's task timeout, so
+  the closing decision's time could push a run over its budget. Now a scheduled run notes before
+  it executes the Runtime-clock instant at which its own time reaches the largest runtime its
+  admission still admits (`policy_control::runtime_budget_allowance_ms`, the same rule; the
+  dispatch clock's start plus the switch), and `ContainedTaskRuntime::run_time_left` (default
+  `None`) answers the time left before the earlier of that instant and the run's host deadline;
+  with less than the closing bound left no closing decision is made. A paced run's settlement
+  compares its budget time, never more than this wall time.
+- **Time**: a failing step can now take up to one step timeout longer than on main, once per run
+  (the run ends there); a step with a retry whose retry decision saw neither page takes it after
+  that decision.
+- **Tests.** Kernel `gate_463_u1.rs` is rewritten (exec gate row "#463 U1 with fix rounds 1 and 2"),
+  the arrival 600 ms and the step timeout 1 000 ms so that `limit_ms` tells the timers apart: the
+  still unknown screen without a retry (the code, 13 + 21 frames, the shared interrupt pages asked
+  on every closing frame and offered none); a page before the bound; the code after a retry
+  decision (13 + 21 + 21 frames); the last attempt of a step with retries; the intermediate page
+  that flashed past; the last two captures, and the first and last frame, compared; another page
+  of the package on the last frame; a shared interrupt page recognised and not pressed; a failed
+  recognising check; the task's deadline; a run the runtime started; less time left than the
+  bound; and the earlier own-page, loading-allowance and changing-screen cases. The scripted
+  runtime (`tests/scripted.rs`) answers the three new seams. Host `gate_463_u1.rs` (host gate row
+  "#463 U1 fix round 2"): a startup package with an entry page on the unknown screen ends
+  `page_confirmation_failed` and pauses nothing; a scheduled run with 490 ms of its 1 300 ms budget
+  left keeps `page_confirmation_failed`, recoverable, `continue`; and the new code admits one
+  ladder (task stage, `pack_logic`, class `pack_logic_mismatch`) and the paused pair is not
+  dispatched after it. Changed earlier tests: `gate_382_e3::gate_e3_g3_consensus_not_met_at_the_linear_next_page_ends_with_page_confirmation_failed`
+  is main's again (rule 1 (b)); `gate_e5_linear::gate_linear_an_intermediate_page_must_be_seen_before_the_next_step`,
+  whose retried case now gets a closing decision after the seen intermediate page (rule 4): its
+  device shows the step's own page after more frames than the arrival takes, so the end is
+  unchanged, and it asserts that no retry wait ran and that only the last recognitions await the
+  step's own page. Round 1's adaptations of `gate_e5_linear::gate_linear_only_a_swallowed_input_is_retried`
+  and `gate_load4::linear_loading_pauses_the_arrival_budget` still hold.
+
 **At deploy.** Installed `linear_steps` packages change behaviour with this version, with no
-change to any package: a run whose step declares a retry and whose retry decision sees a settled
-screen of neither page, or (fix round 1) whose step declares none and whose closing decision sees
-one, which ended `page_confirmation_failed` and started a recovery ladder (`pack_logic`), may now
-end `contained_task_linear_unrecorded_screen`, pause its pair at the first occurrence, and start
-the ladder as before; then the instance goes on with its other tasks. A failing step without a
-retry takes up to its step timeout longer before the run ends. List paused pairs with
-`actingd suspended` (`suspended[]`: the code in `failure`, its `artifact_id`, `lifts_when`
-`content_hash_changes`) or `ac_diagnose` (its `suspended` rows; `failures_grouped`). A pause lifts
-when the package's content changes (add the ending recorded from the named frame), at the pair's
-next due evaluation after the lift check's interval (60 s by default), with no restart.
+change to any package: a run of a task (scheduled, direct or Lab) whose step ends
+`page_confirmation_failed` after a wait and whose screen then stays still, with nothing the package
+declares on it, for one more step timeout ends `contained_task_linear_unrecorded_screen` instead,
+pauses its pair at the first occurrence and starts the ladder as before (`pack_logic`); then the
+instance goes on with its other tasks. A startup package or a ladder rung never ends so. A failing
+step takes up to one step timeout longer before the run ends, unless the run's deadline or its
+runtime budget leaves less. A slow static screen nobody declared can now pause its task: declare it
+(a page or a loading page). List paused pairs with `actingd suspended` (`suspended[]`: the code in
+`failure`, its `artifact_id`, `lifts_when` `content_hash_changes`) or `ac_diagnose` (its
+`suspended` rows; `failures_grouped`). A pause lifts when the package's content changes (add the
+ending recorded from the named frame), at the pair's next due evaluation after the lift check's
+interval (60 s by default), with no restart.
 
 **Rollback** (below 0.12.60). No record shape changes (the code is a string, `failure_severe` an
 existing member); a pause the ledger recorded is rebuilt from its execution record and lifts by

@@ -2,24 +2,30 @@
 
 // Workflow #463 U1 (register §1.372; contracts/linear-steps.md, "Failure codes";
 // contracts/policy-suspension.md, "A failure that pauses at its first occurrence"; coordinator work
-// order `rd-1114/brief-463-u1-unrecorded-screen.md`), the host's half: a linear step's retry
-// decision that saw neither page on a settled screen ends the run with
-// `contained_task_linear_unrecorded_screen`. The run's terminal and receipt name the frame of its
+// order `rd-1114/brief-463-u1-unrecorded-screen.md`), the host's half: a linear step that meets a
+// screen its package never recorded, unknown and still for the whole closing decision, ends the run
+// with `contained_task_linear_unrecorded_screen`. The run's terminal and receipt name the frame of its
 // `Failure` pin (`artifact_id`). A scheduled run that fails so pauses its pair (catalog task,
 // instance) at once, whatever its `on_failure`, with no rerun; a changed package lifts the pause;
 // another pair of the instance is dispatched as before; a direct run pauses nothing. Fix round 1:
 // a step that declares no retry reaches the code through its closing decision, and the frame of
-// the run's `Failure` pin is named the same way.
+// the run's `Failure` pin is named the same way. Fix round 2 (`rd-1114/brief-1715-fix2.md`): only
+// the closing decision raises the code, after a retry decision too; a run the host starts itself
+// (a startup package with an entry page) never raises it; a scheduled run whose admitted runtime
+// budget has less time left than the closing bound makes no closing decision, so its failure is
+// neither rewritten nor renamed; and the code's class really admits one ladder, the pair staying
+// paused.
 //
 // The package is a `linear_steps` source package of game `neutral`, server `test`, 2 x 1: one tap
 // `open` from `home` (first pixel red, as the fake device shows it) to `list` (first pixel blue),
-// expected within 200 ms and attempted twice, 10 ms apart; the retry decision waits the step
-// timeout of 600 ms, a frame every 50 ms. After the tap the device shows a black first pixel (a
+// expected within 200 ms and attempted twice, 10 ms apart; the retry decision and the closing
+// decision each wait the step timeout of 600 ms, a frame every 50 ms. After the tap the device
+// shows a black first pixel (a
 // screen of neither page, unchanged frame after frame), or keeps `home` (the tap swallowed). The
 // fixture catalog's one task `fixture.observe` runs it on `fixture-instance-a`, on the test's
 // manual clock (test plan E-3: the kernel waits on it, a capture spends no time).
 
-use super::instance_workers::all_events;
+use super::instance_workers::{all_events, phases, wait_for_ladder_end};
 use super::*;
 use crate::failure_identity::FailureIdentity;
 use serde_json::{Value, json};
@@ -714,5 +720,186 @@ fn u1_a_step_without_a_retry_names_the_pinned_frame_of_its_closing_decision() {
             "{carrier}"
         );
     }
+    host.close().expect("close runtime host");
+}
+
+// Fix round 2 (rule 5): the package whose tap declares no retry is the instance's startup package,
+// a run the host starts itself; its entry page `home` sends it through the entry check and then
+// the kernel's ordinary run. Run on a key the test holds, as a granted startup claim runs it, on
+// the screen of neither page after the tap: it fails `page_confirmation_failed`, never the new
+// code, after one tap; and nothing is paused: the task bound to the package is dispatched at its
+// next due evaluation.
+#[test]
+fn u1_a_startup_package_with_an_entry_page_never_gets_the_code_and_pauses_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("u1-open-once");
+    write_package_with(&package, None);
+    let startup =
+        ContainedTaskRequest::new(package.to_string_lossy().into_owned()).expect("startup package");
+    let state = device(AfterTap::Unrecorded);
+    // A run on a device instance whose display is observed (Workflow #392 DA-A).
+    state.physical_task_geometry.store(true, Ordering::Release);
+    *state
+        .physical_task_extent
+        .lock()
+        .expect("fake physical task extent") = Some((2, 1));
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_procedure_manifest(manifest_at(&package))
+            .with_startup_packages(std::collections::BTreeMap::from([(
+                POLICY_INSTANCE_ALIAS.to_owned(),
+                startup,
+            )])),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let acquire = runtime_request(
+        &ids,
+        RuntimeOperation::acquire_lease(
+            POLICY_INSTANCE_ALIAS,
+            ids.mint_holder_id().expect("holder"),
+        ),
+    );
+    let connection = ConnectionId::new(465).expect("connection");
+    let granted = host
+        .process_request_for_test(&acquire, connection)
+        .expect("the key's receipt");
+    let Some(RuntimeResult::LeaseGranted { token }) = granted.result() else {
+        panic!("the key: {granted:?}");
+    };
+    let token = token.clone();
+    let ended = host
+        .run_startup_package_on_key_for_test(POLICY_INSTANCE_ALIAS, acquire, token, connection)
+        .expect("no Runtime failure");
+    assert_eq!(ended, Err(CONFIRMATION_FAILED));
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert!(
+        !all_events(&host)
+            .iter()
+            .any(|event| event.event_type() == EventType::PolicyExecutionRecorded),
+        "a startup package settles no policy execution"
+    );
+
+    host.activate_policy_catalog(&sources(Some(recommended()), false))
+        .expect("activate policy catalog");
+    let due = evaluate(&host, &clock, NEXT_OCCURRENCE_UNIX_MS, 81);
+    assert!(!due.paused, "nothing pauses the pair");
+    assert_eq!(due.dispatched, [TASK]);
+    host.close().expect("close runtime host");
+}
+
+// Fix round 2 (rule 6): the task's admitted runtime budget is 1 300 ms, its expected duration
+// 1 300 ms, so the run may take 1 300 ms of its own time. The scheduled run on the screen of
+// neither page spends 200 ms on its arrival, 10 ms on its retry delay and 600 ms on its retry
+// decision; the 490 ms its budget has left are less than the closing decision's bound of 600 ms,
+// so no closing decision is made: the run fails `page_confirmation_failed` after one tap, and its
+// settlement records that code (neither the new code nor `policy_runtime_budget_exceeded`), class
+// recoverable, and follows `on_failure` (`continue`).
+#[test]
+fn u1_a_scheduled_run_whose_budget_ends_before_the_closing_bound_keeps_its_failure() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("u1-open");
+    write_package(&package, 10);
+    let request = ContainedTaskRequest::new(package.to_string_lossy().into_owned())
+        .expect("contained task request");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let state = device(AfterTap::Unrecorded);
+    let host = start(&root, &clock, &package, &state);
+    let mut catalog = sources(Some(continue_without_retry()), false);
+    let mut tasks: Value = serde_json::from_slice(&catalog.tasks.bytes).expect("policy tasks");
+    tasks["tasks"][0]["expected_duration_ms"] = json!(1_300);
+    tasks["tasks"][0]["loop_budget"]["max_runtime_ms"] = json!(1_300);
+    catalog.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("policy task bytes");
+    host.activate_policy_catalog(&catalog)
+        .expect("activate policy catalog");
+    let (context, error) = failed_scheduled_run(&host, &clock, &request, POLICY_NOW_UNIX_MS, 7);
+    assert_eq!(error.code(), CONFIRMATION_FAILED);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let failure = recorded_failure(&host, context.run_id());
+    assert_eq!(failure.outcome.code().as_str(), CONFIRMATION_FAILED);
+    assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
+    assert_eq!(failure.disposition, PolicyFailureDisposition::Continue);
+    host.close().expect("close runtime host");
+}
+
+// Fix round 2 (the review: the ladder for the new code had no test): a scheduled run on a device
+// instance meets the screen of neither page and fails with the new code. Its class
+// `pack_logic_mismatch` admits one ladder at the task stage by the default item `pack_logic`,
+// naming the code; the pair is paused at once and, after the ladder's end, is not dispatched at its
+// next due evaluation.
+#[test]
+fn u1_the_new_code_admits_one_ladder_by_its_class_and_the_paused_pair_is_not_dispatched() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("u1-open");
+    write_package(&package, 10);
+    let request = ContainedTaskRequest::new(package.to_string_lossy().into_owned())
+        .expect("contained task request");
+    let state = device(AfterTap::Unrecorded);
+    state.physical_task_geometry.store(true, Ordering::Release);
+    *state
+        .physical_task_extent
+        .lock()
+        .expect("fake physical task extent") = Some((2, 1));
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_procedure_manifest(manifest_at(&package)),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&sources(Some(recommended()), false))
+        .expect("activate policy catalog");
+    let (context, error) = failed_scheduled_run(&host, &clock, &request, POLICY_NOW_UNIX_MS, 7);
+    assert_eq!(error.code(), UNRECORDED_SCREEN);
+    // The ladder runs on the instance's worker; its end is waited for as every ladder test does.
+    wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
+    let events = all_events(&host);
+    let triggers = phases(&events)
+        .into_iter()
+        .filter_map(|(_, phase)| match phase {
+            actingcommand_contract::RuntimeLifecyclePhase::RecoveryLadderStarted {
+                trigger,
+                ..
+            } => Some(trigger),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [trigger] = triggers.as_slice() else {
+        panic!("one ladder: {triggers:?}");
+    };
+    assert_eq!(
+        trigger.stage,
+        actingcommand_contract::RecoveryTriggerStage::Task
+    );
+    assert_eq!(trigger.failure_code.as_str(), UNRECORDED_SCREEN);
+    assert_eq!(trigger.rule.as_deref(), Some("pack_logic"));
+    assert_eq!(
+        trigger.matched,
+        Some(actingcommand_contract::RecoveryTriggerMatch::Class {
+            ladder_class: actingcommand_contract::outcome::LadderClass::PackLogicMismatch
+        })
+    );
+    assert_eq!(
+        recorded_failure(&host, context.run_id()).disposition,
+        PolicyFailureDisposition::PausedTask
+    );
+    let due = evaluate(&host, &clock, NEXT_OCCURRENCE_UNIX_MS, 91);
+    assert!(
+        !due.dispatched.iter().any(|task| task == TASK),
+        "the paused pair is not dispatched again: {:?}",
+        due.dispatched
+    );
     host.close().expect("close runtime host");
 }

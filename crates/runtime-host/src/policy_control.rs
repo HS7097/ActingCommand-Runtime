@@ -2347,6 +2347,46 @@ pub(crate) fn runtime_budget_exceeded(
         })
 }
 
+/// Workflow #463 U1, fix round 2 (rule 6): the largest `runtime_ms` for which
+/// [`runtime_budget_exceeded`] is false, by the same rule: for each runtime dimension the receipt
+/// carries, its limit less the reservation before the run (the reserved runtime less the
+/// dispatch's expected duration), the smallest of them; `None` when the receipt carries no runtime
+/// dimension. A dimension that carries one member only, or reserves less than the expected
+/// duration or more than its limit, is `policy_budget_receipt_invalid`, as at the settlement.
+pub(crate) fn runtime_budget_allowance_ms(
+    intent: &DispatchIntent,
+    admission: &PolicyAdmissionRecord,
+) -> RuntimeHostResult<Option<u64>> {
+    let invalid = || {
+        fatal(
+            HostCode::PolicyBudgetReceiptInvalid,
+            HostLocation::ReadPolicyRuntimeBudget,
+        )
+    };
+    let allowance = |reserved: Option<u64>, limit: Option<u64>| match (reserved, limit) {
+        (None, None) => Ok(None),
+        (Some(reserved), Some(limit)) => reserved
+            .checked_sub(intent.expected_duration_ms)
+            .and_then(|before| limit.checked_sub(before))
+            .map(Some)
+            .ok_or_else(invalid),
+        _ => Err(invalid()),
+    };
+    let budget = &admission.budget;
+    let task = allowance(
+        budget.task_runtime_reserved_ms,
+        budget.task_runtime_limit_ms,
+    )?;
+    let activity = allowance(
+        budget.activity_runtime_reserved_ms,
+        budget.activity_runtime_limit_ms,
+    )?;
+    Ok(match (task, activity) {
+        (Some(task), Some(activity)) => Some(task.min(activity)),
+        (task, activity) => task.or(activity),
+    })
+}
+
 /// The task and activity window runtimes after a run of `runtime_ms` settles: each reservation
 /// less the expected duration, plus the run. SS-3: `None` for a runtime dimension the receipt
 /// does not carry.
