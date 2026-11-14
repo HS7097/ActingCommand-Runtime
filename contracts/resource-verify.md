@@ -226,7 +226,7 @@ reuses carry the optional keys this slice declares on them: `resource_declaratio
 0.12.47 (Workflow #434 LAB-2) the word is gone, an unknown resource command, and the code is
 retired.
 
-Workflow #464 P2 (since 0.12.60), `standard-pack build`'s own codes, in the same fragment:
+Workflow #464 P2 (since 0.12.61), `standard-pack build`'s own codes, in the same fragment:
 `resource_build_output_invalid` (`path`), `resource_build_failed`
 (`failed_step_count`) and `resource_build_write_failed` (`path`).
 

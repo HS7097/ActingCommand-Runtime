@@ -100,6 +100,10 @@
 //!   `material_export_failed` first, the parts kept. A failure line past the budget is not
 //!   exported: it is sent in `structuredContent` alone beside a summary text, and no file is
 //!   written.
+//! - `mcp_lab_overflow_rule_keeps_next_frame_inline` (#463 L1 fix round 1): a recorded step's
+//!   `do` line far past the budget is written whole, and its `next_frame` (the next screen) stays
+//!   inline verbatim, after `frame_coordinates` and before `after_attachment`, as today's server
+//!   keeps it; its `record` stays in the export.
 //! - `mcp_capture_records_client_action`: after the child of `ac_lab_observe` or `ac_do` with
 //!   `capture` true answered, the scripted Runtime receives on a connection of its own the identity
 //!   card and the client action (surface `mcp`, the tool, kind `command`, the call's instance, the
@@ -2176,7 +2180,10 @@ const DO_REQ_ID: &str = "req-neutral-do";
 const RECORD_STOP: &str = "ac_record_stop";
 const LAB_OBSERVE: &str = "ac_lab_observe";
 const LAB_DO: &str = "ac_do";
-/// The frame parts an exported `observe` or `do` line keeps, in order.
+/// The four frame parts of Workflow #410 item 1 that `mcp_lab_overflow_rule`'s lines carry, in the
+/// order an exported `observe` or `do` line keeps them (#463 L1 fix round 1: a recorded step's
+/// `next_frame` is kept between `preview` and `after_attachment`,
+/// `mcp_lab_overflow_rule_keeps_next_frame_inline`).
 const FRAME_PARTS: [&str; 4] = [
     "frame_coordinates",
     "frame_path",
@@ -2494,6 +2501,63 @@ fn mcp_lab_overflow_rule() {
         (&json!("material_export_failed"), &own_warning, Some(2)),
         "the export's failure first, the child's own after it: {unwritten}"
     );
+}
+
+#[test]
+fn mcp_lab_overflow_rule_keeps_next_frame_inline() {
+    let temp = TempDir::new().expect("tempdir");
+    let base = TempDir::new().expect("tempdir");
+    let state = base.path().join("state");
+    let (program, log) = beside_a_made_up_child(base.path());
+    // A recorded step's `do` line in one call: its record, its next frame and the operation's own
+    // after frame beside far more.
+    let acted = json!({
+        "frame_coordinates": {"device_pixels": [96, 64], "orientation": "landscape"},
+        "after_attachment": {"kind": "frame", "frame_path": "neutral-after.png"},
+        "record": {"status": "click_recorded", "step": 1, "step_closed": true},
+        "next_frame": {
+            "width": 96,
+            "height": 64,
+            "after_ms": 800,
+            "out": "neutral-next.png",
+            "record": {"status": "frame_recorded", "step": 2, "step_opened": true},
+        },
+        "neutral_detail": filler(PAST_THE_BUDGET),
+        "outcome": completed(),
+    });
+    can_answer(
+        &log,
+        "neutral.recorded",
+        &json!({"exit_code": 0, "req_id": DO_REQ_ID, "line": acted}),
+    );
+
+    let mut server = Server::start(exporting_into(&program, &log, &state, temp.path()));
+    server.initialize();
+    let act = answered_as(&server.call_tool(2, LAB_DO, json!({"instance": "neutral.recorded"})));
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+
+    // Written whole; the next screen inline after the coordinates and before the after frame.
+    assert_eq!(
+        members_of(&act),
+        [
+            "req_id",
+            "export",
+            "overflowed",
+            "frame_coordinates",
+            "next_frame",
+            "after_attachment",
+            "warnings",
+            "outcome",
+        ],
+        "{act}"
+    );
+    for part in ["frame_coordinates", "next_frame", "after_attachment"] {
+        assert_eq!(act[part], acted[part], "{part}: {act}");
+    }
+    let exports = temp.path().join("actingcommand-mcp").join("materials");
+    assert_exported_whole(&act, &acted, &exports);
+    assert_eq!(warning_codes(&act), ["answer_exported"], "{act}");
 }
 
 /// A capture's own connection whose client action the Runtime refuses: the identity card

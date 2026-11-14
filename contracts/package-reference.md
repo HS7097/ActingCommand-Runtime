@@ -512,7 +512,7 @@ accepts: a root whose `bundle.json` holds one is `standard_pack_root_invalid` wi
 
 ### The built standard pack
 
-Workflow #464 P2 (since 0.12.60; [resource-verify.md](resource-verify.md), "`standard-pack
+Workflow #464 P2 (since 0.12.61; [resource-verify.md](resource-verify.md), "`standard-pack
 build`"; register [v012-register.md](v012-register.md) §1.376). `actinglab standard-pack build
 --repo <checkout> --source-repository <owner>/<name> --out <directory> [--commit <40-hex>]` builds
 one game's whole standard pack from one commit of its working root (a resource repository checkout

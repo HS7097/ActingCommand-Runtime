@@ -68,7 +68,7 @@ pub(crate) use session_record::{
     parse_session_record_drift_diagnostics,
 };
 pub(crate) use session_record::{
-    SessionRecordRect, SessionRecordRegion, parse_record_mark_rect, record_flag_begin,
-    run_session_record,
+    SessionRecordRect, SessionRecordRegion, parse_record_mark_rect, read_mark_request_file,
+    record_flag_begin, run_session_record,
 };
 pub(crate) use session_transport::run_session_transport;

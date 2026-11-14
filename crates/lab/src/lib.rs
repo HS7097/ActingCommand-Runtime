@@ -51,6 +51,12 @@ mod gate_406_t4;
 // Workflow #449 REC-ARCH: a recording ended as material only; a recorded swipe is a step.
 #[cfg(test)]
 mod gate_449_rec_arch;
+// #463 L1: `do --capture --record` records a whole step in one call.
+#[cfg(test)]
+mod gate_463_l1;
+// #463 L2: a recorded step presses what it finds by its name (a located-text mark it follows).
+#[cfg(test)]
+mod gate_463_l2;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
