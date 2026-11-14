@@ -43,10 +43,14 @@
 //!   S1);
 //! - S7 `root_checked` (fix round 1): `standard-pack check`'s refusals of other kinds;
 //! - I1 to I6 from [`ReadinessInstallation`], what the caller read of an installation: I1 its
-//!   bindings, I2 its `package` range against the bundle's declared maximum (as `place` holds a
-//!   bundle at the edge), I3 an information line (the coordinator's ruling 3: no revision tells
-//!   it), I4 the composer again with the live build's subsystems (as check-config and the Runtime
-//!   check `requires`), I5 its suspended pairs, I6 its verified models.
+//!   bindings, I2 its `package` range against the bundle's declared range by the rule of `place`
+//!   at the edge, called, not copied (the second merge of main, after Workflow #463 V1: the
+//!   contract crate's `package_edge_holds`, then [`BundleRevisionNeed`] for what the game root
+//!   carries, the notices directory, `goals.json` and a pack whose control declaration declares
+//!   variables, read with `control_declares_variables`, the rule `place` calls), I3 an
+//!   information line (the coordinator's ruling 3: no revision tells it), I4 the composer again
+//!   with the live build's subsystems (as check-config and the Runtime check `requires`), I5 its
+//!   suspended pairs, I6 its verified models.
 //!
 //! Fix round 1: a pack answers one of four words ([`ReadinessState`]): `waiting` when an item
 //! fails; `not_scheduled` when it plays a supporting part no rule dispatches; `dispatchable` when
@@ -69,12 +73,14 @@ use crate::standard_pack_schedule::compose_per_server;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Outcome, OutcomeEnvelope};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, InterruptThen, LabError, LabResult, MaintenanceUse,
-    RuntimeErrorCode, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    BundleIndex, BundleMaintenance, BundleRevisionNeed, InterruptThen, LabError, LabResult,
+    MaintenanceUse, PACKAGE_CONTROL_FILE, RuntimeErrorCode, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE,
     STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRoot, StandardPackRootBytes,
     StandardPackRootIssue, StandardPackSchedule, classify_standard_pack_packages,
-    parse_standard_pack_schedule, read_standard_pack_root, standard_pack_maintenance_packages,
+    control_declares_variables, package_edge_holds, parse_standard_pack_schedule,
+    read_standard_pack_root, standard_pack_maintenance_packages,
 };
 use actingcommand_execution_kernel::{
     ExecutionKernelCode, NavigationPackageDescriptor, PreparedContainedTask, PrerequisiteChain,
@@ -129,8 +135,8 @@ pub struct StandardPackReadyRequest {
     /// `interfaces.json`, or what the build declares); `None` where the caller holds none (an
     /// installed game root keeps no `interfaces.json`).
     pub declared_package: Option<[u64; 2]>,
-    /// What the caller read of an installation; `None`: none was read, and the six items of an
-    /// installation are not judged.
+    /// What the caller read of an installation; `None`: none was read, and the five installation
+    /// items that judge one (I1, I2, I4, I5, I6) are not judged (I3 is an information line).
     pub installation: Option<ReadinessInstallation>,
 }
 
@@ -402,6 +408,7 @@ pub fn judge_standard_pack_readiness(
             Err(error) => (Vec::new(), check_refusals(&error, &checked.root)),
         };
     let installation = request.installation.as_ref();
+    let revision_needs = revision_needs(&root, &game, &checked);
     let rules = Rules::of(&game, &checked, &root, installation)?;
     let mut admitted = Admitted::new();
     for package_id in checked.root.registry.package_ids() {
@@ -427,6 +434,7 @@ pub fn judge_standard_pack_readiness(
         maintenance: &checked.maintenance,
         rules: &rules,
         declared_package: request.declared_package,
+        revision_needs: &revision_needs,
         installation,
         admitted: &admitted,
         refusals: &refusals,
@@ -466,6 +474,9 @@ pub fn judge_standard_pack_readiness(
 struct CheckedRoot {
     root: StandardPackRoot,
     maintenance: Vec<BundleMaintenance>,
+    /// I2 (the second merge of main): the packs of `bundle.json` in its order, the order `place`
+    /// reads their control declarations in.
+    listed: Vec<String>,
 }
 
 /// Reads the root files of `root` (the game `game`) as `standard-pack check` reads them.
@@ -503,14 +514,92 @@ fn read_root(root: &Path, game: &str) -> LabResult<CheckedRoot> {
         };
         root_invalid(game, &root.join(STANDARD_PACK_BUNDLE_FILE), &issue)
     })?;
-    let maintenance = bytes(STANDARD_PACK_BUNDLE_FILE)
-        .and_then(|bundle| serde_json::from_slice::<BundleIndex>(bundle).ok())
+    let index = bytes(STANDARD_PACK_BUNDLE_FILE)
+        .and_then(|bundle| serde_json::from_slice::<BundleIndex>(bundle).ok());
+    let maintenance = index
+        .as_ref()
         .map(|index| index.maintenance().to_vec())
+        .unwrap_or_default();
+    let listed = index
+        .map(|index| {
+            index
+                .packs
+                .into_iter()
+                .map(|pack| pack.package_id)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     Ok(CheckedRoot {
         root: checked,
         maintenance,
+        listed,
     })
+}
+
+/// I2 (the second merge of main, after Workflow #463 V1): the bundle's interface declaration, as
+/// the installer's `place` names it beside the zip's root files.
+const INTERFACES_FILE: &str = "interfaces.json";
+
+/// I2: one thing the game root carries that a `package` revision brought, with the refusal of
+/// `place` for a bundle that carries it and declares less: `standard_pack_root_invalid` with its
+/// problem at the root's `interfaces.json`, the pointer empty, naming the declaring pack for
+/// variables.
+struct RevisionNeed {
+    need: BundleRevisionNeed,
+    refusal: Outcome,
+}
+
+/// I2: what the game root `root` of `game` carries that a `package` revision brought, in the order
+/// `place` asks it of a bundle zip: the notices directory (unless a pack is named like it, whose
+/// folder it then is, as `standard-pack check` reads it), `goals.json`, and the first pack, in
+/// `bundle.json`'s order, whose control declaration declares variables, read by the contract
+/// crate's `control_declares_variables`, the reading `place` calls. A control declaration that
+/// cannot be read declares none here: the loader refuses that pack (S1) and `standard-pack check`
+/// the root (every other pack's S7), so no pack of such a root is answered complete. A select
+/// step (`package` 13) asks nothing, as `place` asks nothing of it.
+fn revision_needs(root: &Path, game: &str, checked: &CheckedRoot) -> Vec<RevisionNeed> {
+    let interfaces = root.join(INTERFACES_FILE);
+    let refusal = |need: BundleRevisionNeed| {
+        Outcome::new(SharedCode::StandardPackRootInvalid)
+            .game(game)
+            .path(&interfaces)
+            .standard_pack_problem(need.problem())
+            .json_pointer(String::new())
+    };
+    let registry = &checked.root.registry;
+    let mut needs = Vec::new();
+    let notices = !registry
+        .package_ids()
+        .any(|package_id| package_id.eq_ignore_ascii_case(STANDARD_PACK_NOTICES_DIRECTORY))
+        && fs::metadata(root.join(STANDARD_PACK_NOTICES_DIRECTORY))
+            .is_ok_and(|metadata| metadata.is_dir());
+    if notices {
+        needs.push(RevisionNeed {
+            need: BundleRevisionNeed::Notices,
+            refusal: refusal(BundleRevisionNeed::Notices),
+        });
+    }
+    if fs::metadata(root.join(STANDARD_PACK_GOALS_FILE)).is_ok_and(|metadata| metadata.is_file()) {
+        needs.push(RevisionNeed {
+            need: BundleRevisionNeed::Goals,
+            refusal: refusal(BundleRevisionNeed::Goals),
+        });
+    }
+    let declaring = checked.listed.iter().find(|package_id| {
+        registry.get(package_id).is_some_and(|entry| {
+            read_bounded(&root.join(&entry.directory).join(PACKAGE_CONTROL_FILE))
+                .ok()
+                .flatten()
+                .is_some_and(|control| control_declares_variables(&control))
+        })
+    });
+    if let Some(package_id) = declaring {
+        needs.push(RevisionNeed {
+            need: BundleRevisionNeed::Variables,
+            refusal: refusal(BundleRevisionNeed::Variables).package_id(package_id.as_str()),
+        });
+    }
+    needs
 }
 
 /// Which item carries a refusal of `standard-pack check`.
@@ -803,6 +892,9 @@ struct Context<'a> {
     maintenance: &'a [BundleMaintenance],
     rules: &'a Rules,
     declared_package: Option<[u64; 2]>,
+    /// I2 (the second merge of main): what the game root carries that a `package` revision
+    /// brought, in the order `place` asks it.
+    revision_needs: &'a [RevisionNeed],
     installation: Option<&'a ReadinessInstallation>,
     /// Every pack of the registry as the loader admitted it.
     admitted: &'a Admitted,
@@ -1372,30 +1464,46 @@ impl Context<'_> {
         ReadinessAnswer::fails(ITEM, failed(ReadinessProblem::ServerUnbound))
     }
 
-    /// I2: the installation's `package` range holds the bundle's declared maximum, as `place`
-    /// holds a bundle at the edge.
+    /// I2: the bundle's declared `package` range passes the rule of `place` at the edge, called,
+    /// not copied (the second merge of main): the installation's range holds the declared
+    /// maximum (`package_edge_holds`), then the declared maximum is the revision of each thing
+    /// the game root carries that a revision brought at least ([`BundleRevisionNeed`]), in
+    /// `place`'s order. A bundle `place` refuses is refused whole, so every pack of the root
+    /// answers it.
     fn package_revision(&self, pack: &Pack<'_>) -> ReadinessAnswer {
         const ITEM: ReadinessItem = ReadinessItem::PackageRevision;
         let id = pack.package_id;
-        let [least, most] = match part(self.installation, |installation| {
+        let own = match part(self.installation, |installation| {
             installation.package.as_ref()
         }) {
             Ok(range) => *range,
             Err(why) => return ReadinessAnswer::not_judged(ITEM, id, why),
         };
-        let Some([_, declared]) = self.declared_package else {
+        let Some(declared) = self.declared_package else {
             return ReadinessAnswer::not_judged(ITEM, id, ReadinessUnjudged::PackageUndeclared);
         };
-        if least <= declared && declared <= most {
-            return ReadinessAnswer::holds(ITEM, None);
+        if !package_edge_holds(own, declared) {
+            return ReadinessAnswer::fails(
+                ITEM,
+                waiting(id, ITEM, ReadinessProblem::RevisionOutside)
+                    .required_revision(declared[1])
+                    .range_min(own[0])
+                    .range_max(own[1]),
+            );
         }
-        ReadinessAnswer::fails(
-            ITEM,
-            waiting(id, ITEM, ReadinessProblem::RevisionOutside)
-                .required_revision(declared)
-                .range_min(least)
-                .range_max(most),
-        )
+        if let Some(unmet) = self
+            .revision_needs
+            .iter()
+            .find(|carried| !carried.need.declared_by(declared))
+        {
+            return ReadinessAnswer::fails(
+                ITEM,
+                waiting(id, ITEM, ReadinessProblem::RevisionUndeclared)
+                    .required_revision(unmet.need.revision())
+                    .caused_by(unmet.refusal.clone()),
+            );
+        }
+        ReadinessAnswer::holds(ITEM, None)
     }
 
     /// I3: an information line, never a refusal (the coordinator's ruling 3).

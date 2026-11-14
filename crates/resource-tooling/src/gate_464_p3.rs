@@ -46,6 +46,13 @@
 //   server's return-home package through no chain; a return-home package of another resolution,
 //   and one that declares a prerequisite package, each fail S5 `return_home_refused` alone, caused
 //   by the kernel's `contained_task_prerequisite_incompatible` and naming the return-home package.
+// - The second merge of main (main `60c28e64`, Workflow #463 V1's `package` 14; coordinator work
+//   order rd-1115/brief-1718-main2.md): I2 calls the rule of `place` at the edge. The business
+//   pack declaring a variable in a bundle that declares [12, 12], within the installation's
+//   [3, 12], fails I2 `revision_undeclared` alone with `required_revision` 14, caused by
+//   `standard_pack_root_invalid` `variable_undeclared` naming it, and the return-home package
+//   fails I2 alone with it (`place` refuses the bundle whole); declaring [14, 14] within [3, 14],
+//   I2 holds and the pack is dispatchable.
 // Made-up packs only; no device, no Runtime, no clock read, no sleep.
 
 use crate::codes::{
@@ -57,6 +64,7 @@ use crate::{
     ReadinessInstallation, ReadinessModel, ReadinessSuspension, StandardPackReadiness,
     StandardPackReadyRequest, judge_standard_pack_readiness,
 };
+use actingcommand_contract::StandardPackProblem;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_execution_kernel::ExecutionKernelCode;
@@ -1080,6 +1088,71 @@ fn p3_i2_a_revision_outside_the_installation_fails_package_revision_alone() {
         (Some(&json!(12)), Some(&json!(3)), Some(&json!(11))),
         "{outcome:?}"
     );
+}
+
+/// The second merge of main (after Workflow #463 V1): I2 calls the rule of `place` at the edge,
+/// which asks 14 of a bundle whose packs declare variables.
+#[test]
+fn p3_i2_variables_in_a_bundle_that_declares_less_fail_package_revision_alone() {
+    let temp = TempDir::new().expect("temporary directory");
+    let mut fixture = Fixture::complete();
+    fixture.control["variables"] = json!([{
+        "name": "extra", "type": "switch", "title": {"en": "Extra"}, "default": false
+    }]);
+    let root = fixture.write(&temp);
+
+    // The bundle declares [12, 12], within the installation's [3, 12]: the edge holds, and the
+    // business pack's variables ask 14.
+    let readiness = judge(&root, Some(installation()));
+
+    let outcome = fails_alone(
+        &readiness,
+        ReadinessItem::PackageRevision,
+        ReadinessProblem::RevisionUndeclared,
+    );
+    assert_eq!(
+        outcome.value("required_revision"),
+        Some(&json!(14)),
+        "{outcome:?}"
+    );
+    let cause = first_cause(&outcome);
+    assert!(cause.is(SharedCode::StandardPackRootInvalid), "{cause:?}");
+    assert_eq!(
+        (
+            cause.value("standard_pack_problem"),
+            cause.value("package_id")
+        ),
+        (
+            Some(&json!(StandardPackProblem::VariableUndeclared.as_str())),
+            Some(&json!(CLAIM))
+        ),
+        "{cause:?}"
+    );
+    // `place` refuses the bundle whole: the return-home package, which declares none, fails I2
+    // alone too.
+    alone(
+        pack(&readiness, HOME),
+        ReadinessItem::PackageRevision,
+        ReadinessProblem::RevisionUndeclared,
+    );
+
+    // The same root declaring [14, 14], within an installation's [3, 14], holds I2.
+    let mut reading = installation();
+    reading.package = Some([3, 14]);
+    let readiness = judge_standard_pack_readiness(&StandardPackReadyRequest {
+        root,
+        declared_package: Some([14, 14]),
+        installation: Some(reading),
+    })
+    .unwrap_or_else(|error| panic!("the readiness: {}: {}", error.code, error.message));
+    let pack = claim(&readiness);
+    assert_eq!(
+        pack.item(ReadinessItem::PackageRevision)
+            .map(|answer| answer.state),
+        Some(ItemState::Holds),
+        "{pack:?}"
+    );
+    assert_eq!(pack.readiness, ReadinessState::Dispatchable, "{pack:?}");
 }
 
 #[test]

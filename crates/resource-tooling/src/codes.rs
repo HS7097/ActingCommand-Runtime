@@ -169,7 +169,9 @@ actingcommand_contract::outcome_vocabulary! {
         RootChecked => "root_checked",
         /// I1: an instance of the installation is bound to the pack's game and server.
         InstanceBound => "instance_bound",
-        /// I2: the installation's `package` range holds the bundle's declared maximum.
+        /// I2: the installation's `package` range holds the bundle's declared maximum, and that
+        /// maximum is the revision of what the game root carries at least, by the rule of `place`
+        /// at the edge.
         PackageRevision => "package_revision",
         /// I3: whether the live Runtime has the code for an unrecorded screen; an information line.
         UnrecordedScreenCode => "unrecorded_screen_code",
@@ -235,6 +237,13 @@ actingcommand_contract::outcome_vocabulary! {
         /// I2: the bundle's declared maximum is outside the installation's range
         /// (`required_revision`, `range_min`, `range_max`).
         RevisionOutside => "revision_outside",
+        /// I2 (the second merge of main, after Workflow #463 V1): the game root carries what a
+        /// later `package` revision brought (the notices directory, `goals.json`, a pack whose
+        /// control declaration declares variables) and the bundle declares a lower maximum, so
+        /// `place` refuses the bundle (`required_revision` that revision; `place`'s refusal,
+        /// `standard_pack_root_invalid` with `notice_undeclared`, `goal_undeclared` or
+        /// `variable_undeclared`, is the cause).
+        RevisionUndeclared => "revision_undeclared",
         /// I4: a `requires` word of the game's rules is one the live build does not name.
         RequiresUnknown => "requires_unknown",
         /// I5: a pair of the pack is suspended (`task_id`, `instance_id` where told).

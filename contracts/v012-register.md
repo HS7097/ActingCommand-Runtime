@@ -25214,7 +25214,7 @@ a bundle that declares `package` 13 through its `package` edge. A rollback stays
 is placed from such a bundle. A bundle with such a package that declares less than 13 is placed by
 an earlier installer too, and every run of that package is refused (closing round, "Interface").
 
-### 1.375 Slice #464 P3 (0.12.61): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on the root check and the four answers, coordinator work order `rd-1114/brief-1718-fix1.md`, main `1e67d1c5` merged; fix round 2, after a second review, the coordinator's closing work order on the same main; main `2eaf9b7e` (release 0.12.60) merged, coordinator work order `rd-1115/brief-1718-main.md`)
+### 1.375 Slice #464 P3 (0.12.61): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on the root check and the four answers, coordinator work order `rd-1114/brief-1718-fix1.md`, main `1e67d1c5` merged; fix round 2, after a second review, the coordinator's closing work order on the same main; main `2eaf9b7e` (release 0.12.60) merged, coordinator work order `rd-1115/brief-1718-main.md`; main `60c28e64` (the train 0.12.61a) merged, with the coordinator's two points, coordinator work order `rd-1115/brief-1718-main2.md`)
 
 This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364);
 merging main `155366bb`, whose train 0.12.60d took §1.365 to §1.368 (#453 S3, S4, S9 and S12),
@@ -25223,7 +25223,8 @@ renumbered it 1.369; merging main `1e67d1c5` in fix round 1, whose #1708 (#455 G
 open pull requests). The sibling slices P1 (`standard-pack adopt`) and P2 (`standard-pack
 build`), written at the same time, take the numbers their merges give them. Merging main
 `2eaf9b7e`, whose train 0.12.60e took §1.370 to §1.373 (#463 L1, L2 and U1, #437 ORD-1c), keeps
-1.375. The slice ships in 0.12.61 (release 0.12.60 is cut without it).
+1.375. The slice ships in 0.12.61 (release 0.12.60 is cut without it). Merging main `60c28e64`,
+whose train 0.12.61a holds §1.374 (#463 K1) and §1.378 (#463 V1), keeps 1.375, between them.
 
 **What it is.** One function, `actingcommand_resource_tooling::judge_standard_pack_readiness`,
 judges the readiness items of every pack of one game root (twelve as first built, thirteen since
@@ -25279,9 +25280,9 @@ and, since fix round 1, `blocking_package_id`; the other check's own outcome as 
 `package_readiness_unjudged` (info, ladder class none; required `package_id`, `readiness_item`,
 `readiness_unjudged`), both resource tooling's, both pending; one domain code each, the reason a
 vocabulary value (spec amendment of 10-24). Keys `readiness_item`, `readiness_problem`,
-`readiness_unjudged` (vocabularies of resource tooling's `codes.rs`: thirteen items, twenty
-problems since fix round 2 (nineteen in fix round 1), nine unjudged words since fix round 1;
-twelve, fifteen and eight as first built),
+`readiness_unjudged` (vocabularies of resource tooling's `codes.rs`: thirteen items, twenty-one
+problems since the second merge of main (twenty in fix round 2, nineteen in fix round 1), nine
+unjudged words since fix round 1; twelve, fifteen and eight as first built),
 `required_revision` (integer) and, since fix round 1, `blocking_package_id` (name). Fix round 1
 adds two vocabularies no key carries, the answer's own members: `readiness_state` (four words) and
 `readiness_role` (eight words). No configuration key, record type, payload member, fact, wire
@@ -25373,6 +25374,32 @@ prerequisite package (`p3_fr2_s5_a_return_home_package_that_declares_a_prerequis
 no existing test changes. (2) The catalog's text of `check_refused` no longer names store update
 cooldowns and probe keys: those are `standard-pack check`'s refusals of `schedule.json`, which S4
 carries. (3) actinglab's module text says thirteen items.
+
+**Second merge of main** (main `60c28e64`, the train 0.12.61a: #463 K1, `package` 13, a
+`linear_steps` task with a select step, §1.374; #463 V1, `package` 14, a package's `variables` and
+version 2 of `goals.json`, §1.378; coordinator work order `rd-1115/brief-1718-main2.md`). The merge
+keeps both sides in section order (the register, the exec gate rows, resource tooling's test
+modules). Two points of the work order. (1) A wrong number: the operation table's row
+`standard-pack ready` said that six installation items are `not_judged`; the row reads no
+installation, and the items it leaves unjudged are five (I1, I2, I4, I5, I6; I3 is an information
+line). The row's note and the request's `installation` member text now say five; the contract's
+section "Readiness", the gate row and the tests already did. (2) Item I2 held a copy of the rule of
+`place` at the edge (`min <= max_declared <= max` only), so after the train it answered a bundle
+`place` refuses as holding: `place` also asks 14 of a bundle that carries `goals.json` or whose
+packs declare `variables` (10 of one that carries the notices directory; nothing asks 13). The rule
+now lives in the contract crate, `package_edge_holds`, `BundleRevisionNeed` (`revision`,
+`problem`, `declared_by`) and `control_declares_variables`, and both call it: the rescue module's
+`place` at its edge and in its three checks (its refusals byte for byte as before), and I2, which
+after the edge asks each need the game root carries (the notices directory unless a pack is named
+like it, `goals.json`, the first pack in `bundle.json`'s order whose `control.json` declares
+`variables`) of the declared maximum, in `place`'s order. A need the declaration lacks fails I2
+with the new problem `revision_undeclared` (`required_revision` the revision asked), caused by
+`place`'s refusal, `standard_pack_root_invalid` with `notice_undeclared`, `goal_undeclared` or
+`variable_undeclared` at the root's `interfaces.json`, the pointer empty, `package_id` the
+declaring pack for `variables`; `place` refuses a bundle whole, so every pack of the root answers
+it. Test, `gate_464_p3` (exec gate row "#464 P3"):
+`p3_i2_variables_in_a_bundle_that_declares_less_fail_package_revision_alone`. No existing test
+changes; no code, key or configuration key is added (one vocabulary word).
 
 **At deploy.** Nothing to do: a new read-only command and tool. **Rollback** (below 0.12.61): the
 row and its tool are gone; nothing is persisted.

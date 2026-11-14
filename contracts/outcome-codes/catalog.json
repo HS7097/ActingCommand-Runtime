@@ -9515,7 +9515,7 @@
           "description": "I1: an instance of the installation is bound to the pack's game and server."
         },
         "package_revision": {
-          "description": "I2: the installation's package range holds the bundle's declared maximum, as place holds a bundle at the edge."
+          "description": "I2: the bundle's declared package range passes the rule of place at the edge, called, not copied: the installation's package range holds the declared maximum, and that maximum is the revision of what the game root carries at least (the notices directory 10, goals.json 14, a pack whose control declaration declares variables 14)."
         },
         "unrecorded_screen_code": {
           "description": "I3: whether the live Runtime has the code for an unrecorded screen; an information line, never a refusal."
@@ -9589,6 +9589,9 @@
         },
         "revision_outside": {
           "description": "I2: the bundle's declared package maximum (required_revision) is outside the installation's range (range_min, range_max)."
+        },
+        "revision_undeclared": {
+          "description": "I2 (the second merge of main): the game root carries what a later package revision brought (the notices directory, goals.json, a pack whose control declaration declares variables) and the bundle declares a lower package maximum, so place refuses the bundle at the edge; required_revision the revision it carries asks, place's refusal the cause: standard_pack_root_invalid with notice_undeclared, goal_undeclared or variable_undeclared at the root's interfaces.json, naming the first declaring pack for variables. Every pack of the root answers it."
         },
         "requires_unknown": {
           "description": "I4: a requires word of the game's rules is one the live build does not name; standard_pack_root_invalid schedule_requires_missing at /requires/<index> is the cause."

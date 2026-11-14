@@ -2495,7 +2495,7 @@
       "new": "#464 P3 (whether a pack goes straight into scheduling, and what it waits for)",
       "slice": "464-P3",
       "status": "planned",
-      "notes": "#464 P3 (contracts/standard-pack-schedule.md, Readiness): the resource tooling's one function judge_standard_pack_readiness, which adopt's answer, build.json and the placement plan are to call with what each holds; this row gives it the game root only, so the six installation items are not_judged (installation_not_read) and I3 is information, and a pack answers ready_to_place (or not_scheduled) at best; fix round 1: it runs standard-pack check on the root first, each refusal carried under S1, S4 or S7; it writes nothing, starts nothing (no child process) and reads no installation, no secret and no Runtime"
+      "notes": "#464 P3 (contracts/standard-pack-schedule.md, Readiness): the resource tooling's one function judge_standard_pack_readiness, which adopt's answer, build.json and the placement plan are to call with what each holds; this row gives it the game root only, so the five installation items I1, I2, I4, I5 and I6 are not_judged (installation_not_read) and I3 is information, and a pack answers ready_to_place (or not_scheduled) at best; fix round 1: it runs standard-pack check on the root first, each refusal carried under S1, S4 or S7; it writes nothing, starts nothing (no child process) and reads no installation, no secret and no Runtime"
     },
     {
       "name": "scheduling compile",
