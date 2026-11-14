@@ -321,7 +321,7 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
   "commit": "<40 hex: HEAD>",
   "tree": "<40 hex: HEAD^{tree}>",
   "tools": {"runtime_head": "<40 hex, compiled in>", "executable_sha256": "<64 hex>"},
-  "package": [12, 12],
+  "package": [14, 14],
   "root_files": ["applications.json", "bundle.json", "goals.json", "interfaces.json"],
   "root_directories": ["notices"],
   "packs": [{"package_id": "…", "server": "…", "entry_task_id": "…", "file_count": 4, "byte_count": 1234}],
@@ -387,7 +387,15 @@ as an element of its array.
 | 9 | policy | `lower_bound_column` | S168-LB1b, §1.309 LB1-7, §1.312 |
 | 10 | root | a file under `notices/` | NOTICES-2, §1.335 |
 | 11 | task | `field_lists` of the task | FL-1, §1.343 |
-| 12 | root | `goals.json` | G-R1, §1.356 |
+| 13 | task | `select` under `operations` when it holds an object (a select step), in a pack whose `control.json` `execution_mode` is `linear_steps` only (a page-graph select step keeps its revision): where the kernel's admission finds it (`TaskOperation.select`; `TaskProgram::validate_linear`, `LinearEffect::Select`), a reader private to the kernel crate, which actinglab does not depend on, so the table reads the same member | K1, §1.374; [linear-steps.md](linear-steps.md), "Select steps" |
+| 14 | control | `variables` of the document, whatever it holds, as the installer's `place` reads it (`variable_undeclared` below 14) | V1, §1.378; [package-variables.md](package-variables.md) |
+| 14 | root | `goals.json`, by its presence at the zip's root, as `place` reads it (`goal_undeclared` below 14), whatever version it holds | G-R1, §1.356 (12, version 1); V1 fix round 3, §1.378 (14, version 2) |
+
+Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
+Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought
+version 2, so a zip that carries the file declares 14. A version 1 file is not told apart here: it
+is refused by the check, `goal_version_retired` at `/schema_version` (`package bundle --goals`
+refuses it, so the build fails at its `bundle` step and writes no product), not by the revision.
 
 Nothing else needs a revision: a game root's `tables/` (row 6: no member of a pack reads them),
 `ui.json` (§1.240: no revision), the other root files and every other file of a pack need 3. A

@@ -25214,7 +25214,7 @@ a bundle that declares `package` 13 through its `package` edge. A rollback stays
 is placed from such a bundle. A bundle with such a package that declares less than 13 is placed by
 an earlier installer too, and every run of that package is refused (closing round, "Interface").
 
-### 1.376 Slice #464 P2 (0.12.61): `standard-pack build`, a game's whole standard pack from one commit of its working root, on the steps of `resource verify` (Workflow #464; the owner asked on 11-14 that the Lab build a game's standard pack by itself, board #464; the design `rd-1114/464-pack-build-design.md`, its sections A, C.1, C.2, D and E and the row "P2 build" of its section G, read on main `17197d8e`, with the coordinator's rulings on its section H, not the owner's words; coordinator work orders `rd-1114/brief-464-p2-build.md`, read on main `17197d8e`, `rd-1114/brief-1719-fix1.md` (fix round 1, after the independent review and CI), `rd-1114/brief-1719-fix2.md` (fix round 2, after the second review) and `rd-1115/brief-1719-main.md` (after release 0.12.60); main `155366bb` merged, then main `1e67d1c5` in fix round 1, then main `2eaf9b7e` (release 0.12.60); the number 1.376 is the coordinator's, the numbers between belong to other open pull requests)
+### 1.376 Slice #464 P2 (0.12.61): `standard-pack build`, a game's whole standard pack from one commit of its working root, on the steps of `resource verify` (Workflow #464; the owner asked on 11-14 that the Lab build a game's standard pack by itself, board #464; the design `rd-1114/464-pack-build-design.md`, its sections A, C.1, C.2, D and E and the row "P2 build" of its section G, read on main `17197d8e`, with the coordinator's rulings on its section H, not the owner's words; coordinator work orders `rd-1114/brief-464-p2-build.md`, read on main `17197d8e`, `rd-1114/brief-1719-fix1.md` (fix round 1, after the independent review and CI), `rd-1114/brief-1719-fix2.md` (fix round 2, after the second review), `rd-1115/brief-1719-main.md` (after release 0.12.60) and `rd-1115/brief-1719-rev1314.md` (revisions 13 and 14, after the train 0.12.61a); main `155366bb` merged, then main `1e67d1c5` in fix round 1, then main `2eaf9b7e` (release 0.12.60), then main `60c28e64` (the train 0.12.61a); the number 1.376 is the coordinator's, the numbers between belong to other open pull requests)
 
 **What it is.** A new authoring row of the operation table, `standard-pack build` (command `actinglab
 standard-pack build --repo <checkout> --source-repository <owner>/<name> --out <directory>
@@ -25269,7 +25269,8 @@ nothing is deleted.
   B train's sections put into a revision, each with its file (a pack's `control.json`, task file,
   selection-policy document or navigation projection; the root's `interrupts.json`, `notices/`,
   `goals.json`), the member that holds it, the value it must hold and its condition: 43 member rows
-  and 4 file rows (`apps/actinglab/src/resource_verify/revision.rs`). The conditional ones:
+  and 4 file rows (`apps/actinglab/src/resource_verify/revision.rs`; 45 and 4 since revisions 13
+  and 14, below). The conditional ones:
   `post_admission_ocr` of a task of schema `0.9` only; an `input_recheck` of any kind only in a pack
   whose `control.json` names `linear_steps` (resource-declarations.md: "until then it, and an input
   recheck under `linear_steps`, are admitted by code"); `dictionary` only in a value whose `type` is
@@ -25321,6 +25322,45 @@ nothing is deleted.
 codes' `since`, this section, its rows of the gate map and its contract sentences say 0.12.61. The
 section keeps 1.376, and nothing of its behaviour changes.
 
+**Revisions 13 and 14** (main `60c28e64` merged, the train 0.12.61a: #463 K1, §1.374, and V1,
+§1.378, which brought the `package` rows 13 and 14; work order `rd-1115/brief-1719-rev1314.md`).
+The table stopped at 12: it passed a select step of a `linear_steps` task and a package's
+`variables` through and counted `goals.json` 12 whatever it held, so a bundle built from such
+content would declare too little, the installer would place it or refuse it for the wrong reason,
+and an earlier Runtime would refuse its package at every run. Three rows now
+(resource-verify.md, "The `package` revision"):
+
+- **13**: in a pack whose `control.json` `execution_mode` is `linear_steps`, the member `select` of
+  an element of a task's `operations`, holding an object. That is where the kernel's admission
+  finds a select step (`TaskOperation.select`, an `Option` that an absent member or `null` leaves
+  empty; `TaskProgram::validate_linear` takes it as `LinearEffect::Select`); that reader is private
+  to the kernel crate, which actinglab does not depend on, so the table reads the same member. A
+  page-graph select step keeps its revision.
+- **14**: a pack's `control.json` with the top-level member `variables`, whatever it holds, as the
+  installer's `place` reads it (`check_variables_declared`; `VARIABLES_PACKAGE_REVISION`).
+- **14**: `goals.json` at the zip's root, by its presence, as `place` reads it
+  (`check_goals_declared`; `GOALS_PACKAGE_REVISION`, 14 since V1 fix round 3), whatever version it
+  holds. A version 1 file is refused by the check (`goal_version_retired` at `/schema_version`:
+  `package bundle --goals` refuses it, so the build fails at its `bundle` step), not by the
+  revision. No content needs 12 any more.
+
+The table has 45 member rows and 4 file rows. Tests (gate map `apps.toml`, "#464 P2 revisions 13
+and 14"): `p2_revision_13_select_step_of_a_linear_steps_pack_only` (over entries needing 11, a
+`linear_steps` select step 13; the same select step in a `navigable_route` pack, and a
+`linear_steps` click step, 11); `p2_revision_14_variables_of_control` (over entries needing 13, a
+control with `variables` 14, without it 13); `p2_revision_14_goals_json` (renamed from
+`p2_revision_12_goals_json`: over entries needing 13, `goals.json` 14, a version 1 document too,
+without the file 13); `p2_a_select_step_declares_13_and_with_variables_14` (a bundle's entries
+whose `linear_steps` pack has a select step: 13 without variables, 14 with them). Adapted, because
+V1 fix round 3 changes what it pinned: `p2_notices_give_package_10_and_goals_give_12`, renamed
+`p2_notices_give_package_10_and_goals_give_14`, whose `goals.json` is version 2 (`package bundle
+--goals` refuses version 1) and whose zip and `build.json` declare [14, 14]. The rows' helper
+`assert_row` takes its base from `assert_row_over`, whose base may lie more than one below the row
+(no content needs 12). The file holds 59 tests; neither renamed test was on main, so no
+`[[retired]]` entry is needed. The merge kept both sides in section order: this section between
+§1.374 and §1.378, the gate map's rows of #464 P2 before #463 V1's, and in `bundle.rs` the build's
+`goals.json` with main's note that its packer declares 14.
+
 **Codes.** Three, in the actinglab fragment, since 0.12.61, review pending:
 `resource_build_output_invalid` (`path`), `resource_build_failed` (`failed_step_count`,
 caused by the steps' outcome) and `resource_build_write_failed` (`path`). No key, word or
@@ -25333,9 +25373,9 @@ strict rows 31, the census's group (a) 62, the commands of actinglab's own rows
 (`engine::COMMANDS`) 64; the built slices 7.
 
 **Tests.** `apps/actinglab/src/tests/gate_464_p2.rs` (gate map `apps.toml`, "#464 P2", "#464 P2
-fix round 1" and "#464 P2 fix round 2"), on a neutral fixture repository made with git (RV-1's
+fix round 1", "#464 P2 fix round 2" and "#464 P2 revisions 13 and 14"; 59 tests), on a neutral fixture repository made with git (RV-1's
 files): `resource verify` of a commit reports what RV-1 pins and `standard-pack build` of it
-writes that zip byte for byte and the same `SHA256SUMS`; `notices/` gives 10 and `goals.json` 12 (and `resource verify` of that commit
+writes that zip byte for byte and the same `SHA256SUMS`; `notices/` gives 10 and `goals.json` 12 (14 since revisions 13 and 14, above) (and `resource verify` of that commit
 still leaves `goals.json` out and declares 10); a tracked change and an untracked file are refused
 `resource_build_failed` caused by `resource_verify_checkout_dirty`, `--out` not made (fix round 1,
 adapted: it pinned an empty `--out`), and an `--out` that holds a file or lies inside the
@@ -25343,7 +25383,7 @@ repository `resource_build_output_invalid`; `build.json` matches the zip and has
 Fix round 1: a commit's `tables/` is carried, listed and needs no revision, and a refused table
 fails the build with the reader's refusal; a commit's `ui.json` is carried and listed, and a
 refused one fails the build with `standard_pack_root_invalid`; one test per row of the revision
-table (47), each over entries one revision below the row: with the row's member, file or value the
+table (47; 49 since revisions 13 and 14, above), each over entries one revision below the row: with the row's member, file or value the
 row's revision, without it one lower. `gate_434_lab5g2a::mcp_tools_from_op_table`'s reader of
 `BUILT_SLICES` is adapted (it finds the list wherever rustfmt breaks the line). Fix round 2: three
 more of revision 7, each over entries needing 6 and differing only in what the row detects (a

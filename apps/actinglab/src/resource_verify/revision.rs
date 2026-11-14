@@ -12,9 +12,12 @@
 //! it cites, and the B train's sections, put into a `package` revision, each where it stands and
 //! under the condition it needs it:
 //!
-//! - **The root**: the notices directory, 10 (Workflow #444); `goals.json`, 12 (Workflow #455
-//!   G-R1); `interrupts.json`'s `limit_cause` and `result`, 6 (Workflow #411 B43, UPD-1a). The
-//!   game root's tables need none (row 6: no member of a pack reads them).
+//! - **The root**: the notices directory, 10 (Workflow #444); `goals.json`, 14 (Workflow #455
+//!   G-R1 brought it at 12; Workflow #463 V1 fix round 3, the row 14, brought version 2, the one
+//!   version the Tools read): by its presence, as the installer's `place` reads it, whatever
+//!   version it holds (a version 1 file is the check's `goal_version_retired`, not the table's);
+//!   `interrupts.json`'s `limit_cause` and `result`, 6 (Workflow #411 B43, UPD-1a). The game
+//!   root's tables need none (row 6: no member of a pack reads them).
 //! - **A pack's loading copy** (`resources/loading.json`, `resources/loading/`), 6 (Workflow #407
 //!   LOAD-1).
 //! - **A member of a pack's file** ([`ROWS`]), read as JSON: of `control.json`, of a task file
@@ -25,6 +28,9 @@
 //!   `repeated_anchor` layout whose anchor is a template target of its pack that declares a mask
 //!   or scales, an `anchors[]` or `verify_templates[]` entry of any task file of the pack, as the
 //!   parser resolves the anchor (fix round 2: [`masked_templates`], [`layout_anchor_masked`]).
+//!   Revisions 13 and 14 (Workflow #463 K1 and V1, after the train 0.12.61a): an operation's
+//!   `select` in a `linear_steps` pack, 13, read where the kernel's admission reads it; a pack's
+//!   `control.json` `variables`, 14, read as `place` reads it.
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
@@ -32,7 +38,7 @@
 use super::bundle::PACKAGE_REVISION;
 use actingcommand_contract::{
     GOALS_PACKAGE_REVISION, NOTICES_PACKAGE_REVISION, STANDARD_PACK_GOALS_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, TaskSchema, notice_relative_path,
+    STANDARD_PACK_INTERRUPTS_FILE, TaskSchema, VARIABLES_PACKAGE_REVISION, notice_relative_path,
 };
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -191,11 +197,11 @@ const fn when(
     }
 }
 
-/// The members of the bundle's files that the `package` rows 4 to 11 and the register sections
-/// they cite, and the B train's sections, put into a revision: each with its file, its place, what
-/// it holds, its condition and its revision (`contracts/resource-verify.md`, "The `package`
-/// revision", lists them with their sources).
-const ROWS: [Row; 43] = [
+/// The members of the bundle's files that the `package` rows 4 to 11, 13 and 14 and the register
+/// sections they cite, and the B train's sections, put into a revision: each with its file, its
+/// place, what it holds, its condition and its revision (`contracts/resource-verify.md`, "The
+/// `package` revision", lists them with their sources).
+const ROWS: [Row; 45] = [
     // 4, Workflow #411 B15 (register §1.110 B15-10, §1.111): a `scheduling_outcome` mapping's
     // `remedy`, `control.json`'s `provides`.
     row(TASK, "remedy", Place::Under("mappings"), 4),
@@ -345,6 +351,27 @@ const ROWS: [Row; 43] = [
     row(POLICY, "lower_bound_column", Place::Anywhere, 9),
     // 11, Workflow #450 FL-1 (§1.343): a task's `field_lists`.
     row(TASK, "field_lists", Place::Top, 11),
+    // 13, Workflow #463 K1 (§1.374; contracts/linear-steps.md, "Select steps"): a select step of a
+    // `linear_steps` task, an operation whose effect is `select`, found where the kernel's
+    // admission finds it: in a pack whose control's `execution_mode` is `linear_steps`, the member
+    // `select` of an element of the task's `operations`, holding the step's declaration, an object
+    // (`TaskOperation.select`, an `Option` that an absent member or `null` leaves empty;
+    // `TaskProgram::validate_linear` takes `click`, `application` and `select` of
+    // `(None, None, Some(_))` as `LinearEffect::Select`). That reader is private to the kernel
+    // crate, which this program does not depend on, so the row reads the same member.
+    Row {
+        files: TASK,
+        name: "select",
+        place: Place::Under("operations"),
+        holds: Holds::Object,
+        condition: Condition::LinearSteps,
+        revision: 13,
+    },
+    // 14, Workflow #463 V1 (§1.378; contracts/package-variables.md): a pack's `control.json`
+    // declares `variables`, the top-level member present, as the installer's `place` reads it
+    // (`check_variables_declared`: `variable_undeclared` below 14); what they declare is the
+    // check's.
+    row(CONTROL, "variables", Place::Top, VARIABLES_PACKAGE_REVISION),
 ];
 
 /// What the rows read of the document they walk.
@@ -468,6 +495,9 @@ fn entry_revision(
     if notice_relative_path(name).is_some() {
         return NOTICES_PACKAGE_REVISION;
     }
+    // `goals.json`, 14 since Workflow #463 V1 fix round 3 (`GOALS_PACKAGE_REVISION`): its name at
+    // the zip's root, as the installer's `place` reads it (`check_goals_declared`), whatever
+    // version it holds; a version 1 file is refused by the check (`goal_version_retired`).
     if name == STANDARD_PACK_GOALS_FILE {
         return GOALS_PACKAGE_REVISION;
     }

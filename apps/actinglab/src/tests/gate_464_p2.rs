@@ -376,11 +376,14 @@ fn p2_the_build_carries_resource_verifys_zip_and_verifys_report_is_as_before() {
 }
 
 // G, P2 second item: a committed `notices/` makes the build's zip declare `package` [10, 10], and
-// a committed `goals.json` (no entry) [12, 12], in its `interfaces.json` and in `build.json`; the
+// a committed `goals.json` (no entry) [14, 14], in its `interfaces.json` and in `build.json`; the
 // zip carries `goals.json` byte for byte. `resource verify` of the commit with `goals.json` still
-// leaves it out and declares 10, as before.
+// leaves it out and declares 10, as before. Revisions 13 and 14 (adapted, renamed from
+// `p2_notices_give_package_10_and_goals_give_12`): the train 0.12.61a made `goals.json` version 2
+// and its revision 14, and `package bundle --goals` refuses a version 1 file
+// (`goal_version_retired`), so the file is version 2 and the range [14, 14].
 #[test]
-fn p2_notices_give_package_10_and_goals_give_12() {
+fn p2_notices_give_package_10_and_goals_give_14() {
     let fixture = Fixture::new();
     fixture.commit("neutral fixture");
     let notice: &[u8] = b"Placeholder notice.\n";
@@ -400,7 +403,7 @@ fn p2_notices_give_package_10_and_goals_give_12() {
 
     fixture.write_json(
         "goals.json",
-        &json!({"schema_version": "actingcommand.goals.v1", "game": "neutral", "entries": []}),
+        &json!({"schema_version": "actingcommand.goals.v2", "game": "neutral", "entries": []}),
     );
     let goals = fs::read(fixture.repo().join("goals.json")).unwrap();
     let head = fixture.commit("a goal declaration");
@@ -408,9 +411,9 @@ fn p2_notices_give_package_10_and_goals_give_12() {
     assert_eq!(built.exit_code(), 0, "{}", built.envelope_json());
     let entries = zip_entries(&fixture.out("goals").join(zip_name(&head)));
     assert_eq!(entries.get("goals.json"), Some(&goals));
-    assert_eq!(declared_package(&entries), json!([12, 12]));
+    assert_eq!(declared_package(&entries), json!([14, 14]));
     let document = fixture.build_json("goals");
-    assert_eq!(document["package"], json!([12, 12]));
+    assert_eq!(document["package"], json!([14, 14]));
     assert!(
         document["root_files"]
             .as_array()
@@ -793,8 +796,10 @@ fn interrupt(entry: &Value) -> Entry {
     )
 }
 
-/// Entries whose content needs exactly `revision`, 3 to 11: nothing for 3, else one member of a
-/// row of that revision in [`BASE_PACK`] (11 and 10 by root and pack files the rows name).
+/// Entries whose content needs exactly `revision`, 3 to 11 or 13: nothing for 3, else one member
+/// of a row of that revision in [`BASE_PACK`] (11 and 10 by root and pack files the rows name; 13
+/// by a select step of a `linear_steps` pack). No content needs 12 since `goals.json` needs 14
+/// ("Revisions 13 and 14").
 fn base(revision: u64) -> Vec<Entry> {
     let pack = |path: &str| format!("packs/{BASE_PACK}/{path}");
     let base_task = |value: Value| json_entry(pack(TASK_FILE), &value);
@@ -815,6 +820,13 @@ fn base(revision: u64) -> Vec<Entry> {
         )],
         10 => vec![("notices/NOTICE.md".to_owned(), b"Notice.\n".to_vec())],
         11 => vec![base_task(json!({"field_lists": []}))],
+        13 => vec![
+            json_entry(
+                pack("control.json"),
+                &json!({"execution_mode": "linear_steps"}),
+            ),
+            base_task(json!({"operations": [{"select": {}}]})),
+        ],
         _ => panic!("no base for revision {revision}"),
     }
 }
@@ -837,7 +849,12 @@ fn names_of(entries: &[Entry]) -> Vec<(&str, String)> {
 
 /// The row of `revision`: `with` needs it over a base one lower, and `without` stays one lower.
 fn assert_row(revision: u64, with: &[Entry], without: &[Entry]) {
-    let below = revision - 1;
+    assert_row_over(revision - 1, revision, with, without);
+}
+
+/// The row of `revision` over the base of `below`: `with` needs `revision`, and `without` stays at
+/// `below`.
+fn assert_row_over(below: u64, revision: u64, with: &[Entry], without: &[Entry]) {
     assert_eq!(revision_of(below, &[]), below, "the base of {below}");
     assert_eq!(
         revision_of(below, with),
@@ -1397,7 +1414,111 @@ fn p2_revision_11_field_lists_of_a_task() {
     );
 }
 
+// Revisions 13 and 14 (after the train 0.12.61a, which brought the `package` rows 13 and 14): one
+// test per new row of the table, each over entries whose content needs the highest revision below
+// the row (no content needs 12 any more: `goals.json` needs 14), and one over a bundle's entries.
+
+// Row 13 (Workflow #463 K1): an operation whose effect is `select` in a pack whose control names
+// `linear_steps`, as the kernel's admission finds it, needs 13 over entries that need 11; the same
+// select step in a `navigable_route` pack (a page-graph select step), and a `linear_steps` pack
+// whose operation is a click, stay at 11.
 #[test]
-fn p2_revision_12_goals_json() {
-    assert_row(12, &[json_entry("goals.json".to_owned(), &json!({}))], &[]);
+fn p2_revision_13_select_step_of_a_linear_steps_pack_only() {
+    let linear = control(&json!({"execution_mode": "linear_steps"}));
+    let select = operation(&json!({"select": {}}));
+    assert_row_over(
+        11,
+        13,
+        &[linear.clone(), select.clone()],
+        &[
+            control(&json!({"execution_mode": "navigable_route"})),
+            select,
+        ],
+    );
+    assert_eq!(
+        revision_of(11, &[linear, operation(&json!({"click": {}}))]),
+        11,
+        "a click step of a linear_steps pack"
+    );
+}
+
+// Row 14 (Workflow #463 V1): a pack's `control.json` that declares `variables` (the top-level
+// member, as `place` reads it) needs 14 over entries that need 13; the same control without it
+// stays at 13.
+#[test]
+fn p2_revision_14_variables_of_control() {
+    assert_row(
+        14,
+        &[control(
+            &json!({"provides": [], "variables": [{"name": "count", "type": "integer"}]}),
+        )],
+        &[control(&json!({"provides": []}))],
+    );
+}
+
+// Row 14 (Workflow #463 V1 fix round 3; adapted from `p2_revision_12_goals_json`, renamed: the
+// requirement moves `goals.json` from 12 to 14): a `goals.json` at the zip's root needs 14 over
+// entries that need 13, whatever it holds, as `place` asks 14 of the file's presence; a version 1
+// document needs 14 too (the check refuses it, `goal_version_retired`, not the revision); without
+// the file the entries stay at 13.
+#[test]
+fn p2_revision_14_goals_json() {
+    let goals = |value: Value| json_entry("goals.json".to_owned(), &value);
+    assert_row(
+        14,
+        &[goals(json!({
+            "schema_version": "actingcommand.goals.v2",
+            "game": "neutral",
+            "entries": []
+        }))],
+        &[],
+    );
+    assert_eq!(
+        revision_of(
+            13,
+            &[goals(json!({
+                "schema_version": "actingcommand.goals.v1",
+                "game": "neutral",
+                "entries": []
+            }))]
+        ),
+        14,
+        "a version 1 goals.json"
+    );
+}
+
+// Revisions 13 and 14, the work order's last point: the entries of a bundle (its `bundle.json`,
+// `applications.json` and one pack) whose pack is `linear_steps` with a select step and declares
+// no variables need 13, the revision the build declares; the same bundle whose pack declares
+// variables needs 14.
+#[test]
+fn p2_a_select_step_declares_13_and_with_variables_14() {
+    let bundle = |control_value: Value| {
+        [
+            json_entry("bundle.json".to_owned(), &json!({"game": "neutral"})),
+            json_entry("applications.json".to_owned(), &json!({"game": "neutral"})),
+            control(&control_value),
+            operation(&json!({
+                "id": "choose",
+                "from": "list",
+                "select": {"confirm": "decision"}
+            })),
+        ]
+    };
+    assert_eq!(
+        revision_of(3, &bundle(json!({"execution_mode": "linear_steps"}))),
+        13,
+        "a select step without variables"
+    );
+    assert_eq!(
+        revision_of(
+            3,
+            &bundle(json!({
+                "execution_mode": "linear_steps",
+                "variables": [{"name": "count", "type": "integer"}]
+            }))
+        ),
+        14,
+        "a select step with variables"
+    );
 }
