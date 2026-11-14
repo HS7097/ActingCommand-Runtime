@@ -144,7 +144,7 @@ actingcommand_contract::outcome_codes! {
         // that declares no retry, saw neither page on a settled screen, a screen the package never
         // recorded (keys `pack_operation_id`, `page_ids`, `attempts`; the host adds
         // `artifact_id`). The owner's ruling on board #463: the ladder starts at once, by
-        // `pack_logic`, as for `page_confirmation_failed` (register §1.365).
+        // `pack_logic`, as for `page_confirmation_failed` (register §1.369).
         ContainedTaskLinearUnrecordedScreen => "contained_task_linear_unrecorded_screen": error / pack_logic_mismatch,
         // Workflow #390 EXEC-2: a declared stability wait ended before its frames held (keys
         // `pack_operation_id`, `timeout_ms`).

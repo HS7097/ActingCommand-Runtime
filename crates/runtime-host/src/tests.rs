@@ -246,7 +246,7 @@ mod gate_mapp1d;
 // before it began, at a lease's expiry or after a keyless observation's capture failure, fences
 // that instance only; the Runtime runs on.
 mod gate_458_close_isolates;
-// Workflow #463 U1 (0.12.60; register §1.365): a linear step on a screen its package never
+// Workflow #463 U1 (0.12.60; register §1.369): a linear step on a screen its package never
 // recorded ends with its own code, names its frame and pauses only its own pair, at once.
 mod gate_463_u1;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
@@ -656,6 +656,9 @@ mod gate_epoch_close;
 // Workflow #453 S11 (0.12.60): the state root remembers its installation: the start's check
 // before anything is written, the claim under the owner lock, and the writers that only check.
 mod gate_453_s11;
+// Workflow #453 S12 (0.12.60): `actingd claim-state-root` hands a state root over, and the next
+// start records the new claim once.
+mod gate_453_s12;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
 // read, and of the epochs before a start that failed after appending its start event.
 mod gate_411_a65;

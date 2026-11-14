@@ -61,8 +61,8 @@ kept there too. The single-location kept files:
 `<ms>` is the operation's Unix milliseconds (`op-<ms>`), so each kept name says which operation
 made it. `.old-<unix_ms>` and `.part` are names the bundle grammar reserves for exactly this
 (`package.rs`, reserved ids), so they never collide with a pack directory. No installer command
-touches the state root or the ledger; `install new` (INST-6) only creates the empty state-root
-directory.
+touches the state root or the ledger; the rescue module's `new` (INST-6, built by Workflow #453
+S4) only creates the empty state-root directory.
 
 ## Common rules
 
@@ -141,7 +141,12 @@ Tools names a URL. A downloaded file is used only after its SHA-256 matches its 
 a mismatch refuses as the local checks do (`digest_mismatch`). No other network access: Tools
 reads no token and no `gh` configuration. INST-1 does not download: its `release verify` and
 `release stage` read a folder the fetch script or a downloader filled; the download comes in a
-later slice (with INST-6's fresh root, whose vision models need it).
+later slice (with INST-6's fresh root, whose vision models need it). **Amended by Workflow #453
+S4** (the coordinator's ruling on board #453, not the owner's words): a fresh root downloads
+nothing, so `install new` and the fresh root's models leave this paragraph, which now holds for
+`release stage` only. The rescue module's `new` takes a release folder or a kept build folder
+that is already there (`--build`); a fresh root's vision and OCR models come by the rescue row
+that places a vision root, never by a download.
 
 Checks (every failure is listed, not only the first; each is a `release_check` token):
 
@@ -689,7 +694,7 @@ once more, or, where the Runtime is down, starts it with `install start` (the re
 | `no_seeding` | a root that ran before (an S0) loaded its tagged state, not seeded again (`{tagged_state}`); with the close's `first_epoch` (Workflow #454) `seed` passes as `load` does (`{tagged_state, first_epoch: true}`); without an S0 it passes (`{tagged_state, earlier_runtime: false}`) | yes |
 | `bindings` | every instance alias of the configuration the start was given bound: the root's file as the checks read it (Workflow #454, 0.12.59: after the swap of `config replace`, `config restore` and `instance add`, the new file; before, the file as the command read it before the swap) | yes |
 | `packs` | every game of the pack register registered, with its pack count | yes |
-| `pauses` | S0's pauses, plus the hold on every instance it took | yes |
+| `pauses` | S0's pauses, plus the hold on every instance it took; (Workflow #453 S3, since 0.12.60) an instance pause `instance.added` on an instance that S0 and the hold leave unpaused and whose entry of the configuration the start was given declares `start_paused: true` is the Runtime's own hold at a first start ([scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start") and is expected, those instances named in the row's `start_paused` (absent when none; any other extra pause still fails the row) | yes |
 | `instructions` | S0's run-time instructions in effect as S0 recorded them, and none the start did not restore (the report's `instructions_dropped`: dropped or superseded). An instruction kept over a default that changed (`instructions_base_changed`, `config_override_base_changed`) is restored: it is named in the row's `base_changed` and never fails it (#421 S2-IF) | yes |
 | `no_dispatch` | no dispatch admitted on a held instance since the start (report; else no lease on one) | yes |
 | `new_keys` | each key the update adds `default`, or `explicit` where the file names it (`config.parameters.*` sources) | yes |
@@ -723,8 +728,10 @@ actingctl install pack plan    --root <root> --zip <bundle.zip> --sums <SHA256SU
 actingctl install pack place   --root <root> --zip … --sums … [--facts …] --plan <id> [--hot [--known-pause …]] [--accept-restart-needed] [--ack-guard <id>]...
 actingctl install pack remove  plan|apply --root <root> --game <game> [--plan <id>] [--hot]
 actingctl install pack restore --root <root> --operation <id>
-actingctl install new --root <new root> --build <kept build dir or verified release dir> [--state-root <dir>] [--vision-from <dir>] [--mumu-root <dir>] [--watchdog] [--lab-authoring true|false] [--lab-debugging true|false]
+actinglab new <new_root> --build <kept build dir or verified release dir> [--new-state-root <dir>] [--mumu-root <dir>] [--lab-authoring true|false] [--watchdog]
 ```
+
+(The last line is the Lab's rescue row, Workflow #453 S4: `actingctl install` has no `new`.)
 
 - **Configuration** (INST-3). Every write goes to the candidate; the first write copies the live
   file and records its SHA-256 in `base.json` (refused `config_base_changed` once the live file
@@ -775,9 +782,9 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     without the list `instances` or `policy.facts.instances` (`config_key`, the list's key);
     (Workflow #453 S1) a configuration without `policy`, absent or `null` (`config_key`
     `policy`); with `policy.facts.instances` empty, the refusals of a first row (below). A
-    parameter missing or malformed is `actingctl_usage_invalid`. With no Runtime running it
-    refuses `runtime_not_running`: the new instance's pause needs the Runtime that starts with
-    it.
+    parameter missing or malformed is `actingctl_usage_invalid`. With no Runtime answering, the
+    stopped rule refuses first ("While the Runtime is stopped", below; before Workflow #453 S3 it
+    refused `runtime_not_running`).
   - **The candidate**: the selected configuration with the entry `{alias, instance_id,
     application_id, instance_index, touch_backend, capture_backend}` appended to `instances` and
     the row
@@ -804,14 +811,15 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     `policy.facts.instances[].instance_id` equals the configured aliases, every `host_id` is a
     declared host) by construction. Nothing else differs: the candidate file, its place, the
     commit and every other refusal are those of a configuration with rows, and a configuration
-    with rows composes the same bytes as before (`runtime_not_running` stays: a commit while the
-    Runtime is stopped is a later slice). `install new` is what writes a first `policy`; this
-    slice writes none.
+    with rows composes the same bytes as before (a commit while the Runtime is stopped came with
+    Workflow #453 S3, below). `install new` is what writes a first `policy`; this slice writes
+    none (Workflow #453 S4: the rescue module's `new`, "Fresh root").
   - **The commit** is `config replace`'s ("The Lab's rescue module"): the candidate, written
     beside the live file as `actingd.config.json.new-<ms>.part` (`<ms>` the command's own
     milliseconds) so that its relative paths resolve as the live file's, passes the live build's
     check-config (`--install-root`; a refusal is `config_refused_by_target` with check-config's
-    outcome as its cause, whole); then the hold of every unpaused instance (`lab-instance-<ms>`,
+    outcome as its cause, whole); then, while a Runtime runs (without one: "While the Runtime is
+    stopped", below), the hold of every unpaused instance (`lab-instance-<ms>`,
     every other pause kept) and its global pause (INST-5b, below), the close, the swap with the
     replaced file kept as
     `actingd.config.json.prev-<ms>` (the candidate is the swap's own part, so nothing else is
@@ -822,7 +830,8 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     Workflow #453 S1 `capabilities_from` is `null` for a first row, the member always present).
     The answer's `added` is the same record.
   - **The new instance starts paused** (the coordinator's ruling of 11-11, not Alice's words):
-    after the start, before `alive` and the release of the hold, it is paused with its own reason
+    with a Runtime running, after the start, before `alive` and the release of the hold, it is
+    paused with its own reason
     `instance.added`, a pause reason name ([scheduling-pause.md](scheduling-pause.md):
     `[a-z0-9_.-]`, 1 to 64 bytes), drained as every pause is; the release hands back only the
     hold's own pauses, so it stays paused until a person lifts it (the console's resume,
@@ -865,6 +874,47 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
     `application_id_from` included). A candidate refused after it was written (by check-config,
     or a Runtime gone) stays beside the live file, kept as every part: nothing deletes it, and
     `leftovers` lists it.
+  - **While the Runtime is stopped** (Workflow #453 S3, since 0.12.60; register §1.365; the
+    coordinator's rulings on board #453, not the owner's words). With no Runtime answering the
+    status read, `instance add` no longer refuses `runtime_not_running`. Before the candidate is
+    written it applies the stopped rule the update applies after its close and `install start`
+    before it spawns (one function, `install::launch::refuse_running`, which `place` while the
+    Runtime is stopped applies too): an `actingcommand-actingd.exe` running under the root refuses
+    `runtime_running` (`path`, `pid`), the state root's owner lock held `owner_lock_held`
+    (`path`), a probe that cannot decide `processes_unreadable` (the failed read as the cause); a
+    status read that fails is `processes_unreadable` as before. Each leaves the root as it was.
+    The candidate is the one above with the new entry, and no other, carrying `start_paused: true`
+    as its last member ([runtime-config.md](runtime-config.md), "An entry that starts paused").
+    The live build's check-config judges it as above, so a live build before 0.12.60 (before
+    Workflow #453 S2), which does not know the member, refuses it: `config_refused_by_target`
+    with check-config's own refusal (`config_decode_failed`) as its cause, nothing swapped, the
+    part kept and listed by `leftovers`. The commit takes the writer lock, refuses an unfinished
+    operation and applies the stopped rule again (the candidate's member keeps it on this path, so
+    a Runtime that came up since the first read is refused here, never held), then opens one
+    `config_replace` operation without hold, S0 or guards: the steps `stage_file` (nothing to
+    copy: the candidate is the part) and `swap_file` (the live file kept as
+    `actingd.config.json.prev-<ms>`, the part renamed in, its SHA-256 checked), `current.json`
+    retired at the end; its input `instance_add` records `start_paused: true` (absent for a
+    candidate committed with a Runtime). Nothing is started and nothing is paused: the Runtime's
+    next start holds the instance with `instance.added` ([scheduling-pause.md](scheduling-pause.md),
+    "Pauses held at a first start") until a person resumes it, and the post-start row `pauses` of
+    `install start` expects that pause ("The post-start checks (INST-2)"). The answer:
+    `install_command_done` (`install_instance_add`, `install_operation_id`, `alias`, `game`), the
+    steps `check_config` and `swap` (no `pause_added`), `backup`, `runtime_running: false` and
+    `added`. A failure after the first rename is `install_operation_interrupted`, the journal and
+    `current.json` kept for `resume` and `undo`; while it is unfinished the watchdog stands aside
+    (`config_replace` is off row 7a″'s pass list). The `resume` and the `undo` of a
+    `config_replace` begun while no Runtime answered (its journal holds no hold and no S0: this
+    path, and `config replace` and `config restore` while stopped) take the writer lock and apply
+    the same stopped rule before anything is moved (`owner_lock_held`, `runtime_running`,
+    `processes_unreadable` of `install_resume` or `install_undo`; no status read comes first, so a
+    running Runtime is `owner_lock_held`), as those of `place` while stopped do; those of a
+    `config_replace` begun with a Runtime are unchanged. A crash between the swap's two renames
+    leaves no live configuration: `undo` (which then reads the file the swap kept, the input
+    `backup`) puts it back, while `resume` cannot load the root (`config_unreadable`), a known
+    limit of every `config_replace` that a later slice lifts. With a Runtime answering, the
+    candidate, its commit and its answer are as before: no entry gains the member. Not on the
+    production root before LAB-7 ("Journals across versions").
   - **Taking it back**: `config restore <backup>` puts the kept file back by the same path. Its
     post-start checks judge the pauses from before the restore, so the instance it removes shows
     as a `pauses` failure (the hold's pause on it is not restored): it ends `post_check_failed`
@@ -880,11 +930,106 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
   declared `package` range, never a digest (done; `instances_not_idle`, the instances staying
   paused; the caveat `pack_full_check_skipped`). `remove` renames the game root
   `packages\<game>.old-<ms>`; `restore` puts one pack operation's kept items back.
-- **Fresh root** (INST-6). `new` refuses a non-empty root or state root, copies and verifies the
-  build into `runtime\`, `tools\` and `install\builds\<c>\`, writes the first configuration (the
-  salt 32 bytes from the OS CSPRNG, never shown), runs its check-config and writes `state.json`;
-  nothing is started (done). The vision and OCR models come from
-  `--vision-from` or from the downloads above.
+- **Fresh root** (INST-6; built by Workflow #453 S4, since 0.12.60; register, "Slice #453 S4"; the
+  coordinator's rulings on board #453, not the owner's words). Only the Lab's rescue module serves
+  it, as the row `new <new_root> --build <dir> [--new-state-root <dir>] [--mumu-root <dir>]
+  [--lab-authoring true|false] [--watchdog]`, so that the Lab's command line and its MCP server both
+  have it; `actingctl install` gains nothing (no `install new`). The positional is `new_root` and
+  the state root's option is `--new-state-root` (parameter `new_state_root`), never `--state-root`:
+  the module refuses a parameter named `root` or `state_root` on every row (the coordinator
+  accepted the name after the review); the row declares every parameter. It is the one rescue
+  row served without a located root: it acts on the root it names, not on the root of the program
+  that runs it, so the release's own `actinglab.exe` (the Tools zip unpacked anywhere) and the
+  Lab's MCP server run it before any root exists. Nothing is started; the vision and OCR models
+  are not this row's (the vision root is placed by its own rescue row, never by a download).
+  - **`--build`**: a release folder that verifies, read by the release reader as `release verify`
+    reads it (both zips, `SHA256SUMS`, and `release-facts.json` in the folder when it is there;
+    without it the answer carries the caveat `release_unconfirmed` as a `note` and the kept build
+    is recorded `origin` `local_build`), its zips extracted into a new work folder that is left in
+    place and named (`work_dir`); or a kept build folder (`runtime\BUILD-MANIFEST.json` in it,
+    checked against its own manifests, its `release.json` taken with it). The build's Runtime
+    member must carry the first configuration's template, `actingd.config.first.json`.
+  - **The state root**: `--new-state-root`, else `<new_root>\state`, written absolute.
+  - **Refused before anything is written** (`install_command_refused` of `install_new`, each its
+    own token): a `new_root` that exists and is not an empty folder, `root_not_empty` (`path`; a
+    root that holds an unfinished operation of `new` also names it, `install_operation_id`, and
+    `next` the ways on); a state root that exists and is not an empty folder,
+    `state_root_not_empty` (`path`); a `--build` that does not verify, the release reader's
+    `release_check_failed` (`release_checks`, the reader's refusal as the cause, its `failures`
+    beside), or for a kept build folder, a UI release or a build without the template
+    `build_invalid` (`path`, `count` and `files` for files that differ); an empty `actingd-config`
+    edge `I ∩ R` between the running installer and the build, `interface_edge` (`commit_sha`,
+    `count`, the row in `edges`; "Interface checks"). A refusal that comes after the release
+    reader unpacked a release folder (the edge, a UI release, a build without the template, a
+    facts file or a manifest that cannot be read) names that work folder, `work_dir`, left in
+    place (fix round 1); nothing under the new root or the state root is written.
+  - **One journalled operation** of kind `new` (off row 7a″'s pass list, so no watchdog starts a
+    Runtime on the root while it is unfinished; a watchdog never starts a root that never started),
+    its initiator recorded, under `install\writer.lock`, its steps in this order: `copy_build` (the
+    build's listed files and both manifests into `install\builds\<c>.new-<ms>.part`, with its
+    `release.json`), `verify_tree` of that part, `place_build` (renamed `install\builds\<c>`), one
+    `stage_file` and then one `swap_file` for every file of the kept build, both manifests included,
+    into `tools\` and `runtime\` (all new, no `.old`), `verify_tree` of the live tree,
+    `write_config`, `create_state_root`, `create_vision_root` (fix round 1, below) and
+    `record_state` (`state.json` v1: the live build
+    installed by this operation, the kept build with `origin` `release` or `local_build` and its
+    tag, `packs: []`, the configuration's `config_sha256`). After the first write a failed step
+    ends `install_operation_interrupted`, the journal and `current.json` kept, `next` naming
+    `actingctl install resume|undo --root <new_root> --operation <id>` (until LAB-7; any build of
+    this release or later runs them, and once the configuration is in place the new root's own
+    module answers `op resume` and `undo`). `resume` continues each step by its postcondition;
+    `undo` (the unfinished operation, or the last finished one, under the writer lock and the
+    stopped rule: `owner_lock_held`, `runtime_running`, `processes_unreadable`) sets each written
+    item aside from the last, `state.json.rolledback-<ms2>`, the vision root's folder as
+    `vision.rolledback-<ms2>`, the state root's folder as
+    `<folder>.rolledback-<ms2>` when the operation made it (one that was there, empty, stays),
+    `actingd.config.json.rolledback-<ms2>` and the part `actingd.config.json.abandoned-<ms2>`, each
+    program file `.rolledback-<ms2>`, each part `.abandoned-<ms2>`, the kept build
+    `<c>.rolledback-<ms2>`: nothing is deleted, and the root's folder, its `install\` and the
+    journal stay.
+  - **The first configuration** comes from the template the Runtime member ships beside the
+    example, `actingd.config.first.json` (the example is unchanged: CI starts the Runtime from it):
+    the example's members, a composer-mode `policy` (no `catalog`) with one host and no instance,
+    and `standard_packs.root` `packages`, relative to the configuration's folder, the new root.
+    The host's `cpu_available_milli`, `gpu_available_milli` and `io_available_milli` are 1000
+    each, the most a host may declare: the evaluator's placement check only asks that a task's own
+    load fit them, and the performance controller overlays a host's responsiveness, third-party
+    pressure and heavy-dispatch budget, never these. The command fills only `state_root`
+    (absolute), `secret_fingerprint_salt` (32 bytes of the operating system's generator written
+    as 64 lowercase hexadecimal digits; never printed, journalled, diffed, logged or answered),
+    `lab_module_authoring` (`--lab-authoring`; absent: `true`) and `mumu_root` when
+    `--mumu-root` is given; nothing in Tools names a configuration value. `write_config` writes it
+    beside the live file as `actingd.config.json.new-<ms>.part` (a part an earlier attempt wrote
+    is checked as it is, its salt kept), runs the new live build's check-config with
+    `--install-root <new_root>` and renames it `actingd.config.json`; a refusal ends the operation
+    refused, `config_refused_by_target` (`path` the part, check-config's outcome as the cause),
+    the part kept, `next` naming its undo; a check-config that does not answer is
+    `install_operation_interrupted` with `check_config_unanswered`.
+  - **Not this command's** (Workflow #453 S11, [state-root-installation.md](state-root-installation.md)):
+    `new` mints no installation identity (`install\identity.json`) and writes no state-root record
+    (`installation.json`). It creates the state root's folder, empty, and writes `install\state.json`,
+    which makes the root an installation root: its first start mints the identity and claims the
+    state root.
+  - **The empty vision root** (fix round 1; the coordinator's ruling of 11-14 after the review of
+    `vision place`, not the owner's words). The rescue row that places a vision root refuses one
+    that does not exist and never creates it, so `new` creates the vision root a start resolves by
+    default, `<new_root>\vision` ([vision-model-folders.md](vision-model-folders.md), "Vision
+    root": a `vision` section without `root`, a daemon run from an install root), empty, as the
+    step `create_vision_root`, when the template's `vision` section names no `root` of its own (the
+    shipped template has no `vision` section). It changes no start: a configuration without a
+    `vision` section is never resolved against it, and with one, a missing root and an empty one
+    are refused alike (`vision_root_unavailable`: the start lists `models\`, which neither holds).
+  - **`--watchdog`**: after the operation ended and the writer lock is released, the rescue row
+    `watchdog install` for the new root, last; it registers the task and starts nothing (a root
+    that never started stays down, [runtime-watchdog.md](runtime-watchdog.md), row 3). Its report
+    is the answer's `watchdog`; a registration that failed is the answer's top, the root's members
+    beside it, and `next` names the row again.
+  - **Its answer**: `install_command_done` (`install_new`, `install_operation_id`, `commit_sha`,
+    `installation_changed: true`) with `operation_id`, `root`, `state_root`, `config_sha256`,
+    `lab_options_enabled` (`["lab_module_authoring"]` or `[]`), `build` (`commit`, `origin`, `tag`,
+    `source`), `check_config`, `work_dir` for a release folder, and `next` naming the rows that
+    follow, each run by the new root's own `tools\actinglab.exe`: `place` (standard packs),
+    `instance add` and `up`.
 - **Lab options** (Alice, ruling 44, #421 comment 6380164338; INST-3 and INST-6). The CLI install
   asks for each Lab option (`lab_module_authoring`, `lab_module_debugging`) in the middle of
   `install new` when it runs interactively (its console is a terminal), with the labels of the
@@ -900,8 +1045,11 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
   **always** passes both, `--lab-authoring true|false` and `--lab-debugging true|false`, with the
   person's choice on its Lab page; it never leaves either out, so the non-interactive default
   (both on) never decides for it. It shows the result's `lab_options_enabled` to the person as
-  the CLI returns it, neither recomputed nor filtered. `install new` is not built yet (INST-6,
-  slice R-15e), so this rule has no code before it; no flag of an existing command changes.
+  the CLI returns it, neither recomputed nor filtered. Workflow #453 S4 built the command as the
+  rescue row `new` ("Fresh root" above): it asks nothing and takes `--lab-authoring true|false`
+  only, absent `true`; `lab_module_debugging` is retired ([lab-two-entries.md](lab-two-entries.md)
+  §8.3) and `--lab-debugging` is refused as an unknown option, so a wizard passes
+  `--lab-authoring` alone. No flag of an existing command changes.
 
 ## The Lab's rescue module (Workflow #434 LAB-3, since 0.12.48)
 
@@ -973,6 +1121,22 @@ the rescue face:
   `place`'s failed checks), with `kept: true`, `next` naming the ways out below (and `undo` where it
   applies). A `release-hold` that finds no Runtime answering (or cannot read its status) refuses
   `runtime_not_running`, its hold kept: `kept: true`, `next` with `up` when none runs.
+- **A hand-back the Runtime answers by holding the instance again** (Workflow #453 S3, since
+  0.12.60; register §1.365; the coordinator's ruling 4 on board #453). From 0.12.60 the Runtime
+  answers the resume of an instance whose entry declares `start_paused` and that its start left
+  unapplied (under the hold's pause) by lifting the hold's pause and holding the instance with
+  `instance.added` ([scheduling-pause.md](scheduling-pause.md), "Pauses held at a first start"):
+  `SchedulingResumed` with the new pause's revision and the self-check's `failure_code`
+  `dispatch_paused_instance`. Every hand-back of the module's own hold (`release-hold`, a
+  composite's release, the hand-back after a refusal) reads that answer: the instance is not
+  among the release's `resumed` (so not in `release-hold`'s `count`, and its hand-back row says
+  `resumed: false`) but in `held_again`, `[{alias, reason, revision}]` as S0 records a pause, the
+  reason `instance.added` and the revision the Runtime answered: it stays paused as a newly added
+  instance and waits for a person's resume. `held_again` is absent when no instance was held
+  again, so every other release records and answers as before. No vocabulary word is added.
+  `actingctl install release-hold` (its revision-1 face, whose answer is the step's evidence) is
+  unchanged and still lists such an instance as resumed, while the instance really stays paused
+  with `instance.added`: the safe side.
 - **Ways out of a kept hold** (fix 2). Every answer of the module whose own pauses stay says `hold`
   `kept: true` and gives in `next` only ways out that work today, none naming another party's
   hold: `release_hold`, the module's own `release-hold <reason>`; until LAB-7 deletes actingctl,
@@ -1009,7 +1173,15 @@ the rescue face:
   before anything changes, then stops with hold, stages it as `actingd.config.json.new-<ms>.part`,
   swaps it in with the replaced file kept as `actingd.config.json.prev-<ms>`, starts, waits for
   `alive` and releases (the file's content is never printed, only its SHA-256); `config restore
-  <prev>` does the same with a kept `.prev-<ms>`; `place <bundle.zip>` checks the `package` edge
+  <prev>` does the same with a kept `.prev-<ms>`; with no Runtime answering both swap the file
+  alone, and (Workflow #453 S3, since 0.12.60; register §1.365) only after the stopped rule,
+  under the writer lock and before the operation opens: an `actingcommand-actingd.exe` under the
+  root refuses `runtime_running` (`path`, `pid`), the state root's owner lock held
+  `owner_lock_held` (`path`), a probe that cannot decide `processes_unreadable`, nothing swapped
+  (before, one status read decided, and a Runtime that was starting, which answers none yet,
+  could have its file swapped under it), and the `resume` and `undo` of such an operation apply
+  the rule again first ("Instances, the first slice", "While the Runtime is stopped");
+  `place <bundle.zip>` checks the `package` edge
   first (of the zip's `interfaces.json` it reads `schema_version`, which must be
   `actingcommand.component-interfaces.v1`, and `speaks`, where, by the parse rules of
   [component-interfaces.md](component-interfaces.md), every value under any name must be a pair of
@@ -1055,8 +1227,10 @@ the rescue face:
   slice; "Configuration, instances, packs and a fresh root", "Instances, the first slice") composes
   the candidate and commits it as `config replace` does, with the new instance paused after the
   start (step `pause_added`) before the release, and its hold's global pause kept across the
-  restart until that release (INST-5b). `--detach` runs the module's own command again
-  through the WMI start with the same initiator. The download stays outside.
+  restart until that release (INST-5b); with no Runtime answering (Workflow #453 S3) after the
+  stopped rule, its new entry declaring `start_paused`, by the swap alone. `--detach` runs the
+  module's own command again through the WMI start with the same initiator. The download stays
+  outside.
 - **The composition after a placement** (Workflow #453 S5, since 0.12.59; register §1.345; the
   coordinator's rulings of 11-13 on board #453, not the owner's words). The journal of `place`
   records, as the input `bound`, the instances the running Runtime's status binds to the bundle's
@@ -1208,25 +1382,140 @@ the rescue face:
   installation check or slot lock, `--install-root`, its command line, among them more than 64
   models the packs need or a model name no folder may have, its own registry), printed one
   without its lists, did not run, or was ended), its outcome or the child's failure as the cause;
-  `vision_root_unresolved` (only `vision check`; fix 2: decided by the stage actingd names, not by
-  what its refusal is not) when actingd refused at a stage, which it names only where it loads the
-  configuration (`config_load`), assembles its `vision` section (`config_assemble`) and resolves
+  `vision_root_unresolved` (of these two rows only `vision check`, and `vision place` below; fix 2:
+  decided by the stage actingd names, not by what its refusal is not) when actingd refused at a
+  stage, which it names only where it loads the configuration (`config_load`), assembles its
+  `vision` section (`config_assemble`) and resolves
   the vision root (`config_vision`): its outcome, for example `vision_root_unavailable`, as the
   cause;
   `config_unreadable` for a `standard_packs.root` that cannot be listed or a `bundle.json` whose
   kind cannot be read; `pack_invalid` (`game`, `path`) for a game root whose check gives no
-  models. Nothing is written, downloaded or placed; placing the files is a later slice's.
+  models. Nothing is written, downloaded or placed; placing the files is `vision place`'s (below).
+- **`vision place --from <dir>`** (Workflow #453 S9, since 0.12.60; register §1.367;
+  [vision-model-folders.md](vision-model-folders.md), "Placing a vision root from a folder"; the
+  coordinator's rulings on board #453, not the owner's words). A row of this module only
+  (`writes` true, `runtime` `offline`); `actingctl install` has no such command. It fetches
+  nothing and names no address.
+  - **Which files, and where.** The live build's `actingd vision check --config <the root's
+    configuration> --install-root <root>` (as `vision check` runs it, without `--model`, within its
+    160 s and ended there) resolves the configured vision root and its provider as a start does,
+    and answers every file of that provider's manifest with its size, SHA-256 and state there; the
+    files whose state is not `ok` (`missing`, `sha256_mismatch`, `unreadable`) are the ones to
+    place. A `directml` configuration's manifest holds every file of the `cpu` one and DirectML's
+    own, so a configuration that can fall back to the CPU (`gpu_fallback` `cpu`) gets what both
+    need; one without a `vision` section, or of `cuda`, has no manifest. The module links no vision
+    crate. A refusal of actingd at a stage is `vision_root_unresolved` (a vision root that does not
+    exist yet included: actingd resolves it as a start does, so its folder must exist), any other
+    failure `vision_report_unanswered`, as for `vision check`; both before anything is written.
+    **The row never creates the vision root** (the coordinator's ruling on board #453): to create
+    it, it would have to resolve the configured root itself, repeating actingd's resolution, or
+    write before it holds the writer lock; the slice that builds a fresh root creates the folder.
+    **A file in its place that cannot be read** (`unreadable`) is treated as one that differs (the
+    same ruling): renamed aside under its kept name `<dst>.old-<ms>` and replaced. When that rename
+    itself fails (another process holds the file), the step fails after the earlier steps wrote:
+    the command ends `install_operation_interrupted` with the OS failure as its cause, and the
+    operation is unfinished, so `op resume` (once the file is free) finishes it and `undo` reverses
+    what it placed.
+  - **`--from`** is laid out as a vision root: each file at its `vision_root_path` below it. Before
+    anything is written, each file to place is read from it and compared with its pin, its size
+    and then its SHA-256: one missing, of another size or another SHA-256, or unreadable refuses the
+    whole command `vision_source_invalid` with its `path` (the answer's `source` names its place,
+    its state and its pin; an OS failure is the cause); a `--from` that is no folder is refused the
+    same way. A file below `--from` that the manifest does not name is neither read nor copied; the
+    answer's `ignored` counts them. Every file of this build's manifest is pinned, its license
+    files too (S7, "The manifest"); a report that names a file without a size and a SHA-256 is
+    `vision_report_unanswered`, so no file is ever copied unverified.
+  - **While stopped.** Then, under the writer lock, with no operation unfinished, the stopped rule
+    of the update path (as `place` applies it while no Runtime answers: `owner_lock_held`
+    (`path`), `runtime_running` (`path`, `pid`), `processes_unreadable`), before anything is
+    written. **The files to place are taken again under the lock**, each manifest file of the
+    vision root compared with its pin as actingd compares it (its size, then its SHA-256): another
+    run that placed them while this one waited for the lock leaves none, and the answer is then a
+    complete root's (no operation opened, so no `undo` of this run could set aside what the other
+    placed); a file found wrong only then is verified below `--from` first, as above.
+  - **The operation** (kind `vision_place`; off row 7a″'s pass list, so the watchdog stands aside
+    while it is unfinished): its inputs `commit`, `provider`, `vision_root`, `from`, `ignored` and
+    `config_sha256`; no plan, no S0, no guards; one `vision_file` step per file to place, in the
+    manifest's order (the file copied from `--from` to `<dst>.new-<ms>.part` and checked, a file in
+    its place renamed `<dst>.old-<ms>` and kept, the part renamed in and checked again), then
+    `post_check`, the same `actingd vision check`: one row `vision_check`, passed when every
+    manifest file is `ok`, every manifest model's identity matches and the vision root is the one
+    placed into. Done is `install_command_done` (`install_operation_id`, `installation_changed`
+    true) with `provider`, `vision_root`, `from`, `ignored`, `placed` (each step's evidence: the
+    place, the file and the kept names), `checks` and `next` (`undo`). A failed row ends the
+    command `post_check_failed` (`count`), its step closed with what it read, the files placed and
+    `next` naming `undo`. A step that fails after a change on disk is
+    `install_operation_interrupted`; a copy or a placed file that does not hold its pin is its
+    cause as `vision_source_invalid` (`path` that file).
+  - **A complete root** answers `install_command_done` with `installation_changed` false,
+    `placed` `[]` and actingd's `report` (as actingd read the root before the lock), and opens no
+    operation.
+  - **`resume` and `undo`** (`op resume`, `undo`) take the writer lock and apply the stopped rule
+    again before anything is moved. A crash between the two renames of a step leaves the file of
+    before renamed `.old-<ms>` and the part waiting: `resume` renames the part in, `undo` renames
+    the `.old-<ms>` back. `undo` sets each placed file that holds its pin aside as
+    `.rolledback-<ms2>`, puts a kept `.old-<ms>` back and sets a part left behind aside as
+    `.abandoned-<ms2>`. Nothing is deleted, and no file the manifest does not name and no other
+    folder under `models\` is touched. `leftovers` lists no item of a vision root, as it lists
+    none of a game root.
+  - It falls under the operating rule until LAB-7 ("Journals across versions" below): not used on
+    the production root.
+- **`state-root claim [--new-identity]`** (Workflow #453 S12, since 0.12.60; register §1.368;
+  [state-root-installation.md](state-root-installation.md), "Handing a state root over"; the
+  coordinator's rulings on board #453, not the owner's words). `writes`, `irreversible`, `runtime`
+  `offline`; no `actingctl install` command. It reads the root's configuration as every row does,
+  applies the update path's stopped rule (`owner_lock_held`, `runtime_running` with the image's
+  `pid`, `processes_unreadable`), then runs the live build's `actingd claim-state-root --config
+  <the root's configuration> --actor <initiator>` (and `--new-identity` when given) within
+  `install.child.check_config_timeout_ms`, as `unlock` runs `unlock-owner`: no installer command
+  writes into a state root, actingd does. A completed claim is `install_command_done` (operation
+  `install_state_root_claim`, `path` the state root, `installation_changed` as actingd's
+  `changed`, actingd's outcome `state_root_claimed` as its `related` link) with actingd's report
+  as `report`, the initiator as `actor` and, when a record was replaced, its claim time as
+  `previous {claimed_at_unix_ms}` (when it could be read) and the note `install_caveat_noted` with
+  `install_caveat` `fingerprints_discontinuous` (`path` actingd's `kept_record`, the record set
+  aside) whenever a record of another installation or one that could not be read was replaced,
+  and (fix round 1) whenever a record was written while the state root held an old record an
+  earlier hand-over kept (`path` the newest such record): the ledger's records that
+  carry fingerprints were made with the salt of the configuration that wrote them, and the command
+  cannot know whether this configuration's salt is the same. actingd's refusal is the answer, as
+  `unlock`'s is; no report from actingd (it did not run, printed none or was left running at its
+  deadline) is `install_command_refused` with `install_refusal` `state_root_claim_unanswered`
+  (`path` the state root), the child's failure as the cause or `pid` and `config_key`. The row
+  itself writes nothing in the root.
+- **`op status --state-root-installation`, the member `state_root`** (Workflow #453 S12, since
+  0.12.60; fix round 1, the coordinator's ruling after the review). **Only when the caller asks
+  with the switch `state_root_installation`** (off by default, declared in the operation table,
+  read by the module and never handed to `install status`) does the rescue module's `op status`
+  also read the live build's check-config of the root's configuration (`--install-root <root>`)
+  and answer `state_root {path, installation}`: the configured state root and its installation
+  state as check-config reports it, `claimed_by_this`, `unclaimed` or `not_installed` (`null` from
+  a build before 0.12.60, whose report has no such member); when check-config refuses (another
+  installation's record is `state_root_installation_mismatch`, a file that cannot be read
+  `state_root_installation_record_invalid`, each at stage `config_state_root`) or gives no answer,
+  `installation` is `null` and `check_config` holds that outcome. **Without the switch it starts
+  no process and its answer is byte for byte what it was before S12.** With the switch while
+  `install status` names an unfinished operation, the answer is the status without the member and
+  no process is started: the update path counts any actingd under the root as a running Runtime
+  (the stopped rule, the plan's running images), and a background operation's answer tells its
+  caller to follow it with `op status`, so a check-config started then could make the operation's
+  stop answer `runtime_running` or its plan count one Runtime too many; the answer's own
+  `unfinished` says why the member is not there. Read only; `actingctl install status` is
+  unchanged.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
   `install-root` raise, component-interfaces.md covers the A/B roots only). An installer of
   v0.12.47 or older does not read a journal the module wrote (its `initiator`, `one_way`, the
-  kinds `config_replace` and `pack_place`): the testing phase keeps no old-version compatibility
+  kinds `config_replace` and `pack_place`; since 0.12.60, Workflow #453 S9, the kind
+  `vision_place` and its step `vision_file`, which a build before 0.12.60 does not read either):
+  the testing phase keeps no old-version compatibility
   (Alice, 2026-10-11). `actingctl install` writes its journals byte for byte as before, and this
   build reads the older ones. **Operational rule until LAB-7:** production keeps deploying through
-  `actingctl install` (the coordinator's deploy kit); the module's `deploy`, `rollback`, `place`
-  and `config replace` are not used on the production root, so no journal an older installer
-  cannot read appears there.
+  `actingctl install` (the coordinator's deploy kit); the module's `deploy`, `rollback`, `place`,
+  `config replace` and (Workflow #453 S9) `vision place` are not used on the production root, so
+  no journal an older installer cannot read appears there. Workflow #453 S12: nor is its
+  `state-root claim`, until LAB-7.
 
 ## Interface checks
 
@@ -1241,7 +1530,7 @@ will run, **B** a placed bundle (the register's declared range) or a new one (it
 | update, rollback | `ledger`: Rp.max ∈ R\*; R\*.max > Rp.max needs `--accept-ledger-one-way` (journalled; it closes later rollbacks by the same edge). `runtime-outcomes`: R\*.max ∈ I. `install-control`: I ∩ Rp and I ∩ R\*. `runtime-client`: I ∩ Rp and I ∩ R\*. `package`: every placed B.max ∈ R\* (unknown: the warning). `actingd-config`: C passes R\*'s check-config, and I's key table knows every key C names in the sections the configuration mechanism resolves. Each build's Runtime and Tools manifests declare equal `speaks`. |
 | config commit, restore | C passes the check-config of the build in `runtime\`. |
 | pack place | B.max ∈ the live Runtime's `package` and ∈ I's, checked before the layout; a bundle that carries `notices/` declares B.max ≥ 10 (`pack_invalid`, `notice_undeclared`); from 0.12.60 a bundle that carries `goals.json` declares B.max ≥ 12 (`pack_invalid`, `goal_undeclared`). |
-| new | I ∩ R for `actingd-config`; R's check-config passes. |
+| new | I ∩ R for `actingd-config` (Workflow #453 S4: `installer_meets_next`, before anything is written); R's check-config passes the first configuration (`write_config`). |
 
 An edge row is `{interface, check, result: pass | fail | warning, parties: [{party, source,
 range}]}` (`source` `manifest`, `register` or `bundle`); every failed edge names both parties,
@@ -1287,7 +1576,9 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 | `pack place` (INST-4) | any (cold when stopped; `--hot` when running) | — | taken | hot: its guards |
 | `start` (INST-2) | stopped | unlocked | taken (or already held) + `run.lock` | configuration passes check-config |
 | `stop` (INST-2) | running | — | not taken alone; taken inside an update | its guards |
-| `new` (INST-6) | — | — | created | empty root and state root |
+| `new` (INST-6; the rescue row, Workflow #453 S4) | — (never started) | — | created | the root and the state root absent or empty folders; the build verifies; I ∩ R for `actingd-config` |
+| the rescue module's `config replace`, `config restore` (LAB-3; Workflow #453 S3) | running (stop with hold), or stopped: no actingd under the root | unlocked when stopped | taken | the file passes the live build's check-config; stopped judged under the writer lock before the operation opens |
+| the rescue module's `instance add` (INST-5; Workflow #453 S3) | running (stop with hold; the new instance paused after the start), or stopped: no actingd under the root (the new entry declares `start_paused`) | unlocked when stopped | taken | stopped judged before the candidate is written and again under the writer lock; the candidate passes the live build's check-config |
 
 ### Locks and the watchdog
 
@@ -1309,7 +1600,9 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
   (INST-1b-F fix round 1, review S1 F7); a `current.json` that cannot be read still does. The
   code lists the kinds that pass (`release_stage`, `adopt`, `stop`, `start`, `release_hold`);
   every other kind stands aside. R-15c adds `prepare` and `clean` to the pass list; `convert` and
-  `restart` stay off it (design v4.1 §3.4; "The A/B layout" below).
+  `restart` stay off it (design v4.1 §3.4; "The A/B layout" below). Workflow #453 S4's kind `new`
+  is off it too: a root `new` is building is not started (a watchdog before the kind reads the
+  file as unreadable and stands aside as well).
 - `owner.lock` is only read, never locked. The ledger verification and check-config take their
   own locks as their contracts say.
 
@@ -1422,7 +1715,9 @@ The person's notice before a change (D0) is no guard; every plan prints the fact
 
 ### Secrets, identifiers, digests
 
-The salt never leaves the configuration file and the candidate. No device serial is read or
+The salt never leaves the configuration file and the candidate. The rescue module's `new`
+(Workflow #453 S4) makes a fresh root's salt from 32 bytes of the operating system's generator and
+writes it only into the first configuration's part. No device serial is read or
 written by any install command. No package digest is computed, pinned or compared; zip SHA-256
 values appear only as the download check's evidence.
 
@@ -1464,8 +1759,12 @@ any other schema (`state_invalid`).
 The Lab's rescue module (LAB-3) adds two members after `installer`, which `actingctl install`
 never writes: `"initiator": "<word>"` (lab-two-entries.md §4.1) and `"one_way": true` (a one-way
 ledger edge it applied; absent otherwise); its undo record carries `"initiator"` too. Kinds
-`config_replace` and `pack_place` are the module's. An older reader that refuses unknown members
-does not read such a journal; `install-root` does not change (lab-two-entries.md, open point 5).
+`config_replace` and `pack_place` are the module's, and (Workflow #453 S4) `new`, whose inputs
+record the build, the folder it is copied from, the state root and the options, never the salt;
+its `record_state` step's undo sets `state.json` aside (there is no previous state); and (Workflow
+#453 S9, since 0.12.60) `vision_place` with its step `vision_file`. An older reader that refuses
+unknown members does not read such a journal; `install-root` does not change (lab-two-entries.md,
+open point 5).
 LAB-3 fix 1: the evidence of the module's `pause` step carries `"own_pauses": {"reason",
 "owner_epoch", "revisions": {"<alias>": <revision>}}`, the pauses it set; with the step's
 `drained` it names the instances the module's release may hand back, matched by reason and alias
@@ -1508,6 +1807,10 @@ state alone, so a step repeated after a crash is either already true or done aga
 | `reverse_files` | the previous build verified in place | reverse what is not yet reversed | — |
 | `config_swap` | INST-3 | | |
 | `pack_item` | INST-4, as `swap_file` per item | | |
+| `write_config` | Workflow #453 S4 (`new`): `actingd.config.json` is in place | check the part (written first when it is not there) with the live build's check-config, then rename it in | `actingd.config.json` → `.rolledback-<ms2>`; its part → `.abandoned-<ms2>` |
+| `create_state_root` | Workflow #453 S4 (`new`): the state root's folder is there | create it | the folder → `<folder>.rolledback-<ms2>` when the operation made it |
+| `create_vision_root` | Workflow #453 S4 fix round 1 (`new`): `<root>\vision` is there | create it | the folder → `vision.rolledback-<ms2>` |
+| `vision_file` | Workflow #453 S9: `<dst>` holds the pin's SHA-256; a file of before is kept as `<dst>.old-<ms>` | a part that is not the file set aside `.abandoned-<ms>` and written again; finish whichever half is missing | `<dst>` holding the pin → `.rolledback-<ms2>`; `.old-<ms>` → `<dst>`; a part → `.abandoned-<ms2>` |
 
 `<ms2>` is the undo's own Unix milliseconds. Crash points: before the first swap the live tree is
 untouched (resume restages, undo abandons the parts); between swaps every file is old or new,
@@ -2704,7 +3007,9 @@ fragments and this build's enums; the forwarder's codes are in
 - vocabulary `install_rollback_build_material` (new): `kept`, `cleaned`.
 - vocabulary `install_operation_kind` (new): `release_stage`, `adopt`, `update`, `rollback`,
   `stop`, `start`, `release_hold`, `prepare`, `convert`, `clean`, `restart`; the rescue module's
-  composites add (Workflow #434 LAB-3, since 0.12.48) `config_replace`, `pack_place`.
+  composites add (Workflow #434 LAB-3, since 0.12.48) `config_replace`, `pack_place`, its new
+  row (Workflow #453 S4, since 0.12.60) `new`, and its vision place row (Workflow #453 S9, since
+  0.12.60) `vision_place`.
 - vocabulary `install_step_kind` (new): `extract`, `copy_build`, `verify_tree`, `place_build`,
   `materialize_part`, `verify_part`, `pause`, `close`, `ledger_verify`, `place_slot`,
   `stage_file`, `swap_file`, `retire_live_files`, `place_entries`, `refresh_entries`,
@@ -2712,7 +3017,9 @@ fragments and this build's enums; the forwarder's codes are in
   `start`, `post_check`, `record_health`, `release_hold`, `reverse_files`, `revert_selection`,
   `clean_check`, `clean_slot`, `clean_builds`, `clean_converted`, `delete_cleaning`,
   `record_cleanup`; the rescue module's place composite adds (Workflow #434 LAB-3, since
-  0.12.48) `pack_item`.
+  0.12.48) `pack_item`, its new row (Workflow #453 S4, since 0.12.60) `write_config`,
+  `create_state_root` and (fix round 1) `create_vision_root`, and its vision place row (Workflow
+  #453 S9, since 0.12.60) `vision_file`.
 - vocabulary `install_member` (new): `runtime`, `tools`, `ui`.
 - vocabulary `install_row_reason` (new): `target_restores_player_holds`, `no_player_hold_support`,
   `ui_drives_no_installer`.
@@ -2793,19 +3100,48 @@ the fragment registers, names the command.
   `processes_unreadable`, no longer `runtime_not_running`; no code, location, key or word is new.
 - **Workflow #453 S7** (since 0.12.60; "The Lab's rescue module", `vision manifest` and `vision
   check`): the locations `install_vision_manifest` and `install_vision_check`; `install_refusal`
-  `vision_report_unanswered` (fix 1: either row; actingd gave no usable report: its outcome or
+  `vision_report_unanswered` (fix 1: either row, and since S9 `vision place`; actingd gave no usable report: its outcome or
   the child's failure as the cause, or `timeout_ms` for a child ended at its bound or at the
-  `vision check` row's limit) and `vision_root_unresolved` (only `vision check`: actingd refused
+  `vision check` row's limit) and `vision_root_unresolved` (`vision check`, and since S9 `vision place`: actingd refused
   at a stage where it loads, assembles or resolves the vision configuration, `config_load`,
   `config_assemble` or `config_vision` (fix 2), its outcome as the cause), and `install_caveat`
   `vision_incomplete` (`count`), which only these rows answer; the existing `config_unreadable`
   and `pack_invalid` (`game`, `path`, `timeout_ms`) for the standard-pack root and a game root's
   check; no code or key is new here (actingd's `vision_manifest_reported` and
   `vision_check_completed` are actingd's own).
+- **Workflow #453 S4** (since 0.12.60; "Fresh root"): the location `install_new` (registered by
+  INST-0) is answered, by the rescue module's `new` only; `install_refusal` `root_not_empty`
+  (`path`, and `install_operation_id` for a root holding an unfinished `new`) and
+  `state_root_not_empty` (`path`), which only `new` answers; the existing `release_check_failed`,
+  `build_invalid`, `interface_edge`, `config_refused_by_target`, `check_config_unanswered`,
+  `owner_lock_held`, `runtime_running` and `processes_unreadable`, and the caveat
+  `release_unconfirmed`; the operation kind `new` and the step kinds `write_config`,
+  `create_state_root` and (fix round 1) `create_vision_root`; no code or key is new.
+- **Workflow #453 S9** (since 0.12.60; "The Lab's rescue module", `vision place`): the location
+  `install_vision_place`; `install_refusal` `vision_source_invalid` (`path`), which only this row
+  answers; the operation kind `vision_place` and the step kind `vision_file`; it answers the
+  existing `vision_root_unresolved`, `vision_report_unanswered` (`timeout_ms`),
+  `owner_lock_held`, `runtime_running`, `processes_unreadable`, `operation_unfinished`,
+  `writer_lock_failed` and `post_check_failed` (`count`); no code or key is new.
 - **Workflow #453 S1** (since 0.12.60; "Instances, the first slice", "A first row"):
   `install_instance_add`'s `instance_invalid` gives the existing key `config_key` two more
   values, `policy` and `policy.resources.hosts`, beside those it gave before; no code, location,
   key or word is new.
+- **Workflow #453 S3** (since 0.12.60; "Instances, the first slice", "While the Runtime is
+  stopped"; "The Lab's rescue module", "The composites" and "A hand-back the Runtime answers by
+  holding the instance again"): with no Runtime answering, `install_instance_add` refuses with the
+  existing `runtime_running` (`path`, `pid`), `owner_lock_held` (`path`) and
+  `processes_unreadable`, no longer `runtime_not_running` (which it still answers when a Runtime
+  ran at its first read and none answers at the commit), and `install_config_replace` and
+  `install_config_restore` refuse with the same three, as do `install_resume` and
+  `install_undo` of a `config_replace` begun while no Runtime answered (fix 1); no code,
+  location, key or word is new.
+- **Workflow #453 S12** (since 0.12.60; "The Lab's rescue module", `state-root claim`): the
+  location `install_state_root_claim`; `install_refusal` `state_root_claim_unanswered` (actingd
+  gave no report: the child's failure as the cause, or `pid` and `config_key` for a child left
+  running at its deadline) and `install_caveat` `fingerprints_discontinuous` (`path` the kept
+  record), which only this row answers; the existing `owner_lock_held`, `runtime_running` and `processes_unreadable`
+  for its stopped rule; no code or key is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,
