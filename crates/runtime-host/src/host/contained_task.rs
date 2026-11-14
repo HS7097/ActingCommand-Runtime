@@ -690,6 +690,24 @@ pub(super) struct ContainedRunControl {
     /// another run holds and hands back (a member's startup package in the switch before its
     /// run): the run's end neither renews nor ends that key.
     borrowed_key: std::sync::OnceLock<()>,
+    /// Workflow #463 U1, fix round 2 (rule 6): set once, before a scheduled run executes, when
+    /// its admission carries a runtime budget: the Runtime-clock instant (ms) at which the run's
+    /// own time reaches the largest runtime that budget still admits; fix round 3 (item 4): or
+    /// that the budget's end could not be read.
+    runtime_budget_end: std::sync::OnceLock<RuntimeBudgetEnd>,
+}
+
+/// Workflow #463 U1, fix round 3 (item 4): what a scheduled run noted, before it executed, of the
+/// end of its admitted runtime budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeBudgetEnd {
+    /// The Runtime-clock instant (ms) at which the run's own time reaches the largest runtime its
+    /// admission still admits.
+    At(u64),
+    /// The end could not be read: the run goes on as it would without the note, and a linear
+    /// step's closing decision, which has no time left to compare with its bound, is not made in
+    /// it.
+    Unread,
 }
 
 /// Workflow #429 R-6 (register §1.302): how the Runtime's own reset after a `StopInstanceRun`
@@ -910,6 +928,7 @@ impl ContainedRunControl {
             runtime_stop: AtomicU8::new(Self::STOP_NONE),
             stop_reset: std::sync::OnceLock::new(),
             borrowed_key: std::sync::OnceLock::new(),
+            runtime_budget_end: std::sync::OnceLock::new(),
         }
     }
 
@@ -1070,6 +1089,18 @@ impl ContainedRunControl {
     /// Workflow #390 EXEC-3: whether the host started the run itself.
     fn is_host_package(&self) -> bool {
         self.host_package.get().is_some()
+    }
+
+    /// Workflow #463 U1, fix round 2 (rule 6): the Runtime-clock instant (ms) at which a
+    /// scheduled run's own time reaches its admitted runtime budget, noted before it executes;
+    /// fix round 3 (item 4): or that it could not be read.
+    fn note_runtime_budget_end(&self, end: RuntimeBudgetEnd) {
+        let _ = self.runtime_budget_end.set(end);
+    }
+
+    /// Workflow #463 U1, fix round 2: what [`Self::note_runtime_budget_end`] noted.
+    fn runtime_budget_end(&self) -> Option<RuntimeBudgetEnd> {
+        self.runtime_budget_end.get().copied()
     }
 
     /// Workflow #437 MAPP-2a: marks the run as one on a borrowed key, before it executes.
@@ -2076,6 +2107,14 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         ContainedTaskRunError<Self::Error>,
     > {
         self.inner.offered_shared_interrupt(frame)
+    }
+
+    /// Workflow #463 U1, fix round 2: and recognises them as the run does, handling none.
+    fn shared_interrupt_shown(
+        &mut self,
+        frame: actingcommand_execution_kernel::SharedInterruptFrame<'_>,
+    ) -> Result<bool, ContainedTaskRunError<Self::Error>> {
+        self.inner.shown_shared_interrupt(frame)
     }
 
     /// Workflow #357 DB-2: a layer of the run reads the tables the run bound.
@@ -4595,6 +4634,55 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         self.offered_shared_interrupt(frame)
     }
 
+    /// Workflow #463 U1, fix round 2 (rule 3): the run's shared interrupt pages recognised on
+    /// `frame`, none handled (`host/standard_pack.rs`).
+    fn shared_interrupt_shown(
+        &mut self,
+        frame: actingcommand_execution_kernel::SharedInterruptFrame<'_>,
+    ) -> Result<bool, ContainedTaskRunError<Self::Error>> {
+        self.shown_shared_interrupt(frame)
+    }
+
+    /// Workflow #463 U1, fix round 2 (rule 5): a startup package's or a ladder rung's run.
+    fn host_started_run(&self) -> bool {
+        self.control.is_host_package()
+    }
+
+    /// Workflow #463 U1, fix round 2 (rule 6): the Runtime-clock time left before the earlier of
+    /// the run's host deadline and the end of its admitted runtime budget (a scheduled run's,
+    /// `ContainedRunControl::runtime_budget_end`); none for a run with neither. A failed clock
+    /// read is kept, as the kernel's own reads keep theirs, and leaves no time. Fix round 3 (item
+    /// 4): a scheduled run whose budget's end could not be read has no time left to compare, so
+    /// none is left: its closing decision is not made.
+    fn run_time_left(&mut self) -> Option<std::time::Duration> {
+        let budget_end = match self.control.runtime_budget_end() {
+            Some(RuntimeBudgetEnd::Unread) => return Some(std::time::Duration::ZERO),
+            Some(RuntimeBudgetEnd::At(end_monotonic_ms)) => end_monotonic_ms,
+            None => 0,
+        };
+        let end = [self.control.deadline(), budget_end]
+            .into_iter()
+            .filter(|end| *end != 0)
+            .min()?;
+        match self.host.monotonic_ms() {
+            Ok(now_ms) => Some(std::time::Duration::from_millis(end.saturating_sub(now_ms))),
+            Err(error) => {
+                if self.kernel_clock_failure.is_none() {
+                    self.kernel_clock_failure = Some(error);
+                }
+                Some(std::time::Duration::ZERO)
+            }
+        }
+    }
+
+    /// Workflow #463 U1, fix round 3 (item 3): a failure that poisons the Runtime (a record that
+    /// cannot be written, a clock or identifier read the Runtime's own bookkeeping needs) is the
+    /// one error a linear step's closing decision passes on; a capture, recognition or device
+    /// failure that does not poison it ends the decision with no classification.
+    fn is_bookkeeping_failure(error: &Self::Error) -> bool {
+        error.poison_runtime
+    }
+
     fn record_candidate_evaluation(
         &mut self,
         target_id: &str,
@@ -5478,14 +5566,25 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         if !self.supports_application_effect() {
             return Ok(ApplicationEffectSupport::Unsupported);
         }
-        self.host.application_control(
+        let controlled = self.host.application_control(
             self.request,
             self.token,
             action,
             self.connection_id,
             Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
             super::input::ApplicationKey::Own,
-        )?;
+        );
+        // Workflow #437 ORD-1c fix round 2 (`contracts/device-group.md`, "Who forgets it"): what
+        // the step's own effect leaves in front of the member's device, noted before a failure is
+        // returned, by the rule of the `ApplicationLifecycle` request.
+        self.host
+            .front_after_own_application_effect(
+                self.control.instance_id,
+                action,
+                controlled.is_ok(),
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+        controlled?;
         self.ensure_active()?;
         Ok(ApplicationEffectSupport::Performed)
     }
@@ -8439,6 +8538,22 @@ impl HostShared {
             .control
             .set_deadline(deadline_monotonic_ms)
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #463 U1, fix round 2 (rule 6): where the run's admitted runtime budget ends, so
+        // that a linear step's closing decision that would outlast it is not made
+        // (`RuntimeContainedTask::run_time_left`); read after the switch, which the run's own
+        // time leaves out. Fix round 3 (item 4): a read that fails is no failure of the run: the
+        // run goes on as it would without the note, nothing is poisoned or recorded, and no
+        // closing decision is made in it; the settlement reads the same budget by its own rule
+        // and reports what it meets there, as on a Runtime without this read.
+        match self.policy_run_budget_end_ms(context.decision_id()) {
+            Ok(Some(end_monotonic_ms)) => active_run
+                .control
+                .note_runtime_budget_end(RuntimeBudgetEnd::At(end_monotonic_ms)),
+            Ok(None) => {}
+            Err(_) => active_run
+                .control
+                .note_runtime_budget_end(RuntimeBudgetEnd::Unread),
+        }
         // Workflow #429 R-0b (register §1.238): the policy run shows while it executes, with the
         // request it runs as (the one `contained_runs` tracks) and its package; its guard drops
         // however the run returns.
@@ -9301,12 +9416,17 @@ impl HostShared {
                 if error.has_values() {
                     let values = error.outcome();
                     // #411 A15: an unconfirmed step also names the frame of the run's `Failure`
-                    // pin; #411 A30: a guard refusal names the frame the guard judged on, its
-                    // `GuardRejection` pin. Each is read before the summary moves into the
-                    // terminal's draft.
-                    let frame_pin = if error.code().as_str()
-                        == ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str()
-                    {
+                    // pin, and so (Workflow #463 U1) does a linear step that met a screen its
+                    // package never recorded: the run's last frame, the decision's; #411 A30: a
+                    // guard refusal names the frame the guard judged on, its `GuardRejection` pin.
+                    // Each is read before the summary moves into the terminal's draft.
+                    let frame_pin = if spelled(
+                        error.code().as_str(),
+                        &[
+                            ExecutionKernelCode::ContainedTaskStepUnconfirmed.code(),
+                            ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.code(),
+                        ],
+                    ) {
                         Some(PinnedFrameReason::Failure)
                     } else if error.code().as_str()
                         == ExecutionKernelCode::ContainedTaskGuardRefused.as_str()
@@ -9335,6 +9455,13 @@ impl HostShared {
                 }
                 // Ledger revision 3: the terminal carries the task failure as its outcome.
                 let task_outcome = task_error.outcome();
+                // Workflow #463 U1 (`contracts/policy-suspension.md`, "A failure that pauses at its
+                // first occurrence"): a linear task that met a screen its package never recorded
+                // pauses its task at once. The kernel raises the code only in a task's own run,
+                // outside a restart segment; this is the failure point's verdict, which the policy
+                // class follows (`scheduled_failure_class`), whatever the task's `on_failure`.
+                let pauses_task = error.code().as_str()
+                    == ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.as_str();
                 let event = self.append_contained_task_terminal(
                     request,
                     &token,
@@ -9347,7 +9474,7 @@ impl HostShared {
                         executed_steps,
                         own_executed_steps: None,
                         failure: Some(task_outcome.clone()),
-                        failure_severe: false,
+                        failure_severe: pauses_task,
                         scheduling_outcome: None,
                         selected_scheduling_outcome: None,
                         designated_effect_caps: Vec::new(),
@@ -9402,7 +9529,7 @@ impl HostShared {
                 }
                 failure.task_failure = scheduled.then_some(TaskFailureEvidence {
                     outcome: task_outcome,
-                    severe: false,
+                    severe: pauses_task,
                 });
                 // Workflow #336 L2c: a linear failure with a detail also gets the run's runtime
                 // lifecycle failure record, which carries the detail and names the terminal, as

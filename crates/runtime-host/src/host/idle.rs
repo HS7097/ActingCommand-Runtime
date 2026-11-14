@@ -1580,6 +1580,10 @@ impl HostShared {
                 payload,
             )?;
         }
+        // Workflow #437 ORD-1c fix round 1 (`contracts/device-group.md`, "The member in front"):
+        // the idle action closes the member's application, so a member in front leaves its device
+        // with none in front, whatever the stop's result.
+        self.forget_front(pending.instance_id, super::switch::FrontLoss::Member)?;
         // The key is the claim's and stays with it whatever the stop's result, as a ladder's.
         *stop_sent = true;
         match self.application_control(

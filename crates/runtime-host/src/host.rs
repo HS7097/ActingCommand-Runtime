@@ -298,6 +298,10 @@ pub use standard_pack_schedule::{
     ConfiguredStandardPackSchedule, StandardPackSchedulePreview, compose_configured_standard_packs,
     preview_standard_pack_schedule,
 };
+#[cfg(test)]
+pub(crate) use standard_pack_schedule::{
+    DECLARATION_METADATA_FAILS_FOR_TEST, REFUSALS_NAME_UNCOMPOSED_FOR_TEST,
+};
 mod startup_package;
 mod state_control;
 // Workflow #429 R-6: `StopInstanceRun`, a client's direct run stopped and reset by the Runtime.
@@ -2347,6 +2351,8 @@ impl RuntimeHost {
             #[cfg(test)]
             granted_token_release_for_test: AtomicBool::new(false),
             #[cfg(test)]
+            switch_steps_failure_for_test: AtomicBool::new(false),
+            #[cfg(test)]
             direct_run_terminal_release_off_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             device_keys: config.device_keys,
@@ -2354,6 +2360,7 @@ impl RuntimeHost {
             start_paused: config.start_paused,
             start_pause_unapplied: Mutex::new(BTreeSet::new()),
             switch_cooldowns: Mutex::new(BTreeMap::new()),
+            device_fronts: Mutex::new(BTreeMap::new()),
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
             ladder_busy_holds: Mutex::new(BTreeMap::new()),
@@ -2421,6 +2428,8 @@ impl RuntimeHost {
             policy_condition_for_test: Mutex::new(None),
             #[cfg(test)]
             fail_policy_execution_append_once_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_policy_run_budget_end_once_for_test: AtomicBool::new(false),
             #[cfg(test)]
             pacing_factor_pins_for_test: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
@@ -4790,6 +4799,50 @@ impl RuntimeHost {
             .map_err(|failure| *failure.error)
     }
 
+    /// Workflow #463 U1, fix round 2 (rule 5): runs the startup package of `instance_alias` on
+    /// the test's thread, on the key `token` that `request` (the lease's `AcquireLease`) holds on
+    /// `connection_id`, as a granted startup claim runs it (`run_package_on_key`, its scheduling
+    /// intent recorded first): the run's failure code when it failed.
+    #[cfg(test)]
+    pub(crate) fn run_startup_package_on_key_for_test(
+        &self,
+        instance_alias: &str,
+        request: RuntimeRequest,
+        token: LeaseToken,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<Result<(), &'static str>> {
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::ScheduleStartupPackageForTest,
+        )?;
+        let resolved = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?;
+        let links = shared.events.system_links()?.with_instance_id(
+            shared
+                .events
+                .issuer()
+                .issue_registered_instance(resolved.instance_id()),
+        );
+        let control_request_id = *shared
+            .events
+            .issuer()
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        let pending = shared
+            .prepare_startup_package(&resolved, links, control_request_id)
+            .map_err(|failure| *failure.error)?
+            .expect("the instance's startup package");
+        let mut key = host_claims::HostKey {
+            request,
+            token,
+            connection_id,
+        };
+        Ok(shared
+            .run_package_on_key(&pending, &mut key, None)?
+            .map(drop))
+    }
+
     /// Workflow #369 W-2: the next payload any instance worker takes panics at its start.
     #[cfg(test)]
     pub(crate) fn inject_instance_worker_panic_for_test(&self) -> RuntimeHostResult<()> {
@@ -5130,6 +5183,17 @@ impl RuntimeHost {
     pub(crate) fn fail_next_policy_execution_append_for_test(&self) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::test_spellings::TestLocation::AppendPolicyExecution)?
             .fail_policy_execution_append_once_for_test
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Workflow #463 U1, fix round 3 (item 4), test only: the next scheduled run of this host
+    /// cannot read where its admitted runtime budget ends (the read fails as a dispatch without a
+    /// clock fails it), taken once.
+    #[cfg(test)]
+    pub(crate) fn fail_next_policy_run_budget_end_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::FailPolicyRunBudgetEndForTest)?
+            .fail_policy_run_budget_end_once_for_test
             .store(true, Ordering::Release);
         Ok(())
     }
@@ -6382,6 +6446,10 @@ struct HostShared {
     // settlement takes the granted token, as a build without `HostShared::run_token` there would.
     #[cfg(test)]
     granted_token_release_for_test: AtomicBool,
+    // Workflow #437 ORD-1c fix round 1, test only: the next switch's steps end with a
+    // Runtime-level failure (`Err`) after they ran.
+    #[cfg(test)]
+    switch_steps_failure_for_test: AtomicBool,
     // Workflow #457, test only: while set, a direct run that returns from its terminal step with
     // a failure keeps its lease, as before the fix (`execute_contained_task_with_lease`).
     #[cfg(test)]
@@ -6407,6 +6475,11 @@ struct HostShared {
     // member of a device group of several whose switch failed, with the Runtime-clock (monotonic)
     // instant its switch cooldown ends. Memory only, never stored: a restart drops it.
     switch_cooldowns: Mutex<BTreeMap<InstanceId, u64>>,
+    // Workflow #437 ORD-1c (`contracts/device-group.md`, "The member in front"): the member the
+    // host holds in front of each device of several, by device key, as the switch's own steps
+    // left it (`switch.rs`, `HostShared::note_front`, its one writer). Memory only, never stored: a
+    // start begins with none. A wrong entry is only a preference of the order within one device.
+    device_fronts: Mutex<BTreeMap<InstanceId, InstanceId>>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the
     // per-instance ladder window.
     stuck_recovery: OnceLock<BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>>,
@@ -6522,6 +6595,10 @@ struct HostShared {
     // `fail_policy_execution_append` does in a child process.
     #[cfg(test)]
     fail_policy_execution_append_once_for_test: AtomicBool,
+    // Workflow #463 U1, fix round 3 (item 4), test only: the next read of a scheduled run's
+    // runtime budget end (`policy_run_budget_end_ms`) fails, taken once.
+    #[cfg(test)]
+    fail_policy_run_budget_end_once_for_test: AtomicBool,
     // #385 P-k, test only: the pacing factor and extra rounds an instance's contained runs are
     // handed, by alias, in place of the shadow measurement's.
     #[cfg(test)]

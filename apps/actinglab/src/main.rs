@@ -653,22 +653,37 @@ fn retired_digest_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
     }
 }
 
+/// The flags `do --capture --record` takes that no command line without `--record` takes:
+/// `--tap-rect` (Workflow #336) and, #463 L1, the one-call form's mark request (a file or JSON
+/// text) and its next frame (the wait and the file).
+const RECORD_ONLY_FLAGS: [&str; 5] = [
+    "--tap-rect",
+    "--mark-request",
+    "--mark-request-json",
+    "--next-frame-after-ms",
+    "--next-frame-out",
+];
+
 /// Workflow #336: `--record` takes no value, never comes with `--state-dir`, and is accepted
 /// only on `capture`, `observe --capture`, `do --capture` and (R24) `session app` /
 /// `session instance app` with one of its four actions; `observe`, `do` and `session app` refuse it
-/// with `--dry-run`. `--tap-rect` exists only with it. FlagArgs accepts unknown flags, so
-/// without this gate they would be silently ignored.
+/// with `--dry-run`. `--tap-rect` exists only with it, and so (#463 L1) do the flags of the
+/// one-call form, [`RECORD_ONLY_FLAGS`]. FlagArgs accepts unknown flags, so without this gate they
+/// would be silently ignored.
 fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
     let args = &invocation.args;
     if !args.iter().any(|arg| arg == "--record") {
         // #412 Lab B-3 S2 (design §1.2): with `--operation`, `do` refuses `--tap-rect` itself,
-        // naming it as `conflicting`, so this gate leaves that line to it.
-        if args.iter().any(|arg| arg == "--tap-rect")
+        // naming it as `conflicting`, so this gate leaves that line to it. #463 L1: so are the
+        // one-call form's mark request and next frame.
+        if let Some(flag) = RECORD_ONLY_FLAGS
+            .iter()
+            .find(|flag| args.iter().any(|arg| arg == **flag))
             && !args.iter().any(|arg| arg == "--operation")
         {
-            return Err(CliError::usage(
-                "--tap-rect is accepted only with do --capture --record",
-            ));
+            return Err(CliError::usage(format!(
+                "{flag} is accepted only with do --capture --record"
+            )));
         }
         return Ok(());
     }

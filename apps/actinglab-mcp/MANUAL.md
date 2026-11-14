@@ -127,7 +127,7 @@ naming this file.
     and answered `{req_id, export, overflowed: true}`, `answer_exported` first among its
     `warnings`. `ac_record_stop` keeps its four binding parts together under `lab`, and
     `ac_lab_observe` and `ac_do` their frame parts (`frame_coordinates`, `frame_path`, `preview`,
-    `after_attachment`) each in turn, while the answer still fits. An exported `ac_record_stop`
+    `next_frame`, `after_attachment`) each in turn, while the answer still fits. An exported `ac_record_stop`
     answer goes to `ac_record_draft` as `record_stop_export` (`{path, sha256}`);
   - any other line, a refusal and a child's failure line too, that does not fit with its text
     repeated is sent in `structuredContent` alone, beside a summary text `{outcome,
@@ -210,7 +210,15 @@ naming this file.
   `record_id` it also archives a recording `record start --force` left behind, from its own step
   table, and leaves the session header, another recording's, as it is (`lab.session_header`).
   `ac_record_reopen` makes an archived recording active again, so that `ac_record_mark` and
-  `ac_record_stop` can build its package later.
+  `ac_record_stop` can build its package later. #463 L1 (0.12.60; `contracts/lab-recording.md`,
+  "One call per step"): `ac_do` with `capture` and `record` records a whole step in one call:
+  `mark_request_json` (or `mark_request`, a file) is the `record mark` request of the open step,
+  applied and self-tested as `ac_record_mark` applies it before the press (a refusal is its own, and
+  nothing is pressed or written; a request for anything but the open step, a step operation, a
+  transition, another step or a frame file, is `validation_failed`: send it with `ac_record_mark`),
+  and `next_frame_after_ms` (0 to 60000) takes the next frame after
+  a press performed without a failure, as `capture --record` takes it, opening the next step
+  (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

@@ -41,6 +41,15 @@
 // the shared interrupt check (`with_shared_interrupts`: the n-th offer is handled when the list
 // says so, the handling taking its scripted time; without one none is handled) and counts the
 // offers.
+//
+// Workflow #463 U1, fix round 2: from a given frame on it may show a shared interrupt page
+// (`with_shared_popup_from`): the recognising check finds it, and an offer of such a frame is
+// handled by pressing it, one more input; or its recognising check may fail with
+// `contained_task_recognition_failed` (`with_failing_popup_check_from`). It counts the
+// recognising checks. It may answer that it started the run itself (`host_started`) and how much
+// time the run has left (`with_time_left`). Fix round 3: its capture may fail from a given capture
+// on (`with_failing_capture_from`), an operation error of the device; no error it gives is a
+// failure of its bookkeeping (it records every trace it is handed).
 
 use super::super::*;
 use actingcommand_device::CaptureBackendName;
@@ -160,7 +169,19 @@ pub(crate) struct ScriptedRuntime {
     interrupts: Vec<bool>,
     interrupt_handling: Duration,
     interrupt_offers: usize,
+    // Workflow #463 U1, fix round 2.
+    popup_from: Option<usize>,
+    failing_popup_check_from: Option<usize>,
+    popup_checks: usize,
+    host_started: bool,
+    time_left: Option<Duration>,
+    // Workflow #463 U1, fix round 3.
+    failing_capture_from: Option<usize>,
 }
+
+// Workflow #463 U1, fix round 3: the operation error of a capture that `with_failing_capture_from`
+// makes fail.
+pub(crate) const INJECTED_CAPTURE_FAILURE: &str = "injected capture failure";
 
 impl ScriptedRuntime {
     // A device that shows `screens[n]` after `n` inputs; its steps get no observe-only retry.
@@ -203,7 +224,70 @@ impl ScriptedRuntime {
             interrupts: Vec::new(),
             interrupt_handling: Duration::ZERO,
             interrupt_offers: 0,
+            popup_from: None,
+            failing_popup_check_from: None,
+            popup_checks: 0,
+            host_started: false,
+            time_left: None,
+            failing_capture_from: None,
         }
+    }
+
+    // Workflow #463 U1, fix round 2: the same device, showing a shared interrupt page on every
+    // frame from its `from`-th capture on (captures counted from 1): the recognising check finds
+    // it, and an offer of such a frame presses it, one more input, and is handled.
+    pub(crate) fn with_shared_popup_from(self, from: usize) -> Self {
+        Self {
+            popup_from: Some(from),
+            ..self
+        }
+    }
+
+    // Workflow #463 U1, fix round 2: the same device, whose recognising check of the shared
+    // interrupt pages fails with `contained_task_recognition_failed` from its `from`-th capture on.
+    pub(crate) fn with_failing_popup_check_from(self, from: usize) -> Self {
+        Self {
+            failing_popup_check_from: Some(from),
+            ..self
+        }
+    }
+
+    // Workflow #463 U1, fix round 2: how often the kernel asked whether a shared interrupt page is
+    // shown without handling it.
+    pub(crate) fn popup_checks(&self) -> usize {
+        self.popup_checks
+    }
+
+    // Workflow #463 U1, fix round 2: the same device, answering that it started the run itself.
+    pub(crate) fn host_started(self) -> Self {
+        Self {
+            host_started: true,
+            ..self
+        }
+    }
+
+    // Workflow #463 U1, fix round 3: the same device, whose capture fails with
+    // `INJECTED_CAPTURE_FAILURE` from its `from`-th capture on (captures counted from 1, a failed
+    // one included); a failed capture shows no frame.
+    pub(crate) fn with_failing_capture_from(self, from: usize) -> Self {
+        Self {
+            failing_capture_from: Some(from),
+            ..self
+        }
+    }
+
+    // Workflow #463 U1, fix round 2: the same device, answering that the run has `left` before
+    // its deadline or the end of its budget, whenever asked.
+    pub(crate) fn with_time_left(self, left: Duration) -> Self {
+        Self {
+            time_left: Some(left),
+            ..self
+        }
+    }
+
+    // Whether the frame captured last shows the shared interrupt page.
+    fn popup_shown(&self) -> bool {
+        self.popup_from.is_some_and(|from| self.captures >= from)
     }
 
     // The same device, whose every `step_pacing()` answer also hands the loading mode `mode`
@@ -395,6 +479,13 @@ impl ContainedTaskRuntime for ScriptedRuntime {
     type Error = &'static str;
 
     fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
+        if self
+            .failing_capture_from
+            .is_some_and(|from| self.captures + 1 >= from)
+        {
+            self.captures += 1;
+            return Err(INJECTED_CAPTURE_FAILURE);
+        }
         let segment = self.effects().min(self.screens.len() - 1);
         let frames = &self.screens[segment];
         let shown = &mut self.shown[segment];
@@ -516,12 +607,48 @@ impl ContainedTaskRuntime for ScriptedRuntime {
             .copied()
             .unwrap_or(false);
         self.interrupt_offers += 1;
+        if self.popup_shown() {
+            // Workflow #463 U1, fix round 2: the shared interrupt page is pressed.
+            if let Some(press) = self.inputs.last().cloned() {
+                self.inputs.push(press);
+                self.events.push(ScriptedEvent::Input);
+            }
+            return Ok(SharedInterruptVerdict::Handled);
+        }
         if handled {
             self.offset += self.interrupt_handling;
             Ok(SharedInterruptVerdict::Handled)
         } else {
             Ok(SharedInterruptVerdict::NotHandled)
         }
+    }
+
+    fn shared_interrupt_shown(
+        &mut self,
+        _frame: SharedInterruptFrame<'_>,
+    ) -> Result<bool, ContainedTaskRunError<Self::Error>> {
+        self.popup_checks += 1;
+        if self
+            .failing_popup_check_from
+            .is_some_and(|from| self.captures >= from)
+        {
+            return Err(ContainedTaskRunError::Task(ContainedTaskError::new(
+                actingcommand_contract::codes::SharedCode::ContainedTaskRecognitionFailed.code(),
+            )));
+        }
+        Ok(self.popup_shown())
+    }
+
+    fn host_started_run(&self) -> bool {
+        self.host_started
+    }
+
+    fn run_time_left(&mut self) -> Option<Duration> {
+        self.time_left
+    }
+
+    fn is_bookkeeping_failure(_error: &Self::Error) -> bool {
+        false
     }
 
     fn observe_extra_wait_round(&mut self) {

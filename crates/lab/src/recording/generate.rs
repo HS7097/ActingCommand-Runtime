@@ -5,7 +5,7 @@
 //! task, control and resources documents, the guard of every click, and the timeouts with
 //! their clamp warnings. Everything here is computed in memory; nothing is written.
 
-use super::follow::follow_invalid;
+use super::follow::{follow_invalid, located_page_problem};
 use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
     ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame,
@@ -61,6 +61,8 @@ pub(crate) struct PlanStep {
     pub(crate) step: RecordingStep,
     /// `None` for the application entry step (`from:"any"`).
     pub(crate) page: Option<String>,
+    /// The marks the step's page requires; #463 L2 fix 1: never the located-text mark its click
+    /// follows, which is the click's guard only.
     pub(crate) required: Vec<String>,
     /// Workflow #390 LAB-2: the marks the step's page forbids (mark ids).
     pub(crate) forbidden: Vec<String>,
@@ -713,7 +715,18 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
             Some(name) => format!("step_{}_{name}", numbered(number)),
             None => format!("step_{}", numbered(number)),
         });
-        let required = required_ids(&step.marks, &step.reused, &marks);
+        // #463 L2 fix 1: the located-text mark a click follows is the click's guard and target,
+        // and no mark of the step's page, which its other marks recognize.
+        let followed_text = step
+            .click
+            .as_ref()
+            .and_then(|click| click.follow.as_ref())
+            .map(|follow| follow.mark_id.as_str())
+            .filter(|id| marks.get(*id).is_some_and(RecordedMark::locates_text));
+        let required = required_ids(&step.marks, &step.reused, &marks)
+            .into_iter()
+            .filter(|id| Some(id.as_str()) != followed_text)
+            .collect::<Vec<_>>();
         let (transition_page, transition_required) = match &step.transition {
             Some(StepTransition::Page {
                 marks: transition_marks,
@@ -1087,11 +1100,28 @@ fn guard_rect(plan: &Plan, mark: &RecordedMark) -> LabResult<RecordRect> {
     }
 }
 
+/// #463 L2: whether the click of `step` follows a located-text mark: its guard is then that
+/// mark's text (`verify_text`), confirmed on a fresh frame before the input.
+pub(crate) fn follows_located_text(plan: &Plan, step: &PlanStep) -> LabResult<bool> {
+    match step
+        .step
+        .click
+        .as_ref()
+        .and_then(|click| click.follow.as_ref())
+    {
+        Some(follow) => Ok(plan.mark(&follow.mark_id)?.locates_text()),
+        None => Ok(false),
+    }
+}
+
 /// The guard target of a click step (section 4.3), only from the page's required marks:
 /// the declared click guard, the click source (not OCR), the first template, the first color
 /// or color digest, the first check. `None` when the page has only OCR marks: the click is
 /// then a trusted coordinate. Workflow #396 REC-4: a click that follows a template is guarded
-/// by that template, which the kernel requires of a `target` or `offset` click.
+/// by that template, which the kernel requires of a `target` or `offset` click; #463 L2: one that
+/// follows a located-text mark by that mark (`verify_text`), which (fix 1) is a mark of the step
+/// but none of its page: the page stands on the step's other marks (`page_needs_followed_text`
+/// otherwise).
 pub(crate) fn guard_target<'p>(
     plan: &'p Plan,
     step: &PlanStep,
@@ -1108,6 +1138,41 @@ pub(crate) fn guard_target<'p>(
         .and_then(|click| click.follow.as_ref())
     {
         let id = follow.mark_id.as_str();
+        // #463 L2 fix 1: a followed located-text mark of the step is no mark of its page; the
+        // page stands on the step's other marks.
+        let of_step = step.step.marks.iter().any(|mark| mark.id == id)
+            || step.step.reused.iter().any(|reused| reused == id);
+        if of_step && plan.mark(id)?.locates_text() {
+            let mut step_marks = step.step.marks.iter().collect::<Vec<_>>();
+            for reused in &step.step.reused {
+                step_marks.push(plan.mark(reused)?);
+            }
+            let any_of_member = step_marks.iter().any(|mark| {
+                mark.any_of
+                    .as_ref()
+                    .is_some_and(|members| members.iter().any(|member| member == id))
+            });
+            if any_of_member {
+                return Err(follow_invalid(
+                    step.step.index,
+                    id,
+                    ClickFollowProblem::NotRequired,
+                    format!(
+                        "step {} follows '{id}', which only an any_of check of its page names",
+                        step.step.index
+                    ),
+                ));
+            }
+            if let Some(message) = located_page_problem(id, &step_marks) {
+                return Err(follow_invalid(
+                    step.step.index,
+                    id,
+                    ClickFollowProblem::PageNeedsFollowedText,
+                    format!("step {}: {message}", step.step.index),
+                ));
+            }
+            return Ok(Some(plan.mark(id)?));
+        }
         return match required.iter().copied().find(|mark| mark.id == id) {
             Some(mark) if mark.family == MarkFamily::Template => Ok(Some(mark)),
             Some(_) => Err(follow_invalid(
@@ -1115,7 +1180,7 @@ pub(crate) fn guard_target<'p>(
                 id,
                 ClickFollowProblem::NotTemplate,
                 format!(
-                    "step {} follows '{id}', which is not a template",
+                    "step {} follows '{id}', which is neither a template nor a located-text mark",
                     step.step.index
                 ),
             )),
@@ -1187,6 +1252,10 @@ fn guard_json(plan: &Plan, step: &PlanStep, page: &str) -> LabResult<Option<Valu
         // #411 Lab B-9: a value test guards the input as a check does.
         MarkFamily::Check | MarkFamily::ValueTest => {
             guard.insert("check".into(), json!(mark.id));
+        }
+        // #463 L2: a located text guards the click that follows it, its own target.
+        MarkFamily::Ocr if mark.locates_text() => {
+            guard.insert("verify_text".into(), json!(mark.id));
         }
         MarkFamily::Ocr => return Ok(None),
     }
@@ -1526,7 +1595,7 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
                         format!("ocr '{}' has no OCR fields", mark.id),
                     )
                 })?;
-                ocr.push(json!({
+                let mut target = json!({
                     "id": mark.id,
                     "region": region_json(mark_region(mark)?),
                     "languages": spec.languages,
@@ -1537,7 +1606,15 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
                     "minimum_confidence": spec.minimum_confidence,
                     "model_ref": spec.model_ref,
                     "model_sha256": spec.model_sha256
-                }));
+                });
+                // #463 L2: a located-text mark is a locate target, with its margin of uniqueness.
+                if let Some(locate) = &spec.locate {
+                    target["locate"] = json!(locate);
+                    if let Some(unique) = &mark.unique {
+                        target["unique"] = json!(unique);
+                    }
+                }
+                ocr.push(target);
             }
             MarkFamily::Check => {
                 let mut target = Map::new();
@@ -1671,6 +1748,12 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
             None => {
                 operation.insert("unguarded_trusted_coordinate".into(), json!(true));
             }
+        }
+        // #463 L2: the guard of a click on located text is evaluated again on one fresh frame of
+        // the step's page, and the input is drawn from that frame (`linear-steps.md`, Workflow
+        // #411 B12): the name is found again just before it is pressed.
+        if follows_located_text(plan, step)? {
+            operation.insert("input_recheck".into(), json!({"kind": "fresh_frame"}));
         }
         operation.insert(
             "expect_after".into(),

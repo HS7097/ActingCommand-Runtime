@@ -66,11 +66,13 @@ const BINDING_PARTS: [&str; 4] = [
 ];
 /// The frame parts of an `observe` or `do` line, in the order they are kept (today's
 /// `FRAME_PARTS`; Workflow #410 item 1): the frame's coordinate system, the paths of the frame
-/// files and the after-action attachment.
-const FRAME_PARTS: [&str; 4] = [
+/// files, (#463 L1 fix round 1) a recorded step's next frame, the next screen, and the
+/// after-action attachment.
+const FRAME_PARTS: [&str; 5] = [
     "frame_coordinates",
     "frame_path",
     "preview",
+    "next_frame",
     "after_attachment",
 ];
 

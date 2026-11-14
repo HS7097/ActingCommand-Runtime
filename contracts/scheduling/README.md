@@ -1081,7 +1081,9 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   intermediates. `produce(k,p)` is the resource layer's own `r(k,p)` (`amount` or v2
   `expected_amount_milli`; [resource-targets.md](../resource-targets.md), "Resource weights (v2)"),
   `W(k,p)` its effective weight `B_p + Γ` (the base weight plus a covering goal's shortfall
-  weight), `consume(k,p)` the task's declared consumption of the pool (its `consumes` amounts;
+  weight; Workflow #455 G-R2s, since 0.12.60: `B_p` alone for a task that carries the irreversible
+  mark, [resource-targets.md](../resource-targets.md), "A task that can do something
+  irreversible"), `consume(k,p)` the task's declared consumption of the pool (its `consumes` amounts;
   SS-2g, since 0.12.34: in thousandths, `C/1000` exactly, an expected consumption included,
   "Expected quantities (v2)"; the reserve gate reads `⌈C/1000⌉`) and `Q_p` the pool's
   `valuation.scale`. `P(k,p)`, the cost of consuming pool `p`, is `W(k,p)`, whatever the pool's
@@ -1181,7 +1183,8 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   - *The zero tier.* A candidate within tolerance whose task carries `benefit_realization: true`
     ([v2/README.md](v2/README.md); the model's verdict that the task is a realization or
     conversion with a real downstream use, one more run wasting nothing), whose `B` is known, that
-    produces a pool weighed above 0 on its instance (a model price or a goal's shortfall; a pool
+    produces a pool weighed above 0 on its instance (a model price or a goal's shortfall, which
+    weighs no task that carries the irreversible mark, G-R2s; a pool
     verified worthless is weighed 0) and whose latest run there did not fail is *released*
     (`zero_tier: released`). It takes part in the allocation after every unjudged and every
     positive judged candidate of the business tier, of every instance, a promotion not lifting
@@ -1341,7 +1344,9 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
   allowance (the gate's own available amount, its projection less the consumption step 3
   counts as not shown yet, less `at_least`, at least 0), and a run cap from them (at most 1000);
   a task that produces a pool an active goal covers also carries the goal's gap
-  ([../remedies.md](../remedies.md), section 4, "Spend values"). An allowance below the task's
+  ([../remedies.md](../remedies.md), section 4, "Spend values"); since Workflow #455 G-R2s
+  (0.12.60) a task that carries the irreversible mark carries the values of an instance without a
+  record instead: no gap and no goal term in its run cap. An allowance below the task's
   declared consumption of the pool, 0 included, is never dispatched: the gate holds it.
 
 ## Shared Run Limits (Workflow #427-B)
@@ -1436,20 +1441,66 @@ package included (register §1.215 UPD-16), meets the game's "client out of date
 - **No configuration key.** The store update rule's cadence is its `cooldown_ms`; the hold and
   its order are code.
 
-## Order within one device (Workflow #437 ORD-1b, since 0.12.60)
+## Order within one device (Workflow #437 ORD-1b, since 0.12.60; the host's inputs: ORD-1c, since 0.12.60)
 
-Register §1.352; the owner's rulings on board #437 as the coordinator recorded them;
-[device-group.md](../device-group.md), "One pick per device per round". It applies only to a device
-whose key the device map names for two or more members, and only when the Runtime passes the
-order's inputs beside the map (`DeviceGroups::with_order`); without them the device's one pick is
-its first candidate in the allocation order, as MAPP-1 built it. An instance alone on its device
-never reads any of it, and a catalog that declares `max_queue_wait_ms` on its tasks decides there
-exactly as one that does not.
+Register §1.352 and §1.373; the owner's rulings on board #437 as the coordinator recorded them;
+[device-group.md](../device-group.md), "One pick per device per round" and "The member in front".
+It applies only to a device whose key the device map names for two or more members, and only when
+the Runtime passes the order's inputs beside the map (`DeviceGroups::with_order`); without them
+the device's one pick is its first candidate in the allocation order, as MAPP-1 built it. **From
+ORD-1c on the Runtime passes them at every policy cycle whose device map names a device of
+several**, so the selection below is in force for every device of several (which the load still
+refuses until the release that first accepts a group of several, [device-group.md](../device-group.md),
+"Release."); a cycle whose map names none is handed the map alone, exactly as before ORD-1c. An
+instance alone on its device never reads any of it, and a catalog that declares
+`max_queue_wait_ms` on its tasks decides there exactly as one that does not.
 
 - **The inputs.** The member in front of the device, or none. For each waiting contender, when its
   wait began; a contender the Runtime gives no start waits from the evaluation's time. The longest
-  wait of a task that declares none (1 800 000 ms until the Runtime passes a configured one). Two
-  members of one device named in front refuse the evaluation (`policy_evaluation_input_invalid`).
+  wait of a task that declares none (1 800 000 ms when no configured one is passed). Two members of
+  one device named in front refuse the evaluation (`policy_evaluation_input_invalid`). **What the
+  Runtime passes** (ORD-1c, register §1.373; the coordinator's rulings 1, 2 and 4 on board #437):
+  - *The member in front* is the member the host holds in front of the device: the member whose
+    switch's own steps last ended with its application in front or started, or (since fix round 2)
+    whose run's own step last launched or restarted its application, and none once a switch of the
+    device was refused or failed (a Runtime-level failure included), once the member's own
+    application was stopped or failed to start (by a request or by a step of its run), once a
+    ladder rung (a Runtime-level failure of the application restart rung included) or the idle
+    action changed what is in front, and none after a start ([device-group.md](../device-group.md),
+    "The member in front", "Who forgets it").
+    *What it does not see* (register §1.373, fix round 2): an emulator or an application that
+    crashes, a person's work by hand on the device, a Lab raw input and a run's own inputs that
+    bring another package to the front leave a member named in front that is not. That costs at
+    most one switch more, which reads the real foreground, and lets a waiting task start at most
+    one run later; no task waits without end, since its wait still counts against its limit. A stop
+    command that failed and the ladder's emulator restart rung when it returns before its stop
+    forget a member whose application may still be in front; that costs at most one switch made
+    early.
+  - *The default limit* is `scheduling.device_group.max_queue_wait_ms` in effect as the cycle
+    starts (milliseconds `60000..=86400000`, default `1800000`; [runtime-config.md](../runtime-config.md)),
+    so an instruction applies from the next round.
+  - *The wait's clock.* A pair (task, member) has a wait only while its member belongs to a device
+    of several, is not the member in front, and the pair is queued: it is due and has no dispatch
+    in flight, and its decision is selected and not yet admitted, or its last reason is a wait
+    behind the device's order or behind a run (`instance_already_selected`,
+    `device_group_waiting` `held`, `device_group_waiting` `selected` with the order's `limit_ms`,
+    `dispatch_instance_held`, `policy_chain_handover_waiting`, `policy_concurrent_runs_deferred`,
+    `heavy_scene_budget_deferred`, `heavy_scene_budget_exhausted`). The wait begins at the instant
+    of the first evaluation in which the pair is queued and keeps that start while it stays
+    queued. Any other decision ends it: not due, a person's hold, a pause, a fence, a cooldown (the
+    member's switch cooldown included), the task's own gates; and so does a row
+    `device_group_waiting` `selected` without the order's values, which a member held as the cycle
+    starts gets behind another member's pick (it is no contender). The admission of the pair's
+    dispatch ends it. When a member takes the front (its switch succeeded), every wait of its pairs
+    is forgotten; a member that loses the front (another member's switch succeeded) starts its
+    queued pairs' waits anew at the first evaluated round after, from that round's instant; with
+    none in front every member's queued pairs wait. Past its limit a wait writes nothing: no record,
+    no held-set rule, no code.
+  - *Its staging* is the eligibility age's: the verdicts of an evaluated cycle are applied when the
+    next evaluation starts, and that evaluation passes the starts applied then, of the members not
+    in front. An evaluation stages no wait of a member that took the front after it read the
+    members in front (register §1.373, fix round 1). Memory only: none of it enters the ledger, a fact, a snapshot or a decision identity,
+    and a start of the Runtime begins with no wait and none in front.
 - **The contenders** of a device are the candidates of its members, but one the Runtime holds
   whole (`InstanceHolds`: UPD-1's hold, a switch cooldown), one whose member is held as the cycle
   starts (a pause, a fence, a person's hold, a holder of the device, a takeover cooldown, a
