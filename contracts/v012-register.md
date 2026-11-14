@@ -23181,6 +23181,86 @@ self-check, a resume or the fence's recheck lifts it.
 **Rollback** (below 0.12.60). Nothing is persisted by the fixes; a build before them reads every
 record they write, and halts again where they fence.
 
+### 1.365 Slice #463 U1 (0.12.60): a recorded package that meets a screen it does not know ends with a code of its own, and only its own task pauses (Workflow #463; the owner's four sentences on board #463 and the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-463-u1-unrecorded-screen.md`, read on main `17197d8e`)
+
+1.365 was the next free number on main `17197d8e` (#1707, §1.364, merged). Pull requests open
+beside this one may take numbers first, and a train renumbers it.
+
+**What it is.** A `linear_steps` step's retry decision that saw neither its gate nor the step's
+own page, on a screen whose last two frames the Runtime's one frame-change measure finds unchanged
+(the whole frame at the default threshold, #411 A43b's comparison), and that ended on its budget,
+not on its loading allowance, met a screen the package never recorded. In a task's own run
+(scheduled or direct; not a prerequisite, return-home, navigation or interrupt layer, a startup
+package or a ladder rung) and outside a restart segment the run ends with the new code
+`contained_task_linear_unrecorded_screen` in place of `page_confirmation_failed`, with the detail
+that code gave and no further input ([linear-steps.md](linear-steps.md), "Failure codes"). A
+scheduled run that fails so pauses its pair at once, whatever its `on_failure`
+([policy-suspension.md](policy-suspension.md), "A failure that pauses at its first occurrence").
+Every other end of a step keeps its code; page-graph packages are unchanged.
+
+**Where, by reading (step 1 of the work order).** The decision is `run_linear_step`'s retry
+decision branch `Err(..)` (`contained_task/linear.rs`); there the wait has evaluated the gate and
+the step's own page on every frame and knows whether it ended on its loading allowance. The other
+`page_confirmation_failed` ends of a step (no attempt left after the arrival, a seen intermediate
+page, a seen skip target, the continued wait after a late gate) evaluate only the candidates, so
+nothing judges the step's own page there: they keep their code, and a step without a declared
+retry (`--click-retry`) never reaches the new code. The measure is `StillScreen::WHOLE_FRAME`
+(`contracts/color-digest.md`, "Frame change") on the frames the decision captured, a
+`SettledScreen` of the decision's wait: no capture, no recognition and no time is added; a loading
+frame, a handled shared interrupt page and a failed observation start it afresh. The ladder's
+settled check (#411 A49) probes with captures of its own, and the failure-frame comparison
+(`policy-suspension.md`, "Error frames") reads stored frames after the run, so neither fits a wait.
+
+**The pause.** The host's kernel-failure path marks the terminal `failure_severe` for the code
+(`host/contained_task.rs`); the policy class follows it (`scheduled_failure_class`) in the live
+settlement, the startup reconciliation and the ledger's re-derivation, so the settlement writes
+`paused_task` with no retry time (no R22 rerun). `failure_identity.rs` lists the code with the
+accumulating main-scope codes, so its identity names the error frame and the packages' content
+hashes, and the pause lifts by "Lifting (R19)". The host also names the frame of the run's
+`Failure` pin (`artifact_id`) on the terminal and the receipt, as #411 A15 does for
+`contained_task_step_unconfirmed`. No ledger event type, enum value, persisted member or
+configuration key is added.
+
+**The code.** `contained_task_linear_unrecorded_screen` (`execution-kernel`, error, ladder class
+`none`, pending, since 0.12.60; values `pack_operation_id`, `page_ids`, `attempts` required,
+`artifact_id` optional). Class `none` matches no default trigger item, so it starts no
+stuck-recovery ladder (the coordinator's ruling: the next package first; its gate's return-home
+package, and a ladder when that fails, as before). By the decision table of
+[runtime-outcomes.md](runtime-outcomes.md) row 1 (`planned_stop`: a rule stopped the run on
+purpose) or row 4 (`pack_logic_mismatch`) would describe it; the ruling chose `none`, as UPD-1's
+row UPD-2 did for `contained_task_application_update_required`. The index is regenerated.
+
+**Interface.** No revision moves: a new code is a string of the catalog (`runtime-outcomes` stays
+1, [component-interfaces.md](component-interfaces.md): new codes in the catalog only); the ledger's
+records keep their shapes and `failure_severe` is an existing member.
+
+Tests: kernel `gate_463_u1.rs` (exec gate row "#463 U1"): the settled screen of neither page
+(the code, the detail `page_confirmation_failed` gives, the values, the timing, one input); the
+own page with no attempt left, the decision ended on its loading allowance and a screen still
+changing (each `page_confirmation_failed` with the detail before). Host `gate_463_u1.rs` (host gate
+row "#463 U1"): a scheduled run pauses its pair at once under `continue` with no retry and under
+the recommended value, while a swallowed tap still follows `on_failure`; another task of the
+instance is dispatched, admitted and dispatched again while the pair stays paused; a changed
+package lifts the pause; a direct run names the `Failure` pin's frame on its terminal and receipt
+and pauses nothing; and `ladder_tests.rs`: the code matches no default trigger item while
+`page_confirmation_failed` reaches `pack_logic`. No existing test pins `page_confirmation_failed`
+for the end this slice renames (the linear retry tests end on the gate, the own page or a loading
+allowance); none is adapted, no golden changes, no test leaves the gate map.
+
+**At deploy.** Installed `linear_steps` packages change behaviour with this version, with no
+change to any package: a run whose step declares a retry and whose retry decision sees a settled
+screen of neither page, which ended `page_confirmation_failed` and started a recovery ladder
+(`pack_logic`), now ends `contained_task_linear_unrecorded_screen`, pauses its pair at the first
+occurrence and starts no ladder; the instance goes on with its other tasks. List paused pairs with
+`actingd suspended` (`suspended[]`: the code in `failure`, its `artifact_id`, `lifts_when`
+`content_hash_changes`) or `ac_diagnose` (its `suspended` rows; `failures_grouped`). A pause lifts
+when the package's content changes (add the ending recorded from the named frame), at the pair's
+next due evaluation after the lift check's interval (60 s by default), with no restart.
+
+**Rollback** (below 0.12.60). No record shape changes (the code is a string, `failure_severe` an
+existing member); a pause the ledger recorded is rebuilt from its execution record and lifts by
+the same package change.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -102,6 +102,9 @@ mod gate_450_fl1;
 // Workflow #453 S8: the models a package's recognition pack names, its OCR and NN targets'.
 #[cfg(test)]
 mod gate_453_s8;
+// Workflow #463 U1: a linear step's retry decision on a screen its package never recorded.
+#[cfg(test)]
+mod gate_463_u1;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.
@@ -5065,6 +5068,11 @@ impl PreparedContainedTask {
                     timing: observation_timing,
                     pacing,
                     store_routing,
+                    // Workflow #463 U1: a task's own run, not a layer's, a recovery entry's or a
+                    // run the host starts itself (a startup package, a ladder rung).
+                    own_task_run: entry == ContainedTaskEntry::Ordinary
+                        && options.application_entry == ApplicationEntryRun::AfterInitialFrame,
+                    restart_segment: false,
                 },
             );
         }

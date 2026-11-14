@@ -393,6 +393,34 @@ fn e3_g3_the_screen_disagrees_with_the_pack_codes_reach_pack_logic_and_sampling_
     }
 }
 
+// Workflow #463 U1: a linear step that met a screen its package never recorded ends with
+// `contained_task_linear_unrecorded_screen`, ladder class `none`, which no default trigger item
+// names at any stage, so it starts no ladder; `page_confirmation_failed`, the code the same end had
+// before, still reaches `pack_logic` by its class at the task stage.
+#[test]
+fn u1_the_unrecorded_screen_code_reaches_no_default_trigger_item() {
+    let ladder = default_ladder();
+    let unrecorded = "contained_task_linear_unrecorded_screen";
+    assert_eq!(
+        ladder_class_of(unrecorded),
+        Some(LadderClass::NotApplicable)
+    );
+    for stage in STAGES {
+        assert_eq!(
+            ladder.classify(stage, unrecorded),
+            TriggerVerdict::Unmatched,
+            "{stage:?}"
+        );
+    }
+    match ladder.classify(RecoveryTriggerStage::Task, "page_confirmation_failed") {
+        TriggerVerdict::Matched { item, by } => {
+            assert_eq!(item.id, "pack_logic");
+            assert_eq!(by, MatchedBy::Class(LadderClass::PackLogicMismatch));
+        }
+        other => panic!("page_confirmation_failed does not reach pack_logic: {other:?}"),
+    }
+}
+
 #[test]
 fn rb_h3_rung_three_s_bounds_are_the_configuration_s() {
     let shipped = shipped();

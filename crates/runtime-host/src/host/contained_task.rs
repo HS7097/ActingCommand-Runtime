@@ -9301,12 +9301,17 @@ impl HostShared {
                 if error.has_values() {
                     let values = error.outcome();
                     // #411 A15: an unconfirmed step also names the frame of the run's `Failure`
-                    // pin; #411 A30: a guard refusal names the frame the guard judged on, its
-                    // `GuardRejection` pin. Each is read before the summary moves into the
-                    // terminal's draft.
-                    let frame_pin = if error.code().as_str()
-                        == ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str()
-                    {
+                    // pin, and so (Workflow #463 U1) does a linear step that met a screen its
+                    // package never recorded: the run's last frame, the decision's; #411 A30: a
+                    // guard refusal names the frame the guard judged on, its `GuardRejection` pin.
+                    // Each is read before the summary moves into the terminal's draft.
+                    let frame_pin = if spelled(
+                        error.code().as_str(),
+                        &[
+                            ExecutionKernelCode::ContainedTaskStepUnconfirmed.code(),
+                            ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.code(),
+                        ],
+                    ) {
                         Some(PinnedFrameReason::Failure)
                     } else if error.code().as_str()
                         == ExecutionKernelCode::ContainedTaskGuardRefused.as_str()
@@ -9335,6 +9340,13 @@ impl HostShared {
                 }
                 // Ledger revision 3: the terminal carries the task failure as its outcome.
                 let task_outcome = task_error.outcome();
+                // Workflow #463 U1 (`contracts/policy-suspension.md`, "A failure that pauses at its
+                // first occurrence"): a linear task that met a screen its package never recorded
+                // pauses its task at once. The kernel raises the code only in a task's own run,
+                // outside a restart segment; this is the failure point's verdict, which the policy
+                // class follows (`scheduled_failure_class`), whatever the task's `on_failure`.
+                let pauses_task = error.code().as_str()
+                    == ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.as_str();
                 let event = self.append_contained_task_terminal(
                     request,
                     &token,
@@ -9347,7 +9359,7 @@ impl HostShared {
                         executed_steps,
                         own_executed_steps: None,
                         failure: Some(task_outcome.clone()),
-                        failure_severe: false,
+                        failure_severe: pauses_task,
                         scheduling_outcome: None,
                         selected_scheduling_outcome: None,
                         designated_effect_caps: Vec::new(),
@@ -9402,7 +9414,7 @@ impl HostShared {
                 }
                 failure.task_failure = scheduled.then_some(TaskFailureEvidence {
                     outcome: task_outcome,
-                    severe: false,
+                    severe: pauses_task,
                 });
                 // Workflow #336 L2c: a linear failure with a detail also gets the run's runtime
                 // lifecycle failure record, which carries the detail and names the terminal, as

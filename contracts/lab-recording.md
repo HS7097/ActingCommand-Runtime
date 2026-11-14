@@ -1575,7 +1575,16 @@ equal value is accepted.
   `startup_package`, unpacked as a directory); and, with optional steps, that they cover only
   screens appearing after the click of the step before them (a pop-up later than its
   `settle_ms`, shown more often than the copies recorded, or never recorded makes the package
-  fail loudly).
+  fail loudly). Workflow #463 U1 (since 0.12.60): a screen the recording never met after a step
+  recorded with `--click-retry`, which the step's retry decision sees as neither the next page
+  nor the step's own page and which does not change, ends a run of the package (its own run,
+  outside a restart segment) with `contained_task_linear_unrecorded_screen`, whose `artifact_id`
+  is the frame of that screen; a scheduled run then pauses its task at once, until the package
+  changes ([linear-steps.md](linear-steps.md), "Failure codes";
+  [policy-suspension.md](policy-suspension.md), "A failure that pauses at its first occurrence").
+  Record the missing ending from that frame: an optional step, or a step and a page. A step
+  recorded without `--click-retry` has no retry decision and ends `page_confirmation_failed`, as
+  before.
 
 ## Error codes
 

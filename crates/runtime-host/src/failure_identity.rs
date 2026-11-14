@@ -61,9 +61,13 @@ const DETAIL_KEYS: &[&str] = &[
 ];
 /// Failures of the main package's own steps whose screen does not match the package (R21).
 /// Workflow #390 EXEC-3 (wave 14 ruling 4): a page-graph step unconfirmed after all its retries
-/// is the graph counterpart of `contained_task_linear_intermediate_unobserved`.
+/// is the graph counterpart of `contained_task_linear_intermediate_unobserved`. Workflow #463 U1:
+/// a linear step that met a screen its package never recorded writes its identity as these do
+/// (its error frame, not its decision), though its terminal pauses the task at the first one.
 const MAIN_ACCUMULATING: &[&str] = &[
     actingcommand_execution_kernel::ExecutionKernelCode::PageConfirmationFailed.as_str(),
+    actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen
+        .as_str(),
     actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskLinearIntermediateUnobserved
         .as_str(),
     actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str(),
