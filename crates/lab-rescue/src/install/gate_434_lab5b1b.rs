@@ -149,6 +149,9 @@ fn rescue_handed_rows_hand_what_they_declare() {
                     ordered = true;
                     true
                 }
+                // Workflow #453 S12 fix round 1: a parameter the module reads itself is placed and
+                // written nowhere (`op status`'s `state_root_installation`), so any place fits.
+                Part::Param(_, Written::Beside) => true,
                 Part::Further => index + 1 == handed.parts.len(),
                 other => !ordered && in_place(installer, *other),
             };

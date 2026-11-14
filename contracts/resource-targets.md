@@ -66,7 +66,7 @@ evaluator reads its targets as a v2 policy's.
 
 ## A task that can do something irreversible
 
-Workflow #455 G-R2s (0.12.60; register §1.365; the coordinator's rulings of 11-14 on board #455).
+Workflow #455 G-R2s (0.12.60; register §1.369; the coordinator's rulings of 11-14 on board #455).
 **A goal never raises the weight of a task whose package can do something irreversible**, for
 every version of the record. The standard-pack composer marks such a task `irreversible_reach:
 true` (its package, or a rule that follows it by a chain link, directly or further down, can do

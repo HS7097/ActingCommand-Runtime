@@ -166,7 +166,7 @@ mod tests {
     // Workflow #455 G-R2a (0.12.60; register §1.361): the goal document's value store, a v3
     // record whose targets weigh as a v2 record's.
     mod gate_455_gr2a;
-    // Workflow #455 G-R2s (0.12.60; register §1.365): a goal never raises the weight of a task
+    // Workflow #455 G-R2s (0.12.60; register §1.369): a goal never raises the weight of a task
     // whose package can do something irreversible.
     mod gate_455_gr2s;
 

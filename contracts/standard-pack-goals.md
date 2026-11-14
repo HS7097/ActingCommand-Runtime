@@ -270,7 +270,7 @@ fourteen of the file and `goal_undeclared`) are words of the existing vocabulary
      Since G-R1 fix round 2 a `tier` entry's rule is also `goal_governs_irreversible` at its own
      pointer when a rule that follows it (which runs when it completes), directly or through
      further followers, runs such a package or one the references were not told of, each follower
-     visited once. Since Workflow #455 G-R2s fix round 1 (0.12.60, register §1.365) the rules that
+     visited once. Since Workflow #455 G-R2s fix round 1 (0.12.60, register §1.369) the rules that
      follow a rule are every rule, not held, whose trigger has a chain link to it as the evaluator
      reads one (a `dependency_completed` reached only through `all` whose `terminal_states` holds
      `succeeded`), the lists the composer's irreversible mark reads
@@ -288,7 +288,7 @@ fourteen of the file and `goal_undeclared`) are words of the existing vocabulary
      check does not refuse such an entry (it would forbid goals on ordinary pools); the rule
      belongs to the scheduler, and this check leaves it to the evaluator: **a goal's shortfall
      never raises the weight of a rule whose package can do something irreversible**. Workflow
-     #455 G-R2s (0.12.60, register §1.365) builds it: the composer marks such a rule's tasks
+     #455 G-R2s (0.12.60, register §1.369) builds it: the composer marks such a rule's tasks
      (`irreversible_reach`, [standard-pack-schedule.md](standard-pack-schedule.md), "The
      irreversible mark") and the evaluator weighs a marked candidate as on an instance without a
      target record ([resource-targets.md](resource-targets.md), "A task that can do something

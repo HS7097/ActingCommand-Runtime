@@ -43,7 +43,10 @@ configuration and loads no model. It places no `DirectML.dll`. The Windows
 installation package, assembled and published outside this repository, carries
 these files and `DirectML.dll`, each with its license files, by the owner's
 decision (Workflow #441, 2026-11-13; the registry's `redistribution_note`s); the
-Runtime package and the Tools package carry none of them.
+Runtime package and the Tools package carry none of them. On an installed root,
+the Lab's rescue row `vision place --from <dir>` places them from such a folder,
+each verified against the installed build's manifest and never downloaded
+("Placing a vision root from a folder" below; Workflow #453 S9).
 
 ## The manifest
 
@@ -181,6 +184,38 @@ neither places nor removes a file. The Lab's rescue rows `vision manifest` and
 "The Lab's rescue module"); `vision check` there also asks the Tools'
 `standard-pack check` of each game root which models the installed packs need
 (its member `models`, [package-reference.md](package-reference.md)).
+
+## Placing a vision root from a folder
+
+Workflow #453 S9 (since 0.12.60; register §1.367). The Lab's rescue row `vision place --from
+<dir>` ([install-cli.md](install-cli.md), "The Lab's rescue module") places what the configured
+vision root lacks or holds wrong, from a folder a person gives; it fetches nothing and names no
+address, and `actingctl install` has no such command.
+
+- **Which files.** Those of the manifest of the configured provider, as `actingd vision check`
+  (above) resolves the vision root and the provider and states each file: every file whose state
+  is not `ok` is placed. A `directml` manifest holds every file of the `cpu` one, so a
+  configuration that may fall back to the CPU (`gpu_fallback` `cpu`, "Fallback to the CPU" below)
+  is given what both need. The vision root must exist (it is resolved as a start resolves it), and
+  the row never creates it: it would have to repeat that resolution or write before it holds the
+  installer's writer lock, so the setup of a fresh root creates the folder. A file the manifest
+  does not name, and every other folder under `models\`, is never touched.
+- **The folder given** is laid out as a vision root: each file at its `vision_root_path` below it.
+  Each file to place is read there and compared with its pin, its size first and then its
+  SHA-256, before anything is written; one that is missing or differs refuses the whole command.
+  What "verified" means is the same for a license file as for a library or a model file: every
+  file of this build's manifest, the license files included, has a size and a SHA-256 (`pinned`
+  true), and a file without them is never copied. A file of the folder the manifest does not name
+  is ignored and counted.
+- **When.** Only while the Runtime is stopped (a model file that changes under a running daemon is
+  retired until restart, "Startup and first use"; a loaded library cannot be replaced), under the
+  installer's writer lock, in one journalled operation that the watchdog stands aside for until it
+  ends. A file of another SHA-256 in its place, or one that cannot be read, is replaced, and kept
+  beside it as `<file>.old-<ms>`; nothing is deleted, and `undo` puts it back. A file that cannot
+  even be renamed aside interrupts the operation, which `resume` finishes once the file is free
+  and `undo` reverses.
+- **After.** The same `actingd vision check` again: every manifest file `ok` and every manifest
+  model's identity matching, else the command reports that check failed and names its `undo`.
 
 ## Folder layouts
 

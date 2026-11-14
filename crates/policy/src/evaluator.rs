@@ -236,7 +236,7 @@ pub struct EvaluationFacts {
 /// shorten a list, so a refresh would be asked for at every evaluation and never served. Memory
 /// only: none of it enters a snapshot or decision identity.
 ///
-/// Workflow #455 G-R2s round 2 (register §1.365; `contracts/resource-targets.md`, "A task that
+/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
 /// can do something irreversible"): also the instances whose resource target record the Runtime
 /// leaves out whole, because the scheduler workbench cannot compose their game's root
 /// ([`LeftOutFacts::void_targets`]): every candidate of such an instance is computed as a marked
@@ -4504,7 +4504,7 @@ fn apply_priority_selection(
         .map_err(PolicyEvaluationError::invalid)?;
         instance_targets.insert(instance_id.as_str(), resolved);
     }
-    // Workflow #455 G-R2s (register §1.365; `contracts/resource-targets.md`, "A task that can do
+    // Workflow #455 G-R2s (register §1.369; `contracts/resource-targets.md`, "A task that can do
     // something irreversible"): a goal never raises the weight of a task whose package can do
     // something irreversible. A candidate whose task carries the composer's mark, on an instance
     // that holds a target record, reads its instance resolved once more as without the record
@@ -8071,11 +8071,11 @@ fn deterministic_decision_id(
     format!("decision:{:x}", hasher.finalize())
 }
 
-/// Workflow #455 G-R2s fix round 3 (register §1.365): the part [`targets_void_decision_id`]
+/// Workflow #455 G-R2s fix round 3 (register §1.369): the part [`targets_void_decision_id`]
 /// hashes before the identity it extends.
 const TARGETS_VOID_IDENTITY_PART: &[u8] = b"targets-void";
 
-/// Workflow #455 G-R2s fix round 3 (register §1.365; `contracts/resource-targets.md`, "A task that
+/// Workflow #455 G-R2s fix round 3 (register §1.369; `contracts/resource-targets.md`, "A task that
 /// can do something irreversible"): the decision identity of a candidate of an instance that
 /// holds a target record, the record left out whole because its game's root cannot be composed
 /// ([`LeftOutFacts::targets_void`]): its [`deterministic_decision_id`] `decision_id`
@@ -8110,7 +8110,7 @@ fn reason_with(outcome: Outcome, detail: impl Into<String>) -> DecisionReason {
     }
 }
 
-/// Workflow #455 G-R2s (register §1.365; `contracts/resource-targets.md`, "A task that can do
+/// Workflow #455 G-R2s (register §1.369; `contracts/resource-targets.md`, "A task that can do
 /// something irreversible"): the reason of a candidate whose task carries the composer's
 /// irreversible mark, on an instance that holds a target record: the record is left out for it.
 /// It stands where the record's policy-level reason would, after the reasons of the instance's
@@ -8127,7 +8127,7 @@ fn irreversible_left_out_reason() -> DecisionReason {
     )
 }
 
-/// Workflow #455 G-R2s round 2 (register §1.365; `contracts/resource-targets.md`, "A task that
+/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
 /// can do something irreversible"): the reason of a candidate of an instance whose game's root the
 /// Runtime cannot compose ([`LeftOutFacts::targets_void`]), on an instance that holds a target
 /// record: the record is left out for it until a composition of its game succeeds. It stands

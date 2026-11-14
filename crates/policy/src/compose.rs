@@ -96,7 +96,7 @@ pub struct StandardPackGameFiles<'a> {
     pub root: &'a StandardPackRoot,
     /// The bundle's `maintenance[]` entries.
     pub maintenance: &'a [BundleMaintenance],
-    /// Workflow #455 G-R2s (register §1.365): which packages of the root can do something
+    /// Workflow #455 G-R2s (register §1.369): which packages of the root can do something
     /// irreversible, by the whole root's declarations as the caller's reader read every package
     /// `bundle.json` registers, and which could not be read. Required: no caller can leave it out.
     pub irreversible: &'a IrreversiblePackages,
@@ -239,7 +239,7 @@ pub const POOL_TRIGGER_LINE_MEMBER: &str = "trigger_line";
 /// [`crate::QUEUE_WAIT_SUBSYSTEM`].
 pub const MAX_QUEUE_WAIT_MEMBER: &str = "max_queue_wait_ms";
 
-/// Workflow #455 G-R2s (register §1.365; `contracts/standard-pack-schedule.md`, "The irreversible
+/// Workflow #455 G-R2s (register §1.369; `contracts/standard-pack-schedule.md`, "The irreversible
 /// mark"): the task member the composer writes, `true`, on a rule whose package can do something
 /// irreversible by its game root's declarations ([`IrreversiblePackages::counts_irreversible`],
 /// every task of a game whose root has a package that could not be read included), and on a rule
@@ -451,7 +451,7 @@ impl StandardPackComposition {
     /// use (keys `game`, `package_id`); then, SS-2, one `standard_pack_priority_tiers_exceeded`
     /// per game whose composed rules use more than two distinct priority values (keys `game`,
     /// `count` the number of values, `limit_count` 2), by game id; then, Workflow #455 G-R2s
-    /// (register §1.365), one `standard_pack_package_unreadable` per package whose declaration
+    /// (register §1.369), one `standard_pack_package_unreadable` per package whose declaration
     /// could not be read, of a game whose `schedule.json` was read (keys `game`, `package_id`), by
     /// game id, then package id: every composed task of that game carries the irreversible mark.
     pub fn warnings(&self) -> Vec<Outcome> {
@@ -478,7 +478,7 @@ impl StandardPackComposition {
         unclassified.chain(tiers).chain(unreadable).collect()
     }
 
-    /// Workflow #455 G-R2s (register §1.365): each game whose `schedule.json` was read and whose
+    /// Workflow #455 G-R2s (register §1.369): each game whose `schedule.json` was read and whose
     /// root has a package that could not be read, by game id, with those packages by id. Every
     /// composed task of such a game carries [`IRREVERSIBLE_REACH_MEMBER`].
     pub fn unreadable_packages(&self) -> &[(String, Vec<String>)] {
@@ -1347,7 +1347,7 @@ pub fn compose_standard_pack_rules(
     })
 }
 
-/// Workflow #455 G-R2s (register §1.365; `contracts/standard-pack-schedule.md`, "The irreversible
+/// Workflow #455 G-R2s (register §1.369; `contracts/standard-pack-schedule.md`, "The irreversible
 /// mark"): the ids of the rules of one game, not held, that carry [`IRREVERSIBLE_REACH_MEMBER`]:
 /// a rule whose package counts as irreversible by the game root's declarations
 /// ([`IrreversiblePackages::counts_irreversible`]: every rule while a package of the root could
@@ -1385,7 +1385,7 @@ fn irreversible_rules<'a>(game: &'a ReadGame<'_>) -> BTreeSet<&'a str> {
     marked
 }
 
-/// Workflow #455 G-R2s fix round 1 (register §1.365; `contracts/standard-pack-schedule.md`, "The
+/// Workflow #455 G-R2s fix round 1 (register §1.369; `contracts/standard-pack-schedule.md`, "The
 /// irreversible mark"): the rules that follow each rule of one game's `schedule.json`, by the
 /// rule's file id, each list in file order. A rule follows another when its trigger has a chain
 /// link to it as the evaluator reads one (`required_predecessors`, `contracts/scheduling/README.md`,
@@ -1697,7 +1697,7 @@ fn read_game(
             ),
         ));
     }
-    // Workflow #455 G-R2s (register §1.365): likewise the irreversible mark is the composer's,
+    // Workflow #455 G-R2s (register §1.369): likewise the irreversible mark is the composer's,
     // written from the game root's package declarations; a rule that wrote it would decide its
     // own safety line.
     if let Some(index) = schedule

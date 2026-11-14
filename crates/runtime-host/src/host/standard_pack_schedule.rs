@@ -78,7 +78,7 @@ const FIRST_CHECK_WAIT_TICK: Duration = Duration::from_millis(50);
 /// The size and modification time of one root file, `None` when it does not exist.
 type FileMark = Option<(u64, Option<SystemTime>)>;
 
-/// Workflow #455 G-R2s (register §1.365; `contracts/standard-pack-schedule.md`, "The irreversible
+/// Workflow #455 G-R2s (register §1.369; `contracts/standard-pack-schedule.md`, "The irreversible
 /// mark"): the files of a package, below its directory, the workbench marks for its declaration.
 /// The declaration reader (`PreparedContainedTask::read_remedy_declarations`) reads the whole
 /// content directory of the package, so the set of files it opens follows the directory's listing
@@ -232,7 +232,7 @@ struct WorkbenchState {
     uncomposed: BTreeSet<String>,
 }
 
-/// Workflow #455 G-R2s round 2 (register §1.365; `contracts/resource-targets.md`, "A task that
+/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
 /// can do something irreversible"): at a check whose composition is refused (as a whole, or no
 /// refused game can be taken out), notes as uncomposed `failed`, the games whose own root failed
 /// at this check (fix round 3), and every game in use whose marks this check did not find equal to
@@ -255,7 +255,7 @@ fn note_uncomposed(
     }
 }
 
-/// Workflow #455 G-R2s fix round 3 (register §1.365; C.1, the coordinator's ruling of 11-14):
+/// Workflow #455 G-R2s fix round 3 (register §1.369; C.1, the coordinator's ruling of 11-14):
 /// while a game's own root fails, the games in use whose tasks the active generation `active` does
 /// not hold as `composition`, the other games' roots as they are now, composes them: a task of the
 /// game (its instance bound to it in `bound`) in `active` that `composition` does not compose with
@@ -371,7 +371,7 @@ struct ScheduleGame {
     declarations: Option<RootDeclarations>,
 }
 
-/// G-R2s (register §1.365): one game root's package declarations as the composer takes them.
+/// G-R2s (register §1.369): one game root's package declarations as the composer takes them.
 struct RootDeclarations {
     /// Which packages can do something irreversible, by the whole root, and which could not be
     /// read.
@@ -389,7 +389,7 @@ struct PackageMarks {
     marks: Vec<DeclarationMark>,
 }
 
-/// G-R2s (register §1.365; `contracts/standard-pack-schedule.md`, "The irreversible mark"): what
+/// G-R2s (register §1.369; `contracts/standard-pack-schedule.md`, "The irreversible mark"): what
 /// every package `root`'s registry lists provides and, fix round 3, what its remedies list
 /// (`RemedyDeclarations::declared_capabilities`), each read below the game root `directory`
 /// through the reader the goal check uses (`PreparedContainedTask::read_remedy_declarations`), into
@@ -1063,7 +1063,7 @@ impl HostShared {
                 }
             }
         }
-        // G-R2s (register §1.365): a package of a composed game whose declaration could not be
+        // G-R2s (register §1.369): a package of a composed game whose declaration could not be
         // read marks every task of its game; it is recorded once while it stays unreadable, with
         // the reader's refusal as its cause when the reader refused it, and again only after it
         // has read once.
@@ -1261,7 +1261,7 @@ impl HostShared {
         Ok(())
     }
 
-    /// Workflow #455 G-R2s round 2 (register §1.365): the games in use whose root the
+    /// Workflow #455 G-R2s round 2 (register §1.369): the games in use whose root the
     /// workbench's checks could not compose since the last composition that succeeded
     /// ([`note_uncomposed`]); none in configured mode. The policy cycle reads them right after
     /// the check and leaves out the resource target record of each of their instances

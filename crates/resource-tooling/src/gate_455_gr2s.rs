@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #455 G-R2s fix round 3 (register §1.365; contracts/standard-pack-goals.md,
+// Workflow #455 G-R2s fix round 3 (register §1.369; contracts/standard-pack-goals.md,
 // "Irreversibility"; contracts/standard-pack-schedule.md, "The irreversible mark"): the resource
 // tools' goal check (`goal_issues`) and the composer's input they read (`root_irreversibility`),
 // over real packages on disk read by the Runtime's metadata reader.

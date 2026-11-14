@@ -432,7 +432,7 @@ pub struct TaskSpec {
         deserialize_with = "written_bound"
     )]
     pub max_queue_wait_ms: Option<u64>,
-    /// Workflow #455 G-R2s (register §1.365, `actingcommand.scheduling.v2` only): `true` marks a
+    /// Workflow #455 G-R2s (register §1.369, `actingcommand.scheduling.v2` only): `true` marks a
     /// task whose package, or a rule that follows it by a chain link, can do something irreversible
     /// by its game root's declarations, or whose game root has a package that could not be read
     /// (`contracts/standard-pack-schedule.md`, "The irreversible mark"). A goal never raises such

@@ -523,7 +523,7 @@ warnings; `standard-pack compose` and the Runtime's workbench do not.
 
 ## The irreversible mark
 
-Workflow #455 G-R2s (since 0.12.60; register §1.365; the coordinator's rulings of 11-14 on board
+Workflow #455 G-R2s (since 0.12.60; register §1.369; the coordinator's rulings of 11-14 on board
 #455). A resource goal raises the weight of whatever produces its pool, and a rule of a package
 that can do something irreversible (retire, scrap, spend what cannot be had back) may be among the
 producers. The goal check ([standard-pack-goals.md](standard-pack-goals.md)) refuses an entry that

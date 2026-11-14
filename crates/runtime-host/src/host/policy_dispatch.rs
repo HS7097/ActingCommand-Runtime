@@ -1383,7 +1383,7 @@ impl HostShared {
         // after a start, and its key raises no fact refresh demand on the instances it applies to.
         self.report_left_out_record_lists(&left_out_lists)?;
         let mut left_out = left_out_facts(&left_out_lists);
-        // Workflow #455 G-R2s round 2 (register §1.365; `contracts/resource-targets.md`, "A task
+        // Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task
         // that can do something irreversible"): a game whose root cannot be composed has no goals
         // in effect until it composes; every instance of it reads as without a target record.
         for instance in &facts.instances {
