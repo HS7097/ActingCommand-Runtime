@@ -11,6 +11,7 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::DriveDraw;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 pub const LAB_RECORDING_SCHEMA: &str = "actingcommand.lab-recording.v1";
 pub const LAB_RECORD_MARK_SCHEMA: &str = "actingcommand.lab-record-mark.v1";
@@ -21,6 +22,9 @@ pub const LAB_RECORDING_DEFAULT_MATCH_METRIC: &str = "ccoeff_normed";
 pub const LAB_RECORDING_DEFAULT_SETTLE_MS: u64 = 2_000;
 /// The largest settle of an optional step (the package's largest step timeout).
 pub const LAB_RECORDING_MAX_SETTLE_MS: u64 = 60_000;
+/// #463 L1: the longest wait between a one-call step's performed press and its next frame, the
+/// bound a settle has.
+pub const LAB_RECORDING_MAX_NEXT_FRAME_MS: u64 = LAB_RECORDING_MAX_SETTLE_MS;
 /// Workflow #390 LAB-2: the largest duration of a recorded drag or long press (the Runtime's
 /// largest input duration).
 pub const LAB_RECORDING_MAX_GESTURE_MS: u64 = 60_000;
@@ -376,7 +380,8 @@ pub enum TemplateMaskSpec {
 }
 
 /// Workflow #396 REC-4 (REC-2): a second place within this margin of the best match fails a
-/// template mark, as the task's `verify_templates[].unique` declares it.
+/// template mark, as the task's `verify_templates[].unique` declares it; #463 L2: and a second
+/// matching block fails a located-text mark, as the task's `ocr_targets[].unique` declares it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TemplateUniqueSpec {
@@ -393,7 +398,8 @@ pub struct MarkCrop {
     pub asset: String,
 }
 
-/// The OCR declaration fields of a task 0.9 `ocr_targets[]` entry; all are required.
+/// The OCR declaration fields of a task 0.9 `ocr_targets[]` entry; all are required, `locate`
+/// is the one optional member.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OcrSpec {
@@ -405,6 +411,79 @@ pub struct OcrSpec {
     pub minimum_confidence: f64,
     pub model_ref: String,
     pub model_sha256: String,
+    /// #463 L2: a located-text mark finds one of its `expected` names block by block, as the
+    /// task's `ocr_targets[].locate` declares it (`contracts/ocr-fields.md`, "Located text"); a
+    /// click may follow the box it finds. Absent on every other OCR mark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locate: Option<OcrLocateSpec>,
+}
+
+/// #463 L2: the `locate` of a located-text mark, member for member as the task's
+/// `ocr_targets[].locate` declares it; every member is the author's, with no Lab default. The
+/// Runtime's declaration rules (a `line_merge` exactly with `detect`, the cell grid inside the
+/// region, 1 to 64 cells) are applied when the mark is recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OcrLocateSpec {
+    pub normalize: OcrLocateNormalizeSpec,
+    pub blocks: OcrLocateBlocksSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_merge: Option<OcrLocateLineMergeSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cells: Option<OcrLocateCellsSpec>,
+}
+
+/// #463 L2: the normalization of blocks and `expected` names (`identity_v1`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OcrLocateNormalizeSpec {
+    #[serde(rename = "identity_v1")]
+    IdentityV1,
+}
+
+/// #463 L2: how the provider cuts the region into blocks (`detect` or `region`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrLocateBlocksSpec {
+    Detect,
+    Region,
+}
+
+/// #463 L2: `"none"` or `{"gap_factor": n}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OcrLocateLineMergeSpec {
+    Keyword(OcrLocateLineMergeKeywordSpec),
+    Factor(OcrLocateGapFactorSpec),
+}
+
+/// #463 L2: the line merge keyword `none`, which merges no boxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OcrLocateLineMergeKeywordSpec {
+    #[serde(rename = "none")]
+    NoMerge,
+}
+
+/// #463 L2: the folder's line merge with this factor in place of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OcrLocateGapFactorSpec {
+    pub gap_factor: u32,
+}
+
+/// #463 L2: a grid of cells relative to the region's top-left corner, cell
+/// `k = row * columns + column`; the click box of a following click is the cell holding the found
+/// name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OcrLocateCellsSpec {
+    pub x: i64,
+    pub y: i64,
+    pub width: i64,
+    pub height: i64,
+    pub pitch_x: i64,
+    pub pitch_y: i64,
+    pub columns: i64,
+    pub rows: i64,
 }
 
 /// #411 Lab B-9: one side of a value-test mark, an inline OCR read. The package declares it as
@@ -536,7 +615,7 @@ pub struct RecordedMark {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub any_of: Option<Vec<String>>,
     /// Workflow #396 REC-4: a template mark's factors (REC-5), mask (REC-7) and margin of
-    /// uniqueness (REC-2), as declared.
+    /// uniqueness (REC-2), as declared; #463 L2: a located-text mark's margin of uniqueness.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scales: Option<TemplateScalesSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -575,6 +654,11 @@ impl RecordedMark {
     /// self-test evaluates it as the Runtime evaluates the target the package declares for it.
     pub fn declares_exact_template(&self) -> bool {
         self.scales.is_some() || self.mask.is_some() || self.unique.is_some()
+    }
+
+    /// #463 L2: an OCR mark that declares `locate`, which a click may follow.
+    pub fn locates_text(&self) -> bool {
+        self.family == MarkFamily::Ocr && self.ocr.as_ref().is_some_and(|ocr| ocr.locate.is_some())
     }
 }
 
@@ -637,7 +721,9 @@ pub struct StepClick {
 /// Workflow #396 REC-4: how the package's click follows a template mark. `target` clicks the
 /// match box; `offset` clicks the match box's top-left corner plus `offset`, which is the
 /// declared rectangle minus the crop's top-left corner (scaled by the factor the template
-/// matched at, for a template with `scales`).
+/// matched at, for a template with `scales`). #463 L2: or a located-text mark: its box is the
+/// found block, or the declared cell holding it, and `offset` is the declared rectangle minus that
+/// box's top-left corner on the primary frame, fixed when the click is declared.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClickFollow {
@@ -645,6 +731,11 @@ pub struct ClickFollow {
     pub form: ClickFollowForm,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<RecordRect>,
+    /// #463 L2 fix 1: the `expected` names of the followed located-text mark were changed after
+    /// the step's click was executed, so the recorded press is not what the package presses: the
+    /// package presses where the new names are found. Absent (false) on every other click.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub names_changed_after_press: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -858,12 +949,15 @@ pub struct MarkSpec {
     pub model_ref: Option<String>,
     #[serde(default)]
     pub model_sha256: Option<String>,
+    /// #463 L2: an OCR mark's `locate`, which makes it a located-text mark.
+    #[serde(default)]
+    pub locate: Option<OcrLocateSpec>,
     #[serde(default)]
     pub all_of: Option<Vec<String>>,
     #[serde(default)]
     pub any_of: Option<Vec<String>>,
     /// Workflow #396 REC-4: a template mark's factors (REC-5), mask (REC-7) and margin of
-    /// uniqueness (REC-2).
+    /// uniqueness (REC-2); #463 L2: a located-text mark's margin of uniqueness.
     #[serde(default)]
     pub scales: Option<TemplateScalesSpec>,
     #[serde(default)]
@@ -902,6 +996,7 @@ impl MarkSpec {
             minimum_confidence: None,
             model_ref: None,
             model_sha256: None,
+            locate: None,
             all_of: None,
             any_of: None,
             scales: None,
@@ -1115,6 +1210,10 @@ pub struct MarkView {
     /// #411 Lab B-9: a value-test mark's declaration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value_test: Option<ValueTestSpec>,
+    /// #463 L2 fix 2: a located-text mark as the recording holds it, every member that a request
+    /// changing only its names gives again (`region`, `unique`, the OCR fields with `locate`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub located_text: Option<RecordedMark>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1128,6 +1227,10 @@ pub struct ClickView {
     /// Workflow #390 LAB-2: a drag or a long press.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gesture: Option<ClickGesture>,
+    /// #463 L2 fix 1: the names of the located-text mark the click follows were changed after its
+    /// press, so the recorded press is not what the package presses.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub names_changed_after_press: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1272,6 +1375,48 @@ pub struct CommitClickOutcome {
     pub step: u32,
     pub step_closed: bool,
     pub click: StepClick,
+}
+
+/// #463 L1 (`contracts/lab-recording.md`, "One call per step"): `do --capture --record` that
+/// records a whole step: the `record mark` request of the open step, the press, and the next
+/// frame after it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RecordStepRequest {
+    /// The `actingcommand.lab-record-mark.v1` request `record mark --request-json` takes, applied
+    /// first, as `record mark` applies it; `None` is today's `do --capture --record`.
+    pub mark: Option<MarkRequest>,
+    /// How the press is planned on the open step, as `do --capture --record` plans it.
+    pub click: PlanClickRequest,
+    /// After a performed press without a failure, wait this many milliseconds (0 to
+    /// [`LAB_RECORDING_MAX_NEXT_FRAME_MS`]) and take the next frame as `capture --record` takes
+    /// it; `None` takes none.
+    pub next_frame_after_ms: Option<u64>,
+    /// The file the next frame's PNG is written to, as `capture --record --out` writes it.
+    pub next_frame_out: Option<PathBuf>,
+}
+
+/// #463 L1: the next frame a one-call step took after its press.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NextFrameOutcome {
+    /// The wait before it, in milliseconds.
+    pub after_ms: u64,
+    /// The file its PNG was written to.
+    pub out: Option<String>,
+    /// The frame as the recording took it, `capture --record`'s `record`.
+    pub record: AttachFrameOutcome,
+}
+
+/// #463 L1: what a one-call step recorded.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordStepOutcome {
+    /// The `record mark` output of the request, when one was given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mark: Option<MarkOutcome>,
+    /// The press as `do --capture --record` records it.
+    pub click: CommitClickOutcome,
+    /// The next frame, when one was asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_frame: Option<NextFrameOutcome>,
 }
 
 /// `session app <verb> --record`: the verb as given (`launch`, `restart`, `stop`,

@@ -21,8 +21,9 @@ actingcommand_contract::outcome_codes! {
         /// Error link. The vision root has no ONNX Runtime library (key `path`: the library the
         /// Runtime would load).
         LabOcrRuntimeMissing => "lab_ocr_runtime_missing": error / none,
-        /// Error. Workflow #396 REC-4: a click that follows a template mark does not hold
-        /// (keys `mark_id`: the followed mark, `follow_problem`: why; `stage`). A declaration
+        /// Error. Workflow #396 REC-4: a click that follows a template mark (#463 L2: or a
+        /// located-text mark) does not hold (keys `mark_id`: the followed mark,
+        /// `follow_problem`: why; `stage`). A declaration
         /// that cannot hold refuses `record mark` with it; a frame on which it does not hold
         /// is its reason inside `record_mark_rejected`.
         RecordClickFollowInvalid => "record_click_follow_invalid": error / none,
@@ -52,29 +53,35 @@ actingcommand_contract::outcome_codes! {
 actingcommand_contract::outcome_locations! {
     /// Where in the Lab a result arose.
     pub enum LabLocation {
-        /// Checking a click that follows a template mark: its declaration, and the followed
-        /// template and click box on every live frame of the step.
+        /// Checking a click that follows a template mark or (#463 L2) a located-text mark: its
+        /// declaration, and the followed mark and click box on every live frame of the step.
         RecordClickFollowCheck => "record_click_follow_check",
     }
 }
 
-// Workflow #396 REC-4.
+// Workflow #396 REC-4; #463 L2: a click may follow a located-text mark too.
 actingcommand_contract::outcome_vocabulary! {
-    /// Why a click that follows a template mark does not hold (`follow_problem`).
+    /// Why a click that follows a template mark or a located-text mark does not hold
+    /// (`follow_problem`).
     pub enum ClickFollowProblem: "follow_problem" {
-        /// The followed mark is not a template mark of the step.
+        /// The followed mark is neither a template mark nor a located-text mark of the step.
         NotTemplate => "not_template",
-        /// The followed template is only a member of an `any_of` check, not a required mark of
-        /// the step's page.
+        /// The followed mark is only a member of an `any_of` check of the step's page.
         NotRequired => "not_required",
-        /// The click guard names another mark than the followed template.
+        /// The click guard names another mark than the followed one.
         GuardConflict => "guard_conflict",
         /// On the primary frame the template's best match is not at its crop, or not at factor
         /// 1000.
         PrimaryMismatch => "primary_mismatch",
         /// On a frame the template does not pass in its search area.
         TemplateUnmatched => "template_unmatched",
-        /// On a frame the click box that follows the match leaves the frame.
+        /// On a frame the click box that follows the match or the found text leaves the frame.
         ClickOutsideFrame => "click_outside_frame",
+        /// #463 L2: on the primary frame the press of the step's executed click lies outside the
+        /// box the followed located text gives there.
+        PressOutsideFoundBox => "press_outside_found_box",
+        /// #463 L2 fix 1: the step's page would need the followed located text to be recognized:
+        /// no other mark of the step recognizes it, or a check of the page names the located text.
+        PageNeedsFollowedText => "page_needs_followed_text",
     }
 }

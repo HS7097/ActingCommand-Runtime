@@ -904,7 +904,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Lab do",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json do, one argument per flag, and answers its data verbatim. With capture it acts on the instance through the Runtime with exactly one of target (a Runtime element id), tap, swipe or operation (an operation of the package's entry task, which the Runtime runs as a run runs it and records with every attempt and frame) (instance: its alias; without dry_run, package or zip is required), and the Runtime records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id. Without dry_run each of its observations (before, after, every arrival sample) takes the frames the package's target consensus needs (up to five; the last is the current frame). Offline (scene, with up to 4 earlier frames of the same screen in sample_scenes, oldest first, as for ac_lab_observe) actinglab only plans, with dry_run, and touches no Runtime. The destructive guard flags (destructive, allow_destructive) are read only offline and with dry_run: with capture and without dry_run either one set is refused before actinglab runs, arguments_invalid {argument, argument_problem: conflicting}, and this server adds no guard of its own. target is never a mode: target tap with tap names the tap twice and is refused before actinglab runs, arguments_invalid {argument: tap, argument_problem: conflicting}; give tap alone. Every arguments_invalid {argument, argument_problem} refusal this server gives before actinglab runs carries a req_id this server issued for it (in actinglab's form; no Lab request exists under it and nothing is recorded). An argument the chosen path does not read is never ignored: actinglab refuses it (lab_tool_failed caused by validation_failed, naming it as argument and argument_problem in its details). Every answer states frame_coordinates {device_pixels [width, height], orientation, applies_to}, the coordinate system of the frame the action was chosen on: tap, tap_rect and swipe are in these frame pixels, counted from the top-left pixel, never in a preview's. After an action it attaches the result by default, so no extra observe is needed: when the page after it is known, after_attachment {kind page_projection, observation} is that page's projection (its content_sha256 and after.projection_sequence are the next call's projection_hash and projection_sequence); otherwise after_attachment {kind frame, frame_coordinates, frame_path, preview {path, width, height, scale}} names the frame after the action and its JPEG preview (long edge at most 1024; frame point = preview point times scale). preview true (capture, not dry_run) also writes the preview of a known page's frame. Images are never inlined, only paths. An after_page wait that ends without the page fails with class safety, lab_tool_failed caused by lab_arrival_timeout; its raw_text is the operation's answer, arrival last. seed (an unsigned integer, passed as --seed; offline, with dry_run, or with capture and record) draws the point pressed in the box from that seed as the Runtime draws a run's, centre-hotspot with the touch keys of the install's configuration and uniform without them, instead of the box's centre; offline and with dry_run the answer then carries actual_click.seed and actual_click.sampling {algorithm, action_seed, source_regions, parameters} as actinglab gives it (with record, the recorded click carries point_rule and sampling), and the same seed draws the same point. A Runtime element (target with capture) is pressed at its projection point and tap and swipe exactly, so seed with them is refused.",
+            "Runs actinglab --json do, one argument per flag, and answers its data verbatim. With capture it acts on the instance through the Runtime with exactly one of target (a Runtime element id), tap, swipe or operation (an operation of the package's entry task, which the Runtime runs as a run runs it and records with every attempt and frame) (instance: its alias; without dry_run, package or zip is required), and the Runtime records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id. Without dry_run each of its observations (before, after, every arrival sample) takes the frames the package's target consensus needs (up to five; the last is the current frame). Offline (scene, with up to 4 earlier frames of the same screen in sample_scenes, oldest first, as for ac_lab_observe) actinglab only plans, with dry_run, and touches no Runtime. The destructive guard flags (destructive, allow_destructive) are read only offline and with dry_run: with capture and without dry_run either one set is refused before actinglab runs, arguments_invalid {argument, argument_problem: conflicting}, and this server adds no guard of its own. target is never a mode: target tap with tap names the tap twice and is refused before actinglab runs, arguments_invalid {argument: tap, argument_problem: conflicting}; give tap alone. Every arguments_invalid {argument, argument_problem} refusal this server gives before actinglab runs carries a req_id this server issued for it (in actinglab's form; no Lab request exists under it and nothing is recorded). An argument the chosen path does not read is never ignored: actinglab refuses it (lab_tool_failed caused by validation_failed, naming it as argument and argument_problem in its details). Every answer states frame_coordinates {device_pixels [width, height], orientation, applies_to}, the coordinate system of the frame the action was chosen on: tap, tap_rect and swipe are in these frame pixels, counted from the top-left pixel, never in a preview's. After an action it attaches the result by default, so no extra observe is needed: when the page after it is known, after_attachment {kind page_projection, observation} is that page's projection (its content_sha256 and after.projection_sequence are the next call's projection_hash and projection_sequence); otherwise after_attachment {kind frame, frame_coordinates, frame_path, preview {path, width, height, scale}} names the frame after the action and its JPEG preview (long edge at most 1024; frame point = preview point times scale). preview true (capture, not dry_run) also writes the preview of a known page's frame. Images are never inlined, only paths. An after_page wait that ends without the page fails with class safety, lab_tool_failed caused by lab_arrival_timeout; its raw_text is the operation's answer, arrival last. seed (an unsigned integer, passed as --seed; offline, with dry_run, or with capture and record) draws the point pressed in the box from that seed as the Runtime draws a run's, centre-hotspot with the touch keys of the install's configuration and uniform without them, instead of the box's centre; offline and with dry_run the answer then carries actual_click.seed and actual_click.sampling {algorithm, action_seed, source_regions, parameters} as actinglab gives it (with record, the recorded click carries point_rule and sampling), and the same seed draws the same point. A Runtime element (target with capture) is pressed at its projection point and tap and swipe exactly, so seed with them is refused. A recorded step in one call (with capture and record): mark, one actingcommand.lab-record-mark.v1 request as ac_record_mark takes it, is applied to the open step and self-tested as record mark does before the press (a refusal is record mark's own; nothing is pressed or written); after a press performed without a failure, next_frame_after_ms (0 to 60000) waits and takes the next frame as capture --record does, which opens the next step, answered as next_frame (next_frame_out writes its PNG); the answer's record carries record.mark. actinglab refuses dry_run with record (record_flag_unsupported): ac_record_mark with dry_run is the preview.",
             lab_errors!(),
             lab_job!()
         ),
@@ -979,6 +979,88 @@ pub(super) static TOOLS: &[ToolDef] = &[
         result_schema: lab::lab_result,
         run: lab::record_status,
     },
+    // ---- #463 L1 (begin): the recording family's rows that had no tool. ----
+    ToolDef {
+        name: "ac_record_candidates",
+        title: "Recording step candidates",
+        tier: Tier::Author,
+        description: concat!(
+            "Runs actinglab --json record candidates --step-id <step_id>: the automatic region candidates of one resource step of the recording session's own step list (the older record step file, not the Lab recording's marks), verbatim. It reads the session files only and takes no recording lock: no Runtime connection, no client.action.",
+            lab_errors!(),
+            lab_job!()
+        ),
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: lab::record_candidates_input,
+        result_schema: lab::lab_result,
+        run: lab::record_candidates,
+    },
+    ToolDef {
+        name: "ac_record_amend",
+        title: "Amend a recording step",
+        tier: Tier::Author,
+        description: concat!(
+            "Runs actinglab --json record amend: amends one step of the recording session's own step list (step_id; a resource step's id, region, threshold, color check or a candidate of its report, an operation's pages, click or destructive mark) or applies a drift diagnostics file (from_drift_diagnostics), with the backtest of a resource step's frame (contrast_frame, metric), verbatim. It changes the session files only, under the recording lock: no Runtime connection, no client.action.",
+            lab_errors!(),
+            lab_job!()
+        ),
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: lab::record_amend_input,
+        result_schema: lab::lab_result,
+        run: lab::record_amend,
+    },
+    ToolDef {
+        name: "ac_record_step",
+        title: "Record a session step",
+        tier: Tier::Author,
+        description: concat!(
+            "Runs actinglab --json record step --kind <kind> --instance <instance>: records one step of the recording session's own step list from a frame (frame or source_frame, or capture through the Runtime), a resource region with its backtest or an operation (click, swipe, drag, long_press, long_tap), verbatim. A Lab recording's steps are recorded with ac_lab_observe or ac_lab_do and record and ac_record_mark instead. This server records no client.action for it.",
+            lab_errors!(),
+            lab_job!()
+        ),
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: lab::record_step_input,
+        result_schema: lab::lab_result,
+        run: lab::record_step,
+    },
+    ToolDef {
+        name: "ac_record_archive",
+        title: "Archive a recording",
+        tier: Tier::Author,
+        description: concat!(
+            "Runs actinglab --json record archive: ends the instance's active recording as material only (no marks needed), writes its manifest beside its frames and step table and keeps every file; record_id names an archived recording again, or one record start --force left behind; copy_to, an absolute path of a directory that does not exist or is empty, receives a checked copy. The answer is verbatim. It changes the recording files only: no Runtime connection, no client.action.",
+            lab_errors!(),
+            lab_job!()
+        ),
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: lab::record_archive_input,
+        result_schema: lab::lab_result,
+        run: lab::record_archive,
+    },
+    ToolDef {
+        name: "ac_record_reopen",
+        title: "Reopen a recording",
+        tier: Tier::Author,
+        description: concat!(
+            "Runs actinglab --json record reopen: makes an archived recording of the instance (record_id, or the one the session header names) its active recording again, so that its steps can be marked and ac_record_stop can build its package; refused while another recording is active. The answer is verbatim. It changes the session header only: no Runtime connection, no client.action.",
+            lab_errors!(),
+            lab_job!()
+        ),
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: lab::record_reopen_input,
+        result_schema: lab::lab_result,
+        run: lab::record_reopen,
+    },
+    // ---- #463 L1 (end) ----
     ToolDef {
         name: "ac_binding_draft",
         title: "Binding draft",

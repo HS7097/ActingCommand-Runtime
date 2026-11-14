@@ -7,8 +7,9 @@ use actingcommand_contract::{
     LabOperationFailure, LabOperationSelection, LabOperationStage, LabProjectionHint,
 };
 use actingcommand_lab::{
-    ClickEffect, ClickGesture, ClickPlan, CommitClickRequest, OpaqueJson, PlanClickRequest,
-    PlannedSwipe, RecordPoint, RecordingLock, record_commit_click, record_plan_click,
+    AttachFrameRequest, ClickEffect, ClickGesture, ClickPlan, CommitClickRequest, OpaqueJson,
+    PlanClickRequest, PlannedStep, PlannedSwipe, RecordPoint, RecordStepOutcome, RecordStepPorts,
+    RecordStepRequest, RecordingLock, parse_mark_request, record_plan_step,
 };
 use actingcommand_runtime_client::RuntimeClientError;
 
@@ -35,9 +36,11 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         ));
     }
     // `do --capture --record`: the lock is held across the device click; the point comes from
-    // the open step's rectangle, planned before anything is pressed.
+    // the open step's rectangle, planned before anything is pressed. #463 L1: with a mark request,
+    // the request is applied to the open step and self-tested first, by `record mark`'s code, and
+    // nothing is written until the input is sent.
     let recording = if flags.bool("--record") {
-        Some(begin_record_click(
+        Some(begin_record_step(
             global,
             flags,
             super::super::lab_draw::press_draw(seed)?,
@@ -46,9 +49,14 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         None
     };
     let selection = match &recording {
-        Some((_, plan)) => recorded_click_selection(plan)?,
+        Some(begun) => recorded_click_selection(begun.planned.plan())?,
         None => selection(flags)?,
     };
+    // The lock lives to the end of the command; the planned step is performed once, below, with
+    // the next frame's device configuration resolved before it.
+    let (record_lock, planned_step) = recording
+        .map(|begun| (begun.lock, (begun.planned, begun.next_frame_device)))
+        .unzip();
     let after = flags
         .optional("--after-page")
         .map(|page_id| {
@@ -101,113 +109,284 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         // observations take.
         let frames = super::super::contained_resources::online_frame_plan(&instance, path)?;
         let session = begin_runtime_debug_session()?;
+        // `do --capture --record` (#463 L1): the planned step writes its marks, then sends the
+        // input through the port below and records the Runtime's answer as before, and takes the
+        // next frame when asked for.
+        if let (Some(lock), Some((planned, next_frame_device))) =
+            (record_lock.as_ref(), planned_step)
+        {
+            let mut runtime = RuntimeStep {
+                global,
+                flags,
+                instance: &instance,
+                session: &session,
+                request: Some(request),
+                frames: Some(frames),
+                next_frame_device,
+                answer: None,
+                next_frame: None,
+            };
+            let performed = planned.perform(lock, &mut runtime);
+            return recorded_answer(performed, runtime.answer, runtime.next_frame);
+        }
         let verified = session
             .run_contained_lab_operation(&instance, request, frames)
             .map_err(lab_operation_call_error)?;
-        let operation = verified.operation();
-        let record = &operation.record;
-        let prepared = &record.prepared;
-        let frame_summary = |frame: &Option<actingcommand_contract::LabOperationFrame>,
-                             projection: &Option<
-            actingcommand_contract::ContainedPageObservation,
-        >| {
-            frame.as_ref().map(|frame| json!({
-                "frame_id":frame.observation.artifact().frame_id,
-                "frame_sha256":frame.observation.artifact().sha256,
-                "frame_sequence":frame.verified.sequence,
-                "lease_valid_after_capture":frame.lease_valid_after_capture,
-                "page":projection.as_ref().map(|projection| &projection.projection.page),
-                "status":projection.as_ref().map(|projection| projection.status),
-                "projection_sequence":projection.as_ref().map(|projection| projection.projection_sequence),
-            }))
-        };
-        let mut payload = json!({
-            "req_id":verified.receipt().request_id(), "correlation_id":verified.receipt().correlation_id(),
-            "state":if record.failure.is_none() { "completed" } else { "failed" },
-            "instance":instance, "lease_id":prepared.lease_id, "action_id":record.input_action_id,
-            "executed":match record.effect {
-                EffectDisposition::Performed => Some(true),
-                EffectDisposition::NotPerformed => Some(false),
-                EffectDisposition::Indeterminate => None,
-            }, "effect":record.effect,
-            "actual_input":prepared.action, "actual_click":prepared.geometry,
-            "before":frame_summary(&prepared.before_frame, &prepared.before_projection),
-            "after":frame_summary(&record.after_frame, &record.after_projection),
-            "device":{"authority":"runtime_execution_kernel"},
-            "ledger":{"authority":"runtime_global_ledger", "prepared_sequence":record.prepared_artifact.verified.sequence,
-                "input_sequence":record.input_event.map(|event| event.sequence),
-                "terminal_sequence":operation.terminal_artifact.verified.sequence},
-            "failure":record.failure, "cleanup_failure":record.cleanup_failure,
-        });
-        if prepared.after.is_some() {
-            payload["after_condition"] = json!(prepared.after);
-            payload["arrival"] = json!(record.arrival);
-        }
-        // Workflow #410 item 1: the coordinate system of the frame the action's coordinates
-        // were chosen on (the before frame).
-        if let Some(before) = &prepared.before_frame {
-            payload["frame_coordinates"] =
-                super::frame::coordinates(before.observation.width(), before.observation.height());
-        }
-        if global.verbose || flags.bool("--verbose") || flags.bool("--pretty") {
-            payload["operation_record"] = json!(operation);
-        }
-        let evidence_id = payload["req_id"]
-            .as_str()
-            .ok_or_else(|| CliError::device("verified request ID is not canonical"))?
-            .to_string();
-        let mut projection_request = lab2_projection_request(flags, Some(evidence_id));
-        for field in ["effect", "executed", "failure", "ledger"] {
-            projection_request.fields.insert(field.to_string());
-        }
-        if prepared.after.is_some() {
-            projection_request
-                .fields
-                .insert("after_condition".to_string());
-            projection_request.fields.insert("arrival".to_string());
-        }
-        if global.verbose && projection_request.verbosity == ProjectionVerbosity::Min {
-            projection_request.verbosity = ProjectionVerbosity::Normal;
-        }
-        let mut projected = project_record(&payload, &projection_request)
-            .map_err(|error| CliError::device(error.to_string()))?;
-        // Workflow #410 item 1: after an action, its result by default: the after page's
-        // projection when the page is known, otherwise the after frame's path and preview path.
-        // It joins the answer after the Min projection of the operation members, so they keep
-        // their budget, and it is in the details of a failure too.
-        if let Some(attachment) = super::frame::after_attachment(
-            record,
-            flags.bool("--preview"),
-            projection_request.verbosity == ProjectionVerbosity::Min,
-        )? {
-            projected["after_attachment"] = attachment;
-        }
-        // #411 A19: in every answer and every failure's details, `arrival` is the last member.
-        let projected = arrival_last(projected);
-        if let Some((lock, plan)) = &recording {
-            if !matches!(record.effect, EffectDisposition::NotPerformed) {
-                return commit_record_click(lock, plan, record, &payload, projected);
-            }
-            if record.failure.is_none() {
-                return Err(CliError::device(
-                    "do --capture --record: the Runtime reported the click as not performed \
-                     without a failure; nothing was recorded",
-                )
-                .with_details(projected));
-            }
-        }
-        if let Some(failure) = &record.failure {
+        let answered = operation_answer(global, flags, &instance, &verified)?;
+        if let Some(failure) = &verified.operation().record.failure {
             return Err(operation_failure_error(
                 failure,
-                with_target_types(projected, verified.receipt().outcome()),
+                with_target_types(answered.projected, verified.receipt().outcome()),
             ));
         }
-        Ok(projected)
+        Ok(answered.projected)
     })();
     // #411 A19: `arrival` stays the last member when a `--record` answer gains its `record`.
     let result = result.map(arrival_last);
     // The logical publication's generation stays referenced throughout the RPC and validation.
     super::super::contained_resources::finish_package_use(result, reader.close())
+}
+
+/// The answer of an online `do` whose Lab operation the Runtime ran: the payload its record gives,
+/// and the answer projected from it with the after attachment, `arrival` last.
+struct OperationAnswer {
+    payload: Value,
+    projected: Value,
+}
+
+/// [`OperationAnswer`] of `verified` (#463 L1: one function for the recorded and the plain
+/// `do --capture`, as the one body before).
+fn operation_answer(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    instance: &str,
+    verified: &actingcommand_runtime_client::VerifiedLabOperation,
+) -> CliOutcome<OperationAnswer> {
+    let operation = verified.operation();
+    let record = &operation.record;
+    let prepared = &record.prepared;
+    let frame_summary =
+        |frame: &Option<actingcommand_contract::LabOperationFrame>,
+         projection: &Option<actingcommand_contract::ContainedPageObservation>| {
+            frame.as_ref().map(|frame| json!({
+            "frame_id":frame.observation.artifact().frame_id,
+            "frame_sha256":frame.observation.artifact().sha256,
+            "frame_sequence":frame.verified.sequence,
+            "lease_valid_after_capture":frame.lease_valid_after_capture,
+            "page":projection.as_ref().map(|projection| &projection.projection.page),
+            "status":projection.as_ref().map(|projection| projection.status),
+            "projection_sequence":projection.as_ref().map(|projection| projection.projection_sequence),
+        }))
+        };
+    let mut payload = json!({
+        "req_id":verified.receipt().request_id(), "correlation_id":verified.receipt().correlation_id(),
+        "state":if record.failure.is_none() { "completed" } else { "failed" },
+        "instance":instance, "lease_id":prepared.lease_id, "action_id":record.input_action_id,
+        "executed":match record.effect {
+            EffectDisposition::Performed => Some(true),
+            EffectDisposition::NotPerformed => Some(false),
+            EffectDisposition::Indeterminate => None,
+        }, "effect":record.effect,
+        "actual_input":prepared.action, "actual_click":prepared.geometry,
+        "before":frame_summary(&prepared.before_frame, &prepared.before_projection),
+        "after":frame_summary(&record.after_frame, &record.after_projection),
+        "device":{"authority":"runtime_execution_kernel"},
+        "ledger":{"authority":"runtime_global_ledger", "prepared_sequence":record.prepared_artifact.verified.sequence,
+            "input_sequence":record.input_event.map(|event| event.sequence),
+            "terminal_sequence":operation.terminal_artifact.verified.sequence},
+        "failure":record.failure, "cleanup_failure":record.cleanup_failure,
+    });
+    if prepared.after.is_some() {
+        payload["after_condition"] = json!(prepared.after);
+        payload["arrival"] = json!(record.arrival);
+    }
+    // Workflow #410 item 1: the coordinate system of the frame the action's coordinates were
+    // chosen on (the before frame).
+    if let Some(before) = &prepared.before_frame {
+        payload["frame_coordinates"] =
+            super::frame::coordinates(before.observation.width(), before.observation.height());
+    }
+    if global.verbose || flags.bool("--verbose") || flags.bool("--pretty") {
+        payload["operation_record"] = json!(operation);
+    }
+    let evidence_id = payload["req_id"]
+        .as_str()
+        .ok_or_else(|| CliError::device("verified request ID is not canonical"))?
+        .to_string();
+    let mut projection_request = lab2_projection_request(flags, Some(evidence_id));
+    for field in ["effect", "executed", "failure", "ledger"] {
+        projection_request.fields.insert(field.to_string());
+    }
+    if prepared.after.is_some() {
+        projection_request
+            .fields
+            .insert("after_condition".to_string());
+        projection_request.fields.insert("arrival".to_string());
+    }
+    if global.verbose && projection_request.verbosity == ProjectionVerbosity::Min {
+        projection_request.verbosity = ProjectionVerbosity::Normal;
+    }
+    let mut projected = project_record(&payload, &projection_request)
+        .map_err(|error| CliError::device(error.to_string()))?;
+    // Workflow #410 item 1: after an action, its result by default: the after page's projection
+    // when the page is known, otherwise the after frame's path and preview path. It joins the
+    // answer after the Min projection of the operation members, so they keep their budget, and it
+    // is in the details of a failure too.
+    if let Some(attachment) = super::frame::after_attachment(
+        record,
+        flags.bool("--preview"),
+        projection_request.verbosity == ProjectionVerbosity::Min,
+    )? {
+        projected["after_attachment"] = attachment;
+    }
+    // #411 A19: in every answer and every failure's details, `arrival` is the last member.
+    Ok(OperationAnswer {
+        payload,
+        projected: arrival_last(projected),
+    })
+}
+
+/// #463 L1: the Runtime's side of `do --capture --record` (`RecordStepPorts`): the one Lab
+/// operation the command sends, the answer it projects from the Runtime's answer, and the capture
+/// of the next frame, as `capture --record` takes its frame.
+struct RuntimeStep<'a> {
+    global: &'a GlobalOptions,
+    flags: &'a FlagArgs,
+    instance: &'a str,
+    session: &'a actingcommand_runtime_client::RuntimeDebugSession,
+    /// The request and its frames, sent once.
+    request: Option<ContainedLabOperationRequest>,
+    frames: Option<actingcommand_contract::ObservationFramePlan>,
+    /// The next frame's device configuration, resolved for the lock's instance before anything
+    /// was written or pressed (fix round 1); `None` without `--next-frame-after-ms`.
+    next_frame_device: Option<crate::DeviceRuntimeConfig>,
+    /// The operation's answer, once the Runtime answered an input performed or of unknown
+    /// outcome; the answer the command prints, with its `record`.
+    answer: Option<Value>,
+    /// The next frame's capture, as `capture --record` answers it but its `record`.
+    next_frame: Option<Value>,
+}
+
+impl RecordStepPorts for RuntimeStep<'_> {
+    /// The input as `do --capture --record` sends it, once: an input performed or of unknown
+    /// outcome answers what the recording takes of it (and keeps the operation's answer); one not
+    /// performed answers the operation's own error, as before.
+    fn press(&mut self, _plan: &ClickPlan) -> CliOutcome<CommitClickRequest> {
+        let (Some(request), Some(frames)) = (self.request.take(), self.frames.take()) else {
+            return Err(CliError::device(
+                "do --capture --record sends its input once; it was sent already",
+            ));
+        };
+        let verified = self
+            .session
+            .run_contained_lab_operation(self.instance, request, frames)
+            .map_err(lab_operation_call_error)?;
+        let answered = operation_answer(self.global, self.flags, self.instance, &verified)?;
+        let record = &verified.operation().record;
+        if !matches!(record.effect, EffectDisposition::NotPerformed) {
+            let commit = commit_request(record, &answered.payload)?;
+            self.answer = Some(answered.projected);
+            return Ok(commit);
+        }
+        match &record.failure {
+            None => Err(CliError::device(
+                "do --capture --record: the Runtime reported the click as not performed without a \
+                 failure; nothing was recorded",
+            )
+            .with_details(answered.projected)),
+            Some(failure) => Err(operation_failure_error(
+                failure,
+                with_target_types(answered.projected, verified.receipt().outcome()),
+            )),
+        }
+    }
+
+    fn wait(&mut self, duration: std::time::Duration) {
+        std::thread::sleep(duration);
+    }
+
+    /// One frame through the Runtime, as `capture --record` takes it without `--require-fresh`, on
+    /// the device configuration `begin_record_step` resolved before the press.
+    fn capture(&mut self) -> CliOutcome<AttachFrameRequest> {
+        let device_config = self.next_frame_device.as_ref().ok_or_else(|| {
+            CliError::device(
+                "do --capture --record resolves the next frame's device configuration before the \
+                 press, and none was resolved",
+            )
+        })?;
+        let captured = crate::commands::capture_for_command(
+            device_config,
+            device_config.capture_backend,
+            false,
+            std::time::Duration::ZERO,
+        )?;
+        let frame = captured.frame;
+        let png = frame
+            .png_for_artifact()
+            .map_err(|error| CliError::device(error.to_string()))?;
+        self.next_frame = Some(json!({
+            "width": frame.width,
+            "height": frame.height,
+            "capture_backend_used": frame.backend_name.as_str(),
+            "adb_source": device_config.adb_source.as_str(),
+            "adb_warning": device_config.adb_warning,
+            "capture_backend_attempts": captured.attempts,
+            "freshness": captured.freshness,
+        }));
+        Ok(AttachFrameRequest {
+            png,
+            source: "lab_capture".to_string(),
+            runtime_artifact: None,
+            capture_backend: Some(frame.backend_name.as_str().to_string()),
+            freshness: Some(OpaqueJson::from_serializable(&captured.freshness)?),
+        })
+    }
+}
+
+/// #463 L1: the answer of `do --capture --record`: the operation's answer with the recording's
+/// `record` (with a mark request, `record.mark`, `record mark`'s output) and, with a next frame,
+/// `next_frame`, `capture --record`'s answer with the wait (`after_ms`) and the file (`out`). An
+/// error after the input carries the operation's answer in its details (`operation`), as before.
+fn recorded_answer(
+    performed: CliOutcome<RecordStepOutcome>,
+    answer: Option<Value>,
+    next_frame: Option<Value>,
+) -> CliOutcome<Value> {
+    let outcome = match performed {
+        Ok(outcome) => outcome,
+        Err(mut error) => {
+            if let Some(answer) = answer {
+                let mut details = error.details.take().unwrap_or_else(|| json!({}));
+                if let Some(object) = details.as_object_mut() {
+                    object.insert("operation".to_string(), answer);
+                }
+                error = error.with_details(details);
+            }
+            return Err(error);
+        }
+    };
+    let mut projected = answer.ok_or_else(|| {
+        CliError::device("do --capture --record recorded a press the Runtime did not answer")
+    })?;
+    let mut record = encoded(&outcome.click)?;
+    if let Some(mark) = &outcome.mark {
+        record["mark"] = encoded(mark)?;
+    }
+    projected["record"] = record;
+    if let Some(next) = &outcome.next_frame {
+        let mut frame = next_frame.unwrap_or_else(|| json!({}));
+        frame["after_ms"] = json!(next.after_ms);
+        frame["out"] = json!(next.out);
+        frame["record"] = encoded(&next.record)?;
+        projected["next_frame"] = frame;
+    }
+    Ok(projected)
+}
+
+/// A part of the recording's answer as JSON.
+fn encoded<T: serde::Serialize>(value: &T) -> CliOutcome<Value> {
+    serde_json::to_value(value)
+        .map_err(|error| CliError::usage(format!("failed to encode the record: {error}")))
 }
 
 /// Workflow #433 LABDO-1: the answer of a Lab operation call (`do --capture`, element,
@@ -647,13 +826,44 @@ fn selection(flags: &FlagArgs) -> CliOutcome<LabOperationSelection> {
 
 /// Plans the recorded click: the instance check, the recording lock and the point inside
 /// the open step's rectangle (`--tap-rect` declares it, `--tap` picks the point; Workflow #406
-/// T4: with `--seed`, `draw` draws it).
-fn begin_record_click(
+/// T4: with `--seed`, `draw` draws it). #463 L1: with `--mark-request <file>` or
+/// `--mark-request-json <json>` the `record mark` request of the open step is applied and
+/// self-tested first, by `record mark`'s code, and with `--next-frame-after-ms <ms>` (and
+/// `--next-frame-out <png>`) the next frame is taken after a performed press; nothing is written
+/// before the input is sent. Fix round 1: the next frame's device configuration is resolved here,
+/// for the instance the lock names, after the lock and before the step is planned; an error there
+/// ends the call before anything is written or pressed.
+fn begin_record_step(
     global: &GlobalOptions,
     flags: &FlagArgs,
     draw: Option<actingcommand_lab::DriveDraw>,
-) -> CliOutcome<(RecordingLock, ClickPlan)> {
+) -> CliOutcome<RecordStepBegun> {
     let instance = lab2_instance(global, flags);
+    let mark = match (
+        flags.optional("--mark-request"),
+        flags.optional("--mark-request-json"),
+    ) {
+        (Some(_), Some(_)) => {
+            return Err(CliError::usage(
+                "do --capture --record takes --mark-request <file> or --mark-request-json <json>, \
+                 not both",
+            ));
+        }
+        (Some(path), None) => Some(crate::commands::read_mark_request_file(&path)?),
+        (None, Some(text)) => Some(parse_mark_request(&text)?),
+        (None, None) => None,
+    };
+    let next_frame_after_ms = flags
+        .optional("--next-frame-after-ms")
+        .map(|value| {
+            value.parse::<u64>().map_err(|_| {
+                CliError::usage(format!(
+                    "--next-frame-after-ms takes a whole number of milliseconds, got {value}"
+                ))
+            })
+        })
+        .transpose()?;
+    let next_frame_out = flags.optional_path("--next-frame-out");
     let tap_rect = match flags.values("--tap-rect").as_slice() {
         [] => None,
         [value] => Some(crate::commands::parse_record_mark_rect(
@@ -717,27 +927,62 @@ fn begin_record_click(
     }
     let lock =
         crate::commands::record_flag_begin(global, flags, &instance, "do --capture --record")?;
-    let plan = record_plan_click(
+    let next_frame_device = next_frame_after_ms
+        .map(|_| next_frame_device_config(global, lock.instance()))
+        .transpose()?;
+    let planned = record_plan_step(
         &lock,
-        &PlanClickRequest {
-            tap,
-            tap_rect,
-            swipe,
-            draw,
+        &RecordStepRequest {
+            mark,
+            click: PlanClickRequest {
+                tap,
+                tap_rect,
+                swipe,
+                draw,
+            },
+            next_frame_after_ms,
+            next_frame_out,
         },
+        crate::offline_ocr::lab_ocr(),
     )?;
-    Ok((lock, plan))
+    Ok(RecordStepBegun {
+        lock,
+        planned,
+        next_frame_device,
+    })
 }
 
-/// Records the Runtime outcome of the planned click on its step; the operation summary
-/// stays in the output and in any error.
-fn commit_record_click(
-    lock: &RecordingLock,
-    plan: &ClickPlan,
+/// `do --capture --record` planned under its recording lock: the lock, held to the end of the
+/// command; the planned step; and (#463 L1 fix round 1) the device configuration of the next
+/// frame's capture, when one is asked for.
+struct RecordStepBegun {
+    lock: RecordingLock,
+    planned: PlannedStep,
+    next_frame_device: Option<crate::DeviceRuntimeConfig>,
+}
+
+/// The device configuration `capture --record` would capture `instance`'s frame with: the user
+/// configuration's entry of the instance the recording lock names, with the global options'
+/// backend choices (#463 L1 fix round 1).
+fn next_frame_device_config(
+    global: &GlobalOptions,
+    instance: &str,
+) -> CliOutcome<crate::DeviceRuntimeConfig> {
+    let config = crate::read_user_config()?;
+    let named = GlobalOptions {
+        instance: Some(instance.to_owned()),
+        ..global.clone()
+    };
+    crate::device_config(&named, &config)
+}
+
+/// What the recording takes of the Runtime's answer to the planned click (its effect, its ids,
+/// its failure and the frame summaries before and after, marked informational), as `do --capture
+/// --record` has recorded it since #336.
+fn commit_request(
     record: &actingcommand_contract::LabOperationRecord,
     payload: &Value,
-    mut projected: Value,
-) -> CliOutcome<Value> {
+) -> CliOutcome<CommitClickRequest> {
     let opaque = |value: Option<Value>| -> CliOutcome<Option<OpaqueJson>> {
         value
             .filter(|value| !value.is_null())
@@ -757,7 +1002,7 @@ fn commit_record_click(
     let carrier = json!({
         "package_label": prepared.package_label
     });
-    let request = CommitClickRequest {
+    Ok(CommitClickRequest {
         effect: if matches!(record.effect, EffectDisposition::Performed) {
             ClickEffect::Performed
         } else {
@@ -776,22 +1021,7 @@ fn commit_record_click(
             .transpose()?,
         before: opaque(informational("before"))?,
         after: opaque(informational("after"))?,
-    };
-    match record_commit_click(lock, plan, &request) {
-        Ok(outcome) => {
-            projected["record"] = serde_json::to_value(outcome).map_err(|error| {
-                CliError::usage(format!("failed to encode the record: {error}"))
-            })?;
-            Ok(projected)
-        }
-        Err(mut error) => {
-            let mut details = error.details.take().unwrap_or_else(|| json!({}));
-            if let Some(object) = details.as_object_mut() {
-                object.insert("operation".to_string(), projected);
-            }
-            Err(error.with_details(details))
-        }
-    }
+    })
 }
 
 // #411 A19 (exec key 93): a timed-out arrival answers `lab_arrival_timeout` (exit 3); `arrival`
