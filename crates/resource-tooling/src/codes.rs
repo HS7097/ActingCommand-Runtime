@@ -158,8 +158,9 @@ actingcommand_contract::outcome_vocabulary! {
         /// S4: the composer accepts the game's `schedule.json` with one instance per server.
         Composed => "composed",
         /// S5: the pack's entry is reached: by an application entry, a registered prerequisite,
-        /// navigation that lists it or its server's return-home package; and its prerequisite
-        /// chain passes the kernel's own predicate (fix round 1).
+        /// navigation that lists it or its server's return-home package (for a page-graph pack's
+        /// home entry, one the kernel accepts as the Runtime's entry asks, fix round 2); and its
+        /// prerequisite chain passes the kernel's own predicate (fix round 1).
         EntryReachable => "entry_reachable",
         /// S6: the models the pack's recognition targets need are named.
         ModelsNamed => "models_named",
@@ -212,6 +213,13 @@ actingcommand_contract::outcome_vocabulary! {
         /// steps), or a layer's admission fails; the kernel's code or the layer's refusal is the
         /// cause, `blocking_package_id` the layer.
         PrerequisiteRefused => "prerequisite_refused",
+        /// S5 (fix round 2): the return-home package the home entry of a page-graph pack takes is
+        /// one the Runtime's entry refuses (the kernel's `require_configured_package_id` and
+        /// `prerequisite_incompatibility_with` for a configured return-home package: another
+        /// game, server or resolution, one that cannot be a layer, one that declares a
+        /// prerequisite package of its own), or one the loader refuses; the kernel's code or the
+        /// package's refusal is the cause, `blocking_package_id` that package.
+        ReturnHomeRefused => "return_home_refused",
         /// S5: nothing reaches the pack's entry pages (`server`, `page_ids`).
         EntryUnreachable => "entry_unreachable",
         /// S7 (fix round 1): `standard-pack check` refuses the game root at this pack, or at no

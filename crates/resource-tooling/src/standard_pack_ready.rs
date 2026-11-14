@@ -34,7 +34,10 @@
 //!   a run; then the admitted descriptor's entry (`entry_pages`, `prerequisite_package_id`,
 //!   `navigation_entry_pages`) against the registry, the page list and the server's return-home
 //!   package (`return_home_package`), as the Runtime's gate resolves it
-//!   (`contracts/linear-steps.md`, "Return-home fallback");
+//!   (`contracts/linear-steps.md`, "Return-home fallback"); fix round 2: the home entry of a
+//!   page-graph pack, which takes that package through no chain (R23), holds only when the kernel
+//!   accepts the package as the Runtime's entry asks it to (`require_configured_package_id`, then
+//!   `prerequisite_incompatibility_with` for a configured return-home package);
 //! - S6 `models_named`: the admitted descriptor's `recognition_models`, what `standard-pack check`
 //!   answers as `models` (the loader refuses a target that names no model, so S6 fails only with
 //!   S1);
@@ -1168,19 +1171,22 @@ impl Context<'_> {
                 _ => false,
             };
         // Fix round 1: the chain the Runtime admits before a run, through the kernel's predicate.
-        if let Err(refusal) = self.chain(task, navigated) {
-            let problem = if refusal.unbound {
-                ReadinessProblem::PrerequisiteUnregistered
-            } else {
-                ReadinessProblem::PrerequisiteRefused
-            };
-            return ReadinessAnswer::fails(
-                ITEM,
-                failed(problem)
-                    .blocking_package_id(refusal.package_id.as_str())
-                    .caused_by(refusal.cause),
-            );
-        }
+        let home_layer = match self.chain(task, navigated) {
+            Ok(home_layer) => home_layer,
+            Err(refusal) => {
+                let problem = if refusal.unbound {
+                    ReadinessProblem::PrerequisiteUnregistered
+                } else {
+                    ReadinessProblem::PrerequisiteRefused
+                };
+                return ReadinessAnswer::fails(
+                    ITEM,
+                    failed(problem)
+                        .blocking_package_id(refusal.package_id.as_str())
+                        .caused_by(refusal.cause),
+                );
+            }
+        };
         if descriptor.has_application_entry() {
             return ReadinessAnswer::holds(ITEM, Some(ReadinessBasis::ApplicationEntry));
         }
@@ -1193,12 +1199,59 @@ impl Context<'_> {
         if navigated {
             return ReadinessAnswer::holds(ITEM, Some(ReadinessBasis::Navigation));
         }
-        match self.root.registry.return_home_package(pack.server) {
-            Some(return_home) if return_home != id => {
-                ReadinessAnswer::holds(ITEM, Some(ReadinessBasis::ReturnHome))
-            }
-            _ => ReadinessAnswer::fails(ITEM, failed(ReadinessProblem::EntryUnreachable)),
+        let Some(return_home) = self
+            .root
+            .registry
+            .return_home_package(pack.server)
+            .filter(|named| *named != id)
+        else {
+            return ReadinessAnswer::fails(ITEM, failed(ReadinessProblem::EntryUnreachable));
+        };
+        // Fix round 2: a pack whose chain did not take the return-home package as a layer is a
+        // page-graph pack run as the run's own package, which keeps its home entry (R23); that
+        // entry judges the package before it runs it.
+        if !home_layer && let Err(cause) = self.home_entry(task, return_home) {
+            return ReadinessAnswer::fails(
+                ITEM,
+                failed(ReadinessProblem::ReturnHomeRefused)
+                    .blocking_package_id(return_home)
+                    .caused_by(cause),
+            );
         }
+        ReadinessAnswer::holds(ITEM, Some(ReadinessBasis::ReturnHome))
+    }
+
+    /// S5 (fix round 2): the return-home package `return_home` the home entry of the page-graph
+    /// pack `task` takes, judged as the Runtime's entry judges it before it runs it (the host's
+    /// `run_preflighted_contained_task`, Workflow #336 L2d and PKG-S4): the package the loader
+    /// admitted here, then the kernel's `require_configured_package_id`, then the kernel's
+    /// `prerequisite_incompatibility_with` for a configured return-home package (the host's
+    /// `configured_return_home_incompatibility`: a chain layer's checks against the pack's game,
+    /// server and resolution, and no prerequisite package of its own). The error is the cause:
+    /// the package's admission refusal, the kernel's code, or, for a package the loader was not
+    /// asked to admit, `contained_task_prerequisite_unbound` as the chain answers it.
+    fn home_entry(&self, task: &TaskPackageDescriptor, return_home: &str) -> Result<(), Outcome> {
+        let package = match self.admitted.get(return_home) {
+            Some(Ok(admitted)) => admitted.descriptor(),
+            Some(Err(admission)) => return Err(admission.clone()),
+            None => {
+                return Err(Outcome::new(
+                    ExecutionKernelCode::ContainedTaskPrerequisiteUnbound,
+                ));
+            }
+        };
+        package
+            .require_configured_package_id(return_home)
+            .map_err(|error| error.outcome())?;
+        if package
+            .prerequisite_incompatibility_with(task.game(), task.server(), task.resolution(), true)
+            .is_some()
+        {
+            return Err(Outcome::new(
+                SharedCode::ContainedTaskPrerequisiteIncompatible,
+            ));
+        }
+        Ok(())
     }
 
     /// S5 (fix round 1): the prerequisite chain of the pack `task` as the Runtime admits it before
@@ -1206,13 +1259,14 @@ impl Context<'_> {
     /// package and its entry is `navigated` or it may not fall back to the return-home package;
     /// otherwise every layer through the kernel's [`PrerequisiteChain`] (`next` with its server's
     /// return-home package, `begin`, `admit`, `finish`), each layer's descriptor the one the loader
-    /// admitted here.
-    fn chain(&self, task: &TaskPackageDescriptor, navigated: bool) -> Result<(), ChainRefusal> {
+    /// admitted here. Fix round 2: whether the chain admitted a return-home layer.
+    fn chain(&self, task: &TaskPackageDescriptor, navigated: bool) -> Result<bool, ChainRefusal> {
         let mut chain = PrerequisiteChain::new(task.clone());
         if task.prerequisite_package_id().is_none() && (navigated || !chain.may_fall_back()) {
-            return Ok(());
+            return Ok(false);
         }
         let registry = &self.root.registry;
+        let mut home_layer = false;
         while let Some(link) = chain.next(registry.return_home_package(chain.dependent().server()))
         {
             let layer = self.admitted.get(link.package_id.as_str());
@@ -1233,12 +1287,14 @@ impl Context<'_> {
             chain
                 .admit(&link, descriptor)
                 .map_err(|error| ChainRefusal::at(&link, false, error.outcome()))?;
+            home_layer |= link.return_home;
         }
         chain.finish().map_err(|error| ChainRefusal {
             package_id: chain.dependent().package_id().to_owned(),
             unbound: false,
             cause: error.outcome(),
-        })
+        })?;
+        Ok(home_layer)
     }
 
     /// S6: the models the pack needs are named.

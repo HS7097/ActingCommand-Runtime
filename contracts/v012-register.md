@@ -24180,7 +24180,7 @@ the resource tools and `gate_rl1b`, actingd's `gate_rl1c`) give each package its
 whole (`DeclaredCapabilities`, no remedy), pinning what they pinned. No golden changes; no test
 leaves the gate map.
 
-### 1.375 Slice #464 P3 (0.12.60): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on the root check and the four answers, coordinator work order `rd-1114/brief-1718-fix1.md`, main `1e67d1c5` merged)
+### 1.375 Slice #464 P3 (0.12.60): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on the root check and the four answers, coordinator work order `rd-1114/brief-1718-fix1.md`, main `1e67d1c5` merged; fix round 2, after a second review, the coordinator's closing work order on the same main)
 
 This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364);
 merging main `155366bb`, whose train 0.12.60d took §1.365 to §1.368 (#453 S3, S4, S9 and S12),
@@ -24243,8 +24243,9 @@ and, since fix round 1, `blocking_package_id`; the other check's own outcome as 
 `package_readiness_unjudged` (info, ladder class none; required `package_id`, `readiness_item`,
 `readiness_unjudged`), both resource tooling's, both pending; one domain code each, the reason a
 vocabulary value (spec amendment of 10-24). Keys `readiness_item`, `readiness_problem`,
-`readiness_unjudged` (vocabularies of resource tooling's `codes.rs`: thirteen items, nineteen
-problems, nine unjudged words since fix round 1; twelve, fifteen and eight as first built),
+`readiness_unjudged` (vocabularies of resource tooling's `codes.rs`: thirteen items, twenty
+problems since fix round 2 (nineteen in fix round 1), nine unjudged words since fix round 1;
+twelve, fifteen and eight as first built),
 `required_revision` (integer) and, since fix round 1, `blocking_package_id` (name). Fix round 1
 adds two vocabularies no key carries, the answer's own members: `readiness_state` (four words) and
 `readiness_role` (eight words). No configuration key, record type, payload member, fact, wire
@@ -24313,6 +24314,29 @@ where the installation's items are judged, and what can be read while the Runtim
 merge of main `1e67d1c5` also gives `compose_per_server` the composer's input G-R2s made required
 (`IrreversiblePackages`), which the readiness reads as `standard-pack check` reads it
 (`root_irreversibility`). The row still reads the game root only and starts no child process.
+
+**Fix round 2** (the second review's three suggestions, all taken by the coordinator). (1) A
+page-graph pack run as the run's own package keeps its home entry, which takes its server's
+return-home package through no chain (R23), and S5 held for it by `return_home` whenever such a
+package was registered; the Runtime's entry (the host's `run_preflighted_contained_task`) refuses
+the package first when the kernel refuses it. S5 now judges it so, by the kernel's own functions:
+the package the loader admitted here, `TaskPackageDescriptor::require_configured_package_id`, then
+`TaskPackageDescriptor::prerequisite_incompatibility_with` with `configured_return_home` true, the
+function the host's `configured_return_home_incompatibility` calls (another game, server or
+resolution, a package that cannot be a layer, one that declares a prerequisite package of its own).
+A refusal fails S5 with the new problem `return_home_refused` (`prerequisite_refused` names a
+refused chain, which this is not), the kernel's code (`contained_task_prerequisite_incompatible`,
+`contained_task_prerequisite_mismatch`) or the package's `package_invalid` the cause and
+`blocking_package_id` the package. A pack whose chain took the return-home package as a layer (a
+`linear_steps` pack) is judged by the chain as before. Tests, `gate_464_p3` (exec gate row "#464
+P3"): a page-graph business pack with an entry page set (an entry the Runtime checks) fails S5
+`return_home_refused` alone, caused by `contained_task_prerequisite_incompatible` and naming the
+return-home package, when that package has another resolution
+(`p3_fr2_s5_a_return_home_package_of_another_resolution_is_refused`) and when it declares a
+prerequisite package (`p3_fr2_s5_a_return_home_package_that_declares_a_prerequisite_is_refused`);
+no existing test changes. (2) The catalog's text of `check_refused` no longer names store update
+cooldowns and probe keys: those are `standard-pack check`'s refusals of `schedule.json`, which S4
+carries. (3) actinglab's module text says thirteen items.
 
 **At deploy.** Nothing to do: a new read-only command and tool. **Rollback** (below 0.12.60): the
 row and its tool are gone; nothing is persisted.

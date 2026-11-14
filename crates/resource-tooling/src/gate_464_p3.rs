@@ -41,6 +41,11 @@
 //   (`dispatchable`, `ready_to_place`, `waiting`, `not_scheduled` for the return-home package, with
 //   its role); a follower pack is dispatchable behind a dispatchable head and waits
 //   (`head_waiting`, naming the head's pack) behind a waiting one.
+// - Fix round 2 (the second review, the coordinator's work order): a page-graph business pack
+//   whose entry the Runtime checks (an entry page set) keeps its home entry, which takes the
+//   server's return-home package through no chain; a return-home package of another resolution,
+//   and one that declares a prerequisite package, each fail S5 `return_home_refused` alone, caused
+//   by the kernel's `contained_task_prerequisite_incompatible` and naming the return-home package.
 // Made-up packs only; no device, no Runtime, no clock read, no sleep.
 
 use crate::codes::{
@@ -99,6 +104,8 @@ const FEATURES: &str = "neutral.test.features";
 /// Fix round 1: a pack whose one rule rides with the business pack's rule.
 const FOLLOWER: &str = "neutral.test.follower";
 const FOLLOW_RULE: &str = "neutral.test.follower.rule";
+/// Fix round 2: a pack the return-home package declares its prerequisite package.
+const BEFORE_HOME: &str = "neutral.test.before_home";
 
 fn rect(x: u32, y: u32, width: u32, height: u32) -> Value {
     json!({"x": x, "y": y, "width": width, "height": height})
@@ -404,6 +411,9 @@ struct Fixture {
     /// Fix round 1: a loading copy (`resources/loading`) in the business pack, which
     /// `standard-pack check` refuses in a root without `loading.json`.
     loading_copy: bool,
+    /// Fix round 2: the return-home package's control and task.
+    home_control: Value,
+    home_task: Value,
 }
 
 impl Fixture {
@@ -417,6 +427,20 @@ impl Fixture {
             return_home: true,
             root_files: Vec::new(),
             loading_copy: false,
+            home_control: control(HOME),
+            home_task: task_without_model(),
+        }
+    }
+
+    /// Fix round 2: the complete fixture whose page-graph business pack declares its entry as
+    /// the entry page set `["home"]`, an entry the Runtime checks (an entry page set is always
+    /// checked), so that its home entry takes the server's return-home package.
+    fn home_entered() -> Self {
+        let mut entered = task(Some(MODEL));
+        entered["entry_page"] = json!(["home"]);
+        Self {
+            task: Some(entered),
+            ..Self::complete()
         }
     }
 
@@ -444,8 +468,8 @@ impl Fixture {
             fs::create_dir_all(root.join(CLAIM).join("resources").join("loading"))
                 .expect("loading copy");
         }
-        let home = serde_json::to_vec_pretty(&task_without_model()).expect("task JSON");
-        write_pack(&root.join(HOME), &control(HOME), &home);
+        let home = serde_json::to_vec_pretty(&self.home_task).expect("task JSON");
+        write_pack(&root.join(HOME), &self.home_control, &home);
         for extra in &self.extra {
             let task = serde_json::to_vec_pretty(&extra.task).expect("task JSON");
             write_pack(&root.join(extra.package_id), &extra.control, &task);
@@ -1398,4 +1422,56 @@ fn p3_fr1_s3_a_follower_waits_behind_a_waiting_head() {
         (Some(&json!(FOLLOW_RULE)), Some(&json!(CLAIM))),
         "{outcome:?}"
     );
+}
+
+// ---- Fix round 2.
+
+/// Fix round 2: holds that the business pack fails S5 alone, `return_home_refused`, caused by the
+/// kernel's `contained_task_prerequisite_incompatible` and naming the return-home package.
+fn return_home_refused(readiness: &StandardPackReadiness) {
+    let outcome = fails_alone(
+        readiness,
+        ReadinessItem::EntryReachable,
+        ReadinessProblem::ReturnHomeRefused,
+    );
+    assert!(
+        cause_is(&outcome, SharedCode::ContainedTaskPrerequisiteIncompatible),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        outcome.value("blocking_package_id"),
+        Some(&json!(HOME)),
+        "{outcome:?}"
+    );
+}
+
+// The Runtime's home entry of a page-graph pack refuses a return-home package of another
+// resolution (the kernel's `prerequisite_incompatibility_with` for a configured return-home
+// package): S5 fails `return_home_refused` alone.
+#[test]
+fn p3_fr2_s5_a_return_home_package_of_another_resolution_is_refused() {
+    let temp = TempDir::new().expect("temporary directory");
+    let mut fixture = Fixture::home_entered();
+    fixture.home_control["resolution"] = json!({"width": 128, "height": 48});
+    fixture.home_task["coordinate_space"] = json!({"width": 128, "height": 48});
+    let root = fixture.write(&temp);
+
+    let readiness = judge(&root, Some(installation()));
+
+    return_home_refused(&readiness);
+}
+
+// The Runtime's home entry of a page-graph pack refuses a return-home package that declares a
+// prerequisite package of its own, which a chain layer may: S5 fails `return_home_refused` alone.
+#[test]
+fn p3_fr2_s5_a_return_home_package_that_declares_a_prerequisite_is_refused() {
+    let temp = TempDir::new().expect("temporary directory");
+    let mut fixture = Fixture::home_entered();
+    fixture.home_control = control_after(HOME, BEFORE_HOME);
+    fixture.extra.push(extra(BEFORE_HOME, control(BEFORE_HOME)));
+    let root = fixture.write(&temp);
+
+    let readiness = judge(&root, Some(installation()));
+
+    return_home_refused(&readiness);
 }

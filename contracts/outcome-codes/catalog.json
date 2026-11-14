@@ -2727,7 +2727,7 @@
     },
     "blocking_package_id": {
       "type": "name",
-      "description": "The package whose problem keeps another pack waiting: the pack of a follower's head (head_waiting), the layer a prerequisite chain was refused at (prerequisite_unregistered, prerequisite_refused), the pack standard-pack check refused the root at (root_refused) (Workflow #464 P3 fix round 1, since 0.12.60)."
+      "description": "The package whose problem keeps another pack waiting: the pack of a follower's head (head_waiting), the layer a prerequisite chain was refused at (prerequisite_unregistered, prerequisite_refused), the return-home package the Runtime's entry would refuse for a page-graph pack's home entry (return_home_refused, fix round 2), the pack standard-pack check refused the root at (root_refused) (Workflow #464 P3 fix round 1, since 0.12.60)."
     }
   },
   "vocabularies": {
@@ -9476,7 +9476,7 @@
           "description": "S4: the composer accepts the game's schedule.json with one instance per server."
         },
         "entry_reachable": {
-          "description": "S5: the pack's entry is reached: an application entry, no page entry to check, a registered prerequisite package, navigation data that lists it, or its server's return-home package; and its prerequisite chain (its declared prerequisite packages, or the return-home fallback) passes the kernel's own predicate, as the Runtime admits it before a run."
+          "description": "S5: the pack's entry is reached: an application entry, no page entry to check, a registered prerequisite package, navigation data that lists it, or its server's return-home package (for the home entry of a page-graph pack, one the kernel accepts as the Runtime's entry asks it to, fix round 2); and its prerequisite chain (its declared prerequisite packages, or the return-home fallback) passes the kernel's own predicate, as the Runtime admits it before a run."
         },
         "models_named": {
           "description": "S6: the models the pack's recognition targets need are named (the loader refuses a target that names none)."
@@ -9542,11 +9542,14 @@
         "prerequisite_refused": {
           "description": "S5 (fix round 1): the kernel's prerequisite chain refuses the pack's chain as the Runtime would at its first run (a layer of another game, server or resolution or one that cannot be a layer, a cycle, more than three declared layers, the step limit), or a layer's admission fails; the kernel's code or the layer's package_invalid is the cause, blocking_package_id the layer."
         },
+        "return_home_refused": {
+          "description": "S5 (fix round 2): the pack is a page-graph pack whose home entry takes its server's return-home package through no chain, and that package is one the Runtime's entry refuses at the pack's first run: the kernel's require_configured_package_id and prerequisite_incompatibility_with for a configured return-home package refuse it (another game, server or resolution, one that cannot be a layer, one that declares a prerequisite package of its own), or the loader refuses it; the kernel's code (contained_task_prerequisite_incompatible, contained_task_prerequisite_mismatch) or the package's package_invalid is the cause, blocking_package_id the return-home package."
+        },
         "entry_unreachable": {
           "description": "S5: nothing reaches the pack's entry pages (page_ids): no prerequisite package, no navigation data that lists them, no return-home package of its server."
         },
         "check_refused": {
-          "description": "S7 (fix round 1): standard-pack check refuses the game root at this pack, or at no pack (then every pack carries it), for a reason S1 to S6 do not judge (a navigation role, a loading copy, the notices, a store update cooldown, a probe key); its refusal is the cause."
+          "description": "S7 (fix round 1): standard-pack check refuses the game root at this pack, or at no pack (then every pack carries it), for a reason S1 to S6 do not judge (a navigation role, a loading copy, the notices); its refusal is the cause."
         },
         "root_refused": {
           "description": "S7 (fix round 1): standard-pack check refuses the game root at another pack (blocking_package_id; its refusal is the cause) and judges nothing after it, so no pack of the root is complete until the check accepts it."

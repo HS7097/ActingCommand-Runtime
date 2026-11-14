@@ -14,10 +14,10 @@
 //!
 //! Workflow #464 P3 (contracts/standard-pack-schedule.md, "Readiness"): `actinglab standard-pack
 //! ready --root <game root>` answers, for every pack of the root, whether the scheduler can
-//! dispatch it or what it waits for, the twelve items judged by the resource tooling's one
+//! dispatch it or what it waits for, the thirteen items judged by the resource tooling's one
 //! function. It reads the game root only: it writes nothing, starts nothing and reads no
-//! installation, so the six items of an installation are answered not judged and the answer says
-//! `installation: not_read`.
+//! installation, so the items of an installation are answered not judged (I3 an information
+//! line), no pack is answered dispatchable, and the answer says `installation: not_read`.
 
 use crate::{CliError, CliOutcome, FlagArgs, GlobalOptions};
 use actingcommand_resource_tooling::{
