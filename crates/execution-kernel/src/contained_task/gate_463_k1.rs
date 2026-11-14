@@ -442,12 +442,15 @@ fn linear_admission(control: Value, task: Value) -> Result<(), ContainedTaskErro
 // `draw_jump`, the first draw of a step's action seed (the draw of a tap, after its decision)
 // does. With `committed`, it commits every frame it captures, each with a frame reference of its
 // own, as the host does (HS-4's `gate_hs4`), so a select over a scan can bind its confirmation
-// frame.
+// frame. It keeps the frame reference each input was bound to (closing round), which the scripted
+// runtime drops, and it tells the kernel which of its errors are bookkeeping failures as the
+// scripted runtime it wraps does.
 struct Device {
     script: ScriptedRuntime,
     jump: Option<Duration>,
     draw_jump: Option<Duration>,
     committed: Option<CommittedFrames>,
+    input_frames: Vec<Option<InputFrameReference>>,
 }
 
 // The frame references a committing device minted, in capture order.
@@ -467,6 +470,7 @@ impl Device {
             jump: None,
             draw_jump: None,
             committed: None,
+            input_frames: Vec::new(),
         }
     }
 
@@ -613,6 +617,8 @@ impl ContainedTaskRuntime for Device {
         action: InputAction,
         frame: Option<InputFrameContext>,
     ) -> Result<(), Self::Error> {
+        self.input_frames
+            .push(frame.as_ref().map(InputFrameContext::reference));
         self.script.input(action, frame)
     }
 
@@ -673,6 +679,10 @@ impl ContainedTaskRuntime for Device {
             },
             now_unix_ms: 1_000_000,
         })
+    }
+
+    fn is_bookkeeping_failure(error: &Self::Error) -> bool {
+        <ScriptedRuntime as ContainedTaskRuntime>::is_bookkeeping_failure(error)
     }
 }
 
@@ -1895,6 +1905,7 @@ fn card_list_package() -> Vec<u8> {
 // the scan's settled frame. The one tap lands inside the wanted card's click box (the card's anchor
 // at (4, 34), the box 2 px right of it and 1 px down, 4 x 4 px), it is the step's one effect
 // intent, the detail page passes and the run is Completed on it after the one step, with no key.
+// Closing round: the tap is bound to the committed frame the confirmation record names.
 #[test]
 fn k1_a_scan_select_on_one_screen_taps_the_wanted_card_once() {
     let task = PreparedContainedTask::load_with_vision_provider(
@@ -1919,14 +1930,12 @@ fn k1_a_scan_select_on_one_screen_taps_the_wanted_card_once() {
         TaskSelectionOutcome::Selected { count: 1 }
     );
     assert_eq!(record.outcome_key, "card_selected");
-    assert!(
-        matches!(
-            record.confirmation,
-            TaskSelectionConfirmation::IdentityMatched { .. }
-        ),
-        "{:?}",
-        record.confirmation
-    );
+    let TaskSelectionConfirmation::IdentityMatched { frame_id, .. } = &record.confirmation else {
+        panic!(
+            "the identity confirmed on a committed frame: {:?}",
+            record.confirmation
+        );
+    };
     let [tap] = device.inputs() else {
         panic!("one input: {:?}", device.inputs());
     };
@@ -1940,6 +1949,11 @@ fn k1_a_scan_select_on_one_screen_taps_the_wanted_card_once() {
         ),
         "{tap:?}"
     );
+    // Closing round: the press is bound to the frame the confirmation record names.
+    let [Some(bound)] = device.input_frames.as_slice() else {
+        panic!("one input bound to a frame: {:?}", device.input_frames);
+    };
+    assert_eq!(bound.frame_id, *frame_id);
     let intents = device.intents();
     let [(0, "pick", intent)] = intents.as_slice() else {
         panic!("one effect intent of pick: {intents:?}");

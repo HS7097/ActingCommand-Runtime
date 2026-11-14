@@ -25042,13 +25042,15 @@ whose key it does not know, `config_override_dropped`, and goes on
 sibling key below 0.12.60, which §1.353 does not say. Nothing else is persisted by ORD-1c: the
 member in front and the queue waits live in memory only.
 
-### 1.374 Slice #463 K1 (0.12.60): a `linear_steps` task runs a select step, and an empty decision with `on_empty` ends it normally (Workflow #463; the owner's requirement on board #463 that an item of a list is chosen by what the screen shows, and the coordinator's rulings on the design note `rd-1114/463-l3l5-design.md`, not the owner's words; coordinator work order `rd-1114/brief-463-k1-linear-select.md`, read on the head `e045e3ae` of #1715; fix round 1, after an independent review, coordinator work order `rd-1114/brief-1720-fix1.md`, #1715's head `4d82081d` merged)
+### 1.374 Slice #463 K1 (0.12.61): a `linear_steps` task runs a select step, and an empty decision with `on_empty` ends it normally (Workflow #463; the owner's requirement on board #463 that an item of a list is chosen by what the screen shows, and the coordinator's rulings on the design note `rd-1114/463-l3l5-design.md`, not the owner's words; coordinator work order `rd-1114/brief-463-k1-linear-select.md`, read on the head `e045e3ae` of #1715; fix round 1, after an independent review, coordinator work order `rd-1114/brief-1720-fix1.md`, #1715's head `4d82081d` merged; closing round, coordinator work order `rd-1115/brief-1720-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged)
 
 1.374 is the number the coordinator assigned this section when #1715's head `4d82081d` was merged
-into this branch: that head brings main `1e67d1c5`, whose §1.369 is #455 G-R2s, and keeps #1715's
-own section as §1.372; the numbers between are assigned to other open pull requests. This pull
-request is stacked on #1715, which merges first. Pull requests open beside these may take numbers
-first, and a train renumbers them.
+into this branch: that head brought main `1e67d1c5`, whose §1.369 is #455 G-R2s, and kept #1715's
+own section as §1.372; the numbers between were assigned to other open pull requests. The train
+0.12.60e then merged #1715 (U1, §1.372) with #463 L1 (§1.370), L2 (§1.371) and ORD-1c (§1.373),
+and release 0.12.60 was cut after it; the closing round merged main `2eaf9b7e` (release 0.12.60)
+into this branch, and 1.374 is still the next free number. The slice ships in 0.12.61 (release
+0.12.60 is cut without it).
 
 **What it is.** The kernel's half of the design's L3: a recorded (`linear_steps`) package may
 declare the select step a page-graph package has ([linear-steps.md](linear-steps.md), "Select
@@ -25123,12 +25125,22 @@ declare one declares [13, 13], which the `package` edge of an earlier installer 
 an existing code; no record, member, code or configuration key is added, and `ledger`,
 `runtime-client`, `actingd-config` and `runtime-outcomes` do not move.
 
+**Nobody checks the 13** (closing round). That 13 is written by the resource repository's
+packaging (the bundle's `interfaces.json`); no component checks it: `place` holds a bundle's
+maximum to its own range and asks 10 only of a bundle with the notices directory and 12 only of
+one with `goals.json` (`crates/lab-rescue/src/install/place.rs`, `check_notices` and
+`check_goals_declared`), never 13 of a select step, and the Runtime does not check a package's
+declared range at admission (as for revision 11, §1.343). So an earlier installer places a bundle
+whose packs declare a select step and that declares less than 13, and an earlier Runtime then
+refuses that package at every run (`contained_task_linear_invalid`, `reason=operation_effect`).
+
 **Fix round 1** (the coordinator's work order `rd-1114/brief-1720-fix1.md`, after an independent
 review and the first CI run).
-- *#1715's fix round 2 merged.* `linear.rs` is #1715's head `4d82081d` with this slice's additions
-  put back: the select branch of `run_linear_step`, `LinearStepEnd` and the boxed returns of the
-  gate branch, the empty end in `run_linear_steps` (before the restart segment's close), the
-  admission rules, `linear_select_input` and `linear_send_input`. A select step declares no retry,
+- *#1715's fix round 2 merged.* `linear.rs` was then #1715's head `4d82081d` with this slice's
+  additions put back (since the closing round it is main's, below): the select branch of
+  `run_linear_step`, `LinearStepEnd` and the boxed returns of the gate branch, the empty end in
+  `run_linear_steps` (before the restart segment's close), the admission rules,
+  `linear_select_input` and `linear_send_input`. A select step declares no retry,
   so its one attempt is its last: where its arrival fails with `page_confirmation_failed`, #1715's
   `linear_closing` runs exactly as for a click step's last attempt, and only a screen unknown and
   still for the whole closing bound ends `contained_task_linear_unrecorded_screen`; nothing of
@@ -25141,6 +25153,29 @@ review and the first CI run).
   and "Tools" (a first select step's decision offline; an empty first step reports
   `offline_simulation_executed_step_invariant`, as a page-graph task's does), "Older builds".
 - *Lint*: three `.err().expect()` of the first CI run became `.expect_err()`.
+
+**Closing round** (the coordinator's work order `rd-1115/brief-1720-fix2.md`, after the review of
+the fix round found nothing that must change).
+- *Main of release 0.12.60 merged* (`2eaf9b7e`, which holds #1715's last head `263af541` through
+  the train 0.12.60e). `linear.rs` is now main's of release 0.12.60 with this slice's additions;
+  the merge met no conflict in code (only in the exec gate map and in this register, both sides
+  kept in section order). The slice moves to 0.12.61: this section, the contract's sentences
+  ([linear-steps.md](linear-steps.md), the admission row, "Select steps", "Older builds"), the
+  row 13 of component-interfaces.md, the architecture pin's comment and the gate rows. It adds no
+  code, so no `since` moves.
+- *U1's code after a select step's tap.* The description of
+  `contained_task_linear_unrecorded_screen` now begins "after the input of a linear_steps click or
+  select step": a select step's tap reaches the same closing decision. The code is U1's, since
+  0.12.60, review `pending`. A release file fixes a code's signature only (category, ladder class,
+  review, status, and its values' types and required set; [runtime-outcomes.md](runtime-outcomes.md),
+  "Release files"), never its text, and `released/0.12.60.json` holds no entry, so the text may
+  change. [linear-steps.md](linear-steps.md) names no click step in U1's text. The index is
+  regenerated.
+- *`package` 13 is checked by nobody*: "Interface" above, the contract's row 13 and "Older builds".
+- *Tests* (exec gate rows "#463 K1", (10)): the kernel test device answers
+  `is_bookkeeping_failure` as the scripted runtime it wraps does (`false`; it answered the trait's
+  default `true`) and keeps the frame reference each input is bound to; the scan test asserts that
+  its tap is bound to the frame its confirmation record names (`IdentityMatched`'s `frame_id`).
 
 Tests: kernel `gate_463_k1.rs` (exec gate rows "#463 K1"): admission of a fixed-slots select with
 `on_empty` and of a select over a scan; each refusal with its reason, the `input_recheck` refusal,
@@ -25165,10 +25200,11 @@ step (an older build refused one). The Runtime declares `package` [3, 13]: a bun
 13 is placed only by this build's installer or a later one. The recording side that generates
 such packages is a later slice.
 
-**Rollback** (below 0.12.60). No record shape changes; a build below refuses a linear package with
+**Rollback** (below 0.12.61). No record shape changes; a build below refuses a linear package with
 a select step at admission (`reason=operation_effect`), before any lease, and its installer refuses
 a bundle that declares `package` 13 through its `package` edge. A rollback stays open while no root
-is placed from such a bundle.
+is placed from such a bundle. A bundle with such a package that declares less than 13 is placed by
+an earlier installer too, and every run of that package is refused (closing round, "Interface").
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

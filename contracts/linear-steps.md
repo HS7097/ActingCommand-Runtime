@@ -68,7 +68,7 @@ one operation is at fault; an existing check keeps its existing code.
 | 1 to 1000 operations | `operation_count` |
 | `max_steps` declared in task and control, both equal to the operation count | `max_steps` |
 | no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`; `stop_on_confirmation` is not `false` (Workflow #384 D2-S2: `resource_readings`, the reading marks, are admitted) | the field name |
-| each operation's effect is `click`, `application` or (Workflow #463 K1, since 0.12.60) `select`; no `on_error` | `operation_effect` |
+| each operation's effect is `click`, `application` or (Workflow #463 K1, since 0.12.61) `select`; no `on_error` | `operation_effect` |
 | no operation declares an `observation_window`, a page-graph declaration (Workflow #390 EXEC-2, `resource-declarations.md`); an `input_recheck` of any kind is admitted (Workflow #411 B12) | the field name |
 | no operation declares a `when` or an `on_guard_refused`, page-graph candidate operations (Workflow #390 EXEC-1, `resource-declarations.md`) | the field name |
 | no operation declares `max_runs` or `on_max_runs`, a page-graph per-run cap (Workflow #411 B16 part 1, `resource-declarations.md`) | `max_runs` |
@@ -335,7 +335,7 @@ beyond its settle, `N` passes under the popup and the run goes on as if no popup
 
 ## Select steps
 
-Workflow #463 K1 (since 0.12.60, [v012-register.md](v012-register.md) §1.374; the coordinator's
+Workflow #463 K1 (since 0.12.61, [v012-register.md](v012-register.md) §1.374; the coordinator's
 rulings on board #463). An operation's effect may be a select step
 ([selection-graph.md](selection-graph.md), "Select step"): instead of a click it chooses one item of
 a list by what its frame shows, by its selection-policy document, and taps it once. Its
@@ -1034,10 +1034,13 @@ compatibility). A build without optional steps
 (v0.9.0, v0.9.1, and the earlier `linear_steps` builds) refuses an operation's `optional` the
 same way, before `PackageAdmitted`: `resource_declaration_invalid`, `UnknownField` at
 `/operations/<k>/optional`; so does its `package build`. A build before Workflow #463 K1 (below
-0.12.60) refuses a select step under `linear_steps` before `PackageAdmitted`
+0.12.61) refuses a select step under `linear_steps` before `PackageAdmitted`
 (`contained_task_linear_invalid`, `reason=operation_effect`); a bundle whose packs declare one
 declares `package` [13, 13], which the `package` edge of an earlier installer refuses before it
-places anything ([component-interfaces.md](component-interfaces.md), the `package` row 13).
+places anything ([component-interfaces.md](component-interfaces.md), the `package` row 13). That
+13 is written by the resource repository's packaging and checked by no component, so an earlier
+installer places such a bundle that declares less, and an earlier Runtime refuses its package at
+every run.
 
 ## Tools
 

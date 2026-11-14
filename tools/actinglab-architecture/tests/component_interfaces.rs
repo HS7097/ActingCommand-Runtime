@@ -133,7 +133,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   its revision, so [3, 11]. Workflow #455 G-R1 (0.12.60, register §1.356) raises it to 12: a
 ///   game root's goal declaration `goals.json`, placed by the installer and opened by no reader of
 ///   the Runtime yet; a bundle without it keeps its revision, so [3, 12]. Workflow #463 K1
-///   (0.12.60, register §1.374) raises it to 13: a `linear_steps` task's select step, which every
+///   (0.12.61, register §1.374) raises it to 13: a `linear_steps` task's select step, which every
 ///   Runtime before it refuses at admission; a pack without one keeps its revision, so [3, 13].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and

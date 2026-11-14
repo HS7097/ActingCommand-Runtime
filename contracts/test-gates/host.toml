@@ -4004,7 +4004,7 @@ tests = [
 ]
 incident = ["#463 U1"]
 
-# Workflow #463 K1 (0.12.60; register §1.374; brief rd-1114/brief-463-k1-linear-select.md; contracts/linear-steps.md, "Select steps"), the host's half, a fake device and the SEL-L4b host gate's list screen and card reader: a linear_steps package whose one step is a single-frame select over the six cards as fixed slots, with on_empty nobody_listed and its page mapped to that key, its policy listing only member-06, run directly: the receipt is Completed on neutral/list after one step with no input; the ledger holds the step's start, its decision and its finish on neutral/list and no effect; the terminal's scheduling disposition carries nobody_listed with no designated effect, so the host's rule found the one mapping of the final page and the kernel's key, with no contained_task_outcome_* refusal
+# Workflow #463 K1 (0.12.61; register §1.374; brief rd-1114/brief-463-k1-linear-select.md; contracts/linear-steps.md, "Select steps"), the host's half, a fake device and the SEL-L4b host gate's list screen and card reader: a linear_steps package whose one step is a single-frame select over the six cards as fixed slots, with on_empty nobody_listed and its page mapped to that key, its policy listing only member-06, run directly: the receipt is Completed on neutral/list after one step with no input; the ledger holds the step's start, its decision and its finish on neutral/list and no effect; the terminal's scheduling disposition carries nobody_listed with no designated effect, so the host's rule found the one mapping of the final page and the kernel's key, with no contained_task_outcome_* refusal
 [[gate]]
 coverage = "Y"
 tests = [
