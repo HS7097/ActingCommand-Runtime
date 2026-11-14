@@ -7,8 +7,9 @@ its own page, then clicks once, and the click leads to the next step. A step may
 launch, restart or stop the instance's assigned application (rulings R24 and R25, "Application
 steps" below). A step whose page does not always appear may be declared optional and is then
 skipped when its page does not appear ([Workflow #339](https://github.com/HS7097/ActingCommand-Workflow/issues/339),
-"Optional steps" below). Packages that do not declare the mode keep their page-graph execution
-unchanged. No game-specific values are part of this contract.
+"Optional steps" below). A step may instead choose one item of a list by what its frame shows
+and tap it once (Workflow #463 K1, "Select steps" below). Packages that do not declare the mode
+keep their page-graph execution unchanged. No game-specific values are part of this contract.
 
 A Lab recording generates such packages (`record stop`, [Lab recording](lab-recording.md)).
 How a scheduled linear task's failures are rerun, pause it and are lifted by a package update
@@ -67,7 +68,7 @@ one operation is at fault; an existing check keeps its existing code.
 | 1 to 1000 operations | `operation_count` |
 | `max_steps` declared in task and control, both equal to the operation count | `max_steps` |
 | no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`; `stop_on_confirmation` is not `false` (Workflow #384 D2-S2: `resource_readings`, the reading marks, are admitted) | the field name |
-| each operation's effect is `click` or `application`; no `select` or `on_error` | `operation_effect` |
+| each operation's effect is `click`, `application` or (Workflow #463 K1, since 0.12.61) `select`; no `on_error` | `operation_effect` |
 | no operation declares an `observation_window`, a page-graph declaration (Workflow #390 EXEC-2, `resource-declarations.md`); an `input_recheck` of any kind is admitted (Workflow #411 B12) | the field name |
 | no operation declares a `when` or an `on_guard_refused`, page-graph candidate operations (Workflow #390 EXEC-1, `resource-declarations.md`) | the field name |
 | no operation declares `max_runs` or `on_max_runs`, a page-graph per-run cap (Workflow #411 B16 part 1, `resource-declarations.md`) | `max_runs` |
@@ -84,10 +85,11 @@ one operation is at fault; an existing check keeps its existing code.
 | a `page` transition's `interval_ms` is in `1..=1800000`; a run refuses one above the configured ceiling `execution.capture.max_interval_ms` (default 60000) before its first capture, with the same reason (PERF-B1, [resource-declarations.md](resource-declarations.md), "Capture cadence") | `transition_interval` |
 | a `window` has `0 <= min_ms <= max_ms`, `1 <= max_ms <= 1800000`, and `min_ms` below the task timeout | `transition_window` |
 | a `scheduling_outcome`, when declared, has no designated operation and no designated effect set (Workflow #390 OUT-2) | `designated_operation` |
-| every terminal page of that outcome is the target page | `terminal_page` |
+| every terminal page of that outcome is the target page or (Workflow #463 K1) the page of a select step that declares `on_empty` | `terminal_page` |
 | the application rules of "Application steps" below | `application_retry`, `any_from`, `any_requires_application`, `input_after_application_stop`, `application_without_home` |
 | an application entry declares no `prerequisite_package_id` ("Prerequisite packages" below) | `prerequisite_with_application_entry` |
 | the optional-step rules of "Optional steps" below | `optional_first_step`, `optional_application`, `optional_restart_segment_end`, `optional_settle`, `optional_candidates`, `transition_page` |
+| the select-step rules of "Select steps" below (Workflow #463 K1) | `select_optional`, `select_retry`, `expect_identity`, `any_requires_application`, `select_on_empty_target`, `select_on_empty_terminal` |
 
 Every operation still passes the existing operation checks (guard or trusted coordinate, click
 shape, retry fields, `post_delay_ms`); operation ids are unique (`contained_task_program_invalid`).
@@ -97,14 +99,16 @@ to none or to several is the
 existing `contained_task_page_set_invalid`. All comparisons use the resolved ids. A
 `transition` on an operation of any other mode is `contained_task_operation_invalid`, and so
 is an `optional` (detail `operation=<id> optional requires linear_steps`). The
-page-graph checks (scheduling outcome coverage, phases) are not run, and a linear task has no
+page-graph checks (scheduling outcome coverage, phases) are not run; the rules above check a linear
+task's terminal pages, and a linear task has no
 required home entry page, so the host runs no home entry preflight for it; a task with a
 prerequisite package runs through the prerequisite gate instead ("Prerequisite packages" below).
 
 ## Execution
 
 After `PackageAdmitted` and `RunStarted`, the kernel runs the admitted path; no run state
-machine is built and no page is recognized globally.
+machine is built and no page is recognized globally, except on a select step's own frames ("Select
+steps" below).
 
 **Observing.** Each capture is recorded as on the page-graph path (the `CapturePage` timing
 boundary, `CaptureCompleted`, the committed input frame context when the frame carries an
@@ -155,7 +159,10 @@ operation dispatched, with `step_index` `d` the number of operations dispatched 
    input rechecks), each evaluated against the step's page only; a refusal of the recheck
    (`contained_task_guard_refused`, `contained_task_page_unknown`,
    `contained_task_input_stability_unconfirmed` or `contained_task_input_still_unconfirmed`)
-   ends the run the same way, and the input is drawn from the recheck's last frame.
+   ends the run the same way, and the input is drawn from the recheck's last frame. A select step
+   (Workflow #463 K1) replaces items 2 and 3 with its attempt ([selection-graph.md](selection-graph.md),
+   "Execution", "Select over a scan"): its confirmation frame binds its one tap; an empty decision
+   with `on_empty` ends the run ("Select steps" below).
 3. The effect intent, the input bound to that frame's input context and the effect completion
    follow, in the order of the page-graph path.
 4. The post-input wait is `post_delay_ms`, or the window's `min_ms` when larger.
@@ -164,7 +171,8 @@ operation dispatched, with `step_index` `d` the number of operations dispatched 
    optional steps), and that frame is the next dispatched operation's decision frame.
 
 When no operation follows, the run finishes with the target page and `executed_steps` equal
-to the number of operations dispatched. A package without optional steps dispatches every
+to the number of operations dispatched; a select step that ends empty finishes it on its own page
+("Select steps" below). A package without optional steps dispatches every
 operation in order, so its `step_index` is the operation index and its `executed_steps` the
 operation count. The next operation is always the one the passing page selects (below), never
 the result of a comparison with the target page: a path that passes the target page before its
@@ -324,6 +332,72 @@ a hand-written package gives `N`'s page rule a target that fails under the popup
 a color in an area the popup dims or covers) or declares the popup as a `forbidden` target of
 `N`. Otherwise, when a close click is swallowed, an unrecorded popup appears or a popup is late
 beyond its settle, `N` passes under the popup and the run goes on as if no popup had appeared.
+
+## Select steps
+
+Workflow #463 K1 (since 0.12.61, [v012-register.md](v012-register.md) §1.374; the coordinator's
+rulings on board #463). An operation's effect may be a select step
+([selection-graph.md](selection-graph.md), "Select step"): instead of a click it chooses one item of
+a list by what its frame shows, by its selection-policy document, and taps it once. Its
+declaration (a guard, an `expect_after`, its layout, its policy document, read by the same reader,
+`confirm`, `scan` and `on_empty`) is admitted as on the page graph (that document, "Declaration"),
+and then by these rules (`contained_task_linear_invalid`, `operation=<id>`):
+
+| Rule | `reason` |
+|---|---|
+| a select step is not optional: its page is its list, which it reads whatever it shows | `select_optional` |
+| a select step declares no `retryable`, `max_attempts` or `retry_interval_ms`: a retry after a scan would scan again after its moves, and a swallowed tap ends as the tap of a click step without a retry ends ("Retries") | `select_retry` |
+| no operation's `expect_after` declares an `expect_identity` whose `choice_of` names a select step: a linear arrival does not read it | `expect_identity` |
+| a select step does not start from `any` ("Application steps") | `any_requires_application` |
+| the page of a select step that declares `on_empty` is not the task's target page: that page's one mapping would be the `on_empty` key's, and the host, which keys a run by the page it finished on ("Ledger"), would record a run that reached the target page as one that found nothing | `select_on_empty_target` |
+| a select step that declares `on_empty`: exactly one `scheduling_outcome` mapping lists its page, and that mapping's key is its `on_empty` key (the one keyed-terminal rule; the page-graph coverage check that gives a page graph this rule is not run) | `select_on_empty_terminal` |
+
+A step that declares `on_empty` in a task without `scheduling_outcome` is refused as on the page
+graph (`contained_task_select_invalid`, `on_empty scheduling_outcome=absent`). An `input_recheck`
+beside `select` stays refused by the common operation check (`contained_task_operation_invalid`,
+`field=input_recheck`): the select step's confirmation is its recheck. After an application `stop`
+a select step is refused as any input is (`input_after_application_stop`). A select step may
+stand wherever a click step may: first (it decides on the entry frame), last, before a run of
+optional steps (with that run's candidates) or after one (on the frame that ended the settle). A
+package with a select step that declares `on_empty` is no prerequisite and no return-home package
+(`select_on_empty`; [selection-graph.md](selection-graph.md), "Declaration").
+
+**Execution.** The attempt is the page graph's own ([selection-graph.md](selection-graph.md),
+"Execution", "Select over a scan"). The step's gap (ACT-2) and a fresh frame of its page come
+first; then the layout is projected on the step's frame and decided by the policy, the choice is
+confirmed on a fresh frame (the step's page and its guard on it, and its candidate set, its
+decision or the tracked choice, as `confirm` declares), and one tap is drawn inside the chosen
+candidate's click box and bound to that frame's input context; the effect intent, the input and
+the effect completion follow as for a click. The select step's own frames, its confirmation
+frame and a sampled layout's frames, are captured and recognized as on the page-graph path,
+against the package's whole page set, and the step's page must be the one that passes on the
+confirmation frame (`selection_page_changed` otherwise). A select over a scan observes within its
+`max_ms`, capped by the task's, in place of the step timeout. An observation of the attempt whose
+sampling timed out is made again on a fresh frame of the step's page, as a guard's is, never after
+an input; every other failure, and every failure of a select over a scan, whose moves may precede
+it, ends the run with its own code before any tap ("Failure codes"). After its tap the step goes
+on exactly as a click step goes on: the post-input wait, the intermediate state and the arrival over
+its candidates. A select step declares no retry, so its one attempt is its last: where that arrival
+ends with `page_confirmation_failed`, the closing decision of "Retries" follows it as it follows a
+click step's last attempt, and only a screen that stays still and shows nothing the package
+declares for the decision's whole bound ends the run with `contained_task_linear_unrecorded_screen`
+("A screen the package never recorded" under "Failure codes"); every other end of that decision
+keeps `page_confirmation_failed`.
+
+**Ending empty.** An `empty` decision of a step that declares `on_empty`, with nothing unknown
+([selection-graph.md](selection-graph.md), "Ending empty"), taps nothing. After the step's record
+its `StepFinished` names the step's page as recognized on its last frame, and the run finishes
+Completed on that page, `executed_steps` counting the step and `selected_scheduling_outcome` the
+`on_empty` key, as the page graph finishes a keyed end, with no run state machine. The host derives
+the scheduling disposition from that `StepFinished` and the one mapping of its page ("Ledger"); for
+the policy the run is a success ([policy-suspension.md](policy-suspension.md)). An `empty` decision
+without `on_empty`, an `insufficient` or `ambiguous` one and an evaluator abort fail
+`selection_not_selected`; in a step that declares `on_empty` or selects over a scan, an item the
+package does not know or cannot read, which could change the decision, fails
+`selection_result_blocked` and is never skipped or guessed ([selection-graph.md](selection-graph.md),
+"Record per path"); each before any tap.
+
+A task without a select step is admitted, run and recorded as before.
 
 ## Loading pages
 
@@ -818,6 +892,7 @@ starts the stuck-recovery ladder.
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
 | A guard refusal | `contained_task_guard_refused`, its outcome naming `page_id` (the page of the frame the guard judged on) and `artifact_id` (that frame, the run's `GuardRejection` pin) on the terminal and the receipt (#411 A30) | none |
+| A select step's attempt fails (Workflow #463 K1, "Select steps") | the select step's codes ([selection-graph.md](selection-graph.md), "Execution", "Record per path"), with their own ladder classes | as there |
 | A declared input recheck that did not hold before the step timeout (Workflow #411 B12) | `contained_task_input_stability_unconfirmed` (`stable_frames`) or `contained_task_input_still_unconfirmed` (`still_frames`), with `pack_operation_id` and `timeout_ms` | none |
 | The task deadline | `contained_task_timeout` | `task` / the stage it expired in |
 | A recognition error | `contained_task_recognition_failed` | none |
@@ -900,7 +975,10 @@ look still to it; both results are failures of the run, and they differ only in 
 pause.
 
 The new codes are strings; none of them starts the stuck-recovery ladder, except
-`contained_task_linear_unrecorded_screen` (class `pack_logic_mismatch`, above).
+`contained_task_linear_unrecorded_screen` (class `pack_logic_mismatch`, above). A select step's
+codes (Workflow #463 K1) are the page graph's and keep their catalog classes: those of class
+`pack_logic_mismatch` (for example `selection_page_changed` and `selection_result_blocked`) start
+the ladder as in a page-graph task, the others (for example `selection_not_selected`) do not.
 
 A scheduled linear task records its failure as a failure identity built from these codes, the
 step and the detail; which of them can pause the task, the immediate rerun and the lift by a
@@ -921,13 +999,14 @@ linear run is read by older builds.
 | Step start | `StepStarted` | `step_index` the dispatch index `d`, the operation id, `from_page` the step's detector page id (`<unrecognized>` for the application entry), no phase |
 | Skipped optional step | none | a skip shows as the preceding `StepFinished` naming the skip target instead of its declared destination, and as no `StepStarted` of that operation in the run |
 | Input | `EffectIntent`, `EffectCompleted` | unchanged |
+| Select step (Workflow #463 K1) | `task.selection_evaluated`, then its tap's `EffectIntent` and `EffectCompleted`, or none of them after an empty decision | its one decision record, as on the page graph ([selection-graph.md](selection-graph.md), "Record per path") |
 | Application effect | `application.intent`, then `application.completed` followed by `EffectCompleted`, or `application.failed`, which ends the step and the task with no `EffectCompleted` (the `application.*` records are written by the host, with the task and run ids and their own action id); no `EffectIntent` | unchanged |
 | Intermediate page | `RecognitionStarted`, `RecognitionCompleted` | the intermediate page as the only candidate; it is seen when it is the matched page |
-| Attempt end | `StepFinished` | the page that passed (the next step's page, or a candidate of a run of optional steps), the step's own page (a swallowed input) or `<unrecognized>` |
+| Attempt end | `StepFinished` | the page that passed (the next step's page, or a candidate of a run of optional steps), the step's own page (a swallowed input, or a select step's empty decision) or `<unrecognized>` |
 | Waits | the task timing boundaries `PostInputWait`, `PostconditionWait` (also the sleeps of a settle), `PageRecognitionWait`, `RetryWait`, `CapturePage`; `limit_ms` of a timing failure | existing values only |
-| End | `Finalizing`, `TerminalCommitted` | the final page is the target page; `executed_steps` the operations dispatched, on success and on failure (the operation count when the package has no optional step) |
+| End | `Finalizing`, `TerminalCommitted` | the final page is the page the run finished on: the target page, or the page of a select step that ended empty (Workflow #463 K1); `executed_steps` the operations dispatched, on success and on failure (the operation count when the package has no optional step and no select step ended it) |
 | A failure with a kernel detail | a runtime lifecycle failure record (`runtime.failed`) after the terminal, naming it, at the terminal's severity | the detail as its native detail ("Failure detail" above) |
-| Scheduling outcome | the host's existing rule on the last attempt's `StepFinished` of the run's own last dispatched operation (never another layer's, Workflow #411 A23), which names the target page | unchanged |
+| Scheduling outcome | the host's existing rule on the last attempt's `StepFinished` of the run's own last dispatched operation (never another layer's, Workflow #411 A23), which names that page | unchanged |
 
 Candidate pages are never duplicated, since the admission rules keep an operation's own page,
 its intermediate page, its destination and the candidates of a run distinct. Phase evidence is
@@ -954,12 +1033,24 @@ NAV-3a on a configuration that carries either is refused (`config_decode_failed`
 compatibility). A build without optional steps
 (v0.9.0, v0.9.1, and the earlier `linear_steps` builds) refuses an operation's `optional` the
 same way, before `PackageAdmitted`: `resource_declaration_invalid`, `UnknownField` at
-`/operations/<k>/optional`; so does its `package build`.
+`/operations/<k>/optional`; so does its `package build`. A build before Workflow #463 K1 (below
+0.12.61) refuses a select step under `linear_steps` before `PackageAdmitted`
+(`contained_task_linear_invalid`, `reason=operation_effect`); a bundle whose packs declare one
+declares `package` [13, 13], which the `package` edge of an earlier installer refuses before it
+places anything ([component-interfaces.md](component-interfaces.md), the `package` row 13). That
+13 is written by the resource repository's packaging and checked by no component, so an earlier
+installer places such a bundle that declares less, and an earlier Runtime refuses its package at
+every run.
 
 ## Tools
 
 The offline simulation runs the same interpreter: its first decision of a linear package is
-the first operation's click, or a refusal; the first operation is never optional. A package
+the first operation's click or, when the first operation is a select step (Workflow #463 K1), the
+first input its attempt makes on the frames given (its tap, or a scan's first move), as on the page
+graph, or a refusal; the first operation is never optional.
+A first select step that ends empty (`on_empty`) completes the run with its step counted, so its
+offline simulation reports `offline_simulation_executed_step_invariant`, as a page-graph task's
+empty end does. A package
 with an application operation is always
 refused, `application_effect_requires_assigned_application` with no capture, provided the frame
 list is not empty (an empty list is `offline_fixture_missing` before the interpreter). `package build --execution-mode linear_steps`,
@@ -972,8 +1063,9 @@ provider, before it writes it.
 
 ## What a linear task cannot express
 
-Branches and loops of variable length: only the declared path runs, and a run of optional
-steps only skips steps of it. A run of a package without a prerequisite package or return-home
+Branches and loops of variable length: only the declared path runs, a run of optional steps only
+skips steps of it, and a select step only chooses what its one tap presses. A run of a package
+without a prerequisite package or return-home
 fallback that does not start on the first step's page, including one already on the target
 page, fails with `contained_task_linear_entry_unmatched`, so a path whose first page does not
 always appear is not suited to a fixed-interval schedule; a package with a prerequisite package

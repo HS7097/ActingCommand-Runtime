@@ -132,7 +132,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   11: a task's `field_lists`, OCR fields grouped into one list fact; a pack without it keeps
 ///   its revision, so [3, 11]. Workflow #455 G-R1 (0.12.60, register §1.356) raises it to 12: a
 ///   game root's goal declaration `goals.json`, placed by the installer and opened by no reader of
-///   the Runtime yet; a bundle without it keeps its revision, so [3, 12].
+///   the Runtime yet; a bundle without it keeps its revision, so [3, 12]. Workflow #463 K1
+///   (0.12.61, register §1.374) raises it to 13: a `linear_steps` task's select step, which every
+///   Runtime before it refuses at admission; a pack without one keeps its revision, so [3, 13].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -159,7 +161,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
-    ("package", [3, 12]),
+    ("package", [3, 13]),
     ("runtime-client", [3, 8]),
     ("runtime-outcomes", [1, 1]),
 ];
