@@ -111,29 +111,43 @@ root as it is now (the root's metadata cannot be read, the root is damaged, the 
 refused as a whole, or a refused composition cannot be narrowed to a game it composed), a package
 of that game may have changed into one the active generation does not mark. So every candidate of
 that game's instances is computed exactly as a marked candidate is, as on an instance without a
-target record, through the same code path, and carries `resource_target_root_uncomposed` (info, no
-key) in place of `resource_target_package_irreversible`, also when its task carries the mark. The
-workbench notes the game at the check that keeps the active generation and forgets every note at
-the first composition of every game that succeeds; until then each check reads and composes again.
-Which games are noted (fix round 3, the coordinator's ruling of 11-14): **while a game's own root
-fails** (its metadata cannot be read, or it is damaged), the check still marks, reads and composes
-every other game, without activating that composition (the failed game keeps the active
-generation's rules), and notes the failed games and only those other games the active generation
-does not hold as their files give them now (a task of the game in the active generation that the
-composition does not compose with the same id and procedure, or that the composition marks and the
-active generation does not); so one failing root voids only its own game, at the first check after
-a start too. **When the composition is refused as a whole** (or no refused game can be taken out),
-no composition of the others exists, and the check notes every game in use whose files it did not
-find unchanged since its last composed read (a game whose files have not changed is composed in
-the active generation as it is now), with the failed games. The Runtime tells the evaluator per
-instance, in memory only: never a fact or a snapshot. Fix round 3: the void is part of the
-decision identity of each candidate of a voided instance (its identity hashed once more with it),
-since a root that heals appends nothing to the ledger, and two evaluations at one instant, ledger
-position and snapshot must not give two decisions one identity; every other candidate's identity
-is unchanged. It also covers a current generation composed before 0.12.60, whose first check under
-this build meets a root it cannot compose. An instance of a game whose root composes, and that the
-active generation holds as its files give it, is not touched, and an installation whose roots all
-compose computes exactly what it computes without this.
+target record, through the same code path, and carries `resource_target_root_uncomposed` (info)
+in place of `resource_target_package_irreversible`, also when its task carries the mark. The
+workbench voids games at a check that keeps the active generation, by these rules (fix rounds 3
+and 4, the coordinator's rulings of 11-14):
+
+- **A game whose own root fails** (its metadata cannot be read, or it is damaged) is voided. The
+  check still marks, reads and composes every other game, and does not activate that composition:
+  the failed game keeps the active generation's rules.
+- **While a game's own root fails, a game the active generation holds otherwise is voided too**:
+  a game for which the active generation lacks the marks the present composition of its files
+  gives it, or holds a task that composition does not give (a task of the game in the active
+  generation that the composition does not compose with the same id and procedure, or that the
+  composition marks and the active generation does not). Otherwise a task newly marked in a composition that cannot be activated would still
+  take a goal's boost. The check records each game voided this way: one
+  `resource_target_root_uncomposed` (info) naming it (`game`) at each check that voids it; a game
+  whose own root fails is named by that root's own record. Every other game keeps its goals, so one
+  failing root voids only its own game, at the first check after a start too.
+- **When the composition is refused as a whole** (or no refused game can be taken out), no
+  composition of the others exists: every game in use whose files the check did not find unchanged
+  since its last composed read is voided, with the failed games (a game whose files have not
+  changed is composed in the active generation as it is now). The workbench holds no marks at the
+  first check after a start, so there such a refusal voids every game in use.
+
+Every void ends at the first composition of every game that succeeds; until then each check reads
+and composes again. The Runtime tells the evaluator per instance, in memory only: never a fact or
+a snapshot. The void is part of the decision identity of each candidate of a voided instance that
+holds a target record, the only candidates it changes (the identity hashed once more with it): a
+root that heals appends nothing to the ledger, and two evaluations at one instant, ledger position
+and snapshot must not give two decisions one identity. Every other candidate's identity is
+unchanged, a voided instance's without a record included. It also covers a current generation
+composed before 0.12.60, whose first check under this build meets a root it cannot compose. An
+instance of a game whose root composes, and that the active generation holds as its files give it,
+is not touched, and an installation whose roots all compose computes exactly what it computes
+without this. **Known limit:** the forward projection does not read the void: while a game is
+voided, its steps still weigh that game's candidates with their goals (it would need the voided
+instances as an input, and its answer has no member for a candidate's reason); a later slice
+changes it.
 
 ## Document `actingcommand.resource-targets.v1`
 

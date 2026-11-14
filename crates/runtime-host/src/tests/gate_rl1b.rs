@@ -2036,3 +2036,121 @@ fn gr2s_r3_after_a_start_one_failing_root_voids_only_its_own_game() {
     assert_eq!(b, repaired_b, "game B as with every root composed");
     bench.close();
 }
+
+/// Fix round 4 (item 3, the coordinator's ruling on round 3's addition: kept as the rule, and
+/// recorded): game A's `bundle.json` is damaged and, at the same check, game B's package comes to
+/// provide a capability marked irreversible, so the composition the check makes of game B (and
+/// does not activate) marks rule B while the active generation does not: the active generation
+/// holds game B otherwise, and game B's goals are void too. Game A's and game B's candidates say
+/// why, game B's has the numbers of before any goal, and the check records one
+/// `resource_target_root_uncomposed` naming game B and none naming game A (game A's own root's
+/// record names it). Game A repaired, every game composes (rule B now carries the mark): neither
+/// candidate says its root is uncomposed, and nothing more is recorded.
+#[test]
+fn gr2s_r4_a_game_the_active_generation_holds_otherwise_is_voided_and_recorded() {
+    let bench = gr2s_two_games();
+    let (before, _) = gr2s_goals_in_effect(&bench);
+    let recorded = |game: &str| {
+        bench.reads_of(
+            actingcommand_policy::PolicyCode::ResourceTargetRootUncomposed,
+            Some(game),
+        )
+    };
+
+    let bundle = bench.path(GAME_A, "bundle.json");
+    let good = fs::read(&bundle).expect("game A's bundle");
+    fs::write(&bundle, b"{").expect("damage game A's bundle");
+    // An irreversible capability declares its parameters (the package reader refuses one without).
+    super::gate_442_rem1::write_package(
+        &bench.path(GAME_B, PACKAGE_B),
+        PACKAGE_B,
+        None,
+        Some(
+            json!([{"capability": "cap_x", "irreversible": true, "parameters": [
+                {"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_1"}
+            ]}]),
+        ),
+    );
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS));
+    assert!(a.2, "game A says why");
+    assert!(b.2, "game B says why");
+    assert_eq!(
+        (&b.0, &b.1),
+        (&before.1.0, &before.1.1),
+        "game B as without a goal"
+    );
+    assert_eq!(recorded(GAME_B).len(), 1, "{:#?}", recorded(GAME_B));
+    assert!(recorded(GAME_A).is_empty(), "{:#?}", recorded(GAME_A));
+
+    fs::write(&bundle, &good).expect("repair game A's bundle");
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 3 * INTERVAL_MS));
+    assert!(!a.2 && !b.2, "every root composes");
+    assert_eq!(recorded(GAME_B).len(), 1, "nothing more is recorded");
+    assert!(recorded(GAME_A).is_empty());
+    bench.close();
+}
+
+/// Fix round 4 (item 5): check-config's preview of a composition refused as a whole. Game A's
+/// `schedule.json` holds 1 023 more pools, so game A alone holds the catalog's 1 024 pools and the
+/// two games together one too many (`limit_exceeded` at `/pools`, which names no game). The
+/// preview gives only `standard_pack_root_invalid` problems, each naming a composed game and that
+/// game's `schedule.json` (the keys the code's catalog entry requires), both games named, and
+/// leaves no game out.
+#[test]
+fn gr2s_r4_check_configs_preview_names_each_game_of_a_composition_refused_as_a_whole() {
+    let packs = TempDir::new().expect("standard-pack root");
+    let mut crowded = schedule_a(&[(RULE_1, PACKAGE_1, 100)]);
+    let pools = crowded["pools"].as_array_mut().expect("game A's pools");
+    for index in 0..1023 {
+        pools.push(pool(&format!("fixture-pool-x{index:04}")));
+    }
+    for (game, server, package, schedule) in [
+        (GAME_A, SERVER_A, PACKAGE_1, crowded),
+        (GAME_B, SERVER_B, PACKAGE_B, schedule_b(100, true)),
+    ] {
+        let directory = packs.path().join(game);
+        write_json(
+            &directory.join("bundle.json"),
+            &bundle(game, server, &[package]),
+        );
+        super::gate_442_rem1::write_package(&directory.join(package), package, None, None);
+        write_json(&directory.join("schedule.json"), &schedule);
+    }
+    let instances = [BOUND_A, BOUND_B]
+        .map(|(alias, game, server)| (alias.to_owned(), game.to_owned(), server.to_owned()));
+
+    let preview =
+        crate::host::preview_standard_pack_schedule(Some(packs.path()), &instances, None, true);
+    assert!(preview.left_out.is_empty(), "{preview:#?}");
+    let named = preview
+        .problems
+        .iter()
+        .map(|problem| {
+            assert!(
+                problem.is(SharedCode::StandardPackRootInvalid),
+                "{problem:?}"
+            );
+            (
+                problem
+                    .value("game")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                problem
+                    .value("path")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let expected = [GAME_A, GAME_B]
+        .map(|game| {
+            let path = packs.path().join(game).join("schedule.json");
+            (
+                Some(game.to_owned()),
+                Some(path.to_string_lossy().into_owned()),
+            )
+        })
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(named, expected, "{preview:#?}");
+}

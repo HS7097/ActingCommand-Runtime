@@ -79,15 +79,15 @@ pub(crate) fn goal_issues(
     // `irreversible` mark, in registry order as the remedy report reads them. The references
     // judge irreversibility per capability across the whole root (contracts/remedies.md §2.3).
     // Workflow #455 G-R2s fix round 3: and every capability its remedies list.
-    let mut declared = BTreeMap::new();
+    let mut provides = BTreeMap::new();
     for package_id in root.registry.package_ids() {
         let entry = root.registry.get(package_id).ok_or_else(|| {
             LabError::package_invalid(format!("{package_id} is no package of the bundle"))
         })?;
         let capabilities = package_provides(&pack_directory(&entry.directory))?;
-        declared.insert(package_id.to_owned(), capabilities);
+        provides.insert(package_id.to_owned(), capabilities);
     }
-    let mut references = GoalReferences::new(declared);
+    let mut references = GoalReferences::new(provides);
     if let Some((bytes, path)) = schedule {
         let schedule = parse_standard_pack_schedule(bytes)
             .map_err(|issue| root_invalid(game, path, &issue))?;

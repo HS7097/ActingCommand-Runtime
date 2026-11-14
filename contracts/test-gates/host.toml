@@ -3920,3 +3920,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r3_after_a_start_one_failing_root_voids_only_its_own_game",
 ]
 incident = ["#455 G-R2s"]
+# Workflow #455 G-R2s fix round 4 (0.12.60; register §1.365; the coordinator's work order of 11-14, items 3 and 5; contracts/resource-targets.md, "A task that can do something irreversible"): on gate_rl1b's bench with two games, goals applied on both: while game A's bundle.json is damaged and game B's package comes to provide a capability marked irreversible (the composition the check makes and does not activate marks rule B, the active generation does not), game A's and game B's candidates say why, game B's has the numbers of before any goal, the check records one resource_target_root_uncomposed naming game B and none naming game A, and game A repaired, every game composes and nothing more is recorded (1); check-config's preview of a composition refused as a whole (the catalog's pool limit exceeded by the two games together) gives one standard_pack_root_invalid per composed game naming that game and its schedule.json, and leaves no game out (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r4_a_game_the_active_generation_holds_otherwise_is_voided_and_recorded",
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::gr2s_r4_check_configs_preview_names_each_game_of_a_composition_refused_as_a_whole",
+]
+incident = ["#455 G-R2s"]

@@ -657,17 +657,22 @@ can do something irreversible").
   whole, a refusal that cannot be narrowed to a game it composed), that generation may lack the
   mark of a package changed since; so noted games' candidates are computed as on an instance
   without a target record (`resource_target_root_uncomposed`,
-  [resource-targets.md](resource-targets.md), "A task that can do something irreversible"). Fix
-  round 3 (the coordinator's ruling of 11-14): **while a game's own root fails** (its metadata, or
-  its read), the check records it once, goes on for the other games (they are marked, read and
-  composed as ever) and does not activate their composition (the failed game keeps the active
-  generation's rules); it notes the failed games and only those other games whose tasks the active
-  generation does not hold as that composition gives them (a task of the game the composition does
-  not compose with the same id and procedure, or one the composition marks and the active
-  generation does not). One failing root voids only its own game, at the first check after a start
-  too (when the workbench holds no marks). **A composition refused as a whole**, or a refusal no
-  round can narrow, notes the failed games and every game in use whose files the check did not find
-  unchanged since its last composed read. A refusal as a whole is recorded once per set of files
+  [resource-targets.md](resource-targets.md), "A task that can do something irreversible"). The
+  rules (fix rounds 3 and 4, the coordinator's rulings of 11-14): **while a game's own root fails**
+  (its metadata, or its read), the check records it once, goes on for the other games (they are
+  marked, read and composed as ever) and does not activate their composition (the failed game
+  keeps the active generation's rules); it voids the failed games and, **as a rule, every other
+  game the active generation holds otherwise**: one whose tasks the active generation does not
+  hold as that composition gives them (a task of the game the composition does not compose with
+  the same id and procedure, or one the composition marks and the active generation does not), so
+  a task newly marked in a composition that cannot be activated takes no goal's boost. The check
+  records each game it voids that way, one `resource_target_root_uncomposed` (info, `game`) per
+  such game at each check that voids it, as a `standard_pack_read` record. One failing root voids
+  only its own game and the games the active generation holds otherwise, at the first check after
+  a start too (when the workbench holds no marks). **A composition refused as a whole**, or a
+  refusal no round can narrow, voids the failed games and every game in use whose files the check
+  did not find unchanged since its last composed read: at the first check after a start, which
+  holds no marks, every game in use. A refusal as a whole is recorded once per set of files
   composed, as one `standard_pack_root_invalid` per composed game naming that game and its
   `schedule.json` (it named no game before, which broke its catalog entry), as check-config gives
   it. A root's metadata failure (`standard_pack_root_unreadable`) is recorded again after that

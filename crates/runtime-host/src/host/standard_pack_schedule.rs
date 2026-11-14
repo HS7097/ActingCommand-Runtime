@@ -58,10 +58,10 @@ use actingcommand_contract::{
     read_standard_pack_root,
 };
 use actingcommand_policy::{
-    BenefitProvenance, CompiledCatalog, STANDARD_PACK_OPERATION_ID, STANDARD_PACKS_CATALOG_ID,
-    StandardPackBinding, StandardPackCompileWarning, StandardPackComposeInput,
-    StandardPackComposition, StandardPackGameFiles, StandardPackRuleIssue,
-    compose_standard_pack_rules,
+    BenefitProvenance, CompiledCatalog, PolicyCode, STANDARD_PACK_OPERATION_ID,
+    STANDARD_PACKS_CATALOG_ID, StandardPackBinding, StandardPackCompileWarning,
+    StandardPackComposeInput, StandardPackComposition, StandardPackGameFiles,
+    StandardPackRuleIssue, compose_standard_pack_rules,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -263,7 +263,8 @@ fn note_uncomposed(
 /// `active` does not. Any other game's tasks run in the active generation as its files give them
 /// now as far as the mark goes, so its goals stay in effect, also at the first check after a start
 /// (when the workbench holds no marks yet). A game whose root failed is in no `composition`, so
-/// each of its tasks in `active` names it too.
+/// each of its tasks in `active` names it too. Fix round 4: the check records each other game
+/// voided this way, one `resource_target_root_uncomposed` naming it at each check that voids it.
 fn held_otherwise(
     composition: &StandardPackComposition,
     active: Option<&CompiledCatalog>,
@@ -1103,6 +1104,16 @@ impl HostShared {
                 active.as_ref().map(|loaded| loaded.compiled()),
                 &bound,
             );
+            // G-R2s fix round 4 (the coordinator's ruling: the rule is kept, and recorded): one
+            // info record per game this check voids because the active generation holds it
+            // otherwise; a game whose own root failed is named by its root's own record.
+            for game in uncomposed.difference(&failed_roots) {
+                self.record_standard_pack_read(
+                    Outcome::new(PolicyCode::ResourceTargetRootUncomposed)
+                        .operation(HostLocation::StandardPackRead)
+                        .game(game.as_str()),
+                )?;
+            }
             uncomposed.extend(failed_roots);
             state.uncomposed = uncomposed;
             return Ok(());

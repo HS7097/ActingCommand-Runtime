@@ -30,11 +30,14 @@ use super::gate_ss1::{
 use super::gate_ss6 as ss6;
 use super::selection_catalog::{DAY_MS, HOUR_MS, NOW, instance};
 use crate::{
-    CompiledCatalog, DecisionReason, EvaluationResources, FactValue, ForwardProjectionConfig,
-    HostResourceSnapshot, IRREVERSIBLE_REACH_MEMBER, ObservedFact, PolicyCode, PolicyEvaluation,
-    ScopeSelector, StandardPackBinding, StandardPackComposeInput, StandardPackComposition,
-    StandardPackGameFiles, TargetSetter, TaskDecision, check_resource_targets,
-    compose_standard_pack_rules, parse_resource_targets, project_fact_pools, project_forward,
+    CandidateEligibility, CappedMemory, ChainHandoverInputs, CompiledCatalog, DecisionReason,
+    DispatchIntent, EvaluationResources, FactRefreshInputs, FactRefreshSettings, FactValue,
+    ForwardProjectionConfig, HostResourceSnapshot, IRREVERSIBLE_REACH_MEMBER, InstanceHolds,
+    InstancePoolLines, LeftOutFacts, NoProgressGuards, ObservedFact, OwedReruns, PolicyCode,
+    PolicyEvaluation, PolicyEvaluationError, RemedyPlan, RunSlots, ScopeSelector,
+    StandardPackBinding, StandardPackComposeInput, StandardPackComposition, StandardPackGameFiles,
+    TargetSetter, TaskDecision, check_resource_targets, compose_standard_pack_rules,
+    evaluate_with_left_out_facts, parse_resource_targets, project_fact_pools, project_forward,
 };
 
 const V3: &str = "actingcommand.resource-targets.v3";
@@ -913,7 +916,7 @@ fn gr2s_t7_the_mark_follows_every_chain_link_the_evaluator_reads() {
 // Fix round 3, part B (the coordinator's ruling of 11-14): a package also counts as irreversible
 // when a remedy declaration of its mappings lists a capability some package of the root provides
 // marked irreversible, judged from the declarations alone (every capability the remedy lists).
-// Five rules on an hourly clock, each running the package of its own id:
+// Six rules on an hourly clock, each running the package of its own id:
 // - BLOCKED's package provides nothing; its remedy lists `cap_r` and `cap_q`, and PROVIDER's
 //   package provides `cap_r` marked irreversible: BLOCKED is marked, PROVIDER too;
 // - H5's follower F5 (a plain chain link) runs a package whose remedy lists `cap_r`: both marked,
@@ -1030,4 +1033,106 @@ fn gr2s_t8_the_run_caps_goal_term_reads_the_mark() {
         without,
         "the marked task's values are the ones without a record"
     );
+}
+
+/// One round at NOW over the readings of both pools, as [`round`] gives it, through the entry
+/// point that takes the instances whose targets are void (`left_out`), with the fact refresh at
+/// its starting defaults and no reader.
+fn round_with_left_out(catalog: &CompiledCatalog, left_out: &LeftOutFacts) -> PolicyEvaluation {
+    let facts = inputs(readings(), Vec::new());
+    let resources = project_fact_pools(
+        catalog,
+        &facts,
+        &EvaluationResources {
+            pools: Vec::new(),
+            hosts: vec![HostResourceSnapshot {
+                host_id: instance(A, &[]).host_id,
+                cpu_available_milli: 1_000,
+                gpu_available_milli: 1_000,
+                io_available_milli: 1_000,
+                host_responsiveness_basis_points: 10_000,
+                third_party_pressure_basis_points: 0,
+                heavy_dispatch_limit: 1,
+                active_heavy_dispatches: 0,
+                heavy_threshold_milli: crate::DEFAULT_HEAVY_THRESHOLD_MILLI,
+            }],
+        },
+    );
+    let refresh = FactRefreshInputs {
+        settings: FactRefreshSettings {
+            enabled: true,
+            min_interval_ms: 300_000,
+            daily_limit: 96,
+            failure_backoff_ms: 600_000,
+            max_consecutive_failures: 3,
+            expected_duration_ms: crate::FACT_REFRESH_EXPECTED_DURATION_MS,
+        },
+        readers: Vec::new(),
+        instance_facts_loaded_at_unix_ms: Some(NOW - DAY_MS),
+        instance_holds: BTreeMap::new(),
+        idle_closed: BTreeMap::new(),
+    };
+    evaluate_with_left_out_facts::<PolicyEvaluationError>(
+        catalog,
+        &facts,
+        &resources,
+        time(NOW),
+        11,
+        &BTreeSet::new(),
+        &refresh,
+        &RemedyPlan::default(),
+        &ChainHandoverInputs::default(),
+        &RunSlots::default(),
+        &OwedReruns::default(),
+        &InstanceHolds::default(),
+        &NoProgressGuards::default(),
+        &mut CappedMemory::default(),
+        &InstancePoolLines::default(),
+        left_out,
+        |_, _, _| Ok(false),
+        |_: &DispatchIntent| Ok(CandidateEligibility::Eligible),
+    )
+    .unwrap_or_else(|error| panic!("the round evaluates: {error}"))
+}
+
+// Fix round 4 (the coordinator's work order of 11-14, item 2): the void changes a decision only on
+// an instance that holds a target record (the score stage leaves a record out only there), so only
+// there does it enter the decision identity. Task A on instance A, which holds no record, under
+// both pools' readings: the round with instance A's targets void, as while its game's root cannot
+// be composed, has byte for byte the dispatches' identities (`decision_id` and reason chain id) of
+// the round with no game voided, and is that round whole.
+#[test]
+fn gr2s_t10_a_voided_instance_without_a_record_keeps_its_decision_identity() {
+    let catalog = catalog(&[task_a()]);
+    let identities = |evaluation: &PolicyEvaluation| {
+        evaluation
+            .dispatch_intents
+            .iter()
+            .map(|intent| {
+                (
+                    intent.task_id.clone(),
+                    intent.instance_id.clone(),
+                    intent.decision_id.clone(),
+                    intent.reason_chain_id.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let plain = round_with_left_out(&catalog, &LeftOutFacts::default());
+    assert!(
+        plain
+            .dispatch_intents
+            .iter()
+            .any(|intent| intent.task_id == TASK_A && intent.instance_id == A),
+        "task A is dispatched: {plain:#?}"
+    );
+    let mut voided = LeftOutFacts::default();
+    voided.void_targets(A);
+    let under_void = round_with_left_out(&catalog, &voided);
+    assert_eq!(
+        identities(&under_void),
+        identities(&plain),
+        "the identities of no void"
+    );
+    assert_eq!(under_void, plain, "the whole round of no void");
 }

@@ -241,8 +241,9 @@ pub struct EvaluationFacts {
 /// leaves out whole, because the scheduler workbench cannot compose their game's root
 /// ([`LeftOutFacts::void_targets`]): every candidate of such an instance is computed as a marked
 /// candidate is, as on an instance without a target record, with the reason
-/// `resource_target_root_uncomposed`. Fix round 3: the void is part of such a candidate's
-/// decision identity (`targets_void_decision_id`); it enters no snapshot.
+/// `resource_target_root_uncomposed`. Fix round 3: the void is part of the decision identity
+/// (`targets_void_decision_id`) of such a candidate on an instance that holds a target record
+/// (fix round 4: only there, where it changes the decision); it enters no snapshot.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LeftOutFacts {
     keys: BTreeMap<String, BTreeSet<String>>,
@@ -2601,8 +2602,14 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             seed,
         );
         // Workflow #455 G-R2s fix round 3: the void of the instance's targets is part of what
-        // the identity covers ([`targets_void_decision_id`]).
-        let decision_id = if left_out.targets_void(&candidate.instance_id) {
+        // the identity covers ([`targets_void_decision_id`]); fix round 4: only on an instance
+        // that holds a target record, the one the void changes a decision on (the condition the
+        // score stage reads, `apply_priority_selection`), so an instance without a record keeps
+        // the identity it has when no game is voided.
+        let holds_record = target_policies
+            .get(&candidate.instance_id)
+            .is_some_and(|recorded| recorded.state.is_some());
+        let decision_id = if holds_record && left_out.targets_void(&candidate.instance_id) {
             targets_void_decision_id(&decision_id)
         } else {
             decision_id
@@ -8069,14 +8076,15 @@ fn deterministic_decision_id(
 const TARGETS_VOID_IDENTITY_PART: &[u8] = b"targets-void";
 
 /// Workflow #455 G-R2s fix round 3 (register §1.365; `contracts/resource-targets.md`, "A task that
-/// can do something irreversible"): the decision identity of a candidate of an instance whose
-/// resource target record is left out whole because its game's root cannot be composed
-/// ([`LeftOutFacts::targets_void`]): its [`deterministic_decision_id`] `decision_id` hashed once
-/// more after [`TARGETS_VOID_IDENTITY_PART`]. The void changes the decision, and a root that heals
-/// appends nothing to the ledger, so without it two evaluations of one instant, ledger position
-/// and snapshot, one before and one after the heal, would give two decisions one identity
-/// (`policy_decision_identity_conflict`). Every other candidate's identity is
-/// [`deterministic_decision_id`]'s, unchanged.
+/// can do something irreversible"): the decision identity of a candidate of an instance that
+/// holds a target record, the record left out whole because its game's root cannot be composed
+/// ([`LeftOutFacts::targets_void`]): its [`deterministic_decision_id`] `decision_id`
+/// hashed once more after [`TARGETS_VOID_IDENTITY_PART`]. The void changes the decision, and a
+/// root that heals appends nothing to the ledger, so without it two evaluations of one instant,
+/// ledger position and snapshot, one before and one after the heal, would give two decisions one
+/// identity (`policy_decision_identity_conflict`). Every other candidate's identity is
+/// [`deterministic_decision_id`]'s, unchanged; fix round 4: a voided instance's without a record
+/// too, whose decision the void does not change.
 fn targets_void_decision_id(decision_id: &str) -> String {
     let mut hasher = Sha256::new();
     hash_part(&mut hasher, TARGETS_VOID_IDENTITY_PART);
