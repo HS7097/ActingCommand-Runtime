@@ -1236,10 +1236,23 @@ fn declaration_error(path: &str, error: actingcommand_contract::LabError) -> Con
         return match serde_json::from_value::<actingcommand_contract::ResourceDeclarationIssue>(
             error.details.clone().unwrap_or(Value::Null),
         ) {
-            Ok(issue) => ContainmentError::ResourceDeclaration {
-                issue,
-                detail: None,
-            },
+            Ok(issue) => {
+                // Workflow #463 V1 fix round 1: the developer text the declaration gate appends
+                // to its location (the word of the rule a member breaks, as `variables` and
+                // `provides` name it) is kept, so that every admission path names the rule; a
+                // refusal without such a text keeps none.
+                let located = ContainmentError::ResourceDeclaration {
+                    issue: issue.clone(),
+                    detail: None,
+                }
+                .to_string();
+                let detail = error
+                    .message
+                    .strip_prefix(located.as_str())
+                    .and_then(|rest| rest.strip_prefix("; "))
+                    .map(str::to_owned);
+                ContainmentError::ResourceDeclaration { issue, detail }
+            }
             Err(cause) => ContainmentError::PackParse {
                 path: path.to_owned(),
                 message: format!("resource_declaration_diagnostic_invalid: {cause}; {error}"),

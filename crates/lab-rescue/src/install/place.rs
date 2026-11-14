@@ -16,7 +16,9 @@
 //!   the contract crate's notices rules, and, Workflow #451 LOAD-P, the loading templates
 //!   directory `loading/<file>`, exactly the templates the zip's own `loading.json` declares;
 //!   Workflow #455 G-R1 fix round 1: a zip that carries `goals.json` declares `package` 12 at
-//!   least, `goal_undeclared` otherwise), the root files as every reader checks them
+//!   least, `goal_undeclared` otherwise; Workflow #463 V1 fix round 1: a zip whose packs'
+//!   `control.json` declare `variables` declares `package` 14 at least, `variable_undeclared`
+//!   otherwise), the root files as every reader checks them
 //!   ([`read_standard_pack_root`]), each pack's file count and size, and per item `new`,
 //!   `replace`, `unchanged` or, for a reader's root file, the notices directory or the loading
 //!   templates directory the zip no longer carries, `retire`. The notices directory is one item
@@ -80,8 +82,9 @@ use actingcommand_contract::{
     STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE,
     STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRootBytes,
-    StandardPackRootIssue, check_notice_listing, check_notice_pack_ids, check_notice_size,
-    check_notice_text, notice_relative_path, parse_standard_pack_loading, read_standard_pack_root,
+    StandardPackRootIssue, VARIABLES_PACKAGE_REVISION, check_notice_listing, check_notice_pack_ids,
+    check_notice_size, check_notice_text, notice_relative_path, parse_standard_pack_loading,
+    read_standard_pack_root,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -555,6 +558,51 @@ fn check_goals_declared(zip: &Path, game: &str, package: [u64; 2]) -> Result<(),
     Ok(())
 }
 
+/// Workflow #463 V1 fix round 1: a bundle zip of `game` whose packs declare variables (a pack's
+/// `control.json`, its member of `pack_members`, an object with the top-level member
+/// `variables`) declares a `package` maximum (`package[1]`) of [`VARIABLES_PACKAGE_REVISION`] at
+/// least, as one that carries `goals.json` declares [`GOALS_PACKAGE_REVISION`]
+/// ([`check_goals_declared`]): otherwise `pack_invalid` caused by `standard_pack_root_invalid`
+/// with `variable_undeclared` at `<zip>\interfaces.json`, the pointer empty, naming the first such
+/// pack in the order of `package_ids`, before anything is held or written. Only the member's
+/// presence is read here: what the variables declare, and a `control.json` that is no JSON
+/// object, are admission's, which `post_check` runs through `standard-pack check`.
+fn check_variables_declared<'a>(
+    archive: &mut Archive,
+    zip: &Path,
+    game: &str,
+    package: [u64; 2],
+    pack_members: &BTreeMap<String, BTreeMap<String, String>>,
+    package_ids: impl IntoIterator<Item = &'a str>,
+) -> Result<(), Outcome> {
+    if package[1] >= VARIABLES_PACKAGE_REVISION {
+        return Ok(());
+    }
+    for package_id in package_ids {
+        let Some(member) = pack_members
+            .get(package_id)
+            .and_then(|members| members.get(PACK_CONTROL_FILE))
+        else {
+            continue;
+        };
+        let control = archive.read(member)?;
+        let declares = serde_json::from_slice::<Value>(files::without_bom(&control))
+            .ok()
+            .is_some_and(|control| control.get("variables").is_some());
+        if declares {
+            return Err(invalid(zip).caused_by(
+                Outcome::new(SharedCode::StandardPackRootInvalid)
+                    .game(game)
+                    .path(zip.join(INTERFACES_FILE))
+                    .standard_pack_problem(StandardPackProblem::VariableUndeclared)
+                    .json_pointer(String::new())
+                    .package_id(package_id),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `pack_invalid` of the bundle `zip` of `game` for a root file's problem `issue`, caused by
 /// `standard_pack_root_invalid` with `path` the file below the zip, its problem and its pointer.
 fn root_refusal(zip: &Path, game: &str, issue: &StandardPackRootIssue) -> Outcome {
@@ -758,6 +806,16 @@ pub(crate) fn plan(
     if roots.contains(STANDARD_PACK_GOALS_FILE) {
         check_goals_declared(&zip, &game, package)?;
     }
+    // Workflow #463 V1 fix round 1: packs that declare variables with the revision that brings
+    // them.
+    check_variables_declared(
+        &mut archive,
+        &zip,
+        &game,
+        package,
+        &pack_members,
+        bundle.packs.iter().map(|pack| pack.package_id.as_str()),
+    )?;
     // Workflow #451 LOAD-P: the loading templates directory, held to the zip's own
     // `loading.json`; neither is read when the zip carries neither.
     let declaring = if roots.contains(STANDARD_PACK_LOADING_FILE) {

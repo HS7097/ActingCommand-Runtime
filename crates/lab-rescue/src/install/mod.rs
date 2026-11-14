@@ -137,6 +137,10 @@ mod gate_451_loadp;
 // and the `package` revision 12 a bundle that carries it declares.
 #[cfg(test)]
 mod gate_455_gr1;
+// Test-only: Workflow #463 V1, the `package` revision 14 a bundle whose packages declare variables
+// declares, at the installer's edge, and this build's declaration of it.
+#[cfg(test)]
+mod gate_463_v1;
 // Test-only: Workflow #451 PLACE-PKG, the rescue module's `place` reads a bundle's declaration by
 // the bundle's own rule.
 #[cfg(test)]

@@ -2158,3 +2158,13 @@ tests = [
     "actingcommand-lab::lib::gate_463_l1::l1_fix2_a_tap_rect_step_sent_again_says_what_to_look_at_before_its_press",
 ]
 incident = ["#463 L1"]
+
+# Workflow #463 V1 (0.12.61; register §1.378; brief rd-1114/brief-463-v1-package-variables.md; contracts/component-interfaces.md, the package rows 13 and 14): this build's declaration reads package [3, 14], up to the contract crate's VARIABLES_PACKAGE_REVISION; on the fake host, an installer of [3, 14] plans a bundle that declares [14, 14] (its pack and bundle.json new, exit 0, no pause), and an installer of [3, 13] refuses it interface_edge at its interfaces.json with no pause, no journal and nothing in the game root. Fix round 1 (brief rd-1114/brief-1723-fix1.md): on an installer of [3, 14], the bundle whose pack declares variables and that declares [3, 13] is refused pack_invalid caused by standard_pack_root_invalid with variable_undeclared at its interfaces.json, the pointer empty, the game and the pack's package_id, with no pause, no journal and nothing in the game root
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_463_v1::v1_the_build_declares_package_through_revision_14",
+    "actingcommand-lab-rescue::lib::install::gate_463_v1::v1_a_bundle_at_revision_14_is_planned_here_and_refused_by_an_earlier_installer",
+    "actingcommand-lab-rescue::lib::install::gate_463_v1::v1_a_bundle_whose_packs_declare_variables_below_revision_14_is_refused_variable_undeclared",
+]
+incident = ["#463 V1"]

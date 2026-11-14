@@ -442,9 +442,12 @@ without it, every package that carries a loading copy is refused (`loading_pack_
 LOAD-2 this check runs before the cross-check admits the packages, whose loader compiles a copy,
 so a stale copy is named as stale. Workflow #455 G-R1 (since 0.12.60): with `goals.json` (listed
 in `root_files` after `display-layout.json`), the file is read after the composition and held to
-the root and its tables; each problem of a refused file is one `standard_pack_root_invalid`
-warning, last, in file order, and the root is checked as without the file
-([standard-pack-goals.md](standard-pack-goals.md), "Who reads it"). It only
+the root (Workflow #463 V1: no table since); each problem of a refused file is one
+`standard_pack_root_invalid` warning, last, in file order, and the root is checked as without the
+file ([standard-pack-goals.md](standard-pack-goals.md), "Who reads it"). Workflow #463 V1 (since
+0.12.61, register §1.378): before it, the root check of the variables the packages' control
+declarations declare, each problem one `standard_pack_root_invalid` warning naming the package's
+`control.json` ([package-variables.md](package-variables.md), "The root check"). It only
 reads. Every package of the registry is admitted, once, by its directory, with or
 without the navigation files (Workflow #411 A25): a package a root file names first for its
 part, every other package of the registry after them. Its answer is `{status: "checked", root,
@@ -458,7 +461,13 @@ models their recognition packs' OCR and NN targets name (`model_ref`, `model_sha
 the packages the cross-check admitted, each `{model_ref, model_sha256, packages}`, a model several
 packs name listed once with each of them, in byte order of `model_ref`, then of `model_sha256`,
 each model's `packages` in byte order of `package_id`; `[]` for a root whose packs name none. It
-is an added member: every member before it and the exit code are as before. A root without any root file is
+is an added member: every member before it and the exit code are as before. Workflow #463 V1 (since
+0.12.61, register §1.378): after it, `variable_provenance` `{pack: [names], model: [names]}` when a
+package of the root declares variables, each variable that applies by who wrote its default, and
+(V1 fix round 1) `not_applying` `[{name, standard_pack_problem}]`, absent when empty, each
+variable a package that counts as irreversible by the whole root declares
+(`variable_irreversible_by_root`, [package-variables.md](package-variables.md)); absent otherwise, so a
+root without variables answers as before. A root without any root file is
 `standard_pack_root_invalid` `bundle_missing`; a `bundle.json` whose `packs` lists no pack is
 `package_bundle_packs_empty` with `path` `bundle.json` and `json_pointer` `/packs` (Workflow #411
 A40); a package a root file names that cannot be admitted (its directory missing too) is
@@ -939,9 +948,9 @@ data files beside its package directories, one directory per game below the conf
     is not the directory's is `game_mismatch`.
   - **References.** A pack's `package_id` is a package of `bundle.json` (`package_not_listed`),
     its `group` an id of `groups` (`ui_group_unknown`), and each name under its `parameters` a
-    parameter the package declares (`ui_parameter_undeclared`). Package-level parameter
-    declarations (A.7.2) arrive with R-10; until then no package declares a parameter, so any
-    name under `parameters` is `ui_parameter_undeclared`. Group ids, the packs' `package_id`, one
+    parameter the package declares (`ui_parameter_undeclared`). A package's variables carry their
+    own texts ([package-variables.md](package-variables.md)); `parameters` names nothing, so any
+    name under it is `ui_parameter_undeclared`. Group ids, the packs' `package_id`, one
     pack's risk words and the aspect ratios are each listed once (`ui_duplicate`). A package
     without an entry is shown by its `package_id`; so is every package of a game root without
     the file.

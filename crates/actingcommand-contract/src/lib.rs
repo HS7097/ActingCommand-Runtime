@@ -28,6 +28,8 @@ pub mod ledger_capture;
 pub mod monitor;
 pub mod outcome;
 pub mod package;
+// Workflow #463 V1 (since 0.12.61): a package's declared variables, `control.json` `variables`.
+pub mod package_variables;
 pub mod page_projection;
 pub mod performance;
 pub mod ppocr_diagnostic;
@@ -79,6 +81,7 @@ pub use lab::*;
 pub use ledger_capture::*;
 pub use monitor::*;
 pub use package::*;
+pub use package_variables::*;
 pub use performance::*;
 pub use ppocr_diagnostic::*;
 pub use primitive::*;

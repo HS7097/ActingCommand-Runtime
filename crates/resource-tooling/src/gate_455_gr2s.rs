@@ -14,8 +14,12 @@
 //   (a `tier` over its rule, over the head of a chain it follows, and an entry that governs it are
 //   refused) and for the composer's input the tools read; a package whose remedy lists only a
 //   capability nobody marks does not.
-// A made-up game `neutral`, server `test`, 16x9; every package, rule and capability is a
-// placeholder.
+// Workflow #463 V1 (register §1.378; contracts/package-variables.md) replaced the entry types that
+// governed packages by the placement `variable`: Part B's `switch` over two packages became the
+// placement of the variable both declare, refused at the placement's `name`, and `goal_issues`
+// takes no tables any more.
+// A made-up game `neutral`, server `test`, 16x9; every package, rule, capability and variable is
+// a placeholder.
 
 use crate::standard_pack_goals::{goal_issues, root_irreversibility};
 use actingcommand_contract::{
@@ -42,9 +46,19 @@ fn remedy(capabilities: &[&str]) -> Value {
     json!({"need": "need_a", "capabilities": capabilities})
 }
 
+/// Workflow #463 V1: the variables a package declares, the switch `enabled` that Part B's
+/// placement places, for the two packages its `switch` entry governed before V1.
+fn variables_of(package_id: &str) -> Option<Value> {
+    matches!(package_id, "neutral.blocked" | "neutral.keeps").then(|| {
+        json!([{"name": "enabled", "type": "switch", "title": {"en": "Enabled"},
+                "default": false}])
+    })
+}
+
 /// Writes the package `package_id` as a package directory: its control (with `provides` when
-/// given) and its one task, from page `home` (a blue first pixel) to page `page_b` (a red one),
-/// where its run ends on the key `blocked_k`, whose mapping declares `remedy` when given.
+/// given, and, Workflow #463 V1, the variables [`variables_of`] gives it) and its one task, from
+/// page `home` (a blue first pixel) to page `page_b` (a red one), where its run ends on the key
+/// `blocked_k`, whose mapping declares `remedy` when given.
 fn write_pack(directory: &Path, package_id: &str, provides: Option<Value>, remedy: Option<Value>) {
     let mut control = json!({
         "schema_version": "Lab-1y.control.v2",
@@ -61,6 +75,9 @@ fn write_pack(directory: &Path, package_id: &str, provides: Option<Value>, remed
     });
     if let Some(provides) = provides {
         control["provides"] = provides;
+    }
+    if let Some(variables) = variables_of(package_id) {
+        control["variables"] = variables;
     }
     let probe = |page: &str, expected: [u8; 3]| {
         json!({
@@ -246,7 +263,6 @@ fn issues(
         Some((schedule, schedule_path.as_path())),
         goals,
         &|directory: &str| game_root.join(directory),
-        None,
     )
     .unwrap_or_else(|error| panic!("the check runs: {}: {}", error.code, error.message))
 }
@@ -315,7 +331,9 @@ fn gr2s_t7_the_goal_check_reads_the_same_chain_links() {
 // SPARE's package provides unmarked. The composer's input the tools read counts BLOCKED, PROVIDER
 // and F5 irreversible and KEEPS, SPARE and H5 not, every package read. The goal check reads the
 // same rule: a `tier` over BLOCKED, KEEPS and H5 is `goal_governs_irreversible` at BLOCKED and H5,
-// and a `switch` that governs the packages BLOCKED and KEEPS is refused at BLOCKED, nothing else.
+// and (Workflow #463 V1, in place of a `switch` that governed the packages BLOCKED and KEEPS) the
+// placement of the variable `enabled` BLOCKED and KEEPS declare is refused at its `name`, nothing
+// else.
 #[test]
 fn gr2s_r3_a_remedy_that_lists_an_irreversible_capability_makes_its_package_irreversible() {
     let packs: Vec<Pack> = vec![
@@ -359,9 +377,7 @@ fn gr2s_r3_a_remedy_that_lists_an_irreversible_capability_makes_its_package_irre
 
     let goals = goals(json!([
         tier(&["neutral.blocked", "neutral.keeps", "neutral.h5"]),
-        {"name": "enabled", "type": "switch",
-         "governs": {"packages": ["neutral.blocked", "neutral.keeps"]},
-         "title": {"en": "Enabled"}, "default": false}
+        {"name": "enabled", "type": "variable"}
     ]));
     assert_eq!(
         refusals(&issues(&game_root, &root, &schedule, &goals)),
@@ -376,7 +392,7 @@ fn gr2s_r3_a_remedy_that_lists_an_irreversible_capability_makes_its_package_irre
             ),
             (
                 StandardPackProblem::GoalGovernsIrreversible,
-                "/entries/1/governs/packages/0".to_owned()
+                "/entries/1/name".to_owned()
             ),
         ]
     );

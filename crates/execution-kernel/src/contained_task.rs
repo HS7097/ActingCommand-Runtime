@@ -105,6 +105,9 @@ mod gate_453_s8;
 // Workflow #463 U1: a linear step's closing decision on a screen its package never recorded.
 #[cfg(test)]
 mod gate_463_u1;
+// Workflow #463 V1: a package's declared variables at kernel admission.
+#[cfg(test)]
+mod gate_463_v1;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.
@@ -8940,6 +8943,8 @@ fn parse_task_control_declaration(
     let provides = value.get("provides").map(remedies::parse_control_provides);
     // STORE-FG-1: so is `store_update`.
     let store_update = value.get("store_update").map(parse_store_update);
+    // Workflow #463 V1: and `variables`, judged against what the package provides.
+    let variables = value.get("variables").cloned();
     let mut control: TaskControl = serde_json::from_value(value).map_err(|_| {
         ContainedTaskError::new(ExecutionKernelCode::ContainedTaskControlInvalid.code())
     })?;
@@ -8948,6 +8953,9 @@ fn parse_task_control_declaration(
     }
     if let Some(store_update) = store_update {
         control.store_update = Some(store_update?);
+    }
+    if let Some(variables) = variables {
+        control.variables = remedies::parse_control_variables(&variables, &control.provides)?;
     }
     control.validate()?;
     Ok(control)
@@ -9018,6 +9026,11 @@ struct TaskControl {
     /// members ([`parse_task_control_declaration`]).
     #[serde(skip)]
     store_update: Option<actingcommand_contract::StoreUpdateDeclaration>,
+    /// Workflow #463 V1 (contracts/package-variables.md): the variables the package declares, in
+    /// declaration order; empty when it declares none. Read and checked apart from the other
+    /// members ([`parse_task_control_declaration`]); nothing resolves or overlays them yet.
+    #[serde(skip)]
+    variables: Vec<actingcommand_contract::PackageVariable>,
 }
 
 /// Workflow #336 L2b: a `prerequisite_package_id` is not empty, at most 256 bytes and has no

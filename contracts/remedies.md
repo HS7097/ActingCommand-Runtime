@@ -64,8 +64,10 @@ names a game, a need, a capability, a remedy or an order of remedies.
 
 1. The package default is a declaration: with no target record and no configuration, it runs,
    irreversible remedies included, within the defaults the provider declares.
-2. A provider declares named parameters with enumerated options and a default (section 2.2); the
-   target record or the configuration selects values per instance (sections 3.1, 3.2); an unknown
+2. A provider declares named parameters with enumerated options and a default (section 2.2), the
+   scope of its capability; a package that provides no irreversible capability may also declare
+   variables outside `provides` ([package-variables.md](package-variables.md), Workflow #463 L4);
+   the target record or the configuration selects values per instance (sections 3.1, 3.2); an unknown
    parameter or value is refused at write and stops the remedy at use (sections 3.1, 5.5), never
    ignored.
 3. The chosen values reach the run as read-only facts (section 4); the package's own selection
@@ -145,8 +147,9 @@ serializes byte for byte as before.
    the same violations as `resource_declaration_invalid` with the JSON pointer.
 2. A package does not provide a capability one of its own remedies names (a one-package cycle):
    `contained_task_control_invalid` `reason=provides_own_remedy`.
-3. Parameter names are unique across the package's `provides`, so a parameter belongs to one
-   capability and a run's overlay (section 4) is unambiguous.
+3. Parameter names are unique across the package's `provides` and its `variables` (Workflow #463
+   L4), so a name belongs to one capability or one variable and a run's overlay (section 4) is
+   unambiguous.
 4. No other rule is local; the rules across packages are in section 10.
 
 ## 3 Choices: target record, configuration, package default

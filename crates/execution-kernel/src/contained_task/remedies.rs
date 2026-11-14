@@ -9,10 +9,14 @@
 //! equality only. The host reads the declarations without preparing the package
 //! ([`PreparedContainedTask::read_remedy_declarations`]); a prepared package answers the default
 //! of every parameter it declares ([`PreparedContainedTask::declared_parameter_defaults`]).
+//! Workflow #463 V1 (contracts/package-variables.md): kernel admission also reads a control
+//! declaration's `variables` beside `provides` ([`parse_control_variables`]), and the metadata
+//! reader answers them; no run reads a variable yet, so a run's parameters are as before.
 
 use super::*;
 use actingcommand_contract::{
-    DeclaredCapabilities, ProvidedCapability, ProvidesProblem, RemedyDeclaration, validate_provides,
+    DeclaredCapabilities, PackageVariable, ProvidedCapability, ProvidesProblem, RemedyDeclaration,
+    parse_package_variables, validate_provides,
 };
 // Workflow #411 B15 R5: a run's read-only parameters.
 use actingcommand_contract::{FactContent, FactRecord, FactScope, FactValue, InstanceFactSnapshot};
@@ -134,6 +138,14 @@ pub struct RemedyDeclarations {
     /// host's scheduling gate lets such a package's task run on an instance that waits for its
     /// client update.
     pub store_update: bool,
+    /// Workflow #463 V1 (contracts/package-variables.md): the variables its control declaration
+    /// declares beside `provides`, in declaration order; empty when it declares none. The root
+    /// check of `standard-pack check` reads them; nothing resolves a value yet.
+    pub variables: Vec<PackageVariable>,
+    /// Workflow #463 V1: the fact keys its designated effects read their caps from
+    /// (`scheduling_outcome.designated_effects[].max_repeats.fact_key`), in declaration order,
+    /// which the root check holds a variable read as a cap to.
+    pub cap_fact_keys: Vec<String>,
 }
 
 impl RemedyDeclarations {
@@ -207,6 +219,14 @@ impl PreparedContainedTask {
                 })
                 .collect(),
             provides: control.provides,
+            variables: control.variables,
+            cap_fact_keys: scheduling
+                .iter()
+                .filter_map(SchedulingOutcomeDeclaration::designated_effects)
+                .flatten()
+                .filter_map(|effect| effect.cap_fact_key())
+                .map(str::to_owned)
+                .collect(),
         })
     }
 
@@ -353,6 +373,27 @@ pub(super) fn parse_control_provides(
     }
     validate_provides(&provides).map_err(|violation| refused(violation.problem))?;
     Ok(provides)
+}
+
+/// Workflow #463 V1 (contracts/package-variables.md): the `variables` member of a control
+/// declaration whose `provides` is `provides`, read by the contract crate's one reader
+/// ([`parse_package_variables`]); a refusal is `contained_task_control_invalid` with the rule as
+/// its `reason` (`variables_invalid`, `variable_name_taken`, `variables_on_irreversible`) and the
+/// pointer of what breaks it in `control.json` as its `json_pointer`.
+pub(super) fn parse_control_variables(
+    value: &serde_json::Value,
+    provides: &[ProvidedCapability],
+) -> Result<Vec<PackageVariable>, ContainedTaskError> {
+    parse_package_variables(value, provides).map_err(|violation| {
+        ContainedTaskError::with_detail(
+            ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+            format!(
+                "reason={} json_pointer={}",
+                violation.problem.as_str(),
+                violation.pointer
+            ),
+        )
+    })
 }
 
 /// Contracts/remedies.md section 2.4 rule 2: a package does not provide a capability one of its

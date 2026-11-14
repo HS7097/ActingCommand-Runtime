@@ -141,9 +141,11 @@ pub struct StandardPackCheckResponse {
     /// `package_bundle_remedy_invalid` per remedy finding. With `schedule.json`, the
     /// composition's warnings follow, then (SS-2b) one `standard_pack_benefit_undeclared` per
     /// judged rule that declares no value, then (SS-2c) one `standard_pack_priority_tier_mismatch`
-    /// per rule whose maintenance declaration disagrees with its tier. Workflow #455 G-R1: last,
-    /// with `goals.json`, one `standard_pack_root_invalid` per problem of a refused file, in file
-    /// order; the root is checked as without the file.
+    /// per rule whose maintenance declaration disagrees with its tier. Workflow #463 V1: then one
+    /// `standard_pack_root_invalid` per problem of the root check of the packages' variables,
+    /// naming the package's `control.json`. Workflow #455 G-R1: last, with `goals.json`, one
+    /// `standard_pack_root_invalid` per problem of a refused file, in file order; the root is
+    /// checked as without the file.
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
     /// SS-2b (register §1.225): with `schedule.json`, how many of the game's judged rules (their
     /// package is not maintenance-role and, SS-2c, they do not declare themselves maintenance)
@@ -179,6 +181,12 @@ pub struct StandardPackCheckResponse {
     /// `packages` in byte order of `package_id`. Always present, `[]` for a root whose packs name
     /// none. The last member, so every member before it is as before.
     pub models: Vec<StandardPackModel>,
+    /// Workflow #463 V1 (register §1.378; contracts/package-variables.md): when a package of the
+    /// root declares variables, each variable that applies by who wrote its default, `{pack:
+    /// [names], model: [names]}`, in the order the root first declares it. Absent otherwise, after
+    /// `models`, so that a root without variables answers byte for byte as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variable_provenance: Option<actingcommand_contract::VariableOrigins>,
 }
 
 /// Workflow #453 S8: one model a game root's packs need, as `standard-pack check` answers it.

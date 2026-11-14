@@ -271,6 +271,8 @@ fn cov1_t4_a_file_without_followers_answers_as_before() {
         notices: None,
         // Workflow #453 S8: the answer's struct gained this member.
         models: Vec::new(),
+        // Workflow #463 V1: the answer's struct gained this member.
+        variable_provenance: None,
     })
     .expect("the answer");
     assert!(answer.get("benefit_followers").is_none(), "{answer}");
