@@ -23392,11 +23392,12 @@ installer before this slice reads the journals this slice writes (their new memb
 and reports the first-start pause after a cold add as the caveat `post_check_mismatch`, as §1.362
 says.
 
-### 1.364 Slice #453 S4 (0.12.60): the rescue row `new` builds a fresh installation root with its first configuration (Workflow #453, approved by the owner on 11-13; the design survey `rd-1113/fresh-root-design.md` §0, §1(a), §1(b) points 4 and 5, §1(c) "1c. `install new`", the row S4 of §1(d) and §1(e), read on main `98924e28`, its places found again on main `f19756db`; the coordinator's rulings 1 to 9 on board #453, not the owner's words; coordinator work order `rd-1114/brief-453-s4-install-new.md`, read on main `f19756db`, main `e44fecb4` merged; fix round 1, after an independent review and the first CI run, with the coordinator's ruling that a fresh root gets its empty vision root, main `3d9d25e6` merged)
+### 1.366 Slice #453 S4 (0.12.60): the rescue row `new` builds a fresh installation root with its first configuration (Workflow #453, approved by the owner on 11-13; the design survey `rd-1113/fresh-root-design.md` §0, §1(a), §1(b) points 4 and 5, §1(c) "1c. `install new`", the row S4 of §1(d) and §1(e), read on main `98924e28`, its places found again on main `f19756db`; the coordinator's rulings 1 to 9 on board #453, not the owner's words; coordinator work order `rd-1114/brief-453-s4-install-new.md`, read on main `f19756db`, main `e44fecb4` merged; fix round 1, after an independent review and the first CI run, with the coordinator's ruling that a fresh root gets its empty vision root, main `3d9d25e6` merged)
 
 The slice took 1.363 on main `e44fecb4`; merging main `3d9d25e6` in fix round 1, where #457
-took §1.363, renumbered it 1.364, the next free number; slices merged before it renumber it
-again. [install-cli.md](install-cli.md), "Fresh root" (from planned to built),
+took §1.363, renumbered it 1.364, the next free number; main `17197d8e` then gave §1.364 to the
+fixes #456 and #458, and the train 0.12.60d renumbered it 1.366, after #453 S3 (§1.365).
+[install-cli.md](install-cli.md), "Fresh root" (from planned to built),
 "Downloads", the usage line, "Lab options from the graphical wizard", "Interface checks", the
 precondition row, row 7a″, "Secrets", the journal's kinds, the step table and "Outcome codes"
 ("Workflow #453 S4") are the contract; [lab-two-entries.md](lab-two-entries.md) §7 and the row
