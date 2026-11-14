@@ -55,6 +55,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("standard-pack check", ["offline", "read_only"], "available"),
         // ROUT-L RL-1a: composes the schedule rules of bound games into a new directory.
         command_cap("standard-pack compose", ["offline"], "available"),
+        // Workflow #464 P2: `build_schema` tells a caller this build can build a standard pack.
+        standard_pack_build_capability(),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         command_cap("operation validate", ["offline"], "available"),
@@ -216,6 +218,13 @@ where
 fn resource_verify_capability() -> Value {
     let mut capability = command_cap("resource verify", ["offline"], "available");
     capability["report_schema"] = json!(crate::resource_verify::REPORT_SCHEMA);
+    capability
+}
+
+/// Workflow #464 P2: `standard-pack build`'s entry, with the schema of the `build.json` it writes.
+fn standard_pack_build_capability() -> Value {
+    let mut capability = command_cap("standard-pack build", ["offline"], "available");
+    capability["build_schema"] = json!(crate::resource_verify::BUILD_SCHEMA);
     capability
 }
 

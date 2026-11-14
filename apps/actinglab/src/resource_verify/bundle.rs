@@ -20,19 +20,29 @@
 //! 7. every read-back pack admitted again.
 //!
 //! Nothing is deleted; a failed `package bundle` leaves its `bundle.part`.
+//!
+//! Workflow #464 P2: for `standard-pack build` ([`StepsFor::Build`]) the step is the same, and
+//! besides: `package bundle` is given `goals.json` too when the repository holds it (`--goals`);
+//! the repository's tables (`tables/<table_id>.json`, read as the Runtime reads a game root's
+//! tables) go into the zip as `tables/<file>`, listed in its `bundle.json` `tables`, and into the
+//! installed root; and `interfaces.json` declares the `package` revision the zip's content needs
+//! (`revision.rs`). For `resource verify` every byte the step writes is what it wrote before.
 
+use super::revision::content_revision;
 use super::steps::{
     Applications, PackIdentity, admission_failure, declaration_invalid, developer_line,
     foreign_json, preflight, relayed,
 };
-use super::{Counts, StepRun, ZipCounts, path_value, sha256_hex};
+use super::{Counts, StepRun, StepsFor, ZipCounts, path_value, pointer_value, sha256_hex};
 use crate::CliError;
 use crate::codes::{ActinglabCode, BundleProblem, LayoutProblem, ReadbackProblem, VerifyStep};
-use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, BundleSource, NOTICES_PACKAGE_REVISION,
-    STANDARD_PACK_NOTICES_DIRECTORY, notice_relative_path,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_NOTICES_DIRECTORY,
+    STANDARD_PACK_TABLES_DIRECTORY, STANDARD_PACK_UI_FILE, StandardPackRegistry,
+    notice_relative_path, parse_standard_pack_ui, read_standard_pack_tables,
 };
 use actingcommand_resource_tooling::{
     PackageBundleRequest, ResourceToolingCode, StandardPackCheckRequest, StandardPackNotices,
@@ -49,8 +59,12 @@ const INTERFACES_SCHEMA: &str = "actingcommand.component-interfaces.v1";
 const INTERFACES_FILE: &str = "interfaces.json";
 /// The `package` revision the zip's `interfaces.json` declares, as `bundle.ps1` writes it; a
 /// bundle that carries the notices directory declares the contract crate's
-/// `NOTICES_PACKAGE_REVISION` (Workflow #444 NOTICES-3).
-const PACKAGE_REVISION: u64 = 3;
+/// `NOTICES_PACKAGE_REVISION` (Workflow #444 NOTICES-3). Workflow #464 P2: the revision of a
+/// bundle whose content needs no later one (`revision.rs`).
+pub(super) const PACKAGE_REVISION: u64 = 3;
+/// Workflow #464 P2: the directory below the work directory that holds the zip and `SHA256SUMS`,
+/// which `standard-pack build` copies into its `--out`.
+pub(super) const ZIP_DIRECTORY: &str = "out";
 /// The standard-pack root files `package bundle` lays beside `bundle.json` (ROUT-L RL-1a:
 /// `schedule.json` too; Workflow #392 DA-4: `display-layout.json` too; Workflow #407 LOAD-1:
 /// `loading.json` too, given as `--loading`, with its templates in `loading/`).
@@ -78,6 +92,8 @@ pub(super) struct BundleInputs<'a> {
     pub(super) packs: &'a [String],
     /// The identities of the packs the admission step admitted, by directory name.
     pub(super) identities: &'a BTreeMap<String, PackIdentity>,
+    /// Workflow #464 P2: the row that runs the step.
+    pub(super) steps_for: StepsFor,
 }
 
 /// The zip's `interfaces.json`.
@@ -109,12 +125,17 @@ struct BundleTally {
     files: u64,
     bytes: u64,
     zip: Option<ZipCounts>,
+    /// The `package` revision the zip's `interfaces.json` declares, once it is written.
+    revision: Option<u64>,
 }
 
 pub(super) fn bundle(inputs: &BundleInputs<'_>) -> StepRun {
     let mut run = StepRun::start(VerifyStep::Bundle);
+    // Workflow #464 P2: `standard-pack build` carries `goals.json` too.
+    let goals = (inputs.steps_for == StepsFor::Build).then_some(STANDARD_PACK_GOALS_FILE);
     let root_files = ROOT_FILES
         .into_iter()
+        .chain(goals)
         .filter(|name| is_file(&inputs.repo.join(name)))
         .collect::<Vec<_>>();
     // Workflow #444 NOTICES-3: the notices directory, found as the root files are.
@@ -129,7 +150,7 @@ pub(super) fn bundle(inputs: &BundleInputs<'_>) -> StepRun {
         bytes: tally.bytes,
         zip: tally.zip,
         root_files: root_files.iter().map(|name| (*name).to_owned()).collect(),
-        package_revision: package_revision(notices),
+        package_revision: tally.revision.unwrap_or_else(|| package_revision(notices)),
     };
     run.finish()
 }
@@ -154,6 +175,15 @@ fn lay_out(
     tally: &mut BundleTally,
 ) -> Result<(), Outcome> {
     let work = inputs.work;
+    // Workflow #464 P2 fix round 1: `standard-pack build`'s `--out`, the parent of its work
+    // directory, is made here when it is not there yet, so only once the checkout precondition
+    // passed: a call it refuses leaves nothing behind.
+    if inputs.steps_for == StepsFor::Build
+        && let Some(out) = work.parent()
+        && fs::symlink_metadata(out).is_err()
+    {
+        create_dir(out)?;
+    }
     create_dir(work)?;
     let maintenance = read_maintenance(inputs.repo)?;
     let stage = work.join("packs-root");
@@ -180,9 +210,10 @@ fn lay_out(
             display_layout: root_file("display-layout.json"),
             loading: root_file(LOADING_FILE),
             notices: notices.then(|| inputs.repo.join(STANDARD_PACK_NOTICES_DIRECTORY)),
-            // Workflow #455 G-R1 (register §1.356): this step does not pass `goals.json` and
-            // declares no `package` 12; the packer of a bundle that carries it declares [12, 12].
-            goals: None,
+            // Workflow #455 G-R1 (register §1.356): `resource verify` does not pass `goals.json`
+            // and declares no `package` 12 (`goals.json` is none of its root files). Workflow #464
+            // P2: `standard-pack build` passes it, and its revision is computed from the content.
+            goals: root_file(STANDARD_PACK_GOALS_FILE),
         },
     })
     .map_err(|error| lab_failure(&error))?;
@@ -223,6 +254,12 @@ fn lay_out(
         // The bundle root check named it already; the zip cannot hold a second one.
         return Ok(());
     }
+    // Workflow #464 P2: `standard-pack build` carries the repository's tables; fix round 1: and
+    // its `ui.json`, checked against the zip's `bundle.json`.
+    if inputs.steps_for == StepsFor::Build {
+        carry_tables(inputs.repo, &game, &mut entries, run)?;
+        carry_ui(inputs.repo, &game, &mut entries, run)?;
+    }
     // Workflow #444 NOTICES-3: what the check of the installed root must count of the notices
     // directory the zip carries; nothing without it.
     let laid_notices = notices.then(|| {
@@ -236,7 +273,12 @@ fn lay_out(
             bytes: files.iter().sum(),
         }
     });
-    let revision = package_revision(notices);
+    // Workflow #464 P2: `standard-pack build` declares the revision its content needs.
+    let revision = match inputs.steps_for {
+        StepsFor::Verify => package_revision(notices),
+        StepsFor::Build => content_revision(&entries),
+    };
+    tally.revision = Some(revision);
     let interfaces = Interfaces {
         schema_version: INTERFACES_SCHEMA.to_owned(),
         speaks: Speaks {
@@ -251,7 +293,7 @@ fn lay_out(
         .map_err(|error| write_failed_with(foreign_json(&error.to_string())))?;
     interfaces_bytes.push(b'\n');
     entries.insert(INTERFACES_FILE.to_owned(), interfaces_bytes);
-    let out = work.join("out");
+    let out = work.join(ZIP_DIRECTORY);
     create_dir(&out)?;
     let short = inputs.commit.get(..7).unwrap_or(inputs.commit);
     let zip_name = format!("{game}-resources-{short}.zip");
@@ -320,7 +362,12 @@ fn lay_out(
             .is_some_and(|rest| rest.starts_with('/'));
         // Workflow #444 NOTICES-3: and the files of the notices directory, in `notices/`.
         let notice = notice_relative_path(name).is_some();
-        if safe_entry(name) && (!name.contains('/') || loading_template || notice) {
+        // Workflow #464 P2: and the tables `standard-pack build` carries, in `tables/`; a zip of
+        // `resource verify` holds none.
+        let table = name
+            .strip_prefix(STANDARD_PACK_TABLES_DIRECTORY)
+            .is_some_and(|rest| rest.starts_with('/'));
+        if safe_entry(name) && (!name.contains('/') || loading_template || notice || table) {
             let target = join_relative(&installed, name);
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)
@@ -401,6 +448,102 @@ fn read_maintenance(repo: &Path) -> Result<Vec<BundleMaintenance>, Outcome> {
     };
     serde_json::from_slice(bytes.strip_prefix(BYTE_ORDER_MARK).unwrap_or(&bytes))
         .map_err(|error| declaration_invalid("maintenance.json", foreign_json(&error.to_string())))
+}
+
+/// Workflow #464 P2: the tables of the repository `repo` (`tables/<table_id>.json` at its root,
+/// read as the Runtime reads a game root's tables, `read_standard_pack_tables`) carried into the
+/// zip's `entries` of `game` as `tables/<file>`, byte for byte, and listed in its `bundle.json`
+/// `tables` in file name order, as an updater reads them (contracts/package-reference.md, the
+/// bundle index). A table the reader refuses fails the step and is not carried; a repository
+/// without a table leaves `bundle.json` as `package bundle` wrote it.
+fn carry_tables(
+    repo: &Path,
+    game: &str,
+    entries: &mut BTreeMap<String, Vec<u8>>,
+    run: &mut StepRun,
+) -> Result<(), Outcome> {
+    let mut table_ids = Vec::new();
+    for table in read_standard_pack_tables(repo, game)? {
+        if let Err(refused) = table.read {
+            run.fail(refused);
+            continue;
+        }
+        let name = table
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let bytes = fs::read(&table.path)
+            .map_err(|error| read_failed(&table.path, &error, BundleProblem::RootFileDiffers))?;
+        entries.insert(format!("{STANDARD_PACK_TABLES_DIRECTORY}/{name}"), bytes);
+        table_ids.push(table.table_id);
+    }
+    if table_ids.is_empty() {
+        return Ok(());
+    }
+    let listed = entries
+        .get(STANDARD_PACK_BUNDLE_FILE)
+        .ok_or_else(|| mismatch(STANDARD_PACK_BUNDLE_FILE, BundleProblem::IndexSchema))?;
+    let mut index = serde_json::from_slice::<BundleIndex>(listed).map_err(|error| {
+        mismatch(STANDARD_PACK_BUNDLE_FILE, BundleProblem::IndexSchema)
+            .caused_by(foreign_json(&error.to_string()))
+    })?;
+    index.tables = Some(table_ids);
+    if index.validate().is_err() {
+        run.fail(mismatch(
+            STANDARD_PACK_BUNDLE_FILE,
+            BundleProblem::IndexSchema,
+        ));
+        return Ok(());
+    }
+    // The bundle index as `package bundle` encodes it, with its `tables`.
+    let mut encoded = serde_json::to_vec_pretty(&index)
+        .map_err(|error| write_failed_with(foreign_json(&error.to_string())))?;
+    encoded.push(b'\n');
+    entries.insert(STANDARD_PACK_BUNDLE_FILE.to_owned(), encoded);
+    Ok(())
+}
+
+/// Workflow #464 P2 fix round 1: the repository `repo`'s `ui.json`, a root file of the standard
+/// package root (contracts/package-reference.md, "Standard package root") that `place` places and
+/// sets aside when a zip carries none, carried into the zip's `entries` of `game` byte for byte
+/// when its reader, `parse_standard_pack_ui`, takes it against the zip's `bundle.json`. Each
+/// violation of a refused file fails the step as `standard_pack_root_invalid` (`game`, `path`,
+/// `standard_pack_problem`, `json_pointer`), and the file is not carried; a repository without the
+/// file leaves the entries as they are.
+fn carry_ui(
+    repo: &Path,
+    game: &str,
+    entries: &mut BTreeMap<String, Vec<u8>>,
+    run: &mut StepRun,
+) -> Result<(), Outcome> {
+    let path = repo.join(STANDARD_PACK_UI_FILE);
+    if !is_file(&path) {
+        return Ok(());
+    }
+    let bytes = fs::read(&path)
+        .map_err(|error| read_failed(&path, &error, BundleProblem::RootFileDiffers))?;
+    let registry = entries
+        .get(STANDARD_PACK_BUNDLE_FILE)
+        .and_then(|index| StandardPackRegistry::from_bundle_bytes(index, game).ok())
+        .ok_or_else(|| mismatch(STANDARD_PACK_BUNDLE_FILE, BundleProblem::IndexSchema))?;
+    match parse_standard_pack_ui(&bytes, game, &registry) {
+        Ok(_) => {
+            entries.insert(STANDARD_PACK_UI_FILE.to_owned(), bytes);
+        }
+        Err(issues) => {
+            for issue in issues {
+                run.fail(
+                    Outcome::new(SharedCode::StandardPackRootInvalid)
+                        .game(game)
+                        .path(path_value(&path))
+                        .standard_pack_problem(issue.problem)
+                        .json_pointer(pointer_value(&issue.pointer)),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The index and copy checks (`bundle.ps1:316-380`); every difference is recorded. `notices`:

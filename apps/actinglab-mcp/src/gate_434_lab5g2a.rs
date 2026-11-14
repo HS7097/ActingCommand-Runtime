@@ -112,6 +112,8 @@ fn row_mut<'a>(table: &'a mut OperationTable, name: &str) -> &'a mut Operation {
 
 /// The slices actinglab's words offer (`BUILT_SLICES` in `apps/actinglab/src/cli_module/words.rs`),
 /// read from that file's text: actinglab is a program, so its constant is out of this test's reach.
+/// Workflow #464 P2 fix round 1: the list is the `[` after the `=`, wherever rustfmt breaks the
+/// line (after the `=`, after the `[`, or not at all).
 fn actinglab_built_slices() -> Vec<String> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../actinglab/src/cli_module/words.rs");
     let text = fs::read_to_string(&path)
@@ -119,10 +121,12 @@ fn actinglab_built_slices() -> Vec<String> {
     let declared = &text[text
         .find("const BUILT_SLICES")
         .expect("actinglab's words declare BUILT_SLICES")..];
-    let open = declared
-        .find("= [")
-        .expect("BUILT_SLICES is an array written out")
-        + "= [".len();
+    let equals = declared.find('=').expect("BUILT_SLICES is given a value");
+    let open = equals
+        + declared[equals..]
+            .find('[')
+            .expect("BUILT_SLICES is an array written out")
+        + 1;
     let close = open + declared[open..].find(']').expect("BUILT_SLICES ends");
     declared[open..close]
         .split(',')

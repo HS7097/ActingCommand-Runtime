@@ -226,6 +226,183 @@ reuses carry the optional keys this slice declares on them: `resource_declaratio
 0.12.47 (Workflow #434 LAB-2) the word is gone, an unknown resource command, and the code is
 retired.
 
+Workflow #464 P2 (since 0.12.60), `standard-pack build`'s own codes, in the same fragment:
+`resource_build_output_invalid` (`path`), `resource_build_failed`
+(`failed_step_count`) and `resource_build_write_failed` (`path`).
+
+## `standard-pack build`
+
+Workflow #464 P2 (register [v012-register.md](v012-register.md) §1.376; the coordinator's rulings
+on board #464, not the owner's words): one operation from a game's working root to the thing an
+installation's placement accepts.
+
+```text
+actinglab [--json] standard-pack build --repo <checkout> --source-repository <owner>/<name>
+    --out <directory> [--commit <40-hex>]
+```
+
+- **One function.** It runs the steps above, `tools` to `bundle`, every one of them, on the one
+  function `resource verify` runs them on, its work under `<out>/work/` as `resource verify`'s is
+  under `--work` (`packs-root/`, `bundle/`, `out/`, `read-back/`, `installed/`). `resource verify`
+  runs them as before, so its report is the same for the same input. The build differs in five
+  things only:
+  - the checkout's read paths are every input its bundle carries: besides those of "Clean" above,
+    `schedule.json`, `display-layout.json`, `loading.json`, `goals.json`, `ui.json` and every file
+    under `loading/`, `notices/` and `tables/`, each the committed blob and none an ignored file;
+  - `package bundle` is given `goals.json` too when the repository holds it (`--goals`);
+  - the repository's tables, `tables/<table_id>.json` at its root, read as the Runtime reads a game
+    root's tables (`read_standard_pack_tables`; a refused table fails the `bundle` step with its
+    `standard_pack_table_invalid` or `standard_pack_table_unreadable` and is not carried), go into
+    the zip as `tables/<file>`, byte for byte, and into the installed root, and the zip's
+    `bundle.json` lists them in `tables`, in file name order (the index member an updater reads,
+    [package-reference.md](package-reference.md)); without a table the zip's `bundle.json` is the
+    one `package bundle` wrote;
+  - (fix round 1) the repository's `ui.json`, a root file of the standard package root
+    ([package-reference.md](package-reference.md), "Standard package root") that `place` places
+    and sets aside when a zip carries none, goes into the zip's root byte for byte, and into the
+    installed root, when its reader `parse_standard_pack_ui` takes it against the zip's
+    `bundle.json`; each violation of a refused file fails the `bundle` step as
+    `standard_pack_root_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`) and the
+    file is not carried. `package bundle` still has no flag for it: the build adds it to the zip,
+    as it adds the tables;
+  - `interfaces.json` declares the `package` revision the zip's content needs ("The `package`
+    revision" below), not resource verify's 3 or 10.
+- **Clean, and bound to its commit.** The `checkout` precondition refuses a tree with a change, an
+  untracked file or an ignored file where the build reads, so every build has a commit and a tree.
+  `--commit`, when given, must be HEAD. There is no `--base`.
+- **`--out`** is a directory that does not exist, whose parent does, or an existing empty
+  directory, and never `--repo` or a place inside it (by their real paths). Anything else is
+  `resource_build_output_invalid` (`path`), before anything is read. Fix round 1: a `--out` that
+  does not exist is made by the `bundle` step, the first step that writes, so only once the
+  `checkout` precondition passed: a call it refuses (a tree with a change, for example) leaves
+  nothing behind; one that cannot be made fails that step (`package_bundle_write_failed`, caused
+  by the OS failure). A `--out` inside an installation root is not refused: no code of the Lab or
+  the rescue module tells whether a directory lies inside one.
+- **The product**, written only when every step passed: the steps' zip
+  `<out>/<game>-resources-<sha7>.zip`, copied byte for byte from `<out>/work/out/`,
+  `<out>/SHA256SUMS` (`<hex>  <name>\n`), and `<out>/build.json`. Fix round 1: each is written
+  under its name with `.part` added, and only when all three are complete are they renamed, the
+  zip, then `SHA256SUMS`, `build.json` last; a final name that exists is never replaced. A failure
+  while they are written leaves no file under a final name. Fix round 2: a rename that fails half
+  way can leave the zip, or the zip and `SHA256SUMS`, under their final names without `build.json`.
+  `build.json` is the mark of a complete build: it is there only beside the other two, and a reader
+  takes a directory without it as incomplete. For a commit whose repository holds no
+  `goals.json`, no table and no `ui.json` and whose packs need no revision above 3, the zip is
+  `resource verify`'s zip of that commit, byte for byte.
+- **Steps that did not all pass** write no product: `resource_build_failed`
+  (`failed_step_count`), caused by the steps' outcome (`resource_verify_failed` with each failed
+  step's first failure, or the precondition's own code, `resource_verify_checkout_dirty` for a dirty
+  tree); its details are `{outcome, report}`, `report` the steps' `actinglab.resource-verify.v1`
+  document, which is no file. `--out` then holds what the steps wrote below `work/` and nothing
+  else; when the precondition refused the call, a `--out` the build was to make does not exist. A
+  file of the product that cannot be written or renamed is `resource_build_write_failed` (`path`,
+  caused by the OS failure); the files already written stay.
+- **The answer** (exit 0, the CLI module's line, its members flat): `build` (the document of
+  `build.json`), `out`, `files` (`zip`, `sums`, `build`, `work`, absolute paths) and `steps` (each
+  step as the report lists it).
+- **Refusals** as `resource verify`'s: global `--dry-run` `dry_run_unsupported`, after flag parsing
+  only, with no alternative; the device, Runtime and instance options
+  `offline_device_scope_forbidden`; any other flag, a flag twice, a flag without its value, a
+  positional, a `--commit` that is no 40 lowercase hexadecimal characters or a
+  `--source-repository` that is no `<owner>/<name>` `validation_failed`.
+- It writes nothing into the repository and deletes nothing. The MCP tool of its row is
+  `ac_standard_pack_build` ([lab-operations.json](lab-operations.json)), served through a `serve`
+  child. `capabilities` lists it with `build_schema: "actingcommand.standard-pack-build.v1"`.
+
+### `build.json`
+
+`actingcommand.standard-pack-build.v1`, exactly these members:
+
+```json
+{
+  "schema_version": "actingcommand.standard-pack-build.v1",
+  "game": "<the zip's bundle.json game>",
+  "source_repository": "<owner>/<name>",
+  "commit": "<40 hex: HEAD>",
+  "tree": "<40 hex: HEAD^{tree}>",
+  "tools": {"runtime_head": "<40 hex, compiled in>", "executable_sha256": "<64 hex>"},
+  "package": [12, 12],
+  "root_files": ["applications.json", "bundle.json", "goals.json", "interfaces.json"],
+  "root_directories": ["notices"],
+  "packs": [{"package_id": "…", "server": "…", "entry_task_id": "…", "file_count": 4, "byte_count": 1234}],
+  "zip": {"name": "<game>-resources-<sha7>.zip", "sha256": "<64 hex>", "bytes": 0}
+}
+```
+
+`game`, `package` (the range of the zip's `interfaces.json`), `root_files` (the files at the zip's
+root, in byte order), `root_directories` (its directories but `packs`, in byte order) and `packs`
+(its `bundle.json` packs in their order, without `path`) are read back from the zip written, whose
+name, SHA-256 (the one `SHA256SUMS` names) and size `zip` gives; `commit` and `tree` are the
+checkout's, `executable_sha256` the `tools` step's. It has no readiness member: whether a pack is
+ready to be dispatched is judged by another slice's function, which a later slice adds here.
+
+### The `package` revision
+
+[component-interfaces.md](component-interfaces.md): "A bundle writes `package`: its `max` is the
+revision its packs need. Give `min` the same value." The build declares `[r, r]`, `r` the highest
+revision any entry of its zip needs, 3 (the bundle formats of Runtime v0.12.0) when none needs a
+later one. The table holds what each `package` row of that document names and, fix round 1, what
+the register sections it cites and the B train's sections put into a revision (their members
+joined revision 6, "which BT-PK6 declares", and DB-2 declared 6 in 0.12.37), each in the file it
+stands in and under its condition. The files of a pack: `control.json`; a task file
+`resources/operations/<task>/task.json`; a selection-policy document
+`resources/operations/<task>/policies/<name>.json`; the navigation projection below
+`resources/navigation/`. "Under `x`": a member of an object that the member `x` holds, itself or
+as an element of its array.
+
+| Revision | File | What needs it | Source |
+|---|---|---|---|
+| 4 | task | `remedy` under `mappings` | B15, §1.110 B15-10, §1.111 |
+| 4 | control | `provides` | B15 |
+| 5 | task, navigation | a member `kind` that holds `single_touch_path_drag_v1` (a click) | T3, §1.137 |
+| 6 | policy | `tables` of the document | DB-2, §1.65 TB6, §1.244 |
+| 6 | policy | a member `source` that holds `table` | DB-2 |
+| 6 | task | `post_admission_ocr` of a task of schema `0.9` only; a `0.7` or `0.8` task writes it and keeps its revision | OCR-SCALE-1, §1.251 OS-1 |
+| 6 | task | `target_present`, `target_gone` under `expect_after` | ACT-4, §1.254 |
+| 6 | task | `loading` under `expect_after` | LOAD-2, §1.258 LD2-1 |
+| 6 | task | `wait_page` under `expect_after` | A35-S3, §1.176 S3-2; LOAD-2 LD2-2 |
+| 6 | pack | its loading copy, `resources/loading.json` or a file under `resources/loading/` | LOAD-1, §1.257 LD1-2 |
+| 6 | policy | a member `kind` that holds `integer_compare` | BT-B2, §1.146 B2-1 |
+| 6 | task | `part` under `integer` (an `ocr_integer` feature) | BT-B2 B2-2 |
+| 6 | task | `alternatives` under `color_probes` or under `color_check` | BT-B3, §1.149 |
+| 6 | task | `busy` under `mappings` | A35-S1, §1.152 B37-1 |
+| 6 | task, control | `end_pages`, `entry_pages` under `phases` | BT-B5, §1.154 B5-1, B14-1 |
+| 6 | task | a member `kind` that holds `still_frames` under `input_recheck` | BT-B12, §1.155 B12-1 |
+| 6 | task | `input_recheck` under `operations`, in a pack whose `control.json` `execution_mode` is `linear_steps` only | BT-B12 B12-4; resource-declarations.md, "until then it, and an input recheck under `linear_steps`, are admitted by code" |
+| 6 | task | `dictionary` under `value`, in a value whose `type` is `unsigned_integer` only (the `dictionary` of a `dictionary_entry` value is older) | BT-B1, §1.163 B1-1 |
+| 6 | task | `agreement` under `left`, `right` (a value-test side) or `resource_readings` (a reading mark) | BT-B1 B1-2 |
+| 6 | task | `max_runs`, `on_max_runs` under `operations`; `on_guard_refused` under `operations` when it holds an object (the text `next_candidate` is older) | BT-KEY, §1.164 KEY-1, KEY-2 |
+| 6 | task | `luma_floor` under `anchors` or `verify_templates` | BT-B13, §1.165 B13-1 |
+| 6 | task | `confirm` under `select`, whatever it holds | BT-B4, §1.166 B4-1 |
+| 6 | task | `wait` under `operations` | A35-S3, §1.176 S3-1 |
+| 6 | task | a member `type` that holds `timestamp_ms` under `value` | CF-2, §1.181 CF2-1 |
+| 6 | root `interrupts.json` | `limit_cause`, `result` under `interrupts` | B43, §1.203 B43-1; UPD-1a, §1.215 UPD-1 |
+| 6 | control | `store_update` | STORE-FG-1, §1.207 SF-1 |
+| 6 | task | `preprocess` under `ocr_targets` or `shared_ocr` | CFL-2, §1.208 CFL2-1 |
+| 7 | task | a member `value` that holds `anchor_milli` under `features` | FS-2, §1.283 FS2-1 |
+| 7 | task | a member `confirm` that holds `track`, and `track_px`, under `select` | FS-3, §1.284 FS3-1 |
+| 7 | task | a `repeated_anchor` layout of `candidate_layouts` whose `anchor` names a template target of its pack that declares `mask`, `maskRange` or `scales`: an entry of `anchors` (target `page/<id>`) or of `verify_templates` (target `<id>`) of any task file of the pack, as the parser resolves the anchor (fix round 2; it looked at the task's own `anchors` only) | FS-1, §1.282 FS1-3 |
+| 8 | task | `read_list` under `operations` | S168-4, §1.291 S168C-1 |
+| 8 | policy | a member `source` that holds `table_max_over_list` | S168-5a, §1.291 S168C-5 |
+| 9 | policy | `lower_bound_column` | S168-LB1b, §1.309 LB1-7, §1.312 |
+| 10 | root | a file under `notices/` | NOTICES-2, §1.335 |
+| 11 | task | `field_lists` of the task | FL-1, §1.343 |
+| 12 | root | `goals.json` | G-R1, §1.356 |
+
+Nothing else needs a revision: a game root's `tables/` (row 6: no member of a pack reads them),
+`ui.json` (§1.240: no revision), the other root files and every other file of a pack need 3. A
+member is found by its name, its file and its place, not by the declaration reader, and where an
+older member of the same name exists, by the value or the condition that tells them apart. Fix
+round 2: a member the table counts under a holder is matched by the name of its direct holder
+(the member that holds its object, itself or through its array); a member it counts anywhere in
+its file is matched in the whole file, so a structure of another meaning that used the same
+member name there would raise the number. None is known that the readers accept. A JSON file
+that does not read needs nothing here (the `format` step refuses it). A feature that adds a
+`package` revision adds its row, in its own slice
+(`apps/actinglab/src/resource_verify/revision.rs`). `resource verify` keeps its rule: 3, or 10
+with `notices/`; the two rows can therefore declare different revisions for one commit (a follow-up
+slice on `resource verify`).
+
 ## What stays in the wrapper
 
 The repository wrapper keeps what is the repository's policy, not a Runtime rule:

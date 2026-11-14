@@ -2135,3 +2135,80 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_453_s12::op_status_fix1_with_its_switch_leaves_the_member_out_while_an_operation_is_unfinished",
 ]
 incident = ["#453 S12"]
+
+# Workflow #464 P2 (0.12.60; register §1.376; brief rd-1114/brief-464-p2-build.md; contracts/resource-verify.md, "standard-pack build"; contracts/package-reference.md, "The built standard pack"; the design's section G, the row P2 build): on a neutral fixture repository made with git (RV-1's files, two packs), resource verify of a commit reports what RV-1 pins (every step passed, 11 files checked, 2 packs, 6 files, no root file, package 3, a zip of 9 entries) and standard-pack build of the same commit runs the same seven steps, every one passed, and writes into a new --out that zip byte for byte, the same SHA256SUMS, build.json and its work directory, nothing else; a committed notices/ makes the build's zip and build.json declare package [10, 10] and a committed goals.json [12, 12], the zip carrying goals.json byte for byte, while resource verify of that commit still leaves goals.json out and declares 10; a tree with a tracked change or an untracked file is refused resource_build_failed caused by resource_verify_checkout_dirty (tracked_change, untracked) with the steps' report in the details, the content steps not run and (fix round 1) --out not made; an --out that holds a file and one inside the repository are refused resource_build_output_invalid naming it, the file kept and nothing made; build.json has exactly its eleven members (no readiness) and is the zip's: schema, game, source repository, commit and tree as git gives them, the Tools' head and executable SHA-256, the package range of the zip's interfaces.json, its root files and root directories, its bundle.json packs, its name, SHA-256 (SHA256SUMS's too) and size, and the answer carries the same document
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_the_build_carries_resource_verifys_zip_and_verifys_report_is_as_before",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_notices_give_package_10_and_goals_give_12",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_a_dirty_tree_or_an_output_in_use_is_refused_and_nothing_is_built",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_build_json_names_the_commit_and_matches_the_zip",
+]
+incident = ["#464 P2"]
+
+# Workflow #464 P2 fix round 1 (0.12.60; register §1.376; brief rd-1114/brief-1719-fix1.md; contracts/resource-verify.md, "standard-pack build" and "The package revision"; contracts/package-reference.md, "The built standard pack"): a committed tables/neutral_scores.json goes into the build's zip byte for byte, the zip's bundle.json lists it in tables, build.json names the directory tables and the zip declares package [3, 3], and a table its reader refuses fails the build resource_build_failed caused by resource_verify_failed, the bundle step failed with standard_pack_table_invalid, no product written; a committed ui.json goes into the zip byte for byte, build.json lists it among the root files and the zip declares package [3, 3], and a ui.json that names a pack the bundle does not list fails the build, the bundle step failed with standard_pack_root_invalid (game, the file's path, package_not_listed), no product written; and one test per row of the revision table (apps/actinglab/src/resource_verify/revision.rs): over zip entries whose content needs the row's revision minus one, the fixture with the row's member, file or value needs the row's revision and the same fixture without it stays one lower, a conditional row's without being the member where its condition does not hold (a post_admission_ocr of a 0.8 or 0.7 task, an input_recheck of a navigable_route pack, the dictionary of a dictionary_entry value, an on_guard_refused text, a confirm other than track)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_tables_are_carried_and_listed_and_a_refused_table_fails_the_build",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_ui_json_is_carried_and_a_refused_one_fails_the_build",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_4_remedy_of_a_mapping",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_4_provides_of_control",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_5_path_drag_click",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_tables_of_a_policy",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_table_value_source",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_post_admission_ocr_of_a_schema_0_9_task_only",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_expect_after_target_present",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_expect_after_target_gone",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_expect_after_loading",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_expect_after_wait_page",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_integer_compare_predicate",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_part_of_an_ocr_integer_feature",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_alternatives_of_a_color_probe",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_alternatives_of_a_color_check",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_busy_of_a_mapping",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_end_pages_of_a_stage",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_entry_pages_of_a_stage",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_still_frames_input_recheck",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_input_recheck_of_a_linear_steps_pack_only",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_dictionary_of_an_unsigned_integer_value_only",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_agreement_of_a_left_side",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_agreement_of_a_right_side",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_agreement_of_a_reading_mark",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_max_runs_of_an_operation",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_on_max_runs_of_an_operation",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_keyed_on_guard_refused_only",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_luma_floor_of_an_anchor",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_luma_floor_of_a_verify_template",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_confirm_of_a_select",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_wait_of_an_operation",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_timestamp_ms_value_of_a_reading_mark",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_limit_cause_of_an_interrupt",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_store_update_of_control",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_preprocess_of_an_ocr_target",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_preprocess_of_a_shared_read",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_result_of_an_interrupt",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_6_loading_copy_of_a_pack",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_7_anchor_milli_feature",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_7_confirm_track_of_a_select",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_7_track_px_of_a_select",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_7_masked_anchor_of_a_repeated_anchor_layout",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_8_read_list_of_an_operation",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_8_table_max_over_list_value_source",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_9_lower_bound_column",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_10_notices_directory",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_11_field_lists_of_a_task",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_12_goals_json",
+]
+incident = ["#464 P2"]
+
+# Workflow #464 P2 fix round 2 (0.12.60; register §1.376; brief rd-1114/brief-1719-fix2.md; contracts/resource-verify.md, "The package revision"): revision 7's repeated_anchor anchor is looked for, as the parser resolves it, among every template target of its pack that declares mask, maskRange or scales, an anchors entry (target page/<id>) or a verify_templates entry (target <id>) of any task file of the pack: over zip entries that need 6, a layout whose anchor is a verify_templates entry with a mask needs 7 and the same entry without it 6; a layout whose anchor stands, with scales, in another task file of the same pack needs 7 and the same anchor there without them 6; an anchor that declares maskRange alone needs 7 and the same anchor without it 6
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_7_masked_verify_template_as_a_layout_anchor",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_7_masked_anchor_in_another_task_of_the_pack",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_7_mask_range_alone_of_a_layout_anchor",
+]
+incident = ["#464 P2"]
