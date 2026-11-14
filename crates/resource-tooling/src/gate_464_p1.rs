@@ -2,7 +2,8 @@
 
 // Workflow #464 P1 (register §1.377; contracts/standard-pack-authoring.md; coordinator work orders
 // `rd-1114/brief-464-p1-adopt.md`, the design's row "P1 adopt" of its section G,
-// `rd-1114/brief-1722-fix1.md`, `rd-1115/brief-1722-fix2.md` and `rd-1115/brief-1722-fix3.md`):
+// `rd-1114/brief-1722-fix1.md`, `rd-1115/brief-1722-fix2.md`, `rd-1115/brief-1722-fix3.md` and
+// `rd-1115/brief-1722-fix4.md`):
 // `actinglab standard-pack adopt`
 // on a made-up resource repository of the game `neutral`, server `test`, which holds one package,
 // its business rule and a valued pool.
@@ -45,8 +46,15 @@
 //   with `--replace` and the decision) are each accepted and end in one role; a rule that
 //   declares no maintenance beside its package's `maintenance.json` entry is that package's one
 //   maintenance role as the composer reads it (adopted again with or without a decision), and a
-//   business rule only without that entry.
-// No device, no Runtime, no clock read, no sleep: temporary directories and made-up packages.
+//   business rule only without that entry;
+// - fix round 4: the two roles met after the interrupted call's `.part` was moved out are told
+//   with the pack directory committed or absent, as `--replace` found it; a maintenance decision
+//   by its uses alone beside the package's entry leaves the rule, and `schedule.json`, as written;
+//   of the directories a crash left beside the check tree, named as a call makes it whole in, the
+//   next call clears the one with the marker and leaves the one without it, and a link named so
+//   is refused `check_tree_link` before anything is cleared.
+// No device, no Runtime, no clock read, no sleep: temporary directories and made-up packages (and
+// on Windows `mklink`, to make a junction).
 
 use crate::adopt::CHECK_TREE_MARKER;
 use crate::codes::AdoptProblem;
@@ -2141,8 +2149,9 @@ fn p1_after_an_interruption_between_the_two_renames_the_advised_steps_are_accept
     );
     assert!(message.contains("--replace"), "{message}");
 
-    // The .part moved out: a call without the decision meets the two roles and says to commit the
-    // pack directory or put it back, then to run adopt with --replace and the decision.
+    // The .part moved out: a call without the decision meets the two roles. Only --replace meets
+    // that check, after pack_dirty passed (fix round 4), so the message says the pack directory is
+    // committed or absent and to run adopt with --replace and the decision.
     fs::rename(
         fixture.repo().join("maintenance.json.part"),
         fixture.path("maintenance.json.part"),
@@ -2162,10 +2171,14 @@ fn p1_after_an_interruption_between_the_two_renames_the_advised_steps_are_accept
         &before,
     );
     assert!(
-        message.contains("commit it, or put it back as it was"),
+        message.contains(&format!("{ADOPTED_DIRECTORY} is committed or absent")),
         "{message}"
     );
-    assert!(message.contains("--replace"), "{message}");
+    assert!(
+        message.contains("run adopt again with --replace"),
+        "{message}"
+    );
+    assert!(!message.contains("not committed"), "{message}");
 
     // The pack directory put back as it was (absent before that call), adopt with --replace and
     // the decision is accepted and writes the package's one role.
@@ -2281,7 +2294,10 @@ fn p1_a_rule_beside_its_packages_maintenance_entry_is_its_one_maintenance_role()
         maintenance
     );
 
-    // A maintenance role by its uses alone is taken there, its entry kept as it was.
+    // A maintenance role by its uses alone is taken there, its entry kept as it was. Fix round 4:
+    // the rule gains no maintenance declaration, which the composer does not need (its package's
+    // entry leaves it unjudged already): schedule.json read after the call is byte for byte as it
+    // was, and only the pack directory is written.
     let decision = decide(&fixture, "uses", &by_uses);
     let answer = standard_pack_adopt(
         request(&fixture, source, Some(decision), true, SECOND),
@@ -2294,4 +2310,148 @@ fn p1_a_rule_beside_its_packages_maintenance_entry_is_its_one_maintenance_role()
         fs::read(fixture.repo().join("maintenance.json")).expect("maintenance.json"),
         maintenance
     );
+    assert_eq!(
+        fs::read(fixture.repo().join("schedule.json")).expect("schedule.json"),
+        schedule,
+        "the rule beside the entry is kept as it was written"
+    );
+    assert_eq!(fixture.schedule()["rules"][1], rule);
+    assert_eq!(fixture.schedule()["rules"][1].get("maintenance"), None);
+    assert!(
+        answer
+            .given
+            .iter()
+            .all(|given| given.member != "maintenance"),
+        "{:?}",
+        answer.given
+    );
+    assert!(
+        answer.replaced_entries.is_empty(),
+        "{:?}",
+        answer.replaced_entries
+    );
+    assert_eq!(answer.written, [ADOPTED_DIRECTORY]);
+}
+
+/// Makes `link` a link to the directory `target`: a symbolic link, or on Windows a junction, which
+/// needs no privilege (made by `mklink`, the one program the gate runs).
+fn link_directory(link: &Path, target: &Path) {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).expect("the symbolic link");
+    }
+    #[cfg(windows)]
+    {
+        // mklink takes plain paths, not the canonical `\\?\` form.
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .expect("run mklink");
+        assert!(
+            made.status.success(),
+            "make the junction: {}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+    }
+}
+
+#[test]
+fn p1_leftover_temporary_check_trees_cleared_with_the_marker_only_never_through_a_link() {
+    let fixture = Fixture::new();
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(ADOPTED, SERVER, "Adopted", &provenance("passed")),
+    );
+    let decision = decide(&fixture, "decision", &business(&fixed(9_000)));
+    let dry_run = |at_unix_ms: u64| {
+        let mut dry_run = request(
+            &fixture,
+            source.clone(),
+            Some(decision.clone()),
+            false,
+            at_unix_ms,
+        );
+        dry_run.dry_run = true;
+        dry_run
+    };
+    let first = standard_pack_adopt(dry_run(FIRST), &Committed)
+        .unwrap_or_else(|error| panic!("the first dry run: {error}"));
+    let check_tree = PathBuf::from(&first.check_tree);
+    let parent = check_tree
+        .parent()
+        .expect("the directory of the check trees")
+        .to_path_buf();
+    let name = check_tree
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("the check tree's name")
+        .to_owned();
+    // Named as a call makes the tree whole in, `<checkout>.new-<process>-<ms>-<count>`, beside it.
+    let staged = |numbers: &str| parent.join(format!("{name}.new-{numbers}"));
+
+    // What crashes left there: one directory with the tool's marker, one without it.
+    let marked = staged("1-2-3");
+    fs::create_dir(&marked).expect("a marked leftover");
+    fs::write(marked.join(CHECK_TREE_MARKER), b"marker").expect("its marker");
+    fs::write(marked.join("half-made"), b"scratch").expect("a file in it");
+    let unmarked = staged("4-5-6");
+    fs::create_dir(&unmarked).expect("an unmarked leftover");
+    fs::write(unmarked.join("not-the-tools"), b"data").expect("a file in it");
+    let unmarked_before = tree(&unmarked);
+
+    // The next call, which holds the tree, clears the one with the marker and leaves the other.
+    let second = standard_pack_adopt(dry_run(SECOND), &Committed)
+        .unwrap_or_else(|error| panic!("the second dry run: {error}"));
+    assert_eq!(second.check_tree, first.check_tree);
+    assert!(!marked.exists(), "the leftover with the marker is cleared");
+    assert!(unmarked.is_dir(), "the leftover without the marker is left");
+    assert_eq!(tree(&unmarked), unmarked_before, "nothing in it is touched");
+
+    // A link named so is refused before anything is cleared: nothing where it points, not the
+    // marked leftover beside it, and not the tree.
+    let elsewhere = fixture.path("elsewhere");
+    fs::create_dir(&elsewhere).expect("a directory elsewhere");
+    fs::write(elsewhere.join(CHECK_TREE_MARKER), b"marker").expect("a marker there");
+    fs::write(elsewhere.join("someone-elses"), b"data").expect("a file there");
+    let pointed_at = tree(&elsewhere);
+    let link_name = format!("{name}.new-7-8-9");
+    link_directory(&parent.join(&link_name), &elsewhere);
+    let marked = staged("10-11-12");
+    fs::create_dir(&marked).expect("another marked leftover");
+    fs::write(marked.join(CHECK_TREE_MARKER), b"marker").expect("its marker");
+    fs::write(check_tree.join("left-by-an-earlier-call"), b"scratch").expect("a file in the tree");
+    let before = tree(&fixture.repo());
+    let outcome = assert_refused(
+        standard_pack_adopt(
+            request(&fixture, source, Some(decision), false, THIRD),
+            &Committed,
+        ),
+        AdoptProblem::CheckTreeLink,
+        &json!({}),
+        &fixture,
+        &before,
+    );
+    assert!(
+        outcome["values"]["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with(link_name.as_str())),
+        "{outcome}"
+    );
+    assert_eq!(
+        tree(&elsewhere),
+        pointed_at,
+        "nothing where the link points is touched"
+    );
+    assert!(
+        marked.join(CHECK_TREE_MARKER).is_file(),
+        "nothing is cleared before the refusal"
+    );
+    assert!(
+        check_tree.join("left-by-an-earlier-call").is_file(),
+        "the tree is not emptied"
+    );
+    assert_eq!(tree(&unmarked), unmarked_before);
 }

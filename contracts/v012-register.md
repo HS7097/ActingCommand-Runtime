@@ -25137,6 +25137,20 @@ words; main `2eaf9b7e` unchanged, no merge):
 its behaviour changes. The descriptions of `adopt_refused`, `adopt_write_failed` and the words
 `repository_invalid`, `pack_exists`, `check_tree_link` and `business_rule_in_the_way` say the same.
 
+**Fix round 4** (after the review of fix round 3; the coordinator's work order
+`rd-1115/brief-1722-fix4.md`, not the owner's words; main `2eaf9b7e` unchanged, no merge):
+
+| Item | Before | Now |
+|---|---|---|
+| "Commit `packs/<package_id>`, then `--replace`" | given as always followed, though a call that began without the directory never ran the volume check, so with the default state directory on another volume than the checkout the advised call was refused `replace_across_volumes` | the advice (after a leftover root `.part`, after a root file another writer changed) says that put back as it was the directory needs no state directory on the checkout's volume (absent, `--replace` moves nothing; committed, that call passed the check with its `--state-dir`), and that committed as that call left it, `--replace` needs a `--state-dir` on the checkout's volume and, with another one, a recording's package by `--package`; the contract's "always" is gone |
+| `pack_exists` with the directory alone | "interrupted or placed by hand", and "put it back, run again as before", which ends in the same refusal for a committed directory | told apart by what the call reads: a role `pages.json`, `navigation.json` or `interrupts.json` gives (the file named, and what the call accepts: `held` or `maintenance` with `--decide`, never `business`), or no root file naming the package (interrupted, or placed by hand); either way `git status` tells whether the directory is committed, and the advice ends: absent, adopt without `--replace`; committed, with `--replace` and a state directory on the checkout's volume |
+| Two roles | its message said `packs/<package_id>` is not committed, and told a business rule beside the entry, which the composer never judges there | only a call with `--replace` meets the check, after `pack_dirty` passed, so the message says the directory is committed or absent and to run adopt again with `--replace`, the same `--state-dir` and the decision; the branch of a business rule beside the entry, which could not be reached, is removed with its texts (the contract, `adopt_refused`, the word `repository_invalid`) |
+| A maintenance decision without a trigger | gave the rule beside its package's `maintenance.json` entry `"maintenance": true` | the rule declares maintenance only when the composer would otherwise judge it by its value (its own `is_judged_rule` on the rule without the declaration, with the role the call leaves); beside the entry or another root file's role the rule is kept as written, which the composer does not need changed, and a declaration would only add its checks of a declared rule (`limited` refused, the tier of its `priority`) |
+| Flushing | the `.part` files written and renamed without a flush, though the texts say an untrusted root `.part` means no root file was renamed | every file renamed into place, or whose directory is (`packs/<package_id>.part/`'s files, both root `.part` files, the check tree's marker), is flushed (`sync_all`) before the rename, as the Runtime's own writers of state do; the sentence stands |
+| The outcome guard's G2 (CI of fix round 3) | `finished_part` returned `Result<(), String>` | it returns the module's own `LabResult<()>`: `adopt_refused` `repository_invalid` at the `.part`, the operating system's refusal as the cause where there is one, whose message the leftover's message folds in |
+
+No code, word or key is added or removed: the vocabulary `adopt_problem` keeps its 17 words.
+
 **Built.**
 
 | Part | Where |
@@ -25196,7 +25210,11 @@ the new one cannot take its place, and a check tree another call holds refused `
 work order asks); and since fix round 3 the steps the refusals advise after a call stopped between
 its two renames accepted one after the other, ending in one role, and a rule that declares no
 maintenance a business rule without its package's `maintenance.json` entry and that package's one
-maintenance role beside it (two tests).
+maintenance role beside it (two tests); and since fix round 4 the directories a crash left beside
+the check tree, the one with the marker cleared, the one without it left, a link of that name
+refused `check_tree_link` before anything is cleared (one test), with the two tests of fix round 3
+adapted as the work order asks: the two roles' message saying the directory is committed or
+absent, and the maintenance decision by its uses alone keeping `schedule.json` byte for byte.
 
 **What is not added.** No configuration key, record type, payload member, fact, wire shape or
 interface revision; no persisted structure of the Runtime changes. No file of the recording, the

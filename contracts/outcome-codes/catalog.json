@@ -9454,7 +9454,7 @@
       },
       "tokens": {
         "repository_invalid": {
-          "description": "--repo holds no applications.json, maintenance.json or packs directory, one of them or its schedule.json does not read, or a .part of a root file an interrupted adoption left is there (the message names every leftover and what to do), or, without a decision, schedule.json gives the package a held entry, or a rule the composer judges by its value, beside its maintenance.json entry (two roles, which only an adoption interrupted between its two renames leaves; a rule that declares nothing beside that entry is the package's one maintenance role)."
+          "description": "--repo holds no applications.json, maintenance.json or packs directory, one of them or its schedule.json does not read, or a .part of a root file an interrupted adoption left is there (the message names every leftover and what to do), or, without a decision and with --replace, schedule.json gives the package a held entry beside its maintenance.json entry (two roles, which only an adoption interrupted between its two renames leaves; a rule beside that entry is the package's one maintenance role, never a second one)."
         },
         "recording_not_current": {
           "description": "The recording --record-id names is not as its last record stop left it: no recording.json, not stopped, marked again since, or without its package."
@@ -9466,7 +9466,7 @@
           "description": "The package's game is not applications.json's, or its server is none of that file's servers."
         },
         "pack_exists": {
-          "description": "The package was adopted before (its directory, its rule, its held entry or its maintenance entry is there; the message names which, and with its directory alone that an adoption was interrupted before it wrote the root files) and --replace is not given, its .part an interrupted adoption left is there (the message names every leftover and what to do), or the kept copy's place is taken."
+          "description": "The package was adopted before (its directory, its rule, its held entry or its maintenance entry is there; the message names which, and with its directory alone either the root file adopt does not write that gives it a role and what the call accepts for it, or that an adoption was interrupted before it wrote the root files) and --replace is not given, its .part an interrupted adoption left is there (the message names every leftover and what to do), or the kept copy's place is taken."
         },
         "pack_dirty": {
           "description": "With --replace, the version control shows a change not committed below packs/<package_id>, or cannot tell."
