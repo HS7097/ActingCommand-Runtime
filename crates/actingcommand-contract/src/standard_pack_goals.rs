@@ -465,8 +465,111 @@ pub struct GoalReferences {
     /// the reader holds no tables (`package bundle`): then no table reference is judged.
     pub tables: Option<BTreeMap<String, Vec<String>>>,
     /// The packages of the game root's `bundle.json` by id, each `true` when it can do something
-    /// irreversible ([`GoalReferences::new`]).
+    /// irreversible ([`GoalReferences::new`]); Workflow #455 G-R2s: held as the one copy of the
+    /// rule, [`IrreversiblePackages`].
+    packages: IrreversiblePackages,
+}
+
+/// Workflow #455 G-R2s (register §1.363; contracts/standard-pack-goals.md, "Irreversibility"):
+/// which packages of one game root can do something irreversible, by G-R1's rule over the whole
+/// root ([`IrreversiblePackages::new`]), and which packages of the root could not be read. The
+/// one copy of the rule: the goal check holds one in [`GoalReferences`], and the standard-pack
+/// composer takes one per game root as a required input. Made only by
+/// [`IrreversiblePackages::new`], from what a reader read of every package of the root; there is
+/// no default, so no reader can answer "nothing is irreversible" by omission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrreversiblePackages {
+    /// The packages whose declaration was read, by id, each `true` when it can do something
+    /// irreversible.
     packages: BTreeMap<String, bool>,
+    /// The packages whose declaration could not be read, by id.
+    unreadable: BTreeSet<String>,
+}
+
+impl IrreversiblePackages {
+    /// The packages of a game root whose `bundle.json` lists exactly the packages of `declared`,
+    /// each with the capabilities its control declaration provides (`provides[]`), every one
+    /// `true` when its entry writes `irreversible: true`, or `None` when the reader could not read
+    /// its declaration. A capability is irreversible when any package of the root marks it so
+    /// (contracts/remedies.md §2.3, "any provider"), and a package can do something irreversible
+    /// when it provides such a capability, marked by itself or not (G-R1 fix round 1).
+    pub fn new(declared: BTreeMap<String, Option<BTreeMap<String, bool>>>) -> Self {
+        let irreversible = declared
+            .values()
+            .flatten()
+            .flatten()
+            .filter(|(_, marked)| **marked)
+            .map(|(capability, _)| capability.clone())
+            .collect::<BTreeSet<_>>();
+        let mut packages = BTreeMap::new();
+        let mut unreadable = BTreeSet::new();
+        for (package_id, capabilities) in declared {
+            match capabilities {
+                Some(capabilities) => {
+                    let can = capabilities
+                        .keys()
+                        .any(|capability| irreversible.contains(capability));
+                    packages.insert(package_id, can);
+                }
+                None => {
+                    unreadable.insert(package_id);
+                }
+            }
+        }
+        Self {
+            packages,
+            unreadable,
+        }
+    }
+
+    /// Whether the package `package_id`, whose declaration was read, can do something
+    /// irreversible; `None` when it is no package of the root or its declaration could not be
+    /// read.
+    pub fn package(&self, package_id: &str) -> Option<bool> {
+        self.packages.get(package_id).copied()
+    }
+
+    /// The packages of the root whose declaration could not be read, by id.
+    pub fn unreadable(&self) -> &BTreeSet<String> {
+        &self.unreadable
+    }
+
+    /// G-R2s, the safe side: whether a rule that runs `package_id` counts as able to do something
+    /// irreversible. It does unless every package of the root was read and `package_id` is one of
+    /// them that provides no irreversible capability: a package of the root that could not be
+    /// read leaves every capability of the root unknown, and a package no reader read is no
+    /// package the rule can clear.
+    pub fn counts_irreversible(&self, package_id: &str) -> bool {
+        !self.unreadable.is_empty() || self.package(package_id) != Some(false)
+    }
+
+    /// G-R1 fix round 2, shared with the composer (G-R2s): whether a rule among `followers` (the
+    /// rules that follow one rule, `benefit_followers`), or a rule that follows one of them in
+    /// turn, runs a package that counts as irreversible ([`Self::counts_irreversible`]) or is a
+    /// rule `rule` does not know. `rule` gives a follower's package and its own followers by the
+    /// follower's id. Each follower is visited once, so a cycle of followers ends the walk.
+    pub fn followers_irreversible<'a>(
+        &self,
+        followers: &'a [String],
+        rule: impl Fn(&str) -> Option<(&'a str, &'a [String])>,
+    ) -> bool {
+        let mut visited = BTreeSet::new();
+        let mut pending = vec![followers];
+        while let Some(current) = pending.pop() {
+            for follower_id in current {
+                if !visited.insert(follower_id.as_str()) {
+                    continue;
+                }
+                match rule(follower_id) {
+                    Some((package_id, further)) if !self.counts_irreversible(package_id) => {
+                        pending.push(further);
+                    }
+                    _ => return true,
+                }
+            }
+        }
+        false
+    }
 }
 
 impl GoalReferences {
@@ -479,21 +582,14 @@ impl GoalReferences {
     /// governs it, or a rule that runs it, is never passed. The pools and the rules start empty,
     /// the tables `None`.
     pub fn new(provides: BTreeMap<String, BTreeMap<String, bool>>) -> Self {
-        let irreversible = provides
-            .values()
-            .flatten()
-            .filter(|(_, marked)| **marked)
-            .map(|(capability, _)| capability.clone())
-            .collect::<BTreeSet<_>>();
-        let packages = provides
-            .into_iter()
-            .map(|(package_id, capabilities)| {
-                let can = capabilities
-                    .keys()
-                    .any(|capability| irreversible.contains(capability));
-                (package_id, can)
-            })
-            .collect();
+        // G-R2s: the rule has one copy, [`IrreversiblePackages::new`]; every package of the
+        // check's root was read (a package it cannot read is the check's error).
+        let packages = IrreversiblePackages::new(
+            provides
+                .into_iter()
+                .map(|(package_id, capabilities)| (package_id, Some(capabilities)))
+                .collect(),
+        );
         Self {
             pools: BTreeMap::new(),
             rules: BTreeMap::new(),
@@ -505,30 +601,21 @@ impl GoalReferences {
     /// Whether the package `package_id` can do something irreversible; `None` when it is no
     /// package of the root.
     fn irreversible(&self, package_id: &str) -> Option<bool> {
-        self.packages.get(package_id).copied()
+        self.packages.package(package_id)
     }
 
     /// G-R1 fix round 2: whether a rule that follows `rule` ([`GoalRule::followers`]), directly
     /// or through further followers, runs a package that can do something irreversible, or is a
     /// rule or runs a package the references were not told of (never passed). Each follower is
-    /// visited once, so a cycle of followers ends the walk.
+    /// visited once, so a cycle of followers ends the walk. G-R2s: the walk is the one the
+    /// composer runs, [`IrreversiblePackages::followers_irreversible`].
     fn follower_irreversible(&self, rule: &GoalRule) -> bool {
-        let mut visited = BTreeSet::new();
-        let mut pending = vec![rule];
-        while let Some(current) = pending.pop() {
-            for follower_id in &current.followers {
-                if !visited.insert(follower_id.as_str()) {
-                    continue;
-                }
-                match self.rules.get(follower_id) {
-                    Some(follower) if self.irreversible(&follower.package_id) == Some(false) => {
-                        pending.push(follower);
-                    }
-                    _ => return true,
-                }
-            }
-        }
-        false
+        self.packages
+            .followers_irreversible(&rule.followers, |follower_id| {
+                self.rules
+                    .get(follower_id)
+                    .map(|follower| (follower.package_id.as_str(), follower.followers.as_slice()))
+            })
     }
 }
 

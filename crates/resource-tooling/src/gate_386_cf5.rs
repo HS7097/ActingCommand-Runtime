@@ -9,7 +9,7 @@
 // `schedule_invalid` at the reference. Neutral fixtures only: game `game-a`, one package on server
 // `server-a`.
 
-use crate::standard_pack_schedule::check_schedule;
+use crate::standard_pack_schedule::{check_schedule, readable_root};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     LabErrorClass, StandardPackRoot, StandardPackRootBytes, read_standard_pack_root,
@@ -29,15 +29,24 @@ fn cf5_standard_pack_check_accepts_both_forms_its_requires_names_and_reports_the
     let path = Path::new("schedule.json");
     let reference = json!({"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -20});
 
-    let warnings = check_schedule(GAME, &root, &[], &schedule(true, reference.clone()), path)
-        .unwrap_or_else(|error| panic!("the schedule with its requires entry is checked: {error}"));
+    // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+    let irreversible = readable_root(&root);
+    let warnings = check_schedule(
+        GAME,
+        &root,
+        &[],
+        &schedule(true, reference.clone()),
+        path,
+        &irreversible,
+    )
+    .unwrap_or_else(|error| panic!("the schedule with its requires entry is checked: {error}"));
     assert!(warnings.is_empty(), "{warnings:?}");
 
     for (case, value, pointer) in [
         ("both forms", reference, "/rules/0/trigger/value"),
         ("the capacity alone", json!(80), "/pools/0/capacity"),
     ] {
-        let error = check_schedule(GAME, &root, &[], &schedule(false, value), path)
+        let error = check_schedule(GAME, &root, &[], &schedule(false, value), path, &irreversible)
             .expect_err("a reference without its requires entry is reported");
         assert_eq!(
             error.code,

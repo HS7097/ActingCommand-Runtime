@@ -26,10 +26,12 @@
 //!   only the game roots and writes only that new directory.
 
 use crate::standard_pack_check::{read_bounded, root_invalid};
+use crate::standard_pack_goals::root_irreversibility;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, LabError, LabErrorClass, LabResult, STANDARD_PACK_BUNDLE_FILE,
+    BundleIndex, BundleMaintenance, IrreversiblePackages, LabError, LabErrorClass, LabResult,
+    STANDARD_PACK_BUNDLE_FILE,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
     StandardPackRoot, StandardPackRootBytes, read_standard_pack_root, validate_instance_alias,
@@ -94,8 +96,22 @@ pub(crate) fn check_schedule(
     maintenance: &[BundleMaintenance],
     schedule: &[u8],
     path: &Path,
+    irreversible: &IrreversiblePackages,
 ) -> LabResult<Vec<Outcome>> {
-    compose_check(game, root, maintenance, schedule, path).map(|composition| composition.warnings())
+    compose_check(game, root, maintenance, schedule, path, irreversible)
+        .map(|composition| composition.warnings())
+}
+
+/// Workflow #455 G-R2s, for the gate tests whose roots hold no package files: the composer's input
+/// of a root every package of which reads and provides nothing, so nothing is marked.
+#[cfg(test)]
+pub(crate) fn readable_root(root: &StandardPackRoot) -> IrreversiblePackages {
+    IrreversiblePackages::new(
+        root.registry
+            .package_ids()
+            .map(|package_id| (package_id.to_owned(), Some(BTreeMap::new())))
+            .collect(),
+    )
 }
 
 /// What `package bundle --schedule` and `actinglab standard-pack check` report of a game's
@@ -111,7 +127,9 @@ pub(crate) fn check_schedule(
 /// §1.299): and who wrote the game's fixed values and valuation blocks; #428 COV-1 (register
 /// §1.299): and the game's chain followers, each with the rule it rides with, in file order;
 /// #428 SCHED-C1f1 (register §1.303 SC1F-7): and the game's consumptions read from a fact, each
-/// with its key and fallback, in file order.
+/// with its key and fallback, in file order. Workflow #455 G-R2s (register §1.363): composed with
+/// `irreversible`, the root's packages as `root_irreversibility` read them; a package that could
+/// not be read is one `standard_pack_package_unreadable` among the composition's warnings.
 pub(crate) struct ScheduleReport {
     pub(crate) warnings: Vec<Outcome>,
     pub(crate) benefit_coverage: BenefitCoverage,
@@ -129,8 +147,9 @@ pub(crate) fn report_schedule(
     maintenance: &[BundleMaintenance],
     schedule: &[u8],
     path: &Path,
+    irreversible: &IrreversiblePackages,
 ) -> LabResult<ScheduleReport> {
-    let composition = compose_check(game, root, maintenance, schedule, path)?;
+    let composition = compose_check(game, root, maintenance, schedule, path, irreversible)?;
     let mut warnings = composition.warnings();
     warnings.extend(composition.benefit_warnings());
     // SS-2c (register §1.227): the hint of a rule whose declaration disagrees with its tier.
@@ -184,6 +203,7 @@ fn compose_check(
     maintenance: &[BundleMaintenance],
     schedule: &[u8],
     path: &Path,
+    irreversible: &IrreversiblePackages,
 ) -> LabResult<StandardPackComposition> {
     let servers = root
         .registry
@@ -209,6 +229,7 @@ fn compose_check(
             schedule,
             root,
             maintenance,
+            irreversible,
         },
     )]);
     compose_standard_pack_rules(&StandardPackComposeInput {
@@ -290,6 +311,7 @@ pub fn compose_standard_packs(
                         schedule: schedule.as_slice(),
                         root: &read.root,
                         maintenance: read.maintenance.as_slice(),
+                        irreversible: &read.irreversible,
                     },
                 )
             })
@@ -344,6 +366,9 @@ struct GameRoot {
     maintenance: Vec<BundleMaintenance>,
     /// `schedule.json`'s bytes; `None` when the root holds none (the game has no rules).
     schedule: Option<Vec<u8>>,
+    /// Workflow #455 G-R2s: the root's packages, each read below the game root by the reader the
+    /// goal check uses (`root_irreversibility`).
+    irreversible: IrreversiblePackages,
 }
 
 /// Reads `<root>/<game>/`: its root files by the one structure check of every reader, the
@@ -393,11 +418,13 @@ fn read_game_root(root: &Path, game: &str) -> LabResult<GameRoot> {
         .and_then(|bundle| serde_json::from_slice::<BundleIndex>(bundle).ok())
         .map(|index| index.maintenance().to_vec())
         .unwrap_or_default();
+    let irreversible = root_irreversibility(&checked, &|package: &str| directory.join(package));
     Ok(GameRoot {
         game: game.to_owned(),
         root: checked,
         maintenance,
         schedule: read_bounded(&directory.join(STANDARD_PACK_SCHEDULE_FILE))?,
+        irreversible,
     })
 }
 

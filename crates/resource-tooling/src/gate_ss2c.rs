@@ -9,7 +9,7 @@
 // declaration of another shape is refused as `standard_pack_root_invalid`, `schedule_invalid` at
 // the member. Neutral fixtures only: game `game-a`, packages on server `server-a`.
 
-use crate::standard_pack_schedule::report_schedule;
+use crate::standard_pack_schedule::{readable_root, report_schedule};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     LabErrorClass, StandardPackRoot, StandardPackRootBytes, read_standard_pack_root,
@@ -37,8 +37,16 @@ fn ss2c_t5_t6_the_check_counts_declared_rules_apart_and_warns_of_a_tier_mismatch
     let root = root(&rules.iter().map(|(id, ..)| *id).collect::<Vec<_>>());
     let path = Path::new("schedule.json");
 
-    let report = report_schedule(GAME, &root, &[], &schedule(&rules), path)
-        .unwrap_or_else(|error| panic!("the schedule is checked: {error}"));
+    // Workflow #455 G-R2s: every package of the root reads, none irreversible.
+    let report = report_schedule(
+        GAME,
+        &root,
+        &[],
+        &schedule(&rules),
+        path,
+        &readable_root(&root),
+    )
+    .unwrap_or_else(|error| panic!("the schedule is checked: {error}"));
     assert_eq!(
         report.benefit_coverage,
         BenefitCoverage {
@@ -101,6 +109,7 @@ fn ss2c_t3_the_check_refuses_a_declaration_of_another_shape() {
             &[],
             &schedule(&rules),
             Path::new("schedule.json"),
+            &readable_root(&root),
         )
         .err()
         .unwrap_or_else(|| panic!("{value}: refused"));

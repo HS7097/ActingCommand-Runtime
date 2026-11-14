@@ -93,7 +93,9 @@ use crate::codes::ResourceToolingCode;
 use crate::notices_directory::game_root_notices;
 use crate::package_directory::{PACK_DEADLINE, packs_empty};
 use crate::package_loading::{check_loading, stale_copies};
-use crate::standard_pack_goals::{goal_issues, goal_warnings, read_goals_file};
+use crate::standard_pack_goals::{
+    goal_issues, goal_warnings, read_goals_file, root_irreversibility,
+};
 use crate::standard_pack_schedule::report_schedule;
 use crate::{
     DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, StandardPackCheckRequest, StandardPackCheckResponse,
@@ -378,12 +380,16 @@ pub fn check_standard_pack_root(
             .and_then(|bundle| serde_json::from_slice::<BundleIndex>(bundle).ok())
             .map(|index| index.maintenance().to_vec())
             .unwrap_or_default();
+        // Workflow #455 G-R2s: with every package of the root read as the goal check reads it,
+        // so the composition marks what the Runtime's would.
+        let irreversible = root_irreversibility(&checked, &|directory: &str| root.join(directory));
         let report = report_schedule(
             &game,
             &checked,
             &maintenance,
             schedule,
             &root.join(STANDARD_PACK_SCHEDULE_FILE),
+            &irreversible,
         )?;
         warnings.extend(report.warnings);
         benefit_coverage = Some(report.benefit_coverage);

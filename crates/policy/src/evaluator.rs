@@ -4326,6 +4326,9 @@ struct StagedCandidate {
     target: TargetEffect,
     /// SS-1: the base term without an active v2 policy (Alice's ruling 100).
     base: Option<crate::resource_targets::ResourceTerm>,
+    /// Workflow #455 G-R2s: the instance's target record is left out for this candidate (its
+    /// task carries the irreversible mark): it reads its instance resolved without a record.
+    left_out: bool,
 }
 
 /// The score stage between the predicate gate and ranking. Predicate outcomes are never
@@ -4446,6 +4449,62 @@ fn apply_priority_selection(
         .map_err(PolicyEvaluationError::invalid)?;
         instance_targets.insert(instance_id.as_str(), resolved);
     }
+    // Workflow #455 G-R2s (register §1.363; `contracts/resource-targets.md`, "A task that can do
+    // something irreversible"): a goal never raises the weight of a task whose package can do
+    // something irreversible. A candidate whose task carries the composer's mark, on an instance
+    // that holds a target record, reads its instance resolved once more as without the record
+    // (its server- or game-scoped note kept), so every number of it is the one of an instance
+    // without a record; the record's own resolution, which every other candidate reads, is left
+    // as it is.
+    let mut left_out = BTreeSet::new();
+    let mut unrecorded = BTreeMap::new();
+    for candidate in &candidates {
+        let Some(recorded) = target_policies
+            .get(&candidate.instance_id)
+            .filter(|recorded| recorded.state.is_some())
+        else {
+            continue;
+        };
+        if !catalog_task(catalog, &candidate.task_id)?.is_irreversible_reach() {
+            continue;
+        }
+        left_out.insert(candidate.work_index);
+        let instance = facts
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == candidate.instance_id)
+            .ok_or_else(|| {
+                PolicyEvaluationError::invalid(format!(
+                    "a candidate names the unknown instance '{}'",
+                    candidate.instance_id
+                ))
+            })?;
+        if unrecorded.contains_key(instance.instance_id.as_str()) {
+            continue;
+        }
+        let without_record = InstanceTargetPolicy {
+            state: None,
+            ignored: recorded.ignored,
+        };
+        let resolved = crate::resource_targets::resolve_instance_targets(
+            catalog,
+            facts,
+            instance,
+            &without_record,
+            time,
+        )
+        .map_err(PolicyEvaluationError::invalid)?;
+        unrecorded.insert(instance.instance_id.as_str(), resolved);
+    }
+    // The resolution a candidate reads: its instance's, or, left out, its instance's without
+    // the record.
+    let targets_for = |work_index: usize, instance_id: &str| {
+        if left_out.contains(&work_index) {
+            unrecorded.get(instance_id)
+        } else {
+            instance_targets.get(instance_id)
+        }
+    };
     let selection = catalog.catalog().tasks.priority_selection;
     let aging_ms_per_milli = selection.and_then(|selection| selection.aging_ms_per_milli);
     // Workflow #411 B16 part 2: each candidate's reserves, by work index.
@@ -4532,7 +4591,9 @@ fn apply_priority_selection(
                 task_work.next_wake_unix_ms = min_wake(task_work.next_wake_unix_ms, Some(wake));
             }
         }
-        let targets = instance_targets.get(candidate.instance_id.as_str());
+        // G-R2s: a left-out candidate reads its instance as without the record.
+        let left = left_out.contains(&candidate.work_index);
+        let targets = targets_for(candidate.work_index, candidate.instance_id.as_str());
         let target = targets.map_or(TargetEffect::None, |targets| {
             targets.effect(&candidate.task_id)
         });
@@ -4558,6 +4619,9 @@ fn apply_priority_selection(
             let task_work = &mut work[candidate.work_index];
             if let Some(targets) = targets {
                 task_work.reasons.extend(targets.reasons(&target, None, 0));
+            }
+            if left {
+                task_work.reasons.push(irreversible_left_out_reason());
             }
             if let Some(base) = &base {
                 task_work.reasons.extend(base.reasons(None, 0));
@@ -4643,6 +4707,7 @@ fn apply_priority_selection(
             effective_milli,
             target,
             base,
+            left_out: left,
         });
     }
     let thresholds = selection.map(|selection| {
@@ -4662,6 +4727,7 @@ fn apply_priority_selection(
         effective_milli,
         target,
         base,
+        left_out: left,
     } in staged
     {
         candidate.rank.total_score = candidate
@@ -4798,10 +4864,13 @@ fn apply_priority_selection(
                 "neither the last run duration nor the declared expected duration is above zero; the utility term is dropped",
             ));
         }
-        if let Some(targets) = instance_targets.get(candidate.instance_id.as_str()) {
+        if let Some(targets) = targets_for(candidate.work_index, candidate.instance_id.as_str()) {
             task_work
                 .reasons
                 .extend(targets.reasons(&target, score_milli, offset_milli));
+        }
+        if left {
+            task_work.reasons.push(irreversible_left_out_reason());
         }
         if let Some(base) = &base {
             task_work
@@ -4912,7 +4981,8 @@ fn apply_priority_selection(
     let mut spends = BTreeMap::new();
     for candidate in &ranked {
         let task = catalog_task(catalog, &candidate.task_id)?;
-        let targets = instance_targets.get(candidate.instance_id.as_str());
+        // G-R2s: a left-out candidate's gaps are those of an instance without a record.
+        let targets = targets_for(candidate.work_index, candidate.instance_id.as_str());
         let spend = crate::resource_targets::spend_values(
             task,
             // SCHED-C1f1: the views hold the candidate's consumption in effect on its instance,
@@ -7956,6 +8026,23 @@ fn reason_with(outcome: Outcome, detail: impl Into<String>) -> DecisionReason {
         outcome,
         detail: detail.into(),
     }
+}
+
+/// Workflow #455 G-R2s (register §1.363; `contracts/resource-targets.md`, "A task that can do
+/// something irreversible"): the reason of a candidate whose task carries the composer's
+/// irreversible mark, on an instance that holds a target record: the record is left out for it.
+/// It stands where the record's policy-level reason would, after the reasons of the instance's
+/// resolution without the record and before the base term's `resource_weights`.
+fn irreversible_left_out_reason() -> DecisionReason {
+    reason(
+        PolicyCode::ResourceTargetPackageIrreversible,
+        format!(
+            "task marked {}: its package, or a follower riding with it, can do something \
+             irreversible; the instance's resource targets are left out and it is weighed as on \
+             an instance without a record",
+            crate::IRREVERSIBLE_REACH_MEMBER
+        ),
+    )
 }
 
 /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per round"): the

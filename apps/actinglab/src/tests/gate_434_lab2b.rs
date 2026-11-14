@@ -476,7 +476,13 @@ fn own_commands_print_the_cli_line() {
             .is_some_and(|digest| !digest.is_empty()),
         "{line}"
     );
-    assert_eq!(line["warnings"], json!([]), "{line}");
+    // Workflow #455 G-R2s (register §1.363): the root holds no package files, so each registered
+    // package is one `standard_pack_package_unreadable`, in package order, and nothing else.
+    assert_eq!(
+        super::gate_386_rlt::unreadable_packages(&line["warnings"]).len(),
+        3,
+        "{line}"
+    );
 
     // Fix 1: every failure of actinglab's own commands whose details carry an outcome of its own
     // code (the details are one, or their member `outcome` is one) gives the line that outcome's

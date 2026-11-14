@@ -409,6 +409,21 @@ fn validate_tasks(
             diagnostics,
         );
         validate_queue_wait(task, &path, map, descriptor, diagnostics);
+        // Workflow #455 G-R2s (register §1.363): the composer's irreversible mark is a V2
+        // member; a V1 document that names it is refused as an unknown member.
+        if task.irreversible_reach.is_some()
+            && map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2)
+        {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::UnknownField,
+                format!("{path}/{}", crate::IRREVERSIBLE_REACH_MEMBER),
+                format!(
+                    "{} requires actingcommand.scheduling.v2",
+                    crate::IRREVERSIBLE_REACH_MEMBER
+                ),
+                descriptor,
+            ));
+        }
     }
     validate_continuations(bundle, map, task_ids, descriptor, diagnostics);
     validate_realization_cycles(bundle, map, descriptor, diagnostics);

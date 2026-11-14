@@ -28,7 +28,7 @@ use crate::package_loading::{LoadingRoot, check_loading, named_packs, stale_copi
 use crate::standard_pack_check::{
     RootFileInputs, cross_check, probe_keys_marked, store_update_cooldowns,
 };
-use crate::standard_pack_goals::{goal_issues, refuse_goals};
+use crate::standard_pack_goals::{goal_issues, refuse_goals, root_irreversibility};
 use crate::standard_pack_schedule::{ScheduleReport, report_schedule};
 use crate::{PackageBundleRequest, PackageBundleResponse};
 use actingcommand_contract::outcome::{Detail, Outcome};
@@ -335,12 +335,17 @@ fn write_bundle(
         // with the judged rules' coverage and one warning per judged rule that declares no value;
         // SCHED-C1a: and who wrote their fixed values and the pools' valuation blocks.
         if let Some(schedule) = root_files.schedule() {
+            // Workflow #455 G-R2s: with every package of the root read as the goal check reads
+            // it, so the composition marks what the Runtime's would.
+            let irreversible =
+                root_irreversibility(&root, &|directory: &str| packs_dir.join(directory));
             let mut report = report_schedule(
                 &applications.game,
                 &root,
                 index.maintenance(),
                 &schedule.bytes,
                 &schedule.path,
+                &irreversible,
             )?;
             warnings.append(&mut report.warnings);
             schedule_report = Some(report);

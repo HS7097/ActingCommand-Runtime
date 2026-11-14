@@ -21,7 +21,8 @@ use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{CHECK_LABEL, root_invalid, root_issue_outcome};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    GoalReferences, GoalRule, LabError, LabResult, MAX_STANDARD_PACK_GOALS_BYTES, StandardPackRoot,
+    GoalReferences, GoalRule, IrreversiblePackages, LabError, LabResult,
+    MAX_STANDARD_PACK_GOALS_BYTES, StandardPackRoot,
     StandardPackRootIssue, StandardPackTable, StandardPackTableCell, StandardPackTableReadFailure,
     check_standard_pack_goal_references, parse_standard_pack_goals, parse_standard_pack_schedule,
     read_standard_pack_table,
@@ -83,19 +84,7 @@ pub(crate) fn goal_issues(
         let entry = root.registry.get(package_id).ok_or_else(|| {
             LabError::package_invalid(format!("{package_id} is no package of the bundle"))
         })?;
-        let path = pack_directory(&entry.directory);
-        let declarations = PreparedContainedTask::read_remedy_declarations(
-            CHECK_LABEL,
-            &path,
-            Instant::now() + PACK_DEADLINE,
-        )
-        .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))?;
-        let mut capabilities = BTreeMap::new();
-        for provided in &declarations.provides {
-            *capabilities
-                .entry(provided.capability().to_owned())
-                .or_insert(false) |= provided.irreversible();
-        }
+        let capabilities = package_provides(&pack_directory(&entry.directory))?;
         provides.insert(package_id.to_owned(), capabilities);
     }
     let mut references = GoalReferences::new(provides);
@@ -150,6 +139,50 @@ pub(crate) fn goal_issues(
         references.tables = Some(tables);
     }
     Ok(check_standard_pack_goal_references(&declared, &references))
+}
+
+/// What the package at `path` provides, read by the Runtime's metadata reader
+/// (`read_remedy_declarations`): each capability of its control declaration's `provides`, `true`
+/// when an entry marks it `irreversible`. A package the reader refuses is `package_invalid`
+/// naming its path.
+fn package_provides(path: &Path) -> LabResult<BTreeMap<String, bool>> {
+    let declarations = PreparedContainedTask::read_remedy_declarations(
+        CHECK_LABEL,
+        path,
+        Instant::now() + PACK_DEADLINE,
+    )
+    .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))?;
+    let mut capabilities = BTreeMap::new();
+    for provided in &declarations.provides {
+        *capabilities
+            .entry(provided.capability().to_owned())
+            .or_insert(false) |= provided.irreversible();
+    }
+    Ok(capabilities)
+}
+
+/// Workflow #455 G-R2s (register §1.363; contracts/standard-pack-schedule.md, "The irreversible
+/// mark"): the composer's required input for the game root `root`, every package its registry
+/// lists read below `pack_directory` by the reader the goal check uses ([`package_provides`]),
+/// through the one copy of the rule ([`IrreversiblePackages::new`]). A package the reader refuses
+/// could not be read: the composition then marks every task of the game and warns
+/// `standard_pack_package_unreadable`, which the tools list.
+pub(crate) fn root_irreversibility(
+    root: &StandardPackRoot,
+    pack_directory: &dyn Fn(&str) -> PathBuf,
+) -> IrreversiblePackages {
+    IrreversiblePackages::new(
+        root.registry
+            .package_ids()
+            .map(|package_id| {
+                let capabilities = root
+                    .registry
+                    .get(package_id)
+                    .and_then(|entry| package_provides(&pack_directory(&entry.directory)).ok());
+                (package_id.to_owned(), capabilities)
+            })
+            .collect(),
+    )
 }
 
 /// The distinct keys of `table` (its key column, `row_key[0]`), in row order.

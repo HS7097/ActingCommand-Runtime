@@ -54,7 +54,7 @@ use actingcommand_contract::{
     ConfigCatalogProvenance, ConfigCatalogWarnings, STANDARD_PACK_BUNDLE_FILE,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot, StandardPackRootBytes,
+    IrreversiblePackages, STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot, StandardPackRootBytes,
     read_standard_pack_root,
 };
 use actingcommand_policy::{
@@ -78,8 +78,63 @@ const FIRST_CHECK_WAIT_TICK: Duration = Duration::from_millis(50);
 /// The size and modification time of one root file, `None` when it does not exist.
 type FileMark = Option<(u64, Option<SystemTime>)>;
 
-/// The marks of a game root's `schedule.json` and `bundle.json`.
-type GameMarks = (FileMark, FileMark);
+/// Workflow #455 G-R2s (register §1.363; `contracts/standard-pack-schedule.md`, "The irreversible
+/// mark"): the files of a package, below its directory, the workbench marks for its declaration.
+/// The declaration reader (`PreparedContainedTask::read_remedy_declarations`) reads the whole
+/// content directory of the package, so the set of files it opens follows the directory's listing
+/// and is not fixed; the coordinator's ruling of 11-14 marks the two it opens by name before any
+/// file says anything: the control file `control.json` and the source package's own manifest
+/// `resources/operations/resources.json`.
+const DECLARATION_FILES: [&[&str]; 2] = [
+    &["control.json"],
+    &["resources", "operations", "resources.json"],
+];
+
+/// G-R2s: the instance label the workbench reads a package's declaration under; the declaration
+/// does not depend on one.
+const DECLARATIONS_LABEL: &str = "standard-pack-workbench";
+
+/// G-R2s: how long the workbench and its offline readers may read one package's declaration, as
+/// the remedy table may.
+const DECLARATIONS_BUDGET: Duration = Duration::from_secs(60);
+
+/// G-R2s: the mark of one declaration file of a package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DeclarationMark {
+    /// Its size and modification time, `None` when it does not exist ([`file_mark`]).
+    Read(FileMark),
+    /// Its metadata could not be read for another reason than its absence: a mark of its own,
+    /// unequal to every readable one, so the root is read again once when it appears or goes and
+    /// the package counts as unreadable meanwhile; it never stops the check.
+    Failed,
+}
+
+/// The marks of a game root the workbench compares at each check: `schedule.json`,
+/// `bundle.json` and, G-R2s, the declaration files of each package the root registered when the
+/// workbench last read it, by package id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GameMarks {
+    schedule: FileMark,
+    bundle: FileMark,
+    packages: BTreeMap<String, Vec<DeclarationMark>>,
+}
+
+/// G-R2s: the marks of the declaration files ([`DECLARATION_FILES`]) of the package whose
+/// directory is `package`, in that order.
+fn declaration_marks(package: &Path) -> Vec<DeclarationMark> {
+    DECLARATION_FILES
+        .iter()
+        .map(|parts| {
+            let path = parts
+                .iter()
+                .fold(package.to_path_buf(), |path, part| path.join(part));
+            match file_mark(&path) {
+                Ok(mark) => DeclarationMark::Read(mark),
+                Err(_) => DeclarationMark::Failed,
+            }
+        })
+        .collect()
+}
 
 /// The scheduler workbench of one host (composer mode).
 pub(super) struct StandardPackWorkbench {
@@ -123,6 +178,9 @@ struct WorkbenchState {
     bound: BTreeMap<String, StandardPackBinding>,
     /// The marks of each game in use when the last composition read it.
     marks: BTreeMap<String, GameMarks>,
+    /// G-R2s: the packages each game root registered when the workbench last read it, each with
+    /// its directory: whose declaration files the next check marks.
+    packages: BTreeMap<String, BTreeMap<String, PathBuf>>,
     /// Whether the workbench has read the active generation once (at its first check).
     adopted: bool,
     /// The active generation the workbench last saw, and its composition record when it is a
@@ -170,6 +228,84 @@ struct ScheduleGame {
     maintenance: Vec<BundleMaintenance>,
     /// `schedule.json`'s bytes; `None` when the root holds none.
     schedule: Option<Vec<u8>>,
+    /// G-R2s: the declarations of every package the root registers, read when the root holds
+    /// `schedule.json` (the composer's required input); `None` without it.
+    declarations: Option<RootDeclarations>,
+}
+
+/// G-R2s (register §1.363): one game root's package declarations as the composer takes them.
+struct RootDeclarations {
+    /// Which packages can do something irreversible, by the whole root, and which could not be
+    /// read.
+    irreversible: IrreversiblePackages,
+    /// The reader's refusal of each package it could not read, by package id.
+    refusals: BTreeMap<String, Outcome>,
+    /// Each package's directory and the marks of its declaration files, taken just before the
+    /// reader read it, by package id: what the workbench's next check compares.
+    marks: BTreeMap<String, PackageMarks>,
+}
+
+/// G-R2s: one package's directory and the marks of its declaration files.
+struct PackageMarks {
+    directory: PathBuf,
+    marks: Vec<DeclarationMark>,
+}
+
+/// G-R2s (register §1.363; `contracts/standard-pack-schedule.md`, "The irreversible mark"): what
+/// every package `root`'s registry lists provides, each read below the game root `directory`
+/// through the reader the goal check uses (`PreparedContainedTask::read_remedy_declarations`), into
+/// the one copy of the rule ([`IrreversiblePackages::new`]). Each package's declaration files are
+/// marked first ([`declaration_marks`]), so a file that changes after its mark is seen by the next
+/// check. A package one of whose marked files could not be stat'ed, or that the reader refuses,
+/// could not be read: never "reversible".
+fn read_declarations(directory: &Path, root: &StandardPackRoot) -> RootDeclarations {
+    let mut declared = BTreeMap::new();
+    let mut refusals = BTreeMap::new();
+    let mut marks = BTreeMap::new();
+    for package_id in root.registry.package_ids() {
+        let Some(entry) = root.registry.get(package_id) else {
+            declared.insert(package_id.to_owned(), None);
+            continue;
+        };
+        let package = directory.join(&entry.directory);
+        let package_marks = declaration_marks(&package);
+        let capabilities = if package_marks.contains(&DeclarationMark::Failed) {
+            None
+        } else {
+            match PreparedContainedTask::read_remedy_declarations(
+                DECLARATIONS_LABEL,
+                &package,
+                Instant::now() + DECLARATIONS_BUDGET,
+            ) {
+                Ok(declarations) => {
+                    let mut capabilities = BTreeMap::new();
+                    for provided in &declarations.provides {
+                        *capabilities
+                            .entry(provided.capability().to_owned())
+                            .or_insert(false) |= provided.irreversible();
+                    }
+                    Some(capabilities)
+                }
+                Err(error) => {
+                    refusals.insert(package_id.to_owned(), error.outcome());
+                    None
+                }
+            }
+        };
+        declared.insert(package_id.to_owned(), capabilities);
+        marks.insert(
+            package_id.to_owned(),
+            PackageMarks {
+                directory: package,
+                marks: package_marks,
+            },
+        );
+    }
+    RootDeclarations {
+        irreversible: IrreversiblePackages::new(declared),
+        refusals,
+        marks,
+    }
 }
 
 /// ROUT-L RL-1b, pending decision 58 (recommended A): the bound instances whose games are in
@@ -208,8 +344,9 @@ fn file_mark(path: &Path) -> Result<FileMark, RootFailure> {
 }
 
 /// Reads one game root for the composer: its root files by the contract crate's one check, the
-/// bundle's maintenance entries, and `schedule.json` when it holds one (counted in `reads`).
-/// `None` when the directory holds no game root.
+/// bundle's maintenance entries, and `schedule.json` when it holds one (counted in `reads`);
+/// G-R2s: with `schedule.json`, the declarations of every package its registry lists
+/// ([`read_declarations`]). `None` when the directory holds no game root.
 fn read_schedule_game(
     directory: &Path,
     game: &str,
@@ -265,10 +402,14 @@ fn read_schedule_game(
     } else {
         None
     };
+    let declarations = schedule
+        .as_ref()
+        .map(|_| read_declarations(directory, &root));
     Ok(Some(ScheduleGame {
         root,
         maintenance,
         schedule,
+        declarations,
     }))
 }
 
@@ -329,6 +470,31 @@ fn provenance_entries(game: &str, provenance: &BenefitProvenance) -> Vec<Catalog
         }
     }
     entries
+}
+
+/// The composer's per-game files of every game of `read` whose rules `schedule` gives (`None`
+/// leaves the game out), each with its root, its maintenance entries and, G-R2s, the
+/// irreversibility of its packages as [`read_declarations`] read them: a game whose root holds
+/// `schedule.json` always has them, so a game without them is left out too.
+fn composer_inputs<'a>(
+    read: &'a BTreeMap<String, ScheduleGame>,
+    schedule: impl Fn(&str) -> Option<&'a [u8]>,
+) -> BTreeMap<String, StandardPackGameFiles<'a>> {
+    read.iter()
+        .filter_map(|(game, files)| {
+            let schedule = schedule(game.as_str())?;
+            let declarations = files.declarations.as_ref()?;
+            Some((
+                game.clone(),
+                StandardPackGameFiles {
+                    schedule,
+                    root: &files.root,
+                    maintenance: files.maintenance.as_slice(),
+                    irreversible: &declarations.irreversible,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// The refusal record of one issue of `game`'s `schedule.json` at `path`.
@@ -528,8 +694,30 @@ impl HostShared {
                             .map(|bundle| (schedule, bundle))
                     });
                 match read {
-                    Ok(game_marks) => {
-                        marks.insert(game.clone(), game_marks);
+                    Ok((schedule, bundle)) => {
+                        // G-R2s: and the declaration files of each package the root registered
+                        // when the workbench last read it; a metadata failure there is that
+                        // package's own mark and never stops the check.
+                        let packages = state
+                            .packages
+                            .get(game)
+                            .map(|packages| {
+                                packages
+                                    .iter()
+                                    .map(|(package_id, package)| {
+                                        (package_id.clone(), declaration_marks(package))
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        marks.insert(
+                            game.clone(),
+                            GameMarks {
+                                schedule,
+                                bundle,
+                                packages,
+                            },
+                        );
                     }
                     Err(failure) => {
                         self.report_once(
@@ -581,21 +769,9 @@ impl HostShared {
             .saturating_add(1);
         let mut fallen_back = BTreeSet::new();
         let composition = loop {
-            let inputs = read
-                .iter()
-                .filter_map(|(game, files)| {
-                    schedules.get(game).map(|schedule| {
-                        (
-                            game.clone(),
-                            StandardPackGameFiles {
-                                schedule: schedule.as_slice(),
-                                root: &files.root,
-                                maintenance: files.maintenance.as_slice(),
-                            },
-                        )
-                    })
-                })
-                .collect::<BTreeMap<_, _>>();
+            let inputs = composer_inputs(&read, |game| {
+                schedules.get(game).map(Vec::as_slice)
+            });
             let failure = match compose_standard_pack_rules(&StandardPackComposeInput {
                 instances: &bound,
                 games: &inputs,
@@ -693,6 +869,39 @@ impl HostShared {
                             .package_id(package_id.as_str()),
                     )?;
                 }
+            }
+        }
+        // G-R2s (register §1.363): a package of a composed game whose declaration could not be
+        // read marks every task of its game; it is recorded once while it stays unreadable, with
+        // the reader's refusal as its cause when the reader refused it, and again only after it
+        // has read once.
+        let unreadable = composition
+            .unreadable_packages()
+            .iter()
+            .flat_map(|(game, packages)| {
+                packages
+                    .iter()
+                    .map(move |package| (game.clone(), package.clone()))
+            })
+            .collect::<BTreeSet<_>>();
+        for (game, files) in &read {
+            let Some(declarations) = &files.declarations else {
+                continue;
+            };
+            for package_id in files.root.registry.package_ids() {
+                let key = format!("declaration:{package_id}");
+                if !unreadable.contains(&(game.clone(), package_id.to_owned())) {
+                    state.reported.remove(&(game.clone(), key));
+                    continue;
+                }
+                let mut outcome = Outcome::new(SharedCode::StandardPackPackageUnreadable)
+                    .operation(HostLocation::StandardPackRead)
+                    .game(game.as_str())
+                    .package_id(package_id);
+                if let Some(refusal) = declarations.refusals.get(package_id) {
+                    outcome = outcome.caused_by(refusal.clone());
+                }
+                self.report_once(state, game, &key, outcome)?;
             }
         }
         let record = CompositionRecord::of(&composition);
@@ -811,6 +1020,33 @@ impl HostShared {
             .map(|procedure| (procedure.procedure_ref.clone(), procedure.clone()))
             .collect();
         state.bound = bound;
+        // G-R2s: each composed root's packages as read now, with the marks of their declaration
+        // files taken just before each was read, so the next check marks exactly these files and
+        // compares them with what this read saw; a root without `schedule.json` marks none.
+        let mut marks = marks;
+        state.packages.clear();
+        for (game, files) in &read {
+            let read_marks = files
+                .declarations
+                .iter()
+                .flat_map(|declarations| &declarations.marks)
+                .collect::<Vec<_>>();
+            if let Some(game_marks) = marks.get_mut(game) {
+                game_marks.packages = read_marks
+                    .iter()
+                    .map(|(package_id, package)| ((*package_id).clone(), package.marks.clone()))
+                    .collect();
+            }
+            state.packages.insert(
+                game.clone(),
+                read_marks
+                    .iter()
+                    .map(|(package_id, package)| {
+                        ((*package_id).clone(), package.directory.clone())
+                    })
+                    .collect(),
+            );
+        }
         state.marks = marks;
         Ok(())
     }
@@ -1096,21 +1332,8 @@ pub fn compose_configured_standard_packs(
         })
         .collect::<BTreeMap<_, _>>();
     let composition = loop {
-        let inputs = read
-            .iter()
-            .filter_map(|(game, files)| {
-                schedules.get(game).map(|schedule| {
-                    (
-                        game.clone(),
-                        StandardPackGameFiles {
-                            schedule,
-                            root: &files.root,
-                            maintenance: files.maintenance.as_slice(),
-                        },
-                    )
-                })
-            })
-            .collect::<BTreeMap<_, _>>();
+        // G-R2s: with each game's package declarations, read as the workbench reads them.
+        let inputs = composer_inputs(&read, |game| schedules.get(game).copied());
         let failure = match compose_standard_pack_rules(&StandardPackComposeInput {
             instances: &bound,
             games: &inputs,
@@ -1245,21 +1468,11 @@ pub fn preview_standard_pack_schedule(
             Err(_) => preview.left_out.push(game.clone()),
         }
     }
-    let inputs = read
-        .iter()
-        .filter_map(|(game, files)| {
-            files.schedule.as_ref().map(|schedule| {
-                (
-                    game.clone(),
-                    StandardPackGameFiles {
-                        schedule: schedule.as_slice(),
-                        root: &files.root,
-                        maintenance: files.maintenance.as_slice(),
-                    },
-                )
-            })
-        })
-        .collect::<BTreeMap<_, _>>();
+    // G-R2s: with each game's package declarations, read as the workbench reads them.
+    let inputs = composer_inputs(&read, |game| {
+        read.get(game)
+            .and_then(|files| files.schedule.as_deref())
+    });
     match compose_standard_pack_rules(&StandardPackComposeInput {
         instances: &bound,
         games: &inputs,
