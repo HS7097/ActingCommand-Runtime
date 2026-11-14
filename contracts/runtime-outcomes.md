@@ -356,6 +356,14 @@ its boundary's, and keeps the kernel's code and severity. A kernel code on the G
 - a retained session's close before an emulator control, a pause or a handset's link loss, and
   a session close at a lease end, that failed with its resources confirmed holds nothing: its
   failure is recorded and the work goes on. An unconfirmed close fences the instance (#403).
+- a session close refused before it began for a reason of the instance's own key fences that
+  instance as an unconfirmed close does, and the Runtime goes on (Runtime 0.12.60): at a
+  lease's expiry, the refusal by the lapsed lease (`lease_expired`; #411 A64 for a run's lease in
+  its end phase, Workflow #458 for every other lease), and after a capture failure, its close
+  lease refused by the takeover cooldown, a queued claim the routine gate holds back or a lapsed
+  lease (Workflow #456; [read-session-resource-close.md](read-session-resource-close.md)). A
+  failure of the Runtime itself in those paths (a record, a lock, the owner's journal) stays
+  `Global`.
 
 Since Runtime 0.12.26 (W2-C; ISO-M rows A01, A05, E13-E15) the codes of a closing or changed
 session (`execution_session_close_in_progress`, `execution_instance_identity_mismatch`) and of a

@@ -1424,7 +1424,7 @@ fn mapp2b_a_failure_at_each_step_settles_the_run_failed_releases_the_key_and_sta
 /// switch starts the cooldown again, and a restart drops it: B's candidates carry no switch
 /// cooldown after it. The key: default `300000`, range `1..=3600000`, settable.
 ///
-/// Adapted by Workflow #437 ORD-1c (register §1.364), which passes the order within one device:
+/// Adapted by Workflow #437 ORD-1c (register §1.365), which passes the order within one device:
 /// A's run put A in front, so after the cooldown the device stays with A while A's task ends by
 /// B's limit, and B's task is dispatched in the round its limit (the default
 /// `scheduling.device_group.max_queue_wait_ms`, 1 800 000, from the first round after the
@@ -1502,7 +1502,7 @@ fn mapp2b_a_failed_switch_holds_the_member_for_the_cooldown_while_the_other_memb
     let again = bench.evaluate(t2);
     let (reasons, _) = decision_of(&again, TASK_B, B);
     assert!(switch_cooldown_reason(reasons).is_none());
-    // Workflow #437 ORD-1c (register §1.364): B competes again, but A's run put A in front, so
+    // Workflow #437 ORD-1c (register §1.365): B competes again, but A's run put A in front, so
     // the device stays with A while A's task ends by B's limit; B's wait began at t2, and at its
     // limit nothing of A ends by it and B's task is dispatched (`ord1c_t7`).
     assert!(
@@ -1891,7 +1891,7 @@ fn mapp2b_a_direct_run_and_a_launch_of_a_member_stop_the_member_in_front_first()
 /// dispatched. After the cooldown B's task is dispatched again as the owed rerun
 /// (`policy_rerun_owed`).
 ///
-/// Adapted by Workflow #437 ORD-1c (register §1.364), which passes the order within one device:
+/// Adapted by Workflow #437 ORD-1c (register §1.365), which passes the order within one device:
 /// A's dispatch now runs (A in front, its task's wait over), and after the cooldown B's owed rerun
 /// waits for A until its limit (the default `scheduling.device_group.max_queue_wait_ms`,
 /// 1 800 000, from the first round after the cooldown) and is dispatched in the round it comes;
@@ -1949,7 +1949,7 @@ fn mapp2b_the_switch_cooldown_also_holds_the_rerun_the_member_is_owed() {
         "A's task is dispatched meanwhile"
     );
     assert!(bench.owes_rerun(B, TASK_B), "the rerun is still owed");
-    // Workflow #437 ORD-1c (register §1.364): A's dispatch runs, so A is in front and its task's
+    // Workflow #437 ORD-1c (register §1.365): A's dispatch runs, so A is in front and its task's
     // wait ends; after the cooldown B's owed rerun waits for A by its limit (it gains no
     // precedence over the member in front) and goes in the round that limit comes.
     let a = bench.grant(&held, TASK_A);
