@@ -1071,7 +1071,10 @@ the rescue face:
   `--known-pause`, `--ack-guard`, `--ui-confirmed` and `--via` are refused
   (`actingctl_usage_invalid`, `argument_problem` `unknown`). `deploy`, `rollback`, `config replace`
   and `place` plan and apply in one call under the writer lock; `--plan` (a switch) answers the
-  plan only. A one-way ledger edge is journalled `one_way: true` instead of acknowledged.
+  plan only. A one-way ledger edge is journalled `one_way: true` instead of acknowledged. `place`'s
+  `--authorization` and `--enables` (Workflow #463 S3-2, since 0.12.63; "The authorization a
+  placement names", below) are statements of the caller that the tool records, not confirmations
+  it asks for.
 - **Every pause is known.** A hold takes every pause it finds on an affected instance as known,
   keeps it and lists it; a global pause too is kept and listed (the `foreign_pauses` row notes it)
   and the stop goes on. The hold's reason is the module's `lab-<operation>-<unix ms>` unless the
@@ -1337,7 +1340,10 @@ the rescue face:
     does, as `install undo` or `install resume` (`owner_lock_held`, `runtime_running`,
     `processes_unreadable`); no status read comes first there, so a running Runtime is
     `owner_lock_held`. The `undo` and the `resume` of a placement begun with a Runtime are
-    unchanged.
+    unchanged. The `undo` of a placement, with a Runtime or without one, asks for no
+    authorization (Workflow #463 S3-2, since 0.12.63, does not change it): it restores the content
+    the placement replaced, so a package the placement made leave scheduling is scheduled again,
+    and no record says under which authorization.
 
   The answer's steps are `plan` and `place`, with no `schedule`. While the operation is unfinished
   the watchdog stands aside (`pack_place` is off row 7a″'s pass list), so no Runtime starts on a
@@ -1453,9 +1459,10 @@ the rescue face:
   that changes nothing (every item `unchanged`) need neither and read neither.
   - **The parameters.** `--authorization <reference>`: the reference of the authorization (a
     board comment's address, say), non-blank, at most 1024 bytes, no control character.
-    `--enables <package_id>`, repeated: every package of the plan's `enters`, once each, and
-    absent when nothing enters. There is no default, no variable and no switch that places
-    without them.
+    `--enables <package_id>`, repeated: every package of the plan's `enters`, once each (since
+    S3-1's fix round 3 also a package used only as a layer of the prerequisite chain of a
+    scheduled one), and absent when nothing enters. There is no default, no variable and no
+    switch that places without them.
   - **The checks**, after the plan and before the hold, any pause and any write, once for both
     paths (with a Runtime and while it is stopped), in this order, each refusal with `plan_id`
     and `game`: no `--authorization`, or a blank one, is `install_command_refused`
@@ -3297,11 +3304,12 @@ the fragment registers, names the command.
   for its stopped rule; no code or key is new.
 - **Workflow #463 S3-2** (since 0.12.63; "The Lab's rescue module", "The authorization a
   placement names"): `install_refusal` `place_authorization_missing`, `place_enables_mismatch`
-  (the answer's `expected` and `given`, not values) and `place_enables_unknown` (the reader's
-  refusal as the cause), each with `plan_id` and `game`, which only `install_pack_place` answers,
-  each before the hold and any write; the existing `actingctl_usage_invalid` (`unusable`,
-  `wrong_type`) for a malformed `--authorization` or `--enables`; no code, location or key is
-  new.
+  (the answer's `expected` and `given`, not values) and `place_enables_unknown` (no cause is
+  attached: why the lists cannot be stated is in the plan's `schedule_changes` beside the outcome,
+  whose `unread` names the refusal, `standard_pack_root_invalid` at the file), each with `plan_id`
+  and `game`, which only `install_pack_place` answers, each before the hold and any write; the
+  existing `actingctl_usage_invalid` (`unusable`, `wrong_type`) for a malformed `--authorization`
+  or `--enables`; no code, location or key is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

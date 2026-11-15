@@ -46,6 +46,18 @@
 //   `unread` (the zip's side, `rule_package_unregistered` at `/rules/2/package_id`) and none of the
 //   three lists, and the placement with a reference and `--enables` is `place_enables_unknown`,
 //   the plan's `schedule_changes` beside it: nothing written, no pause sent.
+// Round 3 (coordinator work order `rd-1115/brief-463-s32-fix3.md`, after S3-1's fix round 3 and
+// the review of round 2):
+// - `s32_a_content_only_placement_without_a_reference_is_refused_hot_and_cold`: on both paths, a
+//   bundle that only replaces a pack's content (`enters` empty, `content_only` that pack) placed
+//   without `--authorization` is `place_authorization_missing`: nothing written, no pause sent;
+//   the reference is required by every placement that changes something, not only where packages
+//   enter;
+// - `s32_a_new_prerequisite_is_named_with_its_scheduled_package`: a bundle that adds a pack named
+//   by a rule whose `control.json` names a new pack as its prerequisite: the plan's `enters` holds
+//   both; on both paths `--enables` naming only the scheduled one is `place_enables_mismatch` with
+//   both in `expected`, nothing done; with no Runtime, naming both (in the other order) places
+//   them, the journal's `enabled` the two, sorted.
 // The fixtures never depend on how the plan counts a root without `schedule.json` or an installed
 // root that cannot be read: both roots of every scene hold a `schedule.json` and the installed one
 // is read. The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no
@@ -81,11 +93,17 @@ const RELEASED: [u64; 2] = [3, 3];
 const KEPT: &str = "neutral.kept";
 const ADDED: &str = "neutral.added";
 const ALSO: &str = "neutral.also";
+/// Round 3: a pack a bundle adds only as the prerequisite of [`ADDED`] (sorted after [`ADDED`]
+/// and [`ALSO`], before [`KEPT`]).
+const FIRST: &str = "neutral.first";
 /// A package no root carries.
 const GHOST: &str = "neutral.ghost";
 /// Two contents of a pack's `control.json`, of one length (so `bundle.json` keeps its bytes).
 const CONTROL: &[u8] = br#"{"neutral": 1}"#;
 const CONTROL_REPLACED: &[u8] = br#"{"neutral": 2}"#;
+/// Round 3: a pack's `control.json` that names [`FIRST`] as its prerequisite package (the member
+/// S3-1's fix round 3 follows, as the host does when a run is prepared).
+const NEEDS_FIRST: &[u8] = br#"{"prerequisite_package_id": "neutral.first"}"#;
 /// A `schedule.json` the reader refuses: a member it does not know.
 const UNREADABLE_SCHEDULE: &[u8] = br#"{"neutral": "schedule"}"#;
 /// The reference of the authorization the placements name (a made-up board reference).
@@ -823,6 +841,100 @@ fn s32_a_cold_placement_records_the_packages_it_enables() {
     let shown = &status["journal"]["inputs"];
     assert_eq!(shown["authorization"], REFERENCE, "{status}");
     assert_eq!(shown["enabled"], json!([ADDED, ALSO]), "{status}");
+}
+
+// Round 3: a bundle that only replaces a pack's content, its rule unchanged (nothing enters),
+// placed without `--authorization`, with the Runtime and without it: `place_authorization_missing`,
+// nothing written, no pause sent. The reference does not depend on `enters` being non-empty.
+#[test]
+fn s32_a_content_only_placement_without_a_reference_is_refused_hot_and_cold() {
+    for way in WAYS {
+        let scene = staged(way, &content_only());
+        let plan = scene.plan();
+        assert_eq!(
+            plan["schedule_changes"]["enters"],
+            json!([]),
+            "{way:?}: {plan}"
+        );
+        assert_eq!(
+            plan["schedule_changes"]["content_only"],
+            json!([KEPT]),
+            "{way:?}: {plan}"
+        );
+        let plan_id = plan["plan_id"].clone();
+        let before = scene.files();
+        let (line, exit) = scene.place(json!({}));
+        let case = format!("{way:?}: a content-only placement without a reference");
+        assert_refused(
+            &scene,
+            &line,
+            exit,
+            "place_authorization_missing",
+            &plan_id,
+            &before,
+            &case,
+        );
+    }
+}
+
+// Round 3, after S3-1's fix round 3: a bundle that adds [`ADDED`], named by a rule, whose
+// `control.json` names the new pack [`FIRST`] as its prerequisite. The plan's `enters` holds both
+// (`FIRST` by the role `prerequisite`), so on both paths `--enables` naming only the scheduled one
+// is `place_enables_mismatch` with both in `expected`, nothing done; with no Runtime, naming both
+// (in the other order) places them and the journal records both, sorted.
+#[test]
+fn s32_a_new_prerequisite_is_named_with_its_scheduled_package() {
+    let bundle = || {
+        installed()
+            .pack(ADDED, NEEDS_FIRST)
+            .pack(FIRST, CONTROL)
+            .rule("rule.added", ADDED)
+    };
+    for way in WAYS {
+        let scene = staged(way, &bundle());
+        let plan = scene.plan();
+        assert_eq!(
+            plan["schedule_changes"]["enters"],
+            json!([ADDED, FIRST]),
+            "{way:?}: {plan}"
+        );
+        let plan_id = plan["plan_id"].clone();
+        let before = scene.files();
+        let (line, exit) = scene.place(json!({"authorization": REFERENCE, "enables": [ADDED]}));
+        let case = format!("{way:?}: only the scheduled package");
+        assert_refused(
+            &scene,
+            &line,
+            exit,
+            "place_enables_mismatch",
+            &plan_id,
+            &before,
+            &case,
+        );
+        assert_eq!(line["expected"], json!([ADDED, FIRST]), "{case}: {line}");
+        assert_eq!(line["given"], json!([ADDED]), "{case}: {line}");
+    }
+
+    let scene = staged(Way::Stopped, &bundle());
+    let before = scene.journals();
+    let (line, exit) = scene.place(json!({"authorization": REFERENCE, "enables": [FIRST, ADDED]}));
+    assert_eq!(exit, 0, "{line}");
+    assert_eq!(line["outcome"]["code"], "install_command_done", "{line}");
+    for (pack, control) in [(ADDED, NEEDS_FIRST), (FIRST, CONTROL)] {
+        assert_eq!(
+            fs::read(scene.game_root.join(pack).join("control.json")).expect("a placed pack"),
+            control,
+            "{pack}"
+        );
+    }
+    let (_, journal) = scene.new_journal(&before);
+    assert_eq!(journal["kind"], "pack_place", "{journal}");
+    assert_eq!(journal["inputs"]["authorization"], REFERENCE, "{journal}");
+    assert_eq!(
+        journal["inputs"]["enabled"],
+        json!([ADDED, FIRST]),
+        "{journal}"
+    );
 }
 
 // `place --plan` changes nothing and needs neither parameter; nor does a bundle whose plan changes

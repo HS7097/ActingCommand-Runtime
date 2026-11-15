@@ -28527,9 +28527,38 @@ a zip rule naming a package the zip does not carry (`rule_package_unregistered` 
 placement is refused `place_enables_unknown`, nothing written, no pause sent. The seven old gates'
 `fixture::authorized` reads `enters` through the `Option` (none when it is `None`).
 
+**Round 3** (S3-1's fix round 3 merged, its head `5c28a2a4`; coordinator work order
+`rd-1115/brief-463-s32-fix3.md`, after an independent review of round 2, the coordinator's
+rulings, not the owner's words; no main merged). S3-1's `enters` may now hold a package used only
+as a layer of the prerequisite chain of a scheduled one (the plan's role `prerequisite`); its type
+and what `None` means are unchanged, so `authorize` is unchanged and `--enables` names such a
+package too ([install-cli.md](install-cli.md), "The authorization a placement names", "The
+parameters"). The outcome codes entry of `install-cli.md` said that `place_enables_unknown`
+carries the reader's refusal as its cause, round 1's text: the code attaches no cause, and why
+the lists cannot be stated is in the plan's `schedule_changes` beside the outcome, whose `unread`
+names the refusal, as the catalog says. The rule "No confirmation parameters" says that `place`'s
+`--authorization` and `--enables` are statements of the caller that the tool records, not
+confirmations it asks for. The row `place`'s `help`, the description of the Lab's MCP tool, now
+names the authorization (157 bytes, within `MAX_HELP_BYTES`). The sentence on `undo` below is
+written into `install-cli.md` where the `undo` of a placement is described. Tests, two new in the
+same gate file and gate entry: `s32_a_content_only_placement_without_a_reference_is_refused_hot_and_cold`
+(on both paths a bundle that only replaces a pack's content, `enters` empty, placed without
+`--authorization` is `place_authorization_missing`, nothing written, no pause sent: the reference
+does not depend on `enters` being non-empty) and
+`s32_a_new_prerequisite_is_named_with_its_scheduled_package` (a bundle adding a pack named by a
+rule whose `control.json` names a new pack as its prerequisite plans `enters` both; on both
+paths `--enables` naming only the scheduled one is `place_enables_mismatch` with both in
+`expected`, nothing done; with no Runtime naming both places them, the journal's `enabled` the
+two, sorted). No test is adapted.
+
 **What is not changed.** What a placement places, holds and checks; the plan, its id, its items
 and its `schedule_changes` (S3-1's); `release stage`, `deploy` and the other rows; every
-interface revision.
+interface revision. **What the slice does not cover: `undo`** (round 3). The `undo` of a placement,
+with a Runtime or without one, restores the content the placement replaced and asks for no
+authorization; if the undone placement had made a package leave scheduling, the undo brings it
+back, and no record says under which authorization. This slice does not change `undo`, `op
+resume` or `rollback`: `undo` is the way back of a rescue operation, and its record is ordered
+separately.
 
 **At deploy.** Nothing to do on the root. A caller of `place` that changes something passes
 `--authorization` and `--enables` from this build on; a placement without them is refused before

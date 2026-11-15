@@ -3528,7 +3528,7 @@
         {"name": "authorization", "form": "option", "type": "string", "required": false, "note": "the reference of the authorization the placement acts under: non-blank, at most 1024 bytes, no control character; needed by every placement whose plan changes something, not by --plan. It is recorded in the journal as given and never judged: the tool records an authorization and grants none"},
         {"name": "enables", "form": "option", "type": "string", "required": false, "repeat": true, "note": "each package id of the plan's enters, once each; absent when nothing enters. The caller's statement that it knows which packages the placement makes enter scheduling; a plan that lists enters is not an authorization"}
       ],
-      "help": "Places a bundle of standard packs into this root, holding the instances it concerns while they are idle; with the Runtime stopped, without a hold.",
+      "help": "Places a bundle of standard packs into this root under the authorization the caller names, holding its game's instances while idle; Runtime stopped: no hold.",
       "output": "the operation id and each step's result",
       "writes": true,
       "irreversible": true,
