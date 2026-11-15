@@ -338,7 +338,7 @@ actingledger --state-root <state-root> facts --at <sequence>
 actingledger replay --zip <evidence.zip> --expected-sha256 <hex>
 actingledger codes [--code <code>] [--json|--markdown]     # 内嵌码目录里的结果码（contracts/runtime-outcomes.md）；不需要状态根
 
-# Lab 录制成 linear_steps 包（contracts/lab-recording.md）；actinglab 经 ACTINGCOMMAND_RUNTIME_STATE_ROOT 找到守护进程
+# Lab 录制成 linear_steps 包（contracts/lab-recording.md）；actinglab 经 ACTINGCOMMAND_RUNTIME_STATE_ROOT 找到守护进程，没设时经它所在安装的状态根
 actinglab --json --instance <alias> record start --task-id <task_id>     # 按住该实例：以录制自己的理由 lab-record-<ms> 暂停它的调度，两条录制命令之间没有调度任务操作它；record stop 或 record archive 只恢复这一个暂停
 actinglab --json --instance <alias> capture --record     # 下一步的画面；也可用 observe --capture --record，或离线 record mark --frame <png>
 actinglab --json --instance <alias> record mark --page <name> --template <id>=x,y,w,h --color <id>=x,y,w,h --click x,y,w,h

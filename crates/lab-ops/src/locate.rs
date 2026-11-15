@@ -100,16 +100,36 @@ pub fn locate_from(
     program: &Path,
     process: Option<&InstalledProcess>,
 ) -> Result<Location, Outcome> {
-    let (root, installation) = installed_place(program, process)?
-        .ok_or_else(|| Outcome::new(ActingctlCode::InstallRootUnresolved).path(program))?;
+    installed_location_from(program, process)?
+        .ok_or_else(|| Outcome::new(ActingctlCode::InstallRootUnresolved).path(program))
+}
+
+/// Workflow #463 S1-8: the location of this process's program as [`locate`] finds it, `None` when
+/// it runs from no installed root (where [`locate`] answers `install_root_unresolved`), so that a
+/// program inside one whose state root cannot be located is told from a program outside any.
+pub fn installed_location() -> Result<Option<Location>, Outcome> {
+    let (program, process) = this_program()?;
+    installed_location_from(&program, process)
+}
+
+/// Workflow #463 S1-8: the location of a program at `program`, started through the install
+/// selection `process` when that is given, as [`locate_from`] finds it; `None` outside any
+/// installed root.
+pub fn installed_location_from(
+    program: &Path,
+    process: Option<&InstalledProcess>,
+) -> Result<Option<Location>, Outcome> {
+    let Some((root, installation)) = installed_place(program, process)? else {
+        return Ok(None);
+    };
     let config = selected_config(&root, installation.as_ref());
     let state_root = configured_state_root(&config)?;
-    Ok(Location {
+    Ok(Some(Location {
         root,
         installation,
         config,
         state_root,
-    })
+    }))
 }
 
 /// The installed root a program at `program` acts in, with the root's selection as it is now

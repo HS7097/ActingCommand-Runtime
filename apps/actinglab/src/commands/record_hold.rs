@@ -4,8 +4,9 @@
 //! the Runtime half of a recording's hold, for the `record` command and for the `--record` presses
 //! and application operations. The recording library keeps the hold's facts and says what they
 //! mean (`actingcommand_lab::RecordingHold`); the requests are `lab_ops::scheduling`'s, on a
-//! connection to the Runtime the `--record` commands reach (`ACTINGCOMMAND_RUNTIME_STATE_ROOT` or
-//! the default state root), as every press connects.
+//! connection to the Runtime the `--record` commands reach (`ACTINGCOMMAND_RUNTIME_STATE_ROOT`,
+//! else (#463 S1-8) the state root of the installation actinglab runs from, else the default state
+//! root: `crate::state_roots::runtime_state_root`), as every press connects.
 //!
 //! - `record start` ([`take`]; fix round 2: the header knows the hold before the Runtime is asked
 //!   to pause): a connection and one status read, with nothing to undo so far. An instance the
@@ -79,9 +80,9 @@ enum Reached {
 /// closed at once with nothing sent, within the client's IO timeout ([`probe`]), tells them apart
 /// ([`not_reached`]). The fix round after the train's review (the coordinator's ruling: a recording
 /// never starts unheld because the Lab could not tell): a state root that cannot be resolved (an
-/// empty variable, neither `LOCALAPPDATA` nor `APPDATA`) is the caller's mistake or a broken
-/// installation, not "no Runtime": the failure the Lab's other commands answer for it
-/// (`runtime_state_root`, `validation_failed`).
+/// empty variable, neither `LOCALAPPDATA` nor `APPDATA`; #463 S1-8: an installation whose state
+/// root cannot be located) is the caller's mistake or a broken installation, not "no Runtime": the
+/// failure the Lab's other commands answer for it (`runtime_state_root`).
 fn reach() -> CliOutcome<Reached> {
     let config = crate::lab_client_config(runtime_state_root()?);
     Ok(match RuntimeClient::connect(config.clone()) {

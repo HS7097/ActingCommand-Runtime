@@ -1950,7 +1950,10 @@ warned. A recording now holds its instance itself: nothing else is asked of the 
 **Taking the hold (`record start`).** After the start's own refusals (`record_session_active`, the
 options), `record start` connects to the Runtime the `--record` commands reach
 (`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, else the default state root; the connection's handshake is
-`Health`, then `BindChannel`) and reads its status once. Nothing is written so far, so nothing
+`Health`, then `BindChannel`) and reads its status once. #463 S1-8 (0.12.65): without the variable,
+an actinglab that runs from an installation reaches that installation's state root, located as the
+CLI module's rows locate it (`lab_ops::locate`), and only one that runs from no installation the
+default state root. Nothing is written so far, so nothing
 needs undoing when this fails. Then (fix round 2: the session header knows the hold before the
 Runtime is asked to pause):
 
@@ -1986,7 +1989,10 @@ Runtime is asked to pause):
   variable `ACTINGCOMMAND_RUNTIME_STATE_ROOT` empty or white space, or neither `LOCALAPPDATA` nor
   `APPDATA` set. That is the caller's mistake or a broken installation, not "no Runtime":
   `record start` fails and writes nothing, `validation_failed`, as the Lab's other commands
-  answer such an installation, its message saying it paused nothing and started nothing.
+  answer such an installation, its message saying it paused nothing and started nothing. #463
+  S1-8: so does an installation whose state root cannot be located, with the located outcome's
+  code (`install_state_root_unresolved`, or the selection's install code) and its outcome in the
+  details, as the CLI module's rows refuse it; nothing falls back to the default state root.
 - **Something listens, but the handshake does not complete** (`Health` or `BindChannel` fails, is
   refused or gets no answer): a Runtime is there and may dispatch, so whether the instance would be
   held cannot be known. `record start` fails and writes nothing, with the failure as the Lab's

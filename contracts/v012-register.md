@@ -30927,6 +30927,51 @@ gate builds the recording of this gate's test of the whole of stage two; and
 `s25_a_recognize_box_takes_the_settled_capture_and_lists_the_animation` asserts where `record
 frames` lists the sample the box admitted (§1.426). Nothing else changes.
 
+### 1.428 Slice #463 S1-8 (0.12.65): the installed actinglab finds its installation's Runtime (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage one starts recording, plays and ends recording; the rule below is the coordinator's ruling in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s18-installed-state-root.md`)
+
+This section follows §1.427, the highest on main when it was written. It ships in 0.12.65.
+
+**What the walk showed.** After 0.12.64 went live, stage one was walked on a real instance with the
+installed program (`<root>\tools\actinglab.exe`) from a plain shell. Without the variable
+`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, `actinglab --json --instance <i> record start --task-id <t>`
+answered `hold {state: "none", warnings: ["no_runtime_listening"], runtime_error: "runtime client
+error runtime_info_unavailable during discover_runtime"}` and started the recording unheld, while
+the installation's Runtime was running. With the variable set to the installation's state root the
+same command held the instance (`hold.state` `own`). actinglab's own commands took the state root
+from `runtime_state_root()` (`apps/actinglab/src/state_roots.rs`): the variable, else
+`%LOCALAPPDATA%\ActingCommand\runtime`, which is not an installation's state root; the CLI
+module's rows already located the installation's (`cli_module::place`, `lab_ops::locate`).
+
+**The rule** (one for the whole program, in `runtime_state_root()`):
+1. the variable, when it is set (empty or white space refused, as before);
+2. else, when the program runs from an installation, that installation's state root, located as the
+   CLI module's rows locate it; one that cannot be located refuses the command with the located
+   outcome's code (`install_state_root_unresolved`, or the selection's install code), the CLI
+   module's text (`cli_module::place::UNLOCATED`) and the outcome in the details, and nothing falls
+   back to the default: an installed program never reaches another state root than its
+   installation's;
+3. else (a build directory, a test) the default state root, as before.
+
+`no_runtime_listening` keeps its words ("no Runtime listens at the installation's state root"),
+which an installed `record start` now means; a state root that cannot be resolved refuses the start
+and writes nothing, as before.
+
+**Where it is built.** `lab_ops::locate` gains `installed_location` and `installed_location_from`
+(the location, `None` outside any installed root), which `locate_from` now wraps with its
+`install_root_unresolved`; nothing it answers changes. `cli_module::place` is `pub(crate)` and gains
+`installation_state_root`, which reads them (in test builds the place a test set,
+`cli_module::authoring::test_place`, as `record draft` reads it). `place()`, and so every row of
+the CLI module, is unchanged. The two MCP servers set the variable for their actinglab children, so
+their answers do not change.
+
+**No code, no word, no row.** No outcome code or word is added; the operation table and the outcome
+catalog do not change. At deploy nothing is configured.
+
+**Gate** (`contracts/test-gates/exec.toml`, `gate_463_s18`): the default from no installation; the
+variable wherever the program runs; an installation's state root without the variable; an
+installation whose state root cannot be located refused, never the default; `record start` from an
+installation without the variable holding its instance on a scripted Runtime (`hold.state` `own`).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -3621,3 +3621,15 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::commands::session_record::lab2_tests::s25_the_box_flag_declares_the_request_forms_boxes",
 ]
 incident = ["#463 S2-5"]
+
+# #463 S1-8 (0.12.65; register §1.428; brief rd-1116/brief-463-s18-installed-state-root.md; contracts/lab-recording.md, "A recording holds its instance"): the state root actinglab's own commands reach is the variable's when it is set, else the state root of the installation the program runs from as the CLI module's rows locate it, refused when it cannot be located, else (from no installation) the default. On made-up installation roots as the CLI module's tests make them (cli_module::authoring::test_place): without the variable and from no installation, the default under LOCALAPPDATA (1); with the variable, its path from no installation, from an installation and from one whose state root cannot be located (2); from an installation without the variable, its configured state root (3); a configuration without state_root, and none at all: refused install_state_root_unresolved with the CLI module's text and the outcome in the details, never the default (4); record start without the variable from an installation, against the scripted Runtime on its state root: one connection, the handshake, status, pause_scheduling, hold.state own without a warning (5).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s18::s18_from_no_installation_without_the_variable_the_default",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s18::s18_the_variable_wins_wherever_the_program_runs",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s18::s18_from_an_installation_without_the_variable_its_state_root",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s18::s18_an_installation_whose_state_root_cannot_be_located_is_refused",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s18::s18_record_start_from_an_installation_holds_its_instance",
+]
+incident = ["#463 S1-8"]
