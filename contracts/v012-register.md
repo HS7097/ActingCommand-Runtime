@@ -28071,6 +28071,181 @@ revision.
 the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
 `device_locked` or the update code shows no group in the errors view either.
 
+### 1.401 Slice #469 D4b (0.12.63): a vision provider failure during a guard is reported as one (Workflow #469; the owner's approval on board #469 on 11-15 of the four corrections that change what the program does, this one of them; the design `rd-1115/status-codes-a-design.md`, Part 2, A-2 item 1, the row of `contained_task_guard_evaluation_failed` and `contained_task_recognition_failed`, and the slice row D4; the coordinator's rulings in the work order and in its dispatch, not the owner's words; coordinator work order `rd-1115/brief-469-d4-owner-four.md`, read on main `8b85593a` (the #469 train: K2, §1.396, and D4a, §1.400, merged))
+
+The coordinator gave this slice 1.401 (§1.400 names it). It ships in 0.12.63: release 0.12.62 is
+cut from main without it (the coordinator's dispatch, in place of the work order's 0.12.62).
+
+**What it is.** A vision provider that fails, or answers invalidly, while the kernel evaluates a
+step's guard target, an operation's `when` target or an expected identity's target now ends the
+run with `contained_task_vision_provider_failed` (error, `environment_fault`), as one met at a
+page evaluation has since Workflow #387 D1c-G, with the detail that place writes and no values
+(the page path gives that code none either). A real evaluation error there (the declaration cannot
+be evaluated; the provider answered) keeps its code (error, `pack_logic_mismatch`), its detail
+and its control flow. The classes of the three codes do not change.
+
+| Place (`crates/execution-kernel/src/contained_task.rs` unless named) | A provider failure: was | is | A real evaluation error (as before) | Detail (as before, either way) |
+|---|---|---|---|---|
+| a step's guard (`judged_guard_outcome`) | `contained_task_guard_evaluation_failed` | `contained_task_vision_provider_failed` | `contained_task_guard_evaluation_failed` | the evaluation's error, then ` cause=<code>` for an evaluation that refused to conclude |
+| an operation's `when` (`when_holds`, `contained_task/candidates.rs`) | `contained_task_recognition_failed` | `contained_task_vision_provider_failed` | `contained_task_recognition_failed` | `operation=<id> when=<target> <error>`, then ` cause=<code>` as above |
+| an expected identity's targets, text path and template path (`read_expected_identity`) | `contained_task_recognition_failed` | `contained_task_vision_provider_failed` | `contained_task_recognition_failed` | the evaluation's error |
+
+**Told apart as a page evaluation tells them apart.** One function, `failed_by_provider`, reads
+the recognition pack's code of the evaluation's error: `recognition_pack_provider_failed` or
+`recognition_pack_provider_response_invalid` is a failure of the provider, any other a real
+evaluation error. It is D1c-G's reading moved out of `page_failed_by_provider`, which now reads a
+failed page target's cause through it; `target_evaluation_failure_code` gives the three places
+their code from it, and the host's record of a failed guard or `when` evaluation
+(`diagnostic_guard`, `crates/runtime-host/src/host/task_diagnostic.rs`) its primary code, as
+`page_batch_failure_code` does for a page batch. No second reading is added and no decision point
+names a code.
+
+**Where the code that ends a run changes, path by path.** Only where an evaluation at one of the
+three places fails because the provider failed:
+
+1. A step's guard, at every place that judges it: a page-graph step's first attempt and a retry's,
+   an input recheck (`fresh_frame` and the stable or still frames' guards), a `linear_steps` step
+   and its recheck, a select step's confirmation, a scan's guard. The run ends with the provider
+   code where it ended with `contained_task_guard_evaluation_failed`: none of these callers tells
+   the two apart (their only readings by code are `contained_task_guard_refused` and the sampling
+   timeouts, which neither is), so the step, its retry decision and its failure decision go as
+   before. Where the failure decision asks for recovery (a retry attempt of an operation with a
+   recovery task), the run still ends with `contained_task_requires_scheduler`, whose `failure_code`
+   now names the provider code. A select step's confirmation record (`guard_failed`) carries the
+   provider code as its outcome.
+2. An operation's `when`: the run ends with the provider code before the step starts, where it
+   ended with `contained_task_recognition_failed`.
+3. An expected identity, after the step's input: the run ends with the provider code where it
+   ended with `contained_task_recognition_failed`.
+4. The host's record of a failed guard or `when` evaluation whose PP-OCR reports cannot be archived
+   or recorded: the run's primary failure is the provider code where it was
+   `contained_task_guard_evaluation_failed` (for a `when` too, as before for every other error).
+
+What the host, the ladder and the policy do with a run that ends so is what they already do with a
+page evaluation's provider failure; each is a reading by class or by code that already exists. The
+whole list (fix round 2, after the independent review), each with its place in the code
+(`crates/runtime-host/src/host/` unless named):
+
+- **No ladder at once, so no cool-down window either.** At a scheduled run's failed lease end
+  (`ladder_at_lease_end`, `recovery_ladder.rs`) no default trigger item matches the code at the
+  task stage (`pack_logic` names `pack_logic_mismatch`): no ladder is admitted, and the run's key is
+  released, not handed on. The cool-down window opens only on the way to a ladder: when an item
+  matches under `cooldown_opens_on` `triggered` (`admit_or_suppress_ladder`), or when an admitted
+  ladder gets the key under `admitted`, the default (`climb_recovery_ladder`; both read
+  `opens_cooldown_window`). So none opens, and the instance's next trigger is not suppressed by one.
+- **The burst.** Direction ① counts the run's terminal record as each record is committed
+  (`count_stability_record`, `StabilityCounter::count`, `recovery_ladder.rs`): the default
+  `stability_burst` matches `environment_fault` at `stability_warnings`, and the third such failure
+  of one instance within 600 000 ms registers a burst, whose ladder the lease sweep admits
+  (`admit_stability_bursts`) and which climbs from its return-home rung.
+- **A retry round that asks for recovery.** A guard that fails so on a retry attempt of an
+  operation with a recovery task (`refuse_before_input`,
+  `crates/execution-kernel/src/contained_task/observation_window.rs`) still ends the run with
+  `contained_task_requires_scheduler`, and its `failure_code` (`requires_scheduler`,
+  `crates/execution-kernel/src/contained_task.rs`) is the provider code. A guard of a select step's
+  confirmation that fails so writes a confirmation record (`TaskSelectionConfirmation::GuardFailed`,
+  `confirm` in `contained_task/selection.rs` and in `contained_task/scan/select.rs`) whose outcome
+  names the provider code.
+- **The busy-screen probe.** A return-home rung's run that ends so is not held on it
+  (`climb_screen_gate`, `recovery_ladder.rs`: `busy.screen.classes`).
+- **The capture evidence.** A guard's provider failure no longer pins its last frame as
+  `GuardRejection` (the host's list of guard codes in `execute_contained_task_with_lease`,
+  `contained_task.rs`), and keeps its `Terminal` and `Failure` pins.
+- **The task geometry recheck** after a run that ended with `contained_task_recognition_failed`
+  (`recheck_task_geometry`, `contained_task.rs`) no longer runs after a `when` or identity provider
+  failure.
+- **The return-home entry layer and the prerequisite layer.** A `when` or an identity of a home
+  entry recovery package (`run_preflighted_contained_task`, `contained_task.rs`) or of a
+  prerequisite package (`gate_layer` and `close_open`, `prerequisite.rs`) that fails so takes the
+  branch of a failure that is not a recognition failure, as a page evaluation's provider failure
+  did already (a guard's failure took it before too). The layer's facts (`EntryRecoveryFailed`,
+  `EntryTargetDisposition { FailClosed }`, relaying the code) are written by the entry-fact writer
+  (`record_entry_fact`, `contained_task.rs`), which first checks that the run is still active
+  (`ensure_active`): a write at the very moment of a deadline, a cancellation or a pause is refused
+  with the deadline's, the cancellation's or the pause's own code. The layer's error then carries
+  its code only, without the kernel's detail text
+  (`fail_contained_task_entry`; `layer_task_failure`, `prerequisite.rs`), so the main package's
+  terminal record has no native detail for it and its failure identity's key has no `operation=`
+  fragment (`failure_detail_fingerprint`, `crates/runtime-host/src/failure_identity.rs`), as for a
+  page evaluation's provider failure today. Before, the recognition branch recorded the failure for
+  the geometry check (`record_geometry_triggered_recovery_failure`,
+  `record_geometry_triggered_prerequisite_failure`) and carried the kernel's error, its detail
+  included.
+- **The policy's streak.** The settlement (`failure_settlement.rs`) records the failure as it
+  records a page evaluation's provider failure, under the provider code: the code does not
+  accumulate (`failure_accumulates`, `failure_identity.rs`), so its identity's frame mark is unique
+  to its dispatch (`IdentityFrame::unique`). It is compared in the same streak as a page
+  evaluation's provider failure, the provider code's (`same_error`, `policy_control.rs`: code,
+  failure identity and class), not in a class-4 code's; like every failure that does not
+  accumulate, its count stays 1 ([policy-suspension.md](policy-suspension.md), "Every other failure
+  is rerun only").
+- **What stops a package while the provider stays down.** The burst (the default: three such
+  failures of one instance within ten minutes start the ladder from its return-home rung), and the
+  package's own `on_failure` (`policy_control.rs`): its `retry_limit` and `escalation_threshold`
+  apply as to every failure that does not accumulate, whose count stays 1, so they pause the task
+  only at `retry_limit` 0 (then `action` decides) or `escalation_threshold` 1; otherwise each
+  failure is rerun after its backoff while the immediate-rerun round lasts (R22,
+  [policy-suspension.md](policy-suspension.md), "Immediate rerun"). Before, the first such failure
+  started the ladder at once (`pack_logic`).
+
+**What stays as it was.** Every run whose evaluation at the three places does not fail; every
+real evaluation error there (code, detail byte for byte, values, failure identity and streak);
+every page evaluation (the same reading, moved); every other evaluation of a select, a scan or a
+field list, which keeps `contained_task_recognition_failed` whatever failed; the classes and
+categories of every code; the configuration; every record shape and interface revision. Nothing is
+kept for an earlier build.
+
+**Texts.** The catalog descriptions of `contained_task_vision_provider_failed`
+(`execution-kernel.json`), `contained_task_guard_evaluation_failed` and
+`contained_task_recognition_failed` (`contract.json`, with its common causes); fix round 2: the
+later sentences of `contained_task_guard_evaluation_failed`'s description also say that a real
+evaluation error of an operation's `when` ends with that code, not
+`contained_task_recognition_failed`, when the host cannot archive the evaluation's PP-OCR reports
+(`diagnostic_guard`, `task_diagnostic.rs`; existing behaviour; its first sentence, which the index
+shows, is unchanged and the index is current). The contracts
+[resource-declarations.md](resource-declarations.md) ("Candidates": the `when`, and the guard that
+could not be evaluated, twice), [ocr-fields.md](ocr-fields.md) (the text guard),
+[linear-steps.md](linear-steps.md) ("Steps", item 2, and the provider row of "Failure codes"),
+[selection-graph.md](selection-graph.md) ("Expected identity") and
+[emulator-control.md](emulator-control.md) ("Triggers": no ladder at once, the burst; fix round 2:
+the whole list above, each with its place). The index is regenerated.
+
+**Tests.** `crates/execution-kernel/src/contained_task/gate_469_d4b.rs` (gate map `exec.toml`
+"#469 D4b"), on a page graph from a colour home page to a colour terminal page whose one located OCR
+target a scripted provider reads, on the scripted clock: `d4b_a_provider_failure_…`: a provider
+that fails (unavailable, timeout, internal) or answers invalidly ends the guard's run, the `when`'s
+run (both before any input) and the identity's reading with the provider code, the place's detail
+and no values; `d4b_a_real_evaluation_error_…`: a read that cannot conclude because the provider
+kept 64 of 65 boxes keeps `contained_task_guard_evaluation_failed` at the guard and
+`contained_task_recognition_failed` at the `when` and the identity, their detail byte for byte and
+no values; `d4b_a_provider_that_reads_…`: the guard passes and the `when` holds, each run taps once
+and ends `Success` on the terminal page after one step, and the identity reads its business ID; fix
+round 2: each run's records are pinned byte for byte, every trace in order (the step traces with
+their index, operation and page, the effect intent with its guard outcome, each frame's recognised
+page, the final outcome) and every guard evaluation with its kind, target and whether it passed.
+`crates/runtime-host/src/host/recovery_ladder/tests.rs`, `d4b_a_vision_provider_failure_…` (gate
+map `host.toml`): under the defaults the provider code is `environment_fault`, matches no item at
+the task stage and `stability_burst` by class at `stability_warnings`, and three such failures on
+one instance within the window register one burst; the two class-4 codes match `pack_logic` at the
+task stage and register none. Fix round 2, the run level:
+`crates/runtime-host/src/tests/gate_469_d4b.rs` (gate map `host.toml` "#469 D4b"), modelled on the
+page row of `gate_387_d1cg.rs`: a scheduled run on the ladder fixture's physical instance, its
+located OCR target read at `claim`'s guard or at `open`'s `when`.
+`d4b_a_provider_failure_at_a_guard_or_a_when_…`: a provider that fails ends the run with the
+provider code; no ladder claim holds or waits for the instance, the run's lease hands its key to no
+ladder and no ladder starts at the task stage; the run's `task.failed` is what direction ① counts
+(its instance link, warning severity or worse, a code of `environment_fault`). `d4b_a_real_evaluation_error_at_a_guard_or_a_when_…`: the read that
+cannot conclude ends the run with `contained_task_guard_evaluation_failed` (guard) or
+`contained_task_recognition_failed` (`when`), its lease end hands the key to the ladder, and one
+ladder starts at the task stage for the run with that code, by `pack_logic`, matched by the class.
+Without a run-level test: an expected identity (a select step's `choice_of` read back after its
+tap), the return-home entry layer and the prerequisite layer, the retry round that asks for
+recovery, and a select step's or a scan's confirmation guard (the kernel test reads the identity;
+the others rest on the places named above). Test 3 of the kernel file is strengthened, not
+adapted: what it pinned stays pinned. No golden changes, no test leaves the gate map.
+
+**At deploy.** Nothing to do: a run recorded before 0.12.63 keeps the code it ended with.
+
 ### 1.408 Slice #463 S3-1 (0.12.63): the placement plan lists the packages that enter or leave scheduling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that no package enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-1, with §1.1 rows W10 and W11, §2.5 and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s31-place-plan.md`, read on main `44cbab53`)
 
 The coordinator gave this slice 1.408: main `44cbab53` holds the sections up to §1.400, and the
@@ -28086,14 +28261,16 @@ the `--plan` answer and the answer's step `plan`) answers `schedule_changes`
 enter or leave scheduling"). The packages of the bundle's game are classified on the installed
 game root and on the zip's root by the contract crate's own `standard_pack_maintenance_packages`
 and `classify_standard_pack_packages`, called, not copied (the module already depends on the
-contract crate; no dependency is added). The roles by file are that same function called on one
-root file at a time, as `standard-pack adopt` reads them.
+contract crate; no dependency is added). The roles are readiness's words, found by that same
+function called on the entries of one use, or on one list of the root files, at a time (fix round
+2, below). **`enters` is exactly the packages the scheduler will dispatch, or use in a supporting
+role, after the placement and did not before.**
 
 ```json
 "schedule_changes": {
   "packages": [
     {"package_id": "neutral.handler", "before": {"state": "absent"},
-     "after": {"state": "maintenance_role", "roles": ["interrupts.json"]}, "content": "new"},
+     "after": {"state": "maintenance_role", "roles": ["handler"]}, "content": "new"},
     {"package_id": "neutral.waiting",
      "before": {"state": "held", "reason": "not yet run on a device", "reference": "board-reference-1"},
      "after": {"state": "scheduled"}, "content": "unchanged"}
@@ -28106,11 +28283,11 @@ root file at a time, as `standard-pack adopt` reads them.
 
 | Member | What it holds |
 |---|---|
-| `packages` | each package whose part or pack content changes, by package id: `before`, `after` (`state` `scheduled`, `held` with `reason` and `reference`, `maintenance_role`, `unclassified`, `absent` or `unread`; `roles`, the root files that give it a maintenance role, when there is one) and `content` (its pack item's `new`, `replace` or `unchanged`; absent for a pack the zip no longer carries) |
-| `enters` | sorted package ids: `scheduled` after and not before, or a role after it did not have before (from absent, held, unclassified, a role only, or unread) |
-| `leaves` | sorted package ids: `scheduled` before and, read after, not; a role lost; no longer carried by the zip |
-| `content_only` | sorted package ids that take part in scheduling (scheduled, or with a role) before and after in the same way and whose pack is replaced |
-| `unread` | only when a side could not be read: `{root, failure}`, `root` `installed` or `bundle`, the failure as a warning; that side's packages `unread` (without roles when its root files failed, with them when its `schedule.json` did); nothing is refused |
+| `packages` | each package whose part or pack content changes, or that a list names, by package id: `before`, `after` (`state` `scheduled`, `held` with `reason` and `reference`, `maintenance_role`, `unclassified`, `absent` or `unread`; `roles`, readiness's words `startup`, `return_home`, `recognition`, `features`, `edge`, `chain`, `handler`, `then_run`, when there is one) and `content` (its pack item's `new`, `replace` or `unchanged`; absent for a pack the zip no longer carries) |
+| `enters` | sorted package ids the scheduler dispatches, or uses in a role, after and did not before: `scheduled` after and not before, or a role word after it did not hold before; only a composed side counts (its root holds a `schedule.json` the reader and the composer's reference check take), and an installed side that could not be read counts none; a package of a server no instance is bound to is listed too |
+| `leaves` | sorted package ids: `scheduled` before and not after; a role word lost; no longer carried by the zip |
+| `content_only` | sorted package ids the scheduler uses before and after in the same way and whose pack is replaced |
+| `unread` | only when a side could not be read: `{root, failure}`, `root` `installed` or `bundle`, the failure as a warning; that side's packages `unread` (without roles when its root files failed, with them when its `schedule.json` did); with the zip's side unread none of `enters`, `leaves` and `content_only` is answered; nothing is refused |
 
 **What it replaces.** The plan's answer had a member `schedule_changes`, a boolean: whether the
 game's `schedule.json` changes. The work order names the new member `schedule_changes` (S3-2
@@ -28122,19 +28299,64 @@ placement still reads the same fact from the items (`Placement::schedule_changes
 **Words.** No outcome code, no key and no vocabulary word of the catalog is added; the fragments
 and the index are unchanged. The states above are words of the plan's answer only; the failures
 under `unread` are the existing `standard_pack_root_invalid` (at the file, its problem and
-pointer), `foreign_os_error` and `foreign_data_error`, each a warning beside a plan that exits 0.
+pointer) and `foreign_os_error`, each a warning beside a plan that exits 0.
 
 **Tests.** `crates/lab-rescue/src/install/gate_463_s31.rs`, gate map `apps.toml` "#463 S3-1", on
 the fake host with an installer of `package` [3, 10] and bundles declaring [3, 3], each plan
 leaving the game root byte for byte as it was and pausing nothing: a new pack with a rule enters
 from `absent`; a lifted hold enters, its `before` `held` with the entry's reason and reference; an
 added hold leaves; a pack replaced with its rule unchanged is `content_only`; a new
-`interrupts.json` handler enters by its role, the `pages.json` feature not listed; on a game's
-first root every pack a rule names enters, a held one and one in no set are listed and do not; a
-zip that is the installed root has its eight items `unchanged` and lists nothing. Each asserts the
-whole `schedule_changes`. Adapted: `s5_unbound_composition_passes_at_once` of
+`interrupts.json` handler enters by its role (`handler`), the `pages.json` feature not listed; on
+a game's first root every pack a rule names enters, a held one and one in no set are listed and do
+not; a zip that is the installed root has its eight items `unchanged` and lists nothing. Each
+asserts the whole `schedule_changes`. Adapted: `s5_unbound_composition_passes_at_once` of
 `gate_453_cold_place.rs` asserted the boolean `true`; it asserts the plan's item `schedule.json`
 `new`. No golden changes, no test leaves the gate map.
+
+**Fix round 2** (the slice's independent review, its seven items to change and its table against
+the composer; coordinator work order `rd-1115/brief-463-s31-fix2.md`, the coordinator's rulings,
+not the owner's words; main `b7c47129` merged, §1.401 kept before this section). The next slice
+makes a placement name exactly the packages of `enters`, so `enters` must be exactly the packages
+the scheduler dispatches, or uses in a supporting role, after the placement and did not before.
+(1) A side whose root holds no `schedule.json` composes nothing (the workbench leaves such a game
+out, [standard-pack-schedule.md](standard-pack-schedule.md), "Unload"; the composer reads only
+the games of bound instances whose root holds the file): none of its packages counts as scheduled
+or as holding a role for `enters`, `leaves` and `content_only`; `packages` still shows the
+standing and the roles its root files give. So over an installed root without the file every
+package the zip schedules or gives a role enters, and a zip without the file makes nothing enter
+and every package used before leave. No exception was found: the bundle's `recognition` entry is
+read in the Runtime only by the workbench's composition (`host/standard_pack_schedule.rs`,
+`ScheduleGame`), which leaves the game out without the file; the fact refresh runs the
+recognition package each instance's configuration binds (`instances[].recognition_package`),
+which no placement writes. (2) and (4) One notion of an unread side: its root files or its
+`schedule.json` cannot be read or parsed, or the composer's own reference check
+(`validate_standard_pack_schedule_references`, called after the reader, on both sides) refuses
+the file. An unread installed side counts nothing before, so everything scheduled or holding a
+role after enters. (3) With the zip's side unread (only its `schedule.json` can be: the plan
+refuses its other root files) `ScheduleChanges::enters` is `None` and the answer carries
+`packages` and `unread` and none of the three lists. (5) Roles are readiness's words (the
+contract crate's `MaintenanceUse` and `NavigationRole`, the tokens of the vocabulary
+`readiness_role`), found by `standard_pack_maintenance_packages` called on the entries of one use
+at a time and on one list at a time (the features, the edges, the recovery chain, the handlers,
+the `then.run` packages); a package enters when it gains a word it did not hold, whichever file
+gives it. (7) The sentence on a `bundle.json` the index does not take (`foreign_data_error`) is
+gone: the root reader has already parsed the same bytes the same way and refused them as
+`standard_pack_root_invalid`. Also: the installed side's files are read as readiness reads a
+root file, at most 32 MiB (`foreign_os_error` with `io_kind` `file_too_large` beyond it), and a
+package of a server no instance is bound to is listed in `enters` like any other, since binding an
+instance later needs no placement. Tests (6), in the same gate file, a second entry "#463 S3-1"
+of `apps.toml`, each asserting the whole `schedule_changes` (the failure under `unread` by its
+code and values): an installed root without `schedule.json` (the zip's scheduled pack and its
+feature package, role unchanged, both enter); a zip without it (nothing enters, its new handler
+shown with its role; the scheduled pack and the feature package leave); an installed
+`schedule.json` the reader refuses (both enter, `unread` `installed` with `schedule_invalid`); the
+zip's refused (`packages` and `unread` `bundle` only); a rule of the zip naming a package it does
+not carry (the same, `rule_package_unregistered` at `/rules/2/package_id`); a `startup` entry
+gaining `return_home`, an edge package added to the recovery chain and a handler that also
+becomes `then.run` (all three enter with readiness's words); a scheduled pack and a pack in no
+set that the zip no longer carries (both leave, no `content`). Adapted:
+`s31_a_new_interrupt_handler_enters_by_its_role` asserted the role `interrupts.json`; it asserts
+`handler` (the requirement changes the word).
 
 **What is not changed.** The items, the plan document and the plan id, every check of the plan and
 after the placement, the hold, the journal and its inputs, `place`'s parameters and refusals, and
@@ -28163,7 +28385,7 @@ placement that only replaces content or only places held packages.
 |---|---|
 | no `--authorization`, or a blank one | `install_command_refused` `place_authorization_missing` |
 | a reference over 1024 bytes or holding a control character | `actingctl_usage_invalid` `unusable` (`--authorization`) |
-| the plan could not read the zip's `schedule.json` (`unread` names `bundle`) | `place_enables_unknown`, the reader's `standard_pack_root_invalid` as the cause |
+| the plan answers no `enters` (`None`: the zip's side unread, round 2) | `place_enables_unknown`, the plan's `schedule_changes` beside it (its `unread` names the refusal) |
 | `--enables`, sorted, not exactly the plan's `enters` (a name missing, one too many, one twice, any when nothing enters) | `place_enables_mismatch`, the answer's `expected` and `given`, each sorted |
 
 Each refusal carries `plan_id` and `game` and comes before the hold, any pause, the writer lock
@@ -28183,14 +28405,15 @@ refusal.
 |---|---|---|---|
 | `place_authorization_missing` | a placement of a plan that changes something names no authorization | refuses | 1 |
 | `place_enables_mismatch` | `--enables` is not exactly the plan's `enters` | refuses | 1 |
-| `place_enables_unknown` | the plan could not read the zip's `schedule.json`, so what the placement enables cannot be named | refuses | 1 |
+| `place_enables_unknown` | the plan answers no `enters` (the zip's side unread), so what the placement enables cannot be named | refuses | 1 |
 
 **The zip's side and the installed side.** The plan refuses a zip whose other root files the
-reader refuses (`pack_invalid`, caused by `standard_pack_root_invalid`) and a `bundle.json` the
-index does not take, before this check; its own reading of the zip's `schedule.json`, which no
-earlier check reads, is the one way the zip's side is `unread`, and that is
-`place_enables_unknown`. An installed game root that cannot be read refuses nothing (a placement
-is how a broken root is repaired): the names required are the plan's `enters` as S3-1 gives them.
+reader refuses (`pack_invalid`, caused by `standard_pack_root_invalid`), before this check; its
+own reading of the zip's `schedule.json` (the reader, then the composer's reference check), which
+no earlier check reads, is the one way the zip's side is `unread`, and then the plan answers no
+`enters` (round 2), which is `place_enables_unknown`. An installed game root that cannot be read
+refuses nothing (a placement is how a broken root is repaired): it counts nothing before, so the
+names required are every package scheduled or holding a role after, as S3-1 gives them.
 
 **What the texts say.** The tool records an authorization and grants none: it does not judge the
 reference and never supplies one; there is no default, no variable and no switch that places
@@ -28210,15 +28433,17 @@ the fake host with an installed game root whose one pack a rule names (both root
 hold a `schedule.json` and the installed one is read, so no test depends on how S3-1 counts a
 root without one or an installed root that cannot be read): no reference, a blank one, and none
 beside a wrong `--enables` refuse `place_authorization_missing`, with a Runtime and without;
-1025 bytes, a line feed and a tab refuse `unusable`, 1024 bytes pass to the next check;
-`--enables` absent, a name too many, a name twice, another name, and any name where nothing
-enters refuse `place_enables_mismatch` with `expected` and `given`, on both paths; an unreadable
-zip `schedule.json` refuses `place_enables_unknown` with its cause, on both paths, and without a
-reference `place_authorization_missing` first; each refusal leaves the root's `install` folder
-and the game root byte for byte, asks the Runtime nothing and pauses nothing. A content-only
-placement with a Runtime records the reference and `[]`, `op status` shows both, and the journal
-without them loads and is answered without them; a cold placement that enables a pack records it;
-`--plan` and an unchanged bundle need neither.
+1025 bytes, a line feed and a tab refuse `unusable`, 1024 bytes pass to the next check; with
+`enters` the two packs the bundle adds, `--enables` absent, only one of the two, the two and a
+third, one of them twice, another name in place of one, and any name where nothing enters refuse
+`place_enables_mismatch` with `expected` and `given`, each stated name by name, on both paths;
+an unreadable zip `schedule.json` refuses `place_enables_unknown` beside the plan's
+`schedule_changes`, on both paths, and without a reference `place_authorization_missing` first;
+each refusal leaves the root's `install` folder and the game root byte for byte, asks the
+Runtime nothing and pauses nothing. A content-only placement with a Runtime records the
+reference and `[]`, `op status` shows both, and the journal without them loads and is answered
+without them; a cold placement naming exactly the two packs (in the other order) records them
+sorted; `--plan` and an unchanged bundle need neither.
 
 Adapted, because every placement that changes something now names its authorization: the
 placements of `gate_434_lab3.rs` (`place_holds_only_the_bundles_idle_instances`),
@@ -28231,6 +28456,30 @@ are a schedule without rules or holds, and the two tests that list the journal's
 (`s5_a_hot_placement_with_a_bound_instance_answers_as_before`,
 `s6_cold_place_places_the_items_and_keeps_the_replaced_ones`) list `authorization` and
 `enabled` too. No golden changes, no test leaves the gate map.
+
+**Round 2** (S3-1's fix round 2 merged, its head `053d4bdf`, which holds main `b7c47129`;
+coordinator work order `rd-1115/brief-463-s32-fix2.md`, the coordinator's rulings, not the
+owner's words). S3-1's `ScheduleChanges::enters` is now `Option<Vec<String>>`, `None` when the
+zip's side could not be read (its `schedule.json` refused by the reader or by the composer's
+reference check). `authorize` refuses `place_enables_unknown` on that `None`, after the
+authorization check and before the hold and any write, and no longer looks for the zip's side
+under `unread` itself: the plan is the one place that decides what cannot be stated. The refusal
+carries the plan's `schedule_changes` (its `packages` and `unread`) beside the outcome in place
+of the reader's failure as the cause, so the answer says why without a second reading. The
+first round's own detection caught no case that `None` does not: both were the zip's side
+unread. The placeholder `schedule.json` of `gate_453_cold_place.rs` stays the schedule without
+rules or holds of the first round: S3-1 composes it (an empty rule table composes; a root without
+the file composes nothing), so the plan reads the zip's side and nothing enters, and the gate's
+bundles still change `schedule.json`. Tests: `entering()` adds two packs, so `enters` holds two
+and each mismatch case states `expected` and `given` name by name (only one of the two, the two
+and a third, one twice, another in place of one); the cold placement names exactly the two in
+the other order and its journal records them sorted; the test of an unreadable zip
+`schedule.json` asserts the plan's `packages` and `unread` with none of the three lists, the
+same beside the refusal. New: `s32_a_bundle_schedule_naming_a_package_it_lacks_is_refused_enables_unknown`,
+a zip rule naming a package the zip does not carry (`rule_package_unregistered` at
+`/rules/2/package_id`), on both paths: the plan answers `packages` and `unread` and no list, the
+placement is refused `place_enables_unknown`, nothing written, no pause sent. The seven old gates'
+`fixture::authorized` reads `enters` through the `Option` (none when it is `None`).
 
 **What is not changed.** What a placement places, holds and checks; the plan, its id, its items
 and its `schedule_changes` (S3-1's); `release stage`, `deploy` and the other rows; every

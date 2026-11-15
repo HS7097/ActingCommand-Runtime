@@ -16,27 +16,36 @@
 // - `s32_a_reference_out_of_bounds_is_refused_unusable`: one of 1025 bytes, one with a line feed
 //   and one with a tab are `actingctl_usage_invalid` `unusable` naming `--authorization`, with
 //   nothing done; one of 1024 bytes is taken, the next check answering;
-// - `s32_enables_not_the_plans_enters_is_refused_hot_and_cold`: on both paths, a reference beside
-//   no `--enables`, one name too many, one name twice and another name, and (a bundle that only
-//   replaces content) a name where nothing enters, are each `place_enables_mismatch` with the
-//   answer's `expected` (the plan's `enters`) and `given`, both sorted, with nothing done;
+// - `s32_enables_not_the_plans_enters_is_refused_hot_and_cold`: on both paths, with `enters` the
+//   two packs the bundle adds, a reference beside no `--enables`, only one of the two, the two and
+//   a third, one of them twice and another name in place of one, and (a bundle that only replaces
+//   content) a name where nothing enters, are each `place_enables_mismatch` with the answer's
+//   `expected` and `given`, both sorted and stated name by name, with nothing done;
 // - `s32_an_unreadable_bundle_schedule_is_refused_enables_unknown`: on both paths, a zip whose
-//   `schedule.json` the reader refuses (the plan's `unread` names `bundle`) is
-//   `place_enables_unknown` with a reference, with or without `--enables`, its cause
-//   `standard_pack_root_invalid` `schedule_invalid` at the zip's file; without a reference
-//   `place_authorization_missing` first; nothing done;
+//   `schedule.json` the reader refuses: the plan answers `packages` and `unread` (the zip's side,
+//   `schedule_invalid` at the zip's file) and none of the three lists, and the placement with a
+//   reference, with or without `--enables`, is `place_enables_unknown`, the plan's
+//   `schedule_changes` beside it; without a reference `place_authorization_missing` first; nothing
+//   done;
 // - `s32_a_content_only_placement_records_the_reference_and_no_package`: with a Runtime, a bundle
 //   that replaces a pack's content, its rule unchanged, placed with a reference and no
 //   `--enables`: done, the instance held and handed back, the journal's inputs `authorization`
 //   (as given) and `enabled` `[]`, which `op status <op>` shows; the same journal without both
 //   members (as an earlier build wrote it) loads and `op status` answers it without either;
-// - `s32_a_cold_placement_records_the_packages_it_enables`: with no Runtime, a bundle that adds a
-//   pack named by a rule, placed with a reference and `--enables` naming it: done, nothing asked
-//   of the Runtime, the pack placed, the journal's inputs `cold`, `authorization` and `enabled`
-//   `[<the pack>]`, which `op status <op>` shows;
+// - `s32_a_cold_placement_records_the_packages_it_enables`: with no Runtime, a bundle that adds two
+//   packs, each named by a rule, placed with a reference and `--enables` naming exactly the two
+//   (in the other order): done, nothing asked of the Runtime, both packs placed, the journal's
+//   inputs `cold`, `authorization` and `enabled`, the two sorted, which `op status <op>` shows;
 // - `s32_the_plan_and_an_unchanged_bundle_need_neither`: `place --plan` without a reference
-//   answers the plan (its `enters` the added pack) and a bundle that changes nothing is placed
-//   without one (`installation_changed` `false`), each with nothing done.
+//   answers the plan (its `enters` the two added packs) and a bundle that changes nothing is
+//   placed without one (`installation_changed` `false`), each with nothing done.
+// Round 2 (coordinator work order `rd-1115/brief-463-s32-fix2.md`, after S3-1's fix round 2):
+// - `s32_a_bundle_schedule_naming_a_package_it_lacks_is_refused_enables_unknown`: on both paths, a
+//   zip whose `schedule.json` the reader takes but whose third rule names a package the zip does
+//   not carry, which the composer's own reference check refuses: the plan answers `packages` and
+//   `unread` (the zip's side, `rule_package_unregistered` at `/rules/2/package_id`) and none of the
+//   three lists, and the placement with a reference and `--enables` is `place_enables_unknown`,
+//   the plan's `schedule_changes` beside it: nothing written, no pause sent.
 // The fixtures never depend on how the plan counts a root without `schedule.json` or an installed
 // root that cannot be read: both roots of every scene hold a `schedule.json` and the installed one
 // is read. The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no
@@ -67,9 +76,13 @@ const INSTANCE: &str = "neutral.a";
 /// (`package` alone, as a resource repository's release writes it).
 const INSTALLER_PACKAGE: [u64; 2] = [3, 10];
 const RELEASED: [u64; 2] = [3, 3];
-/// The packs: one the installed root schedules, one a bundle adds.
+/// The packs: one the installed root schedules, two a bundle adds (sorted: [`ADDED`] before
+/// [`ALSO`], both before [`KEPT`]).
 const KEPT: &str = "neutral.kept";
 const ADDED: &str = "neutral.added";
+const ALSO: &str = "neutral.also";
+/// A package no root carries.
+const GHOST: &str = "neutral.ghost";
 /// Two contents of a pack's `control.json`, of one length (so `bundle.json` keeps its bytes).
 const CONTROL: &[u8] = br#"{"neutral": 1}"#;
 const CONTROL_REPLACED: &[u8] = br#"{"neutral": 2}"#;
@@ -204,9 +217,13 @@ fn installed() -> Layout {
         .rule("rule.kept", KEPT)
 }
 
-/// A bundle that adds the pack [`ADDED`], named by a rule: it enters.
+/// A bundle that adds the packs [`ADDED`] and [`ALSO`], each named by a rule: both enter.
 fn entering() -> Layout {
-    installed().pack(ADDED, CONTROL).rule("rule.added", ADDED)
+    installed()
+        .pack(ADDED, CONTROL)
+        .pack(ALSO, CONTROL)
+        .rule("rule.added", ADDED)
+        .rule("rule.also", ALSO)
 }
 
 /// A bundle that replaces [`KEPT`]'s content, its rule unchanged: nothing enters.
@@ -319,6 +336,13 @@ impl Scene {
         (tree(&self.root.join("install")), tree(&self.game_root))
     }
 
+    /// The zip's `schedule.json` as the plan's failures name it: below the zip's canonical path.
+    fn zip_schedule(&self) -> PathBuf {
+        fs::canonicalize(&self.zip)
+            .expect("the canonical bundle")
+            .join("schedule.json")
+    }
+
     /// Every journal of the root, by operation id.
     fn journals(&self) -> Vec<(String, Value)> {
         let directory = self.root.join("install").join("operations");
@@ -352,18 +376,51 @@ impl Scene {
     }
 }
 
-/// The values of the first outcome `code` the line carries, as its top or as a link at any depth.
-fn values_of<'a>(line: &'a Value, code: &str) -> Option<&'a Value> {
-    match line {
-        Value::Object(members) => {
-            if members.get("code").and_then(Value::as_str) == Some(code) {
-                return members.get("values");
-            }
-            members.values().find_map(|inner| values_of(inner, code))
-        }
-        Value::Array(items) => items.iter().find_map(|inner| values_of(inner, code)),
-        _ => None,
-    }
+/// A `schedule_changes` as the tests of an unread zip compare it: its member names, sorted, and
+/// its `unread` with each failure as its outcome's code and values, `[{root, code, values}]`.
+fn unread_answer(changes: &Value) -> (Vec<String>, Value) {
+    let mut names = changes
+        .as_object()
+        .map(|members| members.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    names.sort();
+    let sides = changes["unread"]
+        .as_array()
+        .map(|sides| {
+            sides
+                .iter()
+                .map(|side| {
+                    json!({
+                        "root": side["root"],
+                        "code": side["failure"]["outcome"]["code"],
+                        "values": side["failure"]["outcome"]["values"],
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    (names, json!(sides))
+}
+
+/// The member names of a `schedule_changes` whose zip's side could not be read: `packages` and
+/// `unread`, none of `enters`, `leaves` and `content_only`.
+fn unread_names() -> Vec<String> {
+    vec!["packages".to_owned(), "unread".to_owned()]
+}
+
+/// The one side `unread` names when the zip's `schedule.json` at `path` is refused with
+/// `problem` at `pointer`: the zip's, `standard_pack_root_invalid`.
+fn bundle_unread(path: &Path, problem: &str, pointer: &str) -> Value {
+    json!([{
+        "root": "bundle",
+        "code": "standard_pack_root_invalid",
+        "values": {
+            "game": GAME,
+            "path": path.to_string_lossy(),
+            "standard_pack_problem": problem,
+            "json_pointer": pointer,
+        },
+    }])
 }
 
 /// Nothing was done: the root's `install` folder (its journals, `current.json`, the writer lock)
@@ -418,10 +475,10 @@ fn s32_no_reference_is_refused_before_the_hold_hot_and_cold() {
         assert!(plan_id.is_string(), "{way:?}: {plan_id}");
         let before = scene.files();
         for (case, more) in [
-            ("no reference", json!({"enables": [ADDED]})),
+            ("no reference", json!({"enables": [ADDED, ALSO]})),
             (
                 "a blank reference",
-                json!({"authorization": "   ", "enables": [ADDED]}),
+                json!({"authorization": "   ", "enables": [ADDED, ALSO]}),
             ),
             (
                 "no reference beside a wrong --enables",
@@ -455,7 +512,8 @@ fn s32_a_reference_out_of_bounds_is_refused_unusable() {
         ("a line feed", "board-463\ncomment".to_owned()),
         ("a tab", "board-463\tcomment".to_owned()),
     ] {
-        let (line, exit) = scene.place(json!({"authorization": reference, "enables": [ADDED]}));
+        let (line, exit) =
+            scene.place(json!({"authorization": reference, "enables": [ADDED, ALSO]}));
         assert_eq!(exit, 1, "{case}: {line}");
         assert_eq!(
             line["outcome"]["code"], "actingctl_usage_invalid",
@@ -476,13 +534,14 @@ fn s32_a_reference_out_of_bounds_is_refused_unusable() {
         &before,
         "1024 bytes",
     );
-    assert_eq!(line["expected"], json!([ADDED]), "{line}");
+    assert_eq!(line["expected"], json!([ADDED, ALSO]), "{line}");
     assert_eq!(line["given"], json!([]), "{line}");
 }
 
-// `--enables` not exactly the plan's `enters`, on both paths: none, one name too many, one name
-// twice, another name; and where nothing enters, any name. Each `place_enables_mismatch` with the
-// answer's `expected` and `given`, both sorted.
+// `--enables` not exactly the plan's `enters` (the two packs the bundle adds), on both paths:
+// none, only one of the two, the two and a third, one of them twice, another name in place of one;
+// and where nothing enters, any name. Each `place_enables_mismatch` with the answer's `expected`
+// and `given`, both sorted, each stated here name by name.
 #[test]
 fn s32_enables_not_the_plans_enters_is_refused_hot_and_cold() {
     for way in WAYS {
@@ -490,24 +549,29 @@ fn s32_enables_not_the_plans_enters_is_refused_hot_and_cold() {
         let plan = scene.plan();
         assert_eq!(
             plan["schedule_changes"]["enters"],
-            json!([ADDED]),
+            json!([ADDED, ALSO]),
             "{way:?}: {plan}"
         );
         let plan_id = plan["plan_id"].clone();
         let before = scene.files();
         for (case, enables, given) in [
             ("no --enables", None, json!([])),
+            ("only one of the two", Some(json!([ALSO])), json!([ALSO])),
             (
-                "one name too many",
-                Some(json!([KEPT, ADDED])),
-                json!([ADDED, KEPT]),
+                "the two and a third",
+                Some(json!([ALSO, KEPT, ADDED])),
+                json!([ADDED, ALSO, KEPT]),
             ),
             (
-                "one name twice",
-                Some(json!([ADDED, ADDED])),
-                json!([ADDED, ADDED]),
+                "one of the two twice",
+                Some(json!([ALSO, ADDED, ALSO])),
+                json!([ADDED, ALSO, ALSO]),
             ),
-            ("another name", Some(json!([KEPT])), json!([KEPT])),
+            (
+                "another name in place of one",
+                Some(json!([GHOST, ADDED])),
+                json!([ADDED, GHOST]),
+            ),
         ] {
             let mut more = json!({"authorization": REFERENCE});
             if let Some(enables) = enables {
@@ -524,7 +588,7 @@ fn s32_enables_not_the_plans_enters_is_refused_hot_and_cold() {
                 &before,
                 &case,
             );
-            assert_eq!(line["expected"], json!([ADDED]), "{case}: {line}");
+            assert_eq!(line["expected"], json!([ADDED, ALSO]), "{case}: {line}");
             assert_eq!(line["given"], given, "{case}: {line}");
         }
 
@@ -553,28 +617,28 @@ fn s32_enables_not_the_plans_enters_is_refused_hot_and_cold() {
     }
 }
 
-// A zip whose `schedule.json` the reader refuses: the plan names the bundle under `unread`, and
-// the placement is `place_enables_unknown`, caused by the reader's refusal at the zip's file, with
-// a reference, with or without `--enables`; without a reference that refusal comes first.
+// A zip whose `schedule.json` the reader refuses: the plan answers `packages` and `unread` (the
+// zip's side) and none of the three lists, and the placement is `place_enables_unknown`, the
+// plan's `schedule_changes` beside it, with a reference, with or without `--enables`; without a
+// reference that refusal comes first.
 #[test]
 fn s32_an_unreadable_bundle_schedule_is_refused_enables_unknown() {
     for way in WAYS {
         let scene = staged(way, &entering().schedule_bytes(UNREADABLE_SCHEDULE));
+        let unread = bundle_unread(&scene.zip_schedule(), "schedule_invalid", "/neutral");
         let plan = scene.plan();
         assert_eq!(
-            plan["schedule_changes"]["unread"][0]["root"], "bundle",
+            unread_answer(&plan["schedule_changes"]),
+            (unread_names(), unread.clone()),
             "{way:?}: {plan}"
         );
         let plan_id = plan["plan_id"].clone();
         let before = scene.files();
-        let schedule = fs::canonicalize(&scene.zip)
-            .expect("the canonical bundle")
-            .join("schedule.json");
         for (case, more) in [
             ("a reference", json!({"authorization": REFERENCE})),
             (
                 "a reference and --enables",
-                json!({"authorization": REFERENCE, "enables": [ADDED]}),
+                json!({"authorization": REFERENCE, "enables": [ADDED, ALSO]}),
             ),
         ] {
             let (line, exit) = scene.place(more);
@@ -588,19 +652,13 @@ fn s32_an_unreadable_bundle_schedule_is_refused_enables_unknown() {
                 &before,
                 &case,
             );
-            let cause = values_of(&line, "standard_pack_root_invalid")
-                .unwrap_or_else(|| panic!("{case}: no standard_pack_root_invalid in {line}"));
             assert_eq!(
-                cause["standard_pack_problem"], "schedule_invalid",
-                "{case}: {cause}"
-            );
-            assert_eq!(
-                cause["path"],
-                json!(schedule.to_string_lossy()),
-                "{case}: {cause}"
+                unread_answer(&line["schedule_changes"]),
+                (unread_names(), unread.clone()),
+                "{case}: {line}"
             );
         }
-        let (line, exit) = scene.place(json!({"enables": [ADDED]}));
+        let (line, exit) = scene.place(json!({"enables": [ADDED, ALSO]}));
         let case = format!("{way:?}: no reference");
         assert_refused(
             &scene,
@@ -610,6 +668,51 @@ fn s32_an_unreadable_bundle_schedule_is_refused_enables_unknown() {
             &plan_id,
             &before,
             &case,
+        );
+    }
+}
+
+// Round 2: a zip whose `schedule.json` the reader takes but whose third rule names a package the
+// zip does not carry, which the composer's own reference check refuses (S3-1's fix round 2): the
+// plan answers `packages` and `unread` (the zip's side, `rule_package_unregistered` at that rule's
+// package) and none of the three lists, and the placement with a reference and `--enables` is
+// `place_enables_unknown`, the plan's `schedule_changes` beside it: nothing written, no pause sent.
+#[test]
+fn s32_a_bundle_schedule_naming_a_package_it_lacks_is_refused_enables_unknown() {
+    for way in WAYS {
+        let bundle = installed()
+            .pack(ADDED, CONTROL)
+            .rule("rule.added", ADDED)
+            .rule("rule.ghost", GHOST);
+        let scene = staged(way, &bundle);
+        let unread = bundle_unread(
+            &scene.zip_schedule(),
+            "rule_package_unregistered",
+            "/rules/2/package_id",
+        );
+        let plan = scene.plan();
+        assert_eq!(
+            unread_answer(&plan["schedule_changes"]),
+            (unread_names(), unread.clone()),
+            "{way:?}: {plan}"
+        );
+        let plan_id = plan["plan_id"].clone();
+        let before = scene.files();
+        let (line, exit) = scene.place(json!({"authorization": REFERENCE, "enables": [ADDED]}));
+        let case = format!("{way:?}: a rule naming a package the zip lacks");
+        assert_refused(
+            &scene,
+            &line,
+            exit,
+            "place_enables_unknown",
+            &plan_id,
+            &before,
+            &case,
+        );
+        assert_eq!(
+            unread_answer(&line["schedule_changes"]),
+            (unread_names(), unread),
+            "{case}: {line}"
         );
     }
 }
@@ -678,18 +781,19 @@ fn s32_a_content_only_placement_records_the_reference_and_no_package() {
     assert!(read.get("enabled").is_none(), "{older}");
 }
 
-// With no Runtime, a bundle that adds a pack named by a rule, placed with a reference and
-// `--enables` naming that pack: the journal (cold) records both, and `op status` shows them.
+// With no Runtime, a bundle that adds two packs, each named by a rule, placed with a reference and
+// `--enables` naming exactly the two, in the other order: the journal (cold) records both, the
+// two sorted, and `op status` shows them.
 #[test]
 fn s32_a_cold_placement_records_the_packages_it_enables() {
     let scene = staged(Way::Stopped, &entering());
     let before = scene.journals();
-    let (line, exit) = scene.place(json!({"authorization": REFERENCE, "enables": [ADDED]}));
+    let (line, exit) = scene.place(json!({"authorization": REFERENCE, "enables": [ALSO, ADDED]}));
     assert_eq!(exit, 0, "{line}");
     assert_eq!(line["outcome"]["code"], "install_command_done", "{line}");
     assert_eq!(
         line["plan"]["schedule_changes"]["enters"],
-        json!([ADDED]),
+        json!([ADDED, ALSO]),
         "{line}"
     );
     assert!(
@@ -697,21 +801,28 @@ fn s32_a_cold_placement_records_the_packages_it_enables() {
         "{:?}",
         scene.host.runtime.calls.borrow()
     );
-    assert_eq!(
-        fs::read(scene.game_root.join(ADDED).join("control.json")).expect("the placed pack"),
-        CONTROL
-    );
+    for pack in [ADDED, ALSO] {
+        assert_eq!(
+            fs::read(scene.game_root.join(pack).join("control.json")).expect("a placed pack"),
+            CONTROL,
+            "{pack}"
+        );
+    }
     let (operation_id, journal) = scene.new_journal(&before);
     assert_eq!(journal["kind"], "pack_place", "{journal}");
     assert_eq!(journal["inputs"]["cold"], json!(true), "{journal}");
     assert_eq!(journal["inputs"]["authorization"], REFERENCE, "{journal}");
-    assert_eq!(journal["inputs"]["enabled"], json!([ADDED]), "{journal}");
+    assert_eq!(
+        journal["inputs"]["enabled"],
+        json!([ADDED, ALSO]),
+        "{journal}"
+    );
 
     let (status, exit) = scene.line("op status", json!({"op": operation_id}));
     assert_eq!(exit, 0, "{status}");
     let shown = &status["journal"]["inputs"];
     assert_eq!(shown["authorization"], REFERENCE, "{status}");
-    assert_eq!(shown["enabled"], json!([ADDED]), "{status}");
+    assert_eq!(shown["enabled"], json!([ADDED, ALSO]), "{status}");
 }
 
 // `place --plan` changes nothing and needs neither parameter; nor does a bundle whose plan changes
@@ -721,7 +832,11 @@ fn s32_the_plan_and_an_unchanged_bundle_need_neither() {
     let scene = staged(Way::Running, &entering());
     let before = scene.files();
     let plan = scene.plan();
-    assert_eq!(plan["schedule_changes"]["enters"], json!([ADDED]), "{plan}");
+    assert_eq!(
+        plan["schedule_changes"]["enters"],
+        json!([ADDED, ALSO]),
+        "{plan}"
+    );
     assert_nothing_done(&scene, &before, "--plan");
 
     let unchanged = staged(Way::Running, &installed());

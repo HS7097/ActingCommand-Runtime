@@ -3335,3 +3335,13 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_469_k2::k2_returned_to_own_page_names_a_window_that_ended_on_the_step_s_own_page",
 ]
 incident = ["#469 K2"]
+
+# Workflow #469 D4b (0.12.63; register §1.401; brief rd-1115/brief-469-d4-owner-four.md; the owner's approval on board #469; contracts/resource-declarations.md, "Candidates", contracts/ocr-fields.md, contracts/selection-graph.md, "Expected identity", contracts/linear-steps.md, "Steps", and contracts/emulator-control.md, "Triggers"), the kernel, on a page graph from a home page to a terminal page (colour pages, played on the scripted clock) whose one located OCR target a scripted provider reads: a provider that fails (unavailable, timeout, internal) or answers invalidly while the kernel evaluates that target as claim's guard, as open's when or in an expect_identity's text-path reading ends with contained_task_vision_provider_failed (class environment_fault), the place's detail as before (the evaluation's error; at the when after operation=open when=<target>) and no values, before any input (1); a read that cannot conclude because the provider kept 64 of 65 boxes, the provider answering as it should, keeps contained_task_guard_evaluation_failed at the guard and contained_task_recognition_failed at the when and the identity (class pack_logic_mismatch), their detail byte for byte as before (the cause= token of the read at the guard and the when) and no values (2); a provider that reads the name: the guard passes and the when holds, each run taps once and ends Success on the terminal page after one step, its records byte for byte as before (fix round 2: every trace in order, the step traces with their step index, operation and page, the effect intent with its guard outcome, each frame's recognised page and the final outcome, and every guard evaluation with its kind, target and whether it passed: the guard's evaluation before the guard's effect intent, the when's on the home frame before the step starts and the trusted tap's guard after it), and the identity reads member.a (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_469_d4b::d4b_a_provider_failure_at_a_guard_a_when_or_an_identity_ends_with_the_provider_code",
+    "actingcommand-execution-kernel::lib::contained_task::gate_469_d4b::d4b_a_real_evaluation_error_keeps_the_place_s_own_code_and_detail",
+    "actingcommand-execution-kernel::lib::contained_task::gate_469_d4b::d4b_a_provider_that_reads_leaves_the_three_places_as_they_were",
+]
+incident = ["#469 D4b"]

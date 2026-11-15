@@ -103,8 +103,9 @@ const INSTALLER_PACKAGE: [u64; 2] = [3, 10];
 /// The `package` range every bundle here declares: [`speaks`]'s.
 const BUNDLE_PACKAGE: [u64; 2] = [3, 5];
 /// The pack's `control.json` (placeholder bytes) and the game's `schedule.json` a bundle carries:
-/// (Workflow #463 S3-2) a schedule without rules or holds that the reader takes, since a placement
-/// of a `schedule.json` the reader refuses is `place_enables_unknown`.
+/// (Workflow #463 S3-2) a schedule without rules or holds, which the reader and the composer's
+/// reference check take, so the plan reads the zip's side and nothing enters; a `schedule.json`
+/// either refuses leaves that side unread, and its placement is `place_enables_unknown`.
 const CONTROL: &[u8] = br#"{"neutral": 1}"#;
 const SCHEDULE: &[u8] = br#"{"schema_version": "actingcommand.schedule.v1"}"#;
 /// Two catalogs the fake Runtime's latest evaluation ran under.
