@@ -59,6 +59,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         standard_pack_build_capability(),
         // Workflow #464 P1: adopts a recorded package into a resource repository's checkout.
         command_cap("standard-pack adopt", ["offline"], "available"),
+        // Workflow #464 P3: the readiness of every pack of a game root; reads only.
+        command_cap("standard-pack ready", ["offline", "read_only"], "available"),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         command_cap("operation validate", ["offline"], "available"),

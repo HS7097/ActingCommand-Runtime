@@ -59,10 +59,12 @@ use serde_json::{Map, Value};
 /// `lab-ops`, the rows of LAB-2, since Workflow #429 R-6 its row `task stop`, since Workflow #429
 /// R-8 its rows `pack-schedule` and `pack-schedule set`, since Workflow #449 REC-ARCH its rows
 /// `record archive` and `record reopen`, since Workflow #464 P1 its row `standard-pack adopt`
-/// (slice SP-ADOPT), and since Workflow #464 P2 its row `standard-pack build` (slice
-/// `PACK-BUILD`). The rescue module's rows are those `crates/lab-rescue` serves (Workflow #434
-/// LAB-3: [`rescue_served`]); a reserved row comes with the slice that opens it.
-pub(crate) const BUILT_SLICES: [&str; 8] = [
+/// (slice SP-ADOPT), since Workflow #464 P2 its row `standard-pack build` (slice `PACK-BUILD`),
+/// and since Workflow #464 P3 its row `standard-pack ready` (slice `464-P3`). The rescue module's
+/// rows are those `crates/lab-rescue` serves (Workflow #434 LAB-3: [`rescue_served`]); a reserved
+/// row comes with the slice that opens it.
+pub(crate) const BUILT_SLICES: [&str; 9] = [
+    "464-P3",
     "LAB-1",
     "LAB-1b",
     "LAB-2",

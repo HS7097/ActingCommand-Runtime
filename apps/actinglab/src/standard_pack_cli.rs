@@ -23,14 +23,21 @@
 //! [--commit <40-hex>]` builds a game's whole standard pack from one commit of its working root, on
 //! the steps of `resource verify` (`crate::resource_verify`). It writes a directory, so `--dry-run`
 //! refuses it.
+//!
+//! Workflow #464 P3 (contracts/standard-pack-schedule.md, "Readiness"): `actinglab standard-pack
+//! ready --root <game root>` answers, for every pack of the root, whether the scheduler can
+//! dispatch it or what it waits for, the thirteen items judged by the resource tooling's one
+//! function. It reads the game root only: it writes nothing, starts nothing and reads no
+//! installation, so the items of an installation are answered not judged (I3 an information
+//! line), no pack is answered dispatchable, and the answer says `installation: not_read`.
 
 use crate::{CliError, CliOutcome, FlagArgs, GlobalOptions};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_resource_tooling::{
     AdoptSource, AdoptWorktree, StandardPackAdoptRequest, StandardPackCheckRequest,
-    StandardPackComposeRequest, check_standard_pack_root, compose_standard_packs,
-    standard_pack_adopt,
+    StandardPackComposeRequest, StandardPackReadyRequest, check_standard_pack_root,
+    compose_standard_packs, judge_standard_pack_readiness, standard_pack_adopt,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -62,9 +69,16 @@ const REDIRECTING_VARIABLES: [&str; 4] = [
     "GIT_INDEX_FILE",
     "GIT_COMMON_DIR",
 ];
+/// Workflow #464 P3: the flags `standard-pack ready` takes.
+pub(crate) const READY_FLAGS: [&str; 1] = ["--root"];
 
 pub(crate) fn options() -> [&'static str; 1] {
     ["--root <installed game root: <standard_packs.root>/<game>>"]
+}
+
+/// Workflow #464 P3: the flags of `standard-pack ready`.
+pub(crate) fn ready_options() -> [&'static str; 1] {
+    ["--root <a game root, installed or a bundle laid out as one: <standard_packs.root>/<game>>"]
 }
 
 /// ROUT-L RL-1a: the flags of `standard-pack compose`.
@@ -162,6 +176,28 @@ pub(crate) fn run_standard_pack(
         // Workflow #464 P2: a game's whole standard pack from one commit of its working root.
         "build" => crate::resource_verify::run_standard_pack_build(global, args),
         "adopt" => run_adopt(global, args),
+        // Workflow #464 P3: the readiness of every pack of a game root; it only reads.
+        "ready" => {
+            let flags = FlagArgs::parse_values(args)?;
+            if let Some(flag) = flags
+                .flags
+                .keys()
+                .find(|flag| !READY_FLAGS.contains(&flag.as_str()))
+            {
+                return Err(CliError::usage(format!(
+                    "standard-pack ready does not accept {flag}"
+                )));
+            }
+            flags.expect_positionals("standard-pack ready", 0)?;
+            let response = judge_standard_pack_readiness(&StandardPackReadyRequest {
+                root: flags.required_path("--root")?,
+                declared_package: None,
+                installation: None,
+            })?;
+            serde_json::to_value(response).map_err(|error| {
+                CliError::device(format!("failed to serialize the readiness: {error}"))
+            })
+        }
         other => Err(CliError::usage(format!(
             "unknown standard-pack command: {other}"
         ))),
