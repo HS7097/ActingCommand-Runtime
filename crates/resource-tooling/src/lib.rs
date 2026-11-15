@@ -135,6 +135,11 @@ mod gate_464_p1;
 #[cfg(test)]
 mod gate_463_v1;
 
+// Workflow #463 S3-6 (register §1.413): the readiness names a hold's reason and lists each pack's
+// own warnings.
+#[cfg(test)]
+mod gate_463_s36;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;

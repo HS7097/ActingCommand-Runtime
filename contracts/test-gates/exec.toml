@@ -3335,3 +3335,13 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_469_k2::k2_returned_to_own_page_names_a_window_that_ended_on_the_step_s_own_page",
 ]
 incident = ["#469 K2"]
+
+# Workflow #463 S3-6 (0.12.63; register §1.413; brief rd-1115/brief-463-s36-ready-held-reason.md; design rd-1115/pack-stage3-design.md §4.2 "S3-6"; contracts/standard-pack-schedule.md, "Readiness"): the readiness of a made-up installed game root (a business pack with one rule into a valued pool, its server's return-home package) without an installation. A pack held with a reason and a reference fails S2 held alone among its items, package_dispatch_waiting carrying held_reason and held_reference as its schedule.json held entry writes them; a pack held with a reason only, longer than 256 bytes and within the file's 1024, carries that reason byte for byte and no held_reference member, in the outcome and in the serialized row. Two packs that declare the variable extra differently each list on their own row, in the check's order, standard_pack_package_unclassified naming them by package_id and standard_pack_root_invalid variable_conflict at /variables/0 naming their control.json by path; the answer's warnings equal standard-pack check's own; the business pack and the return-home package answer no warnings member. A root standard-pack check warns nothing of answers no warnings, the business pack's row with package_id, server, readiness and items and the return-home package's with roles too, as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_463_s36::s36_a_held_pack_s2_names_its_reason_and_reference",
+    "actingcommand-resource-tooling::lib::gate_463_s36::s36_a_variable_that_does_not_apply_is_listed_on_the_declaring_pack_s_row",
+    "actingcommand-resource-tooling::lib::gate_463_s36::s36_a_root_without_warnings_answers_as_before",
+]
+incident = ["#463 S3-6"]

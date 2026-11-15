@@ -27900,6 +27900,97 @@ revision.
 the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
 `device_locked` or the update code shows no group in the errors view either.
 
+### 1.413 Slice #463 S3-6 (0.12.63): readiness names a hold's reason and lists each pack's own warnings (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-6" and §2.3, "Other gaps of this point", read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s36-ready-held-reason.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.413: main `44cbab53` holds the sections up to §1.400, and the
+numbers between belong to slices dispatched with it. The slice ships in 0.12.63.
+
+**What it is.** A held pack waits with a reason someone wrote (`schedule.json` holds
+`{package_id, reason, reference?}`), and the warnings of `standard-pack check` were listed for the
+root only. Now, in `judge_standard_pack_readiness`
+([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness"):
+
+- S2's `held` (`package_dispatch_waiting`) carries `held_reason`, the reason of the pack's `held`
+  entry, and `held_reference`, its reference where the entry writes one; where it writes none the
+  outcome has no `held_reference` member (absent, not empty). Both are carried as written: text for
+  a reader, never evaluated and used to decide nothing (the contract: nothing evaluates it by
+  machine). Which items fail and why is unchanged: the hold is looked up in the composer-accepted
+  file's `held` list, the list the classification reads, only for a pack S2 already fails `held`.
+- Each pack's row gains `warnings`: the warnings of `standard-pack check` that name the pack, in
+  the check's order. The answer's `warnings` stays as it was, so a pack's warning is listed in both
+  places. A pack no warning names answers no `warnings` member, as a pack without `roles` answers
+  no `roles` (the row's precedent, `skip_serializing_if = "Vec::is_empty"`).
+
+**Where the code corrected the design.** (1) The work order's ruling 3 names a warning's pack by
+its `package_id`, and the design's test asks that "a variable that does not apply appears on the
+declaring pack's row". The root check of the variables (`variable_report`, Workflow #463 V1, §1.378)
+names the declaring pack only by `path`, its `control.json`, and carries no `package_id`. So a
+warning names a pack by its `package_id` (a pack of the registry), else by a `path` that lies in the
+pack's directory, the rule the root check's refusals already follow (`CheckRefusal::read`: the
+`package_id`, else the pack whose directory the `path` is); a warning that names no pack (a rule's
+hint by `task_id`, a refused `goals.json`) is on no row. The check's warnings are not changed. (2)
+The work order's ruling 2 asks the keys to follow the catalog's rule for a key that carries free
+text and, if the catalog requires a length bound, to take the schedule file's own. Every key the
+catalog holds for text as given (`argument_value`, `base`, `instance_selector`, `hold_reason`,
+`pause_reason`) is a `name`, whose bound is 256 bytes without a control character (the key table's
+rule, checked in debug builds when the value is set); a `held` reason or reference may hold 1024
+bytes (`MAX_SCHEDULE_TEXT_BYTES`), so a `name` would refuse a reason the file takes. The catalog
+gains the key type `text` (the way Workflow #463 V2 fix round 1 added `json` for the goal store's
+1024 bytes, §1.382): text a person wrote for a reader, carried as written and never evaluated, at
+most 1024 bytes (the contract crate's `TEXT_MAX_BYTES` is `MAX_SCHEDULE_TEXT_BYTES`), without a
+control character. It is added to the key table's kinds (`KeyKind::Text`), the outcome guard's
+scalar types, [runtime-outcomes.md](runtime-outcomes.md) ("keys"), and to the problem report's
+free text, which its masks search as they search a name
+([problem-report.md](problem-report.md), "What the masks search"; `free_text` in
+`crates/lab-ops/src/report/archive.rs`), so a reason that is one word is searched too.
+
+**Codes, keys and words.** No code and no vocabulary word. Two keys, both optional values of
+`package_dispatch_waiting` (warning, ladder class none, exit status 0: `standard-pack ready`
+answers the readiness beside `lab_operation_completed` and refuses nothing), registered where the
+readiness problem's other keys are (the key table after `blocking_package_id`):
+
+| Key | Type | What it carries |
+|---|---|---|
+| `held_reason` | `text` (new) | S2 `held`: the reason of the pack's `held` entry, as written |
+| `held_reference` | `text` (new) | S2 `held`: the entry's reference, as written; absent where it writes none |
+
+The outcome code index is regenerated; it does not change (it lists no values).
+
+**The callers.** `judge_standard_pack_readiness` has one caller in the product,
+`actinglab standard-pack ready` (`apps/actinglab/src/standard_pack_cli.rs`), which serializes the
+whole answer; the operation table's row `standard-pack ready` is served by that command (the CLI
+module's engine) and its MCP tool `ac_standard_pack_ready` through a `serve` child, so all three
+print both members with no change of their own. Adopt, the build and the placement plan do not call
+it yet (slices S3-5, S3-7 and S3-15). The row's `output` in
+[lab-operations.json](lab-operations.json) names the two members.
+
+**Interface revisions.** None moves. The readiness answer belongs to no interface revision: P3 and
+its fix round 1, which added `readiness`, `roles`, `warnings` and the counts, wrote "No
+configuration key, record type, payload member, fact, wire shape or interface revision" (§1.375),
+and so does this slice. The key type `text` moves no revision either, as `json` moved none
+(§1.382): `runtime-outcomes` stays 1, `actingcommand.outcome.v1` and
+`actingcommand.outcome-codes.v1` stay.
+
+**Tests** (`crates/resource-tooling/src/gate_463_s36.rs`, gate map `contracts/test-gates/exec.toml`
+"#463 S3-6"): a pack held with a reason and a reference fails S2 `held` alone among its items, with
+both values as written; a pack held with a reason of more than 256 bytes and no reference carries
+the reason byte for byte and no `held_reference`, in the outcome and in the serialized row
+(`s36_a_held_pack_s2_names_its_reason_and_reference`); two packs that declare one variable
+differently each list on their own row, in the check's order, the check's
+`standard_pack_package_unclassified` naming them by `package_id` and its
+`standard_pack_root_invalid` `variable_conflict` naming their `control.json` by `path`, the answer's
+`warnings` equal to the check's own, and the other packs answer no `warnings`
+(`s36_a_variable_that_does_not_apply_is_listed_on_the_declaring_pack_s_row`); a root the check
+warns nothing of answers each row with the members it had before
+(`s36_a_root_without_warnings_answers_as_before`). No existing test changes; none leaves the gate
+map.
+
+**What is not changed.** What readiness decides (the thirteen items and their verdicts, the four
+answers, the counts), the composer, `standard-pack check` and its warnings, adopt, the build, the
+placement, the record shapes and the configuration.
+
+**At deploy.** Nothing to do: a read-only answer gains members; nothing is persisted.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

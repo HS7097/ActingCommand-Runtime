@@ -2812,6 +2812,14 @@
       "type": "name",
       "description": "The package whose problem keeps another pack waiting: the pack of a follower's head (head_waiting), the layer a prerequisite chain was refused at (prerequisite_unregistered, prerequisite_refused), the return-home package the Runtime's entry would refuse for a page-graph pack's home entry (return_home_refused, fix round 2), the pack standard-pack check refused the root at (root_refused) (Workflow #464 P3 fix round 1, since 0.12.61)."
     },
+    "held_reason": {
+      "type": "text",
+      "description": "The reason a held pack waits, as its schedule.json held entry writes it: text for a reader, carried as written and never evaluated, at most 1024 bytes without a control character, the file's own bound (readiness item S2 held; Workflow #463 S3-6, since 0.12.63)."
+    },
+    "held_reference": {
+      "type": "text",
+      "description": "The reference of a held pack's schedule.json held entry, as written, where the entry writes one; absent where it writes none (readiness item S2 held; Workflow #463 S3-6, since 0.12.63)."
+    },
     "report_part": {
       "type": "vocab:report_part",
       "description": "Which part of a problem report could not be read (Workflow #467 RPT-1, since 0.12.61)."

@@ -122,7 +122,9 @@ that lists codes is such a comparison and needs the same question.
   `token`, `name`, `id`, `path`, `pointer`, `url`, `integer`, `duration_ms`, `unix_ms`,
   `boolean`, `hash`, `commit`, `version`, `json` (Workflow #463 V2 fix round 1, Runtime 0.12.61:
   the compact JSON text of a value, at most 1024 bytes, no control character; `value_json`),
-  `evidence` (`raw_text` only), `list<T>` (T a scalar or
+  `text` (Workflow #463 S3-6, Runtime 0.12.63: text a person wrote for a reader, carried as
+  written and never evaluated, at most 1024 bytes, no control character; `held_reason`,
+  `held_reference`), `evidence` (`raw_text` only), `list<T>` (T a scalar or
   vocabulary) and `records` (flat; `fields` maps each field, itself a key, to `required` or
   `optional`). Keys are append-only: a key is never renamed, retyped or reused. Keys named
   `setup_*` or `console_*` belong to the UI's own table.

@@ -828,6 +828,10 @@ outcome_keys! {
     // Workflow #464 P3 fix round 1: the pack whose problem keeps another waiting (a follower's
     // head, a refused layer of a prerequisite chain, the pack the root check refused at).
     blocking_package_id: name,
+    // Workflow #463 S3-6: a held pack's reason and reference as its `schedule.json` `held` entry
+    // writes them, text for a reader, never evaluated (at most 1024 bytes, the file's own bound).
+    held_reason: text,
+    held_reference: text,
     // ---- Workflow #467 RPT-1 fix round 1 (contracts/problem-report.md section 9): the closed
     // values of `report export`'s codes: which part is missing and why, the write's step, whether
     // the archive fits its bound, and the root a refused output lies in. ----

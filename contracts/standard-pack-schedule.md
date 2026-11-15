@@ -963,7 +963,7 @@ elsewhere, and answered `holds` (with its `basis` where more than one way exists
 | Id | `readiness_item` | Judged by | Fails with `readiness_problem` |
 |---|---|---|---|
 | S1 | `admitted` | the Runtime's loader, the admission `standard-pack check` runs for every pack | `admission_refused`, caused by `package_invalid` with the loader's refusal |
-| S2 | `classified` | the composer's classification ("Classification"), after it accepted the file | `schedule_missing` (no `schedule.json` and no root file gives a role), `unclassified` (caused by `standard_pack_package_unclassified`), `held` |
+| S2 | `classified` | the composer's classification ("Classification"), after it accepted the file | `schedule_missing` (no `schedule.json` and no root file gives a role), `unclassified` (caused by `standard_pack_package_unclassified`), `held` (Workflow #463 S3-6, since 0.12.63: `held_reason` the reason of the pack's `held` entry, `held_reference` its reference where the entry writes one, absent where it writes none; both as written, text for a reader that nothing evaluates) |
 | S3 | `valued` | the composer's coverage of each rule of the pack ("Judged rules"): complete or a follower holds, the maintenance tier is exempt; a follower is not ahead of its head (below) | `value_pending` (`task_id`), `value_undeclared` (`task_id`, `pool_id`; caused by `standard_pack_benefit_undeclared`), `head_waiting` (`task_id` the follower, `blocking_package_id` the head's pack) |
 | S4 | `composed` | the composer with one instance per server, as the tools compose ("Tools"), and `standard-pack check`'s refusals of `schedule.json` (a store update rule without a cooldown, a probe on a key no reading mark of its package writes) | `composition_refused`, caused by `standard_pack_root_invalid` at the file's pointer |
 | S5 | `entry_reachable` | fix round 1: first the pack's prerequisite chain through the kernel's own predicate (`PrerequisiteChain`: `next` with the server's return-home package, `begin`, `admit`, `finish`), as the Runtime admits it before a run: its declared prerequisite packages, or, for a pack whose entry the navigation does not take and that may fall back, its server's return-home package, each layer the package the loader admitted here; then the admitted package's entry as the Runtime's gate resolves it ([linear-steps.md](linear-steps.md), "Return-home fallback"): an application entry or no page entry to check, else a declared prerequisite package of the root, else navigation data whose page list lists the entry, else the return-home package of its server (not the pack itself); fix round 2: a page-graph pack run as the run's own package keeps its home entry, which takes that package through no chain (R23), so it holds only when the Runtime's entry would run the package: the package the loader admitted, the kernel's `require_configured_package_id`, then its `prerequisite_incompatibility_with` for a configured return-home package (the host's `configured_return_home_incompatibility`) | `prerequisite_unregistered` (caused by the kernel's `contained_task_prerequisite_unbound`), `prerequisite_refused` (a layer of another game, server or resolution or one that cannot be a layer, a cycle, more than three declared layers, the step limit, or a layer the loader refuses; the kernel's code or the layer's `package_invalid` the cause), each with `blocking_package_id` the layer; `return_home_refused` (the home entry's return-home package of another game, server or resolution, one that cannot be a layer, one that declares a prerequisite package of its own, or one the loader refuses; the kernel's code or the package's `package_invalid` the cause, `blocking_package_id` the package); `entry_unreachable` (`server`, `page_ids`) |
@@ -1025,8 +1025,8 @@ well. The function itself reads none of them: its caller hands them in.
 **The row.** `actinglab standard-pack ready --root <game root>` (operation table row `standard-pack
 ready`, module `core`, offline; MCP `ac_standard_pack_ready`) answers the function for the game root
 alone: `{root, game, installation: "not_read", dispatchable, ready_to_place, waiting,
-not_scheduled, warnings, packs: [{package_id, server, readiness, roles?, items: [{id, item, state,
-basis?, models?, outcome?}]}]}`, the packs in the registry's order, beside
+not_scheduled, warnings, packs: [{package_id, server, readiness, roles?, warnings?, items: [{id,
+item, state, basis?, models?, outcome?}]}]}`, the packs in the registry's order, beside
 `lab_operation_completed`. It reads no installation (the status read tells an instance's game but
 not its server; the configuration's instances, check-config's subsystems, `actingd suspended` and
 the vision root's models are read where the placement plan reads them), so its five installation
@@ -1034,6 +1034,18 @@ items are `not_judged`, `installation_not_read`, and its packs `ready_to_place` 
 `not_scheduled`) at best. It starts no child process: a child `actingd` under an installation root
 could be taken for a running Runtime by the update path. Under `--dry-run` it answers the same (no
 effect).
+
+**A pack's own warnings** (Workflow #463 S3-6, register §1.413, since 0.12.63). Each pack's
+`warnings` lists the warnings of `standard-pack check` that name it, in the check's order: a
+warning names a pack by its `package_id` value, else by a `path` value in the pack's directory
+(the root check of the variables names the declaring pack's `control.json`, "A variable that does
+not apply" in [package-variables.md](package-variables.md), and no package id). A warning that
+names no pack (a rule's hint by its `task_id`, a refused `goals.json`) is on no pack's row. The
+answer's `warnings` lists every warning as before, so a pack's warning appears in both places. A
+pack no warning names answers no `warnings` member, as a pack without `roles` answers none. Every
+caller of the function answers both members as they are: `actinglab standard-pack ready`, the
+operation table's row `standard-pack ready` (actinglab's own command) and its MCP tool
+`ac_standard_pack_ready` (through a `serve` child) serialize the whole answer.
 
 ## What does not change
 

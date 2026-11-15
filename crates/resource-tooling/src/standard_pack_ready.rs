@@ -58,6 +58,15 @@
 //! root holds and the installation's were not all judged. An item not judged never counts as
 //! holding. It reads the game root only: it writes nothing, starts nothing and reads no
 //! installation itself.
+//!
+//! Workflow #463 S3-6 (register §1.413): a pack's row says why it waits and what is wrong with it.
+//! S2's `held` carries the hold as the pack's `held` entry of `schedule.json` writes it,
+//! `held_reason` its reason and `held_reference` its reference where the entry writes one: text
+//! for a reader, carried as written and never evaluated. And each row's `warnings` lists the
+//! warnings of `standard-pack check` that name the pack, in the check's order, by their
+//! `package_id`, else by a `path` in the pack's directory (the root check of the variables names
+//! the declaring pack's `control.json` and no package id); the answer's `warnings` lists every
+//! warning as before. Nothing the items decide changes.
 
 use crate::StandardPackCheckRequest;
 use crate::codes::{
@@ -226,6 +235,11 @@ pub struct PackReadiness {
     /// parts, which other packs' runs use); absent when it plays none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<ReadinessRole>,
+    /// Workflow #463 S3-6: the warnings of `standard-pack check` that name the pack, in the
+    /// check's order (the answer's `warnings` lists them too): by their `package_id`, else by a
+    /// `path` in the pack's directory; absent when none does, as `roles`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<Outcome>,
     /// The thirteen items, S1 to S7, then I1 to I6.
     pub items: Vec<ReadinessAnswer>,
 }
@@ -407,6 +421,11 @@ pub fn judge_standard_pack_readiness(
             Ok(response) => (response.warnings, Vec::new()),
             Err(error) => (Vec::new(), check_refusals(&error, &checked.root)),
         };
+    // Workflow #463 S3-6: each warning with the pack it names, for that pack's row.
+    let named = warnings
+        .iter()
+        .map(|warning| CheckWarning::read(warning, &checked.root, &root))
+        .collect::<Vec<_>>();
     let installation = request.installation.as_ref();
     let revision_needs = revision_needs(&root, &game, &checked);
     let rules = Rules::of(&game, &checked, &root, installation)?;
@@ -438,6 +457,7 @@ pub fn judge_standard_pack_readiness(
         installation,
         admitted: &admitted,
         refusals: &refusals,
+        warnings: &named,
     };
     let mut packs = Vec::new();
     for (package_id, admission) in &admitted {
@@ -696,6 +716,40 @@ fn check_refusals(error: &LabError, root: &StandardPackRoot) -> Vec<CheckRefusal
         .collect()
 }
 
+/// Workflow #463 S3-6: one warning of `standard-pack check` and the pack it names.
+struct CheckWarning {
+    /// The pack it names; `None`: it names none, and only the answer's `warnings` lists it.
+    package_id: Option<String>,
+    outcome: Outcome,
+}
+
+impl CheckWarning {
+    /// The warning `outcome` of the game root `root` at `directory`: the pack its `package_id`
+    /// names, else the pack whose directory holds its `path` (the root check of the variables
+    /// names the declaring pack's `control.json` and no package id), else none.
+    fn read(outcome: &Outcome, root: &StandardPackRoot, directory: &Path) -> Self {
+        let text = |key: &str| outcome.value(key).and_then(serde_json::Value::as_str);
+        let package_id = text("package_id")
+            .filter(|package_id| root.registry.get(package_id).is_some())
+            .map(str::to_owned)
+            .or_else(|| {
+                let path = Path::new(text("path")?);
+                root.registry
+                    .package_ids()
+                    .find(|package_id| {
+                        root.registry
+                            .get(package_id)
+                            .is_some_and(|entry| path.starts_with(directory.join(&entry.directory)))
+                    })
+                    .map(str::to_owned)
+            });
+        Self {
+            package_id,
+            outcome: outcome.clone(),
+        }
+    }
+}
+
 /// What the game's `schedule.json` gives the items S2, S3, S4 and I4.
 enum Rules {
     /// The game root holds no `schedule.json`: the game has no rules; the packages the root files
@@ -840,6 +894,27 @@ impl ComposedRules {
         }
         first
     }
+
+    /// Workflow #463 S3-6: `outcome` with the hold of the pack `package_id` as its `held` entry
+    /// of `schedule.json` writes it (a held pack always has one: the classification reads the
+    /// same list): `held_reason` its reason, and `held_reference` its reference where the entry
+    /// writes one, absent where it writes none. Text for a reader, carried as written and never
+    /// evaluated (the contract: nothing evaluates it by machine).
+    fn with_hold(&self, package_id: &str, outcome: Outcome) -> Outcome {
+        let Some(hold) = self
+            .schedule
+            .held
+            .iter()
+            .find(|hold| hold.package_id == package_id)
+        else {
+            return outcome;
+        };
+        let reasoned = outcome.held_reason(hold.rationale.as_str());
+        match &hold.reference {
+            Some(reference) => reasoned.held_reference(reference.as_str()),
+            None => reasoned,
+        }
+    }
 }
 
 /// One pack of the registry and what its admission gave.
@@ -900,6 +975,9 @@ struct Context<'a> {
     admitted: &'a Admitted,
     /// Fix round 1: the refusals of `standard-pack check`, empty when it accepted the root.
     refusals: &'a [CheckRefusal],
+    /// Workflow #463 S3-6: the warnings of `standard-pack check`, each with the pack it names,
+    /// empty when it refused the root.
+    warnings: &'a [CheckWarning],
 }
 
 /// The part `read` of `installation`, or why the item that needs it is not judged.
@@ -934,8 +1012,19 @@ impl Context<'_> {
             server: pack.server.to_owned(),
             readiness: self.answer(pack.package_id, &items),
             roles: self.roles(pack.package_id),
+            warnings: self.warnings_of(pack.package_id),
             items,
         }
+    }
+
+    /// Workflow #463 S3-6: the warnings of `standard-pack check` that name the pack `package_id`,
+    /// in the check's order.
+    fn warnings_of(&self, package_id: &str) -> Vec<Outcome> {
+        self.warnings
+            .iter()
+            .filter(|warning| warning.package_id.as_deref() == Some(package_id))
+            .map(|warning| warning.outcome.clone())
+            .collect()
     }
 
     /// Fix round 1: the four answers. `waiting` when an item fails or an item of the root does
@@ -1129,7 +1218,7 @@ impl Context<'_> {
                 ReadinessAnswer::holds(ITEM, Some(ReadinessBasis::Scheduled))
             }
             Rules::Composed(rules) if rules.held.contains(id) => {
-                ReadinessAnswer::fails(ITEM, failed(ReadinessProblem::Held))
+                ReadinessAnswer::fails(ITEM, rules.with_hold(id, failed(ReadinessProblem::Held)))
             }
             Rules::Composed(_) => ReadinessAnswer::fails(
                 ITEM,
