@@ -27,6 +27,8 @@ pub(crate) mod select;
 pub(crate) mod steps;
 pub(crate) mod store;
 
-pub use archive::{record_archive, record_archive_copy, record_reopen};
+pub use archive::{
+    ArchiveCopyFrames, record_archive, record_archive_copy, record_archive_warnings, record_reopen,
+};
 pub use lock::RecordingLock;
 pub use model::*;

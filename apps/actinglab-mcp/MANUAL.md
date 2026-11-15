@@ -208,11 +208,18 @@ naming this file.
   entered (`record_id`, `record_started_at_unix_ms`) and the `step` it became. `ac_do` with
   `record` and `swipe` on a step without a click records that swipe as the step's. A recording kept
   only as material is ended with `ac_record_archive`: no marks are needed; it writes
-  `archive-manifest-<n>.json` beside the frames and the step table, keeps every file and ends the
-  session (`archived`), and with `copy_to` (the absolute path of a directory that does not exist
-  or is empty; a relative or empty one is `not_absolute`) copies them and checks every copy. With
-  `record_id` it also archives a recording `record start --force` left behind, from its own step
-  table, and leaves the session header, another recording's, as it is (`lab.session_header`).
+  `archive-manifest-<n>.json` beside the frames and the step table (#463 S1-5, 0.12.64:
+  `actingcommand.lab-recording-archive.v2`, whose `material` names each press with the frame it
+  happened on and where it was pressed, and the final screen; `lab.warnings` holds
+  `final_frame_missing` when it names none), keeps every file and ends the session (`archived`),
+  and with `copy_to` (the absolute path of a directory that does not exist or is empty; a relative
+  or empty one is `not_absolute`) copies the step table, the manifest and the frames `material`
+  names, or with `all_frames` every frame the manifest lists, and checks every copy; the copy's
+  manifest says which (`copy.frames`, `material` or `all`), a v1 manifest is copied as it is with
+  every file it lists, and `all_frames` without `copy_to` is `validation_failed`
+  (`copy_to_only`). With `record_id` it also archives a recording `record start --force` left
+  behind, from its own step table, and leaves the session header, another recording's, as it is
+  (`lab.session_header`).
   `ac_record_reopen` makes an archived recording active again, so that `ac_record_mark` and
   `ac_record_stop` can build its package later. #463 L1 (0.12.60; `contracts/lab-recording.md`,
   "One call per step"): `ac_do` with `capture` and `record` records a whole step in one call:
