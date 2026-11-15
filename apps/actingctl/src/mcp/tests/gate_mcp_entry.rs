@@ -45,17 +45,10 @@ fn e15_a_cancelled_call_leaves_no_uncollectable_handle() {
     };
     let (release, gate) = mpsc::channel::<()>();
     let job = jobs
-        .start(
-            "lab_job_1".to_owned(),
-            "lab",
-            None,
-            "running",
-            Vec::new(),
-            move || {
-                let _ = gate.recv();
-                Ok(json!({"done": true}))
-            },
-        )
+        .start("lab_job_1".to_owned(), "lab", "running", move || {
+            let _ = gate.recv();
+            Ok(json!({"done": true}))
+        })
         .unwrap_or_else(|_| panic!("the job starts"));
     drop(take_offered());
     let Ok(answer) = job_answer(&context, &job, unreached_deadline()) else {
@@ -83,14 +76,7 @@ fn e15_a_cancelled_call_leaves_no_uncollectable_handle() {
 
     // A handle that went out counts until its result is read.
     let issued = jobs
-        .start(
-            "lab_job_2".to_owned(),
-            "lab",
-            None,
-            "running",
-            Vec::new(),
-            || Ok(json!({})),
-        )
+        .start("lab_job_2".to_owned(), "lab", "running", || Ok(json!({})))
         .unwrap_or_else(|_| panic!("the job starts"));
     jobs.issue(&["lab_job_2".to_owned()]);
     ended(&issued);
@@ -115,9 +101,7 @@ fn e17_a_run_pack_job_counts_while_it_submits() {
         .start(
             "request-1".to_owned(),
             "run_pack",
-            Some("instance-a".to_owned()),
             "submitting",
-            Vec::new(),
             move || {
                 let _ = gate.recv();
                 Ok(json!({"receipt_state": "accepted"}))

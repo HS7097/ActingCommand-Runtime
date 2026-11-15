@@ -11,7 +11,7 @@ use super::super::jobs::Jobs;
 use super::super::protocol::Era;
 use super::super::runtime::RuntimeAccess;
 use super::super::tools::{Tier, TierSet, ToolContext, definition, find};
-use crate::held_runtime::{HELD_SALT, NoInstances};
+use crate::no_instance_runtime::{NoInstances, TEST_SALT};
 use crate::routine_summary::{self, Ended};
 use actingcommand_contract::codes::ReceiptCode;
 use actingcommand_contract::outcome::{Detail, Outcome};
@@ -54,7 +54,7 @@ impl RuntimeClock for FixedClock {
 /// The Runtime on `root`, with no instance.
 fn start(root: &Path) -> RuntimeHost {
     RuntimeHost::start(
-        RuntimeHostConfig::new(root, HELD_SALT).with_runtime_clock(Arc::new(FixedClock {
+        RuntimeHostConfig::new(root, TEST_SALT).with_runtime_clock(Arc::new(FixedClock {
             elapsed_ms: AtomicU64::new(0),
         })),
         Arc::new(NoInstances),

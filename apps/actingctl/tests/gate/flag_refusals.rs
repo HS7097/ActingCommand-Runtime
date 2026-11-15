@@ -17,7 +17,6 @@ use tempfile::TempDir;
 const ROOT: &str = "{root}";
 // A word no subcommand takes.
 const STRAY: &str = "extra";
-const QUERY: &str = r#"{"action":"query","transition_id":"transition-flags"}"#;
 // A request_id as the Runtime mints it (Workflow #389 MCP-6, `run evidence`).
 const REQUEST_ID: &str = "request_0123456789abcdef0123456789abcdef";
 
@@ -95,17 +94,7 @@ const CLIENT: &[Subcommand] = &[
         &["--max-frames", "2"],
         &["--wait", "60"],
     ),
-    result(
-        &[
-            "install-transition",
-            "--state-root",
-            ROOT,
-            "--action-json",
-            QUERY,
-        ],
-        &["--recover"],
-        &["--action-json", QUERY],
-    ),
+    // Workflow #434 LAB-6S4a (0.12.63): `install-transition`'s row went with the subcommand.
     result(
         &[
             "observe",

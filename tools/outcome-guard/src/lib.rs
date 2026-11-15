@@ -381,12 +381,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "B1: a free name or text field that is not an outcome code (legacy engine and primitive requests, extension ids); B1 settles it",
     ),
     bridge(
-        "crates/actingcommand-contract/src/installation.rs",
-        "InstallTransitionStatus.failure_code",
-        &[Check::G2],
-        "A2b/A2c merge follow-up: filled with a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the field becomes a CodeStr",
-    ),
-    bridge(
         "crates/actingcommand-contract/src/lab.rs",
         "EnvelopeError.code",
         &[Check::G2],

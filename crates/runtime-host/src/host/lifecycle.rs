@@ -10,9 +10,6 @@ impl RuntimeLifecycleFailureStage {
     /// `runtime.lifecycle.*` token until then).
     pub(super) const fn location(self) -> HostLocation {
         match self {
-            Self::InstallDrain => HostLocation::RuntimeLifecycleInstallDrain,
-            Self::InstallHeld => HostLocation::RuntimeLifecycleInstallHeld,
-            Self::InstallRelease => HostLocation::RuntimeLifecycleInstallRelease,
             Self::PolicyInitialization => HostLocation::RuntimeLifecyclePolicyInitialization,
             Self::PolicyMonitor => HostLocation::RuntimeLifecyclePolicyMonitor,
             Self::PolicyForward => HostLocation::RuntimeLifecyclePolicyForward,
