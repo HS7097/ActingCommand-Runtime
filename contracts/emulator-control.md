@@ -635,7 +635,42 @@ operation's `when` or an expected identity (#469 D4b, since 0.12.63; the owner's
 #469) ends the run with `contained_task_vision_provider_failed`, class `environment_fault`: it
 starts no ladder at the task stage, and `stability_burst` counts it (direction ①, below). A real
 evaluation error there keeps its class-4 code (`contained_task_recognition_failed`,
-`contained_task_guard_evaluation_failed`) and starts the ladder by `pack_logic`.
+`contained_task_guard_evaluation_failed`) and starts the ladder by `pack_logic`. For the guard,
+the `when` and the identity, everything else that changes is what a page evaluation's provider
+failure already does (register §1.401 names the same places; `crates/runtime-host/src/host/`
+unless named): (1) at the scheduled run's failed lease end (`ladder_at_lease_end`,
+`recovery_ladder.rs`) no item matches at `task`, so no ladder is admitted, the run's key is
+released, not handed on, and no cool-down window opens either (one opens only when an item matches
+under `cooldown_opens_on` `triggered`, `admit_or_suppress_ladder`, or when an admitted ladder gets
+the key under `admitted`, `climb_recovery_ladder`); (2) direction ① counts the run's terminal
+record (`count_stability_record`): the third such failure of one instance within 600 000 ms is a
+`stability_burst`, whose ladder climbs from its return-home rung; (3) a guard that fails so on a
+retry attempt whose failure decision asks for recovery (`refuse_before_input`,
+`crates/execution-kernel/src/contained_task/observation_window.rs`) still ends the run with
+`contained_task_requires_scheduler`, its `failure_code` the provider code (`requires_scheduler`),
+and a select step's confirmation guard that fails so writes its confirmation record
+(`guard_failed`, `confirm` in `contained_task/selection.rs` and `contained_task/scan/select.rs`)
+with the provider code as its outcome; (4) a return-home rung's run that ends so is not held on
+the busy-screen probe (`climb_screen_gate`, `busy.screen.classes`); (5) a guard's provider failure
+pins no `GuardRejection` frame (`execute_contained_task_with_lease`, `contained_task.rs`); (6) the
+task geometry recheck (`recheck_task_geometry`) does not run after a `when`'s or an identity's;
+(7) in the return-home entry layer (`run_preflighted_contained_task`) and the prerequisite layer
+(`gate_layer`, `close_open`, `prerequisite.rs`) a `when` or an identity that fails so takes the
+branch of a failure that is not a recognition failure: the layer's facts are written by the
+entry-fact writer (`record_entry_fact`), which first checks that the run is still active
+(`ensure_active`: a write at the very moment of a deadline, a cancellation or a pause is refused
+with that end's own code), and the layer's error carries its code only, without the kernel's
+detail text (`fail_contained_task_entry`, `layer_task_failure`), so the main package's terminal
+record has no native detail for it and its failure identity's key has no `operation=` fragment
+(`failure_detail_fingerprint`, `crates/runtime-host/src/failure_identity.rs`), as for a page
+evaluation's provider failure; (8) the policy settles it under the provider code, in the same
+streak as a page evaluation's provider failure (`same_error`, `policy_control.rs`), rerun only, its
+count staying 1 ([policy-suspension.md](policy-suspension.md), "Every other failure is rerun
+only"); (9) while the provider stays down, what stops the package is the burst (the default: three
+such failures of one instance in ten minutes start the ladder from its return-home rung) and its
+own `on_failure`, whose `retry_limit` and `escalation_threshold` pause it only at `retry_limit` 0
+(then `action` decides) or `escalation_threshold` 1, since the count stays 1. Before, the first such
+failure started the ladder at once.
 
 - **Task stage.** A scheduled (policy) contained task run on a physical instance whose
   `task.failed` terminal's outcome code (ledger revision 3; the relayed spelling's `raw_code`

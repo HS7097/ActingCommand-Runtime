@@ -15,7 +15,9 @@
 // `when` and the identity; here a located text read that cannot conclude, because the provider
 // kept fewer boxes than the screen held (the provider answered as it should). A provider that reads
 // the name leaves the three places as they were: the guard passes and the `when` holds, each run
-// taps once and ends on its target page, and the identity reads the business ID the name maps to.
+// taps once and ends on its target page, its records byte for byte as before (fix round 2: every
+// trace, with the values the step traces carry, and every guard evaluation, in order), and the
+// identity reads the business ID the name maps to.
 //
 // A scripted OCR provider answers every text read; the pages are colours, so a page evaluation
 // never calls it. The runs play scripted frames on the scripted clock (EXEC-I4): the home page
@@ -44,6 +46,8 @@ const TEXT: &str = "text/name";
 const NAME: &str = "NAME";
 const HOME: [u8; 3] = [255, 0, 0];
 const TERMINAL: [u8; 3] = [0, 0, 255];
+const HOME_PAGE: &str = "neutral/home";
+const TERMINAL_PAGE: &str = "neutral/terminal";
 
 // What the scripted provider answers to every text read.
 #[derive(Debug, Clone, Copy)]
@@ -278,6 +282,169 @@ fn device() -> ScriptedRuntime {
     ScriptedRuntime::new(vec![vec![shown(HOME)], vec![shown(TERMINAL)]])
 }
 
+// One record of a run, as the kernel hands it to its runtime: a guard evaluation (which one, its
+// target, and whether the target passed: an evaluation error did not; none when no target was
+// evaluated), or a trace, by its kind, with the values a step trace and the final trace carry (the
+// step's index, operation and page, the effect intent's guard outcome, the page a recognition
+// found, the run's outcome). Any other trace is kept whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Recorded {
+    Guard(ContainedTaskGuardEvaluation, Option<String>, Option<bool>),
+    PackageAdmitted,
+    RunStarted,
+    CaptureCompleted,
+    RecognitionStarted,
+    RecognitionCompleted(Option<String>),
+    StepStarted(u32, String, String),
+    EffectIntent(u32, String, ContainedTaskGuardOutcome),
+    EffectCompleted(u32, String),
+    StepFinished(u32, String, String),
+    Finalizing(TaskOutcome),
+    Other(String),
+}
+
+impl Recorded {
+    fn of(trace: &ContainedTaskTrace) -> Self {
+        match trace {
+            ContainedTaskTrace::PackageAdmitted { .. } => Self::PackageAdmitted,
+            ContainedTaskTrace::RunStarted => Self::RunStarted,
+            ContainedTaskTrace::CaptureCompleted { .. } => Self::CaptureCompleted,
+            ContainedTaskTrace::RecognitionStarted { .. } => Self::RecognitionStarted,
+            ContainedTaskTrace::RecognitionCompleted { page_label, .. } => {
+                Self::RecognitionCompleted(page_label.clone())
+            }
+            ContainedTaskTrace::StepStarted {
+                step_index,
+                operation_label,
+                from_page,
+                ..
+            } => Self::StepStarted(*step_index, operation_label.clone(), from_page.clone()),
+            ContainedTaskTrace::EffectIntent {
+                step_index,
+                operation_label,
+                guard,
+                ..
+            } => Self::EffectIntent(*step_index, operation_label.clone(), guard.clone()),
+            ContainedTaskTrace::EffectCompleted {
+                step_index,
+                operation_label,
+            } => Self::EffectCompleted(*step_index, operation_label.clone()),
+            ContainedTaskTrace::StepFinished {
+                step_index,
+                operation_label,
+                page_label,
+                ..
+            } => Self::StepFinished(*step_index, operation_label.clone(), page_label.clone()),
+            ContainedTaskTrace::Finalizing { outcome } => Self::Finalizing(*outcome),
+            other => Self::Other(format!("{other:?}")),
+        }
+    }
+}
+
+// The device of the healthy runs: the scripted device above, which also writes down every record
+// the kernel hands it, in order. It answers the kernel as the scripted device does.
+struct Recording {
+    script: ScriptedRuntime,
+    recorded: Vec<Recorded>,
+}
+
+impl ContainedTaskRuntime for Recording {
+    type Error = &'static str;
+
+    fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
+        self.script.capture()
+    }
+
+    fn input(
+        &mut self,
+        action: InputAction,
+        frame: Option<InputFrameContext>,
+    ) -> Result<(), Self::Error> {
+        self.script.input(action, frame)
+    }
+
+    fn record_guard_evaluation(
+        &mut self,
+        target_id: Option<&str>,
+        result: Option<&actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>>,
+        evaluation: ContainedTaskGuardEvaluation,
+    ) -> Result<(), Self::Error> {
+        self.recorded.push(Recorded::Guard(
+            evaluation,
+            target_id.map(str::to_owned),
+            result.map(|evaluated| evaluated.as_ref().is_ok_and(|target| target.passed)),
+        ));
+        Ok(())
+    }
+
+    fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+        self.recorded.push(Recorded::of(&trace));
+        self.script.record(trace)
+    }
+
+    fn sampling_supported(&self) -> bool {
+        self.script.sampling_supported()
+    }
+
+    fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
+        self.script.step_pacing()
+    }
+
+    fn step_action_gap(&mut self) -> Result<Duration, Self::Error> {
+        self.script.step_action_gap()
+    }
+
+    fn monotonic_now(&mut self) -> Instant {
+        self.script.monotonic_now()
+    }
+
+    fn pause(&mut self, duration: Duration) {
+        self.script.pause(duration);
+    }
+
+    fn is_bookkeeping_failure(error: &Self::Error) -> bool {
+        <ScriptedRuntime as ContainedTaskRuntime>::is_bookkeeping_failure(error)
+    }
+}
+
+// The records of one frame the run captured and recognised as `page`.
+fn frame_records(page: &str) -> Vec<Recorded> {
+    vec![
+        Recorded::CaptureCompleted,
+        Recorded::RecognitionStarted,
+        Recorded::RecognitionCompleted(Some(page.to_owned())),
+    ]
+}
+
+// What a healthy run of `operation` records, in order, as before this slice: its start, the home
+// page's frame, then `before_step` (the `when` evaluated on that frame), the step's start, `guard`
+// (the step's guard evaluation), the effect intent with the guard outcome `outcome`, the effect,
+// the terminal page's frame, the step's end there and the run's success.
+fn healthy_records(
+    operation: &str,
+    before_step: Vec<Recorded>,
+    guard: Recorded,
+    outcome: ContainedTaskGuardOutcome,
+) -> Vec<Recorded> {
+    [
+        vec![Recorded::PackageAdmitted, Recorded::RunStarted],
+        frame_records(HOME_PAGE),
+        before_step,
+        vec![
+            Recorded::StepStarted(0, operation.to_owned(), HOME_PAGE.to_owned()),
+            guard,
+            Recorded::EffectIntent(0, operation.to_owned(), outcome),
+            Recorded::EffectCompleted(0, operation.to_owned()),
+        ],
+        frame_records(TERMINAL_PAGE),
+        vec![
+            Recorded::StepFinished(0, operation.to_owned(), TERMINAL_PAGE.to_owned()),
+            Recorded::Finalizing(TaskOutcome::Success),
+        ],
+    ]
+    .concat()
+}
+
 // The scene of a home frame, the destination frame an expected identity reads.
 fn home_scene() -> Scene {
     let frame = Frame::from_pixels(
@@ -432,11 +599,41 @@ fn d4b_a_real_evaluation_error_keeps_the_place_s_own_code_and_detail() {
 
 // A provider that reads the name meets no failure: the guard passes and the `when` holds, each
 // run taps once and ends on its target page after its one step, and the identity reads the
-// business ID the name maps to.
+// business ID the name maps to. Fix round 2 (the work order's "byte for byte as before"): each run
+// records what it recorded before this slice, every record in order. The guard's run: its start,
+// the home frame, the step's start, the guard's evaluation of the name (passed), the effect intent
+// with the passed guard (the home page, the name, an OCR target), the effect, the terminal frame,
+// the step's end on the terminal page and the success. The `when`'s run: the same, with the
+// `when`'s evaluation of the name (passed) on the home frame before the step starts, and the
+// trusted tap's guard (no target evaluated) in place of the guard's.
 #[test]
 fn d4b_a_provider_that_reads_leaves_the_three_places_as_they_were() {
-    for place in [Place::Guard, Place::When] {
-        let mut runtime = device();
+    let name = || Some(TEXT.to_owned());
+    let guard_run = healthy_records(
+        "claim",
+        Vec::new(),
+        Recorded::Guard(ContainedTaskGuardEvaluation::Evaluated, name(), Some(true)),
+        ContainedTaskGuardOutcome::Passed {
+            page_label: HOME_PAGE.to_owned(),
+            target_id: TEXT.to_owned(),
+            target_kind: "ocr".to_owned(),
+        },
+    );
+    let when_run = healthy_records(
+        "open",
+        vec![Recorded::Guard(
+            ContainedTaskGuardEvaluation::When,
+            name(),
+            Some(true),
+        )],
+        Recorded::Guard(ContainedTaskGuardEvaluation::TrustedCoordinate, None, None),
+        ContainedTaskGuardOutcome::TrustedCoordinate,
+    );
+    for (place, records) in [(Place::Guard, guard_run), (Place::When, when_run)] {
+        let mut runtime = Recording {
+            script: device(),
+            recorded: Vec::new(),
+        };
         let outcome = task(Answer::Reads, place)
             .run(&mut runtime)
             .unwrap_or_else(|error| panic!("{place:?}: expected the run to end, got {error:?}"));
@@ -444,14 +641,15 @@ fn d4b_a_provider_that_reads_leaves_the_three_places_as_they_were() {
             outcome,
             ContainedTaskOutcome {
                 outcome: TaskOutcome::Success,
-                final_page: Some("neutral/terminal".to_owned()),
+                final_page: Some(TERMINAL_PAGE.to_owned()),
                 executed_steps: 1,
                 selected_scheduling_outcome: None,
                 designated_effect_caps: Vec::new(),
             },
             "{place:?}"
         );
-        assert_eq!(runtime.inputs().len(), 1, "{place:?}: one tap");
+        assert_eq!(runtime.script.inputs().len(), 1, "{place:?}: one tap");
+        assert_eq!(runtime.recorded, records, "{place:?}: the run's records");
     }
     match task(Answer::Reads, Place::Identity).read_expected_identity(
         &home_scene(),
