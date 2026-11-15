@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #469 H3 (0.12.62; register §1.399; the design's place 8): an emulator control that
-// fails with `emulator_control_failed` says where it failed. The outcome carries the stage the
-// failure arose at (`stage`, a location) and the device diagnostic's category (`device_category`),
-// the two its primary detail records, which stays as it was. One discovery-bound instance on the
-// scripted emulator controller (HOST-I1), which gives each stage its family's category: an
-// operator `emulator start`, then a `stop` the controller fails at one stage of each family (the
-// vendor command exited non-zero, it could not be launched, its answer was refused). The receipt
-// and the control's one `runtime.failed` record carry the values; the record's other values and
-// its primary detail are the failure's own. The default stage of a failure without a diagnostic
-// is the unit gate `host/emulator_instance/gate_469_h3.rs`.
+// fails with `emulator_control_failed` says where it failed. The receipt's outcome carries the
+// stage the failure arose at (`stage`, a location) and the device diagnostic's category
+// (`device_category`), the two its primary detail records, which stays as it was. The control's
+// one `runtime.failed` record gains only `device_category`: the host's lifecycle record writes
+// its own stage over every failure's `stage` (`host/lifecycle.rs`; here the operation cleanup's
+// registered location, as `gate_458_close_isolates.rs` reads a session close's), so a reader who
+// needs the device stage reads the receipt or the record's primary detail. One discovery-bound
+// instance on the scripted emulator controller (HOST-I1), which gives each stage its family's
+// category: an operator `emulator start`, then a `stop` the controller fails at one stage of each
+// family (the vendor command exited non-zero, it could not be launched, its answer was refused).
+// The record's other values and its primary detail are the failure's own. A failure without a
+// diagnostic is the unit gate `host/emulator_instance/gate_469_h3.rs`.
 
 use super::emulator_controller::{SCRIPTED_FAILED_MS, ScriptedControl, running_state};
 use super::*;
-use crate::codes::HostCode;
+use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::ContractLocation;
 use actingcommand_contract::outcome::{Location, Outcome};
 use actingcommand_contract::{EmulatorInstanceAction, RuntimePayload};
@@ -73,10 +76,12 @@ fn words(outcome: &Outcome) -> (Option<Value>, Option<Value>) {
 }
 
 /// After a confirmed `start`, a `stop` the controller fails at `stage` with `exit_code` (its
-/// process check unknown, the state read after it running): the receipt and the control's one
-/// `runtime.failed` record are `emulator_control_failed` with `stage` and `category` as the values
-/// `stage` and `device_category`; the record keeps its other values (the time, the exit code, the
-/// process check) and its primary detail is the stage and category, as before.
+/// process check unknown, the state read after it running): the receipt is
+/// `emulator_control_failed` with `stage` and `category` as the values `stage` and
+/// `device_category`; the control's one `runtime.failed` record is `emulator_control_failed` with
+/// `category` as `device_category` and the lifecycle's operation cleanup as `stage` (the record's
+/// stage is the lifecycle's), keeps its other values (the time, the exit code, the process check),
+/// and its primary detail is the failure's stage and category, as before.
 fn assert_stop_failure_says_where(
     stage: Location,
     exit_code: Option<i32>,
@@ -101,12 +106,15 @@ fn assert_stop_failure_says_where(
     run.state.emulator.script_read(running_state(16384));
     let receipt = control(&run.host, EmulatorInstanceAction::Stop);
     assert_eq!(receipt.state(), RuntimeReceiptState::Failed, "{receipt:?}");
-    let expected = (Some(json!(stage.as_str())), Some(json!(category.as_str())));
     assert!(
         receipt.outcome().is(HostCode::EmulatorControlFailed),
         "{receipt:?}"
     );
-    assert_eq!(words(receipt.outcome()), expected, "the receipt");
+    assert_eq!(
+        words(receipt.outcome()),
+        (Some(json!(stage.as_str())), Some(json!(category.as_str()))),
+        "the receipt"
+    );
 
     let request_id = receipt.request_id();
     let events = run
@@ -127,7 +135,16 @@ fn assert_stop_failure_says_where(
         panic!("one failure record: {failures:#?}");
     };
     assert!(recorded.is(HostCode::EmulatorControlFailed), "{recorded:?}");
-    assert_eq!(words(recorded), expected, "the record");
+    assert_eq!(
+        words(recorded),
+        (
+            Some(json!(
+                HostLocation::RuntimeLifecycleOperationCleanup.as_str()
+            )),
+            Some(json!(category.as_str()))
+        ),
+        "the record"
+    );
     assert_eq!(
         recorded.value("elapsed_ms"),
         Some(&json!(SCRIPTED_FAILED_MS))

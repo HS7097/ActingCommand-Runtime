@@ -103,7 +103,6 @@ use actingcommand_contract::{
     CONNECTION_PREPARATION_WAIT_MS, EmulatorInstanceAction, EmulatorRunningState, FactValue,
     StartupPackageWithheld,
 };
-use actingcommand_device::DeviceErrorCategory;
 use actingcommand_device::codes::DeviceStage;
 use actingcommand_execution_kernel::ExecutionKernelLocation;
 
@@ -2199,8 +2198,9 @@ impl HostShared {
 /// the outcome's values and the primary detail keeps the stage (ledger revision 3). #411 A38:
 /// `status_read` is the one state read after a control command that passed its own bound; with
 /// no observation of the failure's own, it is the observation the failure carries. Workflow #469
-/// H3 (register §1.399): `emulator_control_failed` also carries the stage and the device
-/// diagnostic's category the primary detail records, as its values `stage` and `device_category`.
+/// H3 (register §1.399): `emulator_control_failed` also carries the stage the primary detail
+/// records as its value `stage`, and the device diagnostic's category as `device_category` when
+/// the failure carries a device diagnostic.
 fn emulator_control_error(
     failure: &EmulatorControlFailure,
     instance_id: InstanceId,
@@ -2208,10 +2208,7 @@ fn emulator_control_error(
 ) -> (RuntimeHostError, RuntimeReceiptState, EffectDisposition) {
     let diagnostic = failure.error.diagnostic();
     let stage = failure_stage(failure);
-    let device_category = diagnostic.map_or(DeviceErrorCategory::ChildExit, |diagnostic| {
-        diagnostic.category()
-    });
-    let category = device_category.as_str();
+    let category = diagnostic.map_or("child_exit", |diagnostic| diagnostic.category().as_str());
     let (code, runtime_code, state, words) = if stage
         == HostLocation::EmulatorControlBinding.location()
         || stage == HostLocation::EmulatorControlRegistration.location()
@@ -2241,7 +2238,9 @@ fn emulator_control_error(
             HostCode::EmulatorControlFailed,
             RuntimeErrorCode::BackendOperationFailed,
             RuntimeReceiptState::Failed,
-            Some((stage, device_category)),
+            // Without a device diagnostic the failure has no category of its own: the detail's
+            // `child_exit` is a default, so no `device_category` is set.
+            Some((stage, diagnostic.map(|diagnostic| diagnostic.category()))),
         )
     };
     // Once the vendor command has run, its effect on the emulator is not known.
@@ -2274,11 +2273,13 @@ fn emulator_control_error(
                 Some(present) => outcome.device_process_present(ProcessPresenceToken(present)),
                 None => outcome,
             };
-            // Workflow #469 H3: where the control failed, for `emulator_control_failed` alone.
+            // Workflow #469 H3: where the control failed, for `emulator_control_failed` alone;
+            // the category only where the failure carries a device diagnostic.
             match words {
-                Some((failed_at, failed_category)) => {
+                Some((failed_at, Some(failed_category))) => {
                     outcome.stage(failed_at).device_category(failed_category)
                 }
+                Some((failed_at, None)) => outcome.stage(failed_at),
                 None => outcome,
             }
         })
@@ -2401,7 +2402,7 @@ const fn fence_reason_token(reason: MonitorRecoveryCoordinationReason) -> &'stat
     }
 }
 
-// Workflow #469 H3 (register §1.399): the stage and category a provider control failure without
-// a device diagnostic carries.
+// Workflow #469 H3 (register §1.399): the stage, and no category, a provider control failure
+// without a device diagnostic carries.
 #[cfg(test)]
 mod gate_469_h3;

@@ -2,13 +2,14 @@
 
 // Workflow #469 H3 (0.12.62; register §1.399; the design's place 8), the stage family the scripted
 // emulator controller cannot reach (it gives every failure a device diagnostic): a provider
-// control failure without a diagnostic is built as `emulator_control_failed` at the default stage
-// `mumu_manager_control` with the category `child_exit`, the two its primary detail records, now
-// also its values `stage` and `device_category`; the other three codes this function builds carry
-// neither. No device, no host: the function that builds the failure, on a hand-made one.
+// control failure without a diagnostic is built as `emulator_control_failed` with the value
+// `stage` at the default `mumu_manager_control` and no `device_category` (no device diagnostic
+// names one; the primary detail keeps its default `child_exit`); the other three codes this
+// function builds carry neither value. No device, no host: the function that builds the failure,
+// on a hand-made one.
 
 use super::*;
-use actingcommand_device::DeviceError;
+use actingcommand_device::{DeviceError, DeviceErrorCategory};
 
 fn instance() -> InstanceId {
     *actingcommand_contract::IdentifierIssuer::new()
@@ -31,7 +32,7 @@ fn failure(error: DeviceError) -> EmulatorControlFailure {
 }
 
 #[test]
-fn h3_a_control_failure_without_a_diagnostic_says_the_default_stage_and_child_exit() {
+fn h3_a_control_failure_without_a_diagnostic_says_the_default_stage_and_no_category() {
     let (error, state, effect) = emulator_control_error(
         &failure(DeviceError::fatal("neutral control failure")),
         instance(),
@@ -52,10 +53,7 @@ fn h3_a_control_failure_without_a_diagnostic_says_the_default_stage_and_child_ex
             HostLocation::MumuManagerControl.location().as_str()
         ))
     );
-    assert_eq!(
-        outcome.value("device_category"),
-        Some(&serde_json::json!(DeviceErrorCategory::ChildExit.as_str()))
-    );
+    assert_eq!(outcome.value("device_category"), None, "{outcome:?}");
     assert_eq!(outcome.value("exit_code"), Some(&serde_json::json!(1)));
     let detail = error.diagnostic_detail().expect("the primary detail");
     assert_eq!(

@@ -6350,7 +6350,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports emulator control failed. Workflow #469 V0 (since 0.12.62): stage, when present, is the step of the emulator control the failure arose at, and device_category the device diagnostic's category. Workflow #469 H3 (since 0.12.62): every provider control failure built under this code carries both, the two its primary detail records: the device diagnostic's stage (a MuMuManager step: the control command's exit, error envelope or launch error; the tool's run, timeout or path; an info reader stage) and category, or without a diagnostic mumu_manager_control and child_exit.",
+      "description": "The Runtime host reports emulator control failed. Workflow #469 V0 (since 0.12.62): stage, when present, is the step of the emulator control the failure arose at, and device_category the device diagnostic's category. Workflow #469 H3 (since 0.12.62): every provider control failure built under this code carries stage, the step its primary detail records (a MuMuManager step: the control command's exit, error envelope or launch error; the tool's run, timeout or path; an info reader stage; without a device diagnostic the default mumu_manager_control), and device_category when the failure carries a device diagnostic. The receipt and a settled timeout's cause carry both; the ledger's runtime.failed record gains only device_category, its stage stays the lifecycle stage runtime_lifecycle_operation_cleanup, so a reader who needs the device stage reads the receipt. The cause a failed restart wraps is a newly built outcome and carries neither.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

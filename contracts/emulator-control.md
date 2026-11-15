@@ -416,14 +416,20 @@ Every request is recorded intent -> result, all linked to the instance:
    `_timeout`, `_path`, an `info` reader stage, `emulator_control_binding`,
    `emulator_control_support`). Workflow #469 H3 (since 0.12.62;
    [v012-register.md](v012-register.md) §1.399): an `emulator_control_failed` outcome also
-   carries that stage and that category as its values `stage` (a location) and
-   `device_category` (vocabulary `device_category`), on the receipt, on this record and where
-   the outcome is a cause whole (a settled timeout's `caused_by` link); a failure without a
-   device diagnostic carries the detail's defaults, `mumu_manager_control` and `child_exit`. The
+   carries that stage as its value `stage` (a location) and, when the failure carries a device
+   diagnostic, that category as its value `device_category` (vocabulary `device_category`); a
+   failure without a device diagnostic carries `stage` at the default `mumu_manager_control` and
+   no `device_category` (its detail keeps the default category `child_exit`, which no device
+   observed). The receipt carries both values, and so does a settled timeout's `caused_by` link
+   (the failure's outcome whole). This record gains only `device_category`: its `stage` stays
+   `runtime_lifecycle_operation_cleanup`, the lifecycle stage the host writes into the `stage` of
+   every `runtime.failed` record. A reader who needs the device stage reads the receipt. The
    other codes of a provider control failure (`emulator_control_wait_timeout`,
    `emulator_control_unavailable`, `emulator_control_unsupported`) carry neither. The detail, the
    stop-result table and a restart's wrapping are unchanged: a failed restart's `caused_by` link
-   names the failing phase's code and operation alone (item 5), so it carries neither value.
+   is a newly built outcome of the failing phase's code and operation alone (item 5), so it
+   carries neither value; the stage that phase failed at stays in the restart record's primary
+   detail.
 5. A failed restart records one `command.rejected` (action `emulator.instance.restart`, the
    receipt terminal) and one `runtime.failed`, after its Start phase when one ran (coordinator
    answer D2); a failed phase records nothing of its own. For `emulator_restart_stop_failed` and
