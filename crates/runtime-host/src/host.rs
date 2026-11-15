@@ -3584,6 +3584,42 @@ impl RuntimeHost {
             .replace_fact_refresh_recorder_for_test(recorder)
     }
 
+    /// Workflow #469 H1, test only: withdraws `instance_alias`'s policy availability through the
+    /// backend self-check gate's own publisher (`backend_selfcheck:<cause>`), at the host clock.
+    #[cfg(test)]
+    pub(crate) fn publish_backend_selfcheck_unavailable_for_test(
+        &self,
+        instance_alias: &str,
+        cause: &str,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::HostLocation::ReadPolicyInstanceAvailability)?
+            .publish_backend_selfcheck_unavailable(instance_alias, cause)
+    }
+
+    /// Workflow #469 H1, test only: withdraws `instance_alias`'s policy availability through the
+    /// device link's own publisher (`device_link:<state>`), at the host clock.
+    #[cfg(test)]
+    pub(crate) fn publish_device_link_unavailable_for_test(
+        &self,
+        instance_alias: &str,
+        state: actingcommand_contract::DeviceLinkState,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::HostLocation::ReadPolicyInstanceAvailability)?
+            .publish_device_link_unavailable(instance_alias, state.as_str())
+    }
+
+    /// Workflow #469 H1, test only: withdraws `instance_alias`'s policy availability through the
+    /// device state's own publisher (`device_state:<hold>`), at the host clock.
+    #[cfg(test)]
+    pub(crate) fn publish_device_state_unavailable_for_test(
+        &self,
+        instance_alias: &str,
+        hold: crate::codes::DeviceHold,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::HostLocation::ReadPolicyInstanceAvailability)?
+            .publish_device_state_unavailable(instance_alias, hold.as_str())
+    }
+
     /// ROUT-L RL-1b, test only (acceptance A4): how many times the scheduler workbench opened
     /// `game`'s `schedule.json`.
     #[cfg(test)]

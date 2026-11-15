@@ -6356,7 +6356,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports emulator control failed. Workflow #469 V0 (since 0.12.62): stage, when present, is the step of the emulator control the failure arose at, and device_category the device diagnostic's category.",
+      "description": "The Runtime host reports emulator control failed. Workflow #469 V0 (since 0.12.62): stage, when present, is the step of the emulator control the failure arose at, and device_category the device diagnostic's category. Workflow #469 H3 (since 0.12.62): every provider control failure built under this code carries stage, the step its primary detail records (a MuMuManager step: the control command's exit, error envelope or launch error; the tool's run, timeout or path; an info reader stage; without a device diagnostic the default mumu_manager_control), and device_category when the failure carries a device diagnostic. The receipt and a settled timeout's cause carry both; the ledger's runtime.failed record gains only device_category, its stage stays the lifecycle stage runtime_lifecycle_operation_cleanup, so a reader who needs the device stage reads the receipt. The cause a failed restart wraps is a newly built outcome and carries neither.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -23275,7 +23275,7 @@
     },
     "contained_task_application_update_required": {
       "category": "warning",
-      "ladder_class": "none",
+      "ladder_class": "planned_stop",
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
@@ -23290,7 +23290,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.30",
-      "description": "UPD-1 (contracts/package-reference.md, Shared interrupt pages): a shared interrupt page whose interrupts.json entry declares result application_update_required (page_id) ended the run after its handler (then end_run), or after its handler failed short of fatal (UPD-1 fix round 1: the failure is linked as related): the game says its client must be updated. The run ends with no further input, and before its terminal the Runtime records the instance fact health.application.update_required true, which holds every other task of the instance until a store_update package's run succeeds there. A scheduled run ends by a condition under the default scheduling.rerun.condition_codes (no streak, counts given back, its rerun owed after the update); it never accumulates toward a pause. Its ladder class is none, so no default trigger opens a recovery ladder; a ladder rung's package run that ends with it stops the ladder (recovery_ladder_interrupted). A startup package that ends with it is a runtime.failed warning.",
+      "description": "UPD-1 (contracts/package-reference.md, Shared interrupt pages): a shared interrupt page whose interrupts.json entry declares result application_update_required (page_id) ended the run after its handler (then end_run), or after its handler failed short of fatal (UPD-1 fix round 1: the failure is linked as related): the game says its client must be updated. The run ends with no further input, and before its terminal the Runtime records the instance fact health.application.update_required true, which holds every other task of the instance until a store_update package's run succeeds there. A scheduled run ends by a condition under the default scheduling.rerun.condition_codes (no streak, counts given back, its rerun owed after the update); it never accumulates toward a pause. Its ladder class is planned_stop (#469 D4a, since 0.12.62): the package declares the page and the run stops on purpose, so the errors view's run-recovery grouping counts its record as no failure. No default trigger item matches it, so no default trigger opens a recovery ladder; a ladder rung's package run that ends with it stops the ladder (recovery_ladder_interrupted), by its code. A startup package that ends with it is a runtime.failed warning.",
       "common_causes": "The game released a client version that the installed one may no longer connect with.",
       "handling": "None when the game root's schedule.json has a rule for its store_update package: that rule runs on the fact and its success clears the fact. Otherwise update the client by hand and run the store update package directly (ac_run_pack); its success clears the fact."
     },

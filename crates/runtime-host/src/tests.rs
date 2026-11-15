@@ -249,6 +249,9 @@ mod gate_458_close_isolates;
 // Workflow #463 U1 (0.12.60; register §1.372): a linear step on a screen its package never
 // recorded ends with its own code, names its frame and pauses only its own pair, at once.
 mod gate_463_u1;
+// Workflow #469 K1 (0.12.62; register §1.395): the word a linear step's end carries reaches the
+// policy record and leaves the failure identity and the streak as they are.
+mod gate_469_k1;
 // Workflow #463 K1 (0.12.61; register §1.374): a linear select step that ends empty gets its
 // `on_empty` key from the host's scheduling disposition.
 mod gate_463_k1;
@@ -262,6 +265,13 @@ mod gate_463_v2;
 // Workflow #463 V3 (0.12.61; register §1.383): an application's goals read and set by name
 // (`GoalView`, `EditGoal`).
 mod gate_463_v3;
+// Workflow #469 H2 (0.12.62; register §1.398): a paused pair's `policy_task_paused` says why it
+// was paused (`pause_cause`) and with which failure (`failure_code`), live, after a restart and in
+// `actingd suspended`; a backoff names the failure it follows.
+mod gate_469_h2;
+// Workflow #469 H1 (0.12.62; register §1.397): an unavailable application's `instance_unavailable`
+// reason says who withdrew its availability.
+mod gate_469_h1;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
 // one worker per device, the group's occupancy, pause, gates, session rule and refusals.
 mod gate_mapp1b;
@@ -272,6 +282,9 @@ mod gate_mapp2a;
 // Workflow #437 MAPP-2b (0.12.60; register §1.353): the switch's callers, the run's clock that
 // leaves the switch out, the member's lease, a failed switch and the member's switch cooldown.
 mod gate_mapp2b;
+// Workflow #469 H3 (0.12.62; register §1.399): an emulator control failure says where it failed
+// (`stage`, `device_category`).
+mod gate_469_h3;
 // Workflow #437 ORD-1c (0.12.60; register §1.373): the host passes the order within one device: the
 // member in front, the queue waits and the configured default limit.
 mod gate_ord1c;

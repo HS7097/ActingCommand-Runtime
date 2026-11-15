@@ -32,8 +32,8 @@ here.
 |---|---:|
 | success | 125 |
 | info | 212 |
-| warning | 151 |
-| error | 3367 |
+| warning | 152 |
+| error | 3366 |
 | fatal | 17 |
 
 ## Text and review of the active codes

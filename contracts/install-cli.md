@@ -913,8 +913,8 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
     leaves no live configuration: `undo` (which then reads the file the swap kept, the input
     `backup`) puts it back, while `resume` cannot load the root (`config_unreadable`), a known
     limit of every `config_replace` that a later slice lifts. With a Runtime answering, the
-    candidate, its commit and its answer are as before: no entry gains the member. Not on the
-    production root before LAB-7 ("Journals across versions").
+    candidate, its commit and its answer are as before: no entry gains the member. Kept off the
+    production root until 0.12.62 ("Journals across versions").
   - **Taking it back**: `config restore <backup>` puts the kept file back by the same path. Its
     post-start checks judge the pauses from before the restore, so the instance it removes shows
     as a `pauses` failure (the hold's pause on it is not restored): it ends `post_check_failed`
@@ -1464,8 +1464,8 @@ the rescue face:
     `.abandoned-<ms2>`. Nothing is deleted, and no file the manifest does not name and no other
     folder under `models\` is touched. `leftovers` lists no item of a vision root, as it lists
     none of a game root.
-  - It falls under the operating rule until LAB-7 ("Journals across versions" below): not used on
-    the production root.
+  - Until 0.12.62 it fell under the operating rule that kept the module's rows off the production
+    root ("Journals across versions" below).
 - **`state-root claim [--new-identity]`** (Workflow #453 S12, since 0.12.60; register §1.368;
   [state-root-installation.md](state-root-installation.md), "Handing a state root over"; the
   coordinator's rulings on board #453, not the owner's words). `writes`, `irreversible`, `runtime`
@@ -1517,11 +1517,18 @@ the rescue face:
   `vision_place` and its step `vision_file`, which a build before 0.12.60 does not read either):
   the testing phase keeps no old-version compatibility
   (Alice, 2026-10-11). `actingctl install` writes its journals byte for byte as before, and this
-  build reads the older ones. **Operational rule until LAB-7:** production keeps deploying through
-  `actingctl install` (the coordinator's deploy kit); the module's `deploy`, `rollback`, `place`,
-  `config replace` and (Workflow #453 S9) `vision place` are not used on the production root, so
-  no journal an older installer cannot read appears there. Workflow #453 S12: nor is its
-  `state-root claim`, until LAB-7.
+  build reads the older ones. **Operational rule until LAB-7** (lifted in 0.12.62): until 0.12.62
+  production deployed through `actingctl install` (the coordinator's deploy kit) and kept the
+  module's `deploy`, `rollback`, `place`, `config replace`, (Workflow #453 S9) `vision place` and
+  (Workflow #453 S12) `state-root claim` off the production root, so that no journal an older
+  installer cannot read appeared there. The owner's ruling of 2026-11-15 keeps nothing compatible
+  with earlier builds, so that reason is gone: only the build a deploy replaces must read the
+  module's journals, and that build (v0.12.61 for 0.12.62) reads every kind above, its
+  `actingctl install` being the module's own code (`crates/lab-rescue`). Since 0.12.62 production
+  deploys through the module (`release stage`, `deploy`, `op status`, run from the live build's
+  kept `actinglab`), with `actingctl install` of the build it replaced as the way back
+  (`install resume`, `install undo`, `install release-hold`); the rule keeps no row of the module
+  off the production root any more.
 
 ## Interface checks
 

@@ -919,3 +919,48 @@ fn a24_failure_burst_window_does_not_depend_on_arrival_order() {
         );
     }
 }
+
+// Workflow #469 D4a (0.12.62; register §1.400; the owner's approval on board #469): `device_locked`
+// is of the ladder class `planned_stop`, as the host's three other holds of a handset's start gate
+// are, and the ladder does with it what it did: a rung whose entry it holds is skipped
+// `device_not_ready` as theirs is (the skip reads the code), no trigger item of the defaults matches
+// it at any stage, and three of its warnings on one instance within the window register no burst.
+#[test]
+fn d4a_a_locked_device_still_skips_its_rung_device_not_ready_and_starts_no_ladder() {
+    use actingcommand_contract::outcome::LadderClass;
+
+    let locked = actingcommand_device::codes::DeviceStateCode::DeviceLocked.as_str();
+    for hold in [
+        locked,
+        crate::codes::DeviceStateHostCode::ThermalHold.as_str(),
+        crate::codes::DeviceStateHostCode::BatteryLow.as_str(),
+        crate::codes::DeviceStateHostCode::InUse.as_str(),
+    ] {
+        assert_eq!(
+            ladder_class_of(hold),
+            Some(LadderClass::PlannedStop),
+            "{hold}"
+        );
+        assert_eq!(
+            recovery_entry_skip(hold),
+            Some(RecoveryRungSkipReason::DeviceNotReady),
+            "{hold}"
+        );
+    }
+    let defaults = ladder(serde_json::json!({}));
+    // Every stage of the seven, the recovery preparation's, the resource fence's and a drill's
+    // included.
+    for stage in RecoveryTriggerStage::ALL {
+        assert_eq!(
+            defaults.classify(stage, locked),
+            TriggerVerdict::Unmatched,
+            "{stage:?}"
+        );
+    }
+    let node = instance();
+    let three = [1_000, 2_000, 3_000].map(|at_unix_ms| CountedRecord {
+        severity: EventSeverity::Warning,
+        ..record(node, at_unix_ms, locked)
+    });
+    assert!(bursts(defaults, &three).is_empty(), "three locked warnings");
+}

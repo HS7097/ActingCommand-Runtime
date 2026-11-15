@@ -440,9 +440,10 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   `detached`, the detached run's `pid` and `log`, and `next` naming `op status`, which follows the
   operation (its id in `unfinished` while it runs, in `last_operations` once it ended, its journal
   with `op`). The detached run journals `Lab-MCP`; until LAB-6 its requests to a running Runtime
-  go on the CLI channel, as every request of the module does (section 7). Until LAB-7 production
-  deploys through `actingctl install`, not through the rescue module and not through this server
-  ([install-cli.md](install-cli.md), "Operational rule until LAB-7").
+  go on the CLI channel, as every request of the module does (section 7). Until 0.12.62 production
+  deployed through `actingctl install`, not through the rescue module and not through this server;
+  since 0.12.62 it deploys through the rescue module ([install-cli.md](install-cli.md),
+  "Operational rule until LAB-7", lifted in 0.12.62).
 
 ## 6 Guards report, never block
 
@@ -533,8 +534,10 @@ Alice's answer 4. From LAB-3, in the rescue module:
   install release-hold --root <r> --reason <r>` and `actingctl resume` of each instance it paused;
   after LAB-7 the module's `release-hold` and the Lab's core `resume <instance>` (from LAB-6) stay.
   A global pause is kept and listed (§6). `deploy` takes no `--reason` (its form above has none).
-  Until LAB-7 production deploys through `actingctl install`: an installer of v0.12.47 or older
-  cannot read a journal the module writes (no `install-root` raise; open point 5).
+  Until 0.12.62 production deployed through `actingctl install`, because an installer of v0.12.47
+  or older cannot read a journal the module writes (no `install-root` raise; open point 5); since
+  0.12.62 it deploys through the module, that reason being gone ([install-cli.md](install-cli.md),
+  "Journals across versions").
 
 ## 8 The Lab's modules
 

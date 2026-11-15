@@ -168,7 +168,7 @@ hand. The [summary](README.md) says what each column means. 1157 codes.
 | `contained_task_action_gap_recorded` | info | none | 0.12.37 | active | pending | written | A record of the execution.action_gap keys in a run's diagnostics (a row of the phase action_gap, no ledger shape). |
 | `contained_task_active_identity_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports contained task active identity mismatch. |
 | `contained_task_already_running` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports contained task already running. |
-| `contained_task_application_update_required` | warning | none | 0.12.30 | active | pending | written | UPD-1 (contracts/package-reference.md, Shared interrupt pages): a shared interrupt page whose interrupts.json entry declares result application_update_required… |
+| `contained_task_application_update_required` | warning | planned_stop | 0.12.30 | active | pending | written | UPD-1 (contracts/package-reference.md, Shared interrupt pages): a shared interrupt page whose interrupts.json entry declares result application_update_required… |
 | `contained_task_cancellation_identity_missing` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports contained task cancellation identity missing. |
 | `contained_task_cancellation_state_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports contained task cancellation state invalid. |
 | `contained_task_cancellation_state_missing` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports contained task cancellation state missing. |

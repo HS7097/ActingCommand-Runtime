@@ -89,7 +89,8 @@
       "requests": ["Status", "MonitorStatus", "QueryEvents", "PerformanceStatus", "FactRefreshStatus", "ScheduleExplanation", "RuntimeFactSnapshot", "StartReport"],
       "source": ["actingctl overview", "actingctl status", "actingctl monitor-status", "actingctl emulator status", "actingctl perf-status", "actingctl fact-refresh", "MCP ac_overview", "actinglab status", "actinglab session status", "actinglab lab status", "acui: workbench status and start report reads (crates/acui-source/src/workbench.rs)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#469 F1 (0.12.62): an instance row's run, a brief run status, carries failure_values in its terminal beside failure_code, absent when there are none"
     },
     {
       "name": "facts",
@@ -209,7 +210,8 @@
       "requests": ["QueryEvents", "Status"],
       "source": ["actingctl runs", "MCP ac_runs", "actinglab run list"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#469 F1 (0.12.62): a row whose terminal outcome carries values that codes mode keeps (codes, locations, vocabulary words) has them as failure_values beside failure_code, by key; absent when there are none"
     },
     {
       "name": "run show",
@@ -227,7 +229,7 @@
       "source": ["MCP ac_get_run", "actinglab lab receipt"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `run_show` (the run a handle or run_id names, the full read and the answer of MCP ac_get_run); waiting on the run and the jobs of the MCP process stay with MCP; LAB-2 dropped from_step: the read answers the run whole and holds no steps (run evidence --from-step pages them)"
+      "notes": "LAB-1b moved its code into lab-ops: `run_show` (the run a handle or run_id names, the full read and the answer of MCP ac_get_run); waiting on the run and the jobs of the MCP process stay with MCP; LAB-2 dropped from_step: the read answers the run whole and holds no steps (run evidence --from-step pages them); #469 F1 (0.12.62): the run's terminal carries failure_values beside failure_code, the values codes mode keeps of the terminal outcome, absent when there are none"
     },
     {
       "name": "run evidence",
@@ -288,7 +290,8 @@
       "requests": ["QueryEvents", "ScheduleExplanation", "Status", "RuntimeFactSnapshot"],
       "source": ["actingctl diagnose", "MCP ac_diagnose"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#469 F1 (0.12.62): each runs row, a brief run status, carries failure_values in its terminal beside failure_code, absent when there are none; runs_grouped still groups by catalog_task_id, failure_code and final_page"
     },
     {
       "name": "report export",

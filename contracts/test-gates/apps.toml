@@ -2300,3 +2300,22 @@ tests = [
     "actingcommand-actinglab-mcp::serve_calls::mcp_goals_rows_accepted_are_the_command_lines",
 ]
 incident = ["#463 V3"]
+
+# Workflow #469 F1 (0.12.62; register §1.387; brief rd-1115/brief-469-f1-run-reads.md; contracts/runtime-state-observation.md, "Contained-run queries"), on A42's fake Runtime with one failed run whose terminal outcome carries a vocabulary word (receipt_state), an id (lease_id) and a duration (retry_after_ms): ac_get_run's full status (run_show's read and answer, which actinglab run show answers too), the ac_runs row beside its failure_code, the overview's run block (a brief status) and the diagnosis's runs row (a brief status) each show failure_values {receipt_state: failed} beside the code and neither the id nor the duration; runs_grouped still groups by (catalog_task_id, failure_code, final_page) and carries no failure_values
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_ac_get_run_shows_the_terminal_values_in_full",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_ac_runs_shows_the_values_beside_the_failure_code",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_the_overview_run_shows_the_terminal_values",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_the_diagnosis_runs_show_the_terminal_values_and_the_groups_keep_the_code",
+]
+incident = ["#469 F1"]
+
+# Workflow #469 D4a (0.12.62; register §1.400; brief rd-1115/brief-469-d4-owner-four.md; the owner's approval on board #469): call_budget_exhausted is a warning. The overview's two writers of it (a block whose read the call budget left no time to start, performance_incomplete true, and the not-running rows) write it as a warning beside the overview's success line: runtime_overview_reported, exit 0, no developer line (so the Lab's MCP answers isError false), each warning's envelope category warning
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::overview::tests::d4a_a_spent_call_budget_is_a_warning_beside_a_successful_answer",
+]
+incident = ["#469 D4a"]

@@ -58,8 +58,9 @@ actingcommand_contract::outcome_codes! {
         /// (value `device_label`).
         DeviceKeyguardDismissFailed => "device_keyguard_dismiss_failed": error / environment_fault,
         /// A keyguard waits for a person: it asks for a credential, or the policy is `wait` (value
-        /// `device_label`).
-        DeviceLocked => "device_locked": warning / budget_or_permission,
+        /// `device_label`). Workflow #469 D4a (since 0.12.62): of the ladder class
+        /// `planned_stop`, as the host's three other holds of a handset's start gate are.
+        DeviceLocked => "device_locked": warning / planned_stop,
     }
 }
 // Workflow #398 RD-5a (end).

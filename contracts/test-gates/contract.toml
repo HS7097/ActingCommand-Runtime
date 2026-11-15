@@ -908,3 +908,11 @@ tests = [
     "actingcommand-contract::lib::standard_pack_goals::tests::v1_a_version_1_document_is_refused_goal_version_retired",
 ]
 incident = ["#463 V1"]
+
+# Workflow #469 F1 (0.12.62; register §1.387; brief rd-1115/brief-469-f1-run-reads.md; contracts/runtime-state-observation.md, "Contained-run queries"), on the ScriptedRuntime ledger of the run-status gates (R7): the terminal of a run's status, brief and full, carries what codes mode keeps of its terminal outcome's values as failure_values: of contained_task_deadline_exceeded with receipt_state failed, lease_id (an id) and retry_after_ms (a duration), {receipt_state: failed} alone, in the struct and in the status's JSON; a succeeded terminal without an outcome, and a failed one whose outcome carries only values codes mode drops (request_id, host_halted), have no member, and their terminal's JSON text is the text of the members it had before, in their order
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome",
+]
+incident = ["#469 F1"]
