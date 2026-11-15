@@ -110,6 +110,19 @@ names its packages by `package_id` (`package_label`, `recovery_package_labels`);
 digest is projected. `recovery_package_labels` lists the packages a run admitted for its entry
 recovery; a bound recovery package the run never needed is not listed.
 
+A run's terminal (`ContainedRunTerminal`) names its committed outcome's code as `failure_code`.
+Workflow #469 F1 (since 0.12.62): beside it, `failure_values` holds what codes mode keeps of that
+outcome's own values (`Outcome::codes_only`): the values whose type is a registered name (a code,
+a location, a word of a vocabulary, and lists of them), by key, as an outcome envelope's `values`
+holds them; an id, a name, a number or a duration is never there, nor are the outcome's causes.
+It is absent when the outcome carries none, so such a terminal serializes as before. The fold
+takes it from the terminal fact it takes the code from, in Full and Brief alike, with no other
+read. The terminal denies unknown members, and no reader keeps an earlier shape: every reader of
+this repository builds on the same contract crate. A run's status is the client's projection of
+`QueryEvents` pages, not a wire answer, and `QueryRuns`, whose rows carry the same terminal, is
+answered by no Runtime yet ([global-ledger-query.md](global-ledger-query.md)), so no interface
+revision moves.
+
 The run listing reads by run (Workflow #391 item 3): it first lists the runs of the
 window by their main admission (`task.requested`), their entry facts
 (`task.entry_preflight`) and their terminal (`task.completed`, `task.failed`,
@@ -161,7 +174,9 @@ runs grouped by (policy task id `catalog_task_id`, failure code, final page), an
 `catalog_task_id`, code); a code is its record's outcome, with an unregistered relayed
 spelling read back (`scheduled_failure_code`). To fit its output budget `ac_diagnose` cuts
 `failures_grouped`, then `runs_grouped`, the fewest-count groups first, before any other
-list.
+list. Workflow #469 F1 (since 0.12.62): a `runs` row is the run's brief status as it is, so its
+terminal carries `failure_values`; `runs_grouped` and `failures_grouped` still group by the code
+alone.
 
 #422 QR-2b: a diagnosis lists the window's runs once, with
 `list_window_runs` (the listing `list_contained_runs` reads, on the instance or on every
@@ -197,7 +212,9 @@ restart pages (up to four) and its lease pages (up to two).
 `list_contained_runs` (Workflow #389 MCP-3) pages the same listing for `actingctl runs`
 and MCP `ac_runs`: the runs first recorded in a window, on one instance or all, newest
 first by their first listing fact, each read in brief mode and kept by its dispatch and
-state, at most 100 a page. As in the listing above, a run is not listed until it writes its
+state, at most 100 a page. A row takes from the run's terminal its `task_result`,
+`failure_code`, `final_page` and `executed_steps` and, since Workflow #469 F1 (0.12.62),
+`failure_values` beside `failure_code`, absent when there are none. As in the listing above, a run is not listed until it writes its
 first listing fact, which for a run with an entry check is when that check ends, at most
 `min(step_timeout, task_timeout)`; meanwhile its instance shows `lease_active: true`.
 A scheduled run also carries its policy task id as

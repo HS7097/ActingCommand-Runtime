@@ -254,6 +254,13 @@ summary; a window that starts earlier, or `unavailable` (no row then), is not
 answered completely by it, and its reader reads the ledger or says so. Neither
 type is carried by an operation in 0.12.27, and no configuration key is added
 (the run summary's two keys come with B-2).
+Workflow #469 F1 (since 0.12.62): the fold's terminal also keeps `failure_values`,
+what codes mode keeps of the terminal outcome's own values (the values whose type
+is a registered name), taken from the terminal fact it takes `failure_code` from
+and absent when there are none; a `QueryRuns` row's status carries it as the
+run status read does ([runtime-state-observation.md](runtime-state-observation.md),
+"Contained-run queries"). `QueryRuns` is still carried by no operation, so no
+interface revision moves.
 
 A Runtime reader-pool thread also keeps, from one of its pages to the next, the
 Lab relations through a page's snapshot, for the last 4 snapshots it read at
