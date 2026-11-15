@@ -11,7 +11,9 @@
 //!   (`--record-id`, its `lab/out/<package_id>.<zip|json>`) or any content directory or container
 //!   (`--package`); the decision document `actingcommand.pack-decision.v1` ([`Decision`]), which
 //!   holds only what the Lab cannot know and is required on a first adoption; the Lab's state
-//!   directory, which holds the recordings, the kept copies and the check trees.
+//!   directory, which holds the recordings, the kept copies and the check trees. Workflow #463
+//!   S3-4: or, in place of a document, a held decision's reason and reference
+//!   ([`AdoptDecision::Held`]), which are that document of the class `held` and are read as it is.
 //! - **The checks**, every one before the first write, in this order: the repository, no leftover
 //!   of an interrupted call; the recording; the package, admitted as `package preflight` admits
 //!   it, its game and server those of `applications.json`; its `package_id` a directory name and
@@ -257,14 +259,28 @@ pub enum AdoptSource {
     Package(PathBuf),
 }
 
+/// Where the adoption's decision comes from (Workflow #463 S3-4).
+#[derive(Debug, Clone)]
+pub enum AdoptDecision {
+    /// `--decide <decision.json>`: the decision document at this path.
+    Document(PathBuf),
+    /// `--held-reason <text> [--held-reference <text>]`: exactly the decision `{schema_version,
+    /// class: "held", held: {reason, reference?}}`, built as that document and read by the
+    /// reader of a document, so that every check and every byte written is the document's.
+    Held {
+        reason: String,
+        reference: Option<String>,
+    },
+}
+
 /// Workflow #464 P1: `actinglab standard-pack adopt --repo <checkout> (--record-id <id> |
-/// --package <path>) [--decide <decision.json>] [--replace] [--state-dir <dir>]` under the
-/// global `--dry-run`.
+/// --package <path>) [--decide <decision.json> | --held-reason <text> [--held-reference <text>]]
+/// [--replace] [--state-dir <dir>]` under the global `--dry-run`.
 #[derive(Debug, Clone)]
 pub struct StandardPackAdoptRequest {
     pub repo: PathBuf,
     pub source: AdoptSource,
-    pub decision: Option<PathBuf>,
+    pub decision: Option<AdoptDecision>,
     pub replace: bool,
     pub dry_run: bool,
     /// The Lab's state directory: the recordings, the kept copies and the check trees.
@@ -657,9 +673,17 @@ pub fn standard_pack_adopt(
         }
     }
 
-    // The decision; without one, the class of the earlier adoption.
+    // The decision; without one, the class of the earlier adoption. Workflow #463 S3-4: a held
+    // decision's two texts are that document, handed to the document's own reader.
     let decision = match &request.decision {
-        Some(path) => Some(Decision::read(&absolute(path)?, &root.schedule)?),
+        Some(AdoptDecision::Document(path)) => {
+            Some(Decision::read(&absolute(path)?, &root.schedule)?)
+        }
+        Some(AdoptDecision::Held { reason, reference }) => Some(Decision::of_document(
+            held_document(reason, reference.as_deref()),
+            Path::new(""),
+            &root.schedule,
+        )?),
         None => None,
     };
     let class = match (
@@ -671,7 +695,9 @@ pub fn standard_pack_adopt(
         (None, None) => {
             return Err(refused(
                 adopt(AdoptProblem::DecisionInvalid).json_pointer(""),
-                "a first adoption needs --decide <decision.json>".to_owned(),
+                "a first adoption needs --decide <decision.json>, or --held-reason <text> to \
+                 adopt the package as held"
+                    .to_owned(),
             ));
         }
     };
@@ -1845,6 +1871,18 @@ impl Decision {
             fs::read(path).map_err(|error| invalid("", &format!("{}: {error}", path.display())))?;
         let document = serde_json::from_slice::<Value>(strip_bom(&bytes))
             .map_err(|error| invalid("", &format!("not JSON: {error}")))?;
+        Self::of_document(document, path, schedule)
+    }
+
+    /// The document `document` read from `path`, checked on its own and against the file's pools.
+    /// Workflow #463 S3-4: also a document the call built ([`held_document`]), whose `path` is
+    /// empty, as no file was read.
+    fn of_document(
+        document: Value,
+        path: &Path,
+        schedule: &StandardPackSchedule,
+    ) -> LabResult<Self> {
+        let invalid = |pointer: &str, message: &str| decision_invalid(path, pointer, message);
         let Value::Object(document) = document else {
             return Err(invalid("", "the decision is no JSON object"));
         };
@@ -1975,6 +2013,22 @@ impl Decision {
     fn invalid(&self, pointer: &str, message: &str) -> LabError {
         decision_invalid(&self.path, pointer, message)
     }
+}
+
+/// Workflow #463 S3-4: the decision document `{schema_version, class: "held", held: {reason,
+/// reference?}}` of `--held-reason` and `--held-reference`, which [`Decision::of_document`] reads
+/// as it reads a document given by its path; the texts as given, so that its reader checks them.
+fn held_document(reason: &str, reference: Option<&str>) -> Value {
+    let mut held = Map::new();
+    held.insert(HELD_REASON.to_owned(), json!(reason));
+    if let Some(reference) = reference {
+        held.insert(HELD_REFERENCE.to_owned(), json!(reference));
+    }
+    let mut document = Map::new();
+    document.insert(SCHEMA_VERSION.to_owned(), json!(PACK_DECISION_SCHEMA));
+    document.insert("class".to_owned(), json!("held"));
+    document.insert(HELD.to_owned(), Value::Object(held));
+    Value::Object(document)
 }
 
 /// `value`: `"pending"`, or `{fixed_value_milli, origin?}` whose origin, when written, is `pack`.

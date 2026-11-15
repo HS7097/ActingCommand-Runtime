@@ -157,10 +157,10 @@ mod standard_pack_schedule;
 mod standard_pack_ready;
 
 pub use adopt::{
-    AdoptClass, AdoptCoverage, AdoptSource, AdoptWorktree, DerivedDrift, DerivedFrom,
-    DerivedMember, GivenMember, NotJudgedBecause, PACK_DECISION_SCHEMA, RecordingReview,
-    RootEntryChange, StandardPackAdoptRequest, StandardPackAdoptResponse, ValueNotJudged,
-    ValueWait, standard_pack_adopt,
+    AdoptClass, AdoptCoverage, AdoptDecision, AdoptSource, AdoptWorktree, DerivedDrift,
+    DerivedFrom, DerivedMember, GivenMember, NotJudgedBecause, PACK_DECISION_SCHEMA,
+    RecordingReview, RootEntryChange, StandardPackAdoptRequest, StandardPackAdoptResponse,
+    ValueNotJudged, ValueWait, standard_pack_adopt,
 };
 pub use api::*;
 pub use authoring::*;

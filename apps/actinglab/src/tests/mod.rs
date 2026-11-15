@@ -190,6 +190,10 @@ mod gate_464_p2;
 // those words is gone.
 #[path = "gate_467_rpt1.rs"]
 mod gate_467_rpt1;
+// Workflow #463 S3-4: `standard-pack adopt` refuses a held decision's flags beside `--decide`, and
+// its reference without its reason, before anything is read.
+#[path = "gate_463_s34.rs"]
+mod gate_463_s34;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

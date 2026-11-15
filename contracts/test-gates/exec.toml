@@ -3335,3 +3335,12 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_469_k2::k2_returned_to_own_page_names_a_window_that_ended_on_the_step_s_own_page",
 ]
 incident = ["#469 K2"]
+
+# Workflow #463 S3-4 (0.12.63; register §1.411; brief rd-1115/brief-463-s34-adopt-held.md; design rd-1115/pack-stage3-design.md §4.2 "S3-4"; contracts/standard-pack-authoring.md, "A held decision by two flags"), standard-pack adopt on P1's made-up resource repository: a held decision's reason and reference without a document (AdoptDecision::Held) are the decision {schema_version, class: held, held: {reason, reference}}, read by the document's reader. A first adoption of a package not run through by the two texts writes the pack directory (its JSON canonical) and schedule.json with the held entry {package_id, reason, reference} and no rule, byte for byte the repository the same document writes on a repository of its own, and answers as that document's adoption (class held, no rule, its held entry, no coverage, written the pack directory then schedule.json, the same review, entries, requires, given and derived); a blank reason, empty or of spaces, by the texts and by the document alike, is refused adopt_refused decision_invalid at /held/reason and nothing is written or kept (1); a package its business rule already schedules, adopted again with --replace by the reason and by the document alike: its rules byte for byte as before, its held entry {package_id, reason} written beside them (the one-role table's row held), the answer's rule the kept rule and its held entry the one written, nothing removed or replaced, written the pack directory then schedule.json, maintenance.json unchanged, and the two repositories byte for byte the same (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_464_p1::s34_a_first_adoption_by_the_held_reason_writes_what_the_held_document_writes",
+    "actingcommand-resource-tooling::lib::gate_464_p1::s34_the_held_reason_on_a_scheduled_package_keeps_its_rule_and_writes_its_hold",
+]
+incident = ["#463 S3-4"]

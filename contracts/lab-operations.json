@@ -2643,7 +2643,9 @@
         {"name": "repo", "form": "option", "type": "dir", "required": true, "note": "the game's working root in a resource repository's checkout: applications.json, maintenance.json, packs/ and the root files"},
         {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "a stopped recording of the state directory, its package the one its last record stop generated; not with package"},
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with record_id"},
-        {"name": "decide", "form": "option", "type": "file", "required": false, "note": "the decision document actingcommand.pack-decision.v1; required on a first adoption"},
+        {"name": "decide", "form": "option", "type": "file", "required": false, "note": "the decision document actingcommand.pack-decision.v1; a first adoption needs it or held_reason; not with held_reason or held_reference"},
+        {"name": "held_reason", "form": "option", "type": "string", "required": false, "note": "the decision of the class held without a document: exactly {schema_version, class: held, held: {reason}}, read as a document given by decide is; a non-blank text of at most 1024 bytes without a control character; not with decide"},
+        {"name": "held_reference", "form": "option", "type": "string", "required": false, "note": "with held_reason only: that decision's held.reference, a non-blank text of at most 1024 bytes without a control character"},
         {"name": "replace", "form": "switch", "type": "boolean", "required": false, "note": "adopt a package adopted before again: its directory is replaced and moved to the state directory, its rule kept but for what the decision names"},
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
@@ -2659,7 +2661,7 @@
       "new": "#464",
       "slice": "SP-ADOPT",
       "status": "planned",
-      "notes": "Workflow #464 P1 (0.12.61; contracts/standard-pack-authoring.md): it writes only inside repo and under the state directory, every check before the first write (refusals adopt_refused, adopt_problem naming the check), nothing deleted; the readiness of the package is another slice's"
+      "notes": "Workflow #464 P1 (0.12.61; contracts/standard-pack-authoring.md): it writes only inside repo and under the state directory, every check before the first write (refusals adopt_refused, adopt_problem naming the check), nothing deleted; the readiness of the package is another slice's. Workflow #463 S3-4 (0.12.63; register §1.411; A held decision by two flags): held_reason and held_reference are the decision of the class held without a document, built as that document and read by the document's reader, so every check and every byte written is the document's; decide beside either is refused validation_failed naming the held parameter, argument_problem conflicting, and held_reference without held_reason the same, before anything is read; they only hold, nothing here lifts a hold"
     },
     {
       "name": "standard-pack ready",

@@ -16,7 +16,9 @@
 //! standard-pack adopt --repo <checkout> (--record-id <id> | --package <path>) [--decide
 //! <decision.json>] [--replace] [--state-dir <dir>]` makes a recorded package a member of its
 //! game's standard pack in a resource repository's checkout. Under `--dry-run` it runs every check
-//! and writes nothing in the repository.
+//! and writes nothing in the repository. Workflow #463 S3-4: `--held-reason <text>
+//! [--held-reference <text>]` in place of `--decide` is the decision of the class `held` without a
+//! document, read by the same reader as one.
 //!
 //! Workflow #464 P2 (contracts/resource-verify.md, "`standard-pack build`"): `actinglab
 //! standard-pack build --repo <checkout> --source-repository <owner>/<name> --out <directory>
@@ -34,12 +36,13 @@
 use crate::{CliError, CliOutcome, FlagArgs, GlobalOptions};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
+use actingcommand_lab_ops::codes::ArgumentProblem;
 use actingcommand_resource_tooling::{
-    AdoptSource, AdoptWorktree, StandardPackAdoptRequest, StandardPackCheckRequest,
+    AdoptDecision, AdoptSource, AdoptWorktree, StandardPackAdoptRequest, StandardPackCheckRequest,
     StandardPackComposeRequest, StandardPackReadyRequest, check_standard_pack_root,
     compose_standard_packs, judge_standard_pack_readiness, standard_pack_adopt,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -48,15 +51,22 @@ pub(crate) const CHECK_FLAGS: [&str; 1] = ["--root"];
 /// Workflow #434 LAB-5B2: the flags `standard-pack compose` takes (its own `--instance`, given
 /// after the command's words, `cli_parse::COMMAND_OPTIONS`).
 pub(crate) const COMPOSE_FLAGS: [&str; 3] = ["--root", "--instance", "--out"];
-/// Workflow #464 P1: the flags `standard-pack adopt` takes.
-pub(crate) const ADOPT_FLAGS: [&str; 6] = [
+/// Workflow #464 P1: the flags `standard-pack adopt` takes. Workflow #463 S3-4: and the two of a
+/// held decision without a document.
+pub(crate) const ADOPT_FLAGS: [&str; 8] = [
     "--repo",
     "--record-id",
     "--package",
-    "--decide",
+    DECIDE_FLAG,
+    HELD_REASON_FLAG,
+    HELD_REFERENCE_FLAG,
     "--replace",
     "--state-dir",
 ];
+/// Workflow #463 S3-4: the decision document's flag, and the two of a held decision without one.
+const DECIDE_FLAG: &str = "--decide";
+const HELD_REASON_FLAG: &str = "--held-reason";
+const HELD_REFERENCE_FLAG: &str = "--held-reference";
 /// Workflow #464 P1: the flag of `standard-pack adopt` that takes no value, which takes none from
 /// the next word but `true` or `false` (`FlagArgs::parse_switches`).
 pub(crate) const ADOPT_SWITCHES: [&str; 1] = ["--replace"];
@@ -91,12 +101,14 @@ pub(crate) fn compose_options() -> [&'static str; 3] {
 }
 
 /// Workflow #464 P1: the flags of `standard-pack adopt`.
-pub(crate) fn adopt_options() -> [&'static str; 6] {
+pub(crate) fn adopt_options() -> [&'static str; 8] {
     [
         "--repo <the game's working root in a resource repository's checkout>",
         "--record-id <a stopped recording of the state directory>",
         "--package <a content directory, .zip or .json container>",
-        "--decide <decision.json: actingcommand.pack-decision.v1; required on a first adoption>",
+        "--decide <decision.json: actingcommand.pack-decision.v1; a first adoption needs it or --held-reason>",
+        "--held-reason <text> (the decision of the class held without a document: its reason; not with --decide)",
+        "--held-reference <text> (with --held-reason only: the held decision's reference)",
         "--replace (adopt a package adopted before again)",
         "--state-dir <the Lab's state directory; default actinglab's>",
     ]
@@ -228,6 +240,7 @@ fn run_adopt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             flags.required(flag)?;
         }
     }
+    let decision = adopt_decision(&flags)?;
     let repo = flags.required_path("--repo")?;
     let state_dir = crate::session_state_dir_from_flags(&flags)?;
     let source = match (
@@ -252,7 +265,7 @@ fn run_adopt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         StandardPackAdoptRequest {
             repo,
             source,
-            decision: flags.optional_path("--decide"),
+            decision,
             replace: flags.bool("--replace"),
             dry_run: global.dry_run,
             state_dir,
@@ -262,6 +275,49 @@ fn run_adopt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     )?;
     serde_json::to_value(response)
         .map_err(|error| CliError::device(format!("failed to serialize the adoption: {error}")))
+}
+
+/// Workflow #463 S3-4: the decision of `standard-pack adopt`, taken from its flags before anything
+/// is read or written: `--decide <decision.json>`, the document at that path; or `--held-reason
+/// <text> [--held-reference <text>]`, the decision of the class `held` from the two texts as given,
+/// which the resource tooling builds as that document and reads by the document's reader, so that
+/// the texts are checked as a document's are. `--decide` beside either is refused naming the held
+/// flag, and `--held-reference` without `--held-reason`, which it needs, naming itself.
+fn adopt_decision(flags: &FlagArgs) -> CliOutcome<Option<AdoptDecision>> {
+    match (
+        flags.optional_path(DECIDE_FLAG),
+        flags.optional(HELD_REASON_FLAG),
+        flags.optional(HELD_REFERENCE_FLAG),
+    ) {
+        (Some(_), Some(_), _) => Err(conflicting(
+            HELD_REASON_FLAG,
+            "standard-pack adopt takes --decide <decision.json> or --held-reason <text>, not both",
+        )),
+        (Some(_), None, Some(_)) => Err(conflicting(
+            HELD_REFERENCE_FLAG,
+            "standard-pack adopt takes --held-reference only with --held-reason <text>, and \
+             neither with --decide <decision.json>",
+        )),
+        (None, None, Some(_)) => Err(conflicting(
+            HELD_REFERENCE_FLAG,
+            "standard-pack adopt takes --held-reference only with --held-reason <text>",
+        )),
+        (Some(document), None, None) => Ok(Some(AdoptDecision::Document(document))),
+        (None, Some(reason), reference) => Ok(Some(AdoptDecision::Held { reason, reference })),
+        (None, None, None) => Ok(None),
+    }
+}
+
+/// Workflow #463 S3-4: `flag` refused beside a flag it excludes, or without one it needs, as the
+/// command line's other conflicts are: `validation_failed` naming it, `argument_problem`
+/// `conflicting`.
+fn conflicting(flag: &str, message: &str) -> CliError {
+    let problem = ArgumentProblem::Conflicting.as_str();
+    CliError::usage(message).with_details(json!({
+        "argument": flag,
+        "argument_problem": problem,
+        "arguments": [{"argument": flag, "argument_problem": problem}],
+    }))
 }
 
 /// The checkout's version control as adopt asks it: `git status --porcelain=v1 -z

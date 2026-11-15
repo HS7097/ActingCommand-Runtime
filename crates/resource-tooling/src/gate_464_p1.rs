@@ -59,9 +59,9 @@
 use crate::adopt::CHECK_TREE_MARKER;
 use crate::codes::AdoptProblem;
 use crate::{
-    AdoptClass, AdoptCoverage, AdoptSource, AdoptWorktree, DerivedFrom, PackageBundleRequest,
-    ResourceToolingCode, RootEntryChange, StandardPackAdoptRequest, StandardPackAdoptResponse,
-    StandardPackRootFiles, package_bundle, standard_pack_adopt,
+    AdoptClass, AdoptCoverage, AdoptDecision, AdoptSource, AdoptWorktree, DerivedFrom,
+    PackageBundleRequest, ResourceToolingCode, RootEntryChange, StandardPackAdoptRequest,
+    StandardPackAdoptResponse, StandardPackRootFiles, package_bundle, standard_pack_adopt,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
@@ -658,7 +658,7 @@ fn request(
     StandardPackAdoptRequest {
         repo: fixture.repo(),
         source,
-        decision,
+        decision: decision.map(AdoptDecision::Document),
         replace,
         dry_run: false,
         state_dir: fixture.state(),
@@ -2454,4 +2454,233 @@ fn p1_leftover_temporary_check_trees_cleared_with_the_marker_only_never_through_
         "the tree is not emptied"
     );
     assert_eq!(tree(&unmarked), unmarked_before);
+}
+
+// Workflow #463 S3-4 (register §1.411; contracts/standard-pack-authoring.md, "A held decision by
+// two flags"; coordinator work order `rd-1115/brief-463-s34-adopt-held.md`, the design
+// `rd-1115/pack-stage3-design.md` §4.2 "S3-4"): `--held-reason` and `--held-reference` are the
+// decision `{schema_version, class: "held", held: {reason, reference?}}` without a document
+// (`AdoptDecision::Held`), read by the document's reader.
+// - a first adoption by the two texts writes the held entry with both and no rule, byte for byte
+//   what the same document writes on a repository of its own, and answers as it; a blank reason is
+//   refused as the document's blank reason is (`decision_invalid` at `/held/reason`), nothing
+//   written;
+// - on a package its business rule already schedules, `--replace` with the reason keeps that rule
+//   as written and writes its hold beside it (the one-role table's row `held`), as the document
+//   does.
+
+/// The reason and the reference of the held decisions of S3-4.
+const HELD_REASON: &str = "Not run through on a real device yet.";
+const HELD_REFERENCE: &str = "neutral reference 1";
+
+/// The decision of `--held-reason <reason> [--held-reference <reference>]`.
+fn held_by_flags(reason: &str, reference: Option<&str>) -> AdoptDecision {
+    AdoptDecision::Held {
+        reason: reason.to_owned(),
+        reference: reference.map(str::to_owned),
+    }
+}
+
+/// The decision document the two flags are.
+fn held_document(reason: &str, reference: Option<&str>) -> Value {
+    let mut held = json!({"reason": reason});
+    if let Some(reference) = reference {
+        held["reference"] = json!(reference);
+    }
+    json!({"schema_version": DECISION_SCHEMA, "class": "held", "held": held})
+}
+
+/// [`request`] with the decision `decision`.
+fn request_with(
+    fixture: &Fixture,
+    source: AdoptSource,
+    decision: AdoptDecision,
+    replace: bool,
+    at_unix_ms: u64,
+) -> StandardPackAdoptRequest {
+    StandardPackAdoptRequest {
+        decision: Some(decision),
+        ..request(fixture, source, None, replace, at_unix_ms)
+    }
+}
+
+#[test]
+fn s34_a_first_adoption_by_the_held_reason_writes_what_the_held_document_writes() {
+    // A recording not run through, which only the class held takes.
+    let files = package_files(
+        ADOPTED,
+        SERVER,
+        "Not run through",
+        &provenance("partially_evaluated"),
+    );
+    let fixture = Fixture::new();
+    let source = package_dir(&fixture, "package", &files);
+
+    // A blank reason, by the flag and by the document: the same refusal, nothing written.
+    let before = tree(&fixture.repo());
+    for (index, blank) in ["", "   "].into_iter().enumerate() {
+        assert_refused(
+            standard_pack_adopt(
+                request_with(
+                    &fixture,
+                    source.clone(),
+                    held_by_flags(blank, None),
+                    false,
+                    FIRST,
+                ),
+                &Committed,
+            ),
+            AdoptProblem::DecisionInvalid,
+            &json!({"json_pointer": "/held/reason"}),
+            &fixture,
+            &before,
+        );
+        let document = decide(
+            &fixture,
+            &format!("blank-{index}"),
+            &held_document(blank, None),
+        );
+        assert_refused(
+            standard_pack_adopt(
+                request(&fixture, source.clone(), Some(document), false, FIRST),
+                &Committed,
+            ),
+            AdoptProblem::DecisionInvalid,
+            &json!({"json_pointer": "/held/reason"}),
+            &fixture,
+            &before,
+        );
+    }
+
+    // The two texts on this repository, the document they are on a repository of its own.
+    let by_flags = standard_pack_adopt(
+        request_with(
+            &fixture,
+            source,
+            held_by_flags(HELD_REASON, Some(HELD_REFERENCE)),
+            false,
+            SECOND,
+        ),
+        &Committed,
+    )
+    .unwrap_or_else(|error| panic!("the held adoption by its two texts: {error}"));
+    let twin = Fixture::new();
+    let document = decide(
+        &twin,
+        "held",
+        &held_document(HELD_REASON, Some(HELD_REFERENCE)),
+    );
+    let by_document = standard_pack_adopt(
+        request(
+            &twin,
+            package_dir(&twin, "package", &files),
+            Some(document),
+            false,
+            SECOND,
+        ),
+        &Committed,
+    )
+    .unwrap_or_else(|error| panic!("the held adoption by its document: {error}"));
+
+    // The held entry with both texts, and no rule: byte for byte what the document wrote.
+    let entry = json!({
+        "package_id": ADOPTED,
+        "reason": HELD_REASON,
+        "reference": HELD_REFERENCE
+    });
+    let schedule = fixture.schedule();
+    assert_eq!(schedule["held"], Value::Array(vec![entry.clone()]));
+    assert_eq!(schedule["rules"], json!([existing_rule()]), "no rule");
+    assert_eq!(
+        tree(&fixture.repo().join(ADOPTED_DIRECTORY)),
+        canonical_files(&files)
+    );
+    assert_eq!(tree(&fixture.repo()), tree(&twin.repo()));
+
+    // And the answer the document's is.
+    for answer in [&by_flags, &by_document] {
+        assert_eq!(answer.status, "adopted");
+        assert_eq!(answer.class, AdoptClass::Held);
+        assert!(!answer.review.run_through, "{:?}", answer.review);
+        assert_eq!(answer.rule, None);
+        assert_eq!(answer.held.as_ref(), Some(&entry));
+        assert_eq!(answer.coverage, None);
+        assert_eq!(answer.written, [ADOPTED_DIRECTORY, "schedule.json"]);
+    }
+    assert_eq!(by_flags.review, by_document.review);
+    assert_eq!(by_flags.removed_entries, by_document.removed_entries);
+    assert_eq!(by_flags.replaced_entries, by_document.replaced_entries);
+    assert_eq!(by_flags.requires_added, by_document.requires_added);
+    assert_eq!(by_flags.given, by_document.given);
+    assert_eq!(by_flags.derived, by_document.derived);
+}
+
+#[test]
+fn s34_the_held_reason_on_a_scheduled_package_keeps_its_rule_and_writes_its_hold() {
+    let files = package_files(ADOPTED, SERVER, "Adopted fixture", &provenance("passed"));
+    let entry = json!({"package_id": ADOPTED, "reason": HELD_REASON});
+    let mut written = Vec::new();
+    for by_flags in [true, false] {
+        // The package scheduled by its business rule.
+        let fixture = Fixture::new();
+        let source = package_dir(&fixture, "package", &files);
+        let scheduled = decide(&fixture, "business", &business(&fixed(9_000)));
+        standard_pack_adopt(
+            request(&fixture, source.clone(), Some(scheduled), false, FIRST),
+            &Committed,
+        )
+        .unwrap_or_else(|error| panic!("by flags {by_flags}: the business adoption: {error}"));
+        let rules = fixture.schedule()["rules"].clone();
+        assert_eq!(rules[1]["package_id"], ADOPTED, "by flags {by_flags}");
+
+        // Adopted again as held: by the reason, or by the document it is.
+        let held = if by_flags {
+            held_by_flags(HELD_REASON, None)
+        } else {
+            AdoptDecision::Document(decide(&fixture, "held", &held_document(HELD_REASON, None)))
+        };
+        let answer = standard_pack_adopt(
+            request_with(&fixture, source, held, true, SECOND),
+            &Committed,
+        )
+        .unwrap_or_else(|error| panic!("by flags {by_flags}: the held adoption: {error}"));
+
+        // The one-role table's row `held`: its held entry; its rule kept and not composed while
+        // the hold lasts; no maintenance.json entry to end.
+        let schedule = fixture.schedule();
+        assert_eq!(
+            schedule["rules"], rules,
+            "by flags {by_flags}: the rule is kept"
+        );
+        assert_eq!(
+            schedule["held"],
+            Value::Array(vec![entry.clone()]),
+            "by flags {by_flags}"
+        );
+        assert_eq!(answer.class, AdoptClass::Held, "by flags {by_flags}");
+        assert_eq!(answer.rule.as_ref(), Some(&rules[1]), "by flags {by_flags}");
+        assert_eq!(answer.held.as_ref(), Some(&entry), "by flags {by_flags}");
+        assert!(answer.replaced, "by flags {by_flags}");
+        assert!(
+            answer.removed_entries.is_empty() && answer.replaced_entries.is_empty(),
+            "by flags {by_flags}: {:?} {:?}",
+            answer.removed_entries,
+            answer.replaced_entries
+        );
+        assert_eq!(
+            answer.written,
+            [ADOPTED_DIRECTORY, "schedule.json"],
+            "by flags {by_flags}"
+        );
+        assert_eq!(
+            fs::read(fixture.repo().join("maintenance.json")).expect("maintenance.json"),
+            canonical_json_bytes(&json!([])).expect("canonical JSON"),
+            "by flags {by_flags}"
+        );
+        written.push(tree(&fixture.repo()));
+    }
+    assert_eq!(
+        written[0], written[1],
+        "the reason writes what the document writes"
+    );
 }

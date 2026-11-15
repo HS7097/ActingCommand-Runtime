@@ -27900,6 +27900,74 @@ revision.
 the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
 `device_locked` or the update code shows no group in the errors view either.
 
+### 1.411 Slice #463 S3-4 (0.12.63): a first adoption as held needs two flags and no decision file (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making, board #463; the rule the work order states, that a package not run through on a real device is registered with its rules and stays held; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-4", with §1.1 rows W1 to W3, §1.2 H1, H3 and H16 and §2.1 "Missing" item 1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s34-adopt-held.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.411; the numbers between §1.400 and this one belong to slices
+dispatched with it. The slice ships in 0.12.63.
+
+**What it is.** `standard-pack adopt` takes `--held-reason <text>` and an optional
+`--held-reference <text>`, which are exactly the decision `{schema_version, class: "held", held:
+{reason, reference?}}`. The resource tooling's request names where its decision comes from
+(`AdoptDecision`: `Document`, the path `--decide` gives; `Held`, the two texts); for the second it
+builds that document (`held_document` in `crates/resource-tooling/src/adopt.rs`) and hands it to
+the document's own reader (`Decision::of_document`: the part of `Decision::read` after the file is
+read and parsed, split out unchanged), at the place among the checks where a document is read. So
+every check and every byte written is the one a document of the class `held` gives; there is no
+second path ([standard-pack-authoring.md](standard-pack-authoring.md), "A held decision by two
+flags").
+
+**The texts' limits.** Those of the document's `held` (`decided_held`, at most 1024 bytes, the
+schedule reader's bound): a non-blank text without a control character. A blank reason is refused
+`adopt_refused` `decision_invalid` at `/held/reason`, as the document's blank reason is; the outcome
+names no `path`, since no file was read (`decision_invalid` already leaves out an empty one).
+
+**The command line's refusals.** Before the checkout, the state directory or any file is read:
+`--decide` beside `--held-reason` (with `--held-reference` or without it) is `validation_failed`,
+exit 2, naming `--held-reason`; `--decide` beside `--held-reference` alone, and `--held-reference`
+without `--held-reason`, which it needs, the same naming `--held-reference`; each with
+`argument_problem` `conflicting` and the details of the command line's other conflicts
+(`argument`, `argument_problem`, `arguments`), as `do --operation` without `--capture` is refused.
+No code, word or key is added; the outcome catalog and its index do not change.
+
+**On a package already scheduled.** The one-role table's row `held` (its held entry; its rule, if
+any, kept and not composed while the hold lasts; every `maintenance.json` entry of the package
+removed) is what a decision of the class `held` does today: such a decision wants no rule, so the
+package's rule is kept as written and the held entry is added beside it. So `--replace
+--held-reason` on a package its business rule schedules keeps that rule and writes its hold, as the
+document does. Nothing here lifts a hold: that stays a decision of another class given by
+`--decide` ("Repeating").
+
+**Texts.** The refusal of a first adoption without a decision names `--held-reason` beside
+`--decide`; `help`'s options of the command (`adopt_options`); the row `standard-pack adopt` of
+[lab-operations.json](lab-operations.json) gains the parameters `held_reason` and `held_reference`
+(strings, not required), which the MCP tool `ac_standard_pack_adopt` takes, its schema generated
+from the row, and `decide`'s note and the row's notes say so;
+[standard-pack-authoring.md](standard-pack-authoring.md): "The operation" (the line and two
+inputs), "The decision document" (the new part "A held decision by two flags"), and the row "The
+decision document" of "The checks". The Lab's MCP manual (`apps/actinglab-mcp/MANUAL.md`,
+"Adoption") still lists the tool's parameters without the two; it is not this slice's file.
+
+**Tests.** `crates/resource-tooling/src/gate_464_p1.rs`, on P1's fixtures, gate map `exec.toml`
+"#463 S3-4": `s34_a_first_adoption_by_the_held_reason_writes_what_the_held_document_writes` (a
+package not run through, adopted first by the two texts: its held entry with both and no rule, the
+repository byte for byte what the same document writes on a repository of its own, the answers
+alike; a blank reason by the texts and by the document alike refused `decision_invalid` at
+`/held/reason`, nothing written) and
+`s34_the_held_reason_on_a_scheduled_package_keeps_its_rule_and_writes_its_hold` (`--replace` by the
+reason and by the document alike on a package its business rule schedules: the rules byte for
+byte, the held entry beside them, nothing removed or replaced, the two repositories alike).
+`apps/actinglab/src/tests/gate_463_s34.rs`, gate map `apps.toml` "#463 S3-4":
+`s34_the_held_flags_beside_decide_or_the_reference_alone_are_refused_before_anything_is_read` (the
+three refusals of the command line, five lines, with paths that do not exist, none made).
+Adapted: P1's helper `request` in `gate_464_p1.rs` hands its decision's path on as
+`AdoptDecision::Document`, since the request's member became that source; no assertion changes. No
+golden changes, no test leaves the gate map.
+
+**What is not changed.** What adopt checks and writes for a decision document, the classes
+`business` and `maintenance`, readiness, `standard-pack build` and the recording side.
+
+**At deploy.** Nothing to do.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

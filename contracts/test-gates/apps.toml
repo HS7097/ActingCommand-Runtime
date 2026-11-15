@@ -2332,3 +2332,11 @@ tests = [
     "actingcommand-lab-ops::lib::overview::tests::d4a_a_spent_call_budget_is_a_warning_beside_a_successful_answer",
 ]
 incident = ["#469 D4a"]
+
+# Workflow #463 S3-4 (0.12.63; register §1.411; brief rd-1115/brief-463-s34-adopt-held.md, ruling 3; contracts/standard-pack-authoring.md, "A held decision by two flags"), actinglab's command line with no Runtime and paths that do not exist: standard-pack adopt with --decide and --held-reason, in either order and with --held-reference too, is validation_failed, exit 2, no data, details argument --held-reason and argument_problem conflicting; --decide with --held-reference alone, and --held-reference without --held-reason, the same naming --held-reference; each before anything is read (a call that read the checkout, the package or the document would be adopt_refused), and none of the checkout, the package, the document, the state directory or the Runtime state root is made
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s34::s34_the_held_flags_beside_decide_or_the_reference_alone_are_refused_before_anything_is_read",
+]
+incident = ["#463 S3-4"]
