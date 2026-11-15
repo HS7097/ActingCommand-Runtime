@@ -11,7 +11,11 @@
 //! of every parameter it declares ([`PreparedContainedTask::declared_parameter_defaults`]).
 //! Workflow #463 V1 (contracts/package-variables.md): kernel admission also reads a control
 //! declaration's `variables` beside `provides` ([`parse_control_variables`]), and the metadata
-//! reader answers them; no run reads a variable yet, so a run's parameters are as before.
+//! reader answers them. Workflow #463 V2 (register §1.382): a run reads every variable its
+//! package declares as `session.dispatch.parameter.<name>` with its kind's type: a policy run the
+//! value its dispatch carries (`variable_values`), any other run the declared default
+//! ([`PreparedContainedTask::default_run_values`]), the Lab's scan replay a given value
+//! ([`PreparedContainedTask::given_variable_values`]).
 
 use super::*;
 use actingcommand_contract::{
@@ -50,17 +54,22 @@ pub struct RunParameters {
     /// Workflow #411 B8: the schedule values a policy dispatch carries, `(key, value)` each, with
     /// the dispatch's admission instant; `None` for a run without them.
     schedule: Option<(Vec<(String, FactValue)>, u64)>,
+    /// Workflow #463 V2: each variable the package declares, `(name, value)` with its kind's
+    /// type, in declaration order; empty for a package that declares none.
+    variables: Vec<(String, FactValue)>,
 }
 
 impl RunParameters {
     /// Adds one record per parameter to `snapshot`, after the records it holds: the key
     /// `session.dispatch.parameter.<name>`, the value as a string, the snapshot's instance as its
     /// scope, confidence 1000, no expiry, observed at the dispatch's admission or, for a run
-    /// without a dispatch, at `now_unix_ms`. Then, Workflow #411 B8, one record per schedule
-    /// value of the dispatch: the key `session.dispatch.schedule.<key>`, the value typed, the
-    /// same scope, confidence and expiry, observed at the dispatch's admission. The snapshot
-    /// keeps its identity, the stored projection's; a select step's `input_sha256` covers the
-    /// records added.
+    /// without a dispatch, at `now_unix_ms`. Then, Workflow #463 V2, one record per variable of
+    /// the package under the same prefix, with its kind's type (a string, a boolean, an integer or
+    /// a record list of rows `{key, rank}`), the same scope, confidence, expiry and instant.
+    /// Then, Workflow #411 B8, one record per schedule value of the dispatch: the key
+    /// `session.dispatch.schedule.<key>`, the value typed, the same scope, confidence and expiry,
+    /// observed at the dispatch's admission. The snapshot keeps its identity, the stored
+    /// projection's; a select step's `input_sha256` covers the records added.
     pub fn overlay(&self, snapshot: &mut InstanceFactSnapshot, now_unix_ms: u64) {
         let schedule = self
             .schedule
@@ -81,7 +90,17 @@ impl RunParameters {
                 self.admitted_at_unix_ms.unwrap_or(now_unix_ms),
             )
         });
-        let records = parameters.chain(schedule).collect::<Vec<_>>();
+        let variables = self.variables.iter().map(|(name, value)| {
+            (
+                format!("{RUN_PARAMETER_KEY_PREFIX}{name}"),
+                value.clone(),
+                self.admitted_at_unix_ms.unwrap_or(now_unix_ms),
+            )
+        });
+        let records = parameters
+            .chain(variables)
+            .chain(schedule)
+            .collect::<Vec<_>>();
         if records.is_empty() {
             return;
         }
@@ -122,6 +141,17 @@ impl RunParameters {
         if !values.is_empty() {
             self.schedule = Some((values, admitted_at_unix_ms));
         }
+        self
+    }
+
+    /// Workflow #463 V2 (contracts/package-variables.md, "The run"): these parameters with the
+    /// package's variables, `(name, value)` each with its kind's type
+    /// ([`PreparedContainedTask::default_variable_values`],
+    /// [`PreparedContainedTask::dispatched_variable_values`],
+    /// [`PreparedContainedTask::given_variable_values`]), overlaid at the parameters' instant.
+    #[must_use]
+    pub fn with_variables(mut self, variables: Vec<(String, FactValue)>) -> Self {
+        self.variables = variables;
         self
     }
 }
@@ -247,21 +277,123 @@ impl PreparedContainedTask {
             .collect()
     }
 
-    /// Workflow #411 B15 R5: the parameters of a run of this package without a dispatch (a
-    /// direct run, a run the host starts itself, a Lab run): every parameter it declares, with
-    /// its declared default (contracts/remedies.md section 4).
+    /// Workflow #411 B15 R5: the parameters of `provides` a run of this package without a
+    /// dispatch reads: every parameter it declares, with its declared default
+    /// (contracts/remedies.md section 4). Workflow #463 V2: the parameters only; a run reads them
+    /// with the package's variables, [`Self::default_run_values`].
     pub fn default_run_parameters(&self) -> RunParameters {
         RunParameters {
             package_id: self.control.package_id.clone(),
             values: self.declared_parameter_defaults(),
             admitted_at_unix_ms: None,
             schedule: None,
+            variables: Vec::new(),
         }
+    }
+
+    /// Workflow #463 V2 (contracts/package-variables.md, "The run"): what a run of this package
+    /// without a dispatch (a direct run, a run the host starts itself, a Lab run, an offline
+    /// replay) reads: every parameter it declares with its declared default
+    /// ([`Self::default_run_parameters`]) and every variable it declares with its declared
+    /// default ([`Self::default_variable_values`]). A package that declares no variable reads
+    /// exactly its parameters.
+    pub fn default_run_values(&self) -> RunParameters {
+        self.default_run_parameters()
+            .with_variables(self.default_variable_values())
+    }
+
+    /// Workflow #463 V2: every variable the package declares, `(name, default)` with its kind's
+    /// type ([`PackageVariable::fact_value`]), in declaration order; empty when it declares none.
+    pub fn default_variable_values(&self) -> Vec<(String, FactValue)> {
+        self.control
+            .variables
+            .iter()
+            .filter_map(|variable| {
+                variable
+                    .fact_value(&variable.default_value())
+                    .map(|value| (variable.name.clone(), value))
+            })
+            .collect()
+    }
+
+    /// Workflow #463 V2 (contracts/package-variables.md, "The run"): every variable the package
+    /// declares as a policy run reads it from its dispatch's `variable_values`, `dispatched` each
+    /// `(variable_name, value)` as the reason carries it: the dispatched value when this
+    /// package's own declaration lets it through ([`PackageVariable::judge`], the rule the
+    /// dispatch was resolved by, so a package changed since its dispatch is judged as it is
+    /// now), else the declared default. A variable the reason does not name (its default too
+    /// long for a reason) reads its default; a name the package does not declare is not read.
+    pub fn dispatched_variable_values(
+        &self,
+        dispatched: &[(String, serde_json::Value)],
+    ) -> Vec<(String, FactValue)> {
+        self.control
+            .variables
+            .iter()
+            .filter_map(|variable| {
+                let value = dispatched
+                    .iter()
+                    .find(|(name, _)| *name == variable.name)
+                    .and_then(|(_, value)| variable.judge(value).ok())
+                    .unwrap_or_else(|| variable.default_value());
+                variable
+                    .fact_value(&value)
+                    .map(|value| (variable.name.clone(), value))
+            })
+            .collect()
+    }
+
+    /// Workflow #463 V2 (contracts/package-variables.md, "Runs without a dispatch"): every
+    /// variable the package declares as the Lab's scan replay reads it: its declared default,
+    /// each `(name, value)` of `given` replacing it as a dispatched value does. A name the package
+    /// does not declare (a package that declares none declares no name), a value its declaration
+    /// does not take exactly as given ([`PackageVariable::judge`] refuses it or would leave keys
+    /// out of it), and a name given twice are refused, never ignored.
+    pub fn given_variable_values(
+        &self,
+        given: &[(String, serde_json::Value)],
+    ) -> Result<Vec<(String, FactValue)>, GivenVariableRefusal> {
+        let mut seen = BTreeSet::new();
+        let mut values = Vec::with_capacity(given.len());
+        for (name, value) in given {
+            let refused = |problem| GivenVariableRefusal {
+                name: name.clone(),
+                problem,
+            };
+            if !seen.insert(name.as_str()) {
+                return Err(refused(GivenVariableProblem::Repeated));
+            }
+            let variable = self
+                .control
+                .variables
+                .iter()
+                .find(|variable| variable.name == *name)
+                .ok_or_else(|| refused(GivenVariableProblem::Undeclared))?;
+            let taken = variable
+                .judge(value)
+                .ok()
+                .filter(|judged| judged == value)
+                .and_then(|judged| variable.fact_value(&judged))
+                .ok_or_else(|| refused(GivenVariableProblem::Unfit))?;
+            values.push((name.as_str(), taken));
+        }
+        Ok(self
+            .default_variable_values()
+            .into_iter()
+            .map(|(name, default)| {
+                let value = values
+                    .iter()
+                    .find(|(given, _)| *given == name)
+                    .map_or(default, |(_, value)| value.clone());
+                (name, value)
+            })
+            .collect())
     }
 
     /// Workflow #411 B15 R5: the parameters a policy dispatch of this package carries,
     /// `(parameter_name, parameter_value)` each, observed at the dispatch's admission
-    /// `admitted_at_unix_ms`.
+    /// `admitted_at_unix_ms`. Workflow #463 V2: with no variable; the host adds the dispatch's
+    /// ([`RunParameters::with_variables`]).
     pub fn dispatched_run_parameters(
         &self,
         values: Vec<(String, String)>,
@@ -272,6 +404,7 @@ impl PreparedContainedTask {
             values,
             admitted_at_unix_ms: Some(admitted_at_unix_ms),
             schedule: None,
+            variables: Vec::new(),
         }
     }
 
@@ -279,14 +412,15 @@ impl PreparedContainedTask {
     /// package reads, without a dispatch: every parameter it declares with its declared default,
     /// each `(name, value)` of `given` replacing its parameter's default, as a dispatch's chosen
     /// value does; observed when the snapshot is taken. Without `given` it is
-    /// [`Self::default_run_parameters`]. A name the package does not declare (a package that
-    /// declares none declares no name), a value that is not one of its parameter's declared
-    /// options, and a name given twice are refused, never ignored.
+    /// [`Self::default_run_values`] (Workflow #463 V2: with every variable at its default). A
+    /// name the package does not declare (a package that declares none declares no name), a
+    /// value that is not one of its parameter's declared options, and a name given twice are
+    /// refused, never ignored.
     pub fn given_run_parameters(
         &self,
         given: &[(String, String)],
     ) -> Result<RunParameters, GivenParameterRefusal> {
-        let mut parameters = self.default_run_parameters();
+        let mut parameters = self.default_run_values();
         let mut seen = BTreeSet::new();
         for (name, value) in given {
             let refused = |problem| GivenParameterRefusal {
@@ -334,6 +468,25 @@ pub enum GivenParameterProblem {
 pub struct GivenParameterRefusal {
     pub name: String,
     pub problem: GivenParameterProblem,
+}
+
+/// Workflow #463 V2: why a variable value given to the Lab's scan replay is refused
+/// ([`PreparedContainedTask::given_variable_values`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GivenVariableProblem {
+    /// The package declares no variable of this name.
+    Undeclared,
+    /// The variable's declaration does not take the value exactly as given.
+    Unfit,
+    /// The name is given more than once.
+    Repeated,
+}
+
+/// Workflow #463 V2: a refused given variable value, by its name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GivenVariableRefusal {
+    pub name: String,
+    pub problem: GivenVariableProblem,
 }
 
 /// The `provides` member of a control declaration, read and checked

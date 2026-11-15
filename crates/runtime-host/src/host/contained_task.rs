@@ -8629,7 +8629,9 @@ impl HostShared {
         // Workflow #411 B15 R5 (contracts/remedies.md section 4): a policy run reads the values
         // its dispatch carries, observed at its admission; any other run reads its package's
         // declared defaults. Workflow #411 B8: a policy run also reads the schedule values its
-        // dispatch carries, observed at its admission; any other run reads none.
+        // dispatch carries, observed at its admission; any other run reads none. Workflow #463
+        // V2: a policy run reads the variable values its dispatch carries (`variable_values`),
+        // any other run its package's variable defaults.
         let run_parameters = match dispatched_parameters {
             Some(dispatched) => match dispatched.values {
                 Some(values) => {
@@ -8637,9 +8639,16 @@ impl HostShared {
                 }
                 None => prepared.default_run_parameters(),
             }
+            .with_variables(prepared.dispatched_variable_values(&dispatched.variables))
             .with_dispatch_schedule(dispatched.schedule, dispatched.admitted_at_unix_ms),
-            None => prepared.default_run_parameters(),
+            None => prepared.default_run_values(),
         };
+        // Workflow #463 V2 fix round 1, test only: what the run's snapshots are overlaid with.
+        #[cfg(test)]
+        self.run_parameters_for_test
+            .lock()
+            .expect("the run parameters of the gate tests")
+            .push(run_parameters.clone());
         // Workflow #373 NAV-6: the steps the run's own layers can execute.
         let planned_steps = prerequisites
             .iter()

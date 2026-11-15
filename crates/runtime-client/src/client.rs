@@ -1759,6 +1759,57 @@ impl RuntimeClient {
         }
     }
 
+    /// Reads `instance_alias`'s goal page (`GoalView`, Workflow #463 V3, register §1.383,
+    /// `runtime-client` 9): every entry of its game's `goals.json`, every variable a bound package
+    /// declares, each with its default, its stored value and whether it is in effect. Read-only. An
+    /// answer for another instance is unexpected. A Runtime that does not know the operation drops
+    /// the connection, which this call reports as `runtime_operation_unsupported`, as
+    /// `pack_schedule_view` does.
+    pub fn goal_view(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeClientResult<actingcommand_contract::GoalView> {
+        const OPERATION: Location = ClientLocation::RuntimeGoalView.location();
+        match self.send_or_dropped(
+            OPERATION,
+            RuntimeOperation::GoalView {
+                instance_alias: instance_alias.to_owned(),
+            },
+        )? {
+            SentOutcome::Answered(result) => match *result {
+                RuntimeResult::GoalViewed { view } if view.instance_alias == instance_alias => {
+                    Ok(*view)
+                }
+                _ => Err(self.unexpected_result(OPERATION)),
+            },
+            SentOutcome::Dropped(error) => Err(self.unsupported_after_drop(OPERATION, error)),
+        }
+    }
+
+    /// Sets or clears one value of `instance_alias`'s goal page by its name (`EditGoal`, Workflow
+    /// #463 V3, register §1.383, `runtime-client` 9), only while the goal record's version is
+    /// `expected_version` when one is given (absent from the request when `None`). Returns the
+    /// record's version after the edit and the event that holds it.
+    pub fn edit_goal(
+        &self,
+        instance_alias: &str,
+        expected_version: Option<u64>,
+        op: actingcommand_contract::GoalEdit,
+    ) -> RuntimeClientResult<actingcommand_contract::GoalEdited> {
+        const OPERATION: Location = ClientLocation::RuntimeEditGoal.location();
+        match self.execute(
+            OPERATION,
+            RuntimeOperation::EditGoal {
+                instance_alias: instance_alias.to_owned(),
+                expected_version,
+                op,
+            },
+        )? {
+            RuntimeResult::GoalEdited { edited } => Ok(edited),
+            _ => Err(self.unexpected_result(OPERATION)),
+        }
+    }
+
     /// The end of a `send_or_dropped` read whose connection ended before its receipt: once a new
     /// connection reaches the same owner epoch, `runtime_operation_unsupported` with the drop as
     /// its related failure; otherwise the drop with the reconnect's failure (as `start_report`).

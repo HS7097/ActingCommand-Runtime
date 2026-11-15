@@ -132,7 +132,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   11: a task's `field_lists`, OCR fields grouped into one list fact; a pack without it keeps
 ///   its revision, so [3, 11]. Workflow #455 G-R1 (0.12.60, register §1.356) raises it to 12: a
 ///   game root's goal declaration `goals.json`, placed by the installer and opened by no reader of
-///   the Runtime yet; a bundle without it keeps its revision, so [3, 12]. Workflow #463 K1
+///   the Runtime of 0.12.60 (since Workflow #463 V2, 0.12.61, the scheduler workbench reads it for
+///   the variables' judgement alone, no revision moving); a bundle without it keeps its revision,
+///   so [3, 12]. Workflow #463 K1
 ///   (0.12.61, register §1.374) raises it to 13: a `linear_steps` task's select step, which every
 ///   Runtime before it refuses at admission; a pack without one keeps its revision, so [3, 13].
 ///   Workflow #463 V1 (0.12.61, register §1.378) raises it to 14: a package's `variables` in its
@@ -160,7 +162,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   request without the member is answered as before, so [3, 7]. Workflow #434 LAB-6S1a
 ///   (0.12.58, register §1.287, "Slice LAB-6S1a") raises `max` to 8: the optional `initiator` of
 ///   `BindChannel`, `ChannelBound` and the receipt; a client of 3 to 7 neither sends nor receives
-///   it, so [3, 8].
+///   it, so [3, 8]. Workflow #463 V3 (0.12.61, register §1.383) raises `max` to 9: the request
+///   kinds `GoalView` and `EditGoal` with their results; every earlier request is answered as
+///   before and no answer of an earlier kind changes, so [3, 9].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 32]),
@@ -168,7 +172,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
     ("package", [3, 15]),
-    ("runtime-client", [3, 8]),
+    ("runtime-client", [3, 9]),
     ("runtime-outcomes", [1, 1]),
 ];
 

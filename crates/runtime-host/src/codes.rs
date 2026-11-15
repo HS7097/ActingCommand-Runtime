@@ -1888,6 +1888,8 @@ actingcommand_contract::outcome_locations! {
         DeviceDiagnosticBudgetClosed => "device_diagnostic_budget_closed",
         DeviceDiagnosticCountOverflow => "device_diagnostic_count_overflow",
         DrainPausedInstance => "drain_paused_instance",
+        // Workflow #463 V3 (register §1.383): one value of an application's goal page by name.
+        EditGoal => "edit_goal",
         // Workflow #429 R-0 (register §1.213): the workbench's kinds, refused `not_implemented`
         // until their slices (R-8, R-13c) add the behaviour; R-8 (register §1.308) built the edit.
         EditPackSchedule => "edit_pack_schedule",
@@ -1940,6 +1942,8 @@ actingcommand_contract::outcome_locations! {
         GatePumpPerformanceControl => "gate_pump_performance_control",
         GateRecoveryPause => "gate_recovery_pause",
         GateRecoveryPreparation => "gate_recovery_preparation",
+        // Workflow #463 V3 (register §1.383): one application's goal page.
+        GoalView => "goal_view",
         // Workflow #369 S6b.
         HandOffToClaim => "hand_off_to_claim",
         HandOffToLadder => "hand_off_to_ladder",
@@ -3387,6 +3391,63 @@ actingcommand_contract::outcome_codes! {
         Exceeded => "policy_fact_rows_exceeded": warning / none,
     }
 }
+
+// ---- Workflow #463 V2 (register §1.382; contracts/package-variables.md, "The run"): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's code of a value set on an application that a dispatch does not hand its run
+    /// (Workflow #463 V2). No existing code fits: `policy_fact_rows_exceeded` names a projection's
+    /// record list, and no remedy code speaks of a package's variable.
+    pub(crate) enum GoalValueCode {
+        /// Warning (since 0.12.61). A new dispatch of the task (`task_id`) on the application
+        /// (`instance_id`) reads the default of its package's (`package_id`) variable
+        /// (`variable_name`, declared as `declaration_sha256`) instead of the value set there, for
+        /// the reason `variable_problem` names. Written once per (application, name, declaration,
+        /// and since fix round 1 the stored value) after a start; the run goes on.
+        NotApplied => "goal_value_not_applied": warning / none,
+        /// Error (Workflow #463 V3, since 0.12.61). An `EditGoal` was refused under the fact write
+        /// gate, after the version comparison, against the record it would change: the name it
+        /// names (`goal_name`, when it has an entry name's form) or its value is none the
+        /// application's goal page takes, for the reason `goal_problem` names (with
+        /// `json_pointer`, `range_min`, `range_max`, `pool_id` or `variable_problem` where they
+        /// apply). Denied; nothing is appended.
+        Invalid => "goal_value_invalid": error / none,
+        /// Warning (since 0.12.61; fix round 2). A new dispatch of the task (`task_id`) on the
+        /// application (`instance_id`) runs a package (`package_id`) whose declaration the
+        /// scheduler workbench could not read, so its variables are not known: the dispatch hands
+        /// its run no value and the run reads the package's defaults. Written once per
+        /// (application, package, state of the package's files) after a start; the run goes on.
+        PackageUnreadable => "goal_value_package_unreadable": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_codes! {
+    /// The host's code of a game root's `goals.json` that is not applied while the root runs
+    /// (Workflow #463 V2 fix round 2). No existing code fits: `standard_pack_root_invalid` and
+    /// `standard_pack_root_unreadable` say of every other root file that the root is not
+    /// composed, and here the root runs and only its goal document is not applied.
+    pub(crate) enum StandardPackGoalsCode {
+        /// Warning (since 0.12.61). The scheduler workbench does not apply the game root's
+        /// (`game`) `goals.json` (`path`), for the reason `goals_failure` names: the contract
+        /// crate's reader refused it (its first problem as the cause, a
+        /// `standard_pack_root_invalid`) or it could not be read (the operating system's failure
+        /// as the cause). The root runs; no entry of the file takes a name, and a file that
+        /// cannot be read keeps every variable of the root from applying. Recorded once per
+        /// sha256 of a refused file, and once until an unreadable file reads again.
+        NotApplied => "standard_pack_goals_not_applied": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a game root's `goals.json` is not applied (vocabulary `goals_failure`; Workflow #463 V2
+    /// fix round 2, `standard_pack_goals_not_applied` carries it).
+    pub enum GoalsFailure: "goals_failure" {
+        /// The contract crate's reader refused the file.
+        Refused => "refused",
+        /// The file could not be read: an I/O failure other than its absence.
+        Unreadable => "unreadable",
+    }
+}
+// ---- Workflow #463 V2: end ----
 // ---- #428 S168-LB1a: end ----
 
 // ---- Workflow #438 HELD-1 (register §1.322 HELD-R1 to HELD-R4; `contracts/scheduling/README.md`,

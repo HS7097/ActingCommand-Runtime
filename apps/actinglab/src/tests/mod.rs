@@ -53,6 +53,10 @@ mod gate_lab_l5c;
 // declare or an option it does not declare.
 #[path = "gate_lab_rp.rs"]
 mod gate_lab_rp;
+// Workflow #463 V2: `replay --select --scan` takes `--variable <name>=<json>` and refuses a
+// variable the package does not declare or a value its declaration does not take.
+#[path = "gate_463_v2_replay.rs"]
+mod gate_463_v2_replay;
 // #411 A13 B part (exec key 117): offline `observe` gives an operation whose `to` is a page set
 // the `input` an edge has for the same click.
 #[path = "gate_411_bt_l13.rs"]

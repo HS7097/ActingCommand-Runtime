@@ -21678,6 +21678,105 @@
       "common_causes": "A publisher wrote a record list longer than 256 rows under a key a catalog reads; the fact store holds record lists of up to 1024 rows since 0.12.55.",
       "handling": "Keep a list the scheduler reads at 256 rows or fewer, or read it in a select step's selection document instead; a list reading under inventory.list. is never the scheduler's."
     },
+    "goal_value_not_applied": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "package_id": "required",
+        "variable_name": "required",
+        "declaration_sha256": "required",
+        "variable_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "Workflow #463 V2 (contracts/package-variables.md, \"The run\"): a new policy dispatch of task_id on the application instance_id reads the declared default of the variable variable_name of its package package_id (its declaration's sha256 declaration_sha256) instead of the value set on the application, for the reason variable_problem names: the set value no longer fits the declaration (not_an_option, out_of_range, off_step, type_changed, keys_removed, count_out_of_range, key_repeated), who set it cannot be read (entry_unreadable), or the variable does not apply in the game root (irreversible_by_root, package_unreadable, goals_unreadable, declaration_conflict, goal_name_conflict, name_out_of_limits, cap_range), or no check judges the game's root now (root_unchecked: since fix round 2, with a composed standard pack, while the scheduler workbench notes the game uncomposed: its root failed a check, or a composition was refused, for its root, for another game's or as a whole, while the generation in force did not hold the game with its present files, so a sound root that was judged reads it too; only a check whose composition of every game succeeds lifts the note). With a composed standard pack the root is judged whole, every package of its registry and its goals.json included, at the scheduler workbench's checks. The dispatch's policy_dispatch_parameters records the default with variable_source default and the same variable_problem. Nothing is refused and the stored value is not rewritten. Written once per (application, variable name, declaration, stored value) after a start (a Warning runtime.failed record of the policy driver); a restart may write it once more. An ordered value applied in part (keys_left_out) is no value not applied and is not warned.",
+      "common_causes": "The package was updated and its declaration no longer takes the value set before; or a package of the root that declares the variable can do something irreversible, or declares it differently from another package, or a package of the root or its goals.json cannot be read, or goals.json uses the name for another entry.",
+      "handling": "Set a value the current declaration takes (targets set with entries), or clear the entry so the default is read on purpose; for a variable that does not apply, fix the root as standard-pack check's warning says."
+    },
+    "goal_value_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "goal_problem": "required",
+        "goal_name": "optional",
+        "json_pointer": "optional",
+        "range_min": "optional",
+        "range_max": "optional",
+        "pool_id": "optional",
+        "variable_problem": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "Workflow #463 V3 (contracts/runtime-interface.md, \"Goal request kinds\"): an EditGoal was refused under the fact write gate, after the version comparison (so a request of another version is fact_observation_version_conflict whatever its name and value), against the record it would change, for the reason goal_problem names: the name is no entry of the application's goal page and no variable of its game root (name_unknown), holds no value (holds_no_value), is a tier no reader of this build reads (tier_not_built), a remedy parameter (remedy_parameter), a variable that does not apply in the game root (variable_not_applying, with variable_problem) or one the root declares but no package the active catalog binds on the application (not_offered, fix round 1); or what the page is judged by is not in memory yet, before the Runtime's first check (not_checked_yet, fix round 1: send it again); fix round 2: or the workbench checks the game root and no check since the start could read it (root_failing: the root must be repaired), or the game has no standard pack root with schedule.json (no_schedule: nothing to check); or the value is no JSON (value_not_json), not of the entry's type (wrong_type), outside its range or off its step (out_of_range, off_step, with range_min and range_max), no option (not_an_option), a repeated key (key_repeated), of a count outside its range (count_out_of_range), longer than the store keeps (value_too_large), on a pool the application cannot target or that needs its own step (pool_not_targetable, pool_unvalued, with pool_id), with a deadline (deadline_unsupported); or a clear of a name that holds nothing (value_not_set); or the stored record is no record the readers read (record_unreadable) or the edit would hold more targets or entries than a record keeps (record_out_of_limits). goal_name names the request's name when it has an entry name's form; json_pointer points into the value. Denied; nothing is appended and the stored record is unchanged.",
+      "common_causes": "A value written by hand or by an agent that the declaration does not take; a package update that removed the option, narrowed the range or changed the type; a name of another application's game.",
+      "handling": "Read the page (goals get) and set a value the entry's declaration takes; for variable_not_applying fix the root as standard-pack check's warning says; for not_offered bind a package that declares the variable on the application, or set nothing; for not_checked_yet send the same request again after the Runtime's next check; for root_failing repair the game root the page's declaration names (asking again does not help); for no_schedule give the game root a schedule.json; for record_unreadable write the whole document with targets set first."
+    },
+    "goal_value_package_unreadable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "package_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "Workflow #463 V2 fix round 2 (contracts/package-variables.md, \"A dispatched package whose variables cannot be read\"): a new policy dispatch of task_id on the application instance_id runs the package package_id, whose declaration the scheduler workbench could not read (its declaration files' metadata, the reader's refusal, or a game root the workbench has not read since the start), so its variables are not known: the dispatch hands its run no variable_values and the run reads the package's declared defaults, whatever is set on the application. Nothing is refused. Written once per (application, package, state of the package's files) after a start (a Warning runtime.failed record of the policy driver); a restart may write it once more.",
+      "common_causes": "The package's control.json or its resources manifest cannot be read or is refused by the reader, or is being replaced; or the game root has failed every check since the start.",
+      "handling": "Fix the package as its standard_pack_package_unreadable says (actinglab standard-pack check --root <game root>); the next check reads it again."
+    },
+    "standard_pack_goals_not_applied": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "goals_failure": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "Workflow #463 V2 fix round 2 (contracts/package-variables.md, \"A variable that does not apply\"): the scheduler workbench does not apply the goals.json (path) of the game root game, for the reason goals_failure names: refused, the contract crate's reader refused it (its first problem as the cause, a standard_pack_root_invalid naming the file, its problem and its pointer), so no entry of it takes a name; or unreadable, it could not be read (the operating system's failure as the cause), so which names it takes is not known and no variable of the root applies (goals_unreadable). The root runs and is composed as without the file. Recorded once per sha256 of a refused file, and once until an unreadable one reads again.",
+      "common_causes": "goals.json breaks a rule of the reader (actinglab standard-pack check names it), or the file is locked or not readable by the Runtime's account.",
+      "handling": "Fix the file as standard-pack check says, or make it readable; the next check reads it again."
+    },
     "priority_offset_unknown_task": {
       "category": "warning",
       "ladder_class": "none",
@@ -25037,6 +25136,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: drain paused instance."
     },
+    "edit_goal": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "A Runtime host operation or stage: edit goal (Workflow #463 V3, EditGoal)."
+    },
     "edit_pack_schedule": {
       "owner": "runtime-host",
       "layer": "host",
@@ -25404,6 +25511,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: gate recovery preparation."
+    },
+    "goal_view": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "A Runtime host operation or stage: goal view (Workflow #463 V3, GoalView)."
     },
     "hand_off_to_claim": {
       "owner": "runtime-host",
