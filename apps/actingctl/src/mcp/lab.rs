@@ -25,8 +25,10 @@
 //! `client.action{surface_id: "mcp", control_id: <tool>, kind: Command, value:
 //! PathSafeString(<envelope req_id>)}` is recorded on a fresh (Cli, Cli) connection. The
 //! offline forms and the recording commands (start, mark, stop, status), which keep their
-//! state in files and open no Runtime connection, record nothing, nor do the read-only
-//! tools.
+//! state in files, record nothing, nor do the read-only tools. Since #463 S1-7 `record start`
+//! and the recording's end (stop, archive) do open Runtime connections of their own, for a
+//! status read and the instance's scheduling pause and its resume (the recording holds its
+//! instance); no `client.action` is recorded for them either.
 //!
 //! One overflow rule for every answer that does not fit the output budget (review F2): the
 //! verbatim answer goes to the export directory of ac_material export, and the call answers
@@ -758,7 +760,7 @@ static RECORD_ARCHIVE: LabCommand = LabCommand {
             "copy_to",
             "--copy-to",
             Kind::Text,
-            "--copy-to: an absolute path of a directory that does not exist or is empty; the frames, the step table and the manifest are copied there and checked.",
+            "--copy-to: an absolute path of a directory that does not exist or is empty; the step table, the manifest and the frames the manifest's material names are copied there and checked (every frame only with the Lab's record archive --all-frames or the Lab's MCP server's all_frames).",
         ),
         STATE_DIR,
     ],

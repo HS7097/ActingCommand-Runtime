@@ -5,18 +5,24 @@ use crate::{
     resolve_instance_id, runtime_capture_backend, runtime_input_backend, runtime_state_root,
     stream_input_relay_action,
 };
-use actingcommand_contract::{InputAction, RuntimeReceipt};
+use actingcommand_contract::{
+    InputAction, InputFrameReference, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
+};
 use actingcommand_device::{CaptureBackendChoice, Frame, combine_operation_and_close};
 use actingcommand_lab::{
-    AttachFrameRequest, LabInputPort, OpaqueJson, UserConfig, record_attach_frame,
-    record_frame_preflight,
+    AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
+    LAB_RECORDING_MAX_NEXT_FRAME_MS, LabInputPort, OpaqueJson, PlanClickRequest, PlannedSwipe,
+    PointPress, RecordFramePorts, RecordPoint, RecordPressRequest, UserConfig, record_attach_frame,
+    record_frame_preflight, record_press, record_press_frame_unavailable, record_press_input,
 };
-use actingcommand_runtime_client::RuntimeClient;
+use actingcommand_runtime_client::{
+    RuntimeClient, RuntimeClientError, RuntimeClientErrorClass, RuntimeInputProxy,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Workflow #434 LAB-5B3: the flags `touch-probe` reads: `--touch-backend`, only to refuse it
 /// (actingd owns the backend; actinglab's parser takes the flag globally). Workflow #434 LAB-5B4:
@@ -227,6 +233,10 @@ pub(crate) struct CaptureCommandResult {
     pub(crate) frame: Frame,
     pub(crate) attempts: Vec<Value>,
     pub(crate) freshness: Value,
+    /// #463 S1-1 fix round 2: the reference of the frame the Runtime committed for the one
+    /// observation (`runtime_capture_backend::input_frame_reference`), which an input planned on
+    /// the frame names; `None` for a fresh capture's sequence, on which nothing is pressed.
+    pub(crate) input_frame: Option<InputFrameReference>,
 }
 
 pub(crate) struct CaptureFreshProbeReport {
@@ -277,15 +287,19 @@ pub(crate) fn capture_for_command(
         return capture_require_fresh(device_config, fresh_delay);
     }
 
-    let frame = runtime_capture_backend::capture_runtime_sequence(
-        &device_config.runtime_capture_endpoint(),
-        1,
-        Duration::ZERO,
-    )
-    .map_err(|err| CliError::device(err.to_string()))?
-    .into_iter()
-    .next()
-    .ok_or_else(|| CliError::device("Runtime capture returned no frame"))?;
+    capture_observation_for_command(&device_config.runtime_capture_endpoint())
+}
+
+/// #463 S1-1 fix round 3: [`capture_for_command`] without `--require-fresh` on the Runtime's
+/// capture endpoint of an instance: the Runtime captures, so no local device configuration (no
+/// ADB path) is read here, and `tap`, `swipe` and `long-tap --record` take their frames so.
+fn capture_observation_for_command(
+    endpoint: &runtime_capture_backend::RuntimeCaptureEndpoint,
+) -> CliOutcome<CaptureCommandResult> {
+    // #463 S1-1 fix round 2: the one `ObserveReadonly` read it always was, now with the reference
+    // of the frame the Runtime committed for it.
+    let (frame, input_frame) = runtime_capture_backend::capture_runtime_observation(endpoint)
+        .map_err(|err| CliError::device(err.to_string()))?;
     let attempts = vec![json!({
         "backend": frame.backend_name.as_str(),
         "ok": true,
@@ -296,6 +310,7 @@ pub(crate) fn capture_for_command(
         frame,
         attempts,
         freshness: json!({ "required": false, "authority": "runtime_execution_kernel" }),
+        input_frame,
     })
 }
 
@@ -314,6 +329,7 @@ fn capture_require_fresh(
             frame,
             attempts: report.attempts,
             freshness: report.freshness,
+            input_frame: None,
         });
     }
 
@@ -526,9 +542,22 @@ pub(crate) enum DirectTouchCommand {
     },
 }
 
-/// Workflow #434 LAB-5B2: the flags `tap`, `swipe` and `long-tap` take: none, they take positional
-/// arguments only.
-pub(crate) const DIRECT_TOUCH_FLAGS: [&str; 0] = [];
+/// Workflow #434 LAB-5B2: the flags `tap`, `swipe` and `long-tap` take beside their positional
+/// arguments: #463 S1-1, `--record` (the press is a step of the instance's recording) and its wait
+/// before the screen after the press, `--after-ms <ms>`; #463 S1-2, how the screen after it is
+/// captured until it is still, `--interval-ms <ms>`, `--still-ms <ms>` and `--still-max-ms <ms>`
+/// (the four with `--record` only, `record_flag_gate`).
+pub(crate) const DIRECT_TOUCH_FLAGS: [&str; 5] = [
+    "--record",
+    "--after-ms",
+    "--interval-ms",
+    "--still-ms",
+    "--still-max-ms",
+];
+
+/// #463 S1-1: of [`DIRECT_TOUCH_FLAGS`], those that take no value, as the command line of `tap`,
+/// `swipe` and `long-tap` is parsed (`FlagArgs::parse_switches`).
+pub(crate) const DIRECT_TOUCH_SWITCHES: [&str; 1] = ["--record"];
 
 impl DirectTouchCommand {
     pub(crate) fn parse(command: &str, flags: &FlagArgs) -> CliOutcome<Self> {
@@ -618,6 +647,58 @@ impl DirectTouchCommand {
             }),
         }
     }
+
+    /// #463 S1-1: the command's name, as its recording lock names it.
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Tap { .. } => "tap",
+            Self::Swipe { .. } => "swipe",
+            Self::LongTap { .. } => "long-tap",
+        }
+    }
+
+    /// #463 S1-1: the press `--record` records for this command: a tap or a long press by its
+    /// point, a swipe by its two points and duration as `do --capture --record --swipe` plans it;
+    /// the first capture after it `after_ms` after the press (100 without it).
+    fn record_press_request(&self, after_ms: Option<u64>) -> RecordPressRequest {
+        let (click, point_press) = match *self {
+            Self::Tap { x, y } => (
+                PlanClickRequest::default(),
+                Some(PointPress::Tap {
+                    point: RecordPoint { x, y },
+                }),
+            ),
+            Self::LongTap { x, y, duration_ms } => (
+                PlanClickRequest::default(),
+                Some(PointPress::LongPress {
+                    point: RecordPoint { x, y },
+                    duration_ms,
+                }),
+            ),
+            Self::Swipe {
+                x1,
+                y1,
+                x2,
+                y2,
+                duration_ms,
+            } => (
+                PlanClickRequest {
+                    swipe: Some(PlannedSwipe {
+                        from: RecordPoint { x: x1, y: y1 },
+                        to: RecordPoint { x: x2, y: y2 },
+                        duration_ms,
+                    }),
+                    ..PlanClickRequest::default()
+                },
+                None,
+            ),
+        };
+        RecordPressRequest {
+            click,
+            point_press,
+            after: AfterCapture::for_press(after_ms),
+        }
+    }
 }
 
 pub(crate) fn open_cli_runtime_input_proxy(
@@ -637,12 +718,13 @@ pub(crate) fn run_direct_touch(
     command: &str,
     args: &[String],
 ) -> CliOutcome<Value> {
-    let (command, config) = (|| -> CliOutcome<_> {
-        let flags = FlagArgs::parse(args)?;
+    let (command, config, flags) = (|| -> CliOutcome<_> {
+        let flags = FlagArgs::parse_switches(args, &DIRECT_TOUCH_SWITCHES);
         reject_legacy_session_routing(&flags)?;
         Ok((
             DirectTouchCommand::parse(command, &flags)?,
             read_user_config()?,
+            flags,
         ))
     })()
     .map_err(input_not_submitted)?;
@@ -652,6 +734,10 @@ pub(crate) fn run_direct_touch(
             &instance,
             command.to_json(),
         ));
+    }
+    // #463 S1-1: `--record` (never with `--dry-run`, which `record_flag_gate` refuses first).
+    if flags.bool("--record") {
+        return run_recorded_touch(global, &config, &flags, &command);
     }
     send_direct_touch_command(
         global,
@@ -674,7 +760,24 @@ fn send_direct_touch_command(
     let operation = command.run(&mut backend);
     let close = backend.close();
     let input_outcome = finish_direct_input(operation, close)?;
-    Ok(json!({
+    Ok(direct_touch_answer(
+        &instance_alias,
+        command,
+        control_mode,
+        safety_gate,
+        input_outcome,
+    ))
+}
+
+/// The answer of a direct touch command that sent its input.
+fn direct_touch_answer(
+    instance_alias: &str,
+    command: &DirectTouchCommand,
+    control_mode: &str,
+    safety_gate: &str,
+    input_outcome: Value,
+) -> Value {
+    json!({
         "status": "sent",
         "backend": "runtime_proxy",
         "touch_backend_requested": "runtime_owned",
@@ -691,7 +794,403 @@ fn send_direct_touch_command(
         "handshake": Value::Null,
         "action": command.to_json(),
         "input_outcome": input_outcome
-    }))
+    })
+}
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): `tap`, `swipe` or
+/// `long-tap` with `--record`: the press is a step of the instance's recording, with the screen
+/// before it and the screen after it. The recording lock is taken as every `--record` command takes
+/// it (`record_flag_begin`); fix round 3: no local device configuration is resolved (the Runtime
+/// captures and presses, as for `tap` without `--record`), and the recording does the rest under
+/// the lock (`record_press`): the press planned on the open step (every refusal before anything is
+/// captured or pressed), a frame captured immediately before the press (fix round 2: always), the
+/// input sent through the Runtime's input proxy with that frame's reference (built as `do
+/// --capture`'s online scene builds one), once more on a new capture when the Runtime no longer
+/// held that frame (fix round 3), its outcome recorded, and after a performed press the wait
+/// (`--after-ms`, 100 without it) and the frame after it, both captures as `capture --record` takes
+/// its frame. The answer is the command's own with `record`; a press that was not performed
+/// answers as the command does without `--record` and records no press. A failure after a
+/// performed and recorded press (the input lease's release, the receipt's encoding) is answered
+/// after the frame after it, with `record` and `input_outcome` in its details. #463 S1-2: after the
+/// wait the screen is captured until it is still (`--interval-ms`, `--still-ms`, `--still-max-ms`,
+/// `record_after_frame`), every capture kept; the last is the frame after.
+fn run_recorded_touch(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    command: &DirectTouchCommand,
+) -> CliOutcome<Value> {
+    let after_ms = flags
+        .optional("--after-ms")
+        .map(|value| parse_after_ms(&value))
+        .transpose()?;
+    let mut request = command.record_press_request(after_ms);
+    request.after.interval_ms = after_capture_ms(flags, "--interval-ms", "interval_ms")?;
+    request.after.still_ms = after_capture_ms(flags, "--still-ms", "still_ms")?;
+    if let Some(bound) = after_capture_ms(flags, "--still-max-ms", "still_max_ms")? {
+        request.after.still_max_ms = bound;
+    }
+    let instance = resolve_instance_id(global, config)?;
+    let lock = super::session_record::record_flag_begin(
+        global,
+        flags,
+        &instance,
+        &format!("{} --record", command.name()),
+    )?;
+    // Fix round 3: the Runtime captures and presses, so no local device configuration (no ADB
+    // path) is resolved, as `tap` without `--record` resolves none.
+    let endpoint = runtime_capture_backend::RuntimeCaptureEndpoint::new(
+        instance.clone(),
+        runtime_state_root()?,
+    );
+    let mut frames = PressFrames {
+        endpoint: &endpoint,
+        origin: Instant::now(),
+    };
+    let mut sent = None;
+    let mut press =
+        |plan: &ClickPlan, frame: InputFrameReference| -> CliOutcome<CommitClickRequest> {
+            let pressed = send_recorded_press(&instance, record_press_input(plan)?, frame)?;
+            let commit = pressed.commit.clone();
+            sent = Some(pressed);
+            Ok(commit)
+        };
+    let recorded = record_press(&lock, &request, &mut press, &mut frames);
+    // Not sent: the recording's refusal, or the input's own error, as they are.
+    let Some(SentPress {
+        input_outcome,
+        after_input,
+        hold_warning,
+        ..
+    }) = sent
+    else {
+        return Err(match recorded {
+            Err(error) => error,
+            Ok(_) => CliError::device(
+                "the recording answered a press the command never sent; nothing more is known",
+            ),
+        });
+    };
+    // #463 S1-7: whether the instance was held when the press was made, in `record.warnings`.
+    let mut outcome = recorded.map_err(|error| {
+        let mut error = with_input_outcome(error, &input_outcome);
+        super::record_hold::add_hold_warning_to_failure(&mut error, hold_warning);
+        error
+    })?;
+    outcome.warnings.extend(hold_warning.map(str::to_owned));
+    let record = serde_json::to_value(&outcome)
+        .map_err(|error| CliError::usage(format!("failed to encode the record: {error}")))?;
+    if let Some(mut error) = after_input {
+        error.message = format!(
+            "{}; the press of step {} was performed and recorded and the screen after it taken",
+            error.message, outcome.click.step
+        );
+        return Err(error.with_details(json!({
+            "record": record,
+            "input_outcome": input_outcome
+        })));
+    }
+    let mut data = direct_touch_answer(
+        &instance,
+        command,
+        "direct_trusted_manual",
+        "not_required_for_manual_control",
+        input_outcome,
+    );
+    data["record"] = record;
+    Ok(data)
+}
+
+/// The fix round after the train's review: the word of a flag of the screen after a recorded
+/// effect whose value is no whole number, the word the Lab's other flags answer for it
+/// (`argument_problem` `wrong_type`); `range` stays the word of a value outside its bounds, which
+/// the recording checks (`record_after_capture_check`).
+const NOT_A_WHOLE_NUMBER: &str = "wrong_type";
+
+/// #463 S1-1: `--after-ms <ms>`, a whole number of milliseconds (the recording checks its bound,
+/// 0 to 60000, `range`); anything else is `validation_failed` with `details{argument: "after_ms",
+/// reason: "wrong_type", value}` (the fix round after the train's review: the word and the keys of
+/// the other three flags). The train of stage one: `session app <verb> --record` reads its
+/// `--after-ms` so too.
+pub(crate) fn parse_after_ms(value: &str) -> CliOutcome<u64> {
+    value.parse::<u64>().map_err(|_| {
+        CliError::usage(format!(
+            "--after-ms takes a whole number of milliseconds from 0 to \
+             {LAB_RECORDING_MAX_NEXT_FRAME_MS}, got {value}"
+        ))
+        .with_details(json!({
+            "argument": "after_ms",
+            "reason": NOT_A_WHOLE_NUMBER,
+            "value": value
+        }))
+    })
+}
+
+/// #463 S1-2: `flag` (`--interval-ms`, `--still-ms` or `--still-max-ms`) when it is given, a whole
+/// number of milliseconds (the recording checks its range and the bound of the captures it allows,
+/// `range`); anything else is `validation_failed` with `details{argument, reason: "wrong_type",
+/// value}` (the fix round after the train's review). The train of stage one: `session app <verb>
+/// --record` reads the three so too.
+pub(crate) fn after_capture_ms(
+    flags: &FlagArgs,
+    flag: &str,
+    argument: &str,
+) -> CliOutcome<Option<u64>> {
+    flags
+        .optional(flag)
+        .map(|value| {
+            value.parse::<u64>().map_err(|_| {
+                CliError::usage(format!(
+                    "{flag} takes a whole number of milliseconds, got {value}"
+                ))
+                .with_details(json!({
+                    "argument": argument,
+                    "reason": NOT_A_WHOLE_NUMBER,
+                    "value": value
+                }))
+            })
+        })
+        .transpose()
+}
+
+/// `error` with the input outcome of the press it followed as the member `input_outcome` of its
+/// details; object details keep their members, other details move to `details`.
+fn with_input_outcome(mut error: CliError, input_outcome: &Value) -> CliError {
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        Some(other) => serde_json::Map::from_iter([("details".to_owned(), other)]),
+        None => serde_json::Map::new(),
+    };
+    details
+        .entry("input_outcome")
+        .or_insert_with(|| input_outcome.clone());
+    error.with_details(Value::Object(details))
+}
+
+/// #463 S1-1: one input of a press recorded by its command, sent through the Runtime's input proxy
+/// (its own lease, as `tap` takes it): what the recording takes of it, the input outcome the
+/// answer carries, and a failure after a performed input that leaves the press performed.
+struct SentPress {
+    commit: CommitClickRequest,
+    input_outcome: Value,
+    after_input: Option<CliError>,
+    /// #463 S1-7: the word of `record.warnings` from the status read before the press, on a
+    /// connection of its own: none when the instance's scheduling was paused
+    /// (`record_hold::hold_warning_read`).
+    hold_warning: Option<&'static str>,
+}
+
+/// #463 S1-1: sends `action` once, naming `frame`, the Runtime frame it was planned on (fix round
+/// 2: the capture taken immediately before it; the Runtime resolves it before it presses, and an
+/// instance whose input is the emulator's own presses only on such a frame). A receipt is a
+/// performed press (its request, correlation and action ids). An error the Runtime may have pressed
+/// before ([`input_not_sent`] does not hold) is an indeterminate one, with the request and
+/// correlation ids the error carries (from a received receipt or the failed header read); a refusal
+/// that proves nothing was sent was not performed and is answered as `tap` answers it, with
+/// `input_outcome` (fix round 3: the frame's being unavailable, [`input_frame_unavailable`],
+/// marked so that `record_press` sends the press once more). A connection or lease that fails
+/// sends nothing (`input_stage: not_submitted`).
+fn send_recorded_press(
+    instance: &str,
+    action: InputAction,
+    frame: InputFrameReference,
+) -> CliOutcome<SentPress> {
+    // #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): whether the
+    // instance is held, one status read before the press (the input proxy's preparation reads
+    // none); fix round 2: on a connection of its own, so that a read that fails never leaves the
+    // press's connection dead and the press `not_submitted`.
+    let hold_warning = super::record_hold::hold_warning_read(instance);
+    let state_root = runtime_state_root().map_err(input_not_submitted)?;
+    let client = RuntimeClient::connect(crate::lab_client_config(state_root))
+        .map_err(|error| input_not_submitted(CliError::device(error.to_string())))?;
+    let mut proxy = RuntimeInputProxy::connect(client, instance)
+        .map_err(|error| input_not_submitted(CliError::device(error.to_string())))?;
+    let operation = proxy.input_with_frame(action, Some(frame));
+    let close = proxy.close();
+    let mut input_outcome = json!({
+        "input_stage": if operation.is_ok() { "committed" } else { "receipt_unavailable" },
+        "input_receipt": Value::Null,
+        "close_stage": if close.is_ok() { "succeeded" } else { "failed" },
+    });
+    let mut failures = Vec::new();
+    if let Err(error) = &close {
+        input_outcome["close_error"] = json!(error.to_string());
+        failures.push(format!("releasing the input lease failed: {error}"));
+    }
+    let commit = match operation {
+        Ok(receipt) => {
+            match serde_json::to_value(&receipt) {
+                Ok(value) => input_outcome["input_receipt"] = value,
+                Err(error) => {
+                    input_outcome["input_receipt_serialization_error"] = json!(error.to_string());
+                    failures.push(format!("input receipt serialization failed: {error}"));
+                }
+            }
+            let action_id = match receipt.result() {
+                Some(RuntimeResult::InputCommitted { action_id }) => {
+                    encoded(action_id, &mut failures)
+                }
+                _ => None,
+            };
+            CommitClickRequest {
+                effect: ClickEffect::Performed,
+                has_failure: false,
+                carrier_package: None,
+                req_id: encoded(&receipt.request_id(), &mut failures),
+                correlation_id: encoded(&receipt.correlation_id(), &mut failures),
+                action_id,
+                lease_id: None,
+                failure: None,
+                before: None,
+                after: None,
+            }
+        }
+        Err(error) if !input_not_sent(&error) => {
+            input_outcome["input_error"] = json!(error.to_string());
+            let receipt = error.received_receipt();
+            let header = error.receipt_header_io();
+            let request_id = receipt
+                .map(RuntimeReceipt::request_id)
+                .or_else(|| header.and_then(|header| header.request_id().copied()));
+            let correlation_id = receipt
+                .map(RuntimeReceipt::correlation_id)
+                .or_else(|| header.and_then(|header| header.correlation_id().copied()));
+            CommitClickRequest {
+                effect: ClickEffect::Indeterminate,
+                has_failure: false,
+                carrier_package: None,
+                req_id: request_id.and_then(|id| encoded(&id, &mut failures)),
+                correlation_id: correlation_id.and_then(|id| encoded(&id, &mut failures)),
+                action_id: None,
+                lease_id: None,
+                failure: None,
+                before: None,
+                after: None,
+            }
+        }
+        Err(error) => {
+            input_outcome["input_error"] = json!(error.to_string());
+            let refusal = CliError::device(error.to_string())
+                .with_details(json!({"input_outcome": input_outcome}));
+            // Fix round 3: the one refusal `record_press` sends the press again for.
+            return Err(if input_frame_unavailable(&error) {
+                record_press_frame_unavailable(refusal)
+            } else {
+                refusal
+            });
+        }
+    };
+    let after_input = (!failures.is_empty()).then(|| CliError::device(failures.join("; ")));
+    Ok(SentPress {
+        commit,
+        input_outcome,
+        after_input,
+        hold_warning,
+    })
+}
+
+/// #463 S1-1 fix round 2 (`contracts/lab-recording.md`, "Recording while playing", "The
+/// outcome"): whether an input that failed with `error` was certainly not sent to the device,
+/// decided by the error's result class (Workflow #338 R6) and the state of the receipt it carries:
+/// a usage or safety refusal the Runtime denied (the request, the frame or the foreground refused,
+/// a lease, queue or preemption rule) is answered before the input's intent is recorded, so
+/// nothing was pressed. After every other error the Runtime's own record of the input may say it
+/// is indeterminate: a device failure of the backend on a physical instance (`runtime-host`
+/// `host/input.rs`, `backend_failure_effect`), a Runtime failure after the device write, an input
+/// its operation check stopped mid-press (a failed receipt of the lease's own safety code), or an
+/// answer the client never read (uncertain). `do --capture --record` records the Runtime's own
+/// effect of its press the same way (anything but `not_performed` is on record).
+fn input_not_sent(error: &RuntimeClientError) -> bool {
+    matches!(
+        error.disposition(),
+        RuntimeClientErrorClass::Usage | RuntimeClientErrorClass::Safety
+    ) && error
+        .received_receipt()
+        .is_some_and(|receipt| receipt.state() == RuntimeReceiptState::Denied)
+}
+
+/// #463 S1-1 fix round 3: the code of the Runtime's refusal of an input whose frame it no longer
+/// holds (`runtime-host` `host/input.rs`, the frame's resolution before the input's intent).
+const INPUT_FRAME_UNAVAILABLE: &str = "input_frame_unavailable";
+
+/// #463 S1-1 fix round 3 (`contracts/lab-recording.md`, "Recording while playing", "The screen
+/// before"): whether an input failed with `error` because the Runtime no longer held the frame it
+/// names (another keyless capture, a capture by a lease holder or the capture backend reopening
+/// dropped it between the command's capture and its input): the receipt the Runtime denied it
+/// with, whose outcome's code is the frame's being unavailable. Nothing was sent. The one place
+/// that tells this refusal from every other, by the receipt's state and the outcome's code the
+/// client hands over (the coordinator's ruling of fix round 3: no class or word of the outcome
+/// separates it); `record_press` sends the press once more on a new capture for it, and for no
+/// other refusal.
+fn input_frame_unavailable(error: &RuntimeClientError) -> bool {
+    error
+        .received_receipt()
+        .is_some_and(|receipt| receipt.state() == RuntimeReceiptState::Denied)
+        && error
+            .receipt_outcome()
+            .is_some_and(|outcome| outcome.code().as_str() == INPUT_FRAME_UNAVAILABLE)
+}
+
+/// `value` as the recording keeps it; one that does not encode leaves its member empty and its
+/// failure in `failures`, a failure after the input.
+fn encoded<T: serde::Serialize>(value: &T, failures: &mut Vec<String>) -> Option<OpaqueJson> {
+    match OpaqueJson::from_serializable(value) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            failures.push(error.message);
+            None
+        }
+    }
+}
+
+/// #463 S1-1: the caller's clock and the Runtime's capture of a press recorded by `tap`, `swipe` or
+/// `long-tap --record`: each frame is taken as `capture --record` takes it (the `ObserveReadonly`
+/// read), on the Runtime's capture endpoint of the command's instance (fix round 3: no local
+/// device configuration); fix round 2: with the reference of the frame the Runtime committed for
+/// its observation, which the press is sent with. #463 S1-2: the clock's readings are the time
+/// since `origin`, the command's start of the recording's work (a monotonic clock, as `wait` sleeps
+/// on it).
+struct PressFrames<'a> {
+    endpoint: &'a runtime_capture_backend::RuntimeCaptureEndpoint,
+    origin: Instant,
+}
+
+impl RecordFramePorts for PressFrames<'_> {
+    fn wait(&mut self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        self.origin.elapsed()
+    }
+
+    fn capture(&mut self) -> CliOutcome<CapturedFrame> {
+        runtime_captured_frame(self.endpoint)
+    }
+}
+
+/// #463 S1-1: one frame through the Runtime's capture endpoint `endpoint` as `capture --record`
+/// takes it (the `ObserveReadonly` read, no local device configuration), with the reference of the
+/// frame the Runtime committed for its observation. A recorded press takes its frames so
+/// (`PressFrames`); the fix round after the train's review: `session app <verb> --record` too.
+pub(crate) fn runtime_captured_frame(
+    endpoint: &runtime_capture_backend::RuntimeCaptureEndpoint,
+) -> CliOutcome<CapturedFrame> {
+    let captured = capture_observation_for_command(endpoint)?;
+    let png = captured
+        .frame
+        .png_for_artifact()
+        .map_err(|err| CliError::device(err.to_string()))?;
+    Ok(CapturedFrame {
+        frame: AttachFrameRequest {
+            png,
+            source: "lab_capture".to_string(),
+            runtime_artifact: None,
+            capture_backend: Some(captured.frame.backend_name.as_str().to_string()),
+            freshness: Some(OpaqueJson::from_serializable(&captured.freshness)?),
+        },
+        input_frame: captured.input_frame,
+    })
 }
 
 pub(crate) fn run_direct_input(

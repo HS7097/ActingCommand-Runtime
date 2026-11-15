@@ -2,7 +2,8 @@
 
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
-    CaptureSequenceSpec, ReadonlyObservation, RuntimeCaptureBackend, RuntimeResult,
+    CaptureSequenceSpec, InputFrameReference, ReadonlyObservation, RuntimeCaptureBackend,
+    RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendName, DeviceError,
@@ -42,19 +43,7 @@ pub(super) fn capture_runtime_sequence(
     let client = RuntimeClient::connect(crate::lab_client_config(&endpoint.state_root))
         .map_err(|error| DeviceError::fatal(error.to_string()))?;
     let observations = if frame_count == 1 {
-        let output = client
-            .observe_readonly(&endpoint.instance_alias)
-            .map_err(|error| DeviceError::fatal(error.to_string()))?;
-        match output.receipt().result() {
-            Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => {
-                vec![observation.clone()]
-            }
-            _ => {
-                return Err(DeviceError::fatal(
-                    "Runtime returned an invalid read-only observation receipt",
-                ));
-            }
-        }
+        vec![readonly_observation(&client, &endpoint.instance_alias)?]
     } else {
         let spec = CaptureSequenceSpec::new(frame_count, interval_ms)
             .map_err(|error| DeviceError::fatal(error.to_string()))?;
@@ -76,6 +65,58 @@ pub(super) fn capture_runtime_sequence(
         .iter()
         .map(|observation| frame_from_observation(&endpoint.state_root, observation))
         .collect()
+}
+
+/// #463 S1-1 fix round 2: one read-only observation through the resident Runtime, the request
+/// [`capture_runtime_sequence`] sends for one frame (`ObserveReadonly`): its verified frame, and
+/// the reference of the frame the Runtime committed for it ([`input_frame_reference`]), which an
+/// input planned on that frame names.
+pub(super) fn capture_runtime_observation(
+    endpoint: &RuntimeCaptureEndpoint,
+) -> DeviceResult<(Frame, Option<InputFrameReference>)> {
+    let client = RuntimeClient::connect(crate::lab_client_config(&endpoint.state_root))
+        .map_err(|error| DeviceError::fatal(error.to_string()))?;
+    let observation = readonly_observation(&client, &endpoint.instance_alias)?;
+    let frame = frame_from_observation(&endpoint.state_root, &observation)?;
+    Ok((frame, input_frame_reference(&observation)))
+}
+
+/// One read-only observation of `instance_alias` through `client`.
+fn readonly_observation(
+    client: &RuntimeClient,
+    instance_alias: &str,
+) -> DeviceResult<ReadonlyObservation> {
+    let output = client
+        .observe_readonly(instance_alias)
+        .map_err(|error| DeviceError::fatal(error.to_string()))?;
+    match output.receipt().result() {
+        Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => {
+            Ok(observation.clone())
+        }
+        _ => Err(DeviceError::fatal(
+            "Runtime returned an invalid read-only observation receipt",
+        )),
+    }
+}
+
+/// #411 Lab L3: the frame reference the Runtime committed for `observation`, as the host names an
+/// online `do`'s before frame: an input that names it is resolved against that frame before it is
+/// pressed, and an instance whose input is the emulator's own presses only on such a frame.
+/// `None` when the observation carries no frame id (the client's receipt check refuses such an
+/// observation, `ReadonlyObservation::validate`). #463 S1-1 fix round 2: one function for `do`'s
+/// scene and the device commands' `--record`.
+pub(super) fn input_frame_reference(
+    observation: &ReadonlyObservation,
+) -> Option<InputFrameReference> {
+    observation
+        .artifact()
+        .frame_id()
+        .copied()
+        .map(|frame_id| InputFrameReference {
+            frame_id,
+            width: observation.width(),
+            height: observation.height(),
+        })
 }
 
 pub(super) fn open_runtime_capture(

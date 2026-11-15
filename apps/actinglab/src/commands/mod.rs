@@ -3,6 +3,8 @@ pub(super) mod device_commands;
 pub(super) mod environment_report;
 pub(super) mod navigation_recovery;
 pub(super) mod path_io;
+// #463 S1-7: the Runtime half of a recording's hold (the instance's scheduling pause).
+pub(super) mod record_hold;
 pub(super) mod semantic_ledger;
 pub(super) mod session_contracts;
 pub(super) mod session_record;
@@ -51,6 +53,11 @@ pub(crate) use navigation_recovery::{
 #[cfg(test)]
 pub(crate) use path_io::{JSON_TMP_SEQ, write_json_file};
 pub(crate) use path_io::{ensure_path_within, read_json_file, write_json_file_atomic};
+pub(crate) use record_hold::{add_hold_warning, add_hold_warning_to_failure, hold_warning_read};
+// The fix round after the train's review: what `record start` makes of a failed connect, by what
+// one plain connection met.
+#[cfg(test)]
+pub(crate) use record_hold::{Probed, not_reached};
 pub(crate) use semantic_ledger::{finish_semantic_result_with_ledger, semantic_ledger_context};
 #[cfg(test)]
 pub(crate) use session_contracts::{

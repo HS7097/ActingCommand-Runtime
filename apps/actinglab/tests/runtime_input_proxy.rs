@@ -2,7 +2,7 @@
 
 use actingcommand_contract::{
     ApplicationLifecycleAction, ArtifactKind, CaptureSequenceSpec, EventAction, EventActor,
-    EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InstanceId,
+    EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InputPayload, InstanceId,
     PackageDebugRequest, ProjectionPayload, ProjectionProfile, RetentionClass, RuntimeErrorCode,
     RuntimeEvidenceExportRequest, TaskOutcome, TaskPayload, TaskSemanticFact,
 };
@@ -53,6 +53,11 @@ struct FakeState {
     // #411 Lab L3: the instance's configured input is `nemu_ipc` (the Runtime then presses only on
     // a frame it captured); its fake backends stay the same.
     nemu_input: AtomicBool,
+    // #463 S1-1 fix round 2: a tap fails in the backend (a device failure of the input).
+    tap_fails: AtomicBool,
+    // #463 S1-1 fix round 3: the device reports another application than the assigned one in the
+    // foreground, so the Runtime denies a pointer input (`application_not_foreground`).
+    foreground_other: AtomicBool,
 }
 
 // Test plan E-3 G11 (§3.10): a manual Runtime clock. It moves only when a capture (or a wait of
@@ -2013,6 +2018,11 @@ impl InputBackend for FakeBackend {
         _y: i32,
     ) -> DeviceResult<()> {
         self.state.tap_started.store(true, Ordering::Release);
+        if self.state.tap_fails.load(Ordering::Acquire) {
+            return Err(actingcommand_device::DeviceError::transient(
+                "the fake input backend failed the tap",
+            ));
+        }
         let delay_ms = self.state.tap_delay_ms.load(Ordering::Acquire);
         if delay_ms > 0 {
             thread::sleep(Duration::from_millis(delay_ms as u64));
@@ -2237,15 +2247,21 @@ impl ExecutionBackendProvider for FakeProvider {
         })
     }
 
-    // Slice #316-B3: the fake device always reports its assigned application in the
-    // foreground, so the foreground gate passes exactly as before the gate existed.
+    // Slice #316-B3: the fake device reports its assigned application in the foreground, so the
+    // foreground gate passes exactly as before the gate existed; #463 S1-1 fix round 3: another
+    // one when a test asks for it.
     fn observe_foreground_application(
         &self,
         _instance_alias: &str,
     ) -> DeviceResult<actingcommand_runtime_host::ForegroundApplicationObservation> {
+        let foreground = if self.state.foreground_other.load(Ordering::Acquire) {
+            "neutral.other_application"
+        } else {
+            "neutral.application"
+        };
         Ok(
             actingcommand_runtime_host::ForegroundApplicationObservation {
-                foreground: Some("neutral.application".to_owned()),
+                foreground: Some(foreground.to_owned()),
                 assigned: "neutral.application".to_owned(),
             },
         )
@@ -4043,6 +4059,281 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
 }
 
+/// #463 S1-1 fix round 2 (`contracts/lab-recording.md`, "Recording while playing"): the step table
+/// of the recording `record_s11` under the local application data `local`.
+fn s11_recorded(local: &Path) -> Value {
+    serde_json::from_slice(
+        &fs::read(
+            local
+                .join("ActingCommand")
+                .join("actinglab")
+                .join("session")
+                .join("record-artifacts")
+                .join("record_s11")
+                .join("lab")
+                .join("recording.json"),
+        )
+        .expect("the recording"),
+    )
+    .expect("recording.json")
+}
+
+/// #463 S1-1 fix round 2 (B0): `tap 0 0 --record` on an instance whose input is the emulator's own
+/// (the Runtime presses only on a frame it captured and committed, and refuses an input without
+/// one, `nemu_input_frame_required`): on the wire, in the Runtime's ledger, a capture, then the
+/// input naming the frame of that capture (its intent's `before_frame_id`), then the capture after
+/// it, of another frame; one tap, two captures; the answer's `record` names f0001 before and f0002
+/// after. #463 S1-2: with `--still-ms 0`, one capture after the press, no stillness test.
+#[test]
+fn s11_tap_record_sends_its_input_on_the_frame_captured_before_it() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-frame");
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "record",
+            "start",
+            "--task-id",
+            "neutral_task",
+            "--record-id",
+            "record_s11",
+        ],
+    );
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+            "--after-ms",
+            "0",
+            // #463 S1-2: one capture after the press, no stillness test.
+            "--still-ms",
+            "0",
+        ],
+    );
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client");
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events");
+    drop(client);
+    host.close().expect("close host");
+
+    assert_eq!(tapped["record"]["status"], "press_recorded", "{tapped}");
+    assert_eq!(tapped["record"]["before"]["frame_id"], "f0001", "{tapped}");
+    assert_eq!(tapped["record"]["before"]["refreshed"], true, "{tapped}");
+    assert_eq!(tapped["record"]["after"]["frame_id"], "f0002", "{tapped}");
+    assert_eq!(
+        tapped["input_outcome"]["input_stage"], "committed",
+        "{tapped}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 2);
+    // The wire, in the ledger's order: each capture's frame, and the frame the input names.
+    let wire = events
+        .iter()
+        .filter_map(|event| match event.event_type {
+            EventType::CaptureCompleted => Some(("capture", event.links.frame_id().copied())),
+            EventType::InputIntent => Some((
+                "input",
+                match &event.payload {
+                    ProjectionPayload::Full(payload) => match payload.as_ref() {
+                        EventPayload::Input(InputPayload::Intent(intent)) => intent
+                            .provenance()
+                            .and_then(|provenance| provenance.before_frame_id),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let kinds = wire.iter().map(|(kind, _)| *kind).collect::<Vec<_>>();
+    assert_eq!(kinds, ["capture", "input", "capture"], "{wire:?}");
+    assert!(wire[0].1.is_some(), "the capture names its frame: {wire:?}");
+    assert_eq!(wire[1].1, wire[0].1, "the input names the frame before it");
+    assert!(wire[2].1.is_some(), "{wire:?}");
+    assert_ne!(
+        wire[2].1, wire[0].1,
+        "the capture after it is another frame"
+    );
+
+    let recording = s11_recorded(&local);
+    let execution = &recording["steps"][0]["click"]["execution"];
+    assert_eq!(execution["effect"], "performed", "{recording}");
+    assert_eq!(execution["before_frame"], "f0001", "{recording}");
+    assert_eq!(execution["after_frame"], "f0002", "{recording}");
+}
+
+/// #463 S1-1 fix round 2 (B1): the backend fails the tap of `tap 0 0 --record` (a device-class
+/// error; the Runtime records such an input indeterminate on a physical instance): the press is
+/// recorded indeterminate with the request id the error carries, its step stays open, no frame
+/// after it is taken, and the command answers `record_click_indeterminate` with the press as
+/// recorded and the input outcome.
+#[test]
+fn s11_tap_record_records_a_device_failure_of_the_input_as_indeterminate() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.tap_fails.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-device-failure");
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "record",
+            "start",
+            "--task-id",
+            "neutral_task",
+            "--record-id",
+            "record_s11",
+        ],
+    );
+    let (exit_code, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(exit_code, 1, "{failed}");
+    assert_eq!(
+        failed["outcome"]["code"], "record_click_indeterminate",
+        "{failed}"
+    );
+    let record = &failed["details"]["record"];
+    assert_eq!(record["status"], "press_indeterminate", "{failed}");
+    assert_eq!(record["step"], 1, "{failed}");
+    assert_eq!(record["step_closed"], false, "{failed}");
+    assert!(record["after"].is_null(), "{failed}");
+    assert_eq!(
+        failed["details"]["input_outcome"]["input_stage"], "receipt_unavailable",
+        "{failed}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    // The capture before the press only: no frame after an indeterminate press.
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+
+    let recording = s11_recorded(&local);
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 1, "{recording}");
+    assert_eq!(steps[0]["closed"], false, "{recording}");
+    let execution = &steps[0]["click"]["execution"];
+    assert_eq!(execution["effect"], "indeterminate", "{recording}");
+    assert!(execution["req_id"].is_string(), "{recording}");
+    assert_eq!(execution["before_frame"], "f0001", "{recording}");
+    assert!(execution["after_frame"].is_null(), "{recording}");
+}
+
+/// #463 S1-1 fix round 3: the Runtime denies the input of `tap 0 0 --record` for another reason
+/// than its frame (the device reports another application in the foreground,
+/// `application_not_foreground`): nothing was sent, so the command answers as `tap` does,
+/// `device_error` with the input outcome, the press is not sent again (one capture, no tap), no
+/// click is recorded, and the capture before it stays as the frame of step 1. The command reads no
+/// local device configuration (the configuration file is empty and no ADB is set).
+#[test]
+fn s11_tap_record_answers_a_denied_input_as_tap_and_keeps_the_capture_before_it() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.foreground_other.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-denied-input");
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "record",
+            "start",
+            "--task-id",
+            "neutral_task",
+            "--record-id",
+            "record_s11",
+        ],
+    );
+    let (exit_code, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(exit_code, 1, "{failed}");
+    assert_eq!(failed["outcome"]["code"], "device_error", "{failed}");
+    assert_eq!(
+        failed["details"]["input_outcome"]["input_stage"], "receipt_unavailable",
+        "{failed}"
+    );
+    assert!(failed["details"]["record"].is_null(), "{failed}");
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    // The capture before the press only: no second capture, no frame after.
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+
+    let recording = s11_recorded(&local);
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 1, "{recording}");
+    assert!(steps[0]["click"].is_null(), "{recording}");
+    assert_eq!(steps[0]["closed"], false, "{recording}");
+    let frames = steps[0]["frames"].as_array().expect("step 1's frames");
+    assert_eq!(frames.len(), 1, "{recording}");
+    assert_eq!(frames[0]["frame_id"], "f0001", "{recording}");
+}
+
 #[test]
 fn production_lab_run_routes_device_effects_through_runtime_only() {
     let root = TempDir::new().expect("tempdir");
@@ -4994,4 +5285,385 @@ fn labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result(
     );
     assert_coordinates(&offline["frame_coordinates"], "offline observe");
     host.close().expect("close host");
+}
+
+/// #463 S1-7: `actinglab record start` of the recording `record_s17`.
+fn s17_record_start(config: &Path, runtime_root: &Path, local: &Path) -> Value {
+    run_actinglab_json(
+        config,
+        runtime_root,
+        local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "record",
+            "start",
+            "--task-id",
+            "neutral_task",
+            "--record-id",
+            "record_s17",
+        ],
+    )
+}
+
+/// #463 S1-7: `actinglab tap 0 0 --record --after-ms 0`.
+fn s17_tap_record(config: &Path, runtime_root: &Path, local: &Path) -> Value {
+    run_actinglab_json(
+        config,
+        runtime_root,
+        local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+            "--after-ms",
+            "0",
+        ],
+    )
+}
+
+/// #463 S1-7: a client of the fake host's state root.
+fn s17_client(runtime_root: &Path) -> RuntimeClient {
+    RuntimeClient::connect(RuntimeClientConfig::new(
+        runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client")
+}
+
+/// #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): on the fake Runtime
+/// host, `record start` pauses the instance's scheduling with the recording's own reason (the
+/// host's status shows it, `lab-record-<the header's started_at_unix_ms>`, the header keeps it); a
+/// `tap --record` under that pause is pressed and recorded with no warning; `record archive` resumes
+/// that pause (`release: resumed`), and the host's status shows the instance no longer paused.
+#[test]
+fn s17_record_start_and_archive_hold_and_release_the_instance_on_the_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-s17-hold-and-release");
+    let started = s17_record_start(&config, &runtime_root, &local);
+    let client = s17_client(&runtime_root);
+    let status = client.status().expect("Runtime status");
+    let pause = status.instances()[0]
+        .pause()
+        .expect("the recording paused its instance")
+        .clone();
+    let started_at = started["record"]["started_at_unix_ms"]
+        .as_u64()
+        .expect("the recording's start");
+    assert_eq!(
+        pause.pause_reason.as_str(),
+        format!("lab-record-{started_at}"),
+        "{started}"
+    );
+    assert_eq!(started["hold"]["state"], "own", "{started}");
+    assert_eq!(
+        started["record"]["hold"],
+        json!({"reason": pause.pause_reason.as_str(), "own": true}),
+        "{started}"
+    );
+
+    let held = s17_tap_record(&config, &runtime_root, &local);
+    assert_eq!(held["record"]["status"], "press_recorded", "{held}");
+    assert_eq!(held["record"]["warnings"], json!([]), "{held}");
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+
+    let archived = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "record", "archive"],
+    );
+    assert_eq!(archived["hold"]["release"], "resumed", "{archived}");
+    assert_eq!(
+        archived["hold"]["reason"],
+        json!(pause.pause_reason.as_str()),
+        "{archived}"
+    );
+    let status = client.status().expect("Runtime status");
+    assert!(
+        status.instances()[0].pause().is_none(),
+        "the archive resumed the recording's pause"
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+/// #463 S1-7: a recording started while nothing listened holds nothing (fix round 2:
+/// `no_runtime_listening`); once the fake Runtime host runs, a `tap --record` on its instance,
+/// whose scheduling is not paused, is pressed and recorded all the same, `record.warnings`
+/// `["instance_not_held"]`; under another party's pause the next one warns nothing; `record
+/// archive` holds nothing to release and leaves that pause as it is.
+#[test]
+fn s17_a_press_on_an_instance_that_is_not_held_says_so() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let started = s17_record_start(&config, &runtime_root, &local);
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    assert_eq!(
+        started["hold"]["warnings"],
+        json!(["no_runtime_listening"]),
+        "{started}"
+    );
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-s17-press-not-held");
+
+    let unheld = s17_tap_record(&config, &runtime_root, &local);
+    assert_eq!(unheld["record"]["status"], "press_recorded", "{unheld}");
+    assert_eq!(
+        unheld["record"]["warnings"],
+        json!(["instance_not_held"]),
+        "{unheld}"
+    );
+
+    let client = s17_client(&runtime_root);
+    client
+        .pause_scheduling(
+            actingcommand_contract::SchedulingPauseScope::Instance {
+                instance_alias: "node.a".to_owned(),
+            },
+            actingcommand_contract::SchedulingPauseReason::new("operator").expect("a reason"),
+            1_000,
+        )
+        .expect("another party pauses the instance");
+    let held = s17_tap_record(&config, &runtime_root, &local);
+    assert_eq!(held["record"]["status"], "press_recorded", "{held}");
+    assert_eq!(held["record"]["warnings"], json!([]), "{held}");
+    assert_eq!(state.taps.load(Ordering::Acquire), 2);
+
+    let archived = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "record", "archive"],
+    );
+    assert!(archived.get("hold").is_none(), "{archived}");
+    let status = client.status().expect("Runtime status");
+    assert_eq!(
+        status.instances()[0]
+            .pause()
+            .map(|pause| pause.pause_reason.as_str()),
+        Some("operator"),
+        "the other party's pause stays"
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+/// #463 S1-7 fix round 2: a recording started while nothing listened holds nothing; once the fake
+/// Runtime host runs, `session app launch --record` on its instance, whose scheduling is not
+/// paused, runs the operation and records it as the recording's entry step all the same, and its
+/// `record.warnings` is `["instance_not_held"]`, read before the operation on a connection of its
+/// own.
+#[test]
+fn s17_an_application_operation_on_an_instance_that_is_not_held_says_so() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let started = s17_record_start(&config, &runtime_root, &local);
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-s17-application-not-held");
+
+    let launched = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "session",
+            "app",
+            "launch",
+            "--record",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(
+        launched["record"]["status"], "application_recorded",
+        "{launched}"
+    );
+    assert_eq!(
+        launched["record"]["warnings"],
+        json!(["instance_not_held"]),
+        "{launched}"
+    );
+    assert_eq!(state.application_calls.load(Ordering::Acquire), 1);
+}
+
+/// The train of stage one (brief rd-1115/brief-463-train-s1b.md, i; #463 S1-7 fix round 2): a
+/// recording started while nothing listened holds nothing; once the fake Runtime host runs, its
+/// step's frame is taken with `observe --capture --record` (the package of the L4 test above), and
+/// `do --capture --record --tap-rect 0,0,1,1` on the instance, whose scheduling is not paused,
+/// presses and records the tap all the same (the semantic package of `do --tap` above), its
+/// `record.warnings` `["instance_not_held"]` from the status read before the press on a connection
+/// of its own.
+#[test]
+fn s17_train_do_capture_record_on_an_instance_that_is_not_held_says_so() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let observe_package = root.path().join("observe.zip");
+    write_zip(&observe_package, &[
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+    ]);
+    let resources = root.path().join("resources");
+    let semantic_package = root.path().join("semantic.zip");
+    write_semantic_resources(&resources);
+    write_semantic_package(&semantic_package, &resources);
+    let started = s17_record_start(&config, &runtime_root, &local);
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-train-s17-do-not-held");
+
+    let observed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            observe_package.to_str().expect("observe package path"),
+            "--record",
+        ],
+    );
+    let pressed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--capture",
+            "--zip",
+            semantic_package.to_str().expect("semantic package path"),
+            "--record",
+            "--tap-rect",
+            "0,0,1,1",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert!(observed["record"]["frame"].is_object(), "{observed}");
+    assert_eq!(pressed["record"]["status"], "click_recorded", "{pressed}");
+    assert_eq!(
+        pressed["record"]["warnings"],
+        json!(["instance_not_held"]),
+        "{pressed}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+}
+
+/// The fix round after the train's review (#463 S1-7): a loopback relay in front of the fake host
+/// of `runtime_root`. The state root's runtime-info is rewritten to name the relay, which closes
+/// its `dropped`th accepted connection (0 the first) at once, before anything is read on it, and
+/// relays every other one to the host, both ways, until either side closes it.
+fn s17_relay_dropping(runtime_root: &Path, dropped: usize) {
+    let info_path = runtime_root.join("runtime-info.json");
+    let mut info: Value =
+        serde_json::from_slice(&fs::read(&info_path).expect("the host's runtime-info"))
+            .expect("the host's runtime-info JSON");
+    let host = format!(
+        "{}:{}",
+        info["host"].as_str().expect("the host's address"),
+        info["port"].as_u64().expect("the host's port")
+    );
+    let relay = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("the relay's listener");
+    info["port"] = json!(relay.local_addr().expect("the relay's address").port());
+    fs::write(
+        &info_path,
+        serde_json::to_vec(&info).expect("the relay's runtime-info JSON"),
+    )
+    .expect("the relay's runtime-info");
+    thread::spawn(move || {
+        for (index, accepted) in relay.incoming().enumerate() {
+            let Ok(client) = accepted else {
+                return;
+            };
+            if index == dropped {
+                drop(client);
+                continue;
+            }
+            let Ok(upstream) = std::net::TcpStream::connect(&host) else {
+                return;
+            };
+            let (Ok(client_reader), Ok(upstream_reader)) =
+                (client.try_clone(), upstream.try_clone())
+            else {
+                return;
+            };
+            thread::spawn(move || s17_relay_pipe(client_reader, upstream));
+            thread::spawn(move || s17_relay_pipe(upstream_reader, client));
+        }
+    });
+}
+
+/// One direction of the relay: what `from` sends, to `to`, until `from` closes or the copy fails;
+/// either way `to`'s writing half is then shut, so that its reader sees the end and closes too.
+fn s17_relay_pipe(mut from: std::net::TcpStream, mut to: std::net::TcpStream) {
+    std::io::copy(&mut from, &mut to).ok();
+    to.shutdown(std::net::Shutdown::Write).ok();
+}
+
+/// The fix round after the train's review (#463 S1-7): a recording started while nothing listened
+/// holds nothing; once the fake Runtime host runs, a `tap --record` whose status read before the
+/// press gets no answer (the relay in front of the host closes that connection, the second of the
+/// command, after the capture before the press, at once) is pressed and recorded all the same, its
+/// `record.warnings` `["instance_hold_unread"]`.
+#[test]
+fn s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let started = s17_record_start(&config, &runtime_root, &local);
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-fix-s17-hold-unread");
+    // The command's connections: the capture before the press (0), the status read (1), the
+    // press, the captures after it.
+    s17_relay_dropping(&runtime_root, 1);
+
+    let pressed = s17_tap_record(&config, &runtime_root, &local);
+    host.close().expect("close host");
+
+    assert_eq!(pressed["record"]["status"], "press_recorded", "{pressed}");
+    assert_eq!(
+        pressed["record"]["warnings"],
+        json!(["instance_hold_unread"]),
+        "{pressed}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
 }

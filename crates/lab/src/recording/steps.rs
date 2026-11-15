@@ -470,6 +470,10 @@ pub(crate) struct Arrival {
     pub(crate) opened: bool,
     pub(crate) closed_step: Option<u32>,
     pub(crate) frame: RecordedFrame,
+    /// #463 S1-1: the step of a press recorded by the command that makes it whose after frame this
+    /// frame became; #463 S1-2: or, for a capture of the press's after loop, whose after frame the
+    /// loop names when it ends ([`name_after_frame`]).
+    pub(crate) pressed_step: Option<u32>,
 }
 
 /// The sha256 of the step's live (not superseded) primary frame.
@@ -481,7 +485,97 @@ fn live_primary_sha(step: &RecordingStep) -> Option<String> {
         .map(|frame| frame.sha256.clone())
 }
 
-fn has_marks(step: &RecordingStep) -> bool {
+/// #463 S1-1: the step's live (not superseded) primary frame, the screen a press on it is
+/// committed on.
+pub(crate) fn live_primary(step: &RecordingStep) -> Option<&RecordedFrame> {
+    step.frames
+        .iter()
+        .rev()
+        .find(|frame| frame.role == "primary" && !frame.superseded)
+}
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): a frame that opens a step
+/// is the after frame of the press of the step before it when that press was recorded by the
+/// command that makes it (its execution names its `before_frame`), was performed, and has no after
+/// frame yet. Returns that step. A press of `do --capture --record` names no `before_frame` and is
+/// left as it was. #463 S1-2: only the step; [`name_after_frame`] writes the frame. #463 S1-3: so
+/// is the step of an application operation whose completed receipt names its `before_frame`
+/// (`session app <verb> --record` on a step with a frame) and has no after frame yet, when the step
+/// has no click; the entry step, whose receipt names none, is left as it was.
+fn awaiting_after_frame(recording: &LabRecording) -> Option<u32> {
+    let index = last_effective(recording)?;
+    let step = step_ref(recording, index)?;
+    let awaiting = match (&step.click, &step.application) {
+        (Some(click), _) => {
+            click.executed()
+                && click.execution.as_ref().is_some_and(|execution| {
+                    execution.before_frame.is_some() && execution.after_frame.is_none()
+                })
+        }
+        (None, Some(application)) => application.executed.as_ref().is_some_and(|execution| {
+            execution.before_frame.is_some() && execution.after_frame.is_none()
+        }),
+        (None, None) => false,
+    };
+    awaiting.then_some(index)
+}
+
+/// #463 S1-2 (`contracts/lab-recording.md`, "Recording while playing"): the one place a press's
+/// `after_frame` is written: the press of step `index` names `frame_id`, the last capture of its
+/// own after loop when the loop ends (`record_after_frame`), or, when the loop stored nothing, the
+/// first frame that opens a step after it ([`arrive`]). #463 S1-3: on a step without a click, the
+/// completed receipt of its application operation names it so ([`after_members`]).
+pub(crate) fn name_after_frame(
+    recording: &mut LabRecording,
+    index: u32,
+    frame_id: &str,
+) -> LabResult<()> {
+    let (after_frame, _) = after_members(recording, index)?;
+    *after_frame = Some(frame_id.to_owned());
+    Ok(())
+}
+
+/// #463 S1-3 (the train of stage one, which joins S1-2's [`name_after_frame`] with S1-3's
+/// application steps): the `after_frame` and `after_capture` of the effect of step `index`: its
+/// click's execution when it has a click, else the completed receipt of its application operation;
+/// `record_step_not_found` when it has neither.
+fn after_members(
+    recording: &mut LabRecording,
+    index: u32,
+) -> LabResult<(
+    &mut Option<String>,
+    &mut Option<super::model::AfterCaptureRecord>,
+)> {
+    let step = step_mut(recording, index)?;
+    match (step.click.as_mut(), step.application.as_mut()) {
+        (Some(click), _) => click
+            .execution
+            .as_mut()
+            .map(|execution| (&mut execution.after_frame, &mut execution.after_capture)),
+        (None, Some(application)) => application
+            .executed
+            .as_mut()
+            .map(|execution| (&mut execution.after_frame, &mut execution.after_capture)),
+        (None, None) => None,
+    }
+    .ok_or_else(|| step_not_found(index))
+}
+
+/// #463 S1-1: how the frame after the press of step `index` was taken, on its execution; #463
+/// S1-3: or on the completed receipt of its application operation ([`after_members`]).
+pub(crate) fn note_after_capture(
+    recording: &mut LabRecording,
+    index: u32,
+    record: &super::model::AfterCaptureRecord,
+) -> LabResult<()> {
+    let (_, after_capture) = after_members(recording, index)?;
+    *after_capture = Some(record.clone());
+    Ok(())
+}
+
+/// Whether the step carries marks (its own or reused ones). #463 S1-1 fix round 2: the capture
+/// before a press on such an open step is not stored (`record_before_frame`).
+pub(crate) fn has_marks(step: &RecordingStep) -> bool {
     !step.marks.is_empty() || !step.reused.is_empty()
 }
 
@@ -642,6 +736,30 @@ pub(crate) fn arrive(
     meta: &FrameMeta,
     label: &str,
 ) -> LabResult<Arrival> {
+    arrive_naming(session, loaded, mode, meta, label, true)
+}
+
+/// #463 S1-2 (`contracts/lab-recording.md`, "Recording while playing"): a capture of the after loop
+/// of a press recorded by the command that makes it arrives as a device frame does, without naming
+/// itself the press's `after_frame`: the loop names its last capture when it ends. Its `Arrival`
+/// still answers the press it follows (`pressed_step`).
+pub(crate) fn arrive_after_press(
+    session: &mut Session,
+    loaded: LoadedFrame,
+    meta: &FrameMeta,
+    label: &str,
+) -> LabResult<Arrival> {
+    arrive_naming(session, loaded, ArrivalMode::Device, meta, label, false)
+}
+
+fn arrive_naming(
+    session: &mut Session,
+    loaded: LoadedFrame,
+    mode: ArrivalMode,
+    meta: &FrameMeta,
+    label: &str,
+    names_after_frame: bool,
+) -> LabResult<Arrival> {
     let plan = plan_arrival(&session.recording, mode)?;
     let entry = admit_frame(session, loaded, "primary", meta, label)?;
     match plan {
@@ -656,6 +774,7 @@ pub(crate) fn arrive(
                 opened: false,
                 closed_step: None,
                 frame: entry,
+                pressed_step: None,
             })
         }
         ArrivalPlan::Open { close } => {
@@ -663,6 +782,10 @@ pub(crate) fn arrive(
                 let step = step_mut(&mut session.recording, index)?;
                 step.closed = true;
                 step.closed_by = Some(by.to_string());
+            }
+            let pressed_step = awaiting_after_frame(&session.recording);
+            if let Some(pressed) = pressed_step.filter(|_| names_after_frame) {
+                name_after_frame(&mut session.recording, pressed, &entry.frame_id)?;
             }
             let index = next_step_index(&session.recording)?;
             session
@@ -674,6 +797,7 @@ pub(crate) fn arrive(
                 opened: true,
                 closed_step: close.map(|(index, _)| index),
                 frame: entry,
+                pressed_step,
             })
         }
     }
@@ -1513,7 +1637,7 @@ pub(crate) fn apply_marks(
                 json!({"step": target}),
             ));
         }
-        apply_application(session, request, target, None)?;
+        apply_application(session, request, target)?;
         apply_optional(&mut session.recording, request, target)?;
         return Ok(MarkApplied {
             step: target,
@@ -1681,7 +1805,7 @@ pub(crate) fn apply_marks(
         clear_select(step_mut(&mut session.recording, target)?)?;
     }
     if request.application.is_some() {
-        apply_application(session, request, target, Some(&batch))?;
+        apply_application(session, request, target)?;
     } else {
         select_fresh = declare_select(step_mut(&mut session.recording, target)?, request)?;
         apply_click(session, request, target, &batch)?;
@@ -3099,21 +3223,10 @@ fn application_entry_invalid() -> LabError {
     blocked(
         "record_application_entry_invalid",
         "an application entry step can only be step 1. After the effect of the previous step, \
-         capture the arrival screen with capture --record and mark it, then execute or declare \
-         the application operation on that step; offline, give the arrival screen with --frame",
-    )
-}
-
-fn application_marks_missing(index: u32) -> LabError {
-    with_details(
-        blocked(
-            "record_application_step_marks_missing",
-            format!(
-                "step {index} has a frame but no marks; mark the screen the application \
-                 operation starts from first"
-            ),
-        ),
-        json!({"step": index}),
+         `session app <action> --record` captures the arrival screen itself before the \
+         operation; to declare the operation, capture the arrival screen with capture --record \
+         first, then declare it on that step (no mark is needed); offline, give the arrival \
+         screen with --frame",
     )
 }
 
@@ -3132,12 +3245,11 @@ fn application_mark_target(recording: &mut LabRecording) -> LabResult<(u32, bool
 }
 
 /// `record mark --application <action>`: the declared application operation becomes the
-/// step's effect. `batch` holds the step's marks after this command (none for the entry step).
+/// step's effect. #463 S1-3: an open step needs no marks for it (their check is `record stop`'s).
 fn apply_application(
     session: &mut Session,
     request: &super::model::MarkRequest,
     target: u32,
-    batch: Option<&MarkBatch>,
 ) -> LabResult<()> {
     let Some(spec) = &request.application else {
         return Ok(());
@@ -3154,13 +3266,6 @@ fn apply_application(
             ));
         }
         _ => {}
-    }
-    if let Some(batch) = batch
-        && !step.closed
-        && batch.own.is_empty()
-        && batch.reused.is_empty()
-    {
-        return Err(application_marks_missing(target));
     }
     let attempts = step
         .application
@@ -3797,13 +3902,21 @@ fn plan_swipe(
     let inside = recording
         .coordinate_space
         .is_some_and(|size| rect_inside(from, size) && rect_inside(to, size));
+    // #463 S1-1 fix round 2: the refusals name their argument and reason, as a tap's do
+    // (`plan_point`).
     if !inside {
         return Err(with_details(
             invalid(
                 "validation_failed",
                 "--swipe must start and end inside the frame",
             ),
-            json!({"step": index, "swipe_from": swipe.from, "swipe_to": swipe.to}),
+            json!({
+                "step": index,
+                "argument": "point",
+                "reason": "outside_frame",
+                "swipe_from": swipe.from,
+                "swipe_to": swipe.to
+            }),
         ));
     }
     if !(1..=LAB_RECORDING_MAX_GESTURE_MS).contains(&swipe.duration_ms) {
@@ -3812,7 +3925,12 @@ fn plan_swipe(
                 "validation_failed",
                 format!("--swipe must last 1..={LAB_RECORDING_MAX_GESTURE_MS} ms"),
             ),
-            json!({"step": index, "duration_ms": swipe.duration_ms}),
+            json!({
+                "step": index,
+                "argument": "duration_ms",
+                "reason": "duration_range",
+                "duration_ms": swipe.duration_ms
+            }),
         ));
     }
     Ok(super::model::ClickPlan {
@@ -3834,6 +3952,144 @@ fn plan_swipe(
 
 /// Workflow #449 REC-ARCH: the `source` of a click a recorded swipe declared.
 const SWIPE_SOURCE: &str = "swipe";
+
+/// #463 S1-1: the `source` of a click a tap or a long press declared by its point.
+const POINT_SOURCE: &str = "point";
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): the press of `tap`,
+/// `swipe` or `long-tap --record` on the open step, which must declare no effect. A tap or a long
+/// press declares a box of one pixel at its point ([`plan_point`]); a swipe is today's recorded
+/// swipe, planned by [`plan_click`] (a drag between boxes of one pixel at its two points,
+/// `source: "swipe"`). A step that declares an application operation is
+/// `record_step_effect_exists`, one whose click has an outcome on record `record_click_executed`,
+/// and one that declares a click without one `record_click_exists`: such a step is pressed with
+/// `do --capture --record`. Every refusal comes before anything is pressed.
+pub(crate) fn plan_press(
+    recording: &LabRecording,
+    click: &super::model::PlanClickRequest,
+    point_press: Option<super::model::PointPress>,
+) -> LabResult<super::model::ClickPlan> {
+    let index = open_step(recording).ok_or_else(|| {
+        blocked(
+            "record_step_frame_missing",
+            "there is no open step; record its frame with capture --record first",
+        )
+    })?;
+    let step = effective_step(recording, index)?;
+    if step.application.is_some() {
+        return Err(effect_exists(
+            index,
+            "application",
+            "a press needs a step of its own: execute the operation with `session app <action> \
+             --record` or close the step with `record mark --close-step`, then press",
+        ));
+    }
+    if let Some(declared) = &step.click {
+        if declared.execution.is_some() {
+            return Err(with_details(
+                blocked(
+                    "record_click_executed",
+                    format!(
+                        "the click of step {index} already has an outcome on record; run \
+                         `record mark --reopen-step {index}` to execute it again or \
+                         `record mark --close-step` to accept it"
+                    ),
+                ),
+                json!({"step": index}),
+            ));
+        }
+        return Err(with_details(
+            blocked(
+                "record_click_exists",
+                format!(
+                    "step {index} already declares a click; press it with `do --capture \
+                     --record`, or replace it first with `record mark --replace-click`; nothing \
+                     was pressed"
+                ),
+            ),
+            json!({"step": index}),
+        ));
+    }
+    match point_press {
+        Some(press) => plan_point(recording, index, press),
+        None => plan_click(recording, click),
+    }
+}
+
+/// #463 S1-1: a tap or a long press by its point on the open step `index`, which declares no
+/// effect: the box of one pixel at the point, `rect {x, y, 1, 1}`, `source: "point"`, rule
+/// `explicit`; a long press with `gesture{kind: "long_press", duration_ms}`, ending where it
+/// began. The point lies inside the frame and a long press lasts 1..=60000 ms, else
+/// `validation_failed` with `details{argument, reason}` (`point`, `outside_frame`;
+/// `duration_ms`, `duration_range`).
+fn plan_point(
+    recording: &LabRecording,
+    index: u32,
+    press: super::model::PointPress,
+) -> LabResult<super::model::ClickPlan> {
+    use super::model::PointPress;
+    let (point, gesture) = match press {
+        PointPress::Tap { point } => (point, None),
+        PointPress::LongPress { point, duration_ms } => {
+            (point, Some(ClickGesture::LongPress { duration_ms }))
+        }
+    };
+    let rect = RecordRect {
+        x: point.x,
+        y: point.y,
+        width: 1,
+        height: 1,
+    };
+    if !recording
+        .coordinate_space
+        .is_some_and(|size| rect_inside(rect, size))
+    {
+        return Err(with_details(
+            invalid(
+                "validation_failed",
+                format!(
+                    "the point {},{} must lie inside the frame of the recording",
+                    point.x, point.y
+                ),
+            ),
+            json!({
+                "step": index,
+                "argument": "point",
+                "reason": "outside_frame",
+                "point": point,
+                "coordinate_space": recording.coordinate_space
+            }),
+        ));
+    }
+    if let Some(gesture) = gesture
+        && !(1..=LAB_RECORDING_MAX_GESTURE_MS).contains(&gesture.duration_ms())
+    {
+        return Err(with_details(
+            invalid(
+                "validation_failed",
+                format!("a long press must last 1..={LAB_RECORDING_MAX_GESTURE_MS} ms"),
+            ),
+            json!({
+                "step": index,
+                "argument": "duration_ms",
+                "reason": "duration_range",
+                "duration_ms": gesture.duration_ms()
+            }),
+        ));
+    }
+    Ok(super::model::ClickPlan {
+        record_id: recording.record_id.clone(),
+        step: index,
+        rect,
+        point,
+        point_rule: "explicit".to_string(),
+        source: POINT_SOURCE.to_string(),
+        declares_click: true,
+        gesture,
+        to_point: gesture.map(|_| point),
+        sampling: None,
+    })
+}
 
 /// Workflow #406 T4: a recorded click's rectangle as a drawn box.
 fn pack_rect(rect: RecordRect) -> PackRect {
@@ -4022,11 +4278,18 @@ fn gesture_execution_unsupported(index: u32, gesture: ClickGesture) -> LabError 
     )
 }
 
-/// Records the Runtime outcome of a planned click on its step.
+/// Records the Runtime outcome of a planned click on its step. #463 S1-1: with `names_frames` (a
+/// press recorded by the command that makes it, `record_press`), the execution names the step's
+/// live primary frame as its `before_frame`, and the frame after it becomes its `after_frame`
+/// ([`name_after_frame`]); `do --capture --record` names none. Fix round 3: beside
+/// `before_frame`, `sent_on_unstored_capture` when such a press was sent on a capture its command
+/// did not store (`record_press` hands it; every other caller passes `false`).
 pub(crate) fn commit_click(
     recording: &mut LabRecording,
     plan: &super::model::ClickPlan,
     request: &super::model::CommitClickRequest,
+    names_frames: bool,
+    sent_on_unstored_capture: bool,
 ) -> LabResult<(StepClick, bool)> {
     use super::model::ClickEffect;
     if recording.record_id != plan.record_id || open_step(recording) != Some(plan.step) {
@@ -4040,6 +4303,11 @@ pub(crate) fn commit_click(
     }
     let now = now_unix_ms();
     let step = step_mut(recording, plan.step)?;
+    let before_frame = if names_frames {
+        live_primary(step).map(|frame| frame.frame_id.clone())
+    } else {
+        None
+    };
     if plan.declares_click {
         step.click = Some(StepClick {
             rect: plan.rect,
@@ -4081,6 +4349,10 @@ pub(crate) fn commit_click(
         to_point: plan.to_point,
         duration_ms: plan.gesture.map(ClickGesture::duration_ms),
         sampling: plan.sampling.clone(),
+        before_frame,
+        after_frame: None,
+        after_capture: None,
+        sent_on_unstored_capture,
     });
     if performed {
         click.needs_review = request.has_failure;
@@ -4100,9 +4372,9 @@ pub(crate) fn plan_application(
     request: &super::model::PlanApplicationRequest,
 ) -> LabResult<super::model::ApplicationPlan> {
     let action = application_action(&request.verb)?;
-    let hint = "one step has one effect: capture and mark the next screen with capture --record \
-                first, or replace a declared effect with `record mark --application <action> \
-                --replace-click`";
+    let hint = "one step has one effect: capture the next screen with capture --record first (no \
+                mark is needed), or replace a declared effect with `record mark --application \
+                <action> --replace-click`";
     let plan = |step: u32, opens_entry_step: bool| super::model::ApplicationPlan {
         record_id: recording.record_id.clone(),
         step,
@@ -4133,14 +4405,17 @@ pub(crate) fn plan_application(
         // The operation would land on an optional step (Workflow #339): refused before any
         // request, as `record mark --application` is.
         _ if step.optional.is_some() => Err(optional_application(index, action)),
-        (None, Some(_)) => Ok(plan(index, false)),
-        (None, None) if !has_marks(step) => Err(application_marks_missing(index)),
-        (None, None) => Ok(plan(index, false)),
+        // #463 S1-3: the open step's effect, its marks or none (their check is `record stop`'s).
+        (None, _) => Ok(plan(index, false)),
     }
 }
 
 /// Records the Runtime result of a planned application operation. Performed: the completed
-/// receipt is the step's executed effect and closes it (`closed_by:"application"`).
+/// receipt is the step's executed effect and closes it (`closed_by:"application"`); #463 S1-3: it
+/// names the step's live primary frame as its `before_frame` (none on the entry step), and its
+/// screen after becomes its `after_frame` ([`name_after_frame`]: the last capture of its after
+/// loop, or, when that loop stored nothing, the first frame that opens a step after it); #463
+/// S1-5: and it is stamped `executed_at_unix_ms`, on the clock a click's execution is stamped with.
 /// Indeterminate: the step declares the operation with one more attempt and stays open.
 /// Returns the step's application, whether it was opened and whether it was closed.
 pub(crate) fn commit_application(
@@ -4170,6 +4445,7 @@ pub(crate) fn commit_application(
         recording.steps.push(new_step(plan.step, Vec::new()));
     }
     let step = step_mut(recording, plan.step)?;
+    let before_frame = live_primary(step).map(|frame| frame.frame_id.clone());
     let application = step.application.get_or_insert_with(|| StepApplication {
         action: plan.action.clone(),
         cli_verb: plan.cli_verb.clone(),
@@ -4180,7 +4456,11 @@ pub(crate) fn commit_application(
     });
     let performed = match request {
         CommitApplicationRequest::Performed(execution) => {
-            application.executed = Some(execution.clone());
+            application.executed = Some(super::model::ApplicationExecution {
+                before_frame,
+                executed_at_unix_ms: Some(now_unix_ms()),
+                ..execution.clone()
+            });
             application.source = "executed".to_string();
             application.cli_verb = plan.cli_verb.clone();
             true

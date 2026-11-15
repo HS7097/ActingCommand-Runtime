@@ -4,8 +4,8 @@
 //! (`actingcommand.lab-record-mark.v1`) and the outcome views the CLI prints.
 
 use actingcommand_contract::{
-    InputSamplingEvidence, LabError, LabResult, OcrUnsignedIntegerFormat, OcrValueTrim,
-    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    InputFrameReference, InputSamplingEvidence, LabError, LabResult, OcrUnsignedIntegerFormat,
+    OcrValueTrim, SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
     SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, ValueTestOp,
 };
 use actingcommand_execution_kernel::DriveDraw;
@@ -339,6 +339,25 @@ pub struct ApplicationExecution {
     pub action_id: String,
     pub receipt_state: String,
     pub application_event_ids: Vec<String>,
+    /// #463 S1-3 (`contracts/lab-recording.md`, "Application steps"): the id of the step's live
+    /// primary frame when the operation's completed receipt was recorded, the screen it was run on.
+    /// Absent on the application entry step, which has no frame, and on every operation an earlier
+    /// build recorded, as are the two members below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_frame: Option<String>,
+    /// #463 S1-3: the id of the frame after the operation: what the screen became. The train of
+    /// stage one (with #463 S1-2): the last capture of the operation's own after loop, written once
+    /// when the loop ends; the first frame that opens a step after it only when the loop kept
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_frame: Option<String>,
+    /// #463 S1-3: how the frame after the operation was taken (#463 S1-2's record of the loop).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_capture: Option<AfterCaptureRecord>,
+    /// #463 S1-5: when the completed receipt was recorded, on the Lab's clock as a click's
+    /// `executed_at_unix_ms` is; absent on every operation an earlier build recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executed_at_unix_ms: Option<u64>,
 }
 
 /// An application operation without a completed receipt (it may have run), or a completed
@@ -790,6 +809,59 @@ pub struct ClickExecution {
     /// evidence of `point_rule`'s draw: its algorithm, action seed, boxes and parameters).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<InputSamplingEvidence>,
+    /// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): on a press recorded by
+    /// the command that makes it (`tap`, `swipe` or `long-tap --record`), the id of the step's live
+    /// primary frame when the press was committed: what was on the screen. Absent on every other
+    /// press, as are the two members below, so that a recording without such a press is
+    /// byte-identical to one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_frame: Option<String>,
+    /// #463 S1-1: on such a press, the id of the first frame that arrived after it: what the
+    /// screen became. #463 S1-2: the last capture of the press's own after loop, written once when
+    /// the loop ends (fix round 3: also when a later capture failed); the first frame that opens a
+    /// step after it only when the loop kept nothing (its first capture could not be taken).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_frame: Option<String>,
+    /// #463 S1-1: on such a press, how the frame after it was taken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_capture: Option<AfterCaptureRecord>,
+    /// #463 S1-1 fix round 3: on such a press, `true` when it was sent on a frame its command
+    /// captured and did not store (the open step carries marks, made on its stored frame), so
+    /// that `before_frame` names the stored frame and not the frame the press was sent on. Absent
+    /// (false) on every other press, so that every recording without one is byte-identical to
+    /// one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sent_on_unstored_capture: bool,
+}
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): how the frame after a
+/// press recorded by the command that makes it was taken. #463 S1-2: the screen is captured until
+/// it is still, and these are the parameters as the press took them and what the loop did: the
+/// wait before the first capture (`after_ms`), the time from the start of one capture to the start
+/// of the next (`interval_ms`), how long the screen must not change to be still (`still_ms`; 0: no
+/// stillness test), the bound after the first capture (`still_max_ms`), whether the screen was
+/// found still (`still`: `true`, `false` at the bound, `None` when no test ran or the loop did not
+/// finish), the time from the press to the start of the last capture (`waited_ms`), how many
+/// captures it took (`captures`) and how many of them it kept beside the last, the frame after
+/// (`kept`, `captures - 1`). Fix round 3: `unfinished` when a capture after the first could not be
+/// taken, so that the loop ended there and kept what it had taken (absent otherwise). A record
+/// without `interval_ms` and `still_ms` (S1-1's build wrote one capture after the wait) reads as
+/// one whose screen after was not tested.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AfterCaptureRecord {
+    pub after_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub still_ms: Option<u64>,
+    pub still_max_ms: u64,
+    pub still: Option<bool>,
+    pub waited_ms: u64,
+    pub captures: u32,
+    pub kept: u32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unfinished: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1738,6 +1810,155 @@ pub struct RecordStepOutcome {
     pub next_frame: Option<NextFrameOutcome>,
 }
 
+/// #463 S1-1: the wait before the frame after a press (`--after-ms`) when none is given; #463 S1-2:
+/// 100, the first of the captures that repeat until the screen is still.
+pub const LAB_RECORDING_PRESS_AFTER_MS: u64 = 100;
+/// #463 S1-1: the bound of the stillness test after a press (`--still-max-ms`, slice S1-2) when
+/// none is given.
+pub const LAB_RECORDING_PRESS_STILL_MAX_MS: u64 = 5_000;
+/// #463 S1-1: the wait before the frame after an application operation (slice S1-3) when none is
+/// given.
+pub const LAB_RECORDING_APPLICATION_AFTER_MS: u64 = 2_000;
+/// #463 S1-1: the bound of the stillness test after an application operation (slice S1-3) when
+/// none is given.
+pub const LAB_RECORDING_APPLICATION_STILL_MAX_MS: u64 = 30_000;
+/// #463 S1-2 fix round 3: after an application operation, the time from the start of one capture
+/// to the start of the next, so that a loading screen of half a minute takes at most 31 captures.
+pub const LAB_RECORDING_APPLICATION_INTERVAL_MS: u64 = 1_000;
+/// #463 S1-2 fix round 3: after an application operation, how long the screen must not change to
+/// be still.
+pub const LAB_RECORDING_APPLICATION_STILL_MS: u64 = 2_000;
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): a tap or a long press that
+/// `tap --record` or `long-tap --record` declares by its point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointPress {
+    Tap {
+        point: RecordPoint,
+    },
+    LongPress {
+        point: RecordPoint,
+        duration_ms: u64,
+    },
+}
+
+/// #463 S1-1: how the frame after an effect is taken: the wait before it, in milliseconds (0 to
+/// [`LAB_RECORDING_MAX_NEXT_FRAME_MS`]), and the bound of the stillness test after it. #463 S1-2
+/// runs the test: `interval_ms`, the time from the start of one capture to the start of the next,
+/// and `still_ms`, how long the screen must not change to be still (0: no test), each `None` for
+/// the recording API's default (`record_after_frame`: 100 and 300).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AfterCapture {
+    pub after_ms: u64,
+    pub interval_ms: Option<u64>,
+    pub still_ms: Option<u64>,
+    pub still_max_ms: u64,
+}
+
+impl AfterCapture {
+    /// After a press: `after_ms`, else [`LAB_RECORDING_PRESS_AFTER_MS`]; the bound
+    /// [`LAB_RECORDING_PRESS_STILL_MAX_MS`]; #463 S1-2: the recording API's interval and stillness
+    /// (100, 100, 300, 5000).
+    pub fn for_press(after_ms: Option<u64>) -> Self {
+        Self {
+            after_ms: after_ms.unwrap_or(LAB_RECORDING_PRESS_AFTER_MS),
+            interval_ms: None,
+            still_ms: None,
+            still_max_ms: LAB_RECORDING_PRESS_STILL_MAX_MS,
+        }
+    }
+
+    /// After an application operation (slice S1-3): `after_ms`, else
+    /// [`LAB_RECORDING_APPLICATION_AFTER_MS`]; the bound
+    /// [`LAB_RECORDING_APPLICATION_STILL_MAX_MS`]. #463 S1-2 fix round 3: one capture every
+    /// [`LAB_RECORDING_APPLICATION_INTERVAL_MS`], still after
+    /// [`LAB_RECORDING_APPLICATION_STILL_MS`] unchanged (2000, 1000, 2000, 30000: at most 31
+    /// captures, inside the bound of 120 intervals).
+    pub fn for_application(after_ms: Option<u64>) -> Self {
+        Self {
+            after_ms: after_ms.unwrap_or(LAB_RECORDING_APPLICATION_AFTER_MS),
+            interval_ms: Some(LAB_RECORDING_APPLICATION_INTERVAL_MS),
+            still_ms: Some(LAB_RECORDING_APPLICATION_STILL_MS),
+            still_max_ms: LAB_RECORDING_APPLICATION_STILL_MAX_MS,
+        }
+    }
+}
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): a press `tap`, `swipe` or
+/// `long-tap --record` sends and records: a tap or a long press by its point (`point_press`), or a
+/// swipe as `do --capture --record --swipe` plans it (`click.swipe`); and how the frame after it is
+/// taken.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordPressRequest {
+    pub click: PlanClickRequest,
+    pub point_press: Option<PointPress>,
+    pub after: AfterCapture,
+}
+
+/// #463 S1-1: the frame on the screen when the press was committed, the open step's live primary
+/// frame; `refreshed` when the press's command took it itself. Fix round 2: every such press is
+/// sent on a frame its command captured immediately before it; `sent_on_unstored_capture` when
+/// that capture was not stored (the open step carries marks, made on its stored frame), so that
+/// `frame_id` names the stored frame and not the one the press was sent on. Fix round 3:
+/// `captured_twice` when the Runtime no longer held the frame of the first capture when the press
+/// was sent on it (`input_frame_unavailable`, nothing sent), so the command captured once more and
+/// sent the press again on the second capture, which `frame_id` names when it was stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BeforeFrame {
+    pub frame_id: String,
+    pub path: String,
+    pub sha256: String,
+    pub refreshed: bool,
+    pub sent_on_unstored_capture: bool,
+    pub captured_twice: bool,
+}
+
+/// #463 S1-1 fix round 2 (`contracts/lab-recording.md`, "Recording while playing"): one frame
+/// taken through the Runtime for a press recorded by the command that makes it: the frame as
+/// `capture --record` hands it to the recording, and the reference of the frame the Runtime
+/// committed for that observation, which an input planned on it names (fix round 3: built as
+/// `do --capture`'s online scene builds the reference of its frame). An observation without a
+/// frame id has none (`None`) and no press is sent on it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapturedFrame {
+    pub frame: AttachFrameRequest,
+    pub input_frame: Option<InputFrameReference>,
+}
+
+/// #463 S1-1 fix round 2: the frame a press recorded by the command that makes it is sent on, the
+/// capture taken immediately before it: the Runtime's reference of it (`input_frame`, handed to
+/// the press) and its arrival in the recording (`arrived`), `None` when it was not stored (the
+/// open step carries marks).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeforeCapture {
+    pub input_frame: InputFrameReference,
+    pub arrived: Option<AttachFrameOutcome>,
+}
+
+/// #463 S1-1: the frame after the press and how it was taken. #463 S1-2: the last capture of the
+/// press's after loop, the live primary frame of the step the loop's first capture opened (`step`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AfterFrame {
+    pub step: u32,
+    pub frame_id: String,
+    pub path: String,
+    pub sha256: String,
+    #[serde(flatten)]
+    pub record: AfterCaptureRecord,
+}
+
+/// #463 S1-1: what a press recorded by the command that makes it recorded, as the command's answer
+/// carries it in `record`: the press (`status` `press_recorded`, the recording, the step and its
+/// click), the frame before it and the frame after it, and the warnings (none in slice S1-1).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordPressOutcome {
+    #[serde(flatten)]
+    pub click: CommitClickOutcome,
+    pub before: BeforeFrame,
+    pub after: Option<AfterFrame>,
+    pub warnings: Vec<String>,
+}
+
 /// `session app <verb> --record`: the verb as given (`launch`, `restart`, `stop`,
 /// `force-stop`).
 #[derive(Debug, Clone, PartialEq)]
@@ -1776,8 +1997,10 @@ pub struct CommitApplicationOutcome {
     pub application: StepApplication,
 }
 
-/// Workflow #449 REC-ARCH: the schema of the manifest `record archive` writes into the recording's
-/// own directory (`archive-manifest-<n>.json`).
+/// Workflow #449 REC-ARCH: the schema of the manifest (`archive-manifest-<n>.json`) the builds
+/// before #463 S1-5 wrote into the recording's own directory, v1. Since #463 S1-5 it is only read
+/// (named again, verified, copied as it is, reopened) and never written: `record archive` writes
+/// v2 (`recording/archive.rs`).
 pub const LAB_RECORDING_ARCHIVE_SCHEMA: &str = "actingcommand.lab-recording-archive.v1";
 
 /// Workflow #449 REC-ARCH: `record archive` options.

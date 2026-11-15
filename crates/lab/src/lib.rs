@@ -67,6 +67,17 @@ mod gate_463_r2;
 // frame; record stop keeps its earlier output, refuses an installed root and answers the adoption.
 #[cfg(test)]
 mod gate_463_r4;
+// #463 S1-1: a press is recorded by the command that makes it (`tap`, `swipe`, `long-tap
+// --record`), with the screen before it and the screen after it.
+#[cfg(test)]
+mod gate_463_s11;
+// #463 S1-2: a press is recorded with a fresh screen before it and a still screen after it.
+#[cfg(test)]
+mod gate_463_s12;
+// #463 S1-7: a recording holds its instance; the session header keeps the hold's facts and
+// `record status` shows them.
+#[cfg(test)]
+mod gate_463_s17;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
