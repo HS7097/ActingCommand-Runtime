@@ -25,20 +25,33 @@
 //! reads as a designated effect's cap is an `integer` from 0 to at most [`MAX_VARIABLE_CAP`]. A
 //! name that breaks one of these is reported and does not apply; the root still runs.
 //!
-//! Only the declaration is built here: nothing resolves a value, nothing overlays
-//! `session.dispatch.parameter.<name>`, and no run reads a variable (later slices of #463). A
-//! package without `variables` reads as before.
+//! Workflow #463 V2 (register §1.382; `contracts/package-variables.md`, "The run"): the rules a
+//! value is judged by when a run reads it, one copy for the policy crate, the kernel and the Lab:
+//! [`PackageVariable::judge`] (a value set on an application that no longer fits the declaration
+//! gives the word [`VariableProblem`] says it with, and the run reads the default),
+//! [`PackageVariable::fact_value`] (the overlay `session.dispatch.parameter.<name>` with its
+//! kind's type) and [`variables_not_applying`] (the names the root check keeps from applying,
+//! with their word). A package without `variables` reads as before. Fix round 2: the one
+//! judgement of a whole root, [`judge_root_variables`], takes the goal document as a reader read
+//! it ([`RootGoalDocument`]: absent, accepted, refused or unreadable) and answers, per name, the
+//! packages that declare it, its declaration, and why it does not apply with the detail of the
+//! cause ([`RootVariableVerdict`]); `standard-pack check`, the Runtime's scheduler workbench and
+//! the Runtime's table without a composed standard pack all call it.
 
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
 use crate::standard_pack_goals::{
-    Check, GoalBlock, GoalOption, GoalText, GoalTimeUnit, GoalUnit, GoalVariable,
-    IrreversiblePackages, MAX_GOAL_CHOICE_OPTIONS, MAX_GOAL_ENTRIES, MAX_GOAL_LIST_VALUES,
-    MAX_GOAL_NAME_BYTES, MAX_GOAL_ORDERED_COUNT, MIN_GOAL_CHOICE_OPTIONS, bounded,
+    Check, DeclaredGoal, GoalBlock, GoalOption, GoalText, GoalTimeUnit, GoalType, GoalUnit,
+    GoalVariable, IrreversiblePackages, MAX_GOAL_CHOICE_OPTIONS, MAX_GOAL_ENTRIES,
+    MAX_GOAL_LIST_VALUES, MAX_GOAL_NAME_BYTES, MAX_GOAL_ORDERED_COUNT, MIN_GOAL_CHOICE_OPTIONS,
+    StandardPackGoals, bounded,
 };
 use crate::standard_pack_ui::{MAX_PACK_UI_TITLE_BYTES, at};
-use crate::{MAX_DESIGNATED_EFFECT_REPEATS, ProvidedCapability, remedy_token_valid};
+use crate::{
+    FactScalar, FactValue, MAX_DESIGNATED_EFFECT_REPEATS, ProvidedCapability, remedy_token_valid,
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A package's control declaration, whose `variables` this module reads.
@@ -57,10 +70,92 @@ pub const MAX_ROOT_VARIABLES: usize = MAX_GOAL_ENTRIES;
 /// The largest `max` of an `integer` variable a package reads as a designated effect's cap: the
 /// highest cap a designated effect takes.
 pub const MAX_VARIABLE_CAP: i64 = MAX_DESIGNATED_EFFECT_REPEATS as i64;
-/// The key prefix under which a later slice (V2) overlays a variable for a run, the one remedy
-/// parameters use (`contracts/remedies.md` §4); the root check reads it only to know which
-/// variable a designated effect's cap reads.
+/// The key prefix under which a run reads a variable (Workflow #463 V2), the one remedy parameters
+/// use (`contracts/remedies.md` §4); the root check reads it to know which variable a designated
+/// effect's cap reads.
 pub const VARIABLE_FACT_KEY_PREFIX: &str = "session.dispatch.parameter.";
+/// Workflow #463 V2: the longest text of a value a dispatch's reason carries
+/// (`variable_values[].value_json`). Fix round 1: a `json` key of the key table, which holds the
+/// longest value text the goal store keeps for an entry, so every value a run is to read of a set
+/// value fits; only a declared default may be longer.
+pub const MAX_VARIABLE_VALUE_JSON_BYTES: usize = crate::outcome::JSON_MAX_BYTES;
+/// Workflow #463 V2: the key column of the rows an `ordered` variable is overlaid with.
+pub const ORDERED_VARIABLE_KEY_COLUMN: &str = "key";
+/// Workflow #463 V2: the column of the rows an `ordered` variable is overlaid with that holds each
+/// key's place in the list, 1 for the first.
+pub const ORDERED_VARIABLE_RANK_COLUMN: &str = "rank";
+
+crate::outcome_vocabulary! {
+    /// Workflow #463 V2 (vocabulary `variable_source`): where the value a policy run reads of a
+    /// variable comes from.
+    pub enum VariableSource: "variable_source" {
+        /// The application's entry row of the variable's name in its `session.resource_targets`
+        /// v3 record, the value a person or an agent set.
+        Set => "set",
+        /// The package's declared default.
+        Default => "default",
+    }
+}
+
+crate::outcome_vocabulary! {
+    /// Workflow #463 V2 (vocabulary `variable_problem`): why a value set on an application was
+    /// not handed to a run, which reads the package's default instead; one word per situation.
+    /// Fix round 1: and `keys_left_out`, an `ordered` value handed to the run in part.
+    pub enum VariableProblem: "variable_problem" {
+        /// A `choice` value that is none of the declaration's options.
+        NotAnOption => "not_an_option",
+        /// An `integer` value below `min` or above `max`.
+        OutOfRange => "out_of_range",
+        /// An `integer` value within the range but on no step from `min`.
+        OffStep => "off_step",
+        /// A value that is not of the variable's type.
+        TypeChanged => "type_changed",
+        /// An `ordered` value whose keys the declaration still offers are fewer than `min_count`.
+        KeysRemoved => "keys_removed",
+        /// An `ordered` value of offered keys only whose count is outside `min_count` to
+        /// `max_count`, or whose offered keys are more than `max_count`.
+        CountOutOfRange => "count_out_of_range",
+        /// An `ordered` value that names one key twice.
+        KeyRepeated => "key_repeated",
+        /// Fix round 1: an `ordered` value naming keys the declaration no longer offers, whose
+        /// offered keys are enough: the run reads those, in their order (the source stays
+        /// `set`), and no warning is written, since the value was applied.
+        KeysLeftOut => "keys_left_out",
+        /// Fix round 1: the application's entry row of the name holds a value but who set it
+        /// (its `set_unix_ms` or its `channel`) could not be read.
+        EntryUnreadable => "entry_unreadable",
+        /// A package that declares the variable counts as able to do something irreversible by
+        /// the root (`variable_irreversible_by_root`) because it provides, or its remedies list,
+        /// a capability a package of the root marks irreversible.
+        IrreversibleByRoot => "irreversible_by_root",
+        /// Fix round 1: a package of the game root could not be read, so the root check counts
+        /// every package of the root as able to do something irreversible (its
+        /// `variable_irreversible_by_root`, the safe side): no package that declares the variable
+        /// provides, or lists, a capability marked irreversible.
+        PackageUnreadable => "package_unreadable",
+        /// Fix round 1: the game root's `goals.json` could not be read, so which names it takes
+        /// is not known.
+        GoalsUnreadable => "goals_unreadable",
+        /// The root's declarations of the name are not byte-identical (`variable_conflict`).
+        DeclarationConflict => "declaration_conflict",
+        /// An entry of the root's `goals.json` uses the name for anything but its placement
+        /// (`variable_conflict` at the name).
+        GoalNameConflict => "goal_name_conflict",
+        /// The name is the root's 97th or later (`variable_out_of_limits`).
+        NameOutOfLimits => "name_out_of_limits",
+        /// A package reads the variable as a designated effect's cap and it is no `integer` from
+        /// 0 to 1000 (`variable_cap_range`).
+        CapRange => "cap_range",
+        /// No root check judges the variable for the application's game now. With a composed
+        /// standard pack (Workflow #463 V2 fix round 2) the scheduler workbench has noted the game
+        /// uncomposed: at a check its root failed, or the composition was refused (for this root,
+        /// another game's, or as a whole) while the generation in force did not hold the game
+        /// with its present files; only a check whose composition of every game succeeds lifts
+        /// the note. Without one, the Runtime's table was built before an instance of that game
+        /// was known.
+        RootUnchecked => "root_unchecked",
+    }
+}
 
 /// The type of a variable (`type`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -182,11 +277,171 @@ impl PackageVariable {
         self.kind.variable_type()
     }
 
-    /// The fact key a later slice overlays the variable's value under, and a designated effect's
-    /// cap names to read it: [`VARIABLE_FACT_KEY_PREFIX`] and the name.
+    /// The fact key a run reads the variable's value under (Workflow #463 V2), and a designated
+    /// effect's cap names to read it: [`VARIABLE_FACT_KEY_PREFIX`] and the name.
     pub fn fact_key(&self) -> String {
         format!("{VARIABLE_FACT_KEY_PREFIX}{}", self.name)
     }
+
+    /// Workflow #463 V2: the declared default as a JSON value: a string, an integer, a boolean
+    /// or a list of option values.
+    pub fn default_value(&self) -> Value {
+        match &self.kind {
+            VariableKind::Choice { default, .. } => Value::String(default.clone()),
+            VariableKind::Integer { default, .. } => Value::from(*default),
+            VariableKind::Switch { default } => Value::Bool(*default),
+            VariableKind::Ordered { default, .. } => {
+                Value::Array(default.iter().cloned().map(Value::String).collect())
+            }
+        }
+    }
+
+    /// Workflow #463 V2: `sha256:<hex>` of the entry as written, in compact JSON: a changed
+    /// declaration of the name has another one, so `goal_value_not_applied` is written once per
+    /// (application, name, this).
+    pub fn declaration_sha256(&self) -> String {
+        let compact = serde_json::to_vec(&self.declaration).unwrap_or_default();
+        format!("sha256:{:x}", Sha256::digest(compact))
+    }
+
+    /// Workflow #463 V2 (`contracts/package-variables.md`, "A set value that no longer fits"):
+    /// `value`, set on an application, judged against this declaration when a run is to read it.
+    /// The value the run reads, or the word that says why it reads the default instead:
+    ///
+    /// - `choice`: a string (else `type_changed`) that is one of the options (else
+    ///   `not_an_option`);
+    /// - `integer`: a whole number in the safe range (else `type_changed`) from `min` to `max`
+    ///   (else `out_of_range`) on a step from `min` (else `off_step`);
+    /// - `switch`: a boolean (else `type_changed`);
+    /// - `ordered`: a list of strings (else `type_changed`), each once (else `key_repeated`); the
+    ///   keys the declaration no longer offers are left out and the rest is read in its order;
+    ///   fewer than `min_count` left is `keys_removed` when a key was left out and
+    ///   `count_out_of_range` when none was, more than `max_count` is `count_out_of_range`.
+    ///
+    /// The stored value is never rewritten: this only says what one run reads. Fix round 1: what
+    /// a run reads of an `ordered` value whose keys some were left out of says so
+    /// ([`Self::leaves_keys_out`]).
+    pub fn judge(&self, value: &Value) -> Result<Value, VariableProblem> {
+        match &self.kind {
+            VariableKind::Choice { options, .. } => {
+                let Value::String(chosen) = value else {
+                    return Err(VariableProblem::TypeChanged);
+                };
+                if options.iter().any(|option| option.value == *chosen) {
+                    Ok(value.clone())
+                } else {
+                    Err(VariableProblem::NotAnOption)
+                }
+            }
+            VariableKind::Integer { min, max, step, .. } => {
+                let Some(number) = value.as_i64() else {
+                    return Err(VariableProblem::TypeChanged);
+                };
+                if !(*min..=*max).contains(&number) {
+                    Err(VariableProblem::OutOfRange)
+                } else if (i128::from(number) - i128::from(*min)) % i128::from(*step) != 0 {
+                    Err(VariableProblem::OffStep)
+                } else {
+                    Ok(Value::from(number))
+                }
+            }
+            VariableKind::Switch { .. } => match value {
+                Value::Bool(_) => Ok(value.clone()),
+                _ => Err(VariableProblem::TypeChanged),
+            },
+            VariableKind::Ordered {
+                options,
+                min_count,
+                max_count,
+                ..
+            } => {
+                let Value::Array(items) = value else {
+                    return Err(VariableProblem::TypeChanged);
+                };
+                let mut seen = BTreeSet::new();
+                for item in items {
+                    let Value::String(key) = item else {
+                        return Err(VariableProblem::TypeChanged);
+                    };
+                    if !seen.insert(key.as_str()) {
+                        return Err(VariableProblem::KeyRepeated);
+                    }
+                }
+                let offered = items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|key| options.iter().any(|option| option.value == *key))
+                    .collect::<Vec<_>>();
+                let count = offered.len() as u64;
+                if count < *min_count {
+                    return Err(if offered.len() < items.len() {
+                        VariableProblem::KeysRemoved
+                    } else {
+                        VariableProblem::CountOutOfRange
+                    });
+                }
+                if count > *max_count {
+                    return Err(VariableProblem::CountOutOfRange);
+                }
+                Ok(Value::Array(
+                    offered
+                        .into_iter()
+                        .map(|key| Value::String(key.to_owned()))
+                        .collect(),
+                ))
+            }
+        }
+    }
+
+    /// Workflow #463 V2 fix round 1 (`contracts/package-variables.md`, "A set value that no longer
+    /// fits"): whether `read`, what [`Self::judge`] let through of the set value `set`, leaves keys
+    /// of it out: an `ordered` variable whose declaration no longer offers some keys of the set
+    /// list. The run reads `read`; the record says `keys_left_out`. Never for another kind, whose
+    /// judgement lets a value through whole or not at all.
+    pub fn leaves_keys_out(&self, set: &Value, read: &Value) -> bool {
+        matches!(self.kind, VariableKind::Ordered { .. }) && set != read
+    }
+
+    /// Workflow #463 V2 (`contracts/package-variables.md`, "The run"): the value of the overlay
+    /// record `session.dispatch.parameter.<name>` that holds `value` (the default, or what
+    /// [`Self::judge`] let through): a `choice` a string, a `switch` a boolean, an `integer` an
+    /// integer, an `ordered` variable a record list of one row `{key, rank}` per key in its
+    /// order, `rank` from 1. `None` for a value not of the variable's type.
+    pub fn fact_value(&self, value: &Value) -> Option<FactValue> {
+        match &self.kind {
+            VariableKind::Choice { .. } => value
+                .as_str()
+                .map(|text| FactValue::String(text.to_owned())),
+            VariableKind::Integer { .. } => value.as_i64().map(FactValue::Integer),
+            VariableKind::Switch { .. } => value.as_bool().map(FactValue::Boolean),
+            VariableKind::Ordered { .. } => value
+                .as_array()?
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let rank = i64::try_from(index).ok()?.checked_add(1)?;
+                    Some(BTreeMap::from([
+                        (
+                            ORDERED_VARIABLE_KEY_COLUMN.to_owned(),
+                            FactScalar::String(item.as_str()?.to_owned()),
+                        ),
+                        (
+                            ORDERED_VARIABLE_RANK_COLUMN.to_owned(),
+                            FactScalar::Integer(rank),
+                        ),
+                    ]))
+                })
+                .collect::<Option<Vec<_>>>()
+                .map(FactValue::RecordList),
+        }
+    }
+}
+
+/// Workflow #463 V2: the text a dispatch's reason carries a variable's value as (`value_json`):
+/// compact JSON, which for the values a run reads (option values, whole numbers, booleans and
+/// lists of option values) is their one spelling.
+pub fn variable_value_json(value: &Value) -> String {
+    value.to_string()
 }
 
 /// A variable's type with its members.
@@ -819,6 +1074,82 @@ pub fn check_root_variables(
     checked
 }
 
+/// Workflow #463 V2 (`contracts/package-variables.md`, "A variable that does not apply"): each
+/// name of `packages` that the root check `checked` ([`check_root_variables`] of the same
+/// packages) keeps from applying, with the word a run's record and `goal_value_not_applied` say
+/// it with: `variable_out_of_limits` is `name_out_of_limits`, `variable_conflict` at a
+/// declaration `declaration_conflict` and at a name (a `goals.json` entry's) `goal_name_conflict`,
+/// `variable_irreversible_by_root` `irreversible_by_root` and `variable_cap_range` `cap_range`.
+/// The check reports one problem per name, so a name has one word. It reads the check's answer
+/// only: the rules stay [`check_root_variables`]'s.
+///
+/// Fix round 1 (one word, one cause): `variable_irreversible_by_root` arises in two situations
+/// that `irreversible` (the one the check was given) tells apart. A declaring package that
+/// provides, or whose remedies list, a capability a package of the root marks irreversible
+/// ([`IrreversiblePackages::package`] `Some(true)`) is `irreversible_by_root`; otherwise the check
+/// counted the packages irreversible because a package of the root could not be read
+/// ([`IrreversiblePackages::unreadable`]), or because a declaring package is none it was told of:
+/// `package_unreadable`.
+pub fn variables_not_applying(
+    packages: &[RootPackageVariables],
+    checked: &RootVariables,
+    irreversible: &IrreversiblePackages,
+) -> BTreeMap<String, VariableProblem> {
+    let mut not_applying = BTreeMap::new();
+    for issue in &checked.issues {
+        let Some(package) = packages
+            .iter()
+            .find(|package| package.package_id == issue.package_id)
+        else {
+            continue;
+        };
+        let Some(rest) = issue
+            .issue
+            .pointer
+            .strip_prefix(VARIABLES_POINTER)
+            .and_then(|rest| rest.strip_prefix('/'))
+        else {
+            continue;
+        };
+        let (index, member) = match rest.split_once('/') {
+            Some((index, member)) => (index, Some(member)),
+            None => (rest, None),
+        };
+        let Some(variable) = index
+            .parse::<usize>()
+            .ok()
+            .and_then(|index| package.variables.get(index))
+        else {
+            continue;
+        };
+        let word = match (issue.issue.problem, member) {
+            (StandardPackProblem::VariableOutOfLimits, _) => VariableProblem::NameOutOfLimits,
+            (StandardPackProblem::VariableConflict, Some("name")) => {
+                VariableProblem::GoalNameConflict
+            }
+            (StandardPackProblem::VariableConflict, _) => VariableProblem::DeclarationConflict,
+            (StandardPackProblem::VariableIrreversibleByRoot, _) => {
+                if irreversible.package(&issue.package_id) == Some(true) {
+                    VariableProblem::IrreversibleByRoot
+                } else {
+                    VariableProblem::PackageUnreadable
+                }
+            }
+            (StandardPackProblem::VariableCapRange, _) => VariableProblem::CapRange,
+            _ => continue,
+        };
+        // Fix round 1: one declaring package that can do something irreversible by itself is
+        // the name's cause, whatever an unreadable package adds.
+        let kept = not_applying.entry(variable.name.clone()).or_insert(word);
+        if *kept == VariableProblem::PackageUnreadable
+            && word == VariableProblem::IrreversibleByRoot
+        {
+            *kept = word;
+        }
+    }
+    not_applying
+}
+
 /// Why a name of the root does not apply, at which member of which declarations, each
 /// `(package index, variable index)`.
 struct Refusal {
@@ -894,19 +1225,275 @@ fn refusal_of(
     if readers.is_empty() {
         return None;
     }
-    let member = match &first.kind {
-        VariableKind::Integer { min, .. } if *min < 0 => "min",
-        VariableKind::Integer { max, .. } if *max > MAX_VARIABLE_CAP => "max",
-        VariableKind::Integer { .. } => return None,
-        VariableKind::Choice { .. }
-        | VariableKind::Switch { .. }
-        | VariableKind::Ordered { .. } => "type",
-    };
     Some(Refusal {
         problem: StandardPackProblem::VariableCapRange,
-        member: Some(member),
+        member: Some(cap_member(first)?),
         declarations: readers,
     })
+}
+
+/// The member of `variable`'s declaration at which a designated effect's cap read from it breaks
+/// the rule (its `min` below 0, its `max` above [`MAX_VARIABLE_CAP`], or its `type` when it is no
+/// `integer`); `None` when the cap may read it.
+fn cap_member(variable: &PackageVariable) -> Option<&'static str> {
+    match &variable.kind {
+        VariableKind::Integer { min, .. } if *min < 0 => Some("min"),
+        VariableKind::Integer { max, .. } if *max > MAX_VARIABLE_CAP => Some("max"),
+        VariableKind::Integer { .. } => None,
+        VariableKind::Choice { .. }
+        | VariableKind::Switch { .. }
+        | VariableKind::Ordered { .. } => Some("type"),
+    }
+}
+
+/// Workflow #463 V2 fix round 2 (`contracts/package-variables.md`, "A variable that does not
+/// apply"): what the root's judgement ([`judge_root_variables`]) takes for the game root's goal
+/// document `goals.json`, as a reader read it with [`crate::parse_standard_pack_goals`]: absent,
+/// accepted with its entries, refused (it applies no entry and takes no name), or unreadable (an
+/// I/O failure other than its absence: which names it takes is not known, so no variable of the
+/// root applies).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootGoalDocument<'a> {
+    Absent,
+    Accepted(&'a StandardPackGoals),
+    Refused,
+    Unreadable,
+}
+
+/// Workflow #463 V2 fix round 2: the detail of why a variable of a game root does not apply, beside
+/// its word ([`NotApplyingCause`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VariableCause {
+    /// `declaration_conflict`: the declaring packages whose declaration of the name is not
+    /// byte-identical to the first one's, in registry order (the first is the verdict's first
+    /// package).
+    DeclarationConflict { packages: Vec<String> },
+    /// `goal_name_conflict`: the type of the entry of the accepted `goals.json` that takes the
+    /// name (the entry is named like the variable).
+    GoalEntry { goal_type: Option<GoalType> },
+    /// `irreversible_by_root`: per declaring package that can do something irreversible by
+    /// itself, the capabilities it provides or its remedies list that a package of the root marks
+    /// irreversible.
+    IrreversibleCapabilities {
+        packages: BTreeMap<String, Vec<String>>,
+    },
+    /// `package_unreadable`: the packages of the root whose declaration could not be read, and a
+    /// declaring package the judgement was not told of.
+    UnreadablePackages { packages: Vec<String> },
+    /// `name_out_of_limits`: the name's place in the root's order, from 1.
+    NameOutOfLimits { position: usize },
+    /// `cap_range`: the declaring packages that read the variable as a designated effect's cap,
+    /// and the member of the declaration the problem is at (`type`, `min` or `max`).
+    CapRange {
+        packages: Vec<String>,
+        member: &'static str,
+    },
+    /// No detail beyond the word: `goals_unreadable` (the reader that could not read the file
+    /// keeps its failure).
+    WordOnly,
+}
+
+/// Workflow #463 V2 fix round 2: why a variable of a game root does not apply: the word a run's
+/// record and `goal_value_not_applied` say it with, and its detail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotApplyingCause {
+    pub problem: VariableProblem,
+    pub cause: VariableCause,
+}
+
+/// Workflow #463 V2 fix round 2: one variable name of a game root as the root's judgement
+/// ([`judge_root_variables`]) gives it: every package that declares it (registry order), its first
+/// declaration, and why it does not apply (`None`: it applies).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RootVariableVerdict {
+    pub name: String,
+    pub packages: Vec<String>,
+    pub declaration: PackageVariable,
+    pub not_applying: Option<NotApplyingCause>,
+}
+
+impl RootVariableVerdict {
+    /// Whether the variable applies in the root.
+    pub const fn applies(&self) -> bool {
+        self.not_applying.is_none()
+    }
+}
+
+/// Workflow #463 V2 fix round 2: the root's judgement of its variables
+/// ([`judge_root_variables`]): the root check's answer, which `standard-pack check` reports, and
+/// a verdict per name in the order the root first declares it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RootVariablesJudged {
+    pub checked: RootVariables,
+    pub verdicts: Vec<RootVariableVerdict>,
+}
+
+impl RootVariablesJudged {
+    /// Each name that does not apply, with its word.
+    pub fn not_applying(&self) -> BTreeMap<String, VariableProblem> {
+        self.verdicts
+            .iter()
+            .filter_map(|verdict| {
+                verdict
+                    .not_applying
+                    .as_ref()
+                    .map(|cause| (verdict.name.clone(), cause.problem))
+            })
+            .collect()
+    }
+}
+
+/// Workflow #463 V2 fix round 2 (`contracts/package-variables.md`, "A variable that does not
+/// apply"; the coordinator's ruling: the rules of "does not apply" have one copy, here): the
+/// judgement of the variables `packages` declare (the root's packages in registry order, those a
+/// reader could read) over the whole game root, the one `standard-pack check` and the Runtime's
+/// scheduler workbench give. The goal document counts as [`RootGoalDocument`] says: an accepted
+/// file's entries take the names they use for anything but a placement, a refused or absent file
+/// takes none, and an unreadable one keeps every name of the root from applying
+/// (`goals_unreadable`) that no other rule already keeps. Then [`check_root_variables`] with
+/// `irreversible` and [`variables_not_applying`] give each name its word, and each word its
+/// detail ([`VariableCause`]).
+pub fn judge_root_variables(
+    packages: &[RootPackageVariables],
+    goals: RootGoalDocument<'_>,
+    irreversible: &IrreversiblePackages,
+) -> RootVariablesJudged {
+    let goal_names = match goals {
+        RootGoalDocument::Accepted(accepted) => accepted.names_besides_placements(),
+        RootGoalDocument::Absent | RootGoalDocument::Refused | RootGoalDocument::Unreadable => {
+            BTreeSet::new()
+        }
+    };
+    let checked = check_root_variables(packages, &goal_names, irreversible);
+    let words = variables_not_applying(packages, &checked, irreversible);
+    let root = RootDeclarations::of(packages);
+    let mut verdicts = Vec::with_capacity(root.order.len());
+    for (position, name) in root.order.iter().enumerate() {
+        let Some(declarations) = root.declared.get(name) else {
+            continue;
+        };
+        let Some(&first_at) = declarations.first() else {
+            continue;
+        };
+        let first = variable_at(packages, first_at);
+        let word = match (words.get(*name), goals) {
+            (Some(word), _) => Some(*word),
+            (None, RootGoalDocument::Unreadable) => Some(VariableProblem::GoalsUnreadable),
+            (None, _) => None,
+        };
+        verdicts.push(RootVariableVerdict {
+            name: (*name).to_owned(),
+            packages: declarations
+                .iter()
+                .map(|(package, _)| packages[*package].package_id.clone())
+                .collect(),
+            declaration: first.clone(),
+            not_applying: word.map(|problem| NotApplyingCause {
+                problem,
+                cause: cause_of(
+                    problem,
+                    packages,
+                    position,
+                    declarations,
+                    first,
+                    goals,
+                    irreversible,
+                ),
+            }),
+        });
+    }
+    RootVariablesJudged { checked, verdicts }
+}
+
+/// The detail of the word `problem` of the name the root's `position`th (from 0), whose
+/// declarations in `packages` are `declarations`, the first `first`.
+fn cause_of(
+    problem: VariableProblem,
+    packages: &[RootPackageVariables],
+    position: usize,
+    declarations: &[(usize, usize)],
+    first: &PackageVariable,
+    goals: RootGoalDocument<'_>,
+    irreversible: &IrreversiblePackages,
+) -> VariableCause {
+    let id_of = |(package, _): &(usize, usize)| packages[*package].package_id.clone();
+    match problem {
+        VariableProblem::DeclarationConflict => {
+            let compact =
+                |variable: &PackageVariable| serde_json::to_vec(&variable.declaration).ok();
+            VariableCause::DeclarationConflict {
+                packages: declarations
+                    .iter()
+                    .filter(|declaration| {
+                        compact(variable_at(packages, **declaration)) != compact(first)
+                    })
+                    .map(id_of)
+                    .collect(),
+            }
+        }
+        VariableProblem::GoalNameConflict => VariableCause::GoalEntry {
+            goal_type: match goals {
+                RootGoalDocument::Accepted(accepted) => {
+                    accepted.entry(&first.name).map(DeclaredGoal::goal_type)
+                }
+                RootGoalDocument::Absent
+                | RootGoalDocument::Refused
+                | RootGoalDocument::Unreadable => None,
+            },
+        },
+        VariableProblem::IrreversibleByRoot => VariableCause::IrreversibleCapabilities {
+            packages: declarations
+                .iter()
+                .filter_map(|(package, _)| {
+                    let package_id = &packages[*package].package_id;
+                    irreversible
+                        .irreversible_capabilities(package_id)
+                        .filter(|reached| !reached.is_empty())
+                        .map(|reached| (package_id.clone(), reached.iter().cloned().collect()))
+                })
+                .collect(),
+        },
+        VariableProblem::PackageUnreadable => VariableCause::UnreadablePackages {
+            packages: irreversible
+                .unreadable()
+                .iter()
+                .cloned()
+                .chain(
+                    declarations
+                        .iter()
+                        .map(id_of)
+                        .filter(|package_id| irreversible.package(package_id).is_none()),
+                )
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        },
+        VariableProblem::NameOutOfLimits => VariableCause::NameOutOfLimits {
+            position: position + 1,
+        },
+        VariableProblem::CapRange => {
+            let key = first.fact_key();
+            VariableCause::CapRange {
+                packages: declarations
+                    .iter()
+                    .filter(|(package, _)| packages[*package].cap_fact_keys.contains(&key))
+                    .map(id_of)
+                    .collect(),
+                member: cap_member(first).unwrap_or("type"),
+            }
+        }
+        VariableProblem::GoalsUnreadable
+        | VariableProblem::NotAnOption
+        | VariableProblem::OutOfRange
+        | VariableProblem::OffStep
+        | VariableProblem::TypeChanged
+        | VariableProblem::KeysRemoved
+        | VariableProblem::CountOutOfRange
+        | VariableProblem::KeyRepeated
+        | VariableProblem::KeysLeftOut
+        | VariableProblem::EntryUnreadable
+        | VariableProblem::RootUnchecked => VariableCause::WordOnly,
+    }
 }
 
 /// The variables of a game root as the references of its `goals.json` hold them

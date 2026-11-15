@@ -3957,6 +3957,22 @@
       "status": "active",
       "since": "0.12.30",
       "description": "A runtime client operation: read an instance's pack schedule per package (PackScheduleView, Workflow #429 R-0c)."
+    },
+    "runtime_goal_view": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "A runtime client operation: read one application's goal page (GoalView, Workflow #463 V3)."
+    },
+    "runtime_edit_goal": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "A runtime client operation: set or clear one value of an application's goal page by its name (EditGoal, Workflow #463 V3)."
     }
   }
 }

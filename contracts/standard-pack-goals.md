@@ -257,7 +257,28 @@ for that game, and a reader of the declaration says why.
   the policy crate and check-config read named files only. A later slice's scheduler workbench reads
   it with `schedule.json`. Since G-R2s (0.12.60) the workbench reads every package's declaration
   as this check does, with the same reader and the same rule, for the composer's irreversible mark
-  ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark").
+  ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). **Since
+  Workflow #463 V2 fix round 1 (Runtime 0.12.61, register §1.382)** the workbench reads
+  `goals.json` too, where it reads every package's declaration (and so do the offline readers that
+  read a root as it does, check-config and `actingd suspended`): with this reader, once per read of
+  the root, for the variables' judgement alone ([package-variables.md](package-variables.md), "A
+  variable that does not apply"): the names an accepted file takes, the parsed document kept with
+  the root's declarations, a refused one taking none. Fix round 2: a refused file, or one that
+  cannot be read, is `standard_pack_goals_not_applied` (warning; `goals_failure` `refused` with the
+  reader's first problem as its cause, a `standard_pack_root_invalid`, or `unreadable` with the
+  operating system's failure), recorded once per sha256 of a refused file and once until an
+  unreadable one reads again; neither stops the root. No other reader of the Runtime opens it, and
+  the programs of 0.12.60 open none.
+- **The goal page** (Workflow #463 V3, Runtime 0.12.61, register §1.383; `GoalView` and
+  `EditGoal`, [runtime-interface.md](runtime-interface.md), "Goal request kinds") opens no file: it
+  takes the parsed document the workbench's last check of the root keeps
+  (`RuntimeHost::standard_pack_goal_roots`), lists the entries in file order, each variable at its
+  placement (a placement no package the active catalog binds on the application declares
+  `not_offered`), and checks a name set by it against them. A refused file is named with its
+  sha256 and first problem and lists no entry, as an unreadable or absent one; until the
+  workbench has checked the root after a start the page answers `not_checked_yet` and an edit is
+  refused with that word (fix round 2 of #1731: `root_failing` for a root no check since the start
+  could read, `no_schedule` for a game without `schedule.json`).
 
 ## Interface
 

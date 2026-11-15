@@ -93,6 +93,10 @@ pub(crate) struct DispatchedParameters {
     /// Workflow #411 B8: each schedule value the reason carries, `(key, value)`, typed.
     pub(crate) schedule: Vec<(String, FactValue)>,
     pub(crate) admitted_at_unix_ms: u64,
+    /// Workflow #463 V2: each `(variable_name, value)` of `variable_values` whose `value_json`
+    /// reads as JSON, in its order; empty when the reason carries none, so the run reads its
+    /// package's variable defaults.
+    pub(crate) variables: Vec<(String, serde_json::Value)>,
 }
 
 /// Workflow #411 B8: the keys of `policy_dispatch_parameters` a run reads as
@@ -155,7 +159,32 @@ pub(crate) fn dispatch_parameters(context: &PolicyRunContext) -> Option<Dispatch
         values,
         schedule: dispatch_schedule_values(&reason.outcome),
         admitted_at_unix_ms: context.admission().activity.admitted_at_unix_ms,
+        variables: dispatch_variable_values(&reason.outcome),
     })
+}
+
+/// Workflow #463 V2 (`contracts/package-variables.md`, "The run"): each `(variable_name, value)`
+/// of `outcome`'s `variable_values` (a `policy_dispatch_parameters`), in record order, its value
+/// read from its `value_json`. A record without a name, without `value_json` (a default longer
+/// than a reason carries) or whose `value_json` is no JSON gives nothing: the kernel then reads
+/// that variable's declared default.
+pub(crate) fn dispatch_variable_values(outcome: &Outcome) -> Vec<(String, serde_json::Value)> {
+    outcome
+        .value("variable_values")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|record| {
+            let name = record
+                .get("variable_name")
+                .and_then(serde_json::Value::as_str)?;
+            let text = record
+                .get("value_json")
+                .and_then(serde_json::Value::as_str)?;
+            let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+            Some((name.to_owned(), value))
+        })
+        .collect()
 }
 
 /// Workflow #411 B8: each schedule value `outcome` (a `policy_dispatch_parameters`) carries,

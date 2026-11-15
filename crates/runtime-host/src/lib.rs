@@ -32,6 +32,8 @@ mod fact_refresh;
 mod fact_refresh_transitions;
 mod fact_store;
 mod failure_identity;
+// Workflow #463 V3: what the goal page's two requests decide, pure.
+mod goals;
 mod host;
 // IDLE-1 (Alice's ruling 41): the idle planner, pure.
 mod idle_action;

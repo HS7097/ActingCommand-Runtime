@@ -1438,3 +1438,29 @@ tests = [
     "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t10_a_voided_instance_without_a_record_keeps_its_decision_identity",
 ]
 incident = ["#455 G-R2s"]
+
+# Workflow #463 V2 (0.12.61; register §1.382; brief rd-1115/brief-463-v2-variables-run.md; contracts/package-variables.md, "The run"), policy half, on the selection fixture's catalog and instance A with a v3 record of entries alone set through the Lab: per variable of the dispatched package the entry row of its name beats the default (source set, with who set it and when) and an unset one reads its default; with remedies off the plan's policy_dispatch_parameters gains variable_values, one record per variable in declaration order, which the selected dispatch's chain holds (1); a set value the declaration no longer takes reads the default, its record names the word and who set it, and it is the pair's one value not applied with the declaration's sha256: not_an_option, type_changed (each kind), out_of_range, off_step, keys_removed, count_out_of_range (too few, too many), key_repeated, each with the stored value's sha256 (fix round 1); an ordered value naming a removed key beside enough offered ones reads the rest, as set, marked keys_left_out and not a value not applied (2, fix round 1); a variable the root check keeps from applying reads its default whatever is set, with declaration_conflict, irreversible_by_root (a capability another package marks, also beside an unreadable package), package_unreadable (an unreadable package of the game alone, fix round 1) or root_unchecked (a game the table never judged), and with nothing set reads it with no word (3); a package without variables plans nothing, leaves the plan as it was and the evaluation's reason chains, decisions and intents byte for byte (4); fix round 1: an ordered value of twenty keys longer than 256 bytes is applied as set and recorded whole in value_json (5); a stored row whose setter cannot be read reads the default with entry_unreadable, its record naming no setter, and is the pair's one value not applied (6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_463_v2::v2_a_set_value_beats_the_default_and_rides_the_selected_dispatch_with_remedies_off",
+    "actingcommand-policy::lib::tests::gate_463_v2::v2_a_set_value_that_no_longer_fits_reads_the_default_with_its_word",
+    "actingcommand-policy::lib::tests::gate_463_v2::v2_a_variable_that_does_not_apply_reads_its_default_whatever_is_set",
+    "actingcommand-policy::lib::tests::gate_463_v2::v2_a_package_without_variables_gives_the_reason_chains_of_before",
+    "actingcommand-policy::lib::tests::gate_463_v2::v2_fix1_a_value_longer_than_256_bytes_is_applied_and_recorded_whole",
+    "actingcommand-policy::lib::tests::gate_463_v2::v2_fix1_a_stored_row_whose_setter_cannot_be_read_is_not_applied_with_its_word",
+    "actingcommand-policy::lib::tests::gate_463_v2::v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause",
+    "actingcommand-policy::lib::tests::gate_463_v2::v2_fix2_a_reason_past_the_record_bound_is_recorded_with_hashes_and_kept_whole",
+]
+incident = ["#463 V2"]
+
+# Workflow #463 V3 (0.12.61; register §1.383; brief rd-1115/brief-463-v3-goals-view-edit.md; contracts/resource-targets.md, "One value by name"), policy half, with a made-up instance and pools and no clock: an entry set on no record is a v3 record of its header and one entry row (name, the value's canonical text, set_unix_ms, channel, initiator) that the goal page reads back with who set it; a second set replaces that row, a console set names no initiator, and clearing the last entry leaves the withdrawal the page reads as no record (1); a second entry and a target join after the stored rows, which stay as stored; a target row is mode adjust, weight score_stage with the setter's fields; a target on the same pool under another id replaces it and names it, one of the same id on another pool goes, clearing a target removes its row only (2); an entry over a v2 policy turns its targets into v3 targets with the policy's lifetime and no setter, a v1 policy is unreadable to the edit and to the page (3); a value above 1024 canonical bytes, a fraction, a 97th entry and a 17th target are refused with their word (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_463_v3::v3_policy_an_entry_set_on_no_record_is_read_back_and_clearing_it_withdraws",
+    "actingcommand-policy::lib::tests::gate_463_v3::v3_policy_one_row_changes_and_every_other_row_is_kept_as_stored",
+    "actingcommand-policy::lib::tests::gate_463_v3::v3_policy_a_v2_policy_becomes_v3_targets_and_a_v1_policy_is_unreadable",
+    "actingcommand-policy::lib::tests::gate_463_v3::v3_policy_the_bounds_refuse_an_edit",
+]
+incident = ["#463 V3"]

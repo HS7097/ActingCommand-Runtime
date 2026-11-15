@@ -24,6 +24,41 @@ pub(crate) const CHECK_FLAGS: [&str; 1] = ["--package"];
 pub(crate) const PREFLIGHT_FLAGS: [&str; 2] = ["--package", "--zip"];
 /// Workflow #434 LAB-5B4: the positionals `package preflight` reads: none.
 pub(crate) const PREFLIGHT_POSITIONALS: [&str; 0] = [];
+/// Workflow #463 V3: the flags `package variables` takes: the package directory.
+pub(crate) const VARIABLES_FLAGS: [&str; 1] = ["--package"];
+
+/// Workflow #463 V3: the options `actinglab help` lists for `package variables`.
+pub(crate) fn variables_options() -> [&'static str; 1] {
+    ["--package <package content directory>"]
+}
+
+/// Workflow #463 V3 (register §1.383): `package variables --package <directory>`, a core row that
+/// needs no Runtime: what one package's control declaration declares, its variables with their
+/// defaults and declarations and its remedy parameters, read by the Runtime's metadata reader
+/// (`actingcommand_resource_tooling::package_variables`). It only reads; a package the reader
+/// refuses is `package_invalid`.
+pub(super) fn run_variables(flags: &FlagArgs) -> CliOutcome<Value> {
+    if let Some(flag) = flags
+        .flags
+        .keys()
+        .find(|flag| !VARIABLES_FLAGS.contains(&flag.as_str()))
+    {
+        return Err(CliError::usage(format!(
+            "package variables does not accept {flag}"
+        )));
+    }
+    flags.expect_positionals("package variables", 0)?;
+    let package = flags.required_path("--package")?;
+    // A relative path names the package below the working directory, as every `--package` does.
+    let package = if package.is_absolute() {
+        package
+    } else {
+        std::env::current_dir()
+            .map_err(|error| CliError::package_invalid(error.to_string()))?
+            .join(package)
+    };
+    actingcommand_resource_tooling::package_variables(&package)
+}
 
 /// Workflow #411 A5 (M-PKG §3.2, S5-T4): the answer of `package check`, a package the Runtime's
 /// structural admission admitted, named by what its control declares.

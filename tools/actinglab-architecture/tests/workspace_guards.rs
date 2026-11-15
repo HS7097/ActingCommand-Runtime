@@ -2178,6 +2178,10 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     // slices add the behaviour and the channel decides at the door (U-6).
     "EditPackSchedule",
     "EditResourceTarget",
+    // Workflow #463 V3 (register §1.383): the goal page's read and its one-value write take no
+    // origin gate here; the channel decides at the door (the UI list holds both).
+    "EditGoal",
+    "GoalView",
     // Workflow #384 D2-S5 (register §1.68): the fact refresh's waiting keys, a general read from
     // memory like Status.
     "FactRefreshStatus",

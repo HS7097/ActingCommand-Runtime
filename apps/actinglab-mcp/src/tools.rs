@@ -83,7 +83,10 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 /// Workflow #464 P2 (`PACK-BUILD`): its row `standard-pack build`, the same.
 /// Workflow #464 P3: its row `standard-pack ready` (`ac_standard_pack_ready`), the same way.
 /// Workflow #467 RPT-1: its row `report export`, a core row served in this process.
-pub(crate) const ACTINGLAB_SLICES: [&str; 10] = [
+/// Workflow #463 V3: its rows `goals`, `goals get`, `goals set` and `goals clear`, served in this
+/// process (`lab_ops::core_ops`), and `package variables`, through a `serve` child.
+pub(crate) const ACTINGLAB_SLICES: [&str; 11] = [
+    "463-V3",
     "464-P3",
     "LAB-1",
     "LAB-1b",
@@ -259,8 +262,8 @@ pub(crate) enum Serving {
 /// (the marker of `lab_ops::initiator`, `DETACHED_RUN_VARIABLE`); a rescue row the module does
 /// not serve, or every one where it does not run, is [`Serving::Refused`]. Workflow #434
 /// LAB-5G4b: every other row, a row of no module this process serves itself, goes to a `serve`
-/// child ([`Serving::Child`]): the three `app` rows, `standard-pack check` and (Workflow #464 P3)
-/// `standard-pack ready`, the debugging and
+/// child ([`Serving::Child`]): the three `app` rows, `standard-pack check`, (Workflow #464 P3)
+/// `standard-pack ready` and (Workflow #463 V3) `package variables`, the debugging and
 /// authoring rows actinglab's own commands serve, `record draft` among them since LAB-5G4c gave
 /// it its command (a row no command serves is refused by the child; none is left).
 pub(crate) fn serving(operation: &Operation) -> Serving {
