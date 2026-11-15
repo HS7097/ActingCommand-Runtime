@@ -55,6 +55,9 @@ struct FakeState {
     nemu_input: AtomicBool,
     // #463 S1-1 fix round 2: a tap fails in the backend (a device failure of the input).
     tap_fails: AtomicBool,
+    // #463 S1-1 fix round 3: the device reports another application than the assigned one in the
+    // foreground, so the Runtime denies a pointer input (`application_not_foreground`).
+    foreground_other: AtomicBool,
 }
 
 // Test plan E-3 G11 (§3.10): a manual Runtime clock. It moves only when a capture (or a wait of
@@ -2244,15 +2247,21 @@ impl ExecutionBackendProvider for FakeProvider {
         })
     }
 
-    // Slice #316-B3: the fake device always reports its assigned application in the
-    // foreground, so the foreground gate passes exactly as before the gate existed.
+    // Slice #316-B3: the fake device reports its assigned application in the foreground, so the
+    // foreground gate passes exactly as before the gate existed; #463 S1-1 fix round 3: another
+    // one when a test asks for it.
     fn observe_foreground_application(
         &self,
         _instance_alias: &str,
     ) -> DeviceResult<actingcommand_runtime_host::ForegroundApplicationObservation> {
+        let foreground = if self.state.foreground_other.load(Ordering::Acquire) {
+            "neutral.other_application"
+        } else {
+            "neutral.application"
+        };
         Ok(
             actingcommand_runtime_host::ForegroundApplicationObservation {
-                foreground: Some("neutral.application".to_owned()),
+                foreground: Some(foreground.to_owned()),
                 assigned: "neutral.application".to_owned(),
             },
         )
@@ -4251,6 +4260,75 @@ fn s11_tap_record_records_a_device_failure_of_the_input_as_indeterminate() {
     assert!(execution["req_id"].is_string(), "{recording}");
     assert_eq!(execution["before_frame"], "f0001", "{recording}");
     assert!(execution["after_frame"].is_null(), "{recording}");
+}
+
+/// #463 S1-1 fix round 3: the Runtime denies the input of `tap 0 0 --record` for another reason
+/// than its frame (the device reports another application in the foreground,
+/// `application_not_foreground`): nothing was sent, so the command answers as `tap` does,
+/// `device_error` with the input outcome, the press is not sent again (one capture, no tap), no
+/// click is recorded, and the capture before it stays as the frame of step 1. The command reads no
+/// local device configuration (the configuration file is empty and no ADB is set).
+#[test]
+fn s11_tap_record_answers_a_denied_input_as_tap_and_keeps_the_capture_before_it() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.foreground_other.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-denied-input");
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "record",
+            "start",
+            "--task-id",
+            "neutral_task",
+            "--record-id",
+            "record_s11",
+        ],
+    );
+    let (exit_code, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(exit_code, 1, "{failed}");
+    assert_eq!(failed["outcome"]["code"], "device_error", "{failed}");
+    assert_eq!(
+        failed["details"]["input_outcome"]["input_stage"], "receipt_unavailable",
+        "{failed}"
+    );
+    assert!(failed["details"]["record"].is_null(), "{failed}");
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    // The capture before the press only: no second capture, no frame after.
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+
+    let recording = s11_recorded(&local);
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 1, "{recording}");
+    assert!(steps[0]["click"].is_null(), "{recording}");
+    assert_eq!(steps[0]["closed"], false, "{recording}");
+    let frames = steps[0]["frames"].as_array().expect("step 1's frames");
+    assert_eq!(frames.len(), 1, "{recording}");
+    assert_eq!(frames[0]["frame_id"], "f0001", "{recording}");
 }
 
 #[test]

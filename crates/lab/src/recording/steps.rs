@@ -3993,12 +3993,15 @@ fn gesture_execution_unsupported(index: u32, gesture: ClickGesture) -> LabError 
 /// Records the Runtime outcome of a planned click on its step. #463 S1-1: with `names_frames` (a
 /// press recorded by the command that makes it, `record_press`), the execution names the step's
 /// live primary frame as its `before_frame`, and the first frame that arrives after it becomes its
-/// `after_frame` ([`note_after_frame`]); `do --capture --record` names none.
+/// `after_frame` ([`note_after_frame`]); `do --capture --record` names none. Fix round 3: beside
+/// `before_frame`, `sent_on_unstored_capture` when such a press was sent on a capture its command
+/// did not store (`record_press` hands it; every other caller passes `false`).
 pub(crate) fn commit_click(
     recording: &mut LabRecording,
     plan: &super::model::ClickPlan,
     request: &super::model::CommitClickRequest,
     names_frames: bool,
+    sent_on_unstored_capture: bool,
 ) -> LabResult<(StepClick, bool)> {
     use super::model::ClickEffect;
     if recording.record_id != plan.record_id || open_step(recording) != Some(plan.step) {
@@ -4061,6 +4064,7 @@ pub(crate) fn commit_click(
         before_frame,
         after_frame: None,
         after_capture: None,
+        sent_on_unstored_capture,
     });
     if performed {
         click.needs_review = request.has_failure;

@@ -1379,7 +1379,7 @@ pub fn record_commit_click(
     plan: &ClickPlan,
     request: &CommitClickRequest,
 ) -> LabResult<CommitClickOutcome> {
-    let outcome = commit_recorded(lock, plan, request, false)?;
+    let outcome = commit_recorded(lock, plan, request, false, false)?;
     if request.effect == ClickEffect::Indeterminate {
         return Err(click_indeterminate(plan.step, to_json(&outcome)));
     }
@@ -1393,16 +1393,24 @@ pub fn record_commit_click(
 /// `record_append_failed_after_input` when it could not be recorded; #463 S1-1: with
 /// `names_frames`, a press recorded by the command that makes it (`commit_click`), whose status is
 /// `press_recorded` or `press_indeterminate` where `do --capture --record`'s is `click_recorded` or
-/// `click_indeterminate`.
+/// `click_indeterminate`. Fix round 3: `sent_on_unstored_capture`, handed to `commit_click`, when
+/// such a press was sent on a capture its command did not store.
 fn commit_recorded(
     lock: &RecordingLock,
     plan: &ClickPlan,
     request: &CommitClickRequest,
     names_frames: bool,
+    sent_on_unstored_capture: bool,
 ) -> LabResult<CommitClickOutcome> {
     let recorded = (|| -> LabResult<CommitClickOutcome> {
         let mut session = open_session(lock)?;
-        let (click, performed) = commit_click(&mut session.recording, plan, request, names_frames)?;
+        let (click, performed) = commit_click(
+            &mut session.recording,
+            plan,
+            request,
+            names_frames,
+            sent_on_unstored_capture,
+        )?;
         save(&mut session)?;
         Ok(CommitClickOutcome {
             status: match (names_frames, performed) {
@@ -1963,8 +1971,14 @@ pub fn record_after_frame(
 /// press planned on the open step (`plan_press`: a tap or a long press declares a box of one pixel
 /// at its point, a swipe is today's recorded swipe; every refusal before anything is pressed); the
 /// press sent once through `press` with the Runtime's reference of that frame, whose `Err` (not
-/// performed) is answered as it is and records nothing; its outcome recorded, the execution
-/// naming the frame before; then, only after a press performed without a failure, the frame after
+/// performed) is answered as it is and records no press (the capture before it stays as it was
+/// kept); fix round 3: except one `Err` marked [`record_press_frame_unavailable`] (the Runtime no
+/// longer held the frame, nothing was sent), after which the frame is captured once more as the
+/// first was (a stored first one superseded by the second; on a step with marks neither stored),
+/// the press planned again and sent once more with the new reference, its answer's
+/// `before.captured_twice`, and a second `Err` of any kind answered as it is, unmarked; its outcome
+/// recorded, the execution naming the frame before (and `sent_on_unstored_capture` when that
+/// capture was not stored); then, only after a press performed without a failure, the frame after
 /// ([`record_after_frame`]). An indeterminate press is `record_click_indeterminate` and a press
 /// performed with a failure `record_click_performed_with_failure`, each with the press as recorded
 /// in `record` and no frame after. A frame after that cannot be taken answers its own error and
@@ -1996,37 +2010,20 @@ pub fn record_press(
         }
     }
     let taken = record_before_frame(lock, ports)?;
-    let stored = taken.arrived.is_some();
-    let (plan, before) = {
-        let session = open_session(lock)?;
-        let plan = plan_press(&session.recording, &request.click, request.point_press)?;
-        let before = session
-            .recording
-            .steps
-            .iter()
-            .find(|step| step.index == plan.step)
-            .and_then(live_primary)
-            .map(|frame| BeforeFrame {
-                frame_id: frame.frame_id.clone(),
-                path: frame.path.clone(),
-                sha256: frame.sha256.clone(),
-                refreshed: stored,
-                sent_on_unstored_capture: !stored,
-            })
-            .ok_or_else(|| {
-                blocked(
-                    "record_step_frame_missing",
-                    format!(
-                        "step {} has no frame to press on; record its frame with capture \
-                         --record first",
-                        plan.step
-                    ),
-                )
-            })?;
-        (plan, before)
+    let (plan, before) = planned_press(lock, request, taken.arrived.is_some(), false)?;
+    let (plan, before, pressed) = match press(&plan, taken.input_frame) {
+        // Fix round 3: the Runtime no longer held the frame the press named, and nothing was
+        // sent: one capture more, as the first was taken, and the press sent once more on it.
+        // A second refusal of any kind is answered as it is.
+        Err(refusal) if press_frame_was_unavailable(&refusal) => {
+            let again = record_before_frame(lock, ports)?;
+            let (plan, before) = planned_press(lock, request, again.arrived.is_some(), true)?;
+            let pressed = press(&plan, again.input_frame).map_err(without_frame_unavailable)?;
+            (plan, before, pressed)
+        }
+        answered => (plan, before, answered?),
     };
-    let pressed = press(&plan, taken.input_frame)?;
-    let click = commit_recorded(lock, &plan, &pressed, true)?;
+    let click = commit_recorded(lock, &plan, &pressed, true, before.sent_on_unstored_capture)?;
     let mut outcome = RecordPressOutcome {
         click,
         before,
@@ -2054,6 +2051,87 @@ pub fn record_press(
         record,
     });
     Ok(outcome)
+}
+
+/// #463 S1-1: the press of [`record_press`] planned on the open step after the capture before it,
+/// and the frame it is committed on, the step's live primary frame (`before`): `stored` when that
+/// capture was stored (the command captured the frame `before` names; otherwise the press is sent
+/// on a capture that was not stored); fix round 3: `captured_twice` when that capture is the
+/// second, taken after the Runtime no longer held the frame of the first.
+fn planned_press(
+    lock: &RecordingLock,
+    request: &RecordPressRequest,
+    stored: bool,
+    captured_twice: bool,
+) -> LabResult<(ClickPlan, BeforeFrame)> {
+    let session = open_session(lock)?;
+    let plan = plan_press(&session.recording, &request.click, request.point_press)?;
+    let before = session
+        .recording
+        .steps
+        .iter()
+        .find(|step| step.index == plan.step)
+        .and_then(live_primary)
+        .map(|frame| BeforeFrame {
+            frame_id: frame.frame_id.clone(),
+            path: frame.path.clone(),
+            sha256: frame.sha256.clone(),
+            refreshed: stored,
+            sent_on_unstored_capture: !stored,
+            captured_twice,
+        })
+        .ok_or_else(|| {
+            blocked(
+                "record_step_frame_missing",
+                format!(
+                    "step {} has no frame to press on; record its frame with capture --record \
+                     first",
+                    plan.step
+                ),
+            )
+        })?;
+    Ok((plan, before))
+}
+
+/// #463 S1-1 fix round 3: the member of a press's refusal that [`record_press_frame_unavailable`]
+/// adds, and that [`record_press`] reads and takes away again before anything is answered.
+const PRESS_FRAME_UNAVAILABLE: &str = "press_frame_unavailable";
+
+/// #463 S1-1 fix round 3 (`contracts/lab-recording.md`, "Recording while playing"): `refusal`, the
+/// `Err` of [`record_press`]'s `press` when the Runtime refused the input before sending anything
+/// because it no longer held the frame the input names (the caller tells that refusal from every
+/// other, in one place, by what its Runtime client hands it), marked so that `record_press`
+/// captures once more and sends the press again on the new capture, once. The mark is a member of
+/// the details (object details keep theirs; others move to `details`, as `with_detail` moves
+/// them), and never reaches an answer.
+pub fn record_press_frame_unavailable(refusal: LabError) -> LabError {
+    with_detail(refusal, PRESS_FRAME_UNAVAILABLE, Some(Value::Bool(true)))
+}
+
+/// Whether `refusal` carries the mark of [`record_press_frame_unavailable`].
+fn press_frame_was_unavailable(refusal: &LabError) -> bool {
+    matches!(
+        refusal
+            .details
+            .as_ref()
+            .and_then(|details| details.get(PRESS_FRAME_UNAVAILABLE)),
+        Some(Value::Bool(true))
+    )
+}
+
+/// `refusal` as its caller answered it, without the mark of [`record_press_frame_unavailable`]:
+/// the member taken from its details, and details that held nothing else none.
+fn without_frame_unavailable(mut refusal: LabError) -> LabError {
+    let emptied = match refusal.details.as_mut() {
+        Some(Value::Object(details)) => {
+            details.remove(PRESS_FRAME_UNAVAILABLE).is_some() && details.is_empty()
+        }
+        _ => false,
+    };
+    if emptied {
+        refusal.details = None;
+    }
+    refusal
 }
 
 /// #463 S1-1: the input `tap`, `swipe` or `long-tap --record` sends for a planned press, as the

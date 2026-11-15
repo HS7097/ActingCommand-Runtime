@@ -118,8 +118,9 @@ command deletes nothing and names the files it already wrote.
   that holds one, `lab_recording_unreadable` as above. Fix 1: a frame's `scaled_from` is absent on
   every frame the Lab did not convert. #463 S1-1 (since 0.12.63): a click execution's
   `before_frame`, `after_frame` and `after_capture` are absent on every press but one recorded by
-  the command that makes it ("Recording while playing"), so a recording without such a press is
-  byte-identical to one an earlier build wrote.
+  the command that makes it ("Recording while playing"), and its `sent_on_unstored_capture` on
+  every press but such a press sent on a capture its command did not store (fix round 3), so a
+  recording without such a press is byte-identical to one an earlier build wrote.
 
 ## Commands
 
@@ -1560,15 +1561,28 @@ S1-7, "A recording holds its instance").
   The recorded point is a pixel of that frame (fix round 2 of #463 S1-1). The command takes one
   frame through the Runtime as `capture --record` takes it (the `ObserveReadonly` read) right before
   every press, a step open or not, and sends the input with the Runtime's reference of that frame,
-  as `do --capture --record` names the frame its input was planned on: the Runtime resolves the
-  frame before it presses (`input_frame_unavailable` when it cannot), and an instance whose input is
-  the emulator's own presses only on such a frame. What is kept of the capture: when no step is
-  open (a new recording, or the screen after the previous press could not be taken), it opens the
-  step the press lands on; on an open step without marks it arrives as `capture --record`'s does on
-  that step, its live primary frame, the older frame staying in the step, superseded; on an open
-  step with marks (made on its stored frame) it is not stored and the stored frame stands, and it
-  must be of the recording's size (`record_frame_size_mismatch`). The step's live primary frame is
-  the screen the press is committed on.
+  built as the online scene of `do --capture` builds the reference of the frame it plans on
+  (`do --capture --record` itself presses inside the Runtime's own operation): the Runtime
+  resolves the frame before it presses (`input_frame_unavailable` when it cannot), and an instance
+  whose input is the emulator's own presses only on such a frame. The command reaches the device
+  only through the Runtime: unlike `capture --record` it reads no local device configuration (no
+  ADB path), as `tap` without `--record` reads none (fix round 3). What is kept of the capture:
+  when no step is open (a new recording, or the screen after the previous press could not be
+  taken), it opens the step the press lands on; on an open step without marks it arrives as
+  `capture --record`'s does on that step, its live primary frame, the older frame staying in the
+  step, superseded; on an open step with marks (made on its stored frame) it is not stored and the
+  stored frame stands, and it must be of the recording's size (`record_frame_size_mismatch`). The
+  step's live primary frame is the screen the press is committed on.
+- **When the frame is gone before the press** (fix round 3). Between the command's capture and
+  its input the Runtime may drop the frame the input names (another keyless capture such as a
+  monitor probe, a capture by a lease holder, the capture backend reopening). It then denies the
+  input `input_frame_unavailable` and nothing is sent. On exactly that refusal (the denied receipt
+  whose outcome's code is the frame's being unavailable) the command captures once more, as the
+  first capture was taken, and sends the press once more on the new capture, once: a second
+  refusal of any kind is answered as "The outcome" says. What is kept: the first capture, if it was
+  stored, stays in the step, superseded by the second, which the press is committed on (its
+  `before_frame`); on an open step with marks neither is stored. The answer's
+  `record.before.captured_twice` is `true`. No other refusal is sent again.
 - **The press.** The open step must declare no effect. A tap or a long press declares a box of one
   pixel at its point, `rect {x, y, 1, 1}`, `source: "point"`, rule `explicit` (a long press with
   `gesture{kind: "long_press", duration_ms}`, ending where it began); a swipe is the recorded swipe
@@ -1599,10 +1613,11 @@ S1-7, "A recording holds its instance").
   `details.record` (status `press_indeterminate`) and `details.input_outcome`, and no screen after
   it is taken; check the screen, then `record mark --reopen-step k` or `--close-step`. A denied
   usage or safety refusal (the request, the frame or the foreground refused, a lease, queue or
-  preemption rule) proves nothing was sent: nothing is recorded and the command answers as it does
-  without `--record` (`device_error` with `input_outcome`); so does a lease or connection that
-  fails before the input. A press that was sent and could not be recorded is
-  `record_append_failed_after_input`.
+  preemption rule) proves nothing was sent: no press is recorded, the capture before it stays in
+  the step as a `capture --record` frame would (on an open step with marks it was not stored),
+  and the command answers as it does without `--record` (`device_error` with `input_outcome`); so
+  does a lease or connection that fails before the input. A press that was sent and could not be
+  recorded is `record_append_failed_after_input`.
 - **The screen after.** After a performed press the command waits `--after-ms` (800 without it),
   takes one frame as `capture --record` takes it, and lets it arrive: it opens the next step. A
   frame that cannot be taken answers its own code and class, and the press and its closed step
@@ -1620,16 +1635,21 @@ S1-7, "A recording holds its instance").
   mark --frame` that came first, or, when the screen after could not be taken, the capture before
   the next press, which opens the next step; a later frame never rewrites it); its `after_capture:
   {after_ms, still_max_ms, still, waited_ms, captures, kept}`, how the screen after was taken (today
-  `{after_ms, 0, null, after_ms, 1, 0}`; absent when another frame became the after frame). Its
-  `carrier_package`, `before` and `after` are `null`: no Runtime Lab operation ran.
+  `{after_ms, 0, null, after_ms, 1, 0}`; absent when another frame became the after frame); its
+  `sent_on_unstored_capture: true` when the press was sent on a frame the command captured and did
+  not store (an open step with marks), so that `before_frame` names the stored frame the marks
+  were made on and not the frame the click happened on (fix round 3; absent on every other press).
+  Its `carrier_package`, `before` and `after` are `null`: no Runtime Lab operation ran.
 - **The answer.** The command's own answer (`status: "sent"`, `action`, `input_outcome`, …) with
   `record: {status: "press_recorded", record_id, record_started_at_unix_ms, step, step_closed, click,
-  before: {frame_id, path, sha256, refreshed, sent_on_unstored_capture}, after: {step, frame_id,
-  path, sha256, after_ms, still_max_ms, still, waited_ms, captures, kept} | null, warnings: []}`.
-  `path` is the stored frame: the agent reads the next screen there. `refreshed` says the command
-  captured the frame `frame_id` names; `sent_on_unstored_capture` says the press was sent on a
-  frame the command captured and did not store (an open step with marks), so that `frame_id` names
-  the stored frame the marks were made on.
+  before: {frame_id, path, sha256, refreshed, sent_on_unstored_capture, captured_twice}, after:
+  {step, frame_id, path, sha256, after_ms, still_max_ms, still, waited_ms, captures, kept} | null,
+  warnings: []}`. `path` is the stored frame: the agent reads the next screen there. `refreshed`
+  says the command captured the frame `frame_id` names; `sent_on_unstored_capture` says the press
+  was sent on a frame the command captured and did not store (an open step with marks), so that
+  `frame_id` names the stored frame the marks were made on; `captured_twice` says the frame was
+  captured twice because the Runtime no longer held the first ("When the frame is gone before the
+  press").
 - **Coordinates.** The point is in the recording's coordinate space, the pixels of its frames, and
   the frame the press is sent on is of that size. The Runtime hands the input's coordinates to the
   instance's input backend as they are; an input backend that is the emulator's own reads them as a

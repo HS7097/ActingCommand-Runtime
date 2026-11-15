@@ -28300,7 +28300,7 @@ playing").
 | The model | `ClickExecution` gains `before_frame`, `after_frame` and `after_capture` (`AfterCaptureRecord {after_ms, still_max_ms, still, waited_ms, captures, kept}`), each `serde(default, skip_serializing_if)`; `PointPress`, `AfterCapture` (`for_press` 800 and 5000, `for_application` 2000 and 30000), `RecordPressRequest {click, point_press, after}`, `BeforeFrame`, `AfterFrame`, `RecordPressOutcome {click, before, after, warnings}` (`crates/lab/src/recording/model.rs`) |
 | The steps | `plan_press` (refusals, then `plan_point`: `rect {x, y, 1, 1}`, `source: "point"`, a long press's `gesture`; a swipe through `plan_click`), `commit_click` naming the step's live primary frame with `names_frames`, `note_after_frame` in `arrive`, `note_after_capture` (`crates/lab/src/recording/steps.rs`) |
 | The recording API | `RecordFramePorts {wait, capture}`, `record_before_frame` (one capture when no step is open), `record_after_frame` (the wait, the preflight, one capture, its arrival with `after_capture`), `record_press`, `record_press_input` (the input of a plan); `record_commit_click`'s recording part shared as `commit_recorded`, its two exit-4 errors as functions, its answers unchanged (`crates/lab/src/recording_api.rs`) |
-| The command | `tap`, `swipe` and `long-tap` take `--record` and `--after-ms` (`DIRECT_TOUCH_FLAGS`, `DIRECT_TOUCH_SWITCHES`, parsed by `FlagArgs::parse_switches`); `run_recorded_touch`: the lock (`record_flag_begin`), the device configuration, `record_press` with the input sent through `RuntimeInputProxy` (`send_recorded_press`: a receipt performed; fix round 2, below: a denied usage or safety refusal not performed, any other error indeterminate) and the captures as `capture --record` takes them (`PressFrames`) (`apps/actinglab/src/commands/device_commands.rs`); `record_flag_gate` takes the three without `--dry-run` and refuses `--after-ms` without `--record` (`PRESS_RECORD_ONLY_FLAGS`, `apps/actinglab/src/main.rs`); `dry_run_gate.rs` declares the three forms refused, and the record policy's `record_flag` (`session_contracts.rs`) lists them |
+| The command | `tap`, `swipe` and `long-tap` take `--record` and `--after-ms` (`DIRECT_TOUCH_FLAGS`, `DIRECT_TOUCH_SWITCHES`, parsed by `FlagArgs::parse_switches`); `run_recorded_touch`: the lock (`record_flag_begin`), the Runtime's capture endpoint (fix round 3: no local device configuration), `record_press` with the input sent through `RuntimeInputProxy` (`send_recorded_press`: a receipt performed; fix round 2, below: a denied usage or safety refusal not performed, any other error indeterminate) and the captures as `capture --record` takes them (`PressFrames`) (`apps/actinglab/src/commands/device_commands.rs`); `record_flag_gate` takes the three without `--dry-run` and refuses `--after-ms` without `--record` (`PRESS_RECORD_ONLY_FLAGS`, `apps/actinglab/src/main.rs`); `dry_run_gate.rs` declares the three forms refused, and the record policy's `record_flag` (`session_contracts.rs`) lists them |
 | The table | the rows `tap`, `swipe`, `long-tap`: `record` (switch), `after_ms` (integer), their help, output and notes, `ObserveReadonly` beside `Input`; `own_flags.rs` reads the switch from the command's constant |
 | Texts | [lab-recording.md](lab-recording.md): "Recording while playing", the opening paragraph, the members' paragraph of `recording.json`, "`--record` on device commands" (its first sentence, its table, nine forms); [actinglab-dry-run.md](actinglab-dry-run.md): the three forms |
 
@@ -28383,7 +28383,53 @@ coordinator work order `rd-1115/brief-463-s11-fix2.md`, on the branch's head `61
   on a step with a mark (its capture is not stored, so every file still keeps its bytes); the
   refusals before the press add a swipe's two. No test leaves the gate map.
 
-### 1.424 Slice #463 S1-7 (0.12.63): a recording holds its instance (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one asks nothing of the agent but to start recording, play and end recording; the read-only investigation `rd-1115/record-hold-investigation.md`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s17-record-hold.md`, stacked on #463 S1-1, §1.402, head `24e48b47cd` on main `b7c47129`)
+**Fix round 3** (CI's two red tests of fix round 2, the second independent review's must-change
+item and the coordinator's ruling on one retry; coordinator work order
+`rd-1115/brief-463-s11-fix3.md`, on the branch's head `24e48b47`, main `b7c47129`).
+- *No local device configuration.* The two tests of `runtime_input_proxy.rs` failed with
+  `device_error` "ADB path is not configured" before anything ran: `run_recorded_touch` resolved
+  `device_config` (the ADB path, `effective_adb_path_for_instance`) and its captures used only its
+  Runtime capture endpoint (`capture_for_command` ignores the capture backend it is given). `tap`
+  without `--record` resolves none (`open_cli_runtime_input_proxy`). Now the command builds the
+  endpoint from the instance and the Runtime's state root, and `PressFrames` captures through
+  `capture_observation_for_command`, which `capture_for_command` without `--require-fresh` calls
+  too: the tests are unchanged.
+- *The recording says when a press was sent on a capture it did not store.* `ClickExecution`
+  gains `sent_on_unstored_capture` (`serde(default, skip_serializing_if = Not::not)`: every
+  existing recording and every press on a step without marks byte for byte as before), handed by
+  `record_press` through `commit_recorded` to `commit_click`, written beside `before_frame`.
+- *One retry when the frame is gone before the press.* An input the Runtime denies
+  `input_frame_unavailable` sent nothing: the command captures once more and sends the press once
+  more on the new capture; a second refusal of any kind is answered as before. The refusal is
+  told from every other in one place, `input_frame_unavailable` in `device_commands.rs` (the
+  denied receipt's state and the receipt outcome's code; the code's category and ladder class,
+  `error`/`none`, are those of other input refusals and the outcome carries no word that
+  separates it, so this decision names the code, by the coordinator's ruling), which marks the
+  refusal (`record_press_frame_unavailable`); `record_press` retries on the mark only and takes
+  the mark away before it answers. Kept: the first capture, if stored, stays superseded by the
+  second, which the press is committed on; on a step with marks neither is stored. The answer's
+  `record.before.captured_twice` says so.
+- *Wording.* "Not performed" leaves the capture before the press in the step (except on a step
+  with marks); the frame reference is built as `do --capture`'s online scene builds one (the
+  recorded `do` presses inside the Runtime's own operation).
+- *Signatures.* `commit_click` and the private `commit_recorded` take `sent_on_unstored_capture`
+  after `names_frames` (every other caller passes `false`); `BeforeFrame` gains
+  `captured_twice`; new public `record_press_frame_unavailable`; `PressFrames` holds the endpoint
+  in place of the device configuration. `record_before_frame`, `record_after_frame`,
+  `RecordFramePorts`, `CapturedFrame`, `BeforeCapture`, the press closure, `note_after_frame` and
+  `note_after_capture` are unchanged.
+- *Codes and words.* No outcome code is added and no fragment changes. One decision now reads a
+  code (above). New members: `sent_on_unstored_capture` of an execution, `captured_twice` of the
+  answer's `before`.
+- *Tests.* Two new in `crates/lab/src/gate_463_s11.rs` (a press refused for its frame and sent
+  once more, on a new recording and on a step with marks; a second refusal, of the frame or
+  another, answered as it is, no press recorded, both captures kept) and one in
+  `runtime_input_proxy.rs` (an input denied for the foreground: `device_error`, one capture, no
+  click, the capture before it kept as step 1's frame; the fake device reports another
+  application when the test asks). Adapted: the step with marks asserts the execution's
+  `sent_on_unstored_capture`, the two presses in a row its absence. No test leaves the gate map.
+
+### 1.424 Slice #463 S1-7 (0.12.63): a recording holds its instance (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one asks nothing of the agent but to start recording, play and end recording; the read-only investigation `rd-1115/record-hold-investigation.md`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s17-record-hold.md`, stacked on #463 S1-1, §1.402, cut from its head `24e48b47cd` on main `b7c47129`, its fix round 3 `124e2b4de2` merged)
 
 The coordinator gave this slice 1.424. It ships in 0.12.63, after S1-1.
 
