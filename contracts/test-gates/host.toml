@@ -4137,3 +4137,11 @@ tests = [
     "actingcommand-runtime-host::lib::host::emulator_instance::gate_469_h3::h3_the_other_codes_of_a_provider_control_failure_carry_no_stage_value",
 ]
 incident = ["#469 H3"]
+
+# Workflow #469 D4b (0.12.63; register §1.401; brief rd-1115/brief-469-d4-owner-four.md; the owner's approval on board #469; contracts/emulator-control.md, "Triggers" and direction ①): contained_task_vision_provider_failed, which a vision provider failure at a guard, a when or an expected identity now ends a run with, is of the ladder class environment_fault; under the defaults no trigger item matches it at the task stage (no ladder at once), the stability_burst item matches it by class at stability_warnings, and three of its failures on one instance within the window register one burst of that item; contained_task_guard_evaluation_failed and contained_task_recognition_failed, which a real evaluation error still ends with, match pack_logic by class at the task stage and three of each register no burst
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d4b_a_vision_provider_failure_counts_toward_the_burst_and_starts_no_ladder_at_once",
+]
+incident = ["#469 D4b"]

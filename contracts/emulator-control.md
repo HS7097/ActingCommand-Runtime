@@ -629,7 +629,13 @@ entry and the package's own check says it did not, so the Runtime does not know 
 which is the ladder's job, as for `contained_task_page_unknown`; it starts the ladder by
 `pack_logic`. So does `contained_task_linear_unrecorded_screen` (Workflow #463 U1, class
 `pack_logic_mismatch`, the owner's ruling on board #463), as `page_confirmation_failed` does; its
-scheduled run also pauses its pair ([policy-suspension.md](policy-suspension.md)).
+scheduled run also pauses its pair ([policy-suspension.md](policy-suspension.md)). A failure of the
+vision provider while a run evaluates a page (Workflow #387 D1c-G) or a step's guard, an
+operation's `when` or an expected identity (#469 D4b, since 0.12.63; the owner's approval on board
+#469) ends the run with `contained_task_vision_provider_failed`, class `environment_fault`: it
+starts no ladder at the task stage, and `stability_burst` counts it (direction ①, below). A real
+evaluation error there keeps its class-4 code (`contained_task_recognition_failed`,
+`contained_task_guard_evaluation_failed`) and starts the ladder by `pack_logic`.
 
 - **Task stage.** A scheduled (policy) contained task run on a physical instance whose
   `task.failed` terminal's outcome code (ledger revision 3; the relayed spelling's `raw_code`

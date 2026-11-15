@@ -27900,6 +27900,109 @@ revision.
 the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
 `device_locked` or the update code shows no group in the errors view either.
 
+### 1.401 Slice #469 D4b (0.12.63): a vision provider failure during a guard is reported as one (Workflow #469; the owner's approval on board #469 on 11-15 of the four corrections that change what the program does, this one of them; the design `rd-1115/status-codes-a-design.md`, Part 2, A-2 item 1, the row of `contained_task_guard_evaluation_failed` and `contained_task_recognition_failed`, and the slice row D4; the coordinator's rulings in the work order and in its dispatch, not the owner's words; coordinator work order `rd-1115/brief-469-d4-owner-four.md`, read on main `8b85593a` (the #469 train: K2, §1.396, and D4a, §1.400, merged))
+
+The coordinator gave this slice 1.401 (§1.400 names it). It ships in 0.12.63: release 0.12.62 is
+cut from main without it (the coordinator's dispatch, in place of the work order's 0.12.62).
+
+**What it is.** A vision provider that fails, or answers invalidly, while the kernel evaluates a
+step's guard target, an operation's `when` target or an expected identity's target now ends the
+run with `contained_task_vision_provider_failed` (error, `environment_fault`), as one met at a
+page evaluation has since Workflow #387 D1c-G, with the detail that place writes and no values
+(the page path gives that code none either). A real evaluation error there (the declaration cannot
+be evaluated; the provider answered) keeps its code (error, `pack_logic_mismatch`), its detail
+and its control flow. The classes of the three codes do not change.
+
+| Place (`crates/execution-kernel/src/contained_task.rs` unless named) | A provider failure: was | is | A real evaluation error (as before) | Detail (as before, either way) |
+|---|---|---|---|---|
+| a step's guard (`judged_guard_outcome`) | `contained_task_guard_evaluation_failed` | `contained_task_vision_provider_failed` | `contained_task_guard_evaluation_failed` | the evaluation's error, then ` cause=<code>` for an evaluation that refused to conclude |
+| an operation's `when` (`when_holds`, `contained_task/candidates.rs`) | `contained_task_recognition_failed` | `contained_task_vision_provider_failed` | `contained_task_recognition_failed` | `operation=<id> when=<target> <error>`, then ` cause=<code>` as above |
+| an expected identity's targets, text path and template path (`read_expected_identity`) | `contained_task_recognition_failed` | `contained_task_vision_provider_failed` | `contained_task_recognition_failed` | the evaluation's error |
+
+**Told apart as a page evaluation tells them apart.** One function, `failed_by_provider`, reads
+the recognition pack's code of the evaluation's error: `recognition_pack_provider_failed` or
+`recognition_pack_provider_response_invalid` is a failure of the provider, any other a real
+evaluation error. It is D1c-G's reading moved out of `page_failed_by_provider`, which now reads a
+failed page target's cause through it; `target_evaluation_failure_code` gives the three places
+their code from it, and the host's record of a failed guard or `when` evaluation
+(`diagnostic_guard`, `crates/runtime-host/src/host/task_diagnostic.rs`) its primary code, as
+`page_batch_failure_code` does for a page batch. No second reading is added and no decision point
+names a code.
+
+**Where the code that ends a run changes, path by path.** Only where an evaluation at one of the
+three places fails because the provider failed:
+
+1. A step's guard, at every place that judges it: a page-graph step's first attempt and a retry's,
+   an input recheck (`fresh_frame` and the stable or still frames' guards), a `linear_steps` step
+   and its recheck, a select step's confirmation, a scan's guard. The run ends with the provider
+   code where it ended with `contained_task_guard_evaluation_failed`: none of these callers tells
+   the two apart (their only readings by code are `contained_task_guard_refused` and the sampling
+   timeouts, which neither is), so the step, its retry decision and its failure decision go as
+   before. Where the failure decision asks for recovery (a retry attempt of an operation with a
+   recovery task), the run still ends with `contained_task_requires_scheduler`, whose `failure_code`
+   now names the provider code. A select step's confirmation record (`guard_failed`) carries the
+   provider code as its outcome.
+2. An operation's `when`: the run ends with the provider code before the step starts, where it
+   ended with `contained_task_recognition_failed`.
+3. An expected identity, after the step's input: the run ends with the provider code where it
+   ended with `contained_task_recognition_failed`.
+4. The host's record of a failed guard or `when` evaluation whose PP-OCR reports cannot be archived
+   or recorded: the run's primary failure is the provider code where it was
+   `contained_task_guard_evaluation_failed` (for a `when` too, as before for every other error).
+
+What the host and the ladder do with a run that ends so is what they already do with a page
+evaluation's provider failure; each is a reading by class or by code that already exists:
+
+- the recovery ladder: no default trigger item matches the code at the task stage (`pack_logic`
+  names `pack_logic_mismatch`), so a scheduled run's failure starts no ladder at once, and the
+  default `stability_burst` counts it (`environment_fault`, 3 within 600 000 ms); a return-home
+  rung's run that ends so is not held on the busy-screen probe (`busy.screen.classes`);
+- the capture evidence: a guard's provider failure no longer pins its last frame as
+  `GuardRejection` (the host's list of guard codes), and keeps its `Terminal` and `Failure` pins;
+- the task geometry recheck after a run that ended with `contained_task_recognition_failed`
+  (`recheck_task_geometry`) no longer runs after a `when` or identity provider failure;
+- a home entry recovery package or prerequisite layer whose `when` or identity ends so
+  (`run_entry_recovery`, `prerequisite::close_open`) is closed as any failure other than a
+  recognition failure is, as a page evaluation's provider failure already was (its facts relay the
+  code; a guard's failure took that branch before too);
+- the policy keeps one failure identity per code: these failures count in the provider code's
+  streak, not in the class-4 code's.
+
+**What stays as it was.** Every run whose evaluation at the three places does not fail; every
+real evaluation error there (code, detail byte for byte, values, failure identity and streak);
+every page evaluation (the same reading, moved); every other evaluation of a select, a scan or a
+field list, which keeps `contained_task_recognition_failed` whatever failed; the classes and
+categories of every code; the configuration; every record shape and interface revision. Nothing is
+kept for an earlier build.
+
+**Texts.** The catalog descriptions of `contained_task_vision_provider_failed`
+(`execution-kernel.json`), `contained_task_guard_evaluation_failed` and
+`contained_task_recognition_failed` (`contract.json`, with its common causes); the contracts
+[resource-declarations.md](resource-declarations.md) ("Candidates": the `when`, and the guard that
+could not be evaluated, twice), [ocr-fields.md](ocr-fields.md) (the text guard),
+[linear-steps.md](linear-steps.md) ("Steps", item 2, and the provider row of "Failure codes"),
+[selection-graph.md](selection-graph.md) ("Expected identity") and
+[emulator-control.md](emulator-control.md) ("Triggers": no ladder at once, the burst). The index is
+regenerated.
+
+**Tests.** `crates/execution-kernel/src/contained_task/gate_469_d4b.rs` (gate map `exec.toml`
+"#469 D4b"), on a page graph from a colour home page to a colour terminal page whose one located OCR
+target a scripted provider reads, on the scripted clock: `d4b_a_provider_failure_…`: a provider
+that fails (unavailable, timeout, internal) or answers invalidly ends the guard's run, the `when`'s
+run (both before any input) and the identity's reading with the provider code, the place's detail
+and no values; `d4b_a_real_evaluation_error_…`: a read that cannot conclude because the provider
+kept 64 of 65 boxes keeps `contained_task_guard_evaluation_failed` at the guard and
+`contained_task_recognition_failed` at the `when` and the identity, their detail byte for byte and
+no values; `d4b_a_provider_that_reads_…`: the guard passes and the `when` holds, each run taps once
+and ends `Success` on the terminal page after one step, and the identity reads its business ID.
+`crates/runtime-host/src/host/recovery_ladder/tests.rs`, `d4b_a_vision_provider_failure_…` (gate
+map `host.toml`): under the defaults the provider code is `environment_fault`, matches no item at
+the task stage and `stability_burst` by class at `stability_warnings`, and three such failures on
+one instance within the window register one burst; the two class-4 codes match `pack_logic` at the
+task stage and register none. No test is adapted, no golden changes, no test leaves the gate map.
+
+**At deploy.** Nothing to do: a run recorded before 0.12.63 keeps the code it ended with.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
