@@ -11,8 +11,19 @@
 //! nothing only the run needs; what the run will require that the plan was not given, it says.
 //! [`write_trial_record`] writes the record of a trial,
 //! `actingcommand.pack-trial.v1` under `<state>/trials/<package_id>/<content12>-<ms>.json`, and
-//! [`trial_records`] and [`latest_trial_record`] read them back. In this release nothing writes a
-//! record outside the tests: the run, and the record it leaves, are the next slice's.
+//! [`trial_records`] and [`latest_trial_record`] read them back; S3-11 fix round 2:
+//! [`trial_record_of_run`] finds the record of one run, whatever content it names.
+//!
+//! Workflow #463 S3-11 (register §1.418; `contracts/standard-pack-trial.md`, "The run"): the run
+//! itself is actinglab's (it sends one request through the Lab's operation layer and reads the
+//! run's end as `run show` reads it); this module gives it the offline parts. [`check_trial_run`]
+//! answers the refusals only the run needs, after the plan and before anything is sent or written,
+//! and the plan as the record keeps it; [`PackTrialRecord::of_run`] makes the record of a run whose
+//! end was read, `matched` judged against `--expect`, and [`PackTrialRecord::unexpected_end`] the
+//! warning of a run that ended normally on another end than the one expected. The writer is the
+//! record's only writer, called once per run whose end was read. Three sentences stay true: a
+//! passed trial is not an authorization to enable; a trial counts nothing toward a break-in; a
+//! trial is one run, sent once.
 //!
 //! - **One reading** (fix round 2). The package directory is read once, one bounded snapshot by
 //!   the containment crate's `snapshot_content_directory`, and every member of the plan but the
@@ -41,6 +52,10 @@
 //! - **The state directory** is never a repository's or an installed root's, nor inside one: a
 //!   directory along its path that holds `.git` is a repository's; one whose `install\state.json`
 //!   is a file is an installed root ([`installed_root_containing`]).
+//! - **The writer's steps** (S3-11, the review of S3-10's third round): the hard link of the
+//!   `.part` and the write and flush of a file created anew are taken as parameters inside the
+//!   module (`WriteSteps`), as the Runtime host's `place_once` takes its link, so that the tests
+//!   drive the paths the operating system's refusals take.
 
 use crate::codes::{ResourceToolingCode, TrialRecordProblem, TrialStatePlace};
 use crate::package_directory::PACK_DEADLINE;
@@ -218,8 +233,12 @@ impl TryFrom<TrialPlan> for TrialRecordPlan {
 
     /// The plan `plan` as a record keeps it. A plan without an authorization makes no record
     /// plan: `validation_failed`, as [`write_trial_record`] refuses another malformed record.
+    /// Workflow #463 S3-11 (the review of S3-10's third round, item 3): the authorization is held
+    /// to the bounds the plan's own check holds it to, by calling that check: blank
+    /// (`value_missing`), longer than [`MAX_AUTHORIZATION_BYTES`] (`out_of_range`) or with a
+    /// control character (`not_recognised`), each `validation_failed` naming `--authorization`.
     fn try_from(plan: TrialPlan) -> Result<Self, Self::Error> {
-        let Some(authorization) = plan.authorization else {
+        let Some(authorization) = authorization(plan.authorization.as_deref())? else {
             return Err(LabError::usage(format!(
                 "the plan of the package {} names no authorization; a trial record keeps the \
                  authorization its run was sent under",
@@ -478,6 +497,104 @@ pub fn plan_standard_pack_trial(
         run_requires,
         record_directory,
     })
+}
+
+/// Workflow #463 S3-11 (`contracts/standard-pack-trial.md`, "The run"): the refusals only the run
+/// needs, after the plan `answer` that [`plan_standard_pack_trial`] gave `request` (its refusals come
+/// first), in this order, each before anything is sent and before anything is written:
+/// - no authorization: `trial_authorization_missing`;
+/// - a package the irreversible mark flags (`marked`) and no `--irreversible`:
+///   `trial_irreversible_unacknowledged`; a mark not judged (no `--root`) refuses nothing, as the
+///   plan says;
+/// - any `--variable`: `trial_variables_not_carried`, since a direct run carries no variable value
+///   yet (the plan keeps showing them).
+///
+/// Then the plan as the record keeps it ([`TrialRecordPlan`]). It reads and writes nothing, and it
+/// judges no authorization: the reference is recorded as given.
+pub fn check_trial_run(
+    answer: &StandardPackTrialAnswer,
+    request: &StandardPackTrialRequest,
+) -> LabResult<TrialRecordPlan> {
+    let plan = &answer.plan;
+    if plan.authorization.is_none() {
+        return Err(refused(
+            Outcome::new(ResourceToolingCode::TrialAuthorizationMissing)
+                .package_id(&plan.package_id),
+            format!(
+                "a trial of {} on a real application is sent only under the owner's \
+                 authorization: give --authorization <reference> (the reference of the owner's \
+                 word); a plan (--plan) needs none",
+                plan.package_id
+            ),
+        ));
+    }
+    if plan.irreversible == TrialIrreversible::Marked && !plan.irreversible_acknowledged {
+        return Err(refused(
+            Outcome::new(ResourceToolingCode::TrialIrreversibleUnacknowledged)
+                .package_id(&plan.package_id),
+            format!(
+                "the irreversible mark flags {} over the root given (see the plan's \
+                 irreversible_basis): its trial is sent only with --irreversible",
+                plan.package_id
+            ),
+        ));
+    }
+    if let Some((name, _)) = request.variables.first() {
+        return Err(refused(
+            Outcome::new(ResourceToolingCode::TrialVariablesNotCarried)
+                .package_id(&plan.package_id)
+                .variable_name(name),
+            format!(
+                "--variable {name} is given, but a direct run carries no variable value yet: a \
+                 trial runs every declared default (the plan shows them); give no --variable"
+            ),
+        ));
+    }
+    TrialRecordPlan::try_from(plan.clone())
+}
+
+impl PackTrialRecord {
+    /// Workflow #463 S3-11: the record of the trial run sent as `request_id` (its run `run_id`)
+    /// under `plan`, whose end `end` was read, the run's terminal recorded at `at_unix_ms`;
+    /// `matched` is whether the end's outcome key is the plan's `expect` (`false` for a run that
+    /// failed, was cancelled or ended with another key or with none), absent without one.
+    pub fn of_run(
+        plan: TrialRecordPlan,
+        at_unix_ms: u64,
+        request_id: String,
+        run_id: Option<String>,
+        end: TrialRunEnd,
+    ) -> Self {
+        let matched = plan
+            .expect
+            .as_ref()
+            .map(|expected| end.outcome_key.as_ref() == Some(expected));
+        Self {
+            schema_version: PACK_TRIAL_SCHEMA.to_owned(),
+            at_unix_ms,
+            plan,
+            request_id,
+            run_id,
+            end,
+            matched,
+        }
+    }
+
+    /// Workflow #463 S3-11: the warning `trial_end_unexpected` of a run that ended normally on
+    /// another end than the one expected (the business ended another way, which is what a trial is
+    /// for: the command succeeds); `None` for a run that ended as expected, without `--expect`, or
+    /// that did not end normally (a failed or cancelled run is answered with its own code).
+    pub fn unexpected_end(&self) -> Option<Outcome> {
+        if self.matched != Some(false) || self.end.outcome != TaskOutcome::Success {
+            return None;
+        }
+        let warning =
+            Outcome::new(ResourceToolingCode::TrialEndUnexpected).package_id(&self.plan.package_id);
+        Some(match &self.end.outcome_key {
+            Some(key) => warning.outcome_key(key),
+            None => warning,
+        })
+    }
 }
 
 /// The reference `given`, `None` when none is given; given, it is not blank (`validation_failed`,
@@ -873,8 +990,15 @@ fn judge_irreversible(
 /// with its links resolved. A check that cannot be made is never read as "absent": a part whose
 /// existence or kind the operating system does not tell, or that cannot be resolved, is
 /// `foreign_os_error` with that `path` and its `io_op`. It reads only whether those files exist,
-/// and writes nothing. The one test of the resource tooling and of the Lab for an installed root
-/// along a path; the Runtime host's `installation_root_at` asks the same file of one directory.
+/// and writes nothing. Workflow #463 S3-11 (the review of S3-10's third round): it is the
+/// resource tooling's test of an installed root along a path, which the trial's plan and writer
+/// call; it is not the only one. The Lab's recordings keep their own walk (`installed_root` of
+/// `crates/lab/src/recording/container.rs`, #464 P4) by the same file along the same two paths,
+/// with two different answers (`contracts/standard-pack-trial.md`, "The state directory's
+/// place"): a check the operating system refuses is read there as "absent" and the walk goes on,
+/// where this function answers `foreign_os_error`; and a path that cannot be made absolute is
+/// walked there as given, where this function refuses it. The Runtime host's
+/// `installation_root_at` asks the same file of one directory.
 pub fn installed_root_containing(path: &Path) -> LabResult<Option<PathBuf>> {
     let given = absolute(path)?;
     let resolved = resolved_existing_part(&given)?;
@@ -995,9 +1119,49 @@ pub fn trial_record_path(
 /// removed; a removal the operating system refuses then leaves the record written: the answer is
 /// its path, with the `.part` as [`WrittenTrialRecord::part_left`] and the warning
 /// `trial_record_part_left`. A record holds an authorization by its type ([`TrialRecordPlan`]).
+///
+/// Workflow #463 S3-11: the run's one call of the writer, once its end was read; the steps are
+/// the operating system's (`WriteSteps`).
 pub fn write_trial_record(
     state_dir: &Path,
     record: &PackTrialRecord,
+) -> LabResult<WrittenTrialRecord> {
+    write_trial_record_with(
+        state_dir,
+        record,
+        &WriteSteps {
+            link: &hard_link,
+            write: &write_whole,
+        },
+    )
+}
+
+/// Workflow #463 S3-11: the writer's link step: the hard link of a `.part` (the first path) to its
+/// record's name (the second), which fails when the name is taken.
+pub(crate) type LinkStep<'a> = dyn Fn(&Path, &Path) -> io::Result<()> + 'a;
+/// Workflow #463 S3-11: the writer's write step: writes bytes whole to a file created anew,
+/// flushes them and closes it; the refusal of the step that failed with its `io_op`.
+pub(crate) type WriteStep<'a> = dyn Fn(fs::File, &[u8]) -> Result<(), (io::Error, IoOp)> + 'a;
+
+/// Workflow #463 S3-11 (the review of S3-10's third round, item 1): the writer's two steps whose
+/// refusals a test cannot ask of the operating system, taken as parameters inside the module, as
+/// the Runtime host's `place_once` takes its link (`state_root_installation.rs`): in production
+/// [`fs::hard_link`] and [`write_whole`].
+pub(crate) struct WriteSteps<'a> {
+    pub(crate) link: &'a LinkStep<'a>,
+    pub(crate) write: &'a WriteStep<'a>,
+}
+
+/// The production link step: [`fs::hard_link`].
+fn hard_link(part: &Path, path: &Path) -> io::Result<()> {
+    fs::hard_link(part, path)
+}
+
+/// [`write_trial_record`] with the steps `steps`.
+pub(crate) fn write_trial_record_with(
+    state_dir: &Path,
+    record: &PackTrialRecord,
+    steps: &WriteSteps<'_>,
 ) -> LabResult<WrittenTrialRecord> {
     check_trial_state_dir(state_dir)?;
     let state = absolute(state_dir)?;
@@ -1034,18 +1198,18 @@ pub fn write_trial_record(
         }
         Err(error) => return Err(write_failed(&path, &part, &error, IoOp::Create)),
     };
-    if let Err((error, op)) = write_whole(file, &bytes) {
+    if let Err((error, op)) = (steps.write)(file, &bytes) {
         return Err(failed_removing(
             write_failure(&path, &part, &error, op),
             &[part.as_path()],
         ));
     }
-    match fs::hard_link(&part, &path) {
+    match (steps.link)(&part, &path) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
             return Err(record_exists_beside(&path, &part));
         }
-        Err(unlinked) => place_exclusive(&path, &part, &bytes, &unlinked)?,
+        Err(unlinked) => place_exclusive(&path, &part, &bytes, &unlinked, steps.write)?,
     }
     match fs::remove_file(&part) {
         Ok(()) => Ok(WrittenTrialRecord {
@@ -1085,8 +1249,15 @@ fn write_whole(mut file: fs::File, bytes: &[u8]) -> Result<(), (io::Error, IoOp)
 /// which the reader refuses (`undecodable`). A step the operating system refuses is
 /// `trial_record_write_failed` with the link's refusal as a `note` link; after a refused create
 /// the `.part` is removed, after a refused write or flush the file this call created and the
-/// `.part` ([`failed_removing`]).
-fn place_exclusive(path: &Path, part: &Path, bytes: &[u8], unlinked: &io::Error) -> LabResult<()> {
+/// `.part` ([`failed_removing`]). Workflow #463 S3-11: the bytes are written by the writer's
+/// write step `write`.
+fn place_exclusive(
+    path: &Path,
+    part: &Path,
+    bytes: &[u8],
+    unlinked: &io::Error,
+    write: &WriteStep<'_>,
+) -> LabResult<()> {
     let file = match OpenOptions::new().write(true).create_new(true).open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -1103,7 +1274,7 @@ fn place_exclusive(path: &Path, part: &Path, bytes: &[u8], unlinked: &io::Error)
             ));
         }
     };
-    write_whole(file, bytes)
+    write(file, bytes)
         .map_err(|(error, op)| unlinked_failed(path, part, unlinked, &error, op, &[path, part]))
 }
 
@@ -1218,6 +1389,30 @@ pub fn latest_trial_record(
         .into_iter()
         .rev()
         .find(|record| record.plan.content_hash_prefix == content_hash_prefix))
+}
+
+/// Workflow #463 S3-11 fix round 2 (one run, one record): the file of the record of the run
+/// `request_id` among the trial records of the package `package_id` under `state_dir`
+/// ([`trial_records`], whose refusal of a file it answers), whatever content that record names;
+/// `None` when the run has none. The run reads it before it calls the writer, so that a run whose
+/// package directory changed since it ran is not recorded a second time under another content.
+pub fn trial_record_of_run(
+    state_dir: &Path,
+    package_id: &str,
+    request_id: &str,
+) -> LabResult<Option<PathBuf>> {
+    let state = absolute(state_dir)?;
+    Ok(trial_records(&state, package_id)?
+        .into_iter()
+        .find(|record| record.request_id == request_id)
+        .map(|record| {
+            trial_record_path(
+                &state,
+                package_id,
+                &record.plan.content_hash_prefix,
+                record.at_unix_ms,
+            )
+        }))
 }
 
 /// The content prefix and the time a record's file name `name` says, `<content12>-<ms>.json`;

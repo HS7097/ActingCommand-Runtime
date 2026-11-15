@@ -30375,6 +30375,143 @@ reconnect meets another owner epoch), `s17_fix_a_stop_whose_release_fails_names_
 status read `s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so` (`instance_hold_unread`).
 No code or word is added; no test leaves the gate map.
 
+### 1.418 Slice #463 S3-11 (0.12.65): `standard-pack trial` sends its one run and records the business end (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization, and the owner's ruling of 11-15 that a trial of a held package, on the instance and application it was recorded on, is within her standing authorization, recorded as a reference; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-11"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s311-trial-run.md`, built on the branch of #1758, which holds S3-10)
+
+The coordinator gave this slice 1.418; it stands on S3-10 (§1.417) and ships in 0.12.65 (release
+0.12.64 was cut without it).
+
+**What it is.** Without `--plan` the row `standard-pack trial` is the run
+([standard-pack-trial.md](standard-pack-trial.md), "The run", "The end", "Reading the end later"):
+S3-10's refusal of a line without `--plan` is lifted. Everything the plan does comes first, by the
+same function, then the refusals only the run needs, before anything is sent or written; then one
+run, sent once; then its business end, read as `run show` reads it, answered and recorded once by
+S3-10's writer. The tool records the authorization reference it is given and judges nothing; it
+never starts a trial by itself. Its three sentences stay true: a passed trial is not an
+authorization to enable; a trial counts nothing toward a break-in; a trial is one run, sent once.
+
+**The run's own refusals** (the resource tooling's `check_trial_run`), in this order:
+
+| Code (resource-tooling) | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `trial_authorization_missing` | the run was asked for without `--authorization` (`package_id`) | refuses | 1 (envelope 2) |
+| `trial_irreversible_unacknowledged` | the mark flags the package (`marked`) and `--irreversible` was not given (`package_id`) | refuses | 1 (envelope 2) |
+| `trial_variables_not_carried` | a `--variable` was given, and a direct run carries no variable value yet (`package_id`, `variable_name`) | refuses | 1 (envelope 2) |
+
+A mark not judged (no `--root`) refuses nothing: the run does not require `--root` (the decision
+S3-10 left to this slice). The state directory refused is S3-10's `trial_state_dir_refused`,
+already the plan's; a record of this content at the run's millisecond already there is S3-10's
+`trial_record_exists`, which only the writer can find, since the record's name carries the time the
+run ended. Under the global `--dry-run` the run and `--collect` are `dry_run_unsupported` after the
+flags (the dry-run declaration is now `mixed`). The run's malformed flags are `validation_failed`:
+`--collect` or `--wait` beside `--plan` and `--wait` beside `--collect` `conflicting`, a `--collect`
+that is no request id `not_recognised`, a `--wait` that is no duration `wrong_type`.
+
+**One run, sent once.** The request is the one `run start` sends, made by its own function
+(`lab-ops` `core_ops::run_start_prepared`, called, not copied: the instance resolved by one status
+read, the package directory by its canonical path, the longest deadline, 30 minutes), on the Lab
+channel with the process's initiator (`lab_client_config`), named by its `request_id` before it is
+sent and submitted once. It is waited for as `run start` waits: without `--wait` to its receipt
+(the longest wait `run start` allows: the run's deadline and the client's margin bound it), with
+`--wait` by `lab-ops`'s `wait::wait_at_most`. A wait that ends first is `command_wait_expired`
+(reused: `run start`'s answer) with the request id and `next`, and writes no record. A Runtime that
+refused the run (a receipt without a terminal) answers its refusal. Otherwise the end is read on the
+same connection: after a result that is not known (no receipt came back), a lost connection answers
+the read at once with the client's failure, which is the answer, with the request id and `next`;
+nothing is sent again by this command or anything it starts (the client's own reset after a run it
+saw cancelled, and its recovery of a receipt that did not come in time, are `run start`'s).
+
+**The end.** The run read by `run_show::read` (its key the request id): its state and its terminal,
+whose `outcome_key` S3-3 put on the read. The answer: `{sent, plan, request_id, run_id?, end:
+{state, outcome_key?, final_page?, failure_code?, failure_values?}, expected?, matched?, record,
+part_left?, warnings?}`. A run that ended normally on another end than `--expect` named succeeds,
+exit 0, `matched` false, with the new warning `trial_end_unexpected` (`package_id`, the end's
+`outcome_key`); a failed or cancelled run is refused with its own code and values on top beside the
+same members, as `run start` answers a failed run (exit 1 on the command line). The record is
+written once, when the end has been read; its `<ms>` is the time the ledger recorded the run's
+terminal (one more read, of that record by its request and its sequence), so one run has one name.
+An end not read writes no record: a read the client refuses is answered as that with `next`; a
+read with no terminal, or a terminal whose record that read did not find, is the new
+`trial_end_unread` (`request_id`, `run_state`, the vocabulary `run_state` of `lab-ops`) with `next`.
+
+**Reading the end later.** `--collect <request_id>` beside the same arguments (the words `next`
+gives): it sends nothing; one status read resolves the trial's instance and the run is read as `run
+show` reads it; a run whose facts do not name the trial's package or its instance is the new
+`trial_collect_mismatch` (`request_id`, and the new key and vocabulary `trial_collect_problem`:
+`other_package`, `other_instance`); then its end is answered and recorded as the run's, `sent`
+false. A second `--collect` of the same run finds its record there: `trial_record_exists`.
+
+| Code (resource-tooling) | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `trial_end_unexpected` | the run ended normally on another end than `--expect` named | warns, in the answer's `warnings` | 0 |
+| `trial_end_unread` (key `run_state`) | the read of the run shows no end a record can keep; no record | refuses | 1 (envelope 4) |
+| `trial_collect_mismatch` (word `trial_collect_problem`: `other_package`, `other_instance`) | `--collect` names a run that is not this package's on this instance | refuses | 1 (envelope 2) |
+
+Six new codes in the domain `trial_` of the resource tooling's fragment, one new key and vocabulary
+(`trial_collect_problem`); the index is regenerated. No decision point reads a code: the run's
+branches read typed things (a receipt there or not, committed or not; the run's state; a terminal
+there or not; a failure code there or not), and every code is built, relayed or printed.
+
+**The row** (`lab-operations.json`): `plan` no longer required; `collect` (`request_id`) and `wait`
+(`duration`) added; `writes` true, `runtime` `required` and `requests` `RunContainedTask`,
+`QueryEvents`, `Status`, as `run start` declares them; `help` 152 bytes; the MCP server offers it
+through a `serve` child as before. Beside it: `TRIAL_FLAGS` (10) and the help's options (11), the
+capability (`offline`, `running_runtime`, `device`), the dry-run declaration and
+[actinglab-dry-run.md](actinglab-dry-run.md), and the Files list of [README.md](README.md).
+
+**What the review of S3-10's third round left** (done here): the writer takes its link and its
+write steps as parameters inside the module (`WriteSteps`, as the host's `place_once` takes its
+link), and its failure paths are tested (the fallback without hard links, the success with
+`trial_record_part_left`, the cleanup after a refused write or flush, `io_op` `sync`, a refused
+cleanup named by a `cleanup` link); the conversion into the record's plan calls the plan's own check
+of the authorization's bounds; the comment on `installed_root_containing` says it is not the only
+test of an installed root (the recordings keep their own walk, with the two different answers the
+contract names). From the review of S3-1's third round, two tests in S3-1's gate file: a package
+that only holds a role starts a counted chain, and a chain's fourth layer is not counted.
+
+**Tests.** `crates/resource-tooling/src/gate_463_s311.rs` (seven) and
+`apps/actinglab/src/tests/gate_463_s311.rs` (seven, with the runtime client's scripted Runtime,
+every frame of every connection written down; the sent run's ledger is made when its request
+arrives, its links the client's own ids), gate map `exec.toml` "#463 S3-11"; two tests in
+`crates/lab-rescue/src/install/gate_463_s31.rs`, gate map `apps.toml` "#463 S3-11". Adapted:
+S3-10's `s310_without_plan_the_line_is_refused_before_anything_is_read` (the requirement it pinned,
+a line without `--plan` refused `--plan` `required`, is lifted by this slice): it now pins that a
+line without `--plan` under `--dry-run` is `dry_run_unsupported` before anything is read, and that a
+line naming nothing is `--instance` `required`; its gate entry's text says so. No golden changes.
+
+**What is not changed.** What `--plan` answers; the record's format and what S3-10's reader
+accepts; `run start` and `run show` for their own callers (the run calls their public functions);
+the Runtime's crates; adopt, readiness, build and the placement but the two tests.
+
+**At deploy.** Nothing to do on the root. The trial's run reaches the running Runtime as `run start`
+does; its records go to the Lab's state directory.
+
+**Fix round 2** (coordinator work order `rd-1115/brief-463-s311-fix2.md`, after the independent
+review of #1767: a record must not say more than what was tried). `--collect` takes only a run its
+facts show sent by hand on the Lab's channel: the scheduler's run, a run whose request's origin is
+not recorded and a manual run of another channel are `trial_collect_mismatch` with the new words
+`scheduled`, `origin_unknown` and `other_channel` of `trial_collect_problem`; an ordinary `run
+start` of the same package on the Lab's channel is not told apart (the request is the same, by the
+same function and initiator, and no fact names the command), and the contract says so. The run's
+facts record no content digest (option 丙), so a `--collect` records the package directory as read
+then, which the contract states as a limit; what holds is one run, one record: before the writer the
+package's records are read (`trial_record_of_run`, new in the resource tooling) and a record of the
+run's request id, whatever content it names, is `trial_record_exists` naming it, without `next`. A
+refusal of that reading or of the writer carries `next`. Whether a run failed is read from its end
+state, never from whether a code is there: a failed or cancelled run whose terminal names no code
+is the new `trial_end_uncoded` (`request_id`, `run_state`), its record written. `trial_end_unread`
+keeps one cause, a run not ended yet (`not_found`, `admitted`, `running`) with `next`; an
+interrupted run is the new `trial_run_interrupted` (`request_id`) and a terminal whose record the
+second read did not find the new `trial_terminal_unrecorded` (`request_id`, `run_state`), both
+without `next`: a code each, since the next step differs (read again later; nothing to collect;
+look at the ledger). The four codes refuse, exit 1 on the command line and 4 in a `--via` envelope
+(`device_instance`); the mismatch and `trial_record_exists` stay 1 and 2. No decision reads a
+code: the branches read the run's state, its `dispatch` and `origin`, a terminal there or not, a
+record found or not. Five tests in `apps/actinglab/src/tests/gate_463_s311.rs`, gate map
+`exec.toml` "#463 S3-11"; the made-up ledgers now record their request's origin (the Lab's channel
+unless a test says otherwise), so a made-up terminal is the third record: the tests that pin the
+record's time read it from one constant (`s311_a_run_ending_on_the_target_page_records_its_key_and_matched`
+adapted); the index is regenerated.
+
 ### 1.425 Slice #463 S2-1 (0.12.65): `record ready` lists everything a recording still lacks before `record stop` can make its package (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two turns the recorded material into a package offline; the design `rd-1115/pack-stage12-design.md`, B2.1, B2.2 and the row S2-1 of B5, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s21-record-ready.md`, built on the branch of the stage-one train (#1757) at `5706d568`)
 
 The coordinator gave this slice 1.425. It stands on the train of stage one (§1.402 to §1.404) and
