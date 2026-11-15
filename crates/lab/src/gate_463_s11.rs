@@ -51,6 +51,19 @@
 // - `s11_an_observation_without_a_frame_id_is_refused_before_the_press`: a capture without a
 //   frame id, on a new recording and on an open step: `device_error`, nothing pressed, every file
 //   as it was.
+// Fix round 3 (the press sent on a capture that was not stored is said in the recording; one retry
+// when the Runtime no longer holds the frame):
+// - the step with marks above: its execution's `sent_on_unstored_capture` is true; the two presses
+//   in a row above, each on a stored capture: the member is absent from both executions.
+// - `s11_a_press_refused_for_its_frame_is_sent_once_more_on_a_new_capture`: the first press is
+//   refused as the frame being unavailable, the second performed: capture, press, capture, press,
+//   wait, capture, each press handed its own capture's reference; on a new recording the first
+//   capture (f0001) stays superseded and the second (f0002) is `before_frame`; on a step with
+//   marks neither is stored, `before_frame` is the stored f0001 and the execution says
+//   `sent_on_unstored_capture`; `before.captured_twice` in the answer.
+// - `s11_a_second_refusal_is_answered_as_it_is_and_records_no_press`: the second press is refused
+//   too, as the frame being unavailable or otherwise: capture, press, capture, press and nothing
+//   more; the error is the fake's own, unmarked; no click recorded; both captures stay in step 1.
 // Frames are synthetic 1280x720 (a square of one colour at the top left on gray); no Runtime, no
 // device; the tests read no clock and never sleep.
 
@@ -61,7 +74,7 @@ use crate::{
     OpaqueJson, PlanClickRequest, PlannedSwipe, PointPress, RecordFramePorts, RecordPoint,
     RecordPressOutcome, RecordPressRequest, RecordRect, RecordStartOptions, RecordStopOptions,
     RecordingLock, record_attach_frame, record_commit_click, record_mark, record_plan_click,
-    record_press, record_press_input, record_start, record_stop,
+    record_press, record_press_frame_unavailable, record_press_input, record_start, record_stop,
 };
 use actingcommand_contract::{InputAction, InputFrameReference, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
@@ -149,7 +162,15 @@ enum Answer {
     Performed,
     Indeterminate,
     NotPerformed,
+    /// Fix round 3: refused before anything was sent because the frame the input names is no
+    /// longer held, as the command marks that refusal.
+    FrameUnavailable,
 }
+
+/// The fake Runtime's refusal of an input it did not perform.
+const NOT_PERFORMED: &str = "the fake Runtime did not perform the input";
+/// Fix round 3: the fake Runtime's refusal of an input whose frame it no longer holds.
+const FRAME_GONE: &str = "the fake Runtime no longer holds the frame the input names";
 
 // What the command hands the recording for the input receipt of request `id`: no carrier package,
 // no Runtime frames.
@@ -326,10 +347,23 @@ impl Bench {
         answer: Answer,
         shots: [Shot; N],
     ) -> Pressed {
+        self.press_script(request, [answer], shots)
+    }
+
+    // `record_press` of `request`, the fake Runtime answering each input it is sent with the next
+    // of `answers` (fix round 3: a press sent once more meets the second) and its captures taking
+    // `shots`.
+    fn press_script<const M: usize, const N: usize>(
+        &self,
+        request: &RecordPressRequest,
+        answers: [Answer; M],
+        shots: [Shot; N],
+    ) -> Pressed {
         let log = RefCell::new(Vec::new());
         let inputs = RefCell::new(Vec::new());
         let frames = RefCell::new(Vec::new());
         let captured = RefCell::new(Vec::new());
+        let mut answers = VecDeque::from(answers);
         let result = {
             let mut device = FakeDevice {
                 shots: VecDeque::from(shots),
@@ -343,12 +377,16 @@ impl Bench {
                 log.borrow_mut().push("press".to_owned());
                 inputs.borrow_mut().push(record_press_input(plan)?);
                 frames.borrow_mut().push(frame);
-                match answer {
+                match answers
+                    .pop_front()
+                    .expect("an input the test did not script")
+                {
                     Answer::Performed => Ok(receipt("request-s11", ClickEffect::Performed)),
                     Answer::Indeterminate => Ok(receipt("request-s11", ClickEffect::Indeterminate)),
-                    Answer::NotPerformed => Err(LabError::device(
-                        "the fake Runtime did not perform the input",
-                    )),
+                    Answer::NotPerformed => Err(LabError::device(NOT_PERFORMED)),
+                    Answer::FrameUnavailable => {
+                        Err(record_press_frame_unavailable(LabError::device(FRAME_GONE)))
+                    }
                 }
             };
             record_press(&self.lock, request, &mut press, &mut device)
@@ -1030,6 +1068,14 @@ fn s11_two_presses_each_capture_the_frame_they_are_sent_on() {
     assert_eq!(steps[1]["closed"], true, "{recording}");
     assert_eq!(steps[2]["frames"][0]["frame_id"], "f0004", "{recording}");
     assert_eq!(steps[2]["closed"], false, "{recording}");
+    // Fix round 3: each press was sent on a capture that was stored, so neither execution says
+    // otherwise.
+    for execution in [first_execution, second_execution] {
+        assert!(
+            execution.get("sent_on_unstored_capture").is_none(),
+            "{recording}"
+        );
+    }
 }
 
 #[test]
@@ -1107,6 +1153,8 @@ fn s11_a_step_with_marks_is_pressed_on_a_capture_that_is_not_stored() {
     let execution = &steps[0]["click"]["execution"];
     assert_eq!(execution["before_frame"], "f0001", "{recording}");
     assert_eq!(execution["after_frame"], "f0002", "{recording}");
+    // Fix round 3: the recording itself says the press was sent on a capture it did not store.
+    assert_eq!(execution["sent_on_unstored_capture"], true, "{recording}");
     assert_eq!(steps[1]["frames"][0]["frame_id"], "f0002", "{recording}");
     // Two stored frames: screen 0 (step 1) and screen 2 (step 2); none of screen 1.
     assert_eq!(frame_files(&bench).len(), 2, "{recording}");
@@ -1144,5 +1192,136 @@ fn s11_an_observation_without_a_frame_id_is_refused_before_the_press() {
             before,
             "open step {open_step}: a file changed"
         );
+    }
+}
+
+#[test]
+fn s11_a_press_refused_for_its_frame_is_sent_once_more_on_a_new_capture() {
+    // A new recording: the first capture opens step 1, the second supersedes it there.
+    let bench = Bench::new();
+    let pressed = bench.press_script(
+        &tap_request(100, 200),
+        [Answer::FrameUnavailable, Answer::Performed],
+        [Shot::Screen(0), Shot::Screen(1), Shot::Screen(2)],
+    );
+    assert_eq!(
+        pressed.log,
+        [
+            "capture", "press", "capture", "press", "wait 800", "capture"
+        ]
+    );
+    // Each press is handed the reference of the capture just before it.
+    assert_eq!(pressed.frames, [reference(1), reference(2)]);
+    assert_eq!(
+        pressed.inputs,
+        [
+            InputAction::Tap { x: 100, y: 200 },
+            InputAction::Tap { x: 100, y: 200 }
+        ]
+    );
+    let outcome = answered(&pressed);
+    assert_eq!(outcome.click.status, "press_recorded");
+    assert_eq!(outcome.click.step, 1);
+    assert_eq!(outcome.before.frame_id, "f0002");
+    assert!(outcome.before.refreshed);
+    assert!(!outcome.before.sent_on_unstored_capture);
+    assert!(outcome.before.captured_twice);
+    let record = serde_json::to_value(outcome).expect("the record");
+    assert_eq!(record["before"]["captured_twice"], true, "{record}");
+    assert_eq!(
+        outcome
+            .after
+            .as_ref()
+            .map(|after| (after.step, after.frame_id.as_str())),
+        Some((2, "f0003"))
+    );
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 2, "{recording}");
+    let frames = steps[0]["frames"].as_array().expect("step 1's frames");
+    assert_eq!(frames.len(), 2, "{recording}");
+    assert_eq!(frames[0]["frame_id"], "f0001", "{recording}");
+    assert_eq!(frames[0]["superseded"], true, "{recording}");
+    assert_eq!(frames[1]["frame_id"], "f0002", "{recording}");
+    assert_ne!(frames[1]["superseded"], true, "{recording}");
+    let execution = &steps[0]["click"]["execution"];
+    assert_eq!(execution["effect"], "performed", "{recording}");
+    assert_eq!(execution["before_frame"], "f0002", "{recording}");
+    assert_eq!(execution["after_frame"], "f0003", "{recording}");
+    assert!(
+        execution.get("sent_on_unstored_capture").is_none(),
+        "{recording}"
+    );
+    assert_eq!(steps[1]["frames"][0]["frame_id"], "f0003", "{recording}");
+    // Three stored frames: screens 0, 1 and 2.
+    assert_eq!(frame_files(&bench).len(), 3, "{recording}");
+
+    // A step with marks: neither capture is stored; the press is committed on the stored frame.
+    let marked = Bench::new();
+    marked.capture(0);
+    marked.mark(1, "first_square");
+    let pressed = marked.press_script(
+        &tap_request(100, 200),
+        [Answer::FrameUnavailable, Answer::Performed],
+        [Shot::Screen(1), Shot::Screen(1), Shot::Screen(2)],
+    );
+    assert_eq!(
+        pressed.log,
+        [
+            "capture", "press", "capture", "press", "wait 800", "capture"
+        ]
+    );
+    assert_eq!(pressed.frames, [reference(1), reference(2)]);
+    let outcome = answered(&pressed);
+    assert_eq!(outcome.before.frame_id, "f0001");
+    assert!(!outcome.before.refreshed);
+    assert!(outcome.before.sent_on_unstored_capture);
+    assert!(outcome.before.captured_twice);
+    let recording = marked.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 2, "{recording}");
+    let frames = steps[0]["frames"].as_array().expect("step 1's frames");
+    assert_eq!(frames.len(), 1, "{recording}");
+    assert_eq!(frames[0]["frame_id"], "f0001", "{recording}");
+    let execution = &steps[0]["click"]["execution"];
+    assert_eq!(execution["before_frame"], "f0001", "{recording}");
+    assert_eq!(execution["after_frame"], "f0002", "{recording}");
+    assert_eq!(execution["sent_on_unstored_capture"], true, "{recording}");
+    // Two stored frames: screen 0 (step 1) and screen 2 (step 2); none of screen 1.
+    assert_eq!(frame_files(&marked).len(), 2, "{recording}");
+}
+
+#[test]
+fn s11_a_second_refusal_is_answered_as_it_is_and_records_no_press() {
+    for (second, message) in [
+        (Answer::FrameUnavailable, FRAME_GONE),
+        (Answer::NotPerformed, NOT_PERFORMED),
+    ] {
+        let bench = Bench::new();
+        let pressed = bench.press_script(
+            &tap_request(100, 200),
+            [Answer::FrameUnavailable, second],
+            [Shot::Screen(0), Shot::Screen(1)],
+        );
+        // Once: after the second refusal no capture, no press and no wait.
+        assert_eq!(
+            pressed.log,
+            ["capture", "press", "capture", "press"],
+            "{second:?}"
+        );
+        assert_eq!(pressed.frames, [reference(1), reference(2)], "{second:?}");
+        // The second refusal as the command answered it, without the mark.
+        let error = pressed.result.as_ref().expect_err("a second refusal");
+        assert_eq!(error, &LabError::device(message), "{second:?}");
+        let recording = bench.recording();
+        let steps = recording["steps"].as_array().expect("steps");
+        assert_eq!(steps.len(), 1, "{second:?}: {recording}");
+        // No press is recorded, and both captures stay in step 1, the first superseded.
+        assert!(steps[0]["click"].is_null(), "{second:?}: {recording}");
+        assert_eq!(steps[0]["closed"], false, "{second:?}: {recording}");
+        let frames = steps[0]["frames"].as_array().expect("step 1's frames");
+        assert_eq!(frames.len(), 2, "{second:?}: {recording}");
+        assert_eq!(frames[0]["superseded"], true, "{second:?}: {recording}");
+        assert_eq!(frames[1]["frame_id"], "f0002", "{second:?}: {recording}");
     }
 }

@@ -775,6 +775,13 @@ pub struct ClickExecution {
     /// #463 S1-1: on such a press, how the frame after it was taken.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_capture: Option<AfterCaptureRecord>,
+    /// #463 S1-1 fix round 3: on such a press, `true` when it was sent on a frame its command
+    /// captured and did not store (the open step carries marks, made on its stored frame), so
+    /// that `before_frame` names the stored frame and not the frame the press was sent on. Absent
+    /// (false) on every other press, so that every recording without one is byte-identical to
+    /// one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sent_on_unstored_capture: bool,
 }
 
 /// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): how the frame after a
@@ -1797,7 +1804,10 @@ pub struct RecordPressRequest {
 /// frame; `refreshed` when the press's command took it itself. Fix round 2: every such press is
 /// sent on a frame its command captured immediately before it; `sent_on_unstored_capture` when
 /// that capture was not stored (the open step carries marks, made on its stored frame), so that
-/// `frame_id` names the stored frame and not the one the press was sent on.
+/// `frame_id` names the stored frame and not the one the press was sent on. Fix round 3:
+/// `captured_twice` when the Runtime no longer held the frame of the first capture when the press
+/// was sent on it (`input_frame_unavailable`, nothing sent), so the command captured once more and
+/// sent the press again on the second capture, which `frame_id` names when it was stored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BeforeFrame {
     pub frame_id: String,
@@ -1805,14 +1815,15 @@ pub struct BeforeFrame {
     pub sha256: String,
     pub refreshed: bool,
     pub sent_on_unstored_capture: bool,
+    pub captured_twice: bool,
 }
 
 /// #463 S1-1 fix round 2 (`contracts/lab-recording.md`, "Recording while playing"): one frame
 /// taken through the Runtime for a press recorded by the command that makes it: the frame as
 /// `capture --record` hands it to the recording, and the reference of the frame the Runtime
-/// committed for that observation, which an input planned on it names (`do --capture --record`
-/// names its before frame so). An observation without a frame id has none (`None`) and no press
-/// is sent on it.
+/// committed for that observation, which an input planned on it names (fix round 3: built as
+/// `do --capture`'s online scene builds the reference of its frame). An observation without a
+/// frame id has none (`None`) and no press is sent on it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CapturedFrame {
     pub frame: AttachFrameRequest,
