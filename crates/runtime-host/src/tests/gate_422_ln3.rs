@@ -155,6 +155,7 @@ fn ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names
         condition_reruns: None,
         failure_settled: None,
         dispatches: vec![journal_dispatch],
+        break_in: None,
     };
     let admitted_activity = PolicyActivityStateRecord {
         instance_id: intent.instance_id.clone(),

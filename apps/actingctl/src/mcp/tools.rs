@@ -936,7 +936,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Mark a recording step",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json record mark --request-json <request> with one actingcommand.lab-record-mark.v1 request (marks, a click, a select (a choice in a list of fixed slots by the name read in each) or clear_select, samples, a transition or a step action; on a stopped recording also an ending, a screen that ends the business after the last press taken from a frame file, or remove_ending; contracts/lab-recording.md). actinglab self-tests every mark on the step's or the ending's frames; dry_run only checks. It changes the recording's files only: no Runtime connection, no client.action.",
+            "Runs actinglab --json record mark --request-json <request> with one actingcommand.lab-record-mark.v1 request (marks, a click, a select (a choice in a list of fixed slots by the name read in each) or clear_select, samples, a transition or a step action; on a stopped recording also an ending, a screen that ends the business after the last press taken from a frame file, or remove_ending, and optional_after, a pop-up after which the path goes on inserted as an optional step after a step's press from a frame file, or remove_inserted; contracts/lab-recording.md). The request is handed to actinglab unchanged. actinglab self-tests every mark on the step's or the ending's frames; dry_run only checks. It changes the recording's files only: no Runtime connection, no client.action.",
             lab_errors!(),
             lab_job!()
         ),

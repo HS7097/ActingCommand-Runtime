@@ -135,6 +135,11 @@ mod gate_464_p1;
 #[cfg(test)]
 mod gate_463_v1;
 
+// Workflow #463 S3-6 (register §1.413): the readiness names a hold's reason and lists each pack's
+// own warnings.
+#[cfg(test)]
+mod gate_463_s36;
+
 // Workflow #463 S3-10 (register §1.417): the plan of a trial, its refusals, and the trial record's
 // writer and reader.
 #[cfg(test)]
@@ -164,10 +169,10 @@ mod standard_pack_ready;
 mod standard_pack_trial;
 
 pub use adopt::{
-    AdoptClass, AdoptCoverage, AdoptSource, AdoptWorktree, DerivedDrift, DerivedFrom,
-    DerivedMember, GivenMember, NotJudgedBecause, PACK_DECISION_SCHEMA, RecordingReview,
-    RootEntryChange, StandardPackAdoptRequest, StandardPackAdoptResponse, ValueNotJudged,
-    ValueWait, standard_pack_adopt,
+    AdoptClass, AdoptCoverage, AdoptDecision, AdoptSource, AdoptWorktree, DerivedDrift,
+    DerivedFrom, DerivedMember, GivenMember, NotJudgedBecause, PACK_DECISION_SCHEMA,
+    RecordingReview, RootEntryChange, StandardPackAdoptRequest, StandardPackAdoptResponse,
+    ValueNotJudged, ValueWait, standard_pack_adopt,
 };
 pub use api::*;
 pub use authoring::*;
@@ -203,8 +208,8 @@ pub use resource_restore::*;
 pub use standard_pack_check::check_standard_pack_root;
 pub use standard_pack_ready::{
     InstallationRead, ItemState, PackReadiness, ReadinessAnswer, ReadinessBasis, ReadinessBinding,
-    ReadinessInstallation, ReadinessModel, ReadinessSuspension, StandardPackReadiness,
-    StandardPackReadyRequest, judge_standard_pack_readiness,
+    ReadinessHold, ReadinessInstallation, ReadinessModel, ReadinessSuspension,
+    StandardPackReadiness, StandardPackReadyRequest, judge_standard_pack_readiness,
 };
 pub use standard_pack_schedule::{
     StandardPackComposeRequest, StandardPackComposeResponse, compose_standard_packs,

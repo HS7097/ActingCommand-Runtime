@@ -262,6 +262,12 @@ and absent when there are none; a `QueryRuns` row's status carries it as the
 run status read does ([runtime-state-observation.md](runtime-state-observation.md),
 "Contained-run queries"). `QueryRuns` is still carried by no operation, so no
 interface revision moves.
+Workflow #463 S3-3 (since 0.12.63): the fold's terminal also keeps `outcome_key`,
+the key of the mapping the host keyed the run by, taken from the same terminal
+fact's `scheduling_disposition` and absent when that fact carries none; a
+`QueryRuns` row's status carries it as the run status read does
+([runtime-state-observation.md](runtime-state-observation.md), "Contained-run
+queries"). No interface revision moves.
 
 A Runtime reader-pool thread also keeps, from one of its pages to the next, the
 Lab relations through a page's snapshot, for the last 4 snapshots it read at

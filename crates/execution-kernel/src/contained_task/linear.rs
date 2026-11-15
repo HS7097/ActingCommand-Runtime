@@ -33,7 +33,11 @@
 //! decision: it observes for the step timeout, never inputs and never hands a frame to the shared
 //! interrupt pages. Only a screen that stayed one the package never recorded for the whole
 //! decision changes the end, to `contained_task_linear_unrecorded_screen` with the same detail
-//! and timing; every other end, an error of the decision included, is the one it had.
+//! and timing; every other end, an error of the decision included, is the one it had. Workflow
+//! #463 U1b: the runtime tells the run at its start which code that verdict ends with
+//! ([`super::UnrecordedScreenEnd`]); past its package's break-in a scheduled run ends with
+//! `page_confirmation_failed` as that end gives it, with the word `unrecorded_screen` (Workflow
+//! #469 K1, below). The decision is made and judged the same way.
 //!
 //! Workflow #463 K1 (`contracts/linear-steps.md`, "Select steps"): an operation's effect may be a
 //! select step. Its attempt is the page graph's ([`PreparedContainedTask::select_attempt`]): it
@@ -67,9 +71,9 @@ use super::{
     ExtraRounds, InputRecheck, MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS,
     MAX_TASK_TIMEOUT_MS, PaceClock, PageCandidates, PageObservation, PostAdmissionOcrCollector,
     PreparedContainedTask, RecheckedInput, SampleRetries, StepPacing, TaskControl, TaskOperation,
-    TaskProgram, budget_elapsed_since, budget_now, budget_observation_now, invariant_broken,
-    is_geometry_change, pace_pause, paced_step, resolve_page_reference, runtime_touch_choice,
-    sample_budget_invalid, selection, step_point_draw,
+    TaskProgram, UnrecordedScreenEnd, budget_elapsed_since, budget_now, budget_observation_now,
+    invariant_broken, is_geometry_change, pace_pause, paced_step, resolve_page_reference,
+    runtime_touch_choice, sample_budget_invalid, selection, step_point_draw,
 };
 use crate::codes::{ConfirmationProblem, ExecutionKernelCode, ExecutionKernelLocation};
 use crate::{InputFrameContext, RunOperationPolicy};
@@ -521,6 +525,10 @@ pub(super) struct LinearRun {
     /// [`ContainedTaskRuntime::host_started_run`]); only such a run ends on a screen its package
     /// never recorded with `contained_task_linear_unrecorded_screen`.
     pub(super) own_task_run: bool,
+    /// Workflow #463 U1b: the code a closing decision that found a screen the package never
+    /// recorded ends the run with, as the runtime told it at the run's start
+    /// ([`ContainedTaskRuntime::unrecorded_screen_end`]).
+    pub(super) unrecorded_end: UnrecordedScreenEnd,
     /// Workflow #463 U1 (R25-1, `contracts/policy-suspension.md`, "Which failures accumulate"):
     /// the run made a `launch` or `restart` effect and no step after it arrived on the main
     /// interface yet; false at the run's start.
@@ -678,7 +686,8 @@ fn page_confirmation_failed(
 /// and the timing are those `page_confirmation_failed` gives the same end; the values name the
 /// operation, the pages and the attempts, and the host adds the frame of the run's `Failure` pin
 /// (`artifact_id`). Workflow #469 K1: the values also carry `confirmation_problem`
-/// `unrecorded_screen`, always.
+/// `unrecorded_screen`, always. Workflow #463 U1b: the failure carries the verdict
+/// ([`ContainedTaskError::closing_found_unrecorded`]).
 fn unrecorded_screen(
     operation: &TaskOperation,
     step: &LinearStep,
@@ -699,6 +708,7 @@ fn unrecorded_screen(
     )
     .with_values(values)
     .with_timing(postcondition_timing(elapsed, limit))
+    .with_closing_unrecorded()
 }
 
 /// Workflow #469 K1 (`contracts/linear-steps.md`, "What the program saw"): the end of a step whose
@@ -708,26 +718,35 @@ fn unrecorded_screen(
 /// other verdict, and a decision not made, with `page_confirmation_failed`, the loading values
 /// added when the wait ended on its allowance (`loading_limit`). Both carry the word in their
 /// values; the detail and the timing are the ones that end had (`elapsed` of `limit`).
+///
+/// Workflow #463 U1b (`contracts/linear-steps.md`, "A screen the package never recorded"): the
+/// dedicated code needs the runtime's answer at the run's start (`end`) to be
+/// [`UnrecordedScreenEnd::Dedicated`]; with [`UnrecordedScreenEnd::PageConfirmation`] (a scheduled
+/// run past its package's break-in) the same verdict ends the run with `page_confirmation_failed`,
+/// its word `unrecorded_screen` as every other verdict's word is. Either failure of that verdict
+/// carries it ([`ContainedTaskError::closing_found_unrecorded`]), which names the frame.
 fn closing_end(
     operation: &TaskOperation,
     step: &LinearStep,
     (attempt, intermediate_seen): (u32, bool),
-    awaited: &str,
+    (awaited, end): (&str, UnrecordedScreenEnd),
     closing: LinearClosing<'_>,
     (elapsed, limit): (Duration, Duration),
     loading_limit: Option<LoadingLimit>,
 ) -> ContainedTaskError {
-    match closing.problem {
-        ConfirmationProblem::UnrecordedScreen => unrecorded_screen(
-            operation,
-            step,
-            (attempt, intermediate_seen),
-            awaited,
-            &closing.pages,
-            elapsed,
-            limit,
-        ),
-        problem => {
+    match (closing.problem, end) {
+        (ConfirmationProblem::UnrecordedScreen, UnrecordedScreenEnd::Dedicated) => {
+            unrecorded_screen(
+                operation,
+                step,
+                (attempt, intermediate_seen),
+                awaited,
+                &closing.pages,
+                elapsed,
+                limit,
+            )
+        }
+        (problem, _) => {
             let failed = page_confirmation_failed(
                 operation,
                 step,
@@ -738,7 +757,12 @@ fn closing_end(
                 limit,
             );
             let values = failed.outcome().confirmation_problem(problem);
-            failed.with_values(values).with_loading_limit(loading_limit)
+            let ended = failed.with_values(values).with_loading_limit(loading_limit);
+            if problem == ConfirmationProblem::UnrecordedScreen {
+                ended.with_closing_unrecorded()
+            } else {
+                ended
+            }
         }
     }
 }
@@ -1753,7 +1777,7 @@ impl PreparedContainedTask {
                         operation,
                         step,
                         (attempt, kind == LinearMissKind::AfterIntermediate),
-                        &awaited,
+                        (awaited.as_str(), run.unrecorded_end),
                         closing,
                         (miss.elapsed, miss.limit),
                         loading_limit,
@@ -1863,7 +1887,7 @@ impl PreparedContainedTask {
                                 operation,
                                 step,
                                 (attempt, intermediate_seen),
-                                &awaited,
+                                (awaited.as_str(), run.unrecorded_end),
                                 closing,
                                 (miss.elapsed, miss.limit),
                                 miss.loading_limit,
@@ -1934,7 +1958,7 @@ impl PreparedContainedTask {
                         operation,
                         step,
                         (attempt, false),
-                        &candidates.awaited(false),
+                        (candidates.awaited(false).as_str(), run.unrecorded_end),
                         closing,
                         (elapsed, run.step_timeout),
                         loading_limit,

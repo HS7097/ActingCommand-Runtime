@@ -181,6 +181,8 @@ outcome_keys! {
     // passes on.
     ending_problem: vocab(ending_problem),
     against: vocab(ending_against),
+    // #463 R4: why an optional step a stopped recording inserts after one of its steps cannot hold.
+    optional_after_problem: vocab(optional_after_problem),
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),
@@ -867,6 +869,9 @@ outcome_keys! {
     guard_problem: vocab(guard_problem),
     availability_source: vocab(availability_source),
     pause_cause: vocab(pause_cause),
+    // ---- Workflow #463 U1b fix round 3 (register §1.389): what of a scheduled run's break-in
+    // could not be established (`policy_break_in_unread`); kept in codes mode. ----
+    break_in_problem: vocab(break_in_problem),
     // ---- Workflow #463 S3-10 (`actinglab standard-pack trial`, contracts/standard-pack-trial.md):
     // where a state directory refused for trial records lies, and (fix round 2) why a file of a
     // trial record's name is not read as that record; kept in codes mode. ----
