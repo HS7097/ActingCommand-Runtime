@@ -194,6 +194,10 @@ mod gate_467_rpt1;
 // its reference without its reason, before anything is read.
 #[path = "gate_463_s34.rs"]
 mod gate_463_s34;
+// #463 S3-7: `standard-pack build` answers the readiness of the installed root it kept and the
+// command line of the placement's plan; `build.json` does not change.
+#[path = "gate_463_s37.rs"]
+mod gate_463_s37;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
