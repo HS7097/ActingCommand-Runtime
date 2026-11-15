@@ -323,7 +323,18 @@ its provenance listing come from the same judgement as the Runtime's.
   check builds the table with those games unjudged, so every variable of their instances reads its
   default with `root_unchecked`, the record says so and `goal_value_not_applied` is written once,
   as for any value not applied. The first composition of every game that succeeds judges them
-  again.
+  again. What the workbench notes is what the code does (`note_uncomposed`): a check adds to the
+  note the games whose root failed and, when the composition is refused, every game in use whose
+  files the generation in force does not hold as they are now; the next check does not clear the
+  note by itself, only a check whose composition of every game succeeds. Two states follow from it,
+  which the coordinator confirms as they are:
+  - *A sound root, judged, in a game whose generation in force does not hold its present files*
+    (another game's root is broken, or the whole composition was refused, as for its size): the
+    values set on its applications read their defaults, the record says `root_unchecked`, and
+    `goal_value_not_applied` is written once per value; they apply again when a composition
+    succeeds.
+  - *A game whose `schedule.json` is refused and that falls back to its earlier fragment* counts as
+    composed: it is not noted, and the values set on its applications apply.
 - **Without a composed standard pack** (a configured catalog), as V2 built it: once per remedy
   table, over the packages the table reads, grouped by the game of the instances each catalog task
   covers: each package once in catalog order, no `goals.json` (so `goal_name_conflict` and
@@ -345,7 +356,7 @@ Each name the check reports takes the word of its problem (one word, one cause):
 | `variable_out_of_limits` | `name_out_of_limits` |
 | `variable_cap_range` | `cap_range` |
 | (fix round 1) the root's `goals.json` could not be read | `goals_unreadable` |
-| no check judges the instance's game now: with a composed standard pack (fix round 2), its root failed its check or its composition was refused or not activated; without one, the table was built before an instance of it was known | `root_unchecked` |
+| no check judges the instance's game now: with a composed standard pack (fix round 2), the workbench notes the game uncomposed (its root failed a check, or a composition was refused while the generation in force did not hold the game with its present files), until a check whose composition of every game succeeds; without one, the table was built before an instance of it was known | `root_unchecked` |
 
 **A dispatched package whose variables cannot be read** (fix round 2). With a composed standard
 pack, a dispatch whose package the workbench could not read (a declaration file's metadata, the

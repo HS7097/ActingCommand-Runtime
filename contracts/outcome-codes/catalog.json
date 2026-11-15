@@ -9716,7 +9716,7 @@
           "description": "A package reads the variable as a designated effect's cap and it is no integer from 0 to 1000 (the root check's variable_cap_range)."
         },
         "root_unchecked": {
-          "description": "No root check judges the variable for the application's game now: with a composed standard pack (fix round 2), the game's root failed its check, or its composition was refused or not activated, at the scheduler workbench's last check, so nothing says whether the variable applies; without one, the Runtime's table of the bound packages was built before an instance of that game was known."
+          "description": "No root check judges the variable for the application's game now, so nothing says whether the variable applies. With a composed standard pack (fix round 2) the scheduler workbench has noted the game uncomposed: at a check its root failed its check, or the composition was refused (for this root, for another game's root, or as a whole, as for its size) while the generation in force did not hold the game with its present files, so a sound root that was judged reads root_unchecked too while another game's root keeps the composition from succeeding. A later check does not lift the note by itself: it is lifted only by a check whose composition of every game succeeds and is activated. Without one, the Runtime's table of the bound packages was built before an instance of that game was known."
         }
       }
     },

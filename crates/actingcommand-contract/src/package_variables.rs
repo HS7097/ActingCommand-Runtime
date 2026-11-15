@@ -146,9 +146,13 @@ crate::outcome_vocabulary! {
         /// A package reads the variable as a designated effect's cap and it is no `integer` from
         /// 0 to 1000 (`variable_cap_range`).
         CapRange => "cap_range",
-        /// No root check judged the variable for the application's game: without a composed
-        /// standard pack, the Runtime's table was built before an instance of that game was
-        /// known.
+        /// No root check judges the variable for the application's game now. With a composed
+        /// standard pack (Workflow #463 V2 fix round 2) the scheduler workbench has noted the game
+        /// uncomposed: at a check its root failed, or the composition was refused (for this root,
+        /// another game's, or as a whole) while the generation in force did not hold the game
+        /// with its present files; only a check whose composition of every game succeeds lifts
+        /// the note. Without one, the Runtime's table was built before an instance of that game
+        /// was known.
         RootUnchecked => "root_unchecked",
     }
 }

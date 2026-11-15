@@ -37,12 +37,16 @@
 //! `goal_version_retired` at `/schema_version` and read no further, and a version this build does
 //! not know yet stays `malformed` there.
 //!
-//! The file stores no value: a value is the installation's, set by a person or an agent in a later
-//! slice. The Runtime interprets no text here: titles, help texts, unit texts, option titles and
-//! locales are opaque, measured in bytes only, and ids and option values are compared for equality
-//! only. No Runtime reader opens the file in this slice (its root reader, its startup and run
-//! preparation, the policy crate and check-config); `actinglab standard-pack check` reports a
-//! refused file without failing the root, and `package bundle --goals` refuses one.
+//! The file stores no value: a value is the installation's, set by a person or an agent (Workflow
+//! #463 V3, `EditGoal`). The Runtime interprets no text here: titles, help texts, unit texts,
+//! option titles and locales are opaque, measured in bytes only, and ids and option values are
+//! compared for equality only. Its root reader, its startup and run preparation and the policy
+//! crate open no `goals.json`; since Workflow #463 V2 fix round 1 (Runtime 0.12.61) the scheduler
+//! workbench opens it with this reader, where it reads every package's declaration
+//! (`read_declarations`), for the variables' judgement alone, and so do the offline readers that
+//! read a root as the workbench does, check-config and `actingd suspended`. `actinglab
+//! standard-pack check` reports a refused file without failing the root, and `package bundle
+//! --goals` refuses one.
 
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
 use crate::standard_pack_ui::{

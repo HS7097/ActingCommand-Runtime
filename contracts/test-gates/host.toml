@@ -4053,3 +4053,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_v3::v3_fix1_a_variable_the_root_keeps_from_applying_is_listed_with_its_cause_and_refused",
 ]
 incident = ["#463 V3"]
+
+# Workflow #463 V2, completed in #1731 (0.12.61; register §1.382, "Completed in #1731"; brief rd-1115/brief-1731-fix1.md, items 10 to 12, from #1728's review), the host's half, in composer mode on a manual clock and a fake device: a package of sixteen ordered variables of 64-byte names each set to a 1024-byte value and 64 parameters of 64-byte names and options: the dispatch's policy_dispatch_parameters passes an outcome record's bound, the run reads every value whole, and the ledger's intent and admission records hold it in its recorded form (the first value's sha256, value_bytes 1024 and value_json_left_out in place of its text, every other value's text, the run parameters, within the bound) (1); standard_pack_goals_not_applied for a goals.json the reader refuses (refused, the game, caused by standard_pack_root_invalid goal_version_retired), not again for the same content read again, once more for another refused content, and for one that cannot be read (a directory in its place: unreadable, with its cause, once over two reads) (2); goal_value_package_unreadable once more when the state of the unreadable package's files changes (3); after a restart whose every check fails to read the game root, the restored generation's dispatch carries no policy_dispatch_parameters and one goal_value_package_unreadable names the instance, the task and the package (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix3_a_reason_past_the_record_bound_is_whole_for_the_run_and_shortened_in_the_ledger",
+    "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix3_a_goals_json_not_applied_is_recorded_once_per_content_with_its_cause",
+    "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix3_a_package_whose_files_change_state_is_warned_once_more",
+    "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix3_a_dispatched_package_of_a_root_not_read_since_the_start_is_warned",
+]
+incident = ["#463 V2"]

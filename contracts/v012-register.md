@@ -26845,6 +26845,30 @@ Fix round 2 tests: the policy crate's
 the host's `v2_fix1_the_whole_root_keeps_a_variable_from_applying` (above). No golden; no test
 leaves the gate map.
 
+**Completed in #1731** (the review of fix round 2 found `0eb82c5a` mergeable with no must-change
+and left five things, tests and texts, which go in with V3, the two pull requests merging
+together; coordinator brief `rd-1115/brief-1731-fix1.md`, items 10 to 14). No code of V2 changes.
+
+- *Tests* (the host's `gate_463_v2`): `v2_fix3_a_reason_past_the_record_bound_is_whole_for_the_run_and_shortened_in_the_ledger`
+  (a dispatch whose reason passes the bound: sixteen 1024-byte values and 64 run parameters; the
+  run's values whole; the intent's and the admission's records in the recorded form, so neither
+  builder of a dispatch's event data can go back to the reasons as they are without a test
+  failing); `v2_fix3_a_goals_json_not_applied_is_recorded_once_per_content_with_its_cause`
+  (`standard_pack_goals_not_applied` for each `goals_failure` with its cause, once per content);
+  `v2_fix3_a_package_whose_files_change_state_is_warned_once_more` and
+  `v2_fix3_a_dispatched_package_of_a_root_not_read_since_the_start_is_warned`
+  (`goal_value_package_unreadable`'s two cases the fix round's test left out).
+- *Texts*: the contract crate's `standard_pack_goals.rs` says the workbench, check-config and
+  `actingd suspended` open `goals.json` (through `read_declarations`); the texts of `root_unchecked`
+  (the catalog's word, `goal_value_not_applied`'s description, the contract's `VariableProblem`,
+  package-variables.md's table) say what `note_uncomposed` does: a check adds to the note, and only
+  a check whose composition of every game succeeds lifts it, so a sound root that was judged reads
+  `root_unchecked` too while the generation in force does not hold its present files.
+- *Two states the coordinator confirms as they are*, written into package-variables.md: such a
+  sound root's set values read their defaults with `root_unchecked` and the warning once, and apply
+  again when a composition succeeds; a game whose `schedule.json` is refused and that falls back to
+  its earlier fragment counts as composed, its set values applying.
+
 ### 1.383 Slice V3 (0.12.61): an application's goals are read and set by name; `runtime-client` revision 9 (Workflow #463 V3, which is Workflow #455 G-R2b with the variables in it; the owner asked that a person in the console and an agent through the Lab set an application's goals, board #455, and that a variable's number may come from a person or an agent, board #463; the designs `rd-1114/455-goals-design-final.md` §3.5, §3.6, §3.9 and the row G-R2b of §4 and §5, and `rd-1114/463-l4-design.md` section D, section E's table, the row V3 of section G and "The coordinator's rulings on I"; the coordinator's rulings in the work order and its two messages during the slice (the join of the parsed `goals.json` and of "does this variable apply" is #1728's fix round's; a declaration's `default_origin` is shown as declared), not the owner's words; coordinator work order `rd-1115/brief-463-v3-goals-view-edit.md`, on the head `29a0cbe4` of #1728, then #1728's fix round `020a5681` merged)
 
 **Interface** ([runtime-interface.md](runtime-interface.md), "Goal request kinds";
