@@ -25467,7 +25467,7 @@ nothing is deleted.
   selection-policy document or navigation projection; the root's `interrupts.json`, `notices/`,
   `goals.json`), the member that holds it, the value it must hold and its condition: 43 member rows
   and 4 file rows (`apps/actinglab/src/resource_verify/revision.rs`; 45 and 4 since revisions 13
-  and 14, below). The conditional ones:
+  and 14, below; 45 and 5 since revision 15, §1.385). The conditional ones:
   `post_admission_ocr` of a task of schema `0.9` only; an `input_recheck` of any kind only in a pack
   whose `control.json` names `linear_steps` (resource-declarations.md: "until then it, and an input
   recheck under `linear_steps`, are admitted by code"); `dictionary` only in a value whose `type` is
@@ -25541,8 +25541,8 @@ and an earlier Runtime would refuse its package at every run. Three rows now
   `package bundle --goals` refuses it, so the build fails at its `bundle` step), not by the
   revision. No content needs 12 any more.
 
-The table has 45 member rows and 4 file rows. Tests (gate map `apps.toml`, "#464 P2 revisions 13
-and 14"): `p2_revision_13_select_step_of_a_linear_steps_pack_only` (over entries needing 11, a
+The table has 45 member rows and 4 file rows (45 and 5 since revision 15, §1.385). Tests (gate map
+`apps.toml`, "#464 P2 revisions 13 and 14"): `p2_revision_13_select_step_of_a_linear_steps_pack_only` (over entries needing 11, a
 `linear_steps` select step 13; the same select step in a `navigable_route` pack, and a
 `linear_steps` click step, 11); `p2_revision_14_variables_of_control` (over entries needing 13, a
 control with `variables` 14, without it 13); `p2_revision_14_goals_json` (renamed from
@@ -25553,7 +25553,7 @@ V1 fix round 3 changes what it pinned: `p2_notices_give_package_10_and_goals_giv
 `p2_notices_give_package_10_and_goals_give_14`, whose `goals.json` is version 2 (`package bundle
 --goals` refuses version 1) and whose zip and `build.json` declare [14, 14]. The rows' helper
 `assert_row` takes its base from `assert_row_over`, whose base may lie more than one below the row
-(no content needs 12). The file holds 59 tests; neither renamed test was on main, so no
+(no content needs 12). The file holds 59 tests (64 since revision 15, §1.385); neither renamed test was on main, so no
 `[[retired]]` entry is needed. The merge kept both sides in section order: this section between
 §1.374 and §1.378, the gate map's rows of #464 P2 before #463 V1's, and in `bundle.rs` the build's
 `goals.json` with main's note that its packer declares 14.
@@ -25574,7 +25574,7 @@ slices 9. With #467 RPT-1 too, in the train 0.12.61c: 104 commands, 46 arms (its
 `engine::COMMANDS` 66; the built slices 10.
 
 **Tests.** `apps/actinglab/src/tests/gate_464_p2.rs` (gate map `apps.toml`, "#464 P2", "#464 P2
-fix round 1", "#464 P2 fix round 2" and "#464 P2 revisions 13 and 14"; 59 tests), on a neutral fixture repository made with git (RV-1's
+fix round 1", "#464 P2 fix round 2" and "#464 P2 revisions 13 and 14"; 59 tests, 64 with "#464 P2b revision 15", §1.385), on a neutral fixture repository made with git (RV-1's
 files): `resource verify` of a commit reports what RV-1 pins and `standard-pack build` of it
 writes that zip byte for byte and the same `SHA256SUMS`; `notices/` gives 10 and `goals.json` 12 (14 since revisions 13 and 14, above) (and `resource verify` of that commit
 still leaves `goals.json` out and declares 10); a tracked change and an untracked file are refused
@@ -25584,7 +25584,7 @@ repository `resource_build_output_invalid`; `build.json` matches the zip and has
 Fix round 1: a commit's `tables/` is carried, listed and needs no revision, and a refused table
 fails the build with the reader's refusal; a commit's `ui.json` is carried and listed, and a
 refused one fails the build with `standard_pack_root_invalid`; one test per row of the revision
-table (47; 49 since revisions 13 and 14, above), each over entries one revision below the row: with the row's member, file or value the
+table (47; 49 since revisions 13 and 14, above; and four of row 15 since §1.385), each over entries one revision below the row: with the row's member, file or value the
 row's revision, without it one lower. `gate_434_lab5g2a::mcp_tools_from_op_table`'s reader of
 `BUILT_SLICES` is adapted (it finds the list wherever rustfmt breaks the line). Fix round 2: three
 more of revision 7, each over entries needing 6 and differing only in what the row detects (a
@@ -26418,9 +26418,10 @@ rows 13 and 14, [package-variables.md](package-variables.md) and
 declared). A pack without an ending page keeps its revision; a bundle whose packs declare one
 declares [15, 15], which the `package` edge of an earlier installer refuses in the plan, before the
 hold and any write. **Nobody checks the 15**: it is written by the resource repository's packaging
-(the bundle's `interfaces.json`; `record stop` generates no ending yet, and the Lab's
-`standard-pack build`, §1.376, does not compute it: its revision table has no row for 15 yet),
-and `place` holds a bundle's maximum to its own range and asks 10 only of a bundle with the
+(the bundle's `interfaces.json`; `record stop` generates no ending yet) and, since §1.385
+(Workflow #464 P2b), computed by the Lab's `standard-pack build`, §1.376, for a bundle it builds,
+whose revision table counts an ending page as 15; nothing checks it when a bundle is placed or a
+package is admitted: `place` holds a bundle's maximum to its own range and asks 10 only of a bundle with the
 notices directory and 14 only of one with `goals.json` or one whose packs declare `variables`
 (`crates/lab-rescue/src/install/place.rs`, `check_notices`, `check_goals_declared`,
 `check_variables_declared`), never 15 of an ending, and the Runtime does not check a package's declared range at admission. So an earlier installer places a
@@ -27024,6 +27025,88 @@ check and the first evaluation; a caller asks again. Fix round 2: a page answeri
 
 **Rollback below 0.12.61.** A build before 0.12.61 cannot decode either kind and drops the
 connection; the record an edit writes is a v3 record G-R2a's builds read.
+
+### 1.385 Slice #464 P2b (0.12.61): `standard-pack build` computes `package` 15, a `linear_steps` package's ending page (Workflow #464; the `package` row 15 of Workflow #463 K2, §1.380; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-464-p2b-revision-15.md`, read on main `d0bce861` (the train 0.12.61c, which merged K2))
+
+The coordinator gave this slice 1.385: main `d0bce861` holds the sections up to §1.381; 1.382 and
+1.383 belong to open pull requests, 1.384 to a slice dispatched with this one. The slice ships in
+0.12.61.
+
+**Why.** `standard-pack build` (§1.376) declares the `package` revision its zip's content needs,
+from its revision table (`apps/actinglab/src/resource_verify/revision.rs`;
+[resource-verify.md](resource-verify.md), "The `package` revision"). The table stopped at 14. K2
+(§1.380) brought 15: a `linear_steps` task that maps an ending page, which every Runtime before K2
+refuses at admission (`contained_task_linear_invalid`, `reason=terminal_page`). A bundle built from
+such content declared less than 15, so an installer of [3, 14] placed it and every run of that
+package was refused.
+
+**The row.** A function beside the member rows, as revision 7's layout row is one:
+`declares_linear_ending` reads a pack's `control.json` and its entry task file together, the same
+members, one by one, that the kernel's own test of an admitted package,
+`PreparedContainedTask::declares_linear_endings` (`crates/execution-kernel/src/contained_task/linear.rs`),
+reads; that reader is private to the kernel crate, which actinglab does not depend on.
+
+| The kernel | The row |
+|---|---|
+| `self.control.execution_mode` is `linear_steps` | the pack's `control.json` `execution_mode` is `linear_steps` |
+| `self.program`, the package's program | the task file of the control's `entry_task_id`, `resources/operations/<entry_task_id>/task.json`, the task pack-containment's source assembly takes (`source_pack::compile`, `canonical_task`) |
+| `self.scheduling_outcome`, `mappings()`, `terminal_pages()` | every page of every `terminal_pages` under `mappings` of the task's `scheduling_outcome` (absent or `null`: none) |
+| `self.terminal_page_anchors()` | the task's `target_page`, one page or a set |
+| `operation.on_empty_key().is_some()`, `operation.from` | the `from` of every element of the task's `operations` whose `select` holds an `on_empty` (absent or `null`: none) |
+| `canonical_page_anchor(&self.control.game, page)` | each page with the prefix `<game>/` taken off where it is written, `game` the control's `game` |
+
+A terminal page so compared that is none of the target pages and none of the `on_empty` pages needs
+15. A control without `game` or `entry_task_id`, and an entry task file that is absent or does not
+read, need nothing here: the kernel admits no such package.
+
+**Where the work order's condition and the kernel differ** (the kernel's is followed). The
+condition read "a task file of the pack"; the kernel reads the package's program only, the entry
+task's file, so the row does: an ending in another task file of the pack needs nothing (row 13,
+which this slice does not change, reads every task file of the pack). The condition's "the task's
+`target_page`" is every page of `target_page` in the kernel, which a task may write as one page or
+as a set (a `linear_steps` task admits one page, written either way). Otherwise they agree: both
+compare pages with the game prefix taken off, and both count a terminal page on the path too, which
+every build refuses at admission (`reason=terminal_page`), so it raises the revision of a package
+nothing admits.
+
+**Texts.** The sentences that said the build's table has no row for 15 now say that the 15 is
+written by the resource repository's packaging or computed by `standard-pack build` for a bundle it
+builds, and that nothing checks it when a bundle is placed or a package is admitted:
+resource-verify.md, "The `package` revision" (with the table's row 15 and a paragraph on it);
+[linear-steps.md](linear-steps.md), "Older builds" (the sentence stood there, not in "Endings");
+[component-interfaces.md](component-interfaces.md), the `package` row 15; §1.380, "Interface:
+`package` 15". The module comment of `revision.rs` names row 15, so its sentence that the table
+holds what every `package` row names holds again.
+
+**Counts.** The table has 45 member rows and 5 file rows (the fifth is row 15; §1.376 notes it);
+resource-verify.md's table has its row 15. `gate_464_p2.rs` holds 64 tests (59 before).
+
+**Tests** (`apps/actinglab/src/tests/gate_464_p2.rs`, gate map `apps.toml`, "#464 P2b revision
+15"; five new), over entries that need 14 (a control's `variables` in another pack: the helper
+`base` gains a case for 14, which no existing test asks for):
+`p2_revision_15_ending_page_of_a_linear_steps_task` (the entry task's one mapping on a page no
+operation leaves or reaches 15, on the target page 14; the same ending in a task file that is not
+the entry task 14); `p2_revision_15_an_on_empty_page_is_no_ending` (a select step that declares
+`on_empty`, the target page and its page mapped, 14; a third mapping on an ending page 15);
+`p2_revision_15_pages_compared_without_the_game_prefix` (`neutral/ending` 15, `neutral/target` 14;
+the target page written with the prefix, the `on_empty` page mapped with it and the select step's
+`from` written with it 14); `p2_revision_15_ending_of_a_linear_steps_pack_only` (the same ending in a
+`navigable_route` pack 14); `p2_a_select_step_variables_and_an_ending_declare_15` (a bundle's
+entries, `bundle.json`, `applications.json` and one pack, whose `linear_steps` pack declares
+variables and whose entry task has a select step and an ending page 15; without the ending 14). No
+existing test changes, no golden changes, no test leaves the gate map.
+
+**What is not changed.** Rows 4 to 14 and their tests; the steps `resource verify` shares, and its
+fixed number; `place` and `standard-pack ready`'s item I2 (they ask of a bundle what `place` asks,
+and `place` asks nothing for 15); the kernel. No code, key, word, interface revision or record
+shape is added or changed; the outcome code index does not change.
+
+**At deploy.** Nothing changes for an installation: the operation is offline and the Runtime does
+not run it. A bundle that `standard-pack build` builds from a commit whose `linear_steps` packs
+declare an ending page declares [15, 15], which an installer of [3, 14] refuses through its
+`package` edge, in the plan; a commit without one builds the zip it built before.
+
+**Rollback** (below 0.12.61). Nothing is persisted; an earlier Tools has no `standard-pack build`.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

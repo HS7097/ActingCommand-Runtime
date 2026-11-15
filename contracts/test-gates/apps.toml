@@ -2246,6 +2246,18 @@ tests = [
 ]
 incident = ["#464 P2"]
 
+# Workflow #464 P2b revision 15 (0.12.61; register §1.385; brief rd-1115/brief-464-p2b-revision-15.md; contracts/resource-verify.md, "The package revision"; contracts/component-interfaces.md, the package row 15; contracts/linear-steps.md, "Endings"): the revision table learns the row the train 0.12.61c brought, a linear_steps package's ending page, read as the kernel's declares_linear_endings reads the admitted package; over zip entries that need 14 (a control's variables in another pack), the entry task of a pack whose control.json execution_mode is linear_steps whose one mapping names a page that is none of its target pages and none of its on_empty pages needs 15 and the same mapping on the target page 14, and the same ending in a task file that is not the control's entry_task_id stays 14; a task with a select step that declares on_empty, the target page and the select step's page mapped, stays 14 and with a third mapping on an ending page needs 15; pages are compared with the prefix <game>/ taken off (an ending written neutral/ending 15; a mapping on neutral/target for the target page target, the target page written neutral/target, the on_empty page with the prefix in the mapping or in the select step's from 14); the same ending in a navigable_route pack stays 14; the entries of a bundle whose linear_steps pack declares variables and whose entry task has a select step and an ending page need 15, without the ending 14
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_15_ending_page_of_a_linear_steps_task",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_15_an_on_empty_page_is_no_ending",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_15_pages_compared_without_the_game_prefix",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_15_ending_of_a_linear_steps_pack_only",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_a_select_step_variables_and_an_ending_declare_15",
+]
+incident = ["#464 P2", "#463 K2"]
+
 # Workflow #463 V1 (0.12.61; register §1.378; brief rd-1114/brief-463-v1-package-variables.md; contracts/component-interfaces.md, the package rows 13 and 14): this build's declaration reads package [3, 14], up to the contract crate's VARIABLES_PACKAGE_REVISION (Workflow #463 K2, register §1.380: [3, 15] since, the same release, VARIABLES_PACKAGE_REVISION within it); on the fake host, an installer of [3, 14] plans a bundle that declares [14, 14] (its pack and bundle.json new, exit 0, no pause), and an installer of [3, 13] refuses it interface_edge at its interfaces.json with no pause, no journal and nothing in the game root. Fix round 1 (brief rd-1114/brief-1723-fix1.md): on an installer of [3, 14], the bundle whose pack declares variables and that declares [3, 13] is refused pack_invalid caused by standard_pack_root_invalid with variable_undeclared at its interfaces.json, the pointer empty, the game and the pack's package_id, with no pause, no journal and nothing in the game root. Fix round 3 (brief rd-1115/brief-1723-fix3.md): on an installer of [3, 14], a bundle that carries a version 2 goals.json and declares [12, 12], its pack declaring no variable, is refused pack_invalid caused by standard_pack_root_invalid with goal_undeclared at its interfaces.json, the pointer empty and the game, with no pause, no journal and nothing in the game root; the same bundle declaring [14, 14] is planned with goals.json root new after its pack and bundle.json
 [[gate]]
 coverage = "Y"

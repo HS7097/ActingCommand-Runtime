@@ -796,10 +796,11 @@ fn interrupt(entry: &Value) -> Entry {
     )
 }
 
-/// Entries whose content needs exactly `revision`, 3 to 11 or 13: nothing for 3, else one member
-/// of a row of that revision in [`BASE_PACK`] (11 and 10 by root and pack files the rows name; 13
-/// by a select step of a `linear_steps` pack). No content needs 12 since `goals.json` needs 14
-/// ("Revisions 13 and 14").
+/// Entries whose content needs exactly `revision`, 3 to 11, 13 or 14: nothing for 3, else one
+/// member of a row of that revision in [`BASE_PACK`] (11 and 10 by root and pack files the rows
+/// name; 13 by a select step of a `linear_steps` pack; 14, Workflow #464 P2b, by a control's
+/// `variables`, for row 15). No content needs 12 since `goals.json` needs 14 ("Revisions 13 and
+/// 14").
 fn base(revision: u64) -> Vec<Entry> {
     let pack = |path: &str| format!("packs/{BASE_PACK}/{path}");
     let base_task = |value: Value| json_entry(pack(TASK_FILE), &value);
@@ -827,6 +828,7 @@ fn base(revision: u64) -> Vec<Entry> {
             ),
             base_task(json!({"operations": [{"select": {}}]})),
         ],
+        14 => vec![json_entry(pack("control.json"), &json!({"variables": []}))],
         _ => panic!("no base for revision {revision}"),
     }
 }
@@ -1520,5 +1522,210 @@ fn p2_a_select_step_declares_13_and_with_variables_14() {
         ),
         14,
         "a select step with variables"
+    );
+}
+
+// Revision 15 (Workflow #464 P2b, after the train 0.12.61c, which brought the `package` row 15 of
+// Workflow #463 K2): a `linear_steps` package's ending page, a terminal page of its entry task's
+// `scheduling_outcome` that is none of its target pages and none of its `on_empty` pages, as the
+// kernel's `declares_linear_endings` finds it, needs 15 over entries that need 14 (a control's
+// `variables` in another pack); the same mapping where the kernel finds no ending stays at 14.
+
+/// The row pack's `control.json` of the execution mode `mode`, the game `neutral` and the entry
+/// task `task`, whose file is [`TASK_FILE`].
+fn ending_control(mode: &str) -> Entry {
+    control(&json!({"execution_mode": mode, "game": "neutral", "entry_task_id": "task"}))
+}
+
+/// The row pack's task file `path`: the target page `target_page`, the operations `operations`
+/// and a `scheduling_outcome` that maps each of `pages` in a mapping of its own, keyed `key_<i>`.
+fn mapped_task(path: &str, target_page: &str, operations: &Value, pages: &[&str]) -> Entry {
+    let mappings = pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| {
+            json!({
+                "outcome_key": format!("key_{index}"),
+                "effect": "no_designated_effect",
+                "terminal_pages": [page]
+            })
+        })
+        .collect::<Vec<_>>();
+    in_row(
+        path,
+        &json!({
+            "target_page": target_page,
+            "operations": operations,
+            "scheduling_outcome": {"mappings": mappings}
+        }),
+    )
+}
+
+/// One click step from `start` to the target page `target`.
+fn press() -> Value {
+    json!([{"id": "press", "from": "start", "to": "target", "click": {}}])
+}
+
+/// One select step on the page `from` whose empty decision ends the run with `key_1`, the key of
+/// the second page [`mapped_task`] maps.
+fn choose(from: &str) -> Value {
+    json!([{
+        "id": "choose",
+        "from": from,
+        "to": "target",
+        "select": {"on_empty": {"outcome_key": "key_1"}}
+    }])
+}
+
+// Row 15: the entry task of a `linear_steps` pack whose one mapping names a page that is no target
+// page and no `on_empty` page needs 15; the same mapping on the target page stays at 14. The kernel
+// reads the package's program, the entry task's file, so the same ending in another task file of
+// the pack stays at 14 too (the work order's condition said "a task file of the pack").
+#[test]
+fn p2_revision_15_ending_page_of_a_linear_steps_task() {
+    assert_row(
+        15,
+        &[
+            ending_control("linear_steps"),
+            mapped_task(TASK_FILE, "target", &press(), &["ending"]),
+        ],
+        &[
+            ending_control("linear_steps"),
+            mapped_task(TASK_FILE, "target", &press(), &["target"]),
+        ],
+    );
+    assert_eq!(
+        revision_of(
+            14,
+            &[
+                ending_control("linear_steps"),
+                mapped_task(TASK_FILE, "target", &press(), &["target"]),
+                mapped_task(
+                    "resources/operations/other/task.json",
+                    "target",
+                    &press(),
+                    &["ending"]
+                ),
+            ]
+        ),
+        14,
+        "an ending in a task file that is not the entry task"
+    );
+}
+
+// Row 15: the page of a select step that declares `on_empty` is no ending page: the task that maps
+// the target page and that page stays at 14 (its select step needs 13); with a third mapping on a
+// page no operation leaves or reaches it needs 15.
+#[test]
+fn p2_revision_15_an_on_empty_page_is_no_ending() {
+    assert_row(
+        15,
+        &[
+            ending_control("linear_steps"),
+            mapped_task(
+                TASK_FILE,
+                "target",
+                &choose("list"),
+                &["target", "list", "ending"],
+            ),
+        ],
+        &[
+            ending_control("linear_steps"),
+            mapped_task(TASK_FILE, "target", &choose("list"), &["target", "list"]),
+        ],
+    );
+}
+
+// Row 15: pages are compared with the prefix `<game>/` taken off where it is written, as the
+// kernel's `canonical_page_anchor` gives them: an ending written `neutral/ending` needs 15, and a
+// mapping on `neutral/target` for the target page `target`, one on `target` for the target page
+// written `neutral/target`, and the `on_empty` page written with the prefix in the mapping or in
+// the select step's `from` stay at 14.
+#[test]
+fn p2_revision_15_pages_compared_without_the_game_prefix() {
+    assert_row(
+        15,
+        &[
+            ending_control("linear_steps"),
+            mapped_task(TASK_FILE, "target", &press(), &["neutral/ending"]),
+        ],
+        &[
+            ending_control("linear_steps"),
+            mapped_task(TASK_FILE, "target", &press(), &["neutral/target"]),
+        ],
+    );
+    let stays = |target_page: &str, operations: &Value, pages: &[&str], what: &str| {
+        assert_eq!(
+            revision_of(
+                14,
+                &[
+                    ending_control("linear_steps"),
+                    mapped_task(TASK_FILE, target_page, operations, pages),
+                ]
+            ),
+            14,
+            "{what}"
+        );
+    };
+    stays(
+        "neutral/target",
+        &press(),
+        &["target"],
+        "the target page written with the prefix",
+    );
+    stays(
+        "target",
+        &choose("list"),
+        &["target", "neutral/list"],
+        "the on_empty page mapped with the prefix",
+    );
+    stays(
+        "target",
+        &choose("neutral/list"),
+        &["target", "list"],
+        "the select step's from written with the prefix",
+    );
+}
+
+// Row 15: the same ending in a pack whose control names `navigable_route` stays at 14: only a
+// `linear_steps` package has ending pages.
+#[test]
+fn p2_revision_15_ending_of_a_linear_steps_pack_only() {
+    let ending = mapped_task(TASK_FILE, "target", &press(), &["ending"]);
+    assert_row(
+        15,
+        &[ending_control("linear_steps"), ending.clone()],
+        &[ending_control("navigable_route"), ending],
+    );
+}
+
+// Row 15, the work order's last point: the entries of a bundle (its `bundle.json`,
+// `applications.json` and one pack) whose `linear_steps` pack declares variables and whose entry
+// task has a select step and maps an ending page need 15, the revision the build declares (13, 14
+// and 15 in one bundle); the same bundle without the ending needs 14.
+#[test]
+fn p2_a_select_step_variables_and_an_ending_declare_15() {
+    let bundle = |pages: &[&str]| {
+        [
+            json_entry("bundle.json".to_owned(), &json!({"game": "neutral"})),
+            json_entry("applications.json".to_owned(), &json!({"game": "neutral"})),
+            control(&json!({
+                "execution_mode": "linear_steps",
+                "game": "neutral",
+                "entry_task_id": "task",
+                "variables": [{"name": "count", "type": "integer"}]
+            })),
+            mapped_task(TASK_FILE, "target", &choose("list"), pages),
+        ]
+    };
+    assert_eq!(
+        revision_of(3, &bundle(&["target", "list", "ending"])),
+        15,
+        "a select step, variables and an ending"
+    );
+    assert_eq!(
+        revision_of(3, &bundle(&["target", "list"])),
+        14,
+        "a select step and variables, no ending"
     );
 }
