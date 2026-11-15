@@ -146,7 +146,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `navigate` | preview | `executed_false` | |
 | `monitor` | no_effect | | retired |
 | `stream` | mixed | | `stream check`: no_effect; every other form, `--input-relay` included: preview, `capture_dry_run` |
-| `record` | mixed | | `start`, `step`, `amend`, and (Workflow #449 REC-ARCH) `archive` and `reopen`: refused, `dry_run_unsupported`, action name only, alternative `record status` (start, archive, reopen) or `record candidates` (step, amend); `status`, `candidates`: no_effect; `stop`, `mark`: preview, `dry_run`; `build-task`, `promote`, `publish`: refused, `resource_production_retired`; `draft` (`record` only, since Workflow #434 LAB-5G4c, its own entry `record draft`): no_effect, it changes nothing |
+| `record` | mixed | | `start`, `step`, `amend`, and (Workflow #449 REC-ARCH) `archive` and `reopen`: refused, `dry_run_unsupported`, action name only, alternative `record status` (start, archive, reopen) or `record candidates` (step, amend); `status`, `candidates`, (#463 S2-1, its own entries `record ready` and `session record ready`) `ready` and (#463 S2-13) `frames`: no_effect; `stop`, `mark`: preview, `dry_run`; `build-task`, `promote`, `publish`: refused, `resource_production_retired`; `draft` (`record` only, since Workflow #434 LAB-5G4c, its own entry `record draft`): no_effect, it changes nothing |
 | `explain` | no_effect | | |
 | `config get` | no_effect | | |
 | `config set` | preview | `dry_run` | `validated`, `persisted: false` |
@@ -212,7 +212,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `standard-pack compose` | refused | `dry_run_unsupported` | flag parsing only (ROUT-L RL-1a: it writes a new directory); alternative `standard-pack check` |
 | `standard-pack build` | refused | `dry_run_unsupported` | flag parsing (Workflow #464 P2: it writes its product and its work into `--out`); no alternative |
 | `standard-pack ready` | no_effect | | reads a game root only (Workflow #464 P3) |
-| `standard-pack trial` | no_effect | | its one form in this release, `--plan`, reads the package directory, `--root` and the state directory's place only, writes nothing and sends nothing (Workflow #463 S3-10) |
+| `standard-pack trial` | mixed | | `--plan`: no_effect, it reads the package directory, `--root` and the state directory's place only, writes nothing and sends nothing (Workflow #463 S3-10); without `--plan` (the run, and `--collect`): refused, `dry_run_unsupported`, after the flags and before anything is read, alternative `standard-pack trial --plan` (Workflow #463 S3-11: the run sends one run and writes its record, `--collect` writes the record) |
 | `runtime reset` | refused | `dry_run_unsupported` | positional arguments, Runtime flags, `--state-root`, instance; no alternative; no capability entry |
 | `runtime observe` | no_effect | | |
 | `ledger show` | no_effect | | retired |

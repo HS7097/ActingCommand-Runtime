@@ -22,7 +22,9 @@ skeleton of the adoption ("Writing", "Output"). #463 S1-1: `tap`, `swipe` and `l
 record a press by the command that makes it, with the screen before it and the screen after it, no
 rectangle and no carrier package ("Recording while playing"). #463 S1-7: a recording holds its
 instance: `record start` pauses the instance's scheduling with a reason of its own and the end of
-the recording resumes only that pause ("A recording holds its instance").
+the recording resumes only that pause ("A recording holds its instance"). #463 S2-1: `record ready`
+lists at once everything a recording still lacks before `record stop` can make its package, and its
+state ("What a recording still lacks: `record ready`").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -178,7 +180,7 @@ holds its instance").
 ```
 record mark [--step <n>] [--frame <png>] [--sample <png>]… [--page <name>]
             [--template <id>=x,y,w,h[@x,y,w,h]]… [--scales <f>,…] [--color <id>=x,y,w,h]… [--reuse <id>]…
-            [--forbid <id>]… [--anchor <id> | --no-anchor]
+            [--forbid <id>]… [--anchor <id> | --no-anchor] [--box <recognize|press>=x1,y1:x2,y2]…
             [--click x,y,w,h | --click-from <id> | --click-follow <id> | --click x,y,w,h --click-follow <id>
              | --click x,y,w,h --drag-to x,y,w,h --duration-ms <ms> | --long-press x,y,w,h --duration-ms <ms>
              | --click x,y,w,h --brake-corner x,y,w,h]
@@ -356,7 +358,9 @@ Rules:
   _>.png`; two ids with one asset name are refused (`record_asset_name_conflict`).
 - `--reuse <id>` adds a mark of another effective step to this step and tests it on this
   step's frames. The step's marks are its own marks plus the reused ones.
-- `--sample <png>` adds a frame of the same screen; every mark of the step is tested on it.
+- `--sample <png>` adds a frame of the same screen; every mark of the step is tested on it. #463
+  S2-5: beside a recognize box, a sample on which a box of the request is below its threshold is
+  not added and not stored ("Drawing a box").
 - `--remove <id>` removes the entry only; a mark reused elsewhere, named by a check or used
   as the click guard is refused (`record_mark_in_use`).
 - `--page <name>` (`^[a-z0-9][a-z0-9_]{0,47}$`) names the step's page.
@@ -384,7 +388,8 @@ Rules:
 Output: `{status, record_id, step, step_opened, frame, samples, marks, reused, removed,
 click, application, transition, step_state{marks, frames, effect, transition, closed,
 optional, forbidden?, anchor?}, closed_step, dry_run, forbidden?, after_stop?, select?, ending?,
-removed_ending?}` (#463 R2: `ending`, the ending the command took, and `removed_ending`, the one it
+removed_ending?, boxes?}` (#463 S2-5: `boxes`, the request's boxes as the step took them, is present
+only with boxes, "Drawing a box"; #463 R2: `ending`, the ending the command took, and `removed_ending`, the one it
 gave up, are present only then; such an answer names no step, its `status` is `ending_recorded` or
 `ending_removed`, `marks_validated` with `--dry-run`; "Endings"; #463 R4: an optional step
 inserted after the stop answers as a step, `step` its new serial number, with the status
@@ -1203,6 +1208,164 @@ purpose is to evaluate an OCR target:
 
 `package bundle` never loads the provider.
 
+### Drawing a box
+
+#463 S2-5 (0.12.65; [v012-register.md](v012-register.md) §1.427; the design of board #471 and the
+owner's answer to it: a box is drawn on one state of one screen, its base images are the frames of
+the action that drew it whose similarity reaches 0.95, and a picture with boxes on it is only a
+preview, the stored image has no box; and stage two of package making on board #463, in which the
+agent sets the recognition region and the press region of each step). A `record mark` request
+draws boxes on the step's primary frame, on any step of the recording, as a person marks a
+screenshot: a region the step's page is recognized by, or the region its click presses.
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":2,"page":"title",
+ "boxes":[{"use":"recognize","corners":[{"x":1180,"y":664},{"x":1252,"y":688}]},
+          {"use":"press","corners":[{"x":1180,"y":664},{"x":1252,"y":688}]}]}
+```
+
+- On the command line `--box <recognize|press>=x1,y1:x2,y2`, repeated, is the request form's
+  `boxes` in the order given: `--box recognize=1180,664:1252,688 --box press=1180,664:1252,688` is
+  the example above. The colon separates the two corners; the four numbers `x,y,w,h` every other
+  rectangle flag takes are refused (`validation_failed`, exit 2), as are a use that is neither
+  `recognize` nor `press` and a corner that is not `x,y`, so a rectangle is never read as two
+  corners. `--box` beside `--request` or `--request-json` is refused as every shortcut flag is. The
+  Lab's MCP server's `ac_record_mark` takes it as the row's `box`, an array of those values
+  ([lab-operations.json](lab-operations.json)), or the request form in `request_json`.
+- `use` is `recognize` or `press`; `corners` exactly two points, any two opposite corners in any
+  order, in the pixels of the step's primary frame, the recording's coordinate space (a copy viewed
+  at another scale is mapped back first). Both corner pixels are inside the box: `x` is the smaller
+  of the two `x`, `width` their distance plus 1, and `y` and `height` alike, so equal corners are a
+  box of one pixel. A box takes no other member (`validation_failed`); a mark with an `id`,
+  `threshold` or `search` of its own is written with `add`.
+- Once the step is known (`step`, the open step, or the step `frame` opens), the boxes stand for
+  members the request has. A **recognize box** is a template mark appended to `add`: its id
+  `box/<nn>/<x>_<y>_<w>_<h>` (the step's serial number in two digits, more above 99, and the box's
+  rectangle; its asset `assets/box_<nn>_<x>_<y>_<w>_<h>.png`), its crop cut from the primary frame
+  and searched in the default search area, with no threshold, factors, mask or margin of its own;
+  the step's page requires it. A **press box** is `click: {"region": <its rectangle>}`, a declared
+  tap, except on a press recorded by its point (below). Everything after that is this command's own
+  code: the shape and click rules, the mark-time self-test, the page rule, one call per step,
+  marking after stop and `record stop`, so a recording marked with boxes generates the package the
+  same `add`, `click` and `--sample` written by hand generate, but for the times. The same box on
+  the same step is the same mark: sent again it is `record_mark_id_conflict`, and a one-call step
+  sent again with its boxes is a repeat ("One call per step"). `remove`, `reuse`, `forbid`,
+  `anchor`, `click.from` and `click_guard` name a box's mark as any mark. A box never anchors or
+  forbids by itself.
+- **A press box on a press recorded by its point.** A tap or a long press recorded by the command
+  that made it ("Recording while playing": `source: "point"`, a box of one pixel at the point) takes
+  a press box when the box holds the point that was pressed: the click's `rect` becomes the box, and
+  its `source` (`point`), its gesture (a long press keeps `long_press` and its duration), its
+  execution (the point, `before_frame`, `after_frame`, `after_capture`, the outcome) and its
+  attempts stay as recorded; nothing is pressed again. `record stop` then generates the box as the
+  click (`rect`, or `long_press` with the box). This holds on any effective step, on an active
+  (reopened) recording and on a stopped one, whose next `record stop` generates the package again.
+  - A box that does not hold the recorded point is `record_click_outside_step_rect` (exit 3) with
+    `details{reason: "recorded_point_outside_box", step, point, box}`: the press that was recorded
+    would not have been inside the region; nothing is written.
+  - A second press box on such a step replaces the first, as a second click replaces a declared
+    one, only with `--replace-click` (`replace_click`; `record_click_exists` without it), and only
+    when it holds the point too. A box of one pixel at the point is no box yet.
+  - A recorded swipe keeps its ends: a press box on it is `record_click_rect_conflict` (exit 3,
+    `details{step, gesture, box}`), as a press box beside a drag is; nothing is written.
+  - A click with an outcome that was declared before it was pressed (`do --capture --record` on a
+    declared rectangle, a select's) is today's `record_click_executed`.
+  - The click's `source` stays `point`, so a reader can tell a recorded press with a box from a
+    declared click; its rectangle is no longer one pixel.
+- **Base images are the frames of the action** (the owner's answer on board #471). With a recognize
+  box in the request, each frame of the action that drew it is scored, the box's template score on
+  that frame alone, as the self-test computes it:
+  - the request's own `samples`: one on which every recognize box of the request reaches its
+    threshold is admitted as `--sample` admits one, and every mark of the step is tested on it (one
+    that fails there refuses the request, as before); one on which a box is below it is another
+    state of the screen: not added, which is no refusal, nothing of it stored (no frame of the step,
+    no file), and the answer lists it;
+  - on a draft, **the captures stage one stored for the step** on the way to its screen and before
+    its press: the captures after the previous press or application operation that opened the step
+    ("The screen after": the frame its execution names as `after_frame` and the `after_capture.
+    captures - 1` frames before it in the step), those of them superseded now. They are frames the
+    recording itself took of this step, not frames an agent replaced, so they are frames of the
+    action (this replaces the design's "superseded frames are never used"). The step table cannot
+    tell a frame an agent replaced by hand (`capture --record` or `record mark --frame` on the open
+    step) or the first capture of a press sent twice ("When the frame is gone before the press")
+    from a capture before the press, so only the frames the record of an after loop names are
+    taken. **A base image is a frame of the same state of the screen** (fix round 2, the
+    coordinator's ruling on the owner's words above): a capture is taken only when its whole frame
+    has not changed from the step's live primary frame, judged by the very measure and bound stage
+    one uses to call two captures unchanged ("The screen after": `frame_change_milli` of the whole
+    frame at most `FRAME_CHANGE_MAX_MILLI`, 1500, `contracts/color-digest.md`; the Lab asks the same
+    function its after loop asks). Why: a capture of the previous screen, or of the middle of the
+    transition to this one, can hold a box whose region happens to look alike there, and pass the
+    page too; it is another state of the screen all the same, and taken as a sample it would stay
+    one for ever (no operation takes a sample off), so that a later mark that tells the two screens
+    apart would be refused on it. One that changed is `not_added` with `because{reason:
+    "frame_changed", frame_change_milli}` (the measure's value), whatever its scores, and is no
+    refusal. Of the others, each one on which every recognize box reaches its threshold **and** the
+    step's whole page, as the request leaves it, holds (every own and reused mark passes, no
+    forbidden mark passes, a followed click and a select hold, with the step's live frames: the
+    mark-time self-test's own function) becomes a sample of the step: the stored frame itself, the
+    same file, sha256 and provenance, with its own frame id, role `sample` and `source:
+    "recording_frame"`; nothing new is written to the frame store. Any other is listed in the answer
+    with its scores, and is neither taken nor a reason to refuse: another state of the screen, the
+    middle of an animation. When several reasons apply, the one given is the first of: the frame
+    changed, a box below its threshold, the page's refusal. One whose bytes are those of a live
+    frame of the step (or of a capture added before it) is that frame already, and is not added
+    again. Should two captures hold one by one and not together (a check whose `any_of` members pass
+    on different frames), they are taken one after the other while the page holds;
+  - the frame the boxes are drawn on, and every frame the step held before (its primary frame and
+    its samples), are the step's own: the box's crop is cut from the first, and a box below its
+    threshold on another refuses the request (`record_mark_rejected`, the mark's
+    `self_test_failed` with that frame), nothing written;
+  - frames of other steps are never samples. Where a recognize box reaches its threshold on a live
+    frame of another effective step, the answer lists that frame (`elsewhere`): the box does not
+    tell this screen from that one. Nothing is refused for it.
+  The work is bounded by the frames the recording holds: one template match per recognize box and
+  frame scored, one frame-change comparison per capture, and one page check per capture scored at
+  the threshold; nothing waits on a device. The recognize boxes of a step are best given in one
+  request: a later box is tested on the samples the earlier ones admitted.
+- The answer's `boxes` lists each box as the step took it, `{use, corners, rect, mark?,
+  threshold?, metric?, frames?}` (`mark` the id of a recognize box's template mark); it is absent
+  without boxes. A recognize box gives the `threshold` and `metric` it is scored at and `frames`,
+  one entry per frame scored, in this order: the step's own frames, the request's samples, the
+  captures stage one stored, the frames of other steps where it holds: `{frame_id?, sample?,
+  superseded?, step?, score, matched_rect?, taken, because?}`. `taken` is `own` (a frame the step
+  held before the call; also a capture whose bytes are a live frame's, `frame_id` that frame),
+  `added` (admitted as a sample by this call, `frame_id` its new id), `not_added` (no `frame_id`;
+  `because{reason, mark?, box?, frame_change_milli?}`: `reason` `frame_changed` for a capture whose
+  whole frame changed from the step's live frame, with `frame_change_milli` and no mark; or
+  `below_threshold` with the first recognize box below its threshold there, `box` its index in
+  `boxes` and `mark` its mark; or the mark reason the step's page meets on that frame, such as
+  `self_test_failed` or `forbidden_mark_passes`, with the mark it names) or `elsewhere` (`step` the
+  other step). `sample` is the index of a request's sample in `samples`,
+  `superseded` the frame id of a capture stage one stored. A press box has no frames. `--dry-run`
+  answers the same and writes nothing.
+- Refused, nothing written:
+  - a recognize box whose crop on the primary frame holds one gray value: `record_mark_rejected`
+    with the mark's reason `box_flat`, `box` (its index in `boxes`), `rect` and `instead: "color"`:
+    the template score has no shape to compare there (`ccoeff_normed` cannot score it,
+    `ccorr_normed` scores every flat window alike); mark such a region with a `color` mark. It is
+    checked before the mark is made, so it is the box's one reason;
+  - a recognize box outside the frame: its mark's `region_outside_frame`; a press box outside it:
+    the click's `validation_failed`;
+  - `validation_failed` (exit 2) with `details{argument: "boxes", argument_problem}`: two press
+    boxes, or one recognize box given twice (`repeated`, `box` the second one's index); a press box
+    beside `click`, or boxes beside `step_action` or `transition` (`conflicting`, `member` naming
+    it);
+  - a press box beside `application`: `record_application_with_click`; beside `select`:
+    `record_select_invalid` with `with_click` (a press box is the step's click for the rule of one
+    effect);
+  - boxes beside `ending` or `remove_ending`: `record_ending_invalid` with `with_other_change`, and
+    beside `optional_after` or `remove_inserted`: `record_optional_after_invalid` with
+    `with_other_change`, `members` naming `boxes` (an inserted step takes its marks and click in
+    `optional_after`).
+- The score is the Runtime's own: the template score the self-test and the run compute
+  (`ccoeff_normed` by default: the correlation of the gray values, 0 to 1, not a probability), with
+  the recording's metric, at the recording's template threshold (0.95 unless `record start
+  --template-threshold` gave another), the default the generated package declares. It sees the
+  shape of the gray values only, not their hue or a uniform darkening: use a color mark for those.
+- Nothing is drawn on a frame, and nothing proposes a box: the stored frames and crops are the
+  pixels as captured.
+
 ## Steps, frames and remediation
 
 A frame arrives either from a `--record` command (device frame) or from `record mark
@@ -1757,7 +1920,10 @@ its instance").
   `record_click_exists`. A stopped or archived recording takes no press (`record_session_not_active`).
 - **`record stop`.** Once the steps are marked (`record mark --step k`), a point click is generated
   as the click of its box of one pixel, `{"kind": "rect", "x", "y", "width": 1, "height": 1}` (a
-  long press `long_press` with that box), which the kernel admits and presses at its point.
+  long press `long_press` with that box), which the kernel admits and presses at its point. #463
+  S2-5: a press box that holds the point gives the click its rectangle, the press staying as
+  recorded, and the captures of the step before its press are frames a recognize box takes its
+  base images from ("Drawing a box").
 
 In PowerShell 7.3 or later, with the install root `C:\ActingCommand`:
 
@@ -2185,6 +2351,58 @@ $lab = 'C:\ActingCommand\tools\actinglab.exe'
 & $lab --json --instance emu-a record archive
 ```
 
+## The frames around a press: `record frames`
+
+#463 S2-13 (0.12.65; the owner on board #463: in stage two the Lab may need to give an agent that
+asks the several, or several dozen, frames before and after a press; the rules here are the
+coordinator's). `record frames --step <k> [--before <0..100>] [--after <0..100>] [--record-id
+<id>]` (MCP `ac_record_frames` with `step`, `before`, `after` and `record_id`) reads the recording
+`record status` reads, or the one `--record-id` names (active, archived or stopped), takes no lock,
+writes nothing and decodes no frame: it lists what the step table holds. Its sequence is every
+frame stored under a step, its page transition's and superseded ones included (an ending's are
+not), in the order the frames entered the step table, which their frame ids number: a frame
+captured from the device enters when it is captured; a frame attached from a file (a mark's sample,
+a page transition's frame, an offline frame, a step inserted after the stop) enters when it is
+attached, and its time (`captured_at_unix_ms`, the step table's `recorded_at_unix_ms`) is that
+moment, not the moment its screen was captured. `press` is step k's press as its click execution
+holds it (`executed_at_unix_ms`, `point`, a swipe's `to_point`) with the frame it was sent on
+(`before_frame`), `before` the last `--before` (3 without it) frames before that frame, `after` the
+first `--after` (10) frames after it, across step boundaries, `before_total` and `after_total` how
+many each side holds, and `offset_ms` a frame's time minus the press's time. A step without an
+executed press (an application operation, an entry launch, a step without an effect) has no
+`point`: its time and its `frame` are those its application operation's completed receipt names
+(`executed_at_unix_ms`, recorded since 0.12.64, and `before_frame`), or `null`, and without a frame
+the sides are split at the press's time (a press an earlier build recorded: the frames recorded at
+or before it, and after it) or, without a time either, at the step (the frames stored under the
+steps numbered below k, and those stored under k and above it), `offset_ms` `null` where there is
+no time. Paths are absolute, as the archive's manifest names the files; a frame whose file is not
+there is listed with `path: null` and named in the warning `frame_file_missing`, and a press sent
+on a capture that was not stored (`sent_on_unstored_capture`) answers the stored frame its step
+names and the warning `press_frame_not_stored`, its `after` being the frames after that one
+recorded after the press's time (one recorded between them, a mark's sample or a transition's
+frame, is `before`); `--before` or `--after` outside 0..=100 (`details{argument, reason:
+"range", value, min, max}`), or `--step`, `--before` or `--after` not a whole number
+(`details{argument, reason: "wrong_type", value}`, as the waits of a recorded press answer it) is
+`validation_failed`; a flag given more than once is its last value, as those waits read theirs;
+and a step that does not exist, is dropped or was converted is `record_step_not_found`. A frame a box admits as a step's sample on a draft (#463 S2-5, `source:
+recording_frame`, the file and sha256 of the capture it was taken from, which keeps its own place)
+is a frame of the step table like any other and enters the sequence when the mark admits it, after
+every frame stored before that mark: on a recording marked after its presses it stands among the
+`after` of its own step's press, its `captured_at_unix_ms` the moment of the mark.
+
+```json
+{"record_id": "…", "step": 3, "artifact_step": 3, "kind": "tap",
+ "press": {"at_unix_ms": …, "point": {"x": 962, "y": 658},
+           "frame": {"frame_id": "f0006", "path": "…", "sha256": "…",
+                     "captured_at_unix_ms": …, "stored_under_step": 3}},
+ "before": [{"frame_id": "f0004", "path": "…", "sha256": "…", "captured_at_unix_ms": …,
+             "offset_ms": -1830, "stored_under_step": 2}],
+ "after": [{"frame_id": "f0007", "path": "…", "sha256": "…", "captured_at_unix_ms": …,
+            "offset_ms": 104, "stored_under_step": 4}],
+ "before_total": 4, "after_total": 12,
+ "warnings": [{"code": "frame_file_missing", "frame_ids": ["f0009"]}]}
+```
+
 ## Optional steps
 
 A step whose screen a run does not always show (a daily notice, a reward pop-up, an update
@@ -2530,7 +2748,10 @@ files alone.
     record.
   - The effect by its kind, `null` otherwise: `tap` `{rect, point, source}` and `long_press`
     `{point, duration_ms, rect}`, `rect` `null` for a press declared by its point (`source:
-    "point"`, "Recording while playing"); `swipe` `{from_rect, to_rect, from, to, duration_ms}`;
+    "point"`, "Recording while playing") while its rectangle is the one pixel at its point; #463
+    S2-5 fix round 2: once a press box gave it a rectangle ("Drawing a box"), so that the rectangle
+    is no longer one pixel, `rect` is that box (`source` still `point`, `point` as recorded), and a
+    later archive's manifest carries it; `swipe` `{from_rect, to_rect, from, to, duration_ms}`;
     `application_op` `{action, cli_verb, executed}`, `executed` whether its completed receipt is on
     record.
   - `before` and `after`, the Runtime frames the input's frame summaries name (`frame_id`,
@@ -2694,6 +2915,159 @@ Makes an archived recording of the instance its active recording again:
 | `record stop` | `record_session_not_active`, `details{reason: "recording_archived", record_id}`, nothing read or written: reopen it first |
 | `record candidates` | as before (it reads the session header's own steps) |
 
+## What a recording still lacks: `record ready`
+
+```
+record ready [--record-id <id>] [--state-dir <dir>]
+```
+
+#463 S2-1 (0.12.65; the owner approved the three-stage blueprint of package making on board #463:
+stage two turns the recorded material into a package offline; the rules here are the
+coordinator's). `record stop` refuses at the first pre-check a recording fails ("Pre-checks"), so an
+agent would learn what a recording lacks one refusal at a time; `record ready` lists all of it at
+once. Through the Lab's MCP server (`actinglab-mcp`) it is `ac_record_ready` (`record_id`,
+`state_dir`; [lab-operations.json](lab-operations.json), the row `record ready`); today's server
+(`actingctl mcp-serve`) has no such tool.
+
+- **Which recording.** The one `record status` reads: the recording the instance's session header
+  names, archived or not; or, with `--record-id`, that recording: the header's, or one the header no
+  longer names (a later `record start` replaced it), active, archived or stopped. A recording of
+  another instance is `record_instance_mismatch` (3). No recording is `record_session_not_active`
+  (3); a header whose Lab recording is missing or unreadable, or an id no step table has,
+  `record_lab_unavailable` (3) with its `reason`.
+- **It only reads.** It takes no recording lock (it answers while another command holds the lock),
+  reaches no Runtime (it neither pauses nor releases the instance, "A recording holds its
+  instance") and writes no file of the recording: the package of the self-checks is built in
+  memory only. As every `record` action it creates the session state directory when there is
+  none. `--dry-run` changes nothing (`no_effect`).
+- **The options it reads with** are those `record stop` takes when none is given: the recording's
+  game, server and locale, else (game and server) the instance configuration's, and the default
+  arrival timeouts; for a stopped recording marked again, those its package was generated with
+  ("Marking after stop"). Such an option out of its form (an earlier stop's `--package-id` or
+  `--requires`) is no pre-check of the recording: it is the command's own refusal, as `record stop`
+  answers it, when the recording fails no pre-check the generator makes before it; when it fails
+  one, the option is passed over and every pre-check is listed (fix round 2).
+
+The answer:
+
+```json
+{"status": "draft", "record_id": "…", "session": "active",
+ "missing": [{"order": 1, "step": null, "artifact_step": null, "frame_id": null, "what": "locale",
+              "code": "record_locale_missing", "hint": "record stop --locale <l>"},
+             {"order": 2, "step": 3, "artifact_step": 3, "frame_id": "f0006",
+              "what": "page_recognition", "code": "record_step_without_recognition",
+              "hint": "record mark --step 3 --template <id>=x,y,w,h"}],
+ "missing_total": 2,
+ "warnings": [{"step": 1, "artifact_step": 1, "frame_id": "f0001", "what": "press_point_only"}],
+ "checks_after": ["frames", "admission", "first_decision", "cross_check", "endings", "selects",
+                  "final_package"]}
+```
+
+- **`missing`**: every pre-check of `record stop` the recording fails, at once: the checks the
+  generator makes before it generates anything, each where it fails, the generator going on to
+  the next. A check that needs what a failed one did not give waits for it: the package id needs
+  the game and the server, the two main-interface rules (`application_without_home`,
+  `optional_restart_home`) the game. The checks after the pre-checks (the coordinate space and the
+  arrival timeouts) run only once none fails. Each item: `order` (1..n), `step` (the step's serial
+  number, as `record mark --step` takes it) and `artifact_step` (its number in the package), both
+  `null` for an item of the whole recording; `frame_id`, the frame the step's press happened on as
+  stage one recorded it (its click's or its application operation's `before_frame`, "Recording
+  while playing", "Application steps"; on a press sent on a capture that was not stored,
+  `sent_on_unstored_capture`, the stored frame its marks were made on, as the step table names it),
+  `null` when the step has none (no frame is derived for a press recorded without it, unlike the
+  archive manifest's `material`); on a step whose press `record mark --reopen-step` moved aside
+  (its click has no execution), the frame of its click's last attempt, the press so moved (fix
+  round 2; an application operation moved aside keeps no frame, so `null`); `what`, its word;
+  `code`, the code `record stop` answers for it; `hint` where one command settles it (`record
+  stop --game <g>`, `--server <s>`, `--locale <l>`; `record mark --step k --template
+  <id>=x,y,w,h` for a step without a mark; `record mark --step k --not-optional` for an optional
+  step in a place it cannot be), absent otherwise; and `details` (fix round 2), what the
+  refusal's `details` say beside the item's own members, so that two items of one word are told
+  apart, absent when they say nothing more: `marks` (`[{id, reason, problem?}]`, the marks of
+  `reused_mark_missing`, `forbidden_mark_missing`, `anchor_not_own_template` and
+  `ending_mark_missing`), `outcome_key` (the ending words; for `ending_mark_missing`, whose refusal
+  names the mark alone, the ending's), `page` (`ending_page_taken`), `next_step`
+  (`effect_after_stop`), `later_pages` (`application_without_home`), `missing` (`game`, `server`,
+  `locale`: every part not known), `effective_steps` (`too_few_steps`), `effect_steps` and `max`
+  (`too_many_effects`). The refusal's `step` and `artifact_step` are the item's, and its
+  `select_problem`, `ending_problem`, `transition` and `outcome` say again its word and its code.
+  A self-check's item has no `details`. No item carries a suggestion, a candidate box or a
+  ready-made request: what recognizes the page and where the press may land are the agent's to
+  set.
+- **Order**: the recording's own items first (in the order the generator checks them), then by the
+  step's serial number, each step's in the order the generator checks them.
+- **The words** (`what`, the closed vocabulary `ready_missing` of the outcome catalog, one word per
+  pre-check and one cause per word):
+
+| word | the pre-check the recording fails | code `record stop` answers |
+|---|---|---|
+| `too_few_steps` | fewer than two effective steps | `record_no_steps` |
+| `application_entry_not_first` | an application entry step (no frame) after step 1 | `record_application_entry_not_first` |
+| `effect_missing` | a step before the last without an effect | `record_step_click_missing` |
+| `final_has_effect` | the last step has an effect | `record_final_step_has_click` |
+| `page_recognition` | a step but the application entry step without an own or reused mark | `record_step_without_recognition` |
+| `transition_recognition` | a page transition without a mark | `record_step_without_recognition` |
+| `too_many_effects` | more than 1000 steps with an effect | `record_too_many_steps` |
+| `game`, `server`, `locale` | each part of the package's identity that is not known | `record_locale_missing` |
+| `effect_after_stop` | after a `stop` step the next effect is no `launch` or `restart` | `record_step_after_stop_invalid` |
+| `reused_mark_missing` | a step's page or transition reuses a mark of no effective step | `record_mark_rejected` |
+| `forbidden_mark_missing` | a step forbids a mark of no effective step | `record_mark_rejected` |
+| `anchor_not_own_template` | a step's anchor is no own template mark of it | `record_mark_rejected` |
+| `application_without_home` | no main interface after the last `launch` or `restart` (R25) | `record_application_without_home` |
+| `optional_first_step` | step 1 is optional | `record_optional_first_step` |
+| `optional_final_step` | the last step is optional | `record_optional_final_step` |
+| `optional_application` | an application step is optional | `record_optional_application` |
+| `optional_restart_home` | the main interface after the last `launch` or `restart` is optional | `record_optional_restart_segment_end` |
+| `select_optional` | a select step is optional | `record_select_invalid` |
+| `select_retry` | a select step's click declares a retry | `record_select_invalid` |
+| `select_gesture` | a select step's click declares a gesture | `record_select_invalid` |
+| `select_follow` | a select step's click follows a mark | `record_select_invalid` |
+| `select_key_reserved` | a select's `on_empty` key is `<task_id>_done` | `record_select_invalid` |
+| `select_key_taken` | a select's `on_empty` key is another select's | `record_select_invalid` |
+| `select_wanted_taken` | a select's wanted name is another select's | `record_select_invalid` |
+| `ending_key_reserved` | an ending's outcome key is `<task_id>_done` | `record_ending_invalid` |
+| `ending_key_of_select` | an ending's outcome key is a select's `on_empty` key | `record_ending_invalid` |
+| `ending_key_taken` | an ending's outcome key is another ending's | `record_ending_invalid` |
+| `ending_page_taken` | an ending's page name is another ending's | `record_ending_invalid` |
+| `ending_mark_missing` | an ending's page reuses a mark of no effective step | `record_mark_rejected` |
+
+  The select and ending rules are those `record mark` holds when it takes a select or an ending,
+  checked again where the package is generated ("Selecting in a list", "Endings"); the refusal's
+  own word (`select_problem`, `ending_problem`) is the one `record stop` answers.
+- **The self-checks** (`checks_after` and the `what` of a self-check's refusal, the closed vocabulary
+  `ready_check`): when the recording fails no pre-check, `record ready` runs the self-checks
+  `record stop` runs, in the same order, on the package it would generate, written nowhere:
+  `frames` (every live frame and template crop read back with its sha256 and the recording's size,
+  the last row of "Pre-checks"), `admission` (item 2, with the evaluator), `first_decision` (item
+  3), `cross_check` (items 4, 5 and 7), `endings` (item 9), `selects` (item 8), `final_package`
+  (item 1, and items 2 and 3 again on the final package). Each stops at its first refusal, as it
+  does for `record stop`, and that refusal ends them, since a later check reads what an earlier one
+  built; it is the one item of `missing`, its `what` the check's name, its `code` its own, its
+  `step` and `artifact_step` those its details name (`record_index`, `step`) when it names a step,
+  without a `hint`. `checks_after` names the checks that did not run: all of them when a
+  pre-check fails, those after the refusing one when a self-check refuses, none when every one
+  ran. A failure to read the recording's files that is no check's refusal (class
+  `runtime_unavailable`) is the command's own error.
+- **`warnings`** never block: `press_point_only` (`{step, artifact_step, frame_id, what}`) for each
+  effective step, in the order a run meets them, whose press is a single recorded point: a tap or
+  a long press of `tap` or `long-tap --record` (`source: "point"`, a box of one pixel) that follows
+  no mark, so that the package would press that exact pixel; it is gone once the step's click
+  declares a region (on the last step `record mark --reopen-step k`, then `--click x,y,w,h
+  --replace-click`). Then the generator's own warnings as `record stop` prints them: those of its
+  pre-checks when they all pass, with the self-checks' when every one ran.
+- **`status`**, by the recording alone, and `session`, the session's state as `record status` says
+  it (`active`, `archived` or `stopped`):
+
+| state | means | entered by | left by |
+|---|---|---|---|
+| `material` | nothing of stage two is written: no step carries a page name, a mark (own, reused or forbidden, an anchor, a click guard), a press region (a click other than a press `tap`, `swipe` or `long-tap --record` recorded, or one that follows a mark or declares a retry, or a press box: a press recorded by its point whose rectangle is no longer that one pixel, #463 S2-5), a choice (a select), an optional flag or a transition, and the recording took no ending | stage one: the presses with `--record`, `record archive` | the first such write (`record mark` on the reopened recording) |
+| `draft` | something of stage two is written, and `missing` is not empty | a stage-two write that leaves something missing | the last missing item done (`ready`) |
+| `ready` | `missing` is empty: every pre-check passes and every self-check: `record stop` would write the package | the last missing item done | `record stop` (`packaged`), or a write that leaves something missing (`draft`) |
+| `packaged` | stopped, its package written (`artifact`), and nothing changed since (no `amended_at_unix_ms`); nothing is checked again, `missing` and `checks_after` are empty | `record stop` | `record mark` after the stop ("Marking after stop"): then `ready` or `draft` by the rows above, until `record stop` generates the package again |
+
+`record archive` keeps a draft as it is (a manifest n+1); nothing done is lost. A recording made
+before this slice is read as it is.
+
 ## Package generation (`record stop`)
 
 ```
@@ -2744,7 +3118,9 @@ step's kept frames; the tap's own rectangle, source and mark stay beside the sel
 (`select.click_before`), and `clear_select` gives them back, so that the recording generates the
 package it generated before. #463 R2: it also takes an ending ("Endings"), and gives one up. #463
 R4: it also takes an optional step after the effect of one of its steps, from a frame, and gives
-one up ("Inserting an optional step after stop"). It takes no other new step (a frame that is not
+one up ("Inserting an optional step after stop"). #463 S2-5: it also takes boxes on its steps, and
+a press box on a tap or a long press recorded by its point gives that click its rectangle without
+`--reopen-step`, the press staying as recorded ("Drawing a box"). It takes no other new step (a frame that is not
 the targeted step's primary frame; an ending, "Endings", is not a step and is taken), no step
 operation and no application operation: each is
 `record_session_not_active` (exit 3) with `details{reason: "recording_stopped", change}`, and
@@ -2798,6 +3174,14 @@ order of its serial numbers. The rows below count steps by these numbers; where 
 A `--requires` that does not start with `<game>.<server>.` adds the warning
 `requires_prefix_mismatch`. Steps whose click or application operation is marked
 `needs_review` are not refused; they are listed in `lab.steps_needing_review`.
+
+#463 S2-1: a recording that fails pre-checks is refused with the first of them the generator meets
+(the code and details above, as before), its `details` adding `missing_total`, how many
+pre-checks of the recording it fails, and `hint: "record ready"`, the read that lists every one at
+once with its word ("What a recording still lacks: `record ready`"). The checks of an option's form
+(`--package-id`, `--requires`, the timeouts) answer as before, without these two. Fix round 2: a
+check of `--package-id` or `--requires` met after a failed pre-check no longer ends the count: the
+generator goes on, and `missing_total` counts every pre-check the recording fails.
 
 ### Pages and documents
 
@@ -3297,7 +3681,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed` (Workflow #449 REC-ARCH fix 1: also `record archive --copy-to` empty, blank or relative), `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2), `record_optional_after_invalid` (#463 R4); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
+| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect` (#463 S2-5: also, with `details.reason: "recorded_point_outside_box"`, a press box that does not hold the point a press recorded by its point pressed), `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2), `record_optional_after_invalid` (#463 R4); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written; Workflow #449 REC-ARCH: also a copy file that cannot be written), the state directory cannot be created, `record_archive_verify_failed` (Workflow #449 REC-ARCH) |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

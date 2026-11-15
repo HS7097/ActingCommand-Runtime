@@ -61,9 +61,13 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("standard-pack adopt", ["offline"], "available"),
         // Workflow #464 P3: the readiness of every pack of a game root; reads only.
         command_cap("standard-pack ready", ["offline", "read_only"], "available"),
-        // Workflow #463 S3-10: the plan of a trial on a real application; reads only, sends
-        // nothing in this release.
-        command_cap("standard-pack trial", ["offline", "read_only"], "available"),
+        // Workflow #463 S3-10: the plan of a trial on a real application, offline; Workflow #463
+        // S3-11: without `--plan`, its one run through the running Runtime on a device.
+        command_cap(
+            "standard-pack trial",
+            ["offline", "running_runtime", "device"],
+            "available",
+        ),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         // Workflow #463 V3: what one package's control declaration declares; reads only.
@@ -141,6 +145,18 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             "available",
         ),
         command_cap("session record reopen", ["offline"], "available"),
+        // #463 S2-1: what a recording still lacks; it reads under no lock and writes nothing.
+        command_cap(
+            "session record ready",
+            ["offline", "read_only"],
+            "available",
+        ),
+        // #463 S2-13: the stored frames around one step's press; it only reads.
+        command_cap(
+            "session record frames",
+            ["offline", "read_only"],
+            "available",
+        ),
         command_cap("record", ["offline"], "available"),
         command_cap("record start", ["offline", "runtime_optional"], "available"),
         command_cap("record status", ["offline"], "available"),
@@ -158,6 +174,10 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             "available",
         ),
         command_cap("record reopen", ["offline"], "available"),
+        // #463 S2-1.
+        command_cap("record ready", ["offline", "read_only"], "available"),
+        // #463 S2-13.
+        command_cap("record frames", ["offline", "read_only"], "available"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
         command_cap("session app --record", ["device"], "available"),

@@ -5,7 +5,7 @@
 //! task, control and resources documents, the guard of every click, and the timeouts with
 //! their clamp warnings. Everything here is computed in memory; nothing is written.
 
-use super::ending::{ending_page_id, refuse_ending_rules};
+use super::ending::{ending_page_id, ending_rule_refusals};
 use super::follow::{follow_invalid, located_page_problem};
 use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
@@ -16,7 +16,7 @@ use super::model::{
 use super::select::{on_empty_key, select_invalid};
 use super::steps::path_order;
 use super::store::{blocked, invalid, with_details};
-use crate::codes::{ClickFollowProblem, SelectProblem};
+use crate::codes::{ClickFollowProblem, ReadyMissing, SelectProblem};
 use actingcommand_contract::{
     LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
     SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, TaskSchema,
@@ -456,20 +456,99 @@ fn stop_blocked(code: &str, message: String, details: Value) -> LabError {
     with_details(blocked(code, message), details)
 }
 
+/// #463 S2-1: where `record stop` points its refusal of a recording that fails a pre-check.
+const READY_HINT: &str = "record ready";
+
+/// #463 S2-1 (`contracts/lab-recording.md`, "What a recording still lacks: `record ready`"): one
+/// pre-check of `record stop` that the recording fails: its word, the step it names (its serial
+/// number and its number in the package; `None` for an item of the whole recording) and the refusal
+/// `record stop` answers for it. Fix round 2: `outcome_key`, the ending a failed pre-check of an
+/// ending is about where its refusal does not name it (`ending_mark_missing`).
+#[derive(Debug, Clone)]
+pub(crate) struct Lack {
+    pub(crate) what: ReadyMissing,
+    pub(crate) step: Option<(u32, u32)>,
+    pub(crate) error: LabError,
+    pub(crate) outcome_key: Option<String>,
+}
+
+/// #463 S2-1: what the pre-checks found: the plan when the recording passes every one, otherwise
+/// every pre-check it fails, in the order the generator checks them (never none).
+pub(crate) enum Survey {
+    Planned(Box<Plan>),
+    Lacking(Vec<Lack>),
+}
+
+/// #463 S2-1: the pre-checks the recording fails, as the generator meets them.
+#[derive(Default)]
+struct Lacks(Vec<Lack>);
+
+impl Lacks {
+    fn push(&mut self, what: ReadyMissing, step: Option<(u32, u32)>, error: LabError) {
+        self.0.push(Lack {
+            what,
+            step,
+            error,
+            outcome_key: None,
+        });
+    }
+
+    /// Fix round 2: a failed pre-check of the ending `outcome_key` whose refusal does not name it.
+    fn push_ending(&mut self, what: ReadyMissing, outcome_key: &str, error: LabError) {
+        self.0.push(Lack {
+            what,
+            step: None,
+            error,
+            outcome_key: Some(outcome_key.to_string()),
+        });
+    }
+
+    /// A refusal that is no pre-check of the recording (an option of `record stop` out of its
+    /// form): the answer when the recording failed no pre-check before it, which is where the
+    /// generator meets it; otherwise the failed pre-checks are the answer, the first of them the
+    /// refusal the generator met first. Fix round 2: in that case the option is passed over and
+    /// the generator goes on, so that every pre-check the recording fails is collected
+    /// (`missing_total` counted only those before the option).
+    fn or_refusal(&self, error: LabError) -> LabResult<()> {
+        if self.0.is_empty() {
+            Err(error)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// #463 S2-1: the serial number of the effective step `step` at `position` (from 0) and its number
+/// in the package.
+fn numbered_step(position: usize, step: &RecordingStep) -> Option<(u32, u32)> {
+    Some((step.index, u32::try_from(position + 1).unwrap_or(u32::MAX)))
+}
+
+/// #463 S2-1: the serial number of the package step `step` and its number in the package.
+fn plan_step_number(step: &PlanStep) -> Option<(u32, u32)> {
+    Some((step.step.index, step.number))
+}
+
 /// Workflow #339 section 2.5: where an optional step cannot be. Step 1 is the only page the
 /// entry gate checks, every run ends on the last step, an optional application step would be a
 /// conditional restart, and a launch or restart is complete only on the main interface (R25),
-/// which every run must therefore reach.
-fn refuse_optional_positions(steps: &[PlanStep], game: &str) -> LabResult<()> {
-    let refused = |code: &str, step: &PlanStep, message: String| {
-        stop_blocked(
-            code,
-            message,
-            json!({"step": step.step.index, "artifact_step": step.number}),
-        )
+/// which every run must therefore reach. #463 S2-1: every step in such a place is a failed
+/// pre-check, in that order; the last rule needs the game, and without it waits for it.
+fn optional_positions(steps: &[PlanStep], game: Option<&str>, lacks: &mut Lacks) {
+    let mut refused = |what: ReadyMissing, code: &str, step: &PlanStep, message: String| {
+        lacks.push(
+            what,
+            plan_step_number(step),
+            stop_blocked(
+                code,
+                message,
+                json!({"step": step.step.index, "artifact_step": step.number}),
+            ),
+        );
     };
     if let Some(first) = steps.first().filter(|step| step.settle_ms().is_some()) {
-        return Err(refused(
+        refused(
+            ReadyMissing::OptionalFirstStep,
             "record_optional_first_step",
             first,
             format!(
@@ -478,10 +557,11 @@ fn refuse_optional_positions(steps: &[PlanStep], game: &str) -> LabResult<()> {
                  with `record mark --step {} --not-optional` or record from one screen earlier",
                 first.step.index, first.step.index
             ),
-        ));
+        );
     }
     if let Some(last) = steps.last().filter(|step| step.settle_ms().is_some()) {
-        return Err(refused(
+        refused(
+            ReadyMissing::OptionalFinalStep,
             "record_optional_final_step",
             last,
             format!(
@@ -489,13 +569,14 @@ fn refuse_optional_positions(steps: &[PlanStep], game: &str) -> LabResult<()> {
                  reach; clear it with `record mark --step {} --not-optional`",
                 last.step.index, last.step.index
             ),
-        ));
+        );
     }
-    if let Some(step) = steps
+    for step in steps
         .iter()
-        .find(|step| step.settle_ms().is_some() && step.step.application.is_some())
+        .filter(|step| step.settle_ms().is_some() && step.step.application.is_some())
     {
-        return Err(refused(
+        refused(
+            ReadyMissing::OptionalApplication,
             "record_optional_application",
             step,
             format!(
@@ -504,20 +585,23 @@ fn refuse_optional_positions(steps: &[PlanStep], game: &str) -> LabResult<()> {
                  mark --step {} --not-optional`",
                 step.step.index, step.step.index
             ),
-        ));
+        );
     }
-    if let Some(start) = steps.iter().rposition(|step| {
-        step.step
-            .application
-            .as_ref()
-            .is_some_and(|application| matches!(application.action.as_str(), "launch" | "restart"))
-    }) && let Some(home) = steps[start + 1..].iter().find(|step| {
-        step.page
-            .as_deref()
-            .is_some_and(|page| linear_main_interface(game, page))
-    }) && home.settle_ms().is_some()
+    if let Some(game) = game
+        && let Some(start) = steps.iter().rposition(|step| {
+            step.step.application.as_ref().is_some_and(|application| {
+                matches!(application.action.as_str(), "launch" | "restart")
+            })
+        })
+        && let Some(home) = steps[start + 1..].iter().find(|step| {
+            step.page
+                .as_deref()
+                .is_some_and(|page| linear_main_interface(game, page))
+        })
+        && home.settle_ms().is_some()
     {
-        return Err(refused(
+        refused(
+            ReadyMissing::OptionalRestartHome,
             "record_optional_restart_segment_end",
             home,
             format!(
@@ -529,16 +613,16 @@ fn refuse_optional_positions(steps: &[PlanStep], game: &str) -> LabResult<()> {
                 home.page.as_deref().unwrap_or_default(),
                 home.step.index
             ),
-        ));
+        );
     }
-    Ok(())
 }
 
 /// #463 R1: the rules every select step of the package keeps, as `record mark` checks them: it is
 /// not optional and its click declares no retry, gesture or follow; its `on_empty` key is neither
 /// the usual ending's nor another select step's, and its wanted value's name is its own. Each is
-/// `record_select_invalid` with its word.
-fn refuse_select_rules(steps: &[PlanStep], task_id: &str) -> LabResult<()> {
+/// `record_select_invalid` with its word. #463 S2-1: every rule a select step breaks is a failed
+/// pre-check, by step and in that order.
+fn select_rules(steps: &[PlanStep], task_id: &str, lacks: &mut Lacks) {
     let done = done_key(task_id);
     let mut keys = BTreeMap::new();
     let mut wanted = BTreeMap::new();
@@ -547,59 +631,66 @@ fn refuse_select_rules(steps: &[PlanStep], task_id: &str) -> LabResult<()> {
             continue;
         };
         let index = step.step.index;
-        let refuse =
-            |problem: SelectProblem, message: String| select_invalid(Some(index), problem, message);
+        let at = plan_step_number(step);
+        let mut refuse = |what: ReadyMissing, problem: SelectProblem, message: String| {
+            lacks.push(what, at, select_invalid(Some(index), problem, message));
+        };
         if step.step.optional.is_some() {
-            return Err(refuse(
+            refuse(
+                ReadyMissing::SelectOptional,
                 SelectProblem::OnOptionalStep,
                 format!(
                     "step {index} selects in a list and is optional; a select step's page is its \
                      list"
                 ),
-            ));
+            );
         }
         if let Some(click) = &step.step.click {
             if click.retry.is_some() {
-                return Err(refuse(
+                refuse(
+                    ReadyMissing::SelectRetry,
                     SelectProblem::WithRetry,
                     format!("step {index} selects in a list and its click declares a retry"),
-                ));
+                );
             }
             if click.gesture.is_some() {
-                return Err(refuse(
+                refuse(
+                    ReadyMissing::SelectGesture,
                     SelectProblem::WithGesture,
                     format!("step {index} selects in a list and its click declares a gesture"),
-                ));
+                );
             }
             if click.follow.is_some() {
-                return Err(refuse(
+                refuse(
+                    ReadyMissing::SelectFollow,
                     SelectProblem::WithFollow,
                     format!("step {index} selects in a list and its click follows a mark"),
-                ));
+                );
             }
         }
         let key = on_empty_key(task_id, &select.declaration);
         if key == done {
-            return Err(refuse(
+            refuse(
+                ReadyMissing::SelectKeyReserved,
                 SelectProblem::OnEmptyKeyReserved,
                 format!("the on_empty key '{key}' of step {index} is the usual ending's key"),
-            ));
-        }
-        if let Some(other) = keys.insert(key.clone(), index) {
-            return Err(refuse(
+            );
+        } else if let Some(other) = keys.insert(key.clone(), index) {
+            refuse(
+                ReadyMissing::SelectKeyTaken,
                 SelectProblem::OnEmptyKeyTaken,
                 format!("the on_empty key '{key}' of step {index} is also step {other}'s"),
-            ));
+            );
         }
         let name = select.declaration.wanted.name.clone();
         if let Some(other) = wanted.insert(name.clone(), index) {
-            return Err(refuse(
+            refuse(
+                ReadyMissing::SelectWantedTaken,
                 SelectProblem::WantedNameTaken,
                 format!("the wanted name '{name}' of step {index} is also step {other}'s"),
-            ));
+            );
         }
     }
-    Ok(())
 }
 
 /// The key of the usual ending, `<task_id>_done`.
@@ -673,109 +764,173 @@ pub(crate) fn page_required(
 }
 
 /// Section 4.1 pre-checks (with the R24 and R25 rules), section 4.2 pages and the timeouts of
-/// section 4.3. Any refusal leaves the recording unchanged.
+/// section 4.3. Any refusal leaves the recording unchanged. #463 S2-1: a recording that fails a
+/// pre-check is refused with the first one the generator meets, as before, its details adding how
+/// many it fails (`missing_total`) and where they are all listed (`hint`, `record ready`).
 pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResult<Plan> {
+    match survey(recording, settings)? {
+        Survey::Planned(plan) => Ok(*plan),
+        Survey::Lacking(lacks) => Err(first_lack(lacks)),
+    }
+}
+
+/// #463 S2-1: the refusal `record stop` answers for the failed pre-checks `lacks`: the first the
+/// generator met, with `details.missing_total` and `details.hint`.
+fn first_lack(lacks: Vec<Lack>) -> LabError {
+    let total = lacks.len();
+    let Some(first) = lacks.into_iter().next() else {
+        return invalid("validation_failed", "no failed pre-check was given");
+    };
+    let mut details = match first.error.details.clone() {
+        Some(Value::Object(details)) => details,
+        Some(other) => {
+            let mut details = Map::new();
+            details.insert("cause".to_string(), other);
+            details
+        }
+        None => Map::new(),
+    };
+    details.insert("missing_total".to_string(), json!(total));
+    details.insert("hint".to_string(), json!(READY_HINT));
+    first.error.with_details(Value::Object(details))
+}
+
+/// #463 S2-1: the pre-checks of [`plan`], each collected where it fails, so that the generator
+/// goes on to the next: the plan when the recording passes all of them, otherwise every one it
+/// fails. A check that needs what a failed one did not give waits for it: the package's id and the
+/// main-interface rules need the game (and the id the server), and nothing after the pre-checks
+/// runs once one failed. A refusal that is no pre-check of the recording (a `record stop` option
+/// out of its form) ends the survey where the generator meets it when no pre-check failed before
+/// it, and is passed over when one did (`Lacks::or_refusal`, fix round 2).
+pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabResult<Survey> {
     validate_timeout_option("--timeout-ms", settings.timeout_ms)?;
     let effective = effective_steps(recording);
     let n = effective.len();
+    let mut lacks = Lacks::default();
     if n < 2 {
-        return Err(stop_blocked(
-            "record_no_steps",
-            format!(
-                "the recording has {n} effective step(s); a package needs at least two: a \
-                 screen with its effect and the screen it arrives at"
+        lacks.push(
+            ReadyMissing::TooFewSteps,
+            None,
+            stop_blocked(
+                "record_no_steps",
+                format!(
+                    "the recording has {n} effective step(s); a package needs at least two: a \
+                     screen with its effect and the screen it arrives at"
+                ),
+                json!({"effective_steps": n}),
             ),
-            json!({"effective_steps": n}),
-        ));
+        );
     }
     for (position, step) in effective.iter().enumerate() {
         if position > 0 && step.is_application_entry() {
-            return Err(stop_blocked(
-                "record_application_entry_not_first",
-                format!(
-                    "step {} is an application entry step (no frame) but not the first \
-                     effective step",
-                    step.index
+            lacks.push(
+                ReadyMissing::ApplicationEntryNotFirst,
+                numbered_step(position, step),
+                stop_blocked(
+                    "record_application_entry_not_first",
+                    format!(
+                        "step {} is an application entry step (no frame) but not the first \
+                         effective step",
+                        step.index
+                    ),
+                    json!({"step": step.index}),
                 ),
-                json!({"step": step.index}),
-            ));
+            );
         }
     }
     for (position, step) in effective.iter().enumerate() {
         let effect = step.click.is_some() || step.application.is_some();
         let number = position + 1;
         if number < n && !effect {
-            return Err(stop_blocked(
-                "record_step_click_missing",
-                format!(
-                    "step {} (package step {number}) has no effect: every step before the last \
-                     needs a click or an application operation; if it shows a loading screen, \
-                     turn it into a transition with `record mark --to-transition {}`",
-                    step.index, step.index
+            lacks.push(
+                ReadyMissing::EffectMissing,
+                numbered_step(position, step),
+                stop_blocked(
+                    "record_step_click_missing",
+                    format!(
+                        "step {} (package step {number}) has no effect: every step before the \
+                         last needs a click or an application operation; if it shows a loading \
+                         screen, turn it into a transition with `record mark --to-transition {}`",
+                        step.index, step.index
+                    ),
+                    json!({"step": step.index, "artifact_step": number}),
                 ),
-                json!({"step": step.index, "artifact_step": number}),
-            ));
+            );
         }
         if number == n && effect {
-            return Err(stop_blocked(
-                "record_final_step_has_click",
-                format!(
-                    "the last step {} has an effect; the last step only recognizes the screen \
-                     the package arrives at: capture and mark the screen after its effect",
-                    step.index
+            lacks.push(
+                ReadyMissing::FinalHasEffect,
+                numbered_step(position, step),
+                stop_blocked(
+                    "record_final_step_has_click",
+                    format!(
+                        "the last step {} has an effect; the last step only recognizes the screen \
+                         the package arrives at: capture and mark the screen after its effect",
+                        step.index
+                    ),
+                    json!({"step": step.index, "artifact_step": number}),
                 ),
-                json!({"step": step.index, "artifact_step": number}),
-            ));
+            );
         }
     }
-    for step in &effective {
+    for (position, step) in effective.iter().enumerate() {
         if !step.is_application_entry() && step.marks.is_empty() && step.reused.is_empty() {
-            return Err(stop_blocked(
-                "record_step_without_recognition",
-                format!("step {} has no recognition mark", step.index),
-                json!({"step": step.index}),
-            ));
+            lacks.push(
+                ReadyMissing::PageRecognition,
+                numbered_step(position, step),
+                stop_blocked(
+                    "record_step_without_recognition",
+                    format!("step {} has no recognition mark", step.index),
+                    json!({"step": step.index}),
+                ),
+            );
         }
         if let Some(StepTransition::Page { marks, reused, .. }) = &step.transition
             && marks.is_empty()
             && reused.is_empty()
         {
-            return Err(stop_blocked(
-                "record_step_without_recognition",
-                format!(
-                    "the page transition of step {} has no recognition mark",
-                    step.index
+            lacks.push(
+                ReadyMissing::TransitionRecognition,
+                numbered_step(position, step),
+                stop_blocked(
+                    "record_step_without_recognition",
+                    format!(
+                        "the page transition of step {} has no recognition mark",
+                        step.index
+                    ),
+                    json!({"step": step.index, "transition": "page"}),
                 ),
-                json!({"step": step.index, "transition": "page"}),
-            ));
+            );
         }
     }
-    let effect_steps = n - 1;
+    let effect_steps = n.saturating_sub(1);
     if effect_steps > MAX_EFFECT_STEPS {
-        return Err(stop_blocked(
-            "record_too_many_steps",
-            format!(
-                "the recording has {effect_steps} steps with an effect; a package has at most \
-                 {MAX_EFFECT_STEPS}"
+        lacks.push(
+            ReadyMissing::TooManyEffects,
+            None,
+            stop_blocked(
+                "record_too_many_steps",
+                format!(
+                    "the recording has {effect_steps} steps with an effect; a package has at most \
+                     {MAX_EFFECT_STEPS}"
+                ),
+                json!({"effect_steps": effect_steps, "max": MAX_EFFECT_STEPS}),
             ),
-            json!({"effect_steps": effect_steps, "max": MAX_EFFECT_STEPS}),
-        ));
+        );
     }
-    let missing = [
-        ("game", settings.game.is_none()),
-        ("server", settings.server.is_none()),
-        ("locale", settings.locale.is_none()),
+    // One refusal names every part that is missing; each part is a failed pre-check of its own.
+    let absent = [
+        (ReadyMissing::Game, "game", settings.game.is_none()),
+        (ReadyMissing::Server, "server", settings.server.is_none()),
+        (ReadyMissing::Locale, "locale", settings.locale.is_none()),
     ]
     .into_iter()
-    .filter(|(_, missing)| *missing)
-    .map(|(name, _)| name)
+    .filter(|(_, _, absent)| *absent)
+    .map(|(what, name, _)| (what, name))
     .collect::<Vec<_>>();
-    let (Some(game), Some(server), Some(locale)) = (
-        settings.game.clone(),
-        settings.server.clone(),
-        settings.locale.clone(),
-    ) else {
-        return Err(with_details(
+    if !absent.is_empty() {
+        let missing = absent.iter().map(|(_, name)| *name).collect::<Vec<_>>();
+        let refusal = with_details(
             invalid(
                 "record_locale_missing",
                 format!(
@@ -785,66 +940,83 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
                 ),
             ),
             json!({"missing": missing}),
-        ));
-    };
-    let package_id = settings
-        .package_id
-        .clone()
-        .unwrap_or_else(|| format!("{game}.{server}.{}", recording.task_id));
-    // Workflow #336 PKG-S5 (D9): the package is written as `<package_id>.<ext>`, so its id is
-    // one path segment.
-    if !prerequisite_package_id_valid(&package_id)
-        || !package_id_names_one_path_segment(&package_id)
-    {
-        return Err(with_details(
-            invalid(
-                "validation_failed",
-                "--package-id must be non-empty, at most 256 bytes, without control characters \
-                 and usable as a file name (one path segment)",
-            ),
-            json!({"package_id": package_id}),
-        ));
+        );
+        for (what, _) in &absent {
+            lacks.push(*what, None, refusal.clone());
+        }
     }
+    let game = settings.game.as_deref();
+    let package_id = match (game, settings.server.as_deref()) {
+        (Some(game), Some(server)) => {
+            let package_id = settings
+                .package_id
+                .clone()
+                .unwrap_or_else(|| format!("{game}.{server}.{}", recording.task_id));
+            // Workflow #336 PKG-S5 (D9): the package is written as `<package_id>.<ext>`, so its id
+            // is one path segment.
+            if !prerequisite_package_id_valid(&package_id)
+                || !package_id_names_one_path_segment(&package_id)
+            {
+                lacks.or_refusal(with_details(
+                    invalid(
+                        "validation_failed",
+                        "--package-id must be non-empty, at most 256 bytes, without control \
+                         characters and usable as a file name (one path segment)",
+                    ),
+                    json!({"package_id": package_id}),
+                ))?;
+            }
+            Some(package_id)
+        }
+        _ => None,
+    };
     let mut warnings = Vec::new();
     if let Some(requires) = &settings.requires {
         if !prerequisite_package_id_valid(requires) {
-            return Err(requires_invalid(
+            lacks.or_refusal(requires_invalid(
                 requires,
                 "prerequisite_id_invalid",
                 "--requires must be non-empty, at most 256 bytes and without control characters"
                     .to_string(),
-            ));
+            ))?;
         }
-        if *requires == package_id {
-            return Err(requires_invalid(
+        if let Some(package_id) = &package_id
+            && requires == package_id
+        {
+            lacks.or_refusal(requires_invalid(
                 requires,
                 "prerequisite_self",
                 format!("--requires names this package itself ({package_id})"),
-            ));
+            ))?;
         }
-        if effective[0].is_application_entry() {
-            return Err(requires_invalid(
+        if effective
+            .first()
+            .is_some_and(|step| step.is_application_entry())
+        {
+            lacks.or_refusal(requires_invalid(
                 requires,
                 "application_entry",
                 "the first step is an application entry step: it recognizes nothing before its \
                  operation, so there is no first step a prerequisite package could lead to"
                     .to_string(),
-            ));
+            ))?;
         }
-        let prefix = format!("{game}.{server}.");
-        if !requires.starts_with(&prefix) {
-            warnings.push(json!({
-                "code": "requires_prefix_mismatch",
-                "requires": requires,
-                "expected_prefix": prefix,
-                "message": format!(
-                    "--requires {requires} does not start with {prefix}: a prerequisite package \
-                     runs on the same game and server"
-                )
-            }));
+        if let (Some(game), Some(server)) = (game, settings.server.as_deref()) {
+            let prefix = format!("{game}.{server}.");
+            if !requires.starts_with(&prefix) {
+                warnings.push(json!({
+                    "code": "requires_prefix_mismatch",
+                    "requires": requires,
+                    "expected_prefix": prefix,
+                    "message": format!(
+                        "--requires {requires} does not start with {prefix}: a prerequisite \
+                         package runs on the same game and server"
+                    )
+                }));
+            }
         }
     }
-    for pair in effective.windows(2) {
+    for (position, pair) in effective.windows(2).enumerate() {
         let after_stop = pair[0]
             .application
             .as_ref()
@@ -855,16 +1027,20 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
                 .as_ref()
                 .is_some_and(|application| application.action == "stop");
         if after_stop && next_invalid {
-            return Err(stop_blocked(
-                "record_step_after_stop_invalid",
-                format!(
-                    "step {} stops the application, so the effect of step {} can only be a \
-                     launch or a restart: the foreground gate refuses every pointer input while \
-                     the assigned application is not in the foreground",
-                    pair[0].index, pair[1].index
+            lacks.push(
+                ReadyMissing::EffectAfterStop,
+                numbered_step(position, pair[0]),
+                stop_blocked(
+                    "record_step_after_stop_invalid",
+                    format!(
+                        "step {} stops the application, so the effect of step {} can only be a \
+                         launch or a restart: the foreground gate refuses every pointer input \
+                         while the assigned application is not in the foreground",
+                        pair[0].index, pair[1].index
+                    ),
+                    json!({"step": pair[0].index, "next_step": pair[1].index}),
                 ),
-                json!({"step": pair[0].index, "next_step": pair[1].index}),
-            ));
+            );
         }
     }
 
@@ -903,6 +1079,7 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
     let mut steps = Vec::with_capacity(n);
     for (position, step) in effective.iter().enumerate() {
         let number = position + 1;
+        let at = numbered_step(position, step);
         let page = (!step.is_application_entry()).then(|| match &step.page {
             Some(name) => format!("step_{}_{name}", numbered(number)),
             None => format!("step_{}", numbered(number)),
@@ -923,32 +1100,42 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
         };
         for id in required.iter().chain(&transition_required) {
             if !marks.contains_key(id) {
-                return Err(with_details(
-                    blocked(
-                        "record_mark_rejected",
-                        format!(
-                            "step {} names mark '{id}', which is not a mark of an effective step",
-                            step.index
+                lacks.push(
+                    ReadyMissing::ReusedMarkMissing,
+                    at,
+                    with_details(
+                        blocked(
+                            "record_mark_rejected",
+                            format!(
+                                "step {} names mark '{id}', which is not a mark of an effective \
+                                 step",
+                                step.index
+                            ),
                         ),
+                        json!({"marks": [{"id": id, "reason": "reuse_source_missing"}]}),
                     ),
-                    json!({"marks": [{"id": id, "reason": "reuse_source_missing"}]}),
-                ));
+                );
             }
         }
         // Workflow #390 LAB-2: the forbidden marks are marks of other effective steps, and the
         // anchor is an own template mark of the step.
         for id in &step.forbidden {
             if !marks.contains_key(id) {
-                return Err(with_details(
-                    blocked(
-                        "record_mark_rejected",
-                        format!(
-                            "step {} forbids mark '{id}', which is not a mark of an effective step",
-                            step.index
+                lacks.push(
+                    ReadyMissing::ForbiddenMarkMissing,
+                    at,
+                    with_details(
+                        blocked(
+                            "record_mark_rejected",
+                            format!(
+                                "step {} forbids mark '{id}', which is not a mark of an effective \
+                                 step",
+                                step.index
+                            ),
                         ),
+                        json!({"marks": [{"id": id, "reason": "forbidden_source_missing"}]}),
                     ),
-                    json!({"marks": [{"id": id, "reason": "forbidden_source_missing"}]}),
-                ));
+                );
             }
         }
         if let Some(id) = &step.anchor
@@ -957,16 +1144,20 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
                 .iter()
                 .any(|mark| &mark.id == id && mark.family == MarkFamily::Template)
         {
-            return Err(with_details(
-                blocked(
-                    "record_mark_rejected",
-                    format!(
-                        "step {} is anchored by '{id}', which is not an own template mark of it",
-                        step.index
+            lacks.push(
+                ReadyMissing::AnchorNotOwnTemplate,
+                at,
+                with_details(
+                    blocked(
+                        "record_mark_rejected",
+                        format!(
+                            "step {} is anchored by '{id}', which is not an own template mark of it",
+                            step.index
+                        ),
                     ),
+                    json!({"marks": [{"id": id, "reason": "anchor_invalid", "problem": "not_own_template"}]}),
                 ),
-                json!({"marks": [{"id": id, "reason": "anchor_invalid", "problem": "not_own_template"}]}),
-            ));
+            );
         }
         steps.push(PlanStep {
             number: u32::try_from(number).unwrap_or(u32::MAX),
@@ -985,57 +1176,69 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
         .collect::<BTreeMap<_, _>>();
 
     // R25: a launch or restart is complete only on the main interface; one such page must
-    // follow the last of them (the kernel predicate `linear_main_interface`).
-    if let Some(start) = steps.iter().rposition(|step| {
-        step.step
-            .application
-            .as_ref()
-            .is_some_and(|application| matches!(application.action.as_str(), "launch" | "restart"))
-    }) {
+    // follow the last of them (the kernel predicate `linear_main_interface`, which needs the game).
+    if let Some(game) = game
+        && let Some(start) = steps.iter().rposition(|step| {
+            step.step.application.as_ref().is_some_and(|application| {
+                matches!(application.action.as_str(), "launch" | "restart")
+            })
+        })
+    {
         let later = steps[start + 1..]
             .iter()
             .filter_map(|step| step.page.clone())
             .collect::<Vec<_>>();
-        if !later.iter().any(|page| linear_main_interface(&game, page)) {
+        if !later.iter().any(|page| linear_main_interface(game, page)) {
             let step = &steps[start];
-            return Err(stop_blocked(
-                "record_application_without_home",
-                format!(
-                    "step {} ({}) launches or restarts the application, but no later step is the \
-                     main interface: a launch or restart is complete only on the main interface; \
-                     mark that step with `record mark --step <k> --page home` (its page \
-                     step_<nn>_home is the main interface)",
-                    step.step.index,
-                    step.step
-                        .application
-                        .as_ref()
-                        .map_or("application", |application| application.action.as_str())
+            lacks.push(
+                ReadyMissing::ApplicationWithoutHome,
+                plan_step_number(step),
+                stop_blocked(
+                    "record_application_without_home",
+                    format!(
+                        "step {} ({}) launches or restarts the application, but no later step is \
+                         the main interface: a launch or restart is complete only on the main \
+                         interface; mark that step with `record mark --step <k> --page home` (its \
+                         page step_<nn>_home is the main interface)",
+                        step.step.index,
+                        step.step
+                            .application
+                            .as_ref()
+                            .map_or("application", |application| application.action.as_str())
+                    ),
+                    json!({"step": step.step.index, "artifact_step": step.number, "later_pages": later}),
                 ),
-                json!({"step": step.step.index, "artifact_step": step.number, "later_pages": later}),
-            ));
+            );
         }
     }
-    refuse_optional_positions(&steps, &game)?;
+    optional_positions(&steps, game, &mut lacks);
     // #463 R1: the rules a select step keeps from its marking on, checked again where the package
     // is generated.
-    refuse_select_rules(&steps, &recording.task_id)?;
+    select_rules(&steps, &recording.task_id, &mut lacks);
     // #463 R2: so are an ending's, a select declared after it among them; then each ending's page
     // `ending_kk` (or `ending_kk_<page>`), numbered to the width of the steps' pages.
-    refuse_ending_rules(recording)?;
+    for (what, refusal) in ending_rule_refusals(recording) {
+        lacks.push(what, None, refusal);
+    }
     let mut endings = Vec::with_capacity(recording.endings.len());
     for (position, ending) in recording.endings.iter().enumerate() {
         let required = required_ids(&ending.marks, &ending.reused, &marks);
         if let Some(id) = required.iter().find(|id| !marks.contains_key(*id)) {
-            return Err(with_details(
-                blocked(
-                    "record_mark_rejected",
-                    format!(
-                        "the ending '{}' names mark '{id}', which is not a mark of an effective step",
-                        ending.outcome_key
+            lacks.push_ending(
+                ReadyMissing::EndingMarkMissing,
+                &ending.outcome_key,
+                with_details(
+                    blocked(
+                        "record_mark_rejected",
+                        format!(
+                            "the ending '{}' names mark '{id}', which is not a mark of an \
+                             effective step",
+                            ending.outcome_key
+                        ),
                     ),
+                    json!({"marks": [{"id": id, "reason": "reuse_source_missing"}]}),
                 ),
-                json!({"marks": [{"id": id, "reason": "reuse_source_missing"}]}),
-            ));
+            );
         }
         endings.push(PlanEnding {
             number: u32::try_from(position + 1).unwrap_or(u32::MAX),
@@ -1044,6 +1247,21 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
             ending: ending.clone(),
         });
     }
+    // Every pre-check has run: the generation goes on only with a recording that passes them all.
+    if !lacks.0.is_empty() {
+        return Ok(Survey::Lacking(lacks.0));
+    }
+    let (Some(game), Some(server), Some(locale), Some(package_id)) = (
+        settings.game.clone(),
+        settings.server.clone(),
+        settings.locale.clone(),
+        package_id,
+    ) else {
+        return Err(invalid(
+            "validation_failed",
+            "the package's game, server, locale and id were checked by the pre-checks",
+        ));
+    };
     let runs = optional_runs(&steps)?;
 
     let size = recording.coordinate_space.ok_or_else(|| {
@@ -1124,7 +1342,7 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
         .map(|step| json!({"step": step.number, "record_index": step.step.index}))
         .collect();
 
-    Ok(Plan {
+    Ok(Survey::Planned(Box::new(Plan {
         record_id: recording.record_id.clone(),
         task_id: recording.task_id.clone(),
         game,
@@ -1148,7 +1366,7 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
         warnings,
         needs_review,
         endings,
-    })
+    })))
 }
 
 /// The default task timeout (R24 section 4.3 with Workflow #339 section 2.5):

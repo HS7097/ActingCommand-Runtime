@@ -275,7 +275,8 @@ pub(crate) struct ArchiveInputFrame {
     pub(crate) sha256: Option<Value>,
 }
 
-/// A tap; #463 S1-5: `rect` `None` for a tap declared by its point (`source` `point`).
+/// A tap; #463 S1-5: `rect` `None` for a tap declared by its point (`source` `point`); #463 S2-5
+/// fix round 2: but the press box's rectangle once one was given to it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ArchiveTap {
@@ -294,7 +295,8 @@ pub(crate) struct ArchiveSwipe {
     pub(crate) duration_ms: u64,
 }
 
-/// #463 S1-5: a long press; `rect` `None` for one declared by its point.
+/// #463 S1-5: a long press; `rect` `None` for one declared by its point (#463 S2-5 fix round 2:
+/// until a press box gives it one).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ArchiveLongPress {
@@ -835,8 +837,10 @@ fn named_recording(
     Ok((recording, dir, manifest))
 }
 
-/// The step table of the recording `record_id`, read by its id; `None` when there is none.
-fn read_recording(state_dir: &Path, record_id: &str) -> LabResult<Option<LabRecording>> {
+/// The step table of the recording `record_id`, read by its id; `None` when there is none. #463
+/// S2-1: `record ready --record-id` reads a recording the session header does not name with it.
+/// #463 S2-13: `record frames --record-id` reads its recording so too, whatever its state.
+pub(crate) fn read_recording(state_dir: &Path, record_id: &str) -> LabResult<Option<LabRecording>> {
     let path = recording_path(state_dir, record_id);
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
@@ -911,7 +915,9 @@ fn manifest_number(name: &str) -> Option<u32> {
 }
 
 /// The highest-numbered manifest in the recording's directory `dir`: its number and file name.
-fn latest_manifest(dir: &Path) -> LabResult<Option<(u32, String)>> {
+/// #463 S2-1: `record ready` reads whether a recording the session header does not name is
+/// archived with it.
+pub(crate) fn latest_manifest(dir: &Path) -> LabResult<Option<(u32, String)>> {
     let listing_failed =
         |error: std::io::Error| state_io(format!("failed to list {}: {error}", dir.display()));
     let entries = match fs::read_dir(dir) {
@@ -1226,8 +1232,9 @@ fn final_frame(recording: &LabRecording, index: &FrameIndex<'_>) -> Option<Archi
 }
 
 /// A step's kind: `tap` (a click without a gesture), `swipe` (a drag), `none` (no effect), or the
-/// step table's word for another gesture or an application operation.
-fn step_kind(step: &RecordingStep) -> &'static str {
+/// step table's word for another gesture or an application operation. #463 S2-13: `record frames`
+/// names its step's kind so too.
+pub(crate) fn step_kind(step: &RecordingStep) -> &'static str {
     if step.application.is_some() {
         return "application";
     }
@@ -1264,9 +1271,12 @@ fn row_of(recording: &LabRecording, step: &RecordingStep, index: &FrameIndex<'_>
     let after = execution.and_then(|execution| execution.after.as_ref());
     let kind = step_kind(step);
     let point = execution.map(|execution| execution.point);
-    // #463 S1-5: a tap or a long press declared by its point has no rectangle of its own.
+    // #463 S1-5: a tap or a long press declared by its point has no rectangle of its own. #463 S2-5
+    // fix round 2: unless a press box gave it one, so that its rectangle is no longer one pixel.
     let rect = click
-        .filter(|click| click.source != POINT_SOURCE)
+        .filter(|click| {
+            click.source != POINT_SOURCE || click.rect.width != 1 || click.rect.height != 1
+        })
         .map(|click| click.rect);
     let tap = click.filter(|_| kind == "tap").map(|click| ArchiveTap {
         rect,
@@ -1343,6 +1353,12 @@ fn row_of(recording: &LabRecording, step: &RecordingStep, index: &FrameIndex<'_>
         at_unix_ms,
         request_id,
     }
+}
+
+/// #463 S2-13 (`record frames`): the file of `frame` in the recording's directory `dir` as the
+/// manifest names it (`frames/<name>`), in the absolute form the answers give a path.
+pub(crate) fn stored_frame_path(dir: &Path, frame: &RecordedFrame) -> String {
+    display(&under(dir, &archive_frame(frame).file))
 }
 
 fn archive_frame(frame: &RecordedFrame) -> ArchiveFrame {
@@ -1561,7 +1577,9 @@ fn not_archived(record_id: Option<&str>, state: &str) -> LabError {
     )
 }
 
-fn instance_mismatch(recorded: &str, command: &str) -> LabError {
+/// The recording belongs to another instance than the command's. #463 S2-13: `record frames`
+/// refuses so too.
+pub(crate) fn instance_mismatch(recorded: &str, command: &str) -> LabError {
     with_details(
         blocked(
             "record_instance_mismatch",

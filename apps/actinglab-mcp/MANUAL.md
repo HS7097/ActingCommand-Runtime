@@ -221,8 +221,16 @@ naming this file.
   behind, from its own step table, and leaves the session header, another recording's, as it is
   (`lab.session_header`).
   `ac_record_reopen` makes an archived recording active again, so that `ac_record_mark` and
-  `ac_record_stop` can build its package later. #463 L1 (0.12.60; `contracts/lab-recording.md`,
-  "One call per step"): `ac_do` with `capture` and `record` records a whole step in one call:
+  `ac_record_stop` can build its package later. #463 S2-1 (0.12.65; `contracts/lab-recording.md`,
+  "What a recording still lacks"): `ac_record_ready` (`record_id`, `state_dir`) lists at once
+  everything a recording (the instance's, or the active, archived or stopped one `record_id`
+  names) still lacks before `ac_record_stop` can make its package: every pre-check it fails, each
+  with its word (`what`) and the code `ac_record_stop` would answer, or, once none fails, the
+  refusal of a self-check; and its state, `material`, `draft`, `ready` or `packaged`. It only
+  reads, under no lock, also while another call holds the recording; it opens no Runtime
+  connection and neither pauses nor releases the instance. #463 L1 (0.12.60;
+  `contracts/lab-recording.md`, "One call per step"): `ac_do` with `capture` and `record` records a
+  whole step in one call:
   `mark_request_json` (or `mark_request`, a file) is the `record mark` request of the open step,
   applied and self-tested as `ac_record_mark` applies it before the press (a refusal is its own, and
   nothing is pressed or written; a request for anything but the open step, a step operation, a
@@ -247,6 +255,25 @@ naming this file.
   `record archive` with `record_id`), never an unconditional resume. A press with `record` on an
   instance that is not held is made and recorded with `record.warnings` `instance_not_held`
   (`instance_hold_unread` when the status read got no answer); `ac_record_status` shows the hold.
+  #463 S2-13 (0.12.65; `contracts/lab-recording.md`, "The frames around a press"):
+  `ac_record_frames` (`step`, `before` 0 to 100, default 3, `after` 0 to 100, default 10,
+  `record_id`) lists the stored frames captured just before the frame a step's press was sent on
+  and just after the press, with their paths, capture times and offsets from the press; it reads
+  only and takes no lock.
+  #463 S2-5 (0.12.65; `contracts/lab-recording.md`, "Drawing a box"): stage two marks a draft with
+  boxes: `ac_record_mark` with `box` (`recognize=x1,y1:x2,y2` or `press=x1,y1:x2,y2`, two opposite
+  corners in the frame's pixels; or `boxes` in `request_json`) on any step. A recognize box is a
+  template mark of its own (`box/<nn>/<x>_<y>_<w>_<h>`), whose base images are the step's frames
+  and the captures stage one took of it before its press that reach the threshold; the answer's
+  `boxes[].frames` says of each frame `own`, `added`, `not_added` (with `because`) or `elsewhere`.
+  A capture whose whole frame changed from the step's live frame (the previous screen, the middle
+  of a transition) is another state of the screen and never a base image (`not_added`, `because`
+  `frame_changed` with `frame_change_milli`). Give the recognize boxes of a step in one request:
+  a later box is tested on the samples the earlier ones admitted.
+  A press box is the step's click region; on a tap or a long press recorded with `record` it must
+  hold the point pressed (`record_click_outside_step_rect` with `recorded_point_outside_box`
+  otherwise) and the press stays as recorded; `ac_record_stop` then writes the package of the
+  boxes, and a later `record archive` lists the box as the press's `rect`.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any

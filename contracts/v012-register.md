@@ -30375,6 +30375,558 @@ reconnect meets another owner epoch), `s17_fix_a_stop_whose_release_fails_names_
 status read `s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so` (`instance_hold_unread`).
 No code or word is added; no test leaves the gate map.
 
+### 1.418 Slice #463 S3-11 (0.12.65): `standard-pack trial` sends its one run and records the business end (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization, and the owner's ruling of 11-15 that a trial of a held package, on the instance and application it was recorded on, is within her standing authorization, recorded as a reference; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-11"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s311-trial-run.md`, built on the branch of #1758, which holds S3-10)
+
+The coordinator gave this slice 1.418; it stands on S3-10 (§1.417) and ships in 0.12.65 (release
+0.12.64 was cut without it).
+
+**What it is.** Without `--plan` the row `standard-pack trial` is the run
+([standard-pack-trial.md](standard-pack-trial.md), "The run", "The end", "Reading the end later"):
+S3-10's refusal of a line without `--plan` is lifted. Everything the plan does comes first, by the
+same function, then the refusals only the run needs, before anything is sent or written; then one
+run, sent once; then its business end, read as `run show` reads it, answered and recorded once by
+S3-10's writer. The tool records the authorization reference it is given and judges nothing; it
+never starts a trial by itself. Its three sentences stay true: a passed trial is not an
+authorization to enable; a trial counts nothing toward a break-in; a trial is one run, sent once.
+
+**The run's own refusals** (the resource tooling's `check_trial_run`), in this order:
+
+| Code (resource-tooling) | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `trial_authorization_missing` | the run was asked for without `--authorization` (`package_id`) | refuses | 1 (envelope 2) |
+| `trial_irreversible_unacknowledged` | the mark flags the package (`marked`) and `--irreversible` was not given (`package_id`) | refuses | 1 (envelope 2) |
+| `trial_variables_not_carried` | a `--variable` was given, and a direct run carries no variable value yet (`package_id`, `variable_name`) | refuses | 1 (envelope 2) |
+
+A mark not judged (no `--root`) refuses nothing: the run does not require `--root` (the decision
+S3-10 left to this slice). The state directory refused is S3-10's `trial_state_dir_refused`,
+already the plan's; a record of this content at the run's millisecond already there is S3-10's
+`trial_record_exists`, which only the writer can find, since the record's name carries the time the
+run ended. Under the global `--dry-run` the run and `--collect` are `dry_run_unsupported` after the
+flags (the dry-run declaration is now `mixed`). The run's malformed flags are `validation_failed`:
+`--collect` or `--wait` beside `--plan` and `--wait` beside `--collect` `conflicting`, a `--collect`
+that is no request id `not_recognised`, a `--wait` that is no duration `wrong_type`.
+
+**One run, sent once.** The request is the one `run start` sends, made by its own function
+(`lab-ops` `core_ops::run_start_prepared`, called, not copied: the instance resolved by one status
+read, the package directory by its canonical path, the longest deadline, 30 minutes), on the Lab
+channel with the process's initiator (`lab_client_config`), named by its `request_id` before it is
+sent and submitted once. It is waited for as `run start` waits: without `--wait` to its receipt
+(the longest wait `run start` allows: the run's deadline and the client's margin bound it), with
+`--wait` by `lab-ops`'s `wait::wait_at_most`. A wait that ends first is `command_wait_expired`
+(reused: `run start`'s answer) with the request id and `next`, and writes no record. A Runtime that
+refused the run (a receipt without a terminal) answers its refusal. Otherwise the end is read on the
+same connection: after a result that is not known (no receipt came back), a lost connection answers
+the read at once with the client's failure, which is the answer, with the request id and `next`;
+nothing is sent again by this command or anything it starts (the client's own reset after a run it
+saw cancelled, and its recovery of a receipt that did not come in time, are `run start`'s).
+
+**The end.** The run read by `run_show::read` (its key the request id): its state and its terminal,
+whose `outcome_key` S3-3 put on the read. The answer: `{sent, plan, request_id, run_id?, end:
+{state, outcome_key?, final_page?, failure_code?, failure_values?}, expected?, matched?, record,
+part_left?, warnings?}`. A run that ended normally on another end than `--expect` named succeeds,
+exit 0, `matched` false, with the new warning `trial_end_unexpected` (`package_id`, the end's
+`outcome_key`); a failed or cancelled run is refused with its own code and values on top beside the
+same members, as `run start` answers a failed run (exit 1 on the command line). The record is
+written once, when the end has been read; its `<ms>` is the time the ledger recorded the run's
+terminal (one more read, of that record by its request and its sequence), so one run has one name.
+An end not read writes no record: a read the client refuses is answered as that with `next`; a
+read with no terminal, or a terminal whose record that read did not find, is the new
+`trial_end_unread` (`request_id`, `run_state`, the vocabulary `run_state` of `lab-ops`) with `next`.
+
+**Reading the end later.** `--collect <request_id>` beside the same arguments (the words `next`
+gives): it sends nothing; one status read resolves the trial's instance and the run is read as `run
+show` reads it; a run whose facts do not name the trial's package or its instance is the new
+`trial_collect_mismatch` (`request_id`, and the new key and vocabulary `trial_collect_problem`:
+`other_package`, `other_instance`); then its end is answered and recorded as the run's, `sent`
+false. A second `--collect` of the same run finds its record there: `trial_record_exists`.
+
+| Code (resource-tooling) | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `trial_end_unexpected` | the run ended normally on another end than `--expect` named | warns, in the answer's `warnings` | 0 |
+| `trial_end_unread` (key `run_state`) | the read of the run shows no end a record can keep; no record | refuses | 1 (envelope 4) |
+| `trial_collect_mismatch` (word `trial_collect_problem`: `other_package`, `other_instance`) | `--collect` names a run that is not this package's on this instance | refuses | 1 (envelope 2) |
+
+Six new codes in the domain `trial_` of the resource tooling's fragment, one new key and vocabulary
+(`trial_collect_problem`); the index is regenerated. No decision point reads a code: the run's
+branches read typed things (a receipt there or not, committed or not; the run's state; a terminal
+there or not; a failure code there or not), and every code is built, relayed or printed.
+
+**The row** (`lab-operations.json`): `plan` no longer required; `collect` (`request_id`) and `wait`
+(`duration`) added; `writes` true, `runtime` `required` and `requests` `RunContainedTask`,
+`QueryEvents`, `Status`, as `run start` declares them; `help` 152 bytes; the MCP server offers it
+through a `serve` child as before. Beside it: `TRIAL_FLAGS` (10) and the help's options (11), the
+capability (`offline`, `running_runtime`, `device`), the dry-run declaration and
+[actinglab-dry-run.md](actinglab-dry-run.md), and the Files list of [README.md](README.md).
+
+**What the review of S3-10's third round left** (done here): the writer takes its link and its
+write steps as parameters inside the module (`WriteSteps`, as the host's `place_once` takes its
+link), and its failure paths are tested (the fallback without hard links, the success with
+`trial_record_part_left`, the cleanup after a refused write or flush, `io_op` `sync`, a refused
+cleanup named by a `cleanup` link); the conversion into the record's plan calls the plan's own check
+of the authorization's bounds; the comment on `installed_root_containing` says it is not the only
+test of an installed root (the recordings keep their own walk, with the two different answers the
+contract names). From the review of S3-1's third round, two tests in S3-1's gate file: a package
+that only holds a role starts a counted chain, and a chain's fourth layer is not counted.
+
+**Tests.** `crates/resource-tooling/src/gate_463_s311.rs` (seven) and
+`apps/actinglab/src/tests/gate_463_s311.rs` (seven, with the runtime client's scripted Runtime,
+every frame of every connection written down; the sent run's ledger is made when its request
+arrives, its links the client's own ids), gate map `exec.toml` "#463 S3-11"; two tests in
+`crates/lab-rescue/src/install/gate_463_s31.rs`, gate map `apps.toml` "#463 S3-11". Adapted:
+S3-10's `s310_without_plan_the_line_is_refused_before_anything_is_read` (the requirement it pinned,
+a line without `--plan` refused `--plan` `required`, is lifted by this slice): it now pins that a
+line without `--plan` under `--dry-run` is `dry_run_unsupported` before anything is read, and that a
+line naming nothing is `--instance` `required`; its gate entry's text says so. No golden changes.
+
+**What is not changed.** What `--plan` answers; the record's format and what S3-10's reader
+accepts; `run start` and `run show` for their own callers (the run calls their public functions);
+the Runtime's crates; adopt, readiness, build and the placement but the two tests.
+
+**At deploy.** Nothing to do on the root. The trial's run reaches the running Runtime as `run start`
+does; its records go to the Lab's state directory.
+
+**Fix round 2** (coordinator work order `rd-1115/brief-463-s311-fix2.md`, after the independent
+review of #1767: a record must not say more than what was tried). `--collect` takes only a run its
+facts show sent by hand on the Lab's channel: the scheduler's run, a run whose request's origin is
+not recorded and a manual run of another channel are `trial_collect_mismatch` with the new words
+`scheduled`, `origin_unknown` and `other_channel` of `trial_collect_problem`; an ordinary `run
+start` of the same package on the Lab's channel is not told apart (the request is the same, by the
+same function and initiator, and no fact names the command), and the contract says so. The run's
+facts record no content digest (option 丙), so a `--collect` records the package directory as read
+then, which the contract states as a limit; what holds is one run, one record: before the writer the
+package's records are read (`trial_record_of_run`, new in the resource tooling) and a record of the
+run's request id, whatever content it names, is `trial_record_exists` naming it, without `next`. A
+refusal of that reading or of the writer carries `next`. Whether a run failed is read from its end
+state, never from whether a code is there: a failed or cancelled run whose terminal names no code
+is the new `trial_end_uncoded` (`request_id`, `run_state`), its record written. `trial_end_unread`
+keeps one cause, a run not ended yet (`not_found`, `admitted`, `running`) with `next`; an
+interrupted run is the new `trial_run_interrupted` (`request_id`) and a terminal whose record the
+second read did not find the new `trial_terminal_unrecorded` (`request_id`, `run_state`), both
+without `next`: a code each, since the next step differs (read again later; nothing to collect;
+look at the ledger). The four codes refuse, exit 1 on the command line and 4 in a `--via` envelope
+(`device_instance`); the mismatch and `trial_record_exists` stay 1 and 2. No decision reads a
+code: the branches read the run's state, its `dispatch` and `origin`, a terminal there or not, a
+record found or not. Five tests in `apps/actinglab/src/tests/gate_463_s311.rs`, gate map
+`exec.toml` "#463 S3-11"; the made-up ledgers now record their request's origin (the Lab's channel
+unless a test says otherwise), so a made-up terminal is the third record: the tests that pin the
+record's time read it from one constant (`s311_a_run_ending_on_the_target_page_records_its_key_and_matched`
+adapted); the index is regenerated.
+
+### 1.425 Slice #463 S2-1 (0.12.65): `record ready` lists everything a recording still lacks before `record stop` can make its package (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two turns the recorded material into a package offline; the design `rd-1115/pack-stage12-design.md`, B2.1, B2.2 and the row S2-1 of B5, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s21-record-ready.md`, built on the branch of the stage-one train (#1757) at `5706d568`)
+
+The coordinator gave this slice 1.425. It stands on the train of stage one (§1.402 to §1.404) and
+ships in 0.12.65.
+
+**Why.** `record stop` refused at the first pre-check a recording failed, so an agent working a
+recording in stage two learned what it lacked one refusal at a time. `record ready` is the one read
+that lists it all, and the recording's state ([lab-recording.md](lab-recording.md), "What a
+recording still lacks: `record ready`").
+
+**Established by reading** (the code's facts where the design or the work order said otherwise).
+- *The pre-checks* are those of `generate::plan` (`crates/lab/src/recording/generate.rs`), the
+  functions it calls among them (`refuse_optional_positions`, `refuse_select_rules`, `ending.rs`'s
+  `refuse_ending_rules`), each of which returned at its first failure. They are now one
+  implementation that collects (`generate::survey`, with `optional_positions`, `select_rules` and
+  `ending_rule_refusals`); `plan`, `record stop`'s, answers the first failure the generator meets,
+  as before. The design's word list did not match them: `effect_indeterminate` and
+  `final_frame_missing` are made by no pre-check (an indeterminate press leaves its step open with a
+  click, which the generator takes as an effect; a last step with a press is `final_has_effect`)
+  and are not registered; `optional_position` stood for four checks with four codes and is four
+  words; the pre-checks the list did not name each have their own word. `select_unrefined`,
+  `scan_end_not_recorded` and `press_box` belong to slices not built (V4, C6, C3).
+- *A check that needs what a failed one did not give waits for it*: the package id needs the game
+  and the server, `application_without_home` and `optional_restart_home` the game. Nothing after
+  the pre-checks (the coordinate space, the arrival timeouts, the runs of optional steps) runs once
+  one failed, as none ran before. The checks of an option's form (`--timeout-ms`, `--package-id`,
+  `--requires`) are no pre-checks of the recording: they answer where the generator meets them,
+  unless a failed pre-check came first, which is then the answer as before.
+- *The self-checks* (`recording_api::generate_and_write`) are now one function, `self_checks`, that
+  `record stop` and `record ready` call, its failure naming the check that refused. Each check
+  returns at its first refusal (`load_package_inputs` at the first frame it cannot read; admission
+  and the final package give one verdict each; the first decision simulates step 1; the cross-check,
+  the endings and the selects in `crosscheck.rs` return at their first refusal, and their later
+  parts read what the earlier ones matched), and the first refusal ends them, since a later check
+  reads what an earlier one built. Listing every page that does not match its own frames would mean
+  changing `crosscheck.rs`, which this slice leaves as it is: `record ready` lists the first
+  refusal, and `checks_after` names the checks after it.
+- *The frames check* is the last row of the contract's "Pre-checks" table, but the code runs it
+  after the generator, when it reads the package's inputs; `record ready` runs it as the first
+  self-check, `frames`.
+- *The frame of an item* is the press's `before_frame` that stage one records on a click's
+  execution (§1.402) or an application operation's completed receipt (§1.404); the design named the
+  step's `before_frame`, which no step carries.
+- *The four states* follow the work order's definitions, which differ from the design's B2.2 in one
+  place: a stopped recording marked again is `ready` or `draft` by those definitions (whether
+  `record stop` would write), where the design had it `draft` until `record stop`.
+- *The row's runtime.* The work order said `runtime: none`; the table's word for an operation that
+  never needs actingd is `offline` (`RuntimeNeed::Offline`).
+- *Which recording.* `record status` takes no `--record-id`; `record ready` reads the recording the
+  session header names, or with `--record-id` that one or (by its step table, `archive.rs`'s
+  `read_recording`) one the header no longer names, `archived` when it is active and holds a
+  manifest (`latest_manifest`), both now `pub(crate)`.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The pre-checks, collected | `generate::survey` and `Survey`, `Lack`; `plan` answers the first with `details.missing_total` and `details.hint` `record ready`; `optional_positions`, `select_rules` (`generate.rs`) and `ending_rule_refusals`, `ending_key_problem` with the word (`ending.rs`) |
+| The self-checks, one function | `recording_api::self_checks` (`Checked`, `SelfCheckFailure`), which `generate_and_write` calls; `stop_settings`, the options of an active recording, which `record_stop` and `record_ready` read |
+| The read | `recording_api::record_ready` and `ready_recording`; `crates/lab/src/recording/ready.rs`: `RecordReadyOutcome`, `ReadyItem`, the items, the warning, the state |
+| The words | `crates/lab/src/codes.rs`: `ReadyMissing` (`ready_missing`), `ReadyCheck` (`ready_check`), `ReadyWarning` (`ready_warning`); the catalog's three vocabularies (`contracts/outcome-codes/catalog.json`) |
+| The command | `record ready [--record-id] [--state-dir]` (`apps/actinglab/src/commands/session_record.rs`: `RECORD_READY_READS`, the dispatch, `record_ready_options`), under no lock; the capability entries and their dry-run mode `no_effect` (`capabilities.rs`, `dry_run_gate.rs`, [actinglab-dry-run.md](actinglab-dry-run.md)) |
+| The row | `record ready` in [lab-operations.json](lab-operations.json) (authoring, `offline`, `writes` false, slice `463-S21`); `engine::COMMANDS`, `own_flags::READ_LIST_ROWS` and `reads`, `words::BUILT_SLICES`, and the Lab's MCP server's `ACTINGLAB_SLICES`, so that it offers `ac_record_ready` through a `serve` child; the first-generation server gets nothing |
+| Texts | [lab-recording.md](lab-recording.md): the opening paragraph, the new section "What a recording still lacks: `record ready`" and the sentence of "Pre-checks"; `apps/actinglab-mcp/MANUAL.md`, section 8, "Recordings" |
+
+**Codes and words.** No outcome code is added. Three closed vocabularies of the catalog, built
+from the enums of `crates/lab/src/codes.rs`, used by no outcome key: `ready_missing`, the 31 words of
+`record ready`'s `missing[].what`, one per pre-check and one cause each (the table in the contract
+names each word's code); `ready_check`, the 7 self-checks in the order they run (`checks_after` and
+the `what` of a self-check's refusal); `ready_warning`, `press_point_only`. None refuses or warns as
+an outcome: they are members of a read that exits 0. `record stop`'s first refusal keeps its code,
+class and exit status, its `details` adding `missing_total` and `hint`. The outcome code index is
+current (it lists codes only). No decision reads a code: `record ready` answers a self-check's
+failure as the command's own error by its class (`runtime_unavailable`), and every other by the
+check that refused.
+
+**Tests.** `crates/lab/src/gate_463_s21.rs` (exec gate map "#463 S2-1"; fake Runtime and clock,
+synthetic 1280x720 frames): three things missing listed in order, and `record stop` answering the
+first with `missing_total` 3 and the hint; a complete recording `ready` with every self-check run;
+a recording that lacks something running no self-check (its changed frame refused by `record
+stop --dry-run` once the locale is given); `material` against `draft`; `packaged` after `record
+stop` and `draft` after a later mark; `press_point_only` until a press region is set; the read
+writing nothing and answering while the lock is held. Adapted:
+`apps/actinglab/src/tests/gate_434_lab5b4.rs` holds the register's read lists equal to its commands,
+and `READ_LIST_ROWS` gains `record ready` (its 31 commands are 32). No golden changes; no test leaves
+a gate map.
+
+**What is not changed.** What `record stop` decides, writes or refuses, and the code, class and
+details of every refusal but the two members its first pre-check refusal adds; every check's own
+decision; the generator's output; the step table's format; `record status`; the kernel and the
+Runtime; today's MCP server (`actingctl mcp-serve`). A recording made before this slice is read as
+it is.
+
+**At deploy.** Nothing to configure. Through MCP `ac_record_ready` is on the Lab's MCP server
+(`actinglab-mcp`); a client registered with today's server has no such tool until its registration
+moves, which is the owner's to do.
+
+**Merged with the train** (the coordinator's notice: the parent's branch at `32f71ea6`, which holds
+#463 S1-5 (§1.406), #463 S1-7 (§1.424) and main `a3bf7e28` with §1.408, §1.409 and §1.417). Kept
+whole on both sides: the register (the parent's sections, then this one), the exec gate map (the
+parent's entries, then this slice's), `crates/lab/src/lib.rs` (S1-7's gate, then this slice's), the
+two slice lists (`words::BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`, 13 each with
+`PACK-TRIAL` and `463-S21`), the opening paragraph of [lab-recording.md](lab-recording.md) and
+`session_record.rs`'s imports. `engine::COMMANDS` is 69 (`standard-pack trial` and `record ready`
+each added one). `READ_LIST_ROWS` is 28, unchanged by the parent, so `gate_434_lab5b4`'s 32 holds.
+An item's `frame_id` stays the step table's `before_frame` of the press (`ClickExecution`, or
+`ApplicationExecution`); on a press sent on a capture that was not stored
+(`sent_on_unstored_capture`, S1-1) it is the stored frame, and no frame is derived where the step
+table names none, unlike the manifest's `material` (S1-5). `record ready` takes no lock and opens
+no Runtime connection, so it neither pauses nor releases the instance (S1-7); `record start`,
+`record stop` and `record archive` do, and its tests call the Lab's functions, not those commands.
+
+**Fix round 2** (CI's `light` job and the review of #1766). The two architecture guards: the
+gate's bench pressed through a method named `tap`, which `lab_input_face_is_semantic_input_executor`
+reads as a call of `LabInputPort::tap`; it is `press` now and goes through `record_press` as the
+parent's gates do. `RecordReadyOutcome::warnings` was `serde_json::Value`
+(`lab_source_obeys_dependency_law`); it is `ReadyWarningItem`, `press_point_only` as a struct
+(`PressPointOnly`) or a warning of the generator or of a self-check as `record stop` prints it
+(`OpaqueJson`, a dozen shapes), the JSON unchanged; no other public member of the slice was a
+`Value`. The review's three: a check of `--package-id` or `--requires` met after a failed
+pre-check no longer ends the survey (`Lacks::or_refusal`), so `missing_total` counts every one;
+an item carries `details` (`ReadyDetails`, `ReadyMark`), what its refusal's details say beside its
+own members, and `ending_mark_missing` the ending's outcome key (`Lack::outcome_key`); an item's
+`frame_id` on a step whose press `--reopen-step` moved aside is the click's last attempt's. Three
+tests added (exec gate map "#463 S2-1"); the first and third tests adapted (their identity items
+now show `details.missing`). No code, word or key added.
+
+**Stage two, train 1** (0.12.65; coordinator work order `rd-1115/brief-463-train-s2.md`). Pull
+request #1766 carries this slice, #463 S2-13 (§1.426) and #463 S2-5 (§1.427), merged on main (the
+stage-one train with its last fix round) in that order, and then #463 S3-11 (§1.418, pull request
+#1767, with the unstable host tests FLK-15 and FLK-16 in `ci/flaky-tests.toml` and the workflow's
+two lines as it has them). Release 0.12.64 was cut without the four, so their labels say 0.12.65.
+Kept whole on every side: the register (main's sections, then §1.418, §1.425, §1.426 and §1.427),
+the exec gate map, the operation table's rows `record ready` and `record frames`, the capability
+table, the dry-run declarations and their contract row, the Lab's MCP manual, the catalog (the
+outcome-code index regenerated with S3-11's codes: 3977 codes, 3889 active), and the lists the
+three stage-two slices append to: `engine::COMMANDS` is 70, `own_flags::READ_LIST_ROWS`
+29 (so `gate_434_lab5b4`'s commands are 33), `words::BUILT_SLICES` and the MCP server's
+`ACTINGLAB_SLICES` 14 each. `record ready` meets S2-5's boxes in two tests of this gate, on the
+recording S2-5's test of the whole of stage two makes, with that gate's bench:
+`s21_train_a_press_box_ends_the_press_point_only_of_its_step` (the three recorded taps are
+`press_point_only`; a press box on step 2 ends step 2's alone) and
+`s21_train_the_draft_boxed_on_every_step_is_ready_and_material_before` (archived and reopened,
+`material`; boxed on every step as that test boxes it, `ready` with nothing missing and every
+self-check run). The train's fix round: a press box is a stage-two write (`stage_two_written`
+counts a press recorded by its point whose rectangle is no longer that one pixel, the test
+`press_point_only` makes), so a recording on which only a press box was drawn is `draft`, not
+`material`, and the first test asserts both states. No code, word or key added.
+
+### 1.426 Slice #463 S2-13 (0.12.65): `record frames` lists the stored frames just before and just after one press (Workflow #463; the owner's words of 11-15 on board #463 that in the second stage of recording the Lab may need to accept an agent's request to hand back the several, or several dozen, frames before and after a press, and that after a press the screen may change quickly; the rules are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s213-record-frames.md`, read on the head `5706d568` of the train of stage one, #1757)
+
+The coordinator gave this slice 1.426. It stands on the train of stage one (§1.402, §1.403, §1.404;
+fix round 2 merged its head `32f71ea6`, which adds §1.406 and §1.424) and ships in 0.12.65.
+
+**Why.** Stage one keeps every capture it takes: the frame each recorded press is sent on and every
+capture of the loop after it. Stage two works on the frame each press happened on and the final
+screen; when that does not show what a press did (an animation, a pop-up that came and went, a list
+that scrolled), the agent asks for the frames around that press. This slice is that read
+([lab-recording.md](lab-recording.md), "The frames around a press: `record frames`"). It adds
+nothing to what is recorded.
+
+**Established by reading** (the code's facts where the work order said otherwise).
+- *An application operation's time.* A click execution holds its time (`executed_at_unix_ms`,
+  written when the press's outcome is recorded). An application operation's completed receipt
+  holds one since #463 S1-5 (`ApplicationExecution.executed_at_unix_ms`, §1.406, which fix round 2
+  merged); an operation an earlier build recorded, one without a completed receipt and a step
+  without an effect hold none. So a step without an executed press answers no point and
+  `press.at_unix_ms` its receipt's time, or `null` without one. Its sides are split at the frame its
+  receipt names (`before_frame`, §1.404) when it names one, at its time when it names only that,
+  and otherwise at the step: the frames stored under the steps numbered below it, and those stored
+  under it and above it. A press an earlier build recorded (`do --capture --record`, no
+  `before_frame`) is split at its time: the frames recorded at or before it, and those after it.
+- *The order.* The step table numbers every frame as it enters (`frame_id`, `f0001`, …;
+  `admit_frame` gives `next_frame`, one above the highest on record, and writes
+  `recorded_at_unix_ms` then). The sequence is in that order, the order the frames entered the
+  step table: a frame captured from the device enters when it is captured, in the command that
+  captured it, right after the capture; a frame attached from a file (a mark's sample, a page
+  transition's frame, an offline frame, a step inserted after the stop) enters when it is
+  attached, and its time is that moment, not the moment its screen was captured.
+  `captured_at_unix_ms` is the frame's `recorded_at_unix_ms`.
+- *Which frames.* The steps' frames and their page transitions' frames, as the archive's manifest
+  lists a row's (`row_of`, `crates/lab/src/recording/archive.rs`). An ending's frames (#463 R2) are
+  stored under no step and come from a later run: they are not in the sequence, and the contract
+  says so.
+- *`runtime: none`.* The table's vocabulary has no such word; `offline` is "never needs it"
+  (`RuntimeNeed`, `crates/lab-ops/src/table.rs`), and the row says `offline`.
+- *The refusal of a step.* `record mark --step` refuses a step that does not exist, is dropped or
+  was converted into a transition with `record_step_not_found` and no word in its details
+  (`effective_step`, `crates/lab/src/recording/steps.rs`); `record frames` calls the same function.
+- *The flags' refusal.* The parent's flags (`after_capture_ms`,
+  `apps/actinglab/src/commands/device_commands.rs`) answer a value that is no whole number with
+  `validation_failed`, `details{argument, reason: "range", value}`, and the Lab adds `min` and `max`
+  for a number out of its range (`check_after_capture`); a flag given twice is not refused there
+  (the last is read). `record frames` answers all three so, a flag given twice with `value` the
+  texts given.
+- *`sent_on_unstored_capture`* is a member of the execution, and the parent has no warning word for
+  it; this slice adds `press_frame_not_stored`. Such a press names its step's stored frame
+  (`before_frame`), and a frame may be stored after that one and before the press is sent (a mark's
+  sample, a transition's frame). Fix round 2 (the review of #1765): its `after` are the frames
+  after the stored frame recorded after the press was sent (`recorded_at_unix_ms` later than
+  `executed_at_unix_ms`), and those recorded at or before it are `before`.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The read | `record_frames`, `RecordFramesRequest`, `RecordFramesOutcome` and its parts (`crates/lab/src/recording/around.rs`, new); `effective_step` (`steps.rs`) and `read_recording`, `step_kind` and `instance_mismatch` (`archive.rs`) are `pub(crate)`; `stored_frame_path` (`archive.rs`), the absolute path of a frame's file as the manifest names it |
+| The command | `record frames` and `session record frames`: `RECORD_FRAMES_READS`, the dispatch (no lock), `run_record_frames` and `frames_number`; the session directory is not created for it (`apps/actinglab/src/commands/session_record.rs`) |
+| The registers | `own_flags::READ_LIST_ROWS` and `reads`, `engine::COMMANDS`, `words::BUILT_SLICES` and the Lab's MCP server's `ACTINGLAB_SLICES` (slice `463-S2-13`), the capability entries `record frames` and `session record frames` and their dry-run declarations (`no_effect`) |
+| The table | the row `record frames` (authoring, `runtime: offline`, `writes: false`, `help` 135 bytes), so that the Lab's MCP server offers `ac_record_frames`; today's server (`actingctl mcp-serve`) gets nothing |
+| Texts | [lab-recording.md](lab-recording.md), "The frames around a press: `record frames`" (new); [actinglab-dry-run.md](actinglab-dry-run.md), the `record` row; `apps/actinglab-mcp/MANUAL.md`, "Recordings" |
+
+**Codes and words.** No outcome code is added and no fragment changes. Two warning words of the
+answer's `warnings` (`[{code, frame_ids}]`), each from what the step table and the frames' directory
+hold, never in a text:
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `frame_file_missing` | a listed frame's file is not where the manifest names it; `frame_ids` names each such frame, listed with `path: null` | warns | 0 |
+| `press_frame_not_stored` | the press was sent on a capture its command did not store (`sent_on_unstored_capture`); `press.frame` is the stored frame its step names, which `frame_ids` names | warns | 0 |
+
+The refusals reuse existing codes and words: `validation_failed` with `details{argument, reason:
+"range", value}` (and `min`, `max` for a number out of range; `argument` `before`, `after` or
+`step`), exit 2; `record_step_not_found`, exit 3; `record_session_not_active`,
+`record_lab_unavailable` (`lab_recording_missing` and its other reasons) and
+`record_instance_mismatch` when there is no recording to read. No decision reads a code.
+
+**Tests.** `crates/lab/src/gate_463_s213.rs` (exec gate map "#463 S2-13"; a step table written as
+stage one writes it, made-up frame files that are never decoded, no Runtime, no clock read): step 2
+of three presses (its press, the three frames before the frame it was sent on and the eight after
+it across the step boundaries, offsets, paths and totals; then five before and two after); `before`
+and `after` 0 on a tap and on a swipe (both ends); 101 refused and 100 accepted; the last step,
+without an effect; a dropped step and one that does not exist; two missing files; archived (by
+`record archive`, read by its id under another recording's session header) and stopped; the reads
+under another command's lock, every directory and file unchanged. Adapted, as the requirement
+changes what it pins: `apps/actinglab/src/tests/gate_434_lab5b4.rs`, whose list of the own commands
+that refuse an unknown flag is held equal to `READ_LIST_ROWS` and the unrowed lists (32 now, `record
+frames` after `record reopen`; still 32 after fix round 2 merged #463 S1-5 and S1-7, which add no
+read list). Fix round 2 (the review of #1765) adds five tests to the same gate: in the same file, a
+press sent on a capture that was not stored, with a mark's sample stored between its step's frame
+and the press (the sample `before`, the warning `press_frame_not_stored`); an application
+operation's step split at the frame its receipt names, with offsets from its receipt's time and,
+recorded before #463 S1-5, without; a recording whose presses an earlier build recorded (no
+`before_frame`), split at the press's time with offsets; and in
+`apps/actinglab/src/tests/gate_463_s213.rs`, on the command line, a value that is no whole number,
+a flag given twice and `--step` missing refused, and a read that creates no session directory. No
+test leaves the gate map.
+
+**What is not changed.** Anything recorded or written; the step table's format; every other
+command's answer; the recording lock; the archive and its manifest; today's MCP server.
+
+**At deploy.** Nothing to configure. Recordings already on disk are read as they are: one made
+before stage one (presses of `do --capture --record`, without `before_frame` or a loop after them)
+lists its frames in their stored order, each press split at its time with offsets, and a step
+without a press split at the step with `offset_ms` `null`. Through MCP the tool is
+`ac_record_frames` of the Lab's MCP server (`actinglab-mcp`); a client registered with today's
+server has no such tool until its registration moves, which is the owner's to do.
+
+**Stage two, train 1** (0.12.65; §1.425). A frame a box admits as a step's sample on a draft
+(§1.427, `source: recording_frame`, the file and sha256 of the capture it was taken from) is a
+frame of the step table and enters the sequence when the mark admits it, after every frame stored
+before that mark; the contract's section says so in one sentence, and S2-5's
+`s25_a_recognize_box_takes_the_settled_capture_and_lists_the_animation` asserts it (`record frames`
+of step 2 lists the sample `f0007` after step 2's press, after step 3's `f0006`). The check of the
+parent's waits this section names, `check_after_capture`, is `record_after_capture_check` since the
+stage-one train's last fix round (§1.403), which answers `after_ms` too with `details{argument,
+reason: "range", value, min, max}`, as `record frames` answers its sides out of 0..=100. That round
+also made the parent's flags answer a value that is no whole number `wrong_type` (it was `range`).
+The train's fix round (the coordinator's ruling: one convention for the command line, one cause
+per word): `record frames` reads its numbers as the parent's flags do (`after_capture_ms`): a value
+of `--step`, `--before` or `--after` that is no whole number is `validation_failed` with
+`details{argument, reason: "wrong_type", value}` (the parent's `NOT_A_WHOLE_NUMBER`, now
+`pub(crate)`), a flag given more than once is its last value and no longer refused, and `range`
+stays for a side outside 0..=100 alone. The contract's sentence says so; actinglab's
+`s213_the_command_line_refuses_a_number_it_cannot_read` asserts `wrong_type`, and for a flag given
+twice that the last value is the one read (`--after 3 --after abc` refused for `abc`, `--step x
+--step 1 --after abc --after 3` going on to the read). No code or word is added.
+
+### 1.427 Slice #463 S2-5 (0.12.65): boxes on a draft: the recognition region and the press region of any recorded step (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two hands the agent the frame and where the press went and lets the agent set the recognition region and the press region; the owner's words of 11-15 on the design of board #471: a box is drawn on one state of one screen, its base images are the frames of the action whose similarity reaches 0.95, a picture with boxes is only a preview; the design `rd-1115/471-box-design.md`, its English part, and its first implementation, slices B1 to B3, paused before stage one and ported here by hand; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s25-record-boxes.md`, stacked on the stage-one train #1757 at `32f71ea6291c`)
+
+The coordinator gave this slice 1.427. It ships in 0.12.65, after the stage-one train (§1.402 to
+§1.406, §1.424).
+
+**Why.** A press recorded while playing is an executed click of one pixel, and until now the only
+way to give a step another click region was to reopen it, which works for the last step alone; a
+package that presses one exact pixel is what the kernel then ran. Boxes make the region the agent
+draws the way to say both things, the page's recognition and the press's region, on any step of a
+draft ([lab-recording.md](lab-recording.md), "Drawing a box").
+
+**Ported, and what differs from the earlier work.**
+- *B1* (boxes in the mark request) and *B3* (`--box` on the command line, the row's `box`) are
+  ported whole, labelled #463 S2-5; the request form, the generated ids
+  `box/<nn>/<x>_<y>_<w>_<h>`, `box_flat` with `instead: "color"`, the static rules and the repeat
+  rule are as built. Not ported: everything under `apps/actingctl` (today's MCP server hands the
+  request form on unchanged, no code).
+- *B2* (base images) is ported with the change the work order made: the frames of the action are
+  the request's own samples, treated as B2 built them, and on a draft the captures stage one stored
+  for the step before its press. The answer's words for a frame are the design's: `own`, `added`,
+  `not_added` with `because`, `elsewhere` (B2 as built answered `drawn_on`, `kept`, `added`,
+  `left_out`, and listed no frame of another step).
+- *New*: a press box on a tap or a long press recorded by its point (`source: "point"`) becomes
+  that click's `rect` when it holds the recorded point; a recorded swipe refuses it; a second box
+  needs `--replace-click`. `optional_after` and `remove_inserted` (#463 R4, on main since the earlier
+  work) refuse boxes beside them (`with_other_change`), as an ending does.
+
+**Established by reading.**
+- *Which captures are stage one's.* Every capture stage one stores is `source: "lab_capture"`, as a
+  `capture --record` by hand is, and every frame that replaces an open step's frame supersedes it
+  alike (`arrive_naming`, `ArrivalPlan::Replace`); the step table has no member that tells a capture
+  before the press from a frame an agent replaced by hand, or the first capture of a press sent twice
+  (`before.captured_twice` is in the answer only). What it does record: the press or application
+  operation that opened the step names the last capture of its own after loop as `after_frame`, with
+  `after_capture.captures`, and the loop's captures arrive in one command under the recording lock,
+  so they stand together in the step's frames, ending at that one. Those, superseded now, are the
+  captures taken (`boxes.rs`, `stage_one_captures`); no other superseded frame is.
+- *A press box on an executed click* reached `record_click_executed` in `apply_click`, the one place
+  a click's rectangle is declared; the press box now takes a branch of its own there
+  (`box_on_recorded_press`), so the execution is never touched and nothing is pressed.
+- *The whole-page check of a capture* is the mark-time self-test (`evaluate_batch`,
+  `follow_frames`, `anchor_rejection`, `evaluate_forbidden`, `select_frames`,
+  `other_pages_on_select_frames`), run on the step's live frames and the capture; fix round 2: one
+  function, `page_check`, which `apply_marks`' own self-test calls too. A check's `any_of` is
+  decided over every frame at once (`derive_check`), so captures that hold one by one may not hold
+  together; then they are taken one after the other while the page holds, and no capture is ever a
+  refusal.
+- *The archive's manifest* named a point click's rectangle as absent (`archive.rs`, `row_of`,
+  `source != "point"`), and a boxed point click keeps `source: "point"`; fix round 2: a point
+  click whose rectangle is no longer one pixel is written with it.
+- *Stage one's "unchanged"* (fix round 2): the after loop decides "still" with `unchanged_for`
+  (`recording_api.rs`), the run of captures each within the Runtime's one frame-change bound of
+  the newest (`frame_change_milli` of the whole frame, `change_digest`, at most
+  `FRAME_CHANGE_MAX_MILLI`, 1500); given two digests at one instant and no time to stand, it
+  decides exactly whether the two are unchanged, so `record mark` calls it (both made `pub(crate)`,
+  nothing copied).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The request and the answer | `MarkRequest.boxes` (`BoxSpec {use, corners}`, `BoxUse`); `MarkOutcome.boxes` (`BoxView {use, corners, rect, mark?, threshold?, metric?, frames?}`, `BoxFrameView {frame_id?, sample?, superseded?, step?, score, matched_rect?, taken, because?}`, `BoxFrameTaken`, `BoxBecause {reason, mark?, box?, frame_change_milli?}`) (`crates/lab/src/recording/model.rs`) |
+| The boxes | `box_rect`, `box_mark_id`, `press_rect`, `validate_boxes`, `with_press_click`, `expanded_request`, `expanded_add`, `flat_boxes`, `made_box_marks`, `call_frame`, `below_because`, `stage_one_captures`, `box_views`, `FRAME_CHANGED` (`crates/lab/src/recording/boxes.rs`) |
+| `record mark` | `apply_marks`: the expansion after the target step is known, `box_flat` before the marks are made, the request's samples scored (`not_added` not stored), the captures scored and admitted before the self-test (`admit_captures`, `frame_unchanged`, `cached_digest`, `changed_because`, `page_check`, `recorded_sample`), the self-test (`page_check`, `PageCheck`), the answer's frames (`scored_frames`, `elsewhere_frames`); `apply_click`: `box_on_recorded_press` (`steps.rs`); `validate_mark_request` and the repeat rule, and `change_digest` and `unchanged_for` made `pub(crate)` (`recording_api.rs`); `boxes` among the members beside an ending (`ending.rs`) and an inserted step (`inserted.rs`) |
+| The archive's manifest | `row_of`: a point click's `rect` written once a press box made it more than one pixel (`crates/lab/src/recording/archive.rs`) |
+| The command line | `--box` in `RECORD_MARK_SHORTCUT_FLAGS`, `parse_record_mark_box`, `parse_record_mark_corner` (`apps/actinglab/src/commands/session_record.rs`); the help's flag list (`lab2_cli.rs`) |
+| The table and texts | the row `record mark` gains `box` (option, repeat; its help unchanged, 154 bytes) ([lab-operations.json](lab-operations.json)); [lab-recording.md](lab-recording.md): "Drawing a box" (new), the synopsis, the `--sample` rule, the output, "Recording while playing" (`record stop`), "Marking after stop", the error codes; `apps/actinglab-mcp/MANUAL.md`, "Recordings" |
+
+**Codes and words.** No outcome code is added and no fragment changes (the index is not
+regenerated). Inside existing codes:
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| mark reason `box_flat` of `record_mark_rejected`, with `box`, `rect`, `instead: "color"` | a recognize box whose crop on the primary frame holds one gray value | refuses | 3 |
+| `details.reason` `recorded_point_outside_box` of `record_click_outside_step_rect`, with `step`, `point`, `box` | a press box that does not hold the point a tap or long press recorded by its point pressed | refuses | 3 |
+| `boxes[].frames[].taken` `own` | a frame the step held before the call, or a capture whose bytes are those of a live frame | — | 0 |
+| `taken` `added` | a frame of the action admitted as a sample by this call | — | 0 |
+| `taken` `not_added` with `because.reason` `below_threshold` (or the mark reason the page meets there) | a frame of the action not admitted: a recognize box below its threshold there (or the step's page does not hold there) | — | 0 |
+| `taken` `not_added` with `because.reason` `frame_changed`, with `frame_change_milli` (fix round 2) | a capture stage one stored whose whole frame changed from the step's live frame beyond the frame-change bound: it shows another state of the screen; given before any other reason | — | 0 |
+| `taken` `elsewhere` | a live frame of another step on which the box reaches its threshold | — | 0 |
+
+Existing codes with no new word: `validation_failed` with `argument: "boxes"` and
+`argument_problem` `repeated` or `conflicting` (exit 2); `record_click_rect_conflict` for a press
+box on a recorded swipe, `record_click_exists` for a second box without `--replace-click`,
+`record_click_executed` for a click executed on a declared rectangle (exit 3);
+`record_ending_invalid` and `record_optional_after_invalid` `with_other_change` naming `boxes`
+(exit 3). No decision reads a code: the press box's branch reads the click's `source`.
+
+**Tests.** `crates/lab/src/gate_463_s25_boxes.rs` (B1 and B2 ported, ten), `gate_463_s25_draft.rs`
+(four, on recordings `record_press` made: the whole of stage two to the package, a press box on a
+tap, a swipe and a long press, the captures of an animation and of the settled screen, a press box
+after the stop) and actinglab's `s25_the_box_flag_declares_the_request_forms_boxes`
+(`session_record.rs`, `lab2_tests`), all in the exec gate map ("#463 S2-5"). No existing test
+changes, no golden changes, no test leaves the gate map.
+
+**What is not changed.** `generate.rs`, `crosscheck.rs`, `select.rs`, the kernel and the
+recognition crates; `recording.json`'s schema (a box mark is a template mark, an admitted capture a
+sample with `source: "recording_frame"`, a press box a click's `rect`); the press path of stage one
+and its after loop; `apps/actingctl`. Nothing proposes a box and nothing draws on a frame.
+
+**Fix round 2** (coordinator work order `rd-1115/brief-463-s25-fix2.md`, after the independent
+review of `8379a03b89af`; nothing merged).
+- *The gate map parses*: the gate's `tests` array is closed.
+- *A base image is a frame of the same state of the screen* (the coordinator's ruling on the
+  review's point d, after the owner's words of board #471): a capture stage one stored is taken
+  only when its whole frame has not changed from the step's live primary frame, by stage one's own
+  "unchanged" (`unchanged_for`, the frame-change bound 1500 milli); one that changed is `not_added`
+  with `frame_changed` and `frame_change_milli`, before any other reason, and nothing is refused
+  ([lab-recording.md](lab-recording.md), "Drawing a box", which says why).
+- *One function decides whether a page holds on frames*: `page_check`, for the self-test and the
+  captures alike; for every request that is not a box request it runs the same checks in the same
+  order, with the select's dry run and the other pages' check gated on no refusal before them, as
+  the self-test's own block was.
+- *The archive's manifest* writes a boxed point click's rectangle (`row_of`).
+- *Texts*: the recognize boxes of a step are best given in one request (a later box is tested on
+  the samples the earlier ones admitted), in the contract and the MCP manual.
+- *Tests* (`gate_463_s25_draft.rs`, six more): the previous screen's last capture, on which the
+  box's region matches, is `frame_changed` and the settled captures are added; another step's
+  frame is `elsewhere` and never taken, and a capture of the live frame's bytes is `own`; a capture
+  on which the box passes and the page does not is `not_added` with the page's reason; a point on
+  the press box's bottom-right pixel is inside it and one pixel further is
+  `recorded_point_outside_box`; a recording with `recording_frame` samples archives and reopens; a
+  press box set after a reopen is in the next manifest. The animation test asserts what it did:
+  its two moments change the button's square alone, so they stay within the frame-change bound and
+  are `below_threshold` as before (a comment says so); the helper that paints its frames now paints
+  on any gray, the same bytes as before.
+
+**At deploy.** Nothing to configure: no key, no ledger record, no package revision. Recordings on
+disk load as before; a request without boxes is byte for byte what it was.
+
+**Stage two, train 1** (0.12.65; §1.425). In `gate_463_s25_draft.rs` the bench (`Bench`, its
+`new`, `state`, `header`, `press` and `marked`, its lock and its OCR), the instance, the screens,
+the points pressed, `tap_at`, `one_capture_after` and `button_box` are `pub(crate)`, so that S2-1's
+gate builds the recording of this gate's test of the whole of stage two; and
+`s25_a_recognize_box_takes_the_settled_capture_and_lists_the_animation` asserts where `record
+frames` lists the sample the box admitted (§1.426). Nothing else changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

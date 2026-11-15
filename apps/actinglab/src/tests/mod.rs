@@ -197,6 +197,10 @@ mod gate_463_s13;
 // its own, and the end of the recording resumes only that pause.
 #[path = "gate_463_s17.rs"]
 mod gate_463_s17;
+// #463 S2-13: `record frames` refuses on its command line a number it cannot read, and makes no
+// session directory.
+#[path = "gate_463_s213.rs"]
+mod gate_463_s213;
 // Workflow #464 P2: `standard-pack build` builds a game's standard pack from one commit on the
 // steps of `resource verify`, whose report is as before.
 #[path = "gate_464_p2.rs"]
@@ -217,6 +221,10 @@ mod gate_463_s37;
 // sends nothing.
 #[path = "gate_463_s310.rs"]
 mod gate_463_s310;
+// Workflow #463 S3-11: without `--plan`, `standard-pack trial` sends its one run, reads its
+// business end and records it; `--collect` reads an end later.
+#[path = "gate_463_s311.rs"]
+mod gate_463_s311;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

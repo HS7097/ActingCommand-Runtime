@@ -1,3 +1,4 @@
+use super::device_commands::NOT_A_WHOLE_NUMBER;
 use super::record_hold::{self, Ended};
 use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::{
@@ -13,13 +14,14 @@ use crate::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
-    ApplicationSpec, ArchiveCopyFrames, ClickRetry, ClickSpec, EndingSpec, LAB_RECORD_MARK_SCHEMA,
-    MarkFamily, MarkRequest, MarkSpec, OptionalAfterSpec, RecordArchiveOptions, RecordRect,
-    RecordReopenOptions, RecordStartOptions, RecordStopOptions, RecordingHold, RecordingLock,
-    StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request,
-    record_archive, record_archive_copy, record_archive_warnings, record_hold_status,
-    record_instance_check, record_mark, record_reopen, record_start, record_start_defaults,
-    record_status, record_stop, record_stop_close,
+    ApplicationSpec, ArchiveCopyFrames, BoxSpec, BoxUse, ClickRetry, ClickSpec, EndingSpec,
+    LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest, MarkSpec, OptionalAfterSpec,
+    RecordArchiveOptions, RecordFramesRequest, RecordPoint, RecordRect, RecordReopenOptions,
+    RecordStartOptions, RecordStopOptions, RecordingHold, RecordingLock, StepAction,
+    StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive,
+    record_archive_copy, record_archive_warnings, record_frames, record_hold_status,
+    record_instance_check, record_mark, record_ready, record_reopen, record_start,
+    record_start_defaults, record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -382,6 +384,36 @@ pub(crate) const RECORD_REOPEN_READS: FlagReads = FlagReads {
     positionals: &[],
 };
 
+/// #463 S2-1: the flags `record ready` reads: the recording named by its id (active, archived or
+/// stopped), else the one the instance's session names.
+pub(crate) const RECORD_READY_READS: FlagReads = FlagReads {
+    row: "record ready",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--record-id"],
+            switches: &[],
+            refused: &[],
+        },
+    ],
+    positionals: &[],
+};
+
+/// #463 S2-13: the flags `record frames` reads: the step, how many frames each side lists and the
+/// recording named by its id.
+pub(crate) const RECORD_FRAMES_READS: FlagReads = FlagReads {
+    row: "record frames",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--step", "--before", "--after", "--record-id"],
+            switches: &[],
+            refused: &[],
+        },
+    ],
+    positionals: &[],
+};
+
 /// Workflow #434 LAB-5B3: the flags `record candidates` reads; its step id is also
 /// its first positional.
 pub(crate) const RECORD_CANDIDATES_READS: FlagReads = FlagReads {
@@ -516,6 +548,10 @@ fn record_reads(action: &str) -> Option<&'static FlagReads> {
         // Workflow #449 REC-ARCH.
         "archive" => &RECORD_ARCHIVE_READS,
         "reopen" => &RECORD_REOPEN_READS,
+        // #463 S2-1.
+        "ready" => &RECORD_READY_READS,
+        // #463 S2-13.
+        "frames" => &RECORD_FRAMES_READS,
         _ => return None,
     })
 }
@@ -582,7 +618,8 @@ fn run_session_record_inner(
 ) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
         CliError::usage(
-            "session record requires start|status|stop|mark|step|candidates|amend|archive|reopen",
+            "session record requires \
+             start|status|stop|mark|step|candidates|amend|archive|reopen|ready|frames",
         )
     })?;
     // Workflow #434 LAB-5B4: before anything is read or written.
@@ -592,12 +629,15 @@ fn run_session_record_inner(
         .map(Path::to_path_buf)
         .map(Ok)
         .unwrap_or_else(|| session_state_dir_from_flags(&flags))?;
-    fs::create_dir_all(&state_dir).map_err(|err| {
-        CliError::runtime_not_running(format!(
-            "failed to create session state dir {}: {err}",
-            state_dir.display()
-        ))
-    })?;
+    // #463 S2-13: `record frames` writes nothing, not even the session directory.
+    if action != "frames" {
+        fs::create_dir_all(&state_dir).map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to create session state dir {}: {err}",
+                state_dir.display()
+            ))
+        })?;
+    }
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
     let record_path = session_record_path(&state_dir, &instance_id);
     let record_lock = record_action_lock(global, action, &state_dir, &instance_id)?;
@@ -740,6 +780,23 @@ fn run_session_record_inner(
         // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
         "archive" => run_record_archive(&flags, &record_path, held_record_lock(&record_lock)?),
         "reopen" => run_record_reopen(&flags, &record_path, held_record_lock(&record_lock)?),
+        // #463 S2-1: what the recording still lacks before `record stop` can make its package;
+        // offline, under no lock (`record_action_lock` takes none for it), writing nothing.
+        "ready" => {
+            let options = record_ready_options(&config, &instance_id)?;
+            let ready = record_ready(
+                &state_dir,
+                &instance_id,
+                record_flag_value(&flags, "--record-id")?.as_deref(),
+                &options,
+                crate::offline_ocr::lab_ocr(),
+            )?;
+            serde_json::to_value(ready).map_err(|error| {
+                CliError::usage(format!("failed to encode record ready output: {error}"))
+            })
+        }
+        // #463 S2-13: offline, without the recording lock.
+        "frames" => run_record_frames(&flags, &state_dir, &instance_id),
         "step" => {
             let Some(mut record) = read_json_file::<SessionRecordContext>(&record_path)? else {
                 return Err(CliError::safety_blocked(
@@ -2880,6 +2937,24 @@ fn record_stop_options(
     })
 }
 
+/// #463 S2-1: the options `record ready` reads the recording with, those of `record stop` given
+/// none: the instance configuration's game and server, which `record stop` takes when neither its
+/// flags nor the recording give them.
+fn record_ready_options(config: &UserConfig, instance_id: &str) -> CliOutcome<RecordStopOptions> {
+    let instance = config.instances.get(instance_id);
+    Ok(RecordStopOptions {
+        default_game: instance
+            .and_then(|instance| instance.game.clone())
+            .map(|game| canonical_game(&game))
+            .transpose()?,
+        default_server: instance
+            .and_then(|instance| instance.server.clone())
+            .map(|server| canonical_server(&server))
+            .transpose()?,
+        ..RecordStopOptions::default()
+    })
+}
+
 /// A single-valued flag with a value: given twice or without a value is a usage error.
 fn record_flag_value(flags: &FlagArgs, name: &str) -> CliOutcome<Option<String>> {
     let values = flags.values(name);
@@ -2971,6 +3046,8 @@ pub(crate) const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     // #463 R4: an optional step a stopped recording inserts after a step, and one to give up.
     "--optional-after",
     "--remove-inserted",
+    // #463 S2-5: a box drawn on the step's primary frame by two opposite corners.
+    "--box",
 ];
 
 /// Workflow #434 LAB-5B2: the other flags `record mark` takes besides its shortcut flags: the
@@ -3241,6 +3318,56 @@ fn run_record_reopen(
     }))
 }
 
+/// #463 S2-13 (`contracts/lab-recording.md`, "The frames around a press: `record frames`"): `record
+/// frames --step <k> [--before <n>] [--after <n>] [--record-id <id>]`, offline and without the
+/// recording lock: the stored frames just before and just after the press of step `k` of the
+/// recording `record status` reads, or of the one `--record-id` names (`record_frames`). `--step`
+/// is required; it and `--before` and `--after` are whole numbers (the Lab checks the two sides'
+/// range, 0 to 100, `range`). #463 stage two, train 1, fix round: read as the waits of a recorded
+/// press are read (`after_capture_ms`): a flag given more than once is its last value, and a value
+/// that is no whole number is `validation_failed` with `details{argument, reason: "wrong_type",
+/// value}`. The answer is the Lab's.
+fn run_record_frames(flags: &FlagArgs, state_dir: &Path, instance_id: &str) -> CliOutcome<Value> {
+    let step = frames_number::<u32>(flags, "--step", "step")?.ok_or_else(|| {
+        CliError::usage("record frames needs --step <k>, the step's serial number")
+    })?;
+    let request = RecordFramesRequest {
+        record_id: record_flag_value(flags, "--record-id")?,
+        step,
+        before: frames_number(flags, "--before", "before")?,
+        after: frames_number(flags, "--after", "after")?,
+    };
+    let outcome = record_frames(state_dir, instance_id, &request)?;
+    serde_json::to_value(outcome)
+        .map_err(|error| CliError::usage(format!("failed to encode record frames output: {error}")))
+}
+
+/// #463 S2-13: the whole number `flag` gives (`argument` its MCP name), `None` when it is not
+/// given. #463 stage two, train 1, fix round: as the parent's flags (`after_capture_ms`), the last
+/// value when the flag is given more than once, and a value that is no such number
+/// `validation_failed` with `details{argument, reason: "wrong_type", value}`.
+fn frames_number<T: std::str::FromStr>(
+    flags: &FlagArgs,
+    flag: &str,
+    argument: &str,
+) -> CliOutcome<Option<T>> {
+    flags
+        .optional(flag)
+        .map(|value| {
+            value.parse::<T>().map_err(|_| {
+                CliError::usage(format!(
+                    "{flag} (MCP {argument}) takes a whole number, got {value}"
+                ))
+                .with_details(json!({
+                    "argument": argument,
+                    "reason": NOT_A_WHOLE_NUMBER,
+                    "value": value
+                }))
+            })
+        })
+        .transpose()
+}
+
 fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
     let number = |name: &str| -> CliOutcome<Option<u32>> {
         record_flag_value(flags, name)?
@@ -3393,6 +3520,14 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         remove_ending: record_flag_value(flags, "--remove-ending")?,
         optional_after: None,
         remove_inserted: number("--remove-inserted")?,
+        // #463 S2-5: `--box <use>=x1,y1:x2,y2`, the request form's `boxes`; beside `--ending`,
+        // `--optional-after` or `--transition` they stay in the request, which the Lab refuses:
+        // nothing is dropped.
+        boxes: flags
+            .values("--box")
+            .iter()
+            .map(|value| parse_record_mark_box(value.as_str()))
+            .collect::<CliOutcome<Vec<_>>>()?,
     };
     // #463 R2: `--ending` makes `--frame`, `--sample`, `--page`, the marks (`--template`,
     // `--color`) and `--reuse` the ending's, with `--outcome-key`, as the request form's `ending`
@@ -3532,6 +3667,61 @@ fn parse_record_mark_scales(value: &str) -> CliOutcome<TemplateScalesSpec> {
         })
         .collect::<CliOutcome<Vec<_>>>()?;
     Ok(TemplateScalesSpec { factors_milli })
+}
+
+/// #463 S2-5: `--box <use>=x1,y1:x2,y2`: what the box is for (`recognize` or `press`) and two
+/// opposite corners with the colon between them, as the request form's `boxes` holds them. The
+/// four numbers `x,y,w,h` of every other rectangle flag are refused, so that a rectangle is never
+/// read as two corners.
+fn parse_record_mark_box(value: &str) -> CliOutcome<BoxSpec> {
+    let (word, corners) = value.split_once('=').ok_or_else(|| {
+        CliError::usage(format!(
+            "--box must be <recognize|press>=x1,y1:x2,y2, got {value}"
+        ))
+    })?;
+    let usage = match word.trim() {
+        "recognize" => BoxUse::Recognize,
+        "press" => BoxUse::Press,
+        other => {
+            return Err(CliError::usage(format!(
+                "--box is recognize=x1,y1:x2,y2 or press=x1,y1:x2,y2, got {other}"
+            )));
+        }
+    };
+    let Some((first, second)) = corners.split_once(':') else {
+        return Err(CliError::usage(format!(
+            "--box takes two opposite corners x1,y1:x2,y2 with a colon between them, not a \
+             rectangle x,y,w,h; got {corners}"
+        )));
+    };
+    Ok(BoxSpec {
+        usage,
+        corners: [
+            parse_record_mark_corner(first, value)?,
+            parse_record_mark_corner(second, value)?,
+        ],
+    })
+}
+
+/// #463 S2-5: one corner `x,y` of `--box`'s `value`, with integer fields.
+fn parse_record_mark_corner(text: &str, value: &str) -> CliOutcome<RecordPoint> {
+    let parts = text.split(',').map(str::trim).collect::<Vec<_>>();
+    let [x, y] = parts.as_slice() else {
+        return Err(CliError::usage(format!(
+            "--box corner must be x,y, got {text} in {value}"
+        )));
+    };
+    let field = |number: &str, name: &str| {
+        number.parse::<i32>().map_err(|error| {
+            CliError::usage(format!(
+                "--box corner {name} '{number}' in {value}: {error}"
+            ))
+        })
+    };
+    Ok(RecordPoint {
+        x: field(x, "x")?,
+        y: field(y, "y")?,
+    })
 }
 
 /// `x,y,w,h` with integer fields.
@@ -3863,5 +4053,62 @@ mod lab2_tests {
         .expect("request");
         assert!(beside.optional_after.is_some());
         assert_eq!(beside.step, Some(2), "the step stays in the request");
+    }
+
+    // #463 S2-5 (contracts/lab-recording.md, "Drawing a box"): `record mark --box
+    // <use>=x1,y1:x2,y2`, repeated, gives the request form's `boxes` in the order given, so the
+    // command line and the MCP tools (which hand the request form on unchanged) give the Lab the
+    // same request. The four numbers `x,y,w,h` of every other rectangle flag, a use that is neither
+    // `recognize` nor `press`, a value without `=` and a corner that is not `x,y` are refused, and
+    // `--box` beside `--request-json` is refused as every shortcut flag is.
+    #[test]
+    fn s25_the_box_flag_declares_the_request_forms_boxes() {
+        let shortcut = record_mark_request_from_flags(&flags(&[
+            "--page",
+            "title",
+            "--box",
+            "recognize=1180,664:1252,688",
+            "--box",
+            "press=1252,688:1180,664",
+        ]))
+        .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "page": "title",
+            "boxes": [
+                {"use": "recognize", "corners": [{"x": 1180, "y": 664}, {"x": 1252, "y": 688}]},
+                {"use": "press", "corners": [{"x": 1252, "y": 688}, {"x": 1180, "y": 664}]}
+            ]
+        }))
+        .expect("the request form");
+        assert_eq!(shortcut, request);
+
+        for value in [
+            "recognize=1180,664,73,25",
+            "hover=1180,664:1252,688",
+            "recognize1180,664:1252,688",
+            "press=1180,664:1252",
+            "press=1180,top:1252,688",
+        ] {
+            let error = record_mark_request_from_flags(&flags(&["--box", value])).expect_err(value);
+            assert_eq!(
+                error.code, "validation_failed",
+                "{value}: {}",
+                error.message
+            );
+        }
+
+        let temp = tempfile::TempDir::new().expect("temporary directory");
+        let lock =
+            RecordingLock::acquire(temp.path(), "neutral.instance", "record mark", "Lab-CLI")
+                .expect("recording lock");
+        let error = run_record_mark(
+            &GlobalOptions::default(),
+            &flags(&["--request-json", "{}", "--box", "press=1,1:2,2"]),
+            &lock,
+        )
+        .expect_err("--box beside --request-json");
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+        assert!(error.message.contains("--box"), "{}", error.message);
     }
 }

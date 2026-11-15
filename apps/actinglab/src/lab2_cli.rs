@@ -2688,6 +2688,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--remove-ending <key>",
                 "--optional-after <k>",
                 "--remove-inserted <n>",
+                "--box <recognize|press>=x1,y1:x2,y2",
                 "--dry-run",
                 "--state-dir <dir>",
             ],

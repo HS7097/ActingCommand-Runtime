@@ -9,6 +9,10 @@
 
 // Workflow #449 REC-ARCH: a recording ended as material only, reopened later.
 pub(crate) mod archive;
+// #463 S2-13: the stored frames just before and just after one step's press, read on request.
+pub(crate) mod around;
+// #463 S2-5: boxes drawn on a step's primary frame, a region to recognize by or a region to press.
+pub(crate) mod boxes;
 pub(crate) mod container;
 pub(crate) mod crosscheck;
 // #463 R2: a screen that ends the business another way after the last press, taken by a stopped
@@ -25,6 +29,8 @@ pub(crate) mod inserted;
 pub(crate) mod lock;
 pub(crate) mod marks;
 pub(crate) mod model;
+// #463 S2-1: everything a recording still lacks before `record stop` can make its package.
+pub(crate) mod ready;
 // #463 R1: a step that chooses in a list of fixed slots by the name read in each slot.
 pub(crate) mod select;
 pub(crate) mod steps;
@@ -32,6 +38,10 @@ pub(crate) mod store;
 
 pub use archive::{
     ArchiveCopyFrames, record_archive, record_archive_copy, record_archive_warnings, record_reopen,
+};
+pub use around::{
+    RecordFramesFrame, RecordFramesOutcome, RecordFramesPress, RecordFramesPressFrame,
+    RecordFramesRequest, RecordFramesWarning, record_frames,
 };
 pub use hold::{
     LAB_RECORDING_HOLD_PREFIX, LAB_RECORDING_WARNING_HOLD_UNREAD,
@@ -41,3 +51,6 @@ pub use hold::{
 };
 pub use lock::RecordingLock;
 pub use model::*;
+pub use ready::{
+    PressPointOnly, ReadyDetails, ReadyItem, ReadyMark, ReadyWarningItem, RecordReadyOutcome,
+};

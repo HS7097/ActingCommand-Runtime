@@ -4,10 +4,10 @@
 // rd-1108/arch-013/brief-lab5b4.md): an own command refuses a flag it does not read, a switch takes
 // no value from the next word but `true` or `false`, and a positional a command does not read is
 // refused.
-// - `every_own_command_refuses_a_flag_it_does_not_read`: each of the 31 commands (the 24 rows that
+// - `every_own_command_refuses_a_flag_it_does_not_read`: each of the 33 commands (the 24 rows that
 //   were lenient, `record draft` since Workflow #434 LAB-5G4c, `record archive` and `record reopen`
-//   since Workflow #449 REC-ARCH, and `run list`, `capture`, `lab receipt` and `lab evidence`, the
-//   register's
+//   since Workflow #449 REC-ARCH, `record ready` since #463 S2-1, `record frames` since #463 S2-13,
+//   and `run list`, `capture`, `lab receipt` and `lab evidence`, the register's
 //   `own_flags::READ_LIST_ROWS` and `own_flags::UNROWED_READS`) refuses an unknown
 //   flag before it does anything: `validation_failed` naming it (`argument`, `argument_problem`
 //   `unknown`), the line, the exit code and the developer line those the CLI module gives a strict
@@ -103,13 +103,14 @@ impl Isolated {
     }
 }
 
-/// The 31 commands, each by the name its refusal gives it and the words of a command line that
+/// The 33 commands, each by the name its refusal gives it and the words of a command line that
 /// reaches it: the 24 rows that were lenient, `record draft` (Workflow #434 LAB-5G4c, a row of
-/// `READ_LIST_ROWS` since that slice built its command) and `record archive` and `record reopen`
-/// (Workflow #449 REC-ARCH, rows of it since that slice built them), by their command's words,
-/// then the four own commands outside the operation table. `state` names the recording session's
-/// directory, `out` the frame file `capture` would write.
-fn commands<'a>(state: &'a str, out: &'a str) -> [(&'static str, Vec<&'a str>); 31] {
+/// `READ_LIST_ROWS` since that slice built its command), `record archive` and `record reopen`
+/// (Workflow #449 REC-ARCH, rows of it since that slice built them), `record ready` (#463 S2-1)
+/// and `record frames` (#463 S2-13, the same), by their command's words, then the four own
+/// commands outside the operation table. `state` names the recording session's directory, `out`
+/// the frame file `capture` would write.
+fn commands<'a>(state: &'a str, out: &'a str) -> [(&'static str, Vec<&'a str>); 33] {
     let record = |action: &'a str| vec!["record", action, "--state-dir", state];
     [
         ("touch-probe", vec!["touch-probe"]),
@@ -127,6 +128,8 @@ fn commands<'a>(state: &'a str, out: &'a str) -> [(&'static str, Vec<&'a str>); 
         ("record draft", vec!["record", "draft"]),
         ("record archive", record("archive")),
         ("record reopen", record("reopen")),
+        ("record ready", record("ready")),
+        ("record frames", record("frames")),
         ("package validate", vec!["package", "validate"]),
         ("package inspect", vec!["package", "inspect"]),
         ("package bundle", vec!["package", "bundle"]),
@@ -151,7 +154,7 @@ fn every_own_command_refuses_a_flag_it_does_not_read() {
     let _guard = env_lock();
     let isolated = Isolated::new();
     let (state, out) = (isolated.path("session"), isolated.path("frame.png"));
-    // The 31 are the register's: the rows of `READ_LIST_ROWS`, then the read lists of the own
+    // The 33 are the register's: the rows of `READ_LIST_ROWS`, then the read lists of the own
     // commands outside the table, each by the name its refusal gives it.
     let registered = own_flags::READ_LIST_ROWS
         .iter()
