@@ -27,6 +27,19 @@
 // - `s213_the_read_writes_nothing_and_answers_while_the_lock_is_held`: while another command holds
 //   the recording's lock, reads answer and refusals are refused; every directory and file of the
 //   state directory is as it was.
+// Fix round 2 (the review of #1765):
+// - `s213_a_press_sent_on_a_capture_that_was_not_stored_is_split_at_its_time`: press 2 sent on a
+//   capture its command did not store names its step's stored frame (f0005), and a mark's sample
+//   (f0006) was stored after that frame and before the press: `press.frame` is f0005, the sample is
+//   the last frame before the press, `after` holds only the frames recorded after the press was
+//   sent, and the warning `press_frame_not_stored` names f0005.
+// - `s213_an_application_step_is_split_at_the_frame_its_receipt_names`: step 2's effect an
+//   application operation whose completed receipt names f0006 and its time: no point, the frames
+//   before f0006 and after it with offsets from that time; recorded before #463 S1-5 (no time on
+//   the receipt), the same frames without offsets.
+// - `s213_a_press_an_earlier_build_recorded_is_split_at_its_time`: the presses of `do --capture
+//   --record` (no `before_frame`, no loop recorded after them): step 2's press has no frame, and
+//   its sides are the frames recorded at or before its time and after it, with offsets.
 // The step table is written as stage one writes it; each frame's file holds made-up bytes, which
 // the read never decodes. No Runtime, no device, no clock read by the tests themselves.
 
@@ -636,4 +649,170 @@ fn s213_the_read_writes_nothing_and_answers_while_the_lock_is_held() {
     );
     assert_eq!(snapshot(&state), before);
     drop(lock);
+}
+
+/// The frames recorded after press 2 (1050), each with its offset from it and its step: the loop
+/// after press 2, the frame press 3 was sent on and the loop after press 3.
+const AFTER_PRESS_2: [(&str, i64, u32); 8] = [
+    ("f0007", 110, 3),
+    ("f0008", 210, 3),
+    ("f0009", 310, 3),
+    ("f0010", 410, 3),
+    ("f0011", 950, 3),
+    ("f0012", 1_110, 4),
+    ("f0013", 1_210, 4),
+    ("f0014", 1_310, 4),
+];
+
+#[test]
+fn s213_a_press_sent_on_a_capture_that_was_not_stored_is_split_at_its_time() {
+    let bench = Bench::new();
+    // Press 2 was sent on a capture its command did not store: its step's stored frame is the last
+    // capture after press 1 (f0005), and a mark's sample (f0006, attached at 1000) was stored after
+    // that frame and before the press (1050).
+    let mut table = bench.table();
+    let second = &mut table["steps"][1];
+    second["frames"][3]["superseded"] = json!(false);
+    second["frames"][4]["role"] = json!("sample");
+    second["click"]["execution"]["before_frame"] = json!("f0005");
+    second["click"]["execution"]["sent_on_unstored_capture"] = json!(true);
+    bench.write(&table, "active", &[]);
+    let answered = bench.read(&asked(2, None, None));
+    assert_eq!(answered.press.at_unix_ms, Some(STARTED_AT + 1_050));
+    let frame = answered
+        .press
+        .frame
+        .as_ref()
+        .expect("the stored frame the step names");
+    assert_eq!(
+        (frame.frame_id.as_str(), frame.stored_under_step),
+        ("f0005", 2)
+    );
+    assert_eq!(frame.captured_at_unix_ms, STARTED_AT + 560);
+    // The sample, recorded before the press was sent, is the last frame before it.
+    assert_eq!(
+        sides(&answered.before),
+        timed(&[("f0003", -690, 2), ("f0004", -590, 2), ("f0006", -50, 2)])
+    );
+    // After it only the frames recorded after the press was sent.
+    assert_eq!(sides(&answered.after), timed(&AFTER_PRESS_2));
+    assert_eq!((answered.before_total, answered.after_total), (5, 8));
+    assert_eq!(
+        answered.warnings,
+        [RecordFramesWarning {
+            code: "press_frame_not_stored",
+            frame_ids: vec!["f0005".to_owned()],
+        }]
+    );
+    let shown = serde_json::to_value(&answered).expect("the answer's JSON");
+    assert_eq!(
+        shown["warnings"],
+        json!([{"code": "press_frame_not_stored", "frame_ids": ["f0005"]}])
+    );
+}
+
+#[test]
+fn s213_an_application_step_is_split_at_the_frame_its_receipt_names() {
+    let bench = Bench::new();
+    // Step 2's effect is an application operation run on f0006: its completed receipt names that
+    // frame, the last capture of its loop after it (f0010) and its time (1050).
+    let mut table = bench.table();
+    let after_capture = table["steps"][1]["click"]["execution"]["after_capture"].clone();
+    let second = &mut table["steps"][1];
+    second["click"] = Value::Null;
+    second["closed_by"] = json!("application");
+    second["application"] = json!({
+        "action": "restart", "cli_verb": "restart", "source": "executed",
+        "executed": {
+            "request_id": "request-s213", "correlation_id": "correlation-s213",
+            "action_id": "action-s213", "receipt_state": "completed",
+            "application_event_ids": [], "before_frame": "f0006", "after_frame": "f0010",
+            "after_capture": after_capture, "executed_at_unix_ms": STARTED_AT + 1_050
+        },
+        "attempts": [], "needs_review": false
+    });
+    bench.write(&table, "active", &[]);
+    let answered = bench.read(&asked(2, None, None));
+    assert_eq!(
+        (answered.kind.as_str(), answered.artifact_step),
+        ("application", Some(2))
+    );
+    assert_eq!(answered.press.at_unix_ms, Some(STARTED_AT + 1_050));
+    assert_eq!(
+        (answered.press.point, answered.press.to_point),
+        (None, None)
+    );
+    let frame = answered
+        .press
+        .frame
+        .as_ref()
+        .expect("the frame the receipt names");
+    assert_eq!(
+        (frame.frame_id.as_str(), frame.stored_under_step),
+        ("f0006", 2)
+    );
+    assert_eq!(
+        sides(&answered.before),
+        timed(&[("f0003", -690, 2), ("f0004", -590, 2), ("f0005", -490, 2)])
+    );
+    assert_eq!(sides(&answered.after), timed(&AFTER_PRESS_2));
+    assert_eq!((answered.before_total, answered.after_total), (5, 8));
+    assert!(answered.warnings.is_empty(), "{:?}", answered.warnings);
+    let shown = serde_json::to_value(&answered.press).expect("the press's JSON");
+    assert!(shown.get("point").is_none(), "{shown}");
+    assert_eq!(shown["frame"]["frame_id"], "f0006");
+
+    // Recorded before #463 S1-5, the receipt has no time: the same frames, without offsets.
+    let removed = table["steps"][1]["application"]["executed"]
+        .as_object_mut()
+        .expect("the completed receipt")
+        .remove("executed_at_unix_ms");
+    assert!(removed.is_some(), "setup: the receipt had its time");
+    write_table(&bench.state(), &table);
+    let untimed_answer = bench.read(&asked(2, None, None));
+    assert_eq!(untimed_answer.press.at_unix_ms, None);
+    assert_eq!(untimed_answer.press.frame, answered.press.frame);
+    assert_eq!(
+        sides(&untimed_answer.before),
+        untimed(&[("f0003", 2), ("f0004", 2), ("f0005", 2)])
+    );
+    assert_eq!(
+        sides(&untimed_answer.after),
+        untimed(&AFTER_PRESS_2.map(|(id, _, step)| (id, step)))
+    );
+    assert_eq!(
+        (untimed_answer.before_total, untimed_answer.after_total),
+        (5, 8)
+    );
+}
+
+#[test]
+fn s213_a_press_an_earlier_build_recorded_is_split_at_its_time() {
+    let bench = Bench::new();
+    // The presses of `do --capture --record`: an execution names no frame and no loop after it.
+    let mut table = bench.table();
+    let steps = table["steps"].as_array_mut().expect("the steps");
+    for pressed in steps.iter_mut().take(3) {
+        let execution = pressed["click"]["execution"]
+            .as_object_mut()
+            .expect("an executed press");
+        for member in ["before_frame", "after_frame", "after_capture"] {
+            let removed = execution.remove(member);
+            assert!(removed.is_some(), "setup: an executed press had {member}");
+        }
+    }
+    bench.write(&table, "active", &[]);
+    let answered = bench.read(&asked(2, None, None));
+    assert_eq!(answered.press.at_unix_ms, Some(STARTED_AT + 1_050));
+    assert_eq!(answered.press.point, Some(RecordPoint { x: 12, y: 5 }));
+    assert_eq!(answered.press.frame, None);
+    // The frames recorded at or before the press (1050), the last three of six, then those after
+    // it, each with its offset.
+    assert_eq!(
+        sides(&answered.before),
+        timed(&[("f0004", -590, 2), ("f0005", -490, 2), ("f0006", -50, 2)])
+    );
+    assert_eq!(sides(&answered.after), timed(&AFTER_PRESS_2));
+    assert_eq!((answered.before_total, answered.after_total), (6, 8));
+    assert!(answered.warnings.is_empty(), "{:?}", answered.warnings);
 }

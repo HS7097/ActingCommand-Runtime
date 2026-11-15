@@ -7,21 +7,26 @@
 //! compared or copied: it lists what the step table holds.
 //!
 //! - **The sequence.** Every frame the step table stores under a step, its page transition's too,
-//!   superseded ones included, in the order the step table numbered them as they arrived (the
-//!   number of `frame_id`, `f0001`, `f0002`, …), which is the order they were captured in. An
-//!   ending's frames (#463 R2), taken from a later run and stored under no step, are not in it, as
-//!   the archive's manifest lists none either.
+//!   superseded ones included, in the order the frames entered the step table (the number of
+//!   `frame_id`, `f0001`, `f0002`, …, given as each entered). A frame captured from the device
+//!   enters when it is captured; a frame attached from a file (a mark's sample, a page
+//!   transition's frame, an offline frame, a step inserted after the stop) enters when it is
+//!   attached, and its time (`recorded_at_unix_ms`) is that moment, not the moment its screen was
+//!   captured. An ending's frames (#463 R2), taken from a later run and stored under no step, are
+//!   not in it, as the archive's manifest lists none either.
 //! - **The press.** Its time (`executed_at_unix_ms`), its point and its end point, as the step's
 //!   click execution holds them, and the frame it was sent on (`before_frame`). A step without an
 //!   executed press (an application operation, an entry launch, a step without an effect) has no
-//!   time and no point in the step table; its frame is the one its application operation's
-//!   completed receipt names, when it names one.
+//!   point; its time and its frame are those its application operation's completed receipt names
+//!   (`executed_at_unix_ms`, recorded since #463 S1-5, and `before_frame`), when it names them.
 //! - **The two sides.** With a frame the press was sent on, `before` are the frames before it in
-//!   the sequence and `after` those after it. Without one but with a time (a press an earlier
-//!   build recorded), those captured at or before the time and those captured after it. With
-//!   neither, those stored under the steps numbered below the step, and those stored under it and
-//!   the steps numbered above it. Each side keeps the sequence's order; `before` lists its last
-//!   `n`, `after` its first `n`.
+//!   the sequence and `after` those after it; a press sent on a capture that was not stored names
+//!   its step's stored frame instead, and of the frames after that one only those recorded after
+//!   the press's time are `after`, the others (a mark's sample, a transition's frame) `before`.
+//!   Without a frame but with a time (a press an earlier build recorded), those recorded at or
+//!   before the time and those recorded after it. With neither, those stored under the steps
+//!   numbered below the step, and those stored under it and the steps numbered above it. Each side
+//!   keeps the sequence's order; `before` lists its last `n`, `after` its first `n`.
 
 use super::archive::{instance_mismatch, read_recording, step_kind, stored_frame_path};
 use super::model::{LabRecording, RecordPoint, RecordedFrame, RecordingStep, StepTransition};
@@ -72,8 +77,9 @@ pub struct RecordFramesOutcome {
     pub warnings: Vec<RecordFramesWarning>,
 }
 
-/// The step's press as the step table holds it: its time, its point and its end point (none on a
-/// step without an executed press) and the stored frame it was sent on.
+/// The step's press as the step table holds it: its time (an application operation's completed
+/// receipt's), its point and its end point (none on a step without an executed press) and the
+/// stored frame it was sent on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RecordFramesPress {
     pub at_unix_ms: Option<u64>,
@@ -136,7 +142,8 @@ struct Pressed<'a> {
 /// into a transition (`record_step_not_found`), no recording to read
 /// (`record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`). A frame
 /// whose file is missing is listed with no `path` and named in the warning `frame_file_missing`; a
-/// press sent on a capture that was not stored is named in `press_frame_not_stored`.
+/// press sent on a capture that was not stored is named in `press_frame_not_stored`, and its
+/// `after` are the frames recorded after its time.
 pub fn record_frames(
     state_dir: &Path,
     instance: &str,
@@ -156,6 +163,16 @@ pub fn record_frames(
     });
     let (earlier, later): (Vec<&Stored<'_>>, Vec<&Stored<'_>>) =
         match (position, pressed.at_unix_ms) {
+            // Sent on a capture that was not stored: the frame is the step's stored one, and a
+            // frame stored after it but before the press was sent (a mark's sample, a
+            // transition's frame) is before the press.
+            (Some(at), Some(time)) if pressed.unstored => {
+                let (between, sent_after): (Vec<&Stored<'_>>, Vec<&Stored<'_>>) = sequence
+                    [at + 1..]
+                    .iter()
+                    .partition(|stored| stored.frame.recorded_at_unix_ms <= time);
+                (sequence[..at].iter().chain(between).collect(), sent_after)
+            }
             (Some(at), _) => (
                 sequence[..at].iter().collect(),
                 sequence[at + 1..].iter().collect(),
@@ -275,8 +292,8 @@ fn read_named(
 }
 
 /// What the step table holds of the press of `step`: its click execution's time, point, end point
-/// and `before_frame`; without one, the `before_frame` of its application operation's completed
-/// receipt, and no time and no point.
+/// and `before_frame`; without one, the time (#463 S1-5) and the `before_frame` of its application
+/// operation's completed receipt, when it names them, and no point.
 fn press_record(step: &RecordingStep) -> Pressed<'_> {
     if let Some(execution) = step
         .click
@@ -291,15 +308,15 @@ fn press_record(step: &RecordingStep) -> Pressed<'_> {
             unstored: execution.sent_on_unstored_capture,
         };
     }
+    let receipt = step
+        .application
+        .as_ref()
+        .and_then(|application| application.executed.as_ref());
     Pressed {
-        at_unix_ms: None,
+        at_unix_ms: receipt.and_then(|completed| completed.executed_at_unix_ms),
         point: None,
         to_point: None,
-        frame_id: step
-            .application
-            .as_ref()
-            .and_then(|application| application.executed.as_ref())
-            .and_then(|executed| executed.before_frame.as_deref()),
+        frame_id: receipt.and_then(|completed| completed.before_frame.as_deref()),
         unstored: false,
     }
 }
