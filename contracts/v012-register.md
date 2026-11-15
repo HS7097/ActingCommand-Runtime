@@ -28163,6 +28163,95 @@ frames of application operations (S1-3), `record frame` and the warning of an un
 three tools take `record` on the Lab's MCP server (`actinglab-mcp`); a client registered with
 today's server has no such tool until its registration moves, which is the owner's to do.
 
+### 1.403 Slice #463 S1-2 (0.12.63): a press is recorded with a fresh screen before it and a still screen after it (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one records the material stage two builds a package's recognition from; the design `rd-1115/pack-stage12-design.md`, A1.3, the `after_capture` members of A2.1, the row `after_not_still` of A5 and the row S1-2 of A6, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s12-still-after.md`, built on S1-1's branch at `486f5ce72ec6` (§1.402))
+
+The coordinator gave this slice 1.403, after S1-1 (§1.402), on whose code it stands. The slice
+ships in 0.12.63.
+
+**Why.** S1-1 records a press with the frame its step already had and one capture a fixed time
+after the press. In real play the frame before may be old (the agent looked, thought for a while,
+and pressed), and the frame after may be a frame of an animation or of a loading screen. The
+material must show what was on the screen when it was pressed and what the screen became
+([lab-recording.md](lab-recording.md), "Fresh before, still after").
+
+**Established by reading.**
+- *The measure* (the coordinator's ruling 1). The Runtime's one frame-change measure is
+  `frame_change_digest` and `frame_change_milli`, still at most `FRAME_CHANGE_MAX_MILLI` (1500), in
+  `actingcommand-recognition` (`crates/recognition/src/color_digest.rs`), which the kernel
+  re-exports for its still waits (`StillScreen::WHOLE_FRAME`,
+  `crates/execution-kernel/src/contained_task/observation_window.rs`). The Lab crate already depends
+  on that crate (its colour-digest marks), so the recording API calls the measure on the whole frame,
+  as `StillScreen::WHOLE_FRAME` does; no dependency is added and nothing is copied.
+- *The frame after and `note_after_frame`.* The frame that opens the step after a press is the one
+  S1-1's `note_after_frame` names. With frames kept between, the first of them opens it. So every
+  frame after a press arrives in one write, the kept ones first, and the press's `after_frame` is
+  then set to the last (`name_after_frame`, beside S1-1's `note_after_capture`); `note_after_frame`
+  and `steps.rs` are unchanged. When the frame after could not be taken, the first frame that
+  arrives later (`capture --record`) is still the one `note_after_frame` names.
+- *The warning.* The answer's `warnings` are `record_press`'s (`RecordPressOutcome`), and
+  `record_after_frame` returns the frame and its record only: `after_not_still` is added in
+  `record_press` from the record's `still`, three lines outside the two functions the work order
+  names.
+- *The bound's check.* `record_press` checks `after_ms` before anything; the bound of the stillness
+  test is read by `record_after_frame`, after the press. So `tap`, `swipe` and `long-tap` check it
+  where they read the flag, before the recording lock, and `record_after_frame` checks it again
+  before any wait.
+- *The flag without `--record`.* `record_flag_gate` refuses `--after-ms` without `--record`
+  (`PRESS_RECORD_ONLY_FLAGS`, `apps/actinglab/src/main.rs`, S1-1); `--still-max-ms` is added to that
+  list, a file the design's row does not name.
+- *Interface revisions.* None moves: no request kind, wire shape, record member, ledger member,
+  configuration key or outcome code is added; the members of `after_capture` are S1-1's. Each
+  capture is the `ObserveReadonly` read S1-1's rows name.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The frame before | `record_before_frame`: on an open step without a click, an application operation or marks whose live primary frame was recorded 1000 ms or more ago, one capture; still with that frame by the measure, nothing is stored; changed, it arrives as `capture --record`'s does and supersedes it (`crates/lab/src/recording_api.rs`) |
+| The frame after | `record_after_frame`: the bound's check, the wait, the device-arrival check, one capture, then a wait of 300 ms (the last one the rest of the bound) and a capture until a capture is still with the one before it; frames between kept when they changed from the last frame kept (at first the frame the press was on), the first three; one write of the kept frames and the frame after through `attach_frames` (S1-1's `attach_frame` for several frames, `capture --record`'s one frame included) and `name_after_frame`; `after_capture {after_ms, still_max_ms, still, waited_ms, captures, kept}` filled; helpers `Arriving`, `Measured`, `change_digest`, `still_frames`, `stored_digest`, `frame_refreshable` |
+| The warning | `record_press`: `after_not_still` in `warnings` when `still` is `false` |
+| The command | `tap`, `swipe` and `long-tap` take `--still-max-ms` (`DIRECT_TOUCH_FLAGS`; `parse_still_max_ms`, 0 to 60000; `run_recorded_touch` sets the request's bound) (`apps/actinglab/src/commands/device_commands.rs`); `record_flag_gate` refuses it without `--record` (`apps/actinglab/src/main.rs`) |
+| The table | the rows `tap`, `swipe`, `long-tap`: `still_max_ms` (integer), their notes |
+| Texts | [lab-recording.md](lab-recording.md): "Fresh before, still after" (new), and in "Recording while playing" the synopsis, the MCP parameters, the screens before and after, the refusals, the members of `recording.json` and the answer; the opening paragraph; the `validation_failed` row of "`--record` on device commands" |
+
+**Choices the design left.** The last wait of the stillness test is the rest of the bound, so the
+last capture is taken at the bound; the frames kept between are the first three; a frame between
+is first compared with the frame the press was on; `--still-max-ms 0` takes the one capture after
+the wait and records `still: false` with the warning; the age of 1000 ms, the interval of 300 ms
+and the three frames are constants of the recording API, as the design fixes them, not
+configuration keys.
+
+**Codes and words.** No outcome code is added and no fragment changes. New words, each in the
+answer or the details, never in a text: `after_not_still` in the answer's `record.warnings` (the
+frame after was taken at the bound of the stillness test without two still captures; warns, exit
+0); `validation_failed` with `details{argument: "still_max_ms", reason}`, `reason` `range` (outside
+0..=60000 or no whole number) or `record_only` (without `--record`), each refusing, exit 2. No
+decision reads a code.
+
+**Tests.** `crates/lab/src/gate_463_s12.rs` (exec gate map "#463 S1-2"; fake Runtime and clock,
+synthetic 160x90 screens of one colour; the age of a frame is written into the step table as a fixed
+time, no clock is read): an animation, the settled screen and the settled screen again after the
+press (the animation kept superseded, the third capture the frame after, the second stored nowhere,
+`after_capture {800, 5000, true, 1400, 3, 1}`); screens never still for the bounds 0, 100, 300, 1000
+and 5000 ms (the waits, exactly `ceil(bound / 300) + 2` captures with the frame before, the last
+capture the frame after, three kept, `still` false, `after_not_still`); an old frame before still
+(nothing stored, the old frame named) and changed (stored, the old superseded, the new named,
+`refreshed`), and a young one (no capture); a step with a mark (no capture before the press).
+**Adapted** in `crates/lab/src/gate_463_s11.rs` (S1-1), because this slice deliberately changes
+what they pin: the tap, the long press, the swipe and "marked afterwards" give the screen after
+twice and pin `after_capture {800, 5000, true, 1100, 2, 0}` (the frame after is now the capture still
+with the one before it); "not performed" and "a refusal before the press" record their open step's
+frame at a time the clock has not reached (an open step's frame now stands only while it is young,
+and the test must not depend on the clock). No golden changes; no test leaves the gate map.
+
+**What is not changed.** `model.rs`, `steps.rs`, `archive.rs`, `session_management.rs`, the kernel,
+the Runtime; `do --capture --record`; `capture --record`, whose one frame arrives as before; every
+recording without a press of the three commands, byte for byte. Not built here: the frames around
+application operations (S1-3): `name_after_frame` knows a click's execution only.
+
+**At deploy.** Nothing to configure. Recordings already on disk load as before; `after_capture.still`
+is `null` only on a press recorded without a stillness test.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

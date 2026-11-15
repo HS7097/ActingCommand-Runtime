@@ -530,8 +530,9 @@ pub(crate) enum DirectTouchCommand {
 
 /// Workflow #434 LAB-5B2: the flags `tap`, `swipe` and `long-tap` take beside their positional
 /// arguments: #463 S1-1, `--record` (the press is a step of the instance's recording) and its wait
-/// before the screen after the press, `--after-ms <ms>` (with `--record` only, `record_flag_gate`).
-pub(crate) const DIRECT_TOUCH_FLAGS: [&str; 2] = ["--record", "--after-ms"];
+/// before the screen after the press, `--after-ms <ms>`, and #463 S1-2 the bound of the stillness
+/// test after it, `--still-max-ms <ms>` (both with `--record` only, `record_flag_gate`).
+pub(crate) const DIRECT_TOUCH_FLAGS: [&str; 3] = ["--record", "--after-ms", "--still-max-ms"];
 
 /// #463 S1-1: of [`DIRECT_TOUCH_FLAGS`], those that take no value, as the command line of `tap`,
 /// `swipe` and `long-tap` is parsed (`FlagArgs::parse_switches`).
@@ -786,7 +787,11 @@ fn direct_touch_answer(
 /// takes its frame. The answer is the command's own with `record`; a press that was not performed
 /// answers as the command does without `--record` and records nothing. A failure after a
 /// performed and recorded press (the input lease's release, the receipt's encoding) is answered
-/// after the frame after it, with `record` and `input_outcome` in its details.
+/// after the frame after it, with `record` and `input_outcome` in its details. #463 S1-2
+/// (`contracts/lab-recording.md`, "Fresh before, still after"): an open step's old frame is taken
+/// again before the press, and after the wait the screen is taken every 300 ms until a capture is
+/// still with the one before it, at most `--still-max-ms` (5000 without it); the last capture is
+/// the frame after.
 fn run_recorded_touch(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -797,6 +802,14 @@ fn run_recorded_touch(
         .optional("--after-ms")
         .map(|value| parse_after_ms(&value))
         .transpose()?;
+    let still_max_ms = flags
+        .optional("--still-max-ms")
+        .map(|value| parse_still_max_ms(&value))
+        .transpose()?;
+    let mut request = command.record_press_request(after_ms);
+    if let Some(bound) = still_max_ms {
+        request.after.still_max_ms = bound;
+    }
     let instance = resolve_instance_id(global, config)?;
     let lock = super::session_record::record_flag_begin(
         global,
@@ -813,12 +826,7 @@ fn run_recorded_touch(
         sent = Some(pressed);
         Ok(commit)
     };
-    let recorded = record_press(
-        &lock,
-        &command.record_press_request(after_ms),
-        &mut press,
-        &mut frames,
-    );
+    let recorded = record_press(&lock, &request, &mut press, &mut frames);
     // Not sent: the recording's refusal, or the input's own error, as they are.
     let Some(SentPress {
         input_outcome,
@@ -868,6 +876,27 @@ fn parse_after_ms(value: &str) -> CliOutcome<u64> {
         ))
         .with_details(json!({"argument": "after_ms", "reason": "range", "after_ms": value}))
     })
+}
+
+/// #463 S1-2: `--still-max-ms <ms>`, the bound of the stillness test after the press, a whole
+/// number of milliseconds from 0 to 60000, checked before anything is locked or pressed; anything
+/// else is `validation_failed` with `details{argument: "still_max_ms", reason: "range"}`.
+fn parse_still_max_ms(value: &str) -> CliOutcome<u64> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|bound| *bound <= LAB_RECORDING_MAX_NEXT_FRAME_MS)
+        .ok_or_else(|| {
+            CliError::usage(format!(
+                "--still-max-ms takes a whole number of milliseconds from 0 to \
+                 {LAB_RECORDING_MAX_NEXT_FRAME_MS}, got {value}"
+            ))
+            .with_details(json!({
+                "argument": "still_max_ms",
+                "reason": "range",
+                "still_max_ms": value
+            }))
+        })
 }
 
 /// `error` with the input outcome of the press it followed as the member `input_outcome` of its

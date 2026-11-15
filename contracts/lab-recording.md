@@ -16,7 +16,9 @@ fixed slots by the name read in each slot, its click the slot it chooses ("Selec
 #463 R2: a stopped recording takes an ending from a frame, a screen that ends the business another
 way after its last press, without recording again ("Endings"). #463 S1-1: `tap`, `swipe` and
 `long-tap --record` record a press by the command that makes it, with the screen before it and the
-screen after it, no rectangle and no carrier package ("Recording while playing").
+screen after it, no rectangle and no carrier package ("Recording while playing"). #463 S1-2: the
+screen before is taken again when it is old, and the screen after is the first still one, with the
+screens between kept ("Fresh before, still after").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -1237,7 +1239,7 @@ playing") accept `--record`; every other command or combination is refused befor
 | `dry_run_unsupported` | `capture --record --dry-run` and its `session capture` alias, global or after the command |
 | `record_flag_takes_no_value` | `--record <value>` |
 | `record_state_dir_unsupported` | `--record` with `--state-dir`; `--record` uses `ACTINGLAB_SESSION_STATE_DIR` or the default state root |
-| `validation_failed` | `--tap-rect` without `--record`; #463 L1: so are `--mark-request`, `--mark-request-json`, `--next-frame-after-ms` and `--next-frame-out` ("One call per step"); #463 S1-1: and `--after-ms`, `details{argument: "after_ms", reason: "record_only"}` ("Recording while playing") |
+| `validation_failed` | `--tap-rect` without `--record`; #463 L1: so are `--mark-request`, `--mark-request-json`, `--next-frame-after-ms` and `--next-frame-out` ("One call per step"); #463 S1-1: and `--after-ms`, `details{argument: "after_ms", reason: "record_only"}` ("Recording while playing"); #463 S1-2: and `--still-max-ms`, `details{argument: "still_max_ms", reason: "record_only"}` ("Fresh before, still after") |
 
 The record instance (`--instance` or the instance configuration) and the command instance
 must be the same (`record_instance_mismatch`, exit 3); a missing or inactive session is
@@ -1526,13 +1528,13 @@ command that makes it: no rectangle, no carrier package, nothing marked. Each pr
 the instance's recording with the screen before it and the screen after it.
 
 ```
-tap <x> <y> --record [--after-ms <0..60000>]
-swipe <x1> <y1> <x2> <y2> <ms> --record [--after-ms <0..60000>]
-long-tap <x> <y> <ms> --record [--after-ms <0..60000>]
+tap <x> <y> --record [--after-ms <0..60000>] [--still-max-ms <0..60000>]
+swipe <x1> <y1> <x2> <y2> <ms> --record [--after-ms <0..60000>] [--still-max-ms <0..60000>]
+long-tap <x> <y> <ms> --record [--after-ms <0..60000>] [--still-max-ms <0..60000>]
 ```
 
 All with the global `--json --instance <i>`. Through the Lab's MCP server (`actinglab-mcp`) they are
-`ac_tap`, `ac_swipe` and `ac_long_tap` with `record` and `after_ms` ([lab-operations.json](lab-operations.json),
+`ac_tap`, `ac_swipe` and `ac_long_tap` with `record`, `after_ms` and (#463 S1-2) `still_max_ms` ([lab-operations.json](lab-operations.json),
 the rows `tap`, `swipe` and `long-tap`); today's server (`actingctl mcp-serve`) has no such tool. A
 whole business is `record start`, its presses each with `--record`, and `record archive` ("Archiving"),
 which needs no device: the last press's screen after it is the business's final screen. Pause the
@@ -1541,7 +1543,8 @@ instance's scheduling first, as for every recording.
 - **The screen before.** When no step is open (a new recording, or the screen after the previous
   press could not be taken), the command first takes one frame as `capture --record` takes it, and
   it opens the step the press lands on. When a step is open, its live primary frame stands and
-  nothing is taken. The step's frame is the screen the press is committed on.
+  nothing is taken, unless (#463 S1-2) it is old ("Fresh before, still after"). The step's frame
+  is the screen the press is committed on.
 - **The press.** The open step must declare no effect. A tap or a long press declares a box of one
   pixel at its point, `rect {x, y, 1, 1}`, `source: "point"`, rule `explicit` (a long press with
   `gesture{kind: "long_press", duration_ms}`, ending where it began); a swipe is the recorded swipe
@@ -1552,9 +1555,11 @@ instance's scheduling first, as for every recording.
   the command took one): `validation_failed` with `details{argument, reason}`: a point outside the
   frame (`point`, `outside_frame`), a long press outside 1..=60000 ms (`duration_ms`,
   `duration_range`), a wait outside 0..=60000 ms (`after_ms`, `range`; a value that is no whole
-  number too), `--after-ms` without `--record` (`after_ms`, `record_only`); a swipe's points and
-  duration as "`--record` on device commands" refuses them. An open step that declares a click
-  without an outcome is `record_click_exists`, one whose click has an outcome on record
+  number too), `--after-ms` without `--record` (`after_ms`, `record_only`), #463 S1-2: the bound
+  `--still-max-ms` outside 0..=60000 or no whole number (`still_max_ms`, `range`) and without
+  `--record` (`still_max_ms`, `record_only`); a swipe's points and duration as "`--record` on
+  device commands" refuses them. An open step that declares a click without an outcome is
+  `record_click_exists`, one whose click has an outcome on record
   `record_click_executed`, one that declares an application operation `record_step_effect_exists`:
   such a step is pressed with `do --capture --record`. A frame of another size than the recording's
   is `record_frame_size_mismatch`. `--dry-run` is `record_flag_unsupported`.
@@ -1566,27 +1571,31 @@ instance's scheduling first, as for every recording.
   command answers as it does without `--record` (`device_error` with `input_outcome`). A press that
   was sent and could not be recorded is `record_append_failed_after_input`.
 - **The screen after.** After a performed press the command waits `--after-ms` (800 without it),
-  takes one frame as `capture --record` takes it, and lets it arrive: it opens the next step. A
+  takes one frame as `capture --record` takes it, then (#463 S1-2) one every 300 ms until the
+  screen is still ("Fresh before, still after"), and lets the last arrive: it opens the next step. A
   frame that cannot be taken answers its own code and class, and the press and its closed step
   stand: its details begin with `record` (the press as recorded) and `after: {after_ms, taken:
   false}`, then the capture's own members; take the screen with `capture --record` (MCP:
   `ac_lab_observe` with `capture` and `record`), do not press again. A failure after a performed and
   recorded press that does not undo it (the input lease's release, the receipt's encoding) is
   answered after the screen after it, `device_error` with `record` and `input_outcome` in its
-  details. No stillness test runs yet, and an open step's frame is never taken again.
+  details.
 - **In `recording.json`** (every member absent on every other press, so that a recording without
   such a press, one of `do --capture --record` included, is byte-identical to one an earlier build
   wrote): the click's `source` `point`; its execution's `before_frame`, the id of the step's live
   primary frame when the press was committed (what was on the screen); its `after_frame`, the id of
-  the first frame that arrived after it (the screen after, or a `capture --record` or `record mark
-  --frame` that came first); its `after_capture: {after_ms, still_max_ms, still, waited_ms, captures,
-  kept}`, how the screen after was taken (today `{after_ms, 0, null, after_ms, 1, 0}`). Its
+  the screen after (#463 S1-2: the last capture, after the frames kept between it and the press),
+  or, when it could not be taken, of the first frame that arrived after the press (a `capture
+  --record` or `record mark --frame`); its `after_capture: {after_ms, still_max_ms, still,
+  waited_ms, captures, kept}`, how the screen after was taken ("Fresh before, still after"). Its
   `carrier_package`, `before` and `after` are `null`: no Runtime Lab operation ran.
 - **The answer.** The command's own answer (`status: "sent"`, `action`, `input_outcome`, …) with
   `record: {status: "press_recorded", record_id, record_started_at_unix_ms, step, step_closed, click,
   before: {frame_id, path, sha256, refreshed}, after: {step, frame_id, path, sha256, after_ms,
-  still_max_ms, still, waited_ms, captures, kept} | null, warnings: []}`. `path` is the stored frame:
-  the agent reads the next screen there. `refreshed` says the command took the frame before itself.
+  still_max_ms, still, waited_ms, captures, kept} | null, warnings}`. `path` is the stored frame:
+  the agent reads the next screen there. `refreshed` says the command took the frame before itself
+  (#463 S1-2: when no step was open, or when the open step's old frame changed). `warnings` is
+  empty or (#463 S1-2) `["after_not_still"]`.
 - **Coordinates.** The point is in the recording's coordinate space, the pixels of its frames. The
   Runtime hands the input's coordinates to the instance's input backend as they are and takes the
   frames from its capture backend; nothing converts between the two, so on an instance whose input
@@ -1609,6 +1618,69 @@ $lab = 'C:\ActingCommand\tools\actinglab.exe'
 & $lab --json --instance emu-a long-tap 640 360 800 --record
 & $lab --json --instance emu-a record archive
 ```
+
+### Fresh before, still after
+
+#463 S1-2 (0.12.63; the rules here are the coordinator's). The screen before a press is what was on
+the screen when it was pressed, and the screen after is what the screen became, not a frame of an
+animation or of a loading screen: stage two builds a package's recognition from these two frames.
+
+- **The frame before, taken again.** When the open step declares no click and no application
+  operation, has no marks, and its live primary frame was recorded (`recorded_at_unix_ms`) 1000 ms
+  or more before the press, the command first takes one frame as `capture --record` takes it.
+  Still with the live primary frame (below), nothing is stored and the live primary frame stands.
+  Changed, it arrives as `capture --record`'s does: the older frame becomes `superseded` (the
+  step's `frames` keep both, in order) and the new one is the frame the press is committed on, its
+  `before_frame`. A younger frame is never taken again. A step with marks (the older flow) is never
+  taken again either: a device frame on it is `record_step_click_missing`.
+- **The frame after, still.** After the wait `--after-ms` and its capture, the command waits 300 ms
+  (the last wait only the rest of the bound) and takes one more capture, until a capture is still
+  with the one before it, for at most `--still-max-ms` (0 to 60000, 5000 without it; MCP
+  `still_max_ms`) of waits in all. The frame after is the last capture: it opens the next step and is
+  the press's `after_frame`. At the bound without two still captures the last capture is the frame
+  after, `after_capture.still` is `false` and the answer's `record.warnings` holds
+  `after_not_still`; the press is recorded, exit 0. `--still-max-ms 0` takes the one capture after
+  the wait (`still` `false`, the warning). A press takes at most `ceil(still_max_ms / 300) + 2`
+  captures, the frame before included, and nothing waits past the bound.
+- **The frames between.** A capture that is not still with the next one shows a screen between the
+  press and its frame after (an animation, a loading screen). It is kept when it changed from the
+  last frame kept before it (at first the frame the press was on), at most three, the first ones:
+  they arrive before the frame after, in the order they were taken, as superseded frames of the next
+  step. A capture still with the next one is the same screen as it and is not stored, nor is any
+  capture past the third kept. The frames kept and the frame after are written at once; a capture
+  that fails answers its own code (the press stands, `after: {after_ms, taken: false}`, as above)
+  and stores none of them.
+- **Still.** Two frames are still when their frame change is at most `FRAME_CHANGE_MAX_MILLI`
+  (1500): the Runtime's one frame-change measure, `frame_change_digest` of the whole frame and
+  `frame_change_milli` (`crates/recognition/src/color_digest.rs`; [color-digest.md](color-digest.md),
+  section Frame change), the measure the kernel's still waits use. The Lab calls it and copies
+  nothing. A capture of another size than the recording's is `record_frame_size_mismatch`; a frame
+  the measure cannot digest is `record_frame_unreadable`.
+- **`after_capture`** `{after_ms, still_max_ms, still, waited_ms, captures, kept}`: the wait, the
+  bound, whether two captures were still, every wait in all (`after_ms` and the waits of the
+  stillness test), the captures after the press, the frames kept between. `still` is `true` or
+  `false`; it is `null` only on a press recorded before this slice, whose frame after was taken
+  with no stillness test (`still_max_ms` 0, one capture): stillness was not tested.
+- **Refused before anything is pressed** (exit 2): `--still-max-ms` outside 0..=60000 or no whole
+  number, `validation_failed` `details{argument: "still_max_ms", reason: "range"}`; `--still-max-ms`
+  without `--record`, `details{argument: "still_max_ms", reason: "record_only"}`.
+- **`before.refreshed`** keeps its one meaning, the frame before was captured by this command: when
+  no step was open, and when the open step's old frame changed. An old frame found still stands
+  with `refreshed: false`.
+- **Requests.** Each capture is one `ObserveReadonly` read, as `capture --record` takes its frame; no
+  request kind is new.
+
+The answer's `record.after` of a screen still at the third capture after one frame of an animation,
+and of a screen never still up to the default bound:
+
+```json
+{"step": 2, "frame_id": "f0003", "path": "…", "sha256": "…", "after_ms": 800,
+ "still_max_ms": 5000, "still": true, "waited_ms": 1400, "captures": 3, "kept": 1}
+{"step": 2, "frame_id": "f0005", "path": "…", "sha256": "…", "after_ms": 800,
+ "still_max_ms": 5000, "still": false, "waited_ms": 5800, "captures": 18, "kept": 3}
+```
+
+the second with `"warnings": ["after_not_still"]`.
 
 ## Application steps
 

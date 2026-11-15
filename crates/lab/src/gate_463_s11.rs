@@ -34,11 +34,16 @@
 //   execution's members those an earlier build wrote.
 // Frames are synthetic 1280x720 (a square of one colour at the top left on gray); no Runtime, no
 // device; the tests read no clock and never sleep.
+// #463 S1-2 (register §1.403) adapts six of these tests to what it deliberately changes: the frame
+// after a press is the capture that is still with the one before it, so the scripts give the
+// screen after twice (a wait of 300 ms between) and `after_capture` is `{800, 5000, true, 1100, 2,
+// 0}`; and an open step's frame stands only while it is younger than 1000 ms, so the two tests that
+// press on such a step record its frame at a time the clock has not reached.
 
-use crate::recording::store::{lab_dir, old_record_path, recording_path};
+use crate::recording::store::{lab_dir, old_record_path, recording_path, save_recording};
 use crate::{
     AfterCapture, AttachFrameRequest, ClickEffect, ClickPlan, ClickSpec, CommitClickRequest,
-    LAB_RECORD_MARK_SCHEMA, LabOcr, MarkFamily, MarkRequest, MarkSpec, OpaqueJson,
+    LAB_RECORD_MARK_SCHEMA, LabOcr, LabRecording, MarkFamily, MarkRequest, MarkSpec, OpaqueJson,
     PlanClickRequest, PlannedSwipe, PointPress, RecordFramePorts, RecordPoint, RecordPressOutcome,
     RecordPressRequest, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock,
     record_attach_frame, record_commit_click, record_mark, record_plan_click, record_press,
@@ -68,6 +73,9 @@ const GRAY: [u8; 3] = [60, 60, 60];
 const COLORS: [[u8; 3]; 3] = [[230, 20, 20], [20, 230, 20], [20, 20, 230]];
 /// Each screen's square, a colour mark's region.
 const SQUARE: RecordRect = rect(0, 0, 40, 40);
+/// #463 S1-2: a time the clock has not reached (2100-01-01): a frame recorded then is younger than
+/// any bound, so a press on its step takes no frame before it.
+const UNREACHED_UNIX_MS: u64 = 4_102_444_800_000;
 
 const fn rect(x: i32, y: i32, width: i32, height: i32) -> RecordRect {
     RecordRect {
@@ -236,6 +244,29 @@ impl Bench {
             .unwrap_or_else(|error| panic!("frame {index}: {}: {}", error.code, error.message));
     }
 
+    // #463 S1-2: the live primary frame of step `step` as recorded at `at_unix_ms`, written as the
+    // recording writes its step table: whether a press takes it again then depends on no clock.
+    fn recorded_at(&self, step: u32, at_unix_ms: u64) {
+        let state = self.state();
+        let path = recording_path(&state, RECORD_ID);
+        let mut recording: LabRecording =
+            serde_json::from_slice(&fs::read(&path).expect("step table")).expect("step table JSON");
+        let frame = recording
+            .steps
+            .iter_mut()
+            .find(|item| item.index == step)
+            .and_then(|item| {
+                item.frames
+                    .iter_mut()
+                    .rev()
+                    .find(|frame| frame.role == "primary" && !frame.superseded)
+            })
+            .expect("the step's live primary frame");
+        frame.recorded_at_unix_ms = at_unix_ms;
+        save_recording(&state, &recording)
+            .unwrap_or_else(|error| panic!("step table: {}: {}", error.code, error.message));
+    }
+
     // `record_press` of `request`, the fake Runtime answering `answer` to the input and its
     // captures taking `screens`.
     fn press<const N: usize>(
@@ -394,14 +425,15 @@ fn performed(pressed: Pressed) -> (RecordPressOutcome, Vec<String>, Vec<InputAct
     (outcome, pressed.log, pressed.inputs)
 }
 
-// The frame after a press as S1-1 takes it: the wait, one capture, no stillness test.
+// The frame after a press as #463 S1-2 takes it when the screen after is still at once: the wait,
+// one capture, 300 ms, a capture still with it, nothing kept between.
 fn after_capture(after_ms: u64) -> Value {
     json!({
         "after_ms": after_ms,
-        "still_max_ms": 0,
-        "still": null,
-        "waited_ms": after_ms,
-        "captures": 1,
+        "still_max_ms": 5000,
+        "still": true,
+        "waited_ms": after_ms + 300,
+        "captures": 2,
         "kept": 0
     })
 }
@@ -412,10 +444,16 @@ fn s11_a_tap_on_a_new_recording_records_the_screens_before_and_after() {
     let (outcome, log, inputs) = performed(bench.press(
         &tap_request(100, 200),
         Answer::Performed,
-        [Some(0), Some(1)],
+        [Some(0), Some(1), Some(1)],
     ));
-    // One capture opens step 1, the input, the wait, one capture opens step 2.
-    assert_eq!(log, ["capture", "press", "wait 800", "capture"]);
+    // One capture opens step 1, the input, the wait, one capture, 300 ms (#463 S1-2), a capture
+    // still with it, which opens step 2.
+    assert_eq!(
+        log,
+        [
+            "capture", "press", "wait 800", "capture", "wait 300", "capture"
+        ]
+    );
     assert_eq!(inputs, [InputAction::Tap { x: 100, y: 200 }]);
 
     let recording = bench.recording();
@@ -469,10 +507,10 @@ fn s11_a_tap_on_a_new_recording_records_the_screens_before_and_after() {
             "path": next["frames"][0]["path"],
             "sha256": next["frames"][0]["sha256"],
             "after_ms": 800,
-            "still_max_ms": 0,
-            "still": null,
-            "waited_ms": 800,
-            "captures": 1,
+            "still_max_ms": 5000,
+            "still": true,
+            "waited_ms": 1100,
+            "captures": 2,
             "kept": 0
         }),
         "{record}"
@@ -485,9 +523,14 @@ fn s11_a_long_press_is_a_long_press_of_one_pixel() {
     let (outcome, log, inputs) = performed(bench.press(
         &long_press_request(640, 360, 800),
         Answer::Performed,
-        [Some(0), Some(1)],
+        [Some(0), Some(1), Some(1)],
     ));
-    assert_eq!(log, ["capture", "press", "wait 800", "capture"]);
+    assert_eq!(
+        log,
+        [
+            "capture", "press", "wait 800", "capture", "wait 300", "capture"
+        ]
+    );
     assert_eq!(
         inputs,
         [InputAction::LongTap {
@@ -525,9 +568,14 @@ fn s11_a_swipe_is_the_recorded_swipe_of_one_pixel_boxes() {
     let (outcome, log, inputs) = performed(bench.press(
         &swipe_request((900, 400), (300, 400), 300),
         Answer::Performed,
-        [Some(0), Some(1)],
+        [Some(0), Some(1), Some(1)],
     ));
-    assert_eq!(log, ["capture", "press", "wait 800", "capture"]);
+    assert_eq!(
+        log,
+        [
+            "capture", "press", "wait 800", "capture", "wait 300", "capture"
+        ]
+    );
     assert_eq!(
         inputs,
         [InputAction::Swipe {
@@ -600,8 +648,10 @@ fn s11_an_uncertain_answer_is_indeterminate_and_takes_no_frame_after() {
 #[test]
 fn s11_a_press_not_performed_leaves_every_file_as_it_was() {
     let bench = Bench::new();
-    // The open step, whose frame stands: no frame is taken before the press.
+    // The open step, whose frame stands: no frame is taken before the press (#463 S1-2: its frame
+    // is young).
     bench.capture(0);
+    bench.recorded_at(1, UNREACHED_UNIX_MS);
     let before = bench.files();
     let pressed = bench.press(&tap_request(100, 200), Answer::NotPerformed, []);
     assert_eq!(pressed.log, ["press"]);
@@ -614,6 +664,8 @@ fn s11_a_press_not_performed_leaves_every_file_as_it_was() {
 fn s11_a_refusal_before_the_press_presses_nothing() {
     let bench = Bench::new();
     bench.capture(0);
+    // #463 S1-2: the open step's frame is young, so no frame is taken before the press.
+    bench.recorded_at(1, UNREACHED_UNIX_MS);
     let before = bench.files();
     let too_long = RecordPressRequest {
         after: AfterCapture::for_press(Some(60_001)),
@@ -733,7 +785,7 @@ fn s11_marked_afterwards_the_recording_generates_a_one_pixel_click_the_kernel_ad
     performed(bench.press(
         &tap_request(100, 200),
         Answer::Performed,
-        [Some(0), Some(1)],
+        [Some(0), Some(1), Some(1)],
     ));
     bench.mark(1, "first_square");
     bench.mark(2, "last_square");

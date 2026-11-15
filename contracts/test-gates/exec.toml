@@ -3354,3 +3354,14 @@ tests = [
     "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_463_s11::s11_ac_tap_takes_record_and_after_ms",
 ]
 incident = ["#463 S1-1"]
+
+# #463 S1-2 (0.12.63; register §1.403; brief rd-1115/brief-463-s12-still-after.md; design rd-1115/pack-stage12-design.md, A1.3 and the row S1-2 of A6; contracts/lab-recording.md, "Fresh before, still after"): a press is recorded with a fresh screen before it and a still screen after it, stillness the Runtime's one frame-change measure. record_press under the recording lock with a fake Runtime (its input answer, its captures, the caller's clock), on synthetic 160x90 screens of one colour: an animation, the settled screen and the settled screen again after the press: a capture every 300 ms until the third is still with the second, the animation kept as a superseded frame of step 2, the third capture the frame after and step 1's after_frame, the second stored nowhere, after_capture {800, 5000, true, 1400, 3, 1}, no warning (1); for the bounds 0, 100, 300, 1000 and 5000 ms, captures never still: waits of 300 ms with the last one the rest of the bound, exactly ceil(bound / 300) + 2 captures with the frame before, the last capture the frame after, the first three frames between kept superseded, still false, waited_ms 800 + the bound, record.warnings ["after_not_still"] (2); an open step's frame recorded long ago: one capture before the press, still with it nothing stored and the press naming the old frame (refreshed false), changed the new frame stored, the old superseded and the press naming the new one (refreshed true); a frame recorded at a time the clock has not reached: no capture before the press (3); a step with a mark and an old frame: no capture before the press, which names the step's frame (4). It adapts six tests of #463 S1-1 above (1, 2, 3 and 9: the screen after given twice, after_capture {800, 5000, true, 1100, 2, 0}; 5 and 6: the open step's frame recorded at a time the clock has not reached)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s12::s12_an_animated_screen_after_is_kept_between_and_the_still_one_is_the_frame_after",
+    "actingcommand-lab::lib::gate_463_s12::s12_a_screen_never_still_is_taken_to_the_bound_and_warned",
+    "actingcommand-lab::lib::gate_463_s12::s12_an_old_frame_before_is_taken_again_and_stored_only_when_it_changed",
+    "actingcommand-lab::lib::gate_463_s12::s12_a_step_with_marks_keeps_its_frame_before",
+]
+incident = ["#463 S1-2"]

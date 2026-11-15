@@ -666,9 +666,9 @@ const RECORD_ONLY_FLAGS: [&str; 5] = [
     "--next-frame-out",
 ];
 
-/// #463 S1-1: the flag `tap`, `swipe` and `long-tap` take with `--record` only: the wait before the
-/// screen after the press.
-const PRESS_RECORD_ONLY_FLAGS: [&str; 1] = ["--after-ms"];
+/// #463 S1-1: the flags `tap`, `swipe` and `long-tap` take with `--record` only: the wait before
+/// the screen after the press and (#463 S1-2) the bound of the stillness test after it.
+const PRESS_RECORD_ONLY_FLAGS: [&str; 2] = ["--after-ms", "--still-max-ms"];
 
 /// Workflow #336: `--record` takes no value, never comes with `--state-dir`, and is accepted
 /// only on `capture`, `observe --capture`, `do --capture`, (R24) `session app` /
