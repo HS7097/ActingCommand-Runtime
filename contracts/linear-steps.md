@@ -244,7 +244,8 @@ pages before the target page, "Endings" below).
   frame by itself; it never inputs, never goes on with the attempt and never hands a frame to the
   shared interrupt pages, so a page that passes on it (the step's own page, or an awaited page
   that shows only now) leaves the task failed with `page_confirmation_failed` and the detail,
-  values and timing of the failed wait. Its frames count for the attempt's loading records as a
+  values and timing of the failed wait (Workflow #469 K1: with the word of what it saw beside
+  those values, "What the program saw" under "Failure codes"). Its frames count for the attempt's loading records as a
   retry decision's do. Its time counts against the task's deadline, but a deadline that cuts it,
   and every other error raised by its own capture, recognition or evaluation, whatever its kind
   (a task error, or an operation error of the device or the runtime), leaves the end the failed
@@ -988,8 +989,8 @@ starts the stuck-recovery ladder.
 |---|---|---|
 | The first step's page does not pass within `step_timeout_ms`, or (LOAD-4) the entry wait ended on its loading allowance, with the loading values ("Loading pages") | `contained_task_linear_entry_unmatched` | `page_recognition` / `entry_recognition` |
 | The intermediate page is not seen within its timeout, with no attempt left | `contained_task_linear_intermediate_unobserved` | `postcondition` / `postcondition` |
-| The next step's page does not pass in its budget (with no attempt left), the retry decision sees neither page, the next step's page does not follow a seen intermediate page, or no candidate passes within `S + T` after a seen skip target, each after the closing decision ("Retries") except where it finds a screen the package never recorded (the next row); or (LOAD-4) one of these waits, or the intermediate page's, ended on the attempt's loading allowance, with the loading values ("Loading pages") | `page_confirmation_failed`, detail `transition=none\|page\|window ...` (`intermediate_seen=true` after a seen intermediate page) | `postcondition` / `postcondition`, `limit_ms` the spent budget |
-| Workflow #463 U1 (since 0.12.60): in a task's own run, outside a restart segment, the closing decision after one of the ends of the row above finds a screen the package never recorded (below) | `contained_task_linear_unrecorded_screen`, the detail `page_confirmation_failed` gives that end, values `pack_operation_id`, `page_ids`, `attempts` and (from the host) `artifact_id` | `postcondition` / `postcondition`, the timing `page_confirmation_failed` gives that end (after a retry decision `limit_ms` the step timeout) |
+| The next step's page does not pass in its budget (with no attempt left), the retry decision sees neither page, the next step's page does not follow a seen intermediate page, or no candidate passes within `S + T` after a seen skip target, each after the closing decision ("Retries") except where it finds a screen the package never recorded (the next row); or (LOAD-4) one of these waits, or the intermediate page's, ended on the attempt's loading allowance, with the loading values ("Loading pages") | `page_confirmation_failed`, detail `transition=none\|page\|window ...` (`intermediate_seen=true` after a seen intermediate page); Workflow #469 K1 (since 0.12.62): value `confirmation_problem`, what the program saw ("What the program saw", below) | `postcondition` / `postcondition`, `limit_ms` the spent budget |
+| Workflow #463 U1 (since 0.12.60): in a task's own run, outside a restart segment, the closing decision after one of the ends of the row above finds a screen the package never recorded (below) | `contained_task_linear_unrecorded_screen`, the detail `page_confirmation_failed` gives that end, values `pack_operation_id`, `page_ids`, `attempts`, (Workflow #469 K1, since 0.12.62) `confirmation_problem` `unrecorded_screen`, always, and (from the host) `artifact_id` | `postcondition` / `postcondition`, the timing `page_confirmation_failed` gives that end (after a retry decision `limit_ms` the step timeout) |
 | After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page; or (LOAD-4) its wait ended on its loading allowance, with the loading values | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
@@ -1076,6 +1077,41 @@ recorded after such a restart can end with this code where R25-1 would count the
 restart segment. A screen that changes with a period equal to the decision's capture interval can
 look still to it; both results are failures of the run, and they differ only in the code and the
 pause.
+
+**What the program saw** (Workflow #469 K1, since 0.12.62; the owner's option A on board #469).
+Every end of the two rows `page_confirmation_failed` and `contained_task_linear_unrecorded_screen`
+above carries the value `confirmation_problem`, a word of the closed vocabulary of that name: what
+the program saw where the step's confirmation ended. It stands in the outcome's values (the run's
+terminal, its receipt, a scheduled run's policy record) and never in the detail: the code, the
+detail, the timing and every other value of each end are the ones it had, so the failure identity,
+the streak and the frame rules are unchanged, and for one code the program does the same next
+whichever word it carries. Where the closing decision ("Retries") is made, the word is its verdict:
+
+| The closing decision | `confirmation_problem` |
+|---|---|
+| the task's deadline cut it | `deadline_reached` |
+| the step's own page passed on one of its frames | `input_not_taken` |
+| a page the failed wait awaited passed on one of its frames | `awaited_page_late` |
+| one of its frames was a transition frame (LOAD-4, under `on`) | `transition_shown` |
+| one of its frames showed a shared interrupt page | `interrupt_shown` |
+| at its bound, its last two captures or its first and last frame differ | `screen_moving` |
+| at its bound, on its still last frame, a declared loading page passes, alone or beside another page | `loading_page_shown` |
+| at its bound, on its still last frame, another page of the package passes | `other_page_shown` |
+| its own capture, recognition or evaluation failed, the evaluation of the package's other pages on its last frame included | `check_failed` |
+| every rule above held: a screen the package never recorded | `unrecorded_screen`, the run ending with `contained_task_linear_unrecorded_screen`, which always carries this word |
+
+Where it is not made, the word is that of the first of these that holds: the failed wait, or the
+retry decision, ended on the attempt's loading allowance (`loading_limit`, beside the loading
+values, which codes mode drops); a retry decision saw neither page (`neither_page`, whatever else
+kept the closing decision from being made, a missed intermediate page included); the run is not a
+task's own run (`unjudged_layer_run`); it is inside a restart segment (`unjudged_restart_segment`);
+the package declares sample consensus (`unjudged_consensus`); the step is an application entry
+(`unjudged_application_entry`, which no run reaches: admission refuses a click or a select step
+from any screen, and an application step ends with `contained_task_linear_application_unconfirmed`
+before any closing decision); the run has less than twice the step timeout left
+(`unjudged_time_short`). An intermediate page missed with no attempt left ends with
+`contained_task_linear_intermediate_unobserved`, which carries no word. A layer's failure leaves its
+gate as its code alone, as every value of it did before. The value is optional in the catalog.
 
 The new codes are strings; none of them starts the stuck-recovery ladder, except
 `contained_task_linear_unrecorded_screen` (class `pack_logic_mismatch`, above). A select step's

@@ -27358,6 +27358,73 @@ category but D3's two; no interface revision, record shape or configuration key.
 changes reach no trigger under the defaults, and the removed list entry names a code no build
 since 0.12.39 raises.
 
+### 1.395 Slice #469 K1 (0.12.62): a linear step's end says what was seen (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, place 1 of A-1 in its linear parts and the row K1 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after V0, §1.386))
+
+The coordinator gave this slice 1.395: main `b6fe6ec2` holds the sections up to §1.386; 1.387 to
+1.394 and 1.396 to 1.399 belong to other slices, K2, H1, H2 and H3 among them. The slice ships in
+0.12.62, as §1.386 does.
+
+**What it is.** V0's vocabulary `confirmation_problem` (§1.386) is set on every end of a
+`linear_steps` step that U1's closing decision classifies (§1.372): the three sites where a failed
+wait ends the run with `page_confirmation_failed` (the last attempt's arrival and the next page
+after a seen intermediate page or skip target; the continued wait after a late gate; a retry
+decision that saw neither page), and `contained_task_linear_unrecorded_screen`, which always
+carries `unrecorded_screen` ([linear-steps.md](linear-steps.md), "What the program saw").
+`linear_closing_decision` returns its verdict, a word, in place of a `bool`; `another_page_on`
+tells a declared page, a declared loading page and an error of its own evaluation apart;
+`linear_closing_pages` names the condition that kept the decision from being made. One function of
+`crates/execution-kernel/src/contained_task/linear.rs`, `closing_end`, turns the verdict into the
+code, as U1 did: `unrecorded_screen` into the dedicated code, every other word into
+`page_confirmation_failed`. The conditions and the control flow of the closing decision are U1's;
+no code is added, and no code, class, detail, timing or other value changes.
+
+| Word | From what the program already decides |
+|---|---|
+| `deadline_reached` | the closing observation's two deadline checks |
+| `input_not_taken`, `awaited_page_late` | a frame on which one of the decision's pages passed: the step's own page, the last of them, or an awaited page |
+| `transition_shown` | the frame's transition row (`judge_frame`, LOAD-4 under `on`) |
+| `interrupt_shown` | the recognising check of the shared interrupt pages |
+| `screen_moving` | at the bound, the first and last frames' or the last two captures' comparison |
+| `loading_page_shown`, `other_page_shown` | `another_page_on`: a page it matched that is a declared loading page, or another page it matched |
+| `check_failed` | an error of `another_page_on`'s evaluation, and every other error of the decision's own capture, recognition or evaluation but a bookkeeping failure |
+| `unrecorded_screen` | every rule held |
+| `loading_limit` | the `LoadingLimit` of the failed wait or of the retry decision, whose values the outcome carries |
+| `neither_page` | a retry decision that saw neither page, with no closing decision after it |
+| `unjudged_layer_run`, `unjudged_restart_segment`, `unjudged_consensus`, `unjudged_application_entry`, `unjudged_time_short` | the conditions of `linear_closing_pages`, in its order |
+
+**Choices of this slice** (the design does not settle them). Where several conditions keep the
+decision from being made, the first in `linear_closing_pages`'s order gives the word, the loading
+allowance's first: the outcome then carries its loading values, which codes mode drops. After a
+retry decision that saw neither page and no closing decision, the word is `neither_page` whatever
+condition held (but the loading allowance's): that is what the program saw there, and the design's
+row for the word is that path's. A declared loading page among the pages `another_page_on` matched
+makes the word `loading_page_shown`, as a loading page holding over a page makes the frame a
+loading frame under LOAD-3.
+
+**Not reached.** `unjudged_application_entry` is set where `linear_closing_pages` finds the step's
+`from` to be an application entry, but no run gets there: admission refuses a click or a select
+step from any screen (`any_requires_application`), and an application step ends with
+`contained_task_linear_application_unconfirmed` before any closing decision. No test reaches it.
+
+**What is not changed.** The catalog: the five codes keep `confirmation_problem` optional (V0's
+texts already name it); making it required waits for K2. Every detail text, so the failure
+identity's key K and the accumulating list; the streak; the frame pins; the wire code; the
+`contained_task_linear_intermediate_unobserved` end, which carries no word; a layer's failure,
+which leaves its gate as its code alone as before; no interface revision, record shape or
+configuration key.
+
+**Tests.** `crates/execution-kernel/src/contained_task/linear/gate_469_k1.rs` (16 tests, declared
+in `linear.rs`), one per word on U1's fixture: each asserts the word and that the code, the detail
+byte for byte, the timing and the other values are those of the same end before. The host's half,
+`crates/runtime-host/src/tests/gate_469_k1.rs` (2 tests): a scheduled run's policy record carries
+the word, and its failure identity is the one of the code, the scope, the step and the detail
+alone; the same swallowed tap again keeps that identity byte for byte and counts 2. No existing test
+is adapted.
+
+**At deploy.** Nothing to do. A failed linear run's terminal, receipt, policy record and
+`actingd suspended` row show the word from this build on; `ac_get_run`, `ac_runs` and the overview
+show it with F1.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

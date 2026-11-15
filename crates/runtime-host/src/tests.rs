@@ -249,6 +249,9 @@ mod gate_458_close_isolates;
 // Workflow #463 U1 (0.12.60; register §1.372): a linear step on a screen its package never
 // recorded ends with its own code, names its frame and pauses only its own pair, at once.
 mod gate_463_u1;
+// Workflow #469 K1 (0.12.62; register §1.395): the word a linear step's end carries reaches the
+// policy record and leaves the failure identity and the streak as they are.
+mod gate_469_k1;
 // Workflow #463 K1 (0.12.61; register §1.374): a linear select step that ends empty gets its
 // `on_empty` key from the host's scheduling disposition.
 mod gate_463_k1;

@@ -4066,3 +4066,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix3_a_dispatched_package_of_a_root_not_read_since_the_start_is_warned",
 ]
 incident = ["#463 V2"]
+
+# Workflow #469 K1 (0.12.62; register §1.395; brief rd-1115/brief-469-word-slices.md; contracts/linear-steps.md, "What the program saw"; contracts/policy-suspension.md, "Failure identity"), the host's half, on U1's package and fake device and a manual clock: the swallowed tap under the recommended on_failure fails page_confirmation_failed after two taps, its policy record's outcome carrying confirmation_problem input_not_taken, its failure identity's base the code and its key the one of the code, the scope main, the step open and detail′ of operation=open attempts=2 after_page=<unrecognized> hit_error_page=false transition=none, counted once and retried; the retry fails the same way with the same word, its identity the first one byte for byte, counted twice, the pair paused (1); the screen of neither page under continue without retry: contained_task_linear_unrecorded_screen after one tap, the policy record carrying unrecorded_screen, the identity's base and key those of the code and the detail alone, counted once, the pair paused at once (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_469_k1::k1_a_swallowed_tap_s_word_leaves_the_failure_identity_and_the_streak_as_they_are",
+    "actingcommand-runtime-host::lib::tests::gate_469_k1::k1_an_unrecorded_screen_s_word_leaves_its_failure_identity_as_it_is",
+]
+incident = ["#469 K1"]
