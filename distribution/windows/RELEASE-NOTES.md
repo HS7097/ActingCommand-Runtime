@@ -9,6 +9,170 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.64
+
+本版是 v0.12.63 之后的 2 次合并、8 张 PR，都是 #463 制包的：并车 #1758（S3-2 #1758 自己，带 S3-1 #1754、S3-10 #1759）和并车 #1757（S1-1 #1757 自己，带 S1-2 #1760、S1-3 #1761、
+S1-5 #1763、S1-7 #1762）。两趟车上除了各张的头和合并，第二趟有三个改版本标签和说法的提交，第一阶段那趟有四个接线和修改轮的提交（接上 S1-2 和 S1-3、清单读步骤表记的没存截图、S1-7 补测试和登记、两次整体审查留下的几处）。
+内容是：制包第一阶段「开始录制、正常玩、结束录制」，录制期间按住它录的那一台；放置的预看列出进出调度的包，会改动东西的放置要写明凭哪一条授权、启用哪几个包；试跑工具的计划（不发运行）。
+**生产上跑的是 v0.12.63（2026-11-16 00:04 起，经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.63 装本版：**Lab 救急模块的 `deploy` 和
+`actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 没有一行，没有新文件**。接口一个没动，配置键没加；Runtime 自己的做法一处没变：`crates/runtime-host`、
+`crates/execution-kernel`、`crates/policy`、`crates/ledger`、`apps/actingd` 自 v0.12.63 一个文件没改，它们链接的契约库只多了两个结果键（`crates/actingcommand-contract/src/outcome/keys.rs`
+875–879，只有资源工具写）。结果码加 5 个，没有 `retired`。**退回 v0.12.63 一直开着**；读不了的只是用本版的 `--record` 按下或应用操作录下的录制和第二版清单（见「升级与退回」）。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **录制会按住它录的那一台**（S1-7，登记 §1.424）：`record start` 先把「按住」写进会话头，再以录制自己的理由 `lab-record-<毫秒>` 暂停这一台的调度（和 Lab 的 `pause` 行同一个请求，
+    排空上限 300000 毫秒；`crates/lab-ops/src/scheduling.rs` 44–46、114–125）；`record stop` 和 `record archive` 只恢复显示这个理由的那一个暂停（同一文件 155–173）。这一台本来就被别人暂停着的
+    （人的、部署的、热放置的），什么都不发、也从不恢复它；这个安装没有 Runtime 在跑（状态根下没有地址文件，或地址连不上）时照常开始、什么都不按住，回答的 `hold.warnings` 带
+    `no_runtime_listening`；握手不成、探测超时、状态根解析不了，开始失败、什么都不写（`apps/actinglab/src/commands/record_hold.rs` 10–36、85–150）。
+    - **今天录制的智能体会注意到的**：`record start` 要等这一台正在跑的任务停下：在跑的调度运行先排空，排空期过了在下一个检查点停下，客户端最多等 335 秒（排空 300 秒、检查点宽限 30 秒、
+      IO 5 秒；`contracts/lab-recording.md` 1791–1803），调用方的时限要给够。结束时恢复调度要重连设备并自检，最多 33 秒加 IO 超时（1904–1906），这时归档或停止本身已经做完。
+      忘了结束的录制让这一台一直不在调度里：暂停没有期限、重启以后还在，`status` 和总览里看得到理由 `lab-record-<毫秒>`（1933–1935）。录制的每一下按、每个应用操作之前读一次这一台按没按住，
+      没按住时 `record.warnings` 带 `instance_not_held`，读不到带 `instance_hold_unread`，按照样按、照样记（`record_hold.rs` 466–509）。原来「先 `actingctl pause` 再录」的做法：
+      那个暂停是别人的，录制不恢复它，要自己恢复；README 两种语言里这一行都去掉了。
+    - **第一代 MCP 服务器**（`actingctl mcp-serve`）的 `ac_record_start`、`ac_record_stop`、`ac_record_archive` 跑的是安装里的 `tools\actinglab.exe`（`apps/actingctl/src/mcp/lab.rs` 1033），
+      所以一样按住、一样恢复，只改了这三条的说明。它一次调用最多等 25 秒（`apps/actingctl/src/mcp/tools.rs` 49），等不完的 `ac_record_start` 回 `{handle, job_phase}`，用 `ac_get_run` 接着看，
+      actinglab 照样跑完。
+    - **部署时**有录制正按住某一台：部署的守卫 `foreign_pauses` 把它报成别人的暂停，救急模块记下、不碰它，新版启动时恢复这个暂停，录制结束时照理由放开（`contracts/lab-recording.md` 1937–1942；
+      救急模块部署那条路自 v0.12.63 没改）。
+  - **会改动东西的放置要写明授权**（S3-2，§1.409）：救急模块的 `place` 在计划算完以后、按住和写任何东西之前核，有没有 Runtime 在跑都一样（`crates/lab-rescue/src/rescue.rs` 1889–1901）：
+    没带 `--authorization` 或是空的，拒 `place_authorization_missing`；`--enables` 不正好等于计划的 `enters`（少、多、重复，没有包进调度却点了名），拒 `place_enables_mismatch`，带
+    `expected` 和 `given`；压缩包一侧读不到、`enters` 没有值，拒 `place_enables_unknown`，旁边带计划的 `schedule_changes`；授权超过 1024 字节或带控制字符是用法错误（`unusable`）。
+    只预看（`--plan`）和每一项都没变的放置两样都不问；只换内容、没有包进调度的放置要授权、不带 `--enables`。授权原样、启用的包排好序记进 `pack_place` 日志的 `inputs`（`authorization`、
+    `enabled`），冷热两条路都记，`op status` 看得到；工具只记、不判断授权，也没有默认值、变量或开关能绕过（`crates/lab-rescue/src/install/place.rs` 1734–1761、1782–1844）。
+    - **本版里谁调用 `place`、要传什么**：救急模块的 `place` 行（`actinglab place <压缩包> [--sums <文件>] --authorization <引用> [--enables <包>]…`）和 Lab 的 MCP 工具 `ac_place`（多
+      `authorization`、`enables` 两个参数）都照上面传；第一代 MCP 服务器没有放置的工具；控制台不放置（它的向导没有自己的放置，UI `crates/acui-wizard/src/layout.rs` 8–9）；
+      `standard-pack build` 回答里的 `next.place` 只是预看那一行，不变。
+  - **计划的 `schedule_changes` 换成了对象**（S3-1，§1.408）：原来是布尔值，现在是 `{packages, enters, leaves, content_only, unread?}`（`place.rs` 289–304、545–582）。读旧布尔值的：本仓库里
+    只有救急模块自己的测试（改了）；控制台仓 main 里一处都没有。救急模块日志里检查那一步的意图仍记布尔值 `schedule_changes`（「`schedule.json` 换不换」，`place.rs` 280–286、1846–1855），形状没变。
+    压缩包里的 `schedule.json` 读不进（契约库的读者或组合器的引用检查拒它）时，计划照答、`enters` 没有值，真放置就拒 `place_enables_unknown`。
+  - **`record archive` 写第二版清单**（S1-5，§1.406）：`archive-manifest-<n>.json` 现在是 `actingcommand.lab-recording-archive.v2`（`crates/lab/src/recording/archive.rs` 67）；
+    `--copy-to` 默认只拷步骤表、清单和清单的 `material` 点到的帧，要全部帧加 `--all-frames`（只给它、不给 `--copy-to`，拒 `validation_failed`；`contracts/lab-recording.md` 2585–2595、2649）。
+    v0.12.63 的 Lab 碰到第二版清单：按编号再归档和拷贝都答 `record_state_io_failed`，`record reopen` 照常能用（见「升级与退回」）。
+
+- **新的东西**（照智能体用的次序）：
+  - **开始**：`record start --task-id <任务>`，见上面「按住」。
+  - **按**（S1-1，§1.402）：`tap`、`swipe`、`long-tap` 带 `--record`，这一下按就是录制里的一步，不要任何标记：按的位置（点；滑动的两端；长按的时长）、时刻、按之前的那一帧、按完的结果。
+    每一下都先经 Runtime 截一帧、按在这一帧上（原生触控的实例上 Runtime 只在它自己截的帧上点）；这一帧在按下之前被顶掉，就再截一帧、再发一次，只这一次，`before.captured_twice`；
+    按在没存下来的截图上（打开的一步已经有标记）时如实记 `sent_on_unstored_capture`。录制的按下和应用操作都经 Runtime 截图，不再读本机的设备配置。点击框是按到的那一个像素
+    （`rect {x, y, 1, 1}`，`crates/lab/src/recording/steps.rs` 4020–4040）。回答的 `record` 带 `before`、`after`、`warnings`。
+  - **按完以后的截图**（S1-2，§1.403）：从 `--after-ms`（默认 100）起每 `--interval-ms`（默认 100）截一张，画面连续 `--still-ms`（默认 300）没变算静止，最长 `--still-max-ms`（默认 5000）；
+    **每一张都留在录制里**，最后一张是这一下的 `after_frame`。一下按最多 `1 + still_max_ms / interval_ms` 张（默认 51），间隔数超过 120 在按下之前就拒（`range`）；到上限还没静止给
+    `after_not_still`、这一步照记；中途一张截不成，已截的留着，`after_capture.unfinished`，报错带着已经记下的东西，别再按一次（`contracts/lab-recording.md` 1664–1715）。这四个是命令的参数，
+    不是配置键。
+  - **应用操作**（S1-3，§1.404）：录制进行中 `session app launch|restart|stop --record` 记成一步，带操作之前那一帧和操作之后截到静止的帧（2 秒后开始、每 1 秒一张、2 秒不变算静止、最长 30 秒，
+    `crates/lab/src/recording/model.rs` 的四个常数）；入口的启动没有帧；不再要求操作之前这一步先有标记。
+  - **归档和清单交出什么**（S1-5，§1.406）：清单的 `material` 每一下按或应用操作一行：发生在哪一帧、按在哪里、什么时候、结果怎样，再加最后的结果帧（没有就给警告 `final_frame_missing`，
+    归档照做）。用旧办法 `do --capture --record` 录的按下没记它按在哪一帧，清单推出一帧并写 `derived: true`，`sent_on_unstored_capture` 写 `null`。第一版清单只读不写，带着它的归档原样拷贝。
+  - **放置的预看和授权**（S3-1、S3-2）：`place <压缩包> --plan` 的 `schedule_changes.packages` 给每个有变化的包放置前后各是什么（`scheduled`、`held` 带原因和引用、`maintenance_role`、
+    `unclassified`、`absent`、`unread`，加上支撑的角色词和 `prerequisite`）和内容（新、替换、没变）；`enters` 是放置以后会被调度或被用到、之前没有的包，前置包也算；`leaves`、`content_only`
+    另两份。真放置照 `enters` 逐个 `--enables`，再带 `--authorization`（看板评论的链接这一类）。
+  - **试跑的计划**（S3-10，§1.417）：新命令 `standard-pack trial <实例> --package <目录> [--authorization <引用>] [--variable <名>=<json>]… [--expect <结局>] [--irreversible] [--root <游戏根>]
+    [--state-dir <目录>] --plan`，Lab 的 MCP 工具 `ac_standard_pack_trial`（创作模块）。本版只答计划（不带 `--plan` 拒 `validation_failed`），什么都不发：包、内容哈希的前 12 位、实例、
+    授权引用（原样）、入口任务声明的各个结局、每个变量的值或默认值、带没带「不可逆」、期望的结局、记录放在哪、`run_requires`（`contracts/standard-pack-trial.md` 23–45）。计划不要授权；
+    记录目录在安装根或仓库里拒 `trial_state_dir_refused`。试跑记录的格式、写入器和读者在资源工具库里，本版没有程序写记录（`write_trial_record` 只有测试调用）。
+
+- **部署和退路**：照 v0.12.63 那次的做法，用在线 v0.12.63 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块部署、退回、撤销那几条路自 v0.12.63 一行没改（`crates/lab-rescue` 本版只改了 `place`）。部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在改名放到一边的旧映像上的
+  MCP 服务进程：这次没有删请求种类，旧进程照样能用；要用 Lab 的 MCP 服务器的新工具和新参数，让列出的客户端重开会话。
+  - **退路**：回 v0.12.63 用留着的 v0.12.63 那份 `actingctl install`（`install undo`、`install resume`、`install release-hold`）或救急模块的退回：账本的修订和记录种类都没变，回退门放行。
+    退回之前先把本版上开始的录制结束掉（`record stop` 或 `record archive`），否则那一台的暂停要人来恢复（见「升级与退回」）。
+
+- **已知的限度**（各片验收记录列的，逐条核过；核不到的写明了）：
+  - 第一阶段这条录制的路还没在真机上走过；真机上一次截图要多久没量过，它决定一下按留几张帧。
+  - 一台模拟器上几个应用成组的实例，录制的按下会被拒：这一句是 S1-1 的验收记录写的，没在代码里找到拒的那一处；今天的构建在装载时就拒每一个多成员的组（登记 §1.328 起），在用的安装碰不到。
+  - 按下的点击框是一个像素，要等智能体给它一个范围（「画框」那一片，不在本版）。
+  - 试跑什么都不发；发运行、读后来才结束的那次运行（`--collect`）是下一片 S3-11 的，本版的代码里都没有。
+  - 第一代 MCP 服务器没加参数：`ac_record_archive` 没有 `all_frames`，经它拷贝只带清单点到的帧。
+  - S3-1 的名单可能多于实际、不会漏报：预看不跑组合器，组合器因别的原因拒的根当成组合得成；前置链缺一层、成环或超过三层时 Runtime 拒整趟运行，名单仍把前面几层算作用到（`contracts/install-cli.md`）。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，一个没动：
+
+- 接口：`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、`runtime-outcomes` [1, 1]
+  （`component-interfaces.json` 4–10，`contracts/component-interfaces.md` 自 v0.12.63 没改）。
+- **新落盘的东西归哪个接口**：`pack_place` 日志的 `authorization`、`enabled` 是单地点日志 `install-operation.v1` 的输入，`install-root` 不管这个日志（`contracts/component-interfaces.md` 319–325），
+  日志的 `inputs` 在 v0.12.63 是不带类型的值；录制的会话头 `hold`、步骤表 `recording.json` 的新成员、第二版清单、试跑记录都是 Lab 自己的文件，契约里没有哪个接口管它们。所以没有该升没升的修订。
+  但步骤表的 schema 仍是 `actingcommand.lab-recording.v1`（`crates/lab/src/recording/model.rs` 16），v0.12.63 的 Lab 拒它的新成员（见「升级与退回」）。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和
+  `apps/actingd/src/config/manifest.rs` 没改。截图的那几个数是命令参数，不是配置键。
+- 结果码：3963 → 3968 个码（在用 3875 → 3880，`retired` 88 不变），1764 个位置、31 个分片不变；键 678 → 680，词表 252 → 254，词 1946 → 1955；在用码按类别 warning 154 → 155、
+  error 3367 → 3371，别的不变；审阅定稿的在用码仍是 154 个。
+  - **新码 5 个**，都在资源工具（`resource-tooling`），阶梯类 `none`，审阅 `pending`，都带 `path`：`trial_state_dir_refused`（error，必带 `trial_state_place`：`installed_root` 或 `repository`；拒）、
+    `trial_record_exists`（error；拒，不覆盖）、`trial_record_write_failed`（error；拒）、`trial_record_unreadable`（error，必带 `trial_record_problem`：`read_failed`、`too_large`、`undecodable`、
+    `name_mismatch`；拒）、`trial_record_part_left`（warning；记录写成了、临时文件没清掉，照常成功）。本版的程序只有计划会答第一个，别的四个只有记录的写入器和读者用，本版没有程序调用它们。
+  - **加的词表**：`trial_state_place`（2 个词）、`trial_record_problem`（4 个词），各配一个同名的键；已有词表 `install_refusal` 加 3 个词：`place_authorization_missing`、`place_enables_mismatch`、
+    `place_enables_unknown`（`crates/lab-ops/src/codes.rs` 643–651）。新的域前缀 `trial_` 归资源工具。没有码改类别或阶梯类，没有 `retired`。
+  - 第一阶段的几个警告词（`after_not_still`、`instance_not_held`、`instance_hold_unread`、`no_runtime_listening`、`replaced_header_unread`、`final_frame_missing`）是回答里的词，不是目录里的码。
+  - 本版的发布文件 `contracts/outcome-codes/released/0.12.64.json` 按合入全部 8 张 PR 以后的树生成：0 个码、0 个位置（新码都是 `pending`，没有 `retired`）；索引由脚本生成，仍是 32 个文件，
+    核过是最新的。
+- Lab 的操作表：187 → 188 行（13 行 `reserved` 不变，`not_exposed` 16 不变）：加 `standard-pack trial`；十行改了：`tap`、`swipe`、`long-tap`、`app launch`、`app restart`、`app stop` 多
+  `record`、`after_ms`、`interval_ms`、`still_ms`、`still_max_ms`，`record start`、`record stop` 现在要 Runtime（`Status` 和 `PauseScheduling` / `ResumeScheduling`），`record archive` 多 `all_frames`
+  并要 Runtime，`place` 多 `authorization`、`enables`。所以 Lab 的 MCP 服务器多一个工具 `ac_standard_pack_trial`，这十行的工具多了参数。命令清单（`ratchet/actinglab_commands.json`）
+  46 个顶层分派臂不变，命令 105 → 106。第一代 MCP 服务器仍是 46 个工具，只改了 `ac_record_start`、`ac_record_stop`、`ac_record_archive` 的说明和 `ac_record_archive` 的 `copy_to` 说明。
+  README 两种语言的命令数改成 106、工具表标题改成 v0.12.64；中文 README 的录制那一段照英文改了（去掉先 `actingctl pause` 的那一行）。
+- 两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 没改）：没有新文件、没有去掉的文件；改了内容的是各个程序和本文件。
+- 不稳定表现在是 FLK-08、FLK-10、FLK-14（`ci/flaky-tests.toml`）：FLK-14 随第一阶段那趟车登记，是账本 `gate_ln7c_q` 的一条测试在慢的机器上等写入器回复超时（`writer_response_timeout`），
+  原因没找到；账本那一项检查跳过它，不卡合并的 `flaky` 项照跑（`.github/workflows/ci.yml` 的 `CI_SKIP`、`FLAKY_TESTS`；看板 #71）。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue` 里除 `place` 以外，自 v0.12.63 一行没改，v0.12.63 说明里引的行号对 v0.12.63 和本版都对；`actinglab deploy` 和
+`actingctl install` 走的都是它）：
+
+- **v0.12.63 的安装工具装本版：两面都能装，不用任何标志。** 两个构建清单的 `interfaces` 和 v0.12.63 的一字不差，计划的每条边和 v0.12.63 那次一样：`ledger` 两边 [3, 8]，`one_way` 不触发，
+  `ledger_verify` 为 false（`install/plan.rs` 924）；`install-control` [0, 0]；`runtime-client` 处处 [3, 9]；`package` 的 `bundle_max_in_next` 照旧每个游戏一条 `pack_declaration_unknown`
+  警告，不挡；`installer_knows_keys` 过；`defaults_diff`（583–607）没有一行；文件计划里没有 `new`。救急模块发的请求、启动后检查读的形状都没变。
+- **本版第一次启动多写的**：没有。Runtime 的代码没改，`config.selection` 的默认值哈希不变。
+- **配置文件和已装的包**：v0.12.63 的配置文件照收；准入没改（`crates/pack-containment`、`crates/policy`、`crates/ledger` 都没改），`standard-pack check` 没改（资源工具只加了试跑），
+  对今天的根答法和 v0.12.63 相同，不出新的警告码。
+- **退回 v0.12.63**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.63；第 1 部分的边都过；第 2 部分用 v0.12.63 自己的 `actingledger events` 读部署以来的每一页：本版的
+  Runtime 不写 v0.12.63 不认识的记录，过。本版可能写下的东西，v0.12.63 怎么办（行号是 v0.12.63 的）：
+  - 带 `authorization`、`enabled` 的 `pack_place` 日志：照读。日志的 `inputs` 和 `plan` 是不带类型的值（`crates/lab-rescue/src/install/journal.rs` 154–155），`op status`、`install undo`、
+    `install resume` 都照读；步骤的意图形状没变（`pack_item` 的 `Item` 和检查那一步的 `CheckIntent`，后者的 `schedule_changes` 仍是布尔值，`install/place.rs` 178–205、1011–1019）；`plan` 里成了对象的
+    `schedule_changes` 没有人按类型读。
+  - 带 `hold` 的录制会话头：照读，不认 `hold`（`SessionRecordContext` 不拒未知成员，`apps/actinglab/src/commands/session_record.rs` 29–43）。但 v0.12.63 的 `record stop`、`record archive`
+    不恢复录制的暂停，重写会话头时也不带 `hold`：在本版上开始、在 v0.12.63 上结束的录制，那一台一直暂停着（理由 `lab-record-<毫秒>`），要人用 `resume` 恢复。
+  - 带第一阶段新成员的步骤表（`recording.json` 里按下的 `before_frame`、`after_frame`、`after_capture`、`sent_on_unstored_capture`，应用操作的前三个和 `executed_at_unix_ms`）：拒。
+    `ClickExecution`、`ApplicationExecution` 拒未知成员（`crates/lab/src/recording/model.rs` 334–336、768–770），这份录制在 v0.12.63 的 Lab 里答 `lab_recording_unreadable`
+    （`recording/store.rs` 243–244），标记、停止、生成包都做不了。只用 `do --capture --record` 录、没有应用操作的录制和以前逐字节相同，照读。从本版的录制生成的包格式没变
+    （`recording/generate.rs` 没改），照常装、照常跑。
+  - 第二版清单：`record archive --record-id` 再归档和 `--copy-to` 拷贝答 `record_state_io_failed`（`crates/lab/src/recording/archive.rs` 540–556 只认第一版，240、457 两处调它；码见
+    `recording/store.rs` 69–72）；`record reopen` 照常能用。
+  - 试跑记录：本版没有程序写，安装上不会有；v0.12.63 也没有读它的地方。
+  - **这些都不让安装的状态或日志对 v0.12.63 读不了**：Runtime 的状态根和账本本版没写新东西，救急模块的日志照读。读不了的只是用本版的 `--record` 按下或应用操作录下的那几份录制
+    （从它们第一次这样录起）和它们的第二版清单。
+
+配对：
+
+- **控制台 UI**（UI main `8b4d7480` 钉 Runtime v0.12.63 `3581a8af`，`Cargo.toml` 41–46；最新发版 UI v0.12.20 钉 v0.12.61）：声明的范围没变（`crates/acui-setup/component-interfaces.json` 3–11：
+  `actingd-config` [5, 32]、`install-control` [0, 1]、`ledger` [3, 8]、`runtime-client` [3, 9]、`runtime-outcomes` [1, 1]），本版的接口一个没动，向导核的四条边和对 v0.12.63 一样都过。
+  控制台不调 `place`、不读 `schedule_changes`、不跑录制命令（UI main 里搜过）。**它碰到的一处**：账本窗口按理由认暂停，`lab-<词>-<毫秒>` 只认救急模块的七个词
+  （`crates/acui-app/src/ledger/resume.rs` 63–81），录制的 `lab-record-<毫秒>` 不在里面，于是当成「别的工具设的」、给出两步确认的「恢复调度」（134–145）；人从这里恢复它，录制接下来的每一下按都带
+  `instance_not_held`，结束时答 `already_gone`。
+  - **下一次钉**：六个 `rev`（和锁文件）换成本版的提交，带进来的只有契约库的两个新键（账本、客户端、配置、内核那几个库没改）；范围不用改；账本窗口要把 `lab-record-<毫秒>` 认作录制的按住
+    （由录制结束时放开），不当作随手可以恢复的暂停。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 和 v0.12.63 相同（`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、
+  `package` [3, 15]、`runtime-outcomes` [1, 1]）；默认值文件的哈希不变；`git diff --stat v0.12.63 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json`
+  什么都不打印；不过的边没有，警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的
+  `actinglab` 改名放到一边，别的跑着的程序文件挡住，和 v0.12.63 一样；本版的 `standard-pack check` 不出新的警告码；启动日志不多一行。
+- **热放置工具包**：它不调救急模块的 `place`，也不读 `schedule_changes`：它用自己的放置脚本写文件、用 `actingctl pause` / `resume` 按住和放开、用 `actinglab standard-pack check` 核，所以本版的授权
+  核对管不到它。重钉要换的是构建值（提交、`actinglab`、`actingledger` 和两个构建清单的哈希）；`actingd_config` 5,33 和默认值哈希不变。要让放置留下授权记录，就得改走
+  `actinglab place <压缩包> --sums <文件> --plan` 读出 `plan.schedule_changes.enters`，再 `actinglab place <压缩包> --sums <文件> --authorization <引用> --enables <enters 里的每一个>`。
+  它碰到目标实例上别人的暂停就停，录制按住的那一台也一样。
+- **两个 MCP 服务器**：第一代的工具一个没增减，三个录制工具经安装里的 actinglab 按住和恢复；Lab 的多 `ac_standard_pack_trial`，十个工具多了参数（见上面操作表）。
+
+运行上的变化：
+
+- 从 v0.12.63 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件；Runtime 的做法不变。
+- 录制按住那一台：`record start` 最多等 335 秒；结束时恢复要重连设备；忘了结束，那一台一直不调度；不必再先暂停。
+- 会改动东西的 `place` 要带 `--authorization`，有包进调度时逐个 `--enables`；先用 `--plan` 看 `schedule_changes.enters`。
+- 归档的拷贝默认只带清单点到的帧，要全部帧加 `--all-frames`。
+- 退回 v0.12.63 一直开着；退回之前先结束本版上开始的录制。
+
+本版合并的 PR：
+
+- #1754 S3-1（登记 §1.408）、#1758 S3-2（§1.409，同时是第二趟并车）、#1759 S3-10（§1.417）：各自的门行 `#463 S3-1`、`#463 S3-2`、`#463 S3-10`；救急模块七个旧门的放置调用照规矩带上授权
+  （`crates/lab-rescue/src/install/fixture.rs` 的 `authorized`），`gate_453_cold_place` 的 `schedule_changes` 断言改成看文件那一项，日志输入的名单多两个。
+- #1757 S1-1（§1.402，同时是第一阶段的并车）、#1760 S1-2（§1.403）、#1761 S1-3（§1.404）、#1763 S1-5（§1.406）、#1762 S1-7（§1.424）：各自的门行；`gate_449_rec_arch`（Lab 库和 actinglab 两处）加了第二版清单的测试，
+  `apps/actinglab/tests/runtime_input_proxy.rs` 加了第一阶段的测试；FLK-14 进不稳定表。
+
 ## v0.12.63
 
 本版是 v0.12.62 之后的 3 次合并、9 张 PR：#1744（#434 LAB-6S4a）、#1750（#469 D4b）直接合并，其余七张由并车 #1756 带着合（S3-5 #1756 自己、S3-4 #1752、
