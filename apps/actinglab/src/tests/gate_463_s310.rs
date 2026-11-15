@@ -161,11 +161,11 @@ fn s310_without_plan_the_line_is_refused_before_anything_is_read() {
             "--instance",
             "node-a",
             "--package",
-            &missing_text,
+            missing_text.as_str(),
             "--authorization",
             "board item 463",
             "--state-dir",
-            &state_text,
+            state_text.as_str(),
         ]),
         "--plan",
         "required",
@@ -174,7 +174,7 @@ fn s310_without_plan_the_line_is_refused_before_anything_is_read() {
     argument_refused(&trial(&[]), "--plan", "required");
     // `--plan false` is no plan.
     argument_refused(
-        &trial(&["--plan", "false", "--state-dir", &state_text]),
+        &trial(&["--plan", "false", "--state-dir", state_text.as_str()]),
         "--plan",
         "required",
     );
