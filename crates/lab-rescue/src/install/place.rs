@@ -34,13 +34,18 @@
 //!   (`before`, `after`, `content`) and the sorted package ids that `enters`, `leaves` and changes
 //!   `content_only` ([`ScheduleChanges`]). The plan document, its id, its items and every check
 //!   are as before; a root that cannot be read for it refuses nothing and is named under
-//!   `unread`. Fix round 2: `enters` is exactly the packages the scheduler dispatches, or uses in
-//!   a supporting role, after the placement and did not before. A side the scheduler does not
-//!   compose (its root holds no `schedule.json`) counts no package as scheduled or as holding a
-//!   role; a side whose `schedule.json` the contract crate's reader or the composer's own reference
-//!   check refuses is unread; an unread installed side counts nothing before; with the zip's side
-//!   unread no list is answered (`enters` `None`). Roles are readiness's words, found by the
-//!   contract crate's function on one use or one list at a time.
+//!   `unread`. Fix round 3: `enters` lists the packages that, by the schedule, the root files and
+//!   the prerequisite chains of the two sides, will be dispatched or used after the placement and
+//!   were not before. The plan does not run the composer, so a root the composer refuses for
+//!   another reason than the contract crate's reader and its reference check is counted as
+//!   composed (`contracts/install-cli.md` names those reasons). Fix round 2: a side the scheduler
+//!   does not compose (its root holds no `schedule.json`) counts no package as scheduled or as
+//!   holding a role; a side whose `schedule.json` the contract crate's reader or the composer's own
+//!   reference check refuses is unread; an unread installed side counts nothing before; with the
+//!   zip's side unread no list is answered (`enters` `None`). Roles are readiness's words, found by
+//!   the contract crate's function on one use or one list at a time, and (fix round 3) the plan's
+//!   own `prerequisite`, of a layer of the prerequisite chain of a package that is scheduled or
+//!   holds one of readiness's words ([`with_prerequisites`]).
 //! - **The operation** (`kind` `pack_place`, journalled) while a Runtime runs: the hold of the
 //!   instances bound to the bundle's game (`pause`), then each item that changes (`pack_item`:
 //!   written to
@@ -132,6 +137,18 @@ const POLL_MS: u64 = 500;
 /// reads, the bound readiness reads a game root's file with (the resource tools' buffered payload
 /// bound, 32 MiB); a file beyond it leaves the installed side unread.
 const ROOT_FILE_BYTES: u64 = 32 * 1024 * 1024;
+/// Workflow #463 S3-1 fix round 3: the member of a pack's `control.json` that names the package
+/// the host runs as a layer of the pack's runs (`contracts/linear-steps.md`, "Prerequisite
+/// packages"; the execution kernel's `TaskControl`, which the rescue module does not link).
+const PREREQUISITE_MEMBER: &str = "prerequisite_package_id";
+/// Workflow #463 S3-1 fix round 3: the most layers of a prerequisite chain the host resolves below
+/// the package of a run, the execution kernel's `MAX_PREREQUISITE_DEPTH` (its
+/// `PrerequisiteChain::begin` refuses a fourth declared layer,
+/// `contained_task_prerequisite_depth_exceeded`); the rescue module does not link the kernel.
+const PREREQUISITE_LAYERS: usize = 3;
+/// Workflow #463 S3-1 fix round 3: the plan's word of a package used as a layer of a prerequisite
+/// chain ([`Role::Prerequisite`]), not one of readiness's.
+const PREREQUISITE_ROLE: &str = "prerequisite";
 /// The Tools' Lab program, which runs `standard-pack check`.
 const LAB_PROGRAM: &str = "actinglab.exe";
 /// The root files a bundle zip may carry, in the order they are placed: `bundle.json` first (the
@@ -304,11 +321,16 @@ enum Standing {
 /// "Readiness"), which are the contract crate's own: a `bundle.json` `maintenance[]` entry's use
 /// ([`MaintenanceUse`]: `startup`, `return_home`, `recognition`) or the part one list of the root
 /// files gives it in a run ([`NavigationRole`]: `features`, `edge`, `chain`, `handler`,
-/// `then_run`). Ordered as readiness lists them.
+/// `then_run`). Fix round 3: and, apart from those eight, the plan's own `prerequisite`. Ordered
+/// in this order: `startup`, `return_home`, `recognition`, `features`, `edge`, `chain`,
+/// `handler`, `then_run`, `prerequisite`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Role {
     Use(MaintenanceUse),
     Run(NavigationRole),
+    /// Fix round 3: a layer of the prerequisite chain of a package that is scheduled or holds one
+    /// of the other words ([`with_prerequisites`]); not one of readiness's words.
+    Prerequisite,
 }
 
 impl Role {
@@ -317,6 +339,7 @@ impl Role {
         match self {
             Self::Use(purpose) => json!(purpose),
             Self::Run(role) => json!(role.as_str()),
+            Self::Prerequisite => json!(PREREQUISITE_ROLE),
         }
     }
 }
@@ -325,8 +348,8 @@ impl Role {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Part {
     standing: Standing,
-    /// Fix round 2: the supporting parts the root files give it ([`Role`]); `None` when the
-    /// root's files could not be read.
+    /// Fix round 2: the supporting parts the root files give it ([`Role`]), and (fix round 3) its
+    /// place in a prerequisite chain; `None` when the root's files could not be read.
     roles: Option<BTreeSet<Role>>,
     /// Of a held package, its entry's `reason` and `reference`.
     held: Option<(String, Option<String>)>,
@@ -421,11 +444,13 @@ struct Change {
 pub(crate) struct ScheduleChanges {
     /// Each package whose part or content changes, or that a list names, by package id.
     packages: Vec<Change>,
-    /// Fix round 2: the package ids, sorted, that enter scheduling: exactly the packages the
-    /// scheduler dispatches, or uses in a supporting role, after the placement and did not before
-    /// (scheduled after and not before, or a role after that it did not hold before; a side the
-    /// scheduler does not compose, and an installed side that could not be read, count none).
-    /// `None` when the zip's side could not be read: then no list is answered.
+    /// Fix round 3: the package ids, sorted, that, by the schedule, the root files and the
+    /// prerequisite chains of the two sides, will be dispatched or used after the placement and
+    /// were not before (scheduled after and not before, or a role after, `prerequisite` included,
+    /// that it did not hold before; a side the scheduler does not compose, and an installed side
+    /// that could not be read, count none). The composer is not run: a root it refuses for another
+    /// reason than the reader and the reference check is counted as composed. `None` when the
+    /// zip's side could not be read: then no list is answered.
     pub(crate) enters: Option<Vec<String>>,
     /// Those that leave it: scheduled before and not after, a role before that they do not hold
     /// after, or no longer carried by the zip. Answered only with `enters`.
@@ -1100,6 +1125,81 @@ fn maintenance_roles(
     roles
 }
 
+/// Workflow #463 S3-1 fix round 3: the package a pack's `control.json`, its bytes `control` (a
+/// UTF-8 byte order mark allowed), names in its member `prerequisite_package_id`
+/// ([`PREREQUISITE_MEMBER`]); `None` when it names none, or when the file is no JSON object or the
+/// member no string, which the package's admission refuses (another check's refusal).
+fn prerequisite_of(control: &[u8]) -> Option<String> {
+    let document = serde_json::from_slice::<Value>(files::without_bom(control)).ok()?;
+    document
+        .get(PREREQUISITE_MEMBER)?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// Workflow #463 S3-1 fix round 3: the prerequisite each package of `registry` names, by package
+/// id: the `control.json` of the package's directory the registry gives (the lookup the host's
+/// `GameRegistry::package_path` makes when a run is prepared), its bytes read by `control` from
+/// that directory's name (`None`: the side holds no such file), read by [`prerequisite_of`]. A
+/// file `control` cannot read is its failure.
+fn declared_prerequisites(
+    registry: &StandardPackRegistry,
+    mut control: impl FnMut(&str) -> Result<Option<Vec<u8>>, Outcome>,
+) -> Result<BTreeMap<String, String>, Outcome> {
+    let mut declared = BTreeMap::new();
+    for package_id in registry.package_ids() {
+        let Some(entry) = registry.get(package_id) else {
+            continue;
+        };
+        let Some(bytes) = control(entry.directory.as_str())? else {
+            continue;
+        };
+        if let Some(prerequisite) = prerequisite_of(&bytes) {
+            declared.insert(package_id.to_owned(), prerequisite);
+        }
+    }
+    Ok(declared)
+}
+
+/// Workflow #463 S3-1 fix round 3: gives the role `prerequisite` ([`Role::Prerequisite`]) to each
+/// package of `parts` that is a layer of the prerequisite chain of a package that is scheduled or
+/// holds one of readiness's words, as the host resolves the chain when a run is prepared: from
+/// that package, the prerequisite its `control.json` names (`declared`), looked up in the side's
+/// registry, then that package's own, at most [`PREREQUISITE_LAYERS`] layers. A layer the
+/// registry does not list, or one already in the chain, ends it and counts nothing: the host
+/// refuses that run at preparation, another check's refusal. A package that holds only the role
+/// `prerequisite` starts no chain of its own.
+fn with_prerequisites(parts: &mut BTreeMap<String, Part>, declared: &BTreeMap<String, String>) {
+    let owners = parts
+        .iter()
+        .filter(|(_, part)| {
+            part.standing == Standing::Scheduled
+                || part.roles.as_ref().is_some_and(|roles| !roles.is_empty())
+        })
+        .map(|(package_id, _)| package_id.clone())
+        .collect::<Vec<_>>();
+    let mut layers = BTreeSet::new();
+    for owner in owners {
+        let mut chain = BTreeSet::from([owner.clone()]);
+        let mut dependent = owner;
+        for _ in 0..PREREQUISITE_LAYERS {
+            let Some(layer) = declared.get(&dependent) else {
+                break;
+            };
+            if !parts.contains_key(layer) || !chain.insert(layer.clone()) {
+                break;
+            }
+            layers.insert(layer.clone());
+            dependent.clone_from(layer);
+        }
+    }
+    for layer in layers {
+        if let Some(roles) = parts.get_mut(&layer).and_then(|part| part.roles.as_mut()) {
+            roles.insert(Role::Prerequisite);
+        }
+    }
+}
+
 /// Workflow #463 S3-1: the side of the root files `root` of `game` (`None`: the root holds none),
 /// with the bundle's maintenance entries `maintenance` and the bytes of its `schedule.json`
 /// (`None`: it holds none), classified by the contract crate's [`classify_standard_pack_packages`]
@@ -1107,12 +1207,16 @@ fn maintenance_roles(
 /// without `schedule.json` is not composed (its packages keep the standing and the roles its root
 /// files give them, and count for nothing); a `schedule.json` that the contract crate's reader or
 /// the composer's own reference check ([`validate_standard_pack_schedule_references`]) refuses
-/// leaves each package `unread` with its roles, the refusal kept with the file below `base`.
+/// leaves each package `unread` with its roles, the refusal kept with the file below `base`. Fix
+/// round 3: with the prerequisites its packs' `control.json` name, `prerequisites` (by package
+/// id, [`declared_prerequisites`]), each layer of a chain holding the role `prerequisite`
+/// ([`with_prerequisites`]).
 fn classified_side(
     game: &str,
     root: Option<&StandardPackRoot>,
     maintenance: &[BundleMaintenance],
     schedule_bytes: Option<&[u8]>,
+    prerequisites: &BTreeMap<String, String>,
     base: &Path,
 ) -> Side {
     let Some(root) = root else {
@@ -1134,7 +1238,7 @@ fn classified_side(
         None => StandardPackSchedule::default(),
         Some(Ok(schedule)) => schedule,
         Some(Err(issue)) => {
-            let parts = root
+            let mut parts = root
                 .registry
                 .package_ids()
                 .map(|package_id| {
@@ -1145,7 +1249,8 @@ fn classified_side(
                     };
                     (package_id.to_owned(), part)
                 })
-                .collect();
+                .collect::<BTreeMap<_, _>>();
+            with_prerequisites(&mut parts, prerequisites);
             return Side {
                 parts,
                 missing: Standing::Absent,
@@ -1156,7 +1261,7 @@ fn classified_side(
     };
     let all = standard_pack_maintenance_packages(maintenance, root);
     let classification = classify_standard_pack_packages(&root.registry, &all, &schedule);
-    let parts = root
+    let mut parts = root
         .registry
         .package_ids()
         .map(|package_id| {
@@ -1185,7 +1290,8 @@ fn classified_side(
             };
             (package_id.to_owned(), part)
         })
-        .collect();
+        .collect::<BTreeMap<_, _>>();
+    with_prerequisites(&mut parts, prerequisites);
     Side {
         parts,
         missing: Standing::Absent,
@@ -1218,8 +1324,10 @@ fn read_root_file(path: &Path) -> Result<Option<Vec<u8>>, Outcome> {
 /// ([`classified_side`]): its root files read as every reader reads them
 /// ([`read_standard_pack_root`]), its bundle's maintenance entries (from the `bundle.json` the
 /// reader took) and its `schedule.json`, each file read as readiness reads it
-/// ([`read_root_file`], fix round 2). A file that cannot be read, or root files the reader
-/// refuses, leave the side unread; nothing is refused.
+/// ([`read_root_file`], fix round 2). Fix round 3: and the `control.json` of each package's
+/// directory the registry gives, read the same way, for its prerequisite
+/// ([`declared_prerequisites`]). A file that cannot be read, or root files the reader refuses,
+/// leave the side unread; nothing is refused.
 fn installed_side(game: &str, game_root: &Path) -> Side {
     let mut present = BTreeMap::new();
     for name in [
@@ -1266,11 +1374,21 @@ fn installed_side(game: &str, game_root: &Path) -> Side {
             );
         }
     };
+    let prerequisites = match &root {
+        Some(read) => match declared_prerequisites(&read.registry, |directory| {
+            read_root_file(&game_root.join(directory).join(PACK_CONTROL_FILE))
+        }) {
+            Ok(declared) => declared,
+            Err(failure) => return Side::unreadable(failure),
+        },
+        None => BTreeMap::new(),
+    };
     classified_side(
         game,
         root.as_ref(),
         &maintenance,
         bytes(STANDARD_PACK_SCHEDULE_FILE),
+        &prerequisites,
         game_root,
     )
 }
@@ -1564,7 +1682,18 @@ pub(crate) fn plan(
     let id = format!("plan-{}", &files::sha256_bytes(canonical.as_bytes())[..16]);
     // Workflow #463 S3-1: the packages that enter or leave scheduling, the installed game root
     // against the zip's root, read only; nothing above reads it, so the document, its id and the
-    // items are as before.
+    // items are as before. Fix round 3: with the prerequisite each of the zip's packs names, from
+    // its member `packs/<directory>/control.json`, which every pack carries (checked above).
+    let zip_prerequisites = match zip_root.as_ref() {
+        Some(read) => declared_prerequisites(&read.registry, |directory| {
+            archive
+                .read(&format!(
+                    "{PACKS_DIRECTORY}/{directory}/{PACK_CONTROL_FILE}"
+                ))
+                .map(Some)
+        })?,
+        None => BTreeMap::new(),
+    };
     let scheduling = ScheduleChanges::between(
         installed_side(&game, &game_root),
         classified_side(
@@ -1572,6 +1701,7 @@ pub(crate) fn plan(
             zip_root.as_ref(),
             bundle.maintenance(),
             bytes_of(STANDARD_PACK_SCHEDULE_FILE),
+            &zip_prerequisites,
             &zip,
         ),
         &items,
