@@ -1718,7 +1718,7 @@ of it); a deferred cycle or a failed evaluation leaves it as it was, and a start
 so a run counts from the first evaluation after the start. Nothing of it is written to the ledger
 and no decision reads it. The general read `ScheduleExplanation`
 ([`runtime-interface.md`](../runtime-interface.md), "New request kinds") answers it; its outputs
-are MCP-19b's: the Lab's `schedule` (MCP `ac_schedule`), the `not_running` row of `ac_overview` and
+are MCP-19b's: the Lab's `schedule` (MCP `ac_schedule`), the `not_running` row of `ac_status` and
 the `not_run` rows of `ac_diagnose`.
 
 (Workflow #438 HELD-1, since 0.12.56) A row that keeps one `why` code of the held set past a

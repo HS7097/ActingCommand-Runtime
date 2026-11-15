@@ -101,8 +101,9 @@ const LAB_PROGRAM: &str = "actinglab.exe";
 const MOVE_ASIDE: &str = "move_aside";
 const MOVE_ASIDE_NOTE: &str = "no row resumes or undoes this operation: the state root is created \
                                only after the configuration is written, and everything written \
-                               so far is inside this folder; move the folder aside and run new \
-                               again";
+                               so far into the new root is inside this folder (a release's work \
+                               folder, when the answer names work_dir, is apart from it); move \
+                               the folder aside and run new again";
 
 /// What the operation needs to run, resume and undo its steps, as its journal keeps it. Never the
 /// salt.

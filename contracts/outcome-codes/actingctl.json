@@ -2918,7 +2918,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.37",
-      "description": "actinglab wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} and, with --wait-s, the wake's row (Workflow #432 AGT-1b).",
+      "description": "actinglab wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} (Workflow #432 AGT-1b).",
       "common_causes": "The request succeeded.",
       "handling": "Read the row in host.agent_wake: delivered, or deferred with its reason. A build with no transport answers deferred."
     },

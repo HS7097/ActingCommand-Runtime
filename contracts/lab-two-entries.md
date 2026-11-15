@@ -967,7 +967,7 @@ sentence fails that test.
 - MCP lists the operations of the installed modules, with descriptions generated from the table
   and the shared rules written once in its instructions (#410 item 3); no tiers (`--tier` goes);
   the 24 KiB answer budget and `handle` with `wait_s` stay as runtime-interface.md,
-  "MCP (counter `mcp`)", has them.
+  "MCP (counter `mcp`; a record up to LAB-7)", has them.
   - **The server's shell** (Workflow #434 LAB-5G2a, 0.12.57; register §1.287, "Slice LAB-5G2a";
     the coordinator's rulings on board #434, 6775192250 and 6784514298, not the owner's words).
     `actinglab-mcp` (`apps/actinglab-mcp`) speaks MCP over stdio with the protocol and the loop
@@ -1242,7 +1242,7 @@ sentence fails that test.
   the protocol version the session negotiated, and its export directory. The cursors it binds to
   its connection, `output_budget_exceeded` for an answer that does not fit even so, and the Lab
   tools' overflow rule stay MCP's. What MCP answers does not change: runtime-interface.md, "MCP
-  (counter `mcp`)", still says what it is.
+  (counter `mcp`; a record up to LAB-7)", still says what it is.
 - **Help** (Workflow #434 CLI-HELP, 0.12.55; register §1.313; the coordinator's rulings of
   2026-11-11, not Alice's words).
   - `actinglab help`, and the bare `actinglab`, print without `--json` a text a person reads: the

@@ -4020,7 +4020,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A command's --wait (actinglab emu start, stop, restart and task-run; actinglab after U-3) ended before its request did: the command stopped waiting after waited_ms and the request (operation, request_id when the command knows it) goes on in the Runtime (Workflow #389 MCP-21).",
+      "description": "A command's --wait (actinglab emu start, stop, restart and run start) ended before its request did: the command stopped waiting after waited_ms and the request (operation, request_id when the command knows it) goes on in the Runtime (Workflow #389 MCP-21).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

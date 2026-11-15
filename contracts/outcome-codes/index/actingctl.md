@@ -15,7 +15,7 @@ column means. 204 codes.
 | `agent_channel_failed` | error | none | 0.12.37 | active | pending | TBD | The Lab's agent rows did not do their work: the registry or a record could not be read or written, a channel was refused, or a registered session's hook or… |
 | `agent_channel_reported` | success | none | 0.12.37 | active | pending | TBD | The Lab's agent rows did their work on the channel registry or a session's live record: a channel added, removed or listed, or a running session registered; the… |
 | `agent_facts_published` | success | none | 0.12.0 | active | pending | TBD | actinglab facts publish: the Runtime recorded the fact observation. |
-| `agent_wake_test_queued` | success | none | 0.12.37 | active | pending | written | actinglab wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} and, with --wait-s, the wake's row (Workflow #432… |
+| `agent_wake_test_queued` | success | none | 0.12.37 | active | pending | written | actinglab wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} (Workflow #432 AGT-1b). |
 | `answer_exported` | warning | none | 0.12.0 | active | pending | written | An answer larger than the output budget was written whole to an export file. |
 | `arguments_invalid` | error | none | 0.12.0 | active | pending | TBD | An MCP tool was called with arguments its input schema refuses. |
 | `binding_requires_unavailable` | warning | none | 0.12.0 | active | pending | written | record draft and ac_binding_draft: the answer carries no binding_requires. |

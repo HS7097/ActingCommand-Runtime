@@ -5,18 +5,17 @@ and the owner fragments it names; nobody edits it by hand. After a change to a f
 `py -3 -I -B ci/outcome_codes_index.py` from the workspace root and commit
 `contracts/outcome-codes/index/`; the `rust` check of CI runs the script with `--check` and fails
 while the committed index is not what the script generates. The catalog's contract is
-[runtime-outcomes.md](../../runtime-outcomes.md); `actingctl codes` and the MCP tool
-`ac_outcome_code` look up one code. In the tables, *Codes* counts every code of a fragment, active
-and retired, and *Active* its active codes. *Text written* counts the active codes whose
-`common_causes` and `handling` are both written (neither empty nor `TBD`, as the outcome guard's G10
-reads a text); the other active codes still hold `TBD`, or nothing, in one or both. *Settled* counts
-the active codes whose `review` is `settled`; the others are `pending`. Each owner's file lists
-every code of its fragment, retired ones included, sorted by code, with its category, ladder class,
-`since`, status (a retired code with the code that replaces it, where it names one), review, text
-(`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
-at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1764 locations are not in it, and 9 of the header's 39 owners have no fragment file and so no file
-here.
+[runtime-outcomes.md](../../runtime-outcomes.md); the Lab's `codes <code>` and its MCP tool
+`ac_codes` look up one code. In the tables, *Codes* counts every code of a fragment, active and
+retired, and *Active* its active codes. *Text written* counts the active codes whose `common_causes`
+and `handling` are both written (neither empty nor `TBD`, as the outcome guard's G10 reads a text);
+the other active codes still hold `TBD`, or nothing, in one or both. *Settled* counts the active
+codes whose `review` is `settled`; the others are `pending`. Each owner's file lists every code of
+its fragment, retired ones included, sorted by code, with its category, ladder class, `since`,
+status (a retired code with the code that replaces it, where it names one), review, text (`written`
+when both texts are written, else `TBD`) and the first sentence of its description, cut at a space
+within 160 characters and then ending in `…`. The index holds codes only: the catalog's 1764
+locations are not in it, and 9 of the header's 39 owners have no fragment file and so no file here.
 
 ## Codes by status
 

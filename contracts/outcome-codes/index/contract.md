@@ -53,7 +53,7 @@ column means. 918 codes.
 | `catalog_transition_failed` | error | none | 0.12.0 | active | pending | TBD | The diagnostic code of a ledger diagnostic record: catalog transition failed. |
 | `client_action_invalid` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): client action invalid. |
 | `command_rejected` | error | none | 0.12.0 | active | pending | written | The diagnostic code of a command.rejected record: a request the Runtime refused, or a Lab operation that failed. |
-| `command_wait_expired` | error | none | 0.12.0 | active | pending | TBD | A command's --wait (actinglab emu start, stop, restart and task-run; actinglab after U-3) ended before its request did: the command stopped waiting after… |
+| `command_wait_expired` | error | none | 0.12.0 | active | pending | TBD | A command's --wait (actinglab emu start, stop, restart and run start) ended before its request did: the command stopped waiting after waited_ms and the request… |
 | `config_decode_failed` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): the configuration file does not decode as actingd's… |
 | `config_manifest_parameters_too_many` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: config manifest parameters too many. |
 | `config_manifest_subsystems_too_many` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: config manifest subsystems too many. |

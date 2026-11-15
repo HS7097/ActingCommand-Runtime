@@ -18,7 +18,8 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
 from when"): the three counters, `via`, the Lab options' gate and the origin gates are replaced
 by [lab-two-entries.md](lab-two-entries.md) sections 2 and 3 (LAB-6), and the plans U-3 to U-6
 and the upgrade state are not built. The clean mapping's counters of actingctl and of its MCP
-server ("actingctl (counter `cli`)", "MCP (counter `mcp`)" below) record what those programs
+server ("actingctl (counter `cli`; a record up to LAB-7)", "MCP (counter `mcp`; a record up to
+LAB-7)" below) record what those programs
 sent: Workflow #434 LAB-7 (0.12.62) deleted both, and the Lab's rows
 ([lab-operations.json](lab-operations.json), each with the requests it sends) serve their
 commands and tools on the command line and through the Lab's MCP server.
@@ -849,7 +850,11 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 
 ## Clean mapping
 
-### Rules
+### Rules (a record up to LAB-7)
+
+The rules of the clean mapping as they stood until Workflow #434 LAB-7 (0.12.62) deleted
+actingctl and its MCP server; the operation table ([lab-operations.json](lab-operations.json))
+and [lab-two-entries.md](lab-two-entries.md) section 9 are the mapping now.
 
 1. The CLI command set is the original of the general interface. A general command is
    a name, a parameter structure, the request it sends and its outcome codes.
@@ -880,13 +885,14 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 8. The Lab commands of actingctl move without forwarding shells (U-3): each new home
    first passes its end-to-end test, then the old command retires.
 
-### actingctl (counter `cli`)
+### actingctl (counter `cli`; a record up to LAB-7)
 
 The record of what actingctl sent until Workflow #434 LAB-7 (0.12.62) deleted it; the Lab's core
 and rescue rows serve these commands now ([lab-operations.json](lab-operations.json); the
-opening of this document).
+opening of this document). The last column says where each command was to live while actingctl
+stood.
 
-| Command | Request | Block | New home |
+| Command | Request | Block | Home until LAB-7 |
 |---|---|---|---|
 | `status` | Status | general read | stays; `ac_overview` covers it; #390 九处-1 (board #390 comment 6095942731 item 1, corrected wave-18 ruling 4): each instance carries `emulator_state`, whether its emulator runs as the Runtime last read it, `{state: on \| off, observed_at_unix_ms}`, or `{state: unknown}` while the Runtime holds no reading (never `off` by default); the readings are `MuMuManager info` at the start's discovery (a discovery-bound instance bound to its port is `on`, bound pending `off`), a confirmed emulator start (`on`) or stop (`off`), the state read after a failed control (`unknown` when that read settled nothing after the vendor command ran) and an on-demand `DiscoverInstances` (an instance it no longer lists is `unknown`); no poll is added; an instance that is not discovery-bound is always `unknown`; #411 A35-S5 (register §1.170): an instance whose recovery ladder holds instead of climbing carries `ladder_busy_hold {kind, held_ms, limit_ms}` while the hold waits (`kind` `busy_outcome` or `screen_changing`, `held_ms` since the climb's first hold of that kind, `limit_ms` that kind's configured `max_wait_ms`), the ladder's state in memory, absent otherwise ([emulator-control.md](emulator-control.md), "Busy ends") |
 | `status --config`, `facts --program` | RuntimeFactSnapshot | general read | stays; reports the two Lab options from `config.*` and checks `<root>\tools\actinglab.exe` locally, reporting a mismatch; `ac_facts` (new); #389 MCP-4: both answer `{scope, read_at_unix_ms, snapshot \| records, records_total, records_kept}`, `facts --program` also takes `--key-prefix`; Workflow #429 R-4 (since 0.12.36): `status --config` also answers `config_version`, the settings' version the snapshot answered with its records |
@@ -927,7 +933,7 @@ opening of this document).
 | planned: `clear-kept` (#375 R5e) | ClearKeptFolder | option two | actinglab `clear-kept` instead |
 | `watchdog *`, `mcp-config` | not requests | — | stay; `mcp-config`'s example drops `--tier` |
 
-### MCP (counter `mcp`)
+### MCP (counter `mcp`; a record up to LAB-7)
 
 The record of the tools of `actingctl mcp-serve` until Workflow #434 LAB-7 (0.12.62) deleted it;
 the Lab's MCP server serves the operation table's rows as its tools now
@@ -952,7 +958,7 @@ family's rows that had none (`ac_record_candidates`, `ac_record_amend`, `ac_reco
 `ac_record_archive`, `ac_record_reopen`, author until U-3): the build's author tier goes from 7 to
 12 tools, and U-3's option one gains five.
 
-| Tool | Class | Maps to | Parameters | Block |
+| Tool | Class | Mapped to until LAB-7 | Parameters | Block |
 |---|---|---|---|---|
 | `ac_overview` | read | `actingctl overview` | `instance` ↔ `--instance`; `sections` ↔ `--sections` (#389 MCP-8: a list of block names, `global_pause`, `instances`, `run_window`, `lab_tool`, `install`, #385 P-m's `performance`, and #389 MCP-9a's `catalog`, `config_generation`, `watchdog`, default all; `daemon` and `incomplete` are always answered; another name is `arguments_invalid`); each instance row carries `foreground {package, observed_at_unix_ms}` from the instance program fact `application.foreground` when it has one: the package last seen before a pointer input, read with RuntimeFactSnapshot, no wire change (#389 MCP-5b, D10); each instance row carries `emulator_state`, the status' reading of whether the instance's emulator runs (`on`, `off` or `unknown`, with `observed_at_unix_ms` for `on` and `off`), as `actingctl status` shows it (#390 九处-1), never cut; each instance row carries `backend_selfcheck {<entry>: {status, checked_at_unix_ms}}`, the last self-check of each backend entry (`input`, `capture`, `nemu`) the instance's program facts hold, `status` verbatim from `backend.selfcheck.<entry>.status` (`passed`, `failed`, `unknown`) and the time from `.checked_at_unix_ms`, read with RuntimeFactSnapshot, no wire change; an entry whose facts are absent or invalidated is omitted, `{}` while none was checked, and the member is absent only when the snapshot could not be read (a warning and `incomplete`); never cut (#411 A7, register §1.98 A7-1); each instance row whose instance the latest policy evaluation decided for carries `not_running`, that instance's not-running row as `ac_schedule` answers it, from one ScheduleExplanation read with `candidates: false` (a failed read is a warning and `incomplete`, and no row has the member), never cut (#386 SR-6b, MCP-19b, register §1.144 M19B-3); each instance row whose recovery ladder's hold waits carries `ladder_busy_hold {kind, held_ms, limit_ms}`, the status member verbatim (#411 A35-S5, register §1.170); each instance row that does something now carries `activity {kind, request_id?, package_id?, since_unix_ms}`, the status member verbatim ("What an instance does now"), read with the one Status read, with no further request and nothing read from the ledger, absent while the instance has none, never cut (#429 R-0b2, register §1.243, since 0.12.36); `catalog` is the program fact `config.catalog` (register A5) read back, null while no generation is active, and, while the active composed generation has compile warnings, its member `compile_warnings {count, codes, items}` read from the program fact `config.catalog_warnings`: how many warnings, their codes, and each warning's place `{warning, game?, pointer}` in its game's `schedule.json`, read with the same RuntimeFactSnapshot, no wire change, and, when the fact's 256 rows left some out (fix 1), `items_omitted` and `counts_omitted`, how many place rows and count rows are missing (a warning whose count row is missing is in neither `count` nor `codes`); absent without warnings, so the block is unchanged (#428 CW-1, register §1.290, since 0.12.47); and, while the active composed generation holds fixed values or declared valuations, its member `benefit_provenance {fixed_value {pack, model}, valuation {pack, model}, items}` read from the program fact `config.catalog_provenance` ([standard-pack-schedule.md](standard-pack-schedule.md), "Provenance"): how many judged rules run on a fixed value and how many pools on a declared valuation block, over every game, as the pack wrote them (`pack`) and as the model's export marked them (`model`), and each one `{game, kind, origin, id}` (`kind` `fixed_value` or `valuation`, `id` the rule's or pool's id in its game's `schedule.json`), in the fact's order, read with the same RuntimeFactSnapshot, no wire change, and, when the fact's 256 rows left some out, `items_omitted` and `counts_omitted`, how many id rows and count rows are missing (a value whose count row is missing is in no count); absent without the fact (a state root an earlier build wrote) or with nothing in it, so the block is unchanged (#428 SCHED-C1b, register §1.299, since 0.12.53); `config_generation {running?, selected?}` is the generation of `config.selection` beside the one `install\active.json` selects now, with the warning `config_generation_mismatch` (`path`, the selected configuration) when they differ, or when the selected configuration file's sha256 is not the `config_sha256` of `config.selection` (an edit actingd has not loaded; so also on an install without generations, #422 OV-24K), and one `package_binding_unreadable` per binding of the selected configuration whose path is missing or unreadable (MCP-11's read); `watchdog {decision, attention, starts_24h?, last_tick?}` is `actingctl watchdog status` read locally, null without an install root (#389 MCP-9a); the server's location stands for `--root`; output as the CLI's; only MCP cuts an answer past the output budget, in the order below (presentation) | general |
 | `ac_events` | read | `actingctl events` | `instance`, `view`, `since_unix_ms`, `until_unix_ms`, `after_sequence`, `through_sequence`, `event_type`, `event_types`, `exclude_event_types`, `fact_key`, `min_severity`, `max_severity`, `origin_module`, `task_id`, `run_id`, `request_id`, `correlation_id`, `detail`, `limit`, `cursor`, `wait_s` ↔ same flags (#389 MCP-1; `event_types` and `fact_key` #389 MCP-2, a list comma-separated on the CLI). `detail` is `brief` (the default), `summary` (each row adds the outcome its record carries, none on a state change; the MCP-1 follow-up) or `payload`. Workflow #434 CLI-EV ([v012-register.md](v012-register.md) §1.306): without a position or a window (`after_sequence`, `cursor`, `through_sequence`, `since_unix_ms`, `until_unix_ms`, `run_id`, `request_id`, `correlation_id`) the page is the newest `limit` records the other filters match, oldest first, searched in windows of 256, 4 096 and 65 536 sequences that end at the ledger's head, with `first_sequence` (the records before it: `through_sequence` `first_sequence - 1`) and, when fewer than `limit` were found and older records were not searched, `searched_from_sequence`, the lowest sequence searched; with a position or a window the page starts there, oldest first, as before. Paging: MCP with `next_cursor`; the CLI with `--after-sequence <last_sequence>`, because a cursor is bound to the process and connection that issued it, so the `next_cursor` one CLI call prints always answers `cursor_invalid` in the next (by design). #411 B27: an `event_type`, or an element of `event_types` or `exclude_event_types`, that names no event type is `arguments_invalid` (`not_recognised`) with `argument_value`, the value given | general |

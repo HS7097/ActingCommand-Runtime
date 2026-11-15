@@ -736,10 +736,12 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
 ```
 
 These are the installer's commands as the model names them; the last line is the Lab's rescue
-row `new` (Workflow #453 S4). Of the others the Lab serves `config restore` as `config restore
-<backup> [--sha <sha256>]`, the first slice of `instance add` as below and `pack place` as
-`place <bundle> [--sums <file>] [--facts <file>] [--plan]` ("The Lab's rescue module"); the rest
-are designed and not built, and hold the planned rescue rows `config file show|diff|set|bind|
+row `new` (Workflow #453 S4). Of the others the Lab serves the first slice of `instance add` as
+below; `install config restore` and `install pack plan|place` are not built, and the Lab's own
+rows `config restore <backup> [--sha <sha256>]` (the kept file put back as `config replace` puts
+one) and `place <bundle> [--sums <file>] [--facts <file>] [--plan]` do that work in their own
+forms ("The Lab's rescue module"); the rest are designed and not built, and hold the planned
+rescue rows `config file show|diff|set|bind|
 policy|lab-options|commit|discard`, `instance remove`, `pack remove` and `pack restore`
 ([lab-operations.json](lab-operations.json)).
 
@@ -989,8 +991,9 @@ policy|lab-options|commit|discard`, `instance remove`, `pack remove` and `pack r
     Lab finds the root (every row but `new` locates it from its configuration) and a second `new`
     into the folder is refused `root_not_empty`, so the answer names no command and carries
     `move_aside` in place of `next`: `folder` (the new root) and `note`, which says that the state
-    root is created only after the configuration is written, that everything written so far is
-    inside that folder, and to move it aside and run `new` again (the coordinator's decision: no
+    root is created only after the configuration is written, that everything written so far into
+    the new root is inside that folder (a release's work folder, which the answer names as
+    `work_dir`, is apart from it), and to move it aside and run `new` again (the coordinator's decision: no
     Lab row is built for it, since nothing of an installation exists yet). A `root_not_empty`
     refusal of a root that holds such an unfinished operation answers the same way. `resume`
     continues each step by its postcondition;
@@ -1093,13 +1096,12 @@ with the rescue face. The rows that run the installer's commands:
 | `install start` | `up` |
 | `install release-hold --reason <reason>` | `release-hold <reason>` |
 | `install guards --for stop\|start` | `guards --for stop\|start` |
-| `install config restore` | `config restore <backup> [--sha <sha256>]` |
-| the composites of the module | `config replace <file> [--sha <sha256>]`, `instance add <alias> …`, `place <bundle> [--sums <file>] [--facts <file>] [--plan]`, `new <new_root> --build <dir> …` |
+| the composites of the module | `config replace <file> [--sha <sha256>]`, `config restore <backup> [--sha <sha256>]` (the kept file put back as `config replace` puts one; the installer's `install config restore` is not built), `instance add <alias> …`, `place <bundle> [--sums <file>] [--facts <file>] [--plan]` (the installer's `install pack plan\|place` is not built), `new <new_root> --build <dir> …` |
 
 The rescue face:
 
-- **No root word.** It acts on the root of the `actinglab.exe` that runs it (`<root>\tools\` until
-  LAB-7 moves it to `runtime\`); `--root` and `--state-root` are refused as unknown arguments.
+- **No root word.** It acts on the root of the `actinglab.exe` that runs it (`<root>\tools\`;
+  LAB-7 keeps it there); `--root` and `--state-root` are refused as unknown arguments.
 - **The initiator.** Every journal an operation of the module writes has `initiator` (§4.3 of the
   contract's words) from before its first step; an `undo` records its own initiator in the undo
   record; a resumed operation keeps the face its journal began with. `unlock` passes the initiator
@@ -1899,40 +1901,44 @@ server itself. Since Workflow #434 LAB-7 (0.12.62) the first generation (`g1`,
 `actingcommand-mcp-entry.exe`, whose child was `actingctl mcp-serve`) is deleted with `actingctl`:
 no build carries it, no row plans for it or prints its registration, and a client still
 registered with it stops working (register §1.287, "Slice LAB-7", "At deploy"); a client
-registers the second generation (its bullet, the last but one). The bullets up to and including
-"Registration" describe the first generation as it was, since the second is described by how it
-differs. The first generation's form was:
+registers the second generation ("The second generation and its rows" below). The first
+generation keeps its description under its own title, since the second is described by how it
+differs.
+
+### The first generation (`g1`), deleted by Workflow #434 LAB-7
+
+A record of a program no build carries since LAB-7: nothing in this subsection can be run. Its
+form was:
 
 `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <name> -- mcp-serve --tier …`
 
-- **What it is.** A small program shipped in the Tools half (listed in its `BUILD-MANIFEST.json`).
+- **What it was.** A small program the Tools half shipped until LAB-7 (listed in its `BUILD-MANIFEST.json`).
   `g1` is the entry's own generation (`--generation` prints it); it changes only when the contract
   between the entry and its children changes (`entry_protocol`, 1 for `g1`). Each generation is a
   program of its own with its own file name, in its own `g<N>` directory: `g1\` only ever holds
-  the first program, `actingcommand-mcp-entry.exe`, and `tools\actingcommand-mcp-entry.exe` is
-  that first generation in every build; `g2\` only ever holds the second (below). Nothing
-  overwrites a running entry. Placing an entry is a deploy step today (`g1\`: copy
-  `tools\actingcommand-mcp-entry.exe`); placement by `install update` is a follow-up, and that
-  step, when built, creates under `g2\` only and never writes `g1\`. The bullets below, up to
-  and including "Registration", describe the first generation; the second differs from it as its
-  own bullet, the last, says.
-- **What it does.** It pipes JSON-RPC between the client and one current child,
+  the first program, `actingcommand-mcp-entry.exe`, and `tools\actingcommand-mcp-entry.exe` was
+  that first generation in every build up to LAB-7; `g2\` only ever holds the second (below). Nothing
+  overwrites a running entry. Placing an entry was a deploy step (`g1\`: a person copied
+  `tools\actingcommand-mcp-entry.exe`); placement by `install update` was a follow-up, and that
+  step, if it is built, creates under `g2\` only and never writes `g1\`. The second generation
+  differs from it as "The second generation and its rows" says.
+- **What it did.** It piped JSON-RPC between the client and one current child,
   `<root>\runtime\actingctl.exe` with the words after `--` unchanged (so `--tier` and the client's
-  permission scope stay as they are), and keeps the client's handshake to replay it. It watches
+  permission scope stayed as they were), and kept the client's handshake to replay it. It watched
   the size and time of `runtime\BUILD-MANIFEST.json` and `runtime\actingctl.exe`; a change that
-  stays put for `install.mcp_entry.settle_ms` makes it run
+  stayed put for `install.mcp_entry.settle_ms` made it run
   `actingctl mcp-entry plan --root <root> --entry-protocol 1 --current-build <commit> -- <words>`
-  of the current install, never while `install\writer.lock` is held. Whether an unfinished
+  of the current install, never while `install\writer.lock` was held. Whether an unfinished
   operation blocks it is the plan's decision (`operation_unfinished`). The first plan after a
   child started names that child's build only if the install has not changed since the child
   started; otherwise its build is a planned switch. A planned switch whose install changes again
   before its candidate starts is dropped, and the change is planned again once it stays put for
   `settle_ms`, so a candidate never runs a newer file under an older plan's build (#411 P49,
   v0.12.25).
-- **The plan** (`actingctl mcp-entry plan`, operation `install_mcp_entry_plan`) prints
+- **The plan** (`actingctl mcp-entry plan`, operation `install_mcp_entry_plan`) printed
   `{switch, reason (build_changed, same_build, no_current_build), build {commit, manifest_sha256},
   child [exe, words…], tunables {poll_ms, settle_ms, verify_timeout_ms, drain_max_ms,
-  refused_retry_max_ms}, entry_protocol, outcome}`. It refuses with `install_command_refused`:
+  refused_retry_max_ms}, entry_protocol, outcome}`. It refused with `install_command_refused`:
   `writer_lock_failed`, `operation_unfinished`, `live_build_invalid` / `live_build_modified` (the
   installed files checked against their manifests, as `install adopt` checks them),
   `config_unreadable`, `install_section_invalid`. It reads the configuration before it checks the
@@ -1956,8 +1962,8 @@ differs. The first generation's form was:
   same install is tried once more after `settle_ms`, then not again until it changes. A
   request in flight when its child ends is answered `mcp_entry_outcome_unknown` (since Workflow
   #434 LAB-7, 0.12.62, the first entry is deleted and that code retired; the second generation's
-  is `mcp_entry_g2_outcome_unknown`; inspect with `ac_get_run` or `ac_overview`) and never sent
-  again; the next request goes to a fresh child.
+  is `mcp_entry_g2_outcome_unknown`, which a client inspects with `ac_run_show` or `ac_status`)
+  and never sent again; the next request goes to a fresh child.
   When the first plan after a fresh child names a build other than its predecessor's, the client
   gets the change notice below.
 - **The notice.** Legacy clients get `notifications/tools/list_changed` (the entry answers their
@@ -1973,7 +1979,8 @@ differs. The first generation's form was:
   notice and whether `tools/list` followed, and the client's refresh entry (`tools_list_changed`
   for Claude Code, `codex_reload`, `antigravity_refresh`, `dsh_plugin_reload`, else
   `client_restart`). `actingctl mcp-entry list --root <root> [--all]` (operation
-  `install_mcp_entry_list`) prints them with `stale` when the entry is gone: no process runs with
+  `install_mcp_entry_list`) printed them, as the rescue row `mcp entries [--all]` lists them now
+  (below), with `stale` when the entry is gone: no process runs with
   its pid, or the one that does is another, since Windows reuses pids. That process's creation
   time differs from `process_created_at_unix_ms`, or, in a file without it (an entry before
   v0.12.25), is later than `started_at_unix_ms`, which the entry read after it was created. Only
@@ -1984,7 +1991,10 @@ differs. The first generation's form was:
   `process_probe_failed` caused by each of those rows' failures (#411 P49 fix round 1, review
   M1). Nothing deletes a status file.
 - **Registration.** `actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root
-  <root> [--tier …]` prints the snippet; it writes no client file.
+  <root> [--tier …]` printed the snippet; it wrote no client file.
+
+### The second generation and its rows
+
 - **The second generation** (Workflow #434 LAB-5G5a, 0.12.57; the coordinator's ruling of
   2026-11-12 on board #434, which replaces ruling 6 of 6775192250). A second program,
   `actingcommand-mcp-entry-g2.exe`, the first generation's code with these differences only:
@@ -2009,7 +2019,7 @@ differs. The first generation's form was:
     of `g1`'s three codes, owned by the second program.
   - Its status file is the same file with the same members, `<root>\mcp-entry\state\entry-<pid>.json`
     (`actingcommand.mcp-entry-status.v1`), with `entry_generation` and `entry_protocol` 2, so
-    `mcp-entry list` lists both generations' entries side by side.
+    `mcp entries` lists both generations' entries side by side.
   - No release or Tools archive carries it before the packaging slice (LAB-5G6), and placing it in
     `g2\` is a manual step until an installer step exists. `actingctl mcp-serve` and
     `actingctl mcp-entry plan --entry-protocol 1` went with actingctl (LAB-7, 0.12.62), after the
@@ -2080,9 +2090,10 @@ the bootstrap and the conversion of a single-location root. Until a root is conv
 single-location and nothing here runs on it. Since Workflow #434 LAB-7 (0.12.62) deleted
 `actingctl`, the installer this frozen design names (its commands, an installer's program in
 `install\installer.json`) is the Lab's rescue module and its `tools\actinglab.exe`: a command form
-below is the installer's, which a person runs as its rescue row (`prepare`, `convert`, `clean`,
-`restart` and the rows of "The Lab's rescue module"; `prepare`, `convert` and `clean` are planned
-rows not served yet).
+below is the installer's, which a person runs as its rescue row where one is served (the rows of
+"The Lab's rescue module"); `prepare`, `convert` and `clean` are planned rows not served yet, and
+`install restart` is not built (the rescue row `restart` stops and starts the Runtime of the root;
+it is not this design's `install restart`).
 
 ### Root, slots and root-fixed items (design §2.1, §2.2)
 
