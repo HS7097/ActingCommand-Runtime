@@ -10350,6 +10350,12 @@
         "screen_still": {
           "description": "The screen stayed unchanged until the still limit: the input most likely did nothing."
         },
+        "final_state_unmet": {
+          "description": "The awaited page was on screen at the end but the state the step declares for it did not hold: check the step's final-state target and what the page showed."
+        },
+        "wait_max_reached": {
+          "description": "The wait step's own page stayed on screen until its max_ms ran out and the awaited page did not come: raise max_ms or declare on_timeout."
+        },
         "loading_limit": {
           "description": "The wait ended on its loading allowance while the screen was still loading."
         },

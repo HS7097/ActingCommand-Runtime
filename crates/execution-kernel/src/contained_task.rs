@@ -6179,6 +6179,7 @@ impl PreparedContainedTask {
                             hit_error_page,
                             timing_failure,
                             (still_limit, loading_limit),
+                            destination_reached,
                         ) = match resolution {
                             PostconditionResolution::Reached(reached) => {
                                 observation = Some(reached);
@@ -6227,12 +6228,14 @@ impl PreparedContainedTask {
                                 timing_failure,
                                 still_limit,
                                 loading_limit,
+                                destination_reached,
                             } => (
                                 observation,
                                 last_frame_page,
                                 hit_error_page,
                                 timing_failure,
                                 (still_limit, loading_limit),
+                                destination_reached,
                             ),
                             // #411 B36/B19 (A35-S3): only a wait step holds on its own page.
                             PostconditionResolution::Held { .. } => {
@@ -6255,10 +6258,11 @@ impl PreparedContainedTask {
                         // Workflow #469 K2: what the failed wait saw where it ended.
                         let word = confirmation_word(
                             &self.control.game,
-                            &from_page,
+                            (from_page.as_str(), destination_pages.as_slice()),
                             last_frame_page.as_deref(),
                             hit_error_page,
                             (still_limit.is_some(), loading_limit.is_some()),
+                            destination_reached,
                         );
                         let Some(policy) = retry_policy.as_ref() else {
                             Self::finish_effect_attempt(
@@ -6450,6 +6454,7 @@ impl PreparedContainedTask {
                                         timing_failure,
                                         still_limit,
                                         loading_limit,
+                                        destination_reached,
                                     } => {
                                         Self::finish_effect_attempt(
                                             runtime,
@@ -6461,10 +6466,11 @@ impl PreparedContainedTask {
                                         // ended.
                                         let retry_word = confirmation_word(
                                             &self.control.game,
-                                            &from_page,
+                                            (from_page.as_str(), destination_pages.as_slice()),
                                             last_frame_page.as_deref(),
                                             false,
                                             (still_limit.is_some(), loading_limit.is_some()),
+                                            destination_reached,
                                         );
                                         return Err(with_confirmation_word(
                                             ContainedTaskError::with_detail(
@@ -8536,6 +8542,7 @@ impl PreparedContainedTask {
                             timing_failure: None,
                             still_limit: None,
                             loading_limit: None,
+                            destination_reached: false,
                         });
                     }
                     let on_held = match held.as_mut() {
@@ -8673,6 +8680,7 @@ impl PreparedContainedTask {
             }),
             still_limit,
             loading_limit,
+            destination_reached: false,
         })
     }
 }
@@ -8772,19 +8780,24 @@ fn confirmation_failure_detail(
 }
 
 /// Workflow #469 K2 (register §1.396; the design's place 1, "Page graph"): what a page-graph
-/// wait that did not confirm its step saw where it ended, from its `Failed` resolution and the
-/// page the step started from (`from_page`, compared as the step's own frame is): a declared error
-/// page (`hit_error_page`); the loading allowance or the still limit that ended the wait
-/// (`ended_on`: whether `loading_limit`, whether `still_limit`); otherwise the page its last frame
-/// matched (`last_frame_page`): none, the step's own page, or another page of the package. The
-/// page graph compares no frames, so an unrecognised screen is one word whether it moved or not;
-/// and a frame names no loading page, which the page set leaves out.
+/// wait that did not confirm its step saw where it ended, from its `Failed` resolution, the page
+/// the step started from and its destinations (`from_page`, `destination_pages`, compared as the
+/// step's own frame and its final-state judgement compare them): a declared error page
+/// (`hit_error_page`); the still limit or the loading allowance that ended the wait (`ended_on`:
+/// whether `still_limit`, whether `loading_limit`); otherwise the page its last frame matched
+/// (`last_frame_page`): none; one of the step's destinations, a frame the final-state judgement
+/// found not to be the step's final state (fix round 2); the step's own page, which after a
+/// destination that had passed (`destination_reached`) is the screen come back to it (fix round
+/// 2); or another page of the package. The page graph compares no frames, so an unrecognised
+/// screen is one word whether it moved or not; and a frame names no page that exists only as a
+/// loading copy, which the page set leaves out.
 fn confirmation_word(
     game: &str,
-    from_page: &str,
+    (from_page, destination_pages): (&str, &[String]),
     last_frame_page: Option<&str>,
     hit_error_page: bool,
     ended_on: (bool, bool),
+    destination_reached: bool,
 ) -> ConfirmationProblem {
     match (hit_error_page, ended_on, last_frame_page) {
         (true, _, _) => ConfirmationProblem::ErrorPage,
@@ -8792,9 +8805,20 @@ fn confirmation_word(
         (false, (true, false), _) => ConfirmationProblem::ScreenStill,
         (false, (false, false), None) => ConfirmationProblem::NothingRecognised,
         (false, (false, false), Some(page))
+            if destination_pages
+                .iter()
+                .any(|destination| crate::page_anchor_matches(game, page, destination)) =>
+        {
+            ConfirmationProblem::FinalStateUnmet
+        }
+        (false, (false, false), Some(page))
             if crate::page_anchor_matches(game, page, from_page) =>
         {
-            ConfirmationProblem::InputNotTaken
+            if destination_reached {
+                ConfirmationProblem::ReturnedToOwnPage
+            } else {
+                ConfirmationProblem::InputNotTaken
+            }
         }
         (false, (false, false), Some(_)) => ConfirmationProblem::OtherPageShown,
     }
@@ -8858,6 +8882,11 @@ enum PostconditionResolution {
         still_limit: Option<StillLimitReached>,
         /// LOAD-3: the wait ended on a transition frame after its loading allowance was spent.
         loading_limit: Option<LoadingLimit>,
+        /// Workflow #469 K2 fix round 2: the step's destination had passed before the wait
+        /// failed. Set only where an observation window, which opens on a frame of the
+        /// destination, ran out without it; a last frame on the step's own page is then the
+        /// screen come back to it, not an input that did not take.
+        destination_reached: bool,
     },
 }
 

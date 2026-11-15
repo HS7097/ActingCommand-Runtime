@@ -10,10 +10,13 @@
 //   (`page_confirmation_failed`, `contained_task_step_unconfirmed`,
 //   `contained_task_error_page_reached`): `error_page` on a declared error page, `loading_limit`
 //   when the loading allowance ended the wait, `screen_still` when the still limit did, and
-//   otherwise the page of the wait's last frame: `nothing_recognised` for none, `input_not_taken`
-//   for the step's own page, `other_page_shown` for another page of the package. A run standing on
-//   an error page that no operation leaves: `error_page_no_exit`. A wait step that meets a
-//   declared error page: `error_page`; one whose `max_ms` ran out on its own page: no word.
+//   otherwise the page of the wait's last frame: `nothing_recognised` for none,
+//   `final_state_unmet` for one of the step's destinations whose declared final state did not
+//   hold, `input_not_taken` for the step's own page, `returned_to_own_page` for it at the end of
+//   an observation window (which opens on the destination), `other_page_shown` for another page of
+//   the package. A run standing on an error page that no operation leaves: `error_page_no_exit`. A
+//   wait step that meets a declared error page: `error_page`; one whose `max_ms` ran out on its own
+//   page: `wait_max_reached` (fix round 2, the coordinator's decisions).
 // - `contained_task_requires_scheduler` names the failure whose decision asked for the recovery
 //   (`failure_code`) and, when that failure was a confirmation's, its `confirmation_problem`.
 // - `guard_problem` on `contained_task_guard_refused`: `page_mismatch`, `target_not_passed`,
@@ -25,11 +28,12 @@
 // shows `screens[n]` after `n` inputs, each segment's last frame repeating, a frame is delivered at
 // once unless a test says otherwise, and every pause moves the clock by its length. A frame is
 // three pixels: the first names the page (`home`, `lobby`, `result`, the error page `fail`; dark
-// is none), the second is the guard's flag (green ready, grey busy) and a white third is the
-// loading page `spinner`. The package declares no capture interval (a frame every 50 ms, without
-// back-off), its loading pages' allowance is 30 000 ms, and every step goes from `home` to `result`
-// with a confirmation of 1 000 ms. Every expected value comes from those lines and the design's
-// table of words, never from the code.
+// is none), the second is the guard's flag (green ready, grey busy; `result` names it as an
+// optional target, which a final-state target may list) and a white third is the loading page
+// `spinner`. The package declares no capture interval (a frame every 50 ms, without back-off), its
+// loading pages' allowance is 30 000 ms, and every step goes from `home` to `result` with a
+// confirmation of 1 000 ms. Every expected value comes from those lines and the design's table of
+// words, never from the code.
 
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
@@ -47,6 +51,7 @@ const TASK_FILE: &str = "resources/operations/task/task.json";
 const UNRECOGNIZED: &str = "<unrecognized>";
 
 const CONFIRMATION_MS: u64 = 1_000;
+const WINDOW_MS: u64 = 300;
 const WAIT_MAX_MS: u64 = 2_000;
 const STILL_LIMIT_MS: u64 = 300;
 const LOADING_MS: u64 = 200;
@@ -101,7 +106,7 @@ fn page_set() -> PageSet {
         "pages": [
             {"id": "home", "required": ["page/home"]},
             {"id": "lobby", "required": ["page/lobby"]},
-            {"id": "result", "required": ["page/result"]},
+            {"id": "result", "required": ["page/result"], "optional": ["flag/ready"]},
             {"id": "fail", "required": ["page/fail"]}
         ]
     }))
@@ -164,6 +169,17 @@ fn loading_confirmation() -> Value {
     json!({"page_id": "result", "timeout_ms": CONFIRMATION_MS, "loading": {"max_ms": LOADING_MS}})
 }
 
+// A confirmation on `result` whose final state wants the flag ready there (ACT-4,
+// `target_present`).
+fn ready_confirmation() -> Value {
+    json!({"page_id": "result", "timeout_ms": CONFIRMATION_MS, "target_present": ["flag/ready"]})
+}
+
+// An observation window of `WINDOW_MS` that ends at its end (Workflow #390 EXEC-2).
+fn window() -> Value {
+    json!({"until": "window_end", "window_ms": WINDOW_MS})
+}
+
 // The page-graph task of `operations` that ends on `result`, with the error page `fail`, admitted
 // as the package's admission admits it.
 fn task(operations: Vec<Value>) -> PreparedContainedTask {
@@ -208,6 +224,9 @@ fn task(operations: Vec<Value>) -> PreparedContainedTask {
     program
         .validate_loading(&control, &detector, TASK_FILE)
         .expect("admitted loading declarations");
+    program
+        .validate_expected_targets(&control, &detector, &evaluator, TASK_FILE)
+        .expect("admitted final-state targets");
     PreparedContainedTask {
         control,
         program,
@@ -753,6 +772,137 @@ fn page_moved() -> Vec<Fixture> {
     }]
 }
 
+// Fix round 2: the step's destination on the wait's last frame, its flag busy where the final
+// state wants it ready, without a retry policy, on a decided failure and on a wait step's away
+// clock.
+fn final_state_unmet() -> Vec<Fixture> {
+    let unmet = || word("final_state_unmet");
+    let busy = || frame(RESULT, BUSY, false);
+    let no_policy_case = "no retry policy, the destination without its final state";
+    let no_policy = ended(
+        no_policy_case,
+        &task(vec![open(json!({"expect_after": ready_confirmation()}))]),
+        tapped(vec![busy()]),
+        1,
+    );
+    let decided_case = "a decided failure, the destination without its final state";
+    let decided_end = ended(
+        decided_case,
+        &task(vec![open(
+            json!({"retryable": false, "expect_after": ready_confirmation()}),
+        )]),
+        tapped(vec![busy()]),
+        1,
+    );
+    let decided_detail_text = decided_detail(&decided_end, "open", "result", false);
+    let waited_case = "a wait step away on its destination without its final state";
+    let waited = ended(
+        waited_case,
+        &task(vec![with(
+            hold(),
+            json!({"expect_after": ready_confirmation()}),
+        )]),
+        ScriptedRuntime::new(vec![vec![shown(HOME), busy()]]),
+        0,
+    );
+    let waited_detail = decided_detail(&waited, "hold", "result", false);
+    vec![
+        Fixture {
+            case: no_policy_case,
+            error: no_policy,
+            code: CONFIRMATION_FAILED,
+            detail: Some(unpolicied_detail("result", false)),
+            before: json!({}),
+            added: unmet(),
+        },
+        Fixture {
+            case: decided_case,
+            error: decided_end,
+            code: STEP_NOT_CONFIRMED,
+            detail: Some(decided_detail_text),
+            before: json!({"pack_operation_id": "open", "page_ids": ["result"], "attempts": 1,
+                           "page_id": "result"}),
+            added: unmet(),
+        },
+        Fixture {
+            case: waited_case,
+            error: waited,
+            code: STEP_NOT_CONFIRMED,
+            detail: Some(waited_detail),
+            before: json!({"pack_operation_id": "hold", "page_ids": ["result"], "attempts": 1,
+                           "page_id": "result"}),
+            added: unmet(),
+        },
+    ]
+}
+
+// Fix round 2: the step arrives on `result`, which opens its observation window, and the screen
+// is back on `home` for the rest of the window and the confirmation budget after it; without a
+// retry policy and on a decided failure. The window's failure keeps no frame that matched a page,
+// so the detail names none.
+fn returned_to_own_page() -> Vec<Fixture> {
+    let back = || word("returned_to_own_page");
+    let after_tap = || tapped(vec![shown(RESULT), shown(HOME)]);
+    let no_policy_case = "no retry policy, the window's end on the step's own page";
+    let no_policy = ended(
+        no_policy_case,
+        &task(vec![open(json!({"observation_window": window()}))]),
+        after_tap(),
+        1,
+    );
+    let decided_case = "a decided failure, the window's end on the step's own page";
+    let decided_end = ended(
+        decided_case,
+        &task(vec![open(
+            json!({"retryable": false, "observation_window": window()}),
+        )]),
+        after_tap(),
+        1,
+    );
+    let decided_detail_text = decided_detail(&decided_end, "open", UNRECOGNIZED, false);
+    vec![
+        Fixture {
+            case: no_policy_case,
+            error: no_policy,
+            code: CONFIRMATION_FAILED,
+            detail: Some(unpolicied_detail(UNRECOGNIZED, false)),
+            before: json!({}),
+            added: back(),
+        },
+        Fixture {
+            case: decided_case,
+            error: decided_end,
+            code: STEP_NOT_CONFIRMED,
+            detail: Some(decided_detail_text),
+            before: json!({"pack_operation_id": "open", "page_ids": ["result"], "attempts": 1,
+                           "page_id": "home"}),
+            added: back(),
+        },
+    ]
+}
+
+// Fix round 2: a wait step whose own page stays on screen up to its `max_ms`, without
+// `on_timeout`.
+fn wait_max_reached() -> Vec<Fixture> {
+    let case = "a wait step held on its own page to its max_ms";
+    let error = ended(
+        case,
+        &task(vec![hold()]),
+        ScriptedRuntime::new(vec![vec![shown(HOME)]]),
+        0,
+    );
+    let detail = decided_detail(&error, "hold", "home", false);
+    vec![Fixture {
+        case,
+        error,
+        code: STEP_NOT_CONFIRMED,
+        detail: Some(detail),
+        before: json!({"pack_operation_id": "hold", "page_ids": ["result"], "attempts": 1,
+                       "page_id": "home"}),
+        added: word("wait_max_reached"),
+    }]
+}
+
 // Each fixture ends with its code, and its outcome's values are those it had before this slice
 // with the word added; at least one fixture reaches the word.
 fn assert_words(fixtures: &[Fixture]) {
@@ -769,6 +919,20 @@ fn assert_words(fixtures: &[Fixture]) {
             values(&fixture.error),
             joined(&fixture.before, &fixture.added),
             "{case}"
+        );
+    }
+}
+
+// As `assert_words`, and each fixture's detail is byte for byte the one its code had before this
+// slice.
+fn assert_ends(fixtures: &[Fixture]) {
+    assert_words(fixtures);
+    for fixture in fixtures {
+        assert_eq!(
+            fixture.error.detail(),
+            fixture.detail.as_deref(),
+            "{}: the detail",
+            fixture.case
         );
     }
 }
@@ -844,28 +1008,29 @@ fn k2_page_moved_names_a_gap_frame_off_the_step_s_page() {
     assert_words(&page_moved());
 }
 
-// The design leaves the word of a wait step's end to this slice: its `max_ms` reached on its own
-// page is no situation of the vocabulary (no input was made, nothing else showed), so it carries
-// no word and its values are what they were.
+// Fix round 2 (the coordinator's decision): the wait's last frame on one of the step's
+// destinations, which the final-state judgement found not to be the step's final state, a wait
+// step's away clock included; until then `other_page_shown`, the word of a page that is neither
+// the awaited page nor the step's own.
 #[test]
-fn k2_a_wait_step_held_on_its_own_page_carries_no_word() {
-    let case = "a wait step held on its own page";
-    let error = ended(
-        case,
-        &task(vec![hold()]),
-        ScriptedRuntime::new(vec![vec![shown(HOME)]]),
-        0,
-    );
-    assert_eq!(error.code().as_str(), STEP_NOT_CONFIRMED, "{error:?}");
-    assert_eq!(
-        values(&error),
-        json!({"pack_operation_id": "hold", "page_ids": ["result"], "attempts": 1,
-               "page_id": "home"})
-    );
-    assert_eq!(
-        error.detail().map(str::to_owned),
-        Some(decided_detail(&error, "hold", "home", false))
-    );
+fn k2_final_state_unmet_names_a_destination_whose_final_state_did_not_hold() {
+    assert_ends(&final_state_unmet());
+}
+
+// Fix round 2 (the coordinator's decision): an observation window opens only on a frame of the
+// destination; one that ran out with the screen back on the step's own page carries K1's
+// `returned_to_own_page`, until then `input_not_taken`.
+#[test]
+fn k2_returned_to_own_page_names_a_window_that_ended_on_the_step_s_own_page() {
+    assert_ends(&returned_to_own_page());
+}
+
+// The design leaves the word of a wait step's end to this slice; fix round 2 (the coordinator's
+// decision): its `max_ms` reached on its own page is `wait_max_reached`, its other values and its
+// detail what they were.
+#[test]
+fn k2_wait_max_reached_names_a_wait_step_held_on_its_own_page_to_its_max_ms() {
+    assert_ends(&wait_max_reached());
 }
 
 // The design's test rule: for every fixture that reaches a word, what the failure identity and the
@@ -888,11 +1053,14 @@ fn k2_a_word_leaves_the_code_the_detail_and_every_other_value_as_they_were() {
         page_mismatch(),
         target_not_passed(),
         page_moved(),
+        final_state_unmet(),
+        returned_to_own_page(),
+        wait_max_reached(),
     ]
     .into_iter()
     .flatten()
     .collect::<Vec<_>>();
-    assert_eq!(fixtures.len(), 23);
+    assert_eq!(fixtures.len(), 29);
     for fixture in &fixtures {
         let case = fixture.case;
         assert_eq!(fixture.error.code().as_str(), fixture.code, "{case}");

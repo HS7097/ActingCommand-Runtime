@@ -988,18 +988,30 @@ program saw there, as the outcome value `confirmation_problem` (vocabulary
 `confirmation_problem`), never in the detail, so the failure identity and the streak stay as they
 are. A failed confirmation (`page_confirmation_failed`, `contained_task_step_unconfirmed`,
 `contained_task_error_page_reached`, a wait step's included) is judged from how its wait ended
-and the page its last frame matched, compared with the page the step was dispatched from:
-`error_page` on a declared error page, `loading_limit` when the loading allowance ended the wait,
-`screen_still` when the still limit did, otherwise `nothing_recognised` when the last frame
-matched no page (the page graph compares no frames, so a moving and a still screen are one
-word), `input_not_taken` when it matched the step's own page and `other_page_shown` when it
-matched another page of the package; the package's loading pages are no pages of its page set,
-so `loading_page_shown` is not given here. A run that stands on an error page no operation leaves
-gets `error_page_no_exit`. A wait step whose `max_ms` runs out on its own page carries no word:
-no situation of the vocabulary is that. `contained_task_requires_scheduler` names the failure
-whose decision asked for the recovery, the one its terminal holds, as `failure_code`, and that
-failure's `confirmation_problem` when it was a confirmation's (none after a guard's refusal). A
-guard's refusal (`contained_task_guard_refused`, in either execution mode) says why as
+and the page its last frame matched, compared with the step's destinations and the page it was
+dispatched from: `error_page` on a declared error page, `loading_limit` when the loading
+allowance ended the wait, `screen_still` when the still limit did, otherwise `nothing_recognised`
+when the last frame matched no page (the page graph compares no frames, so a moving and a still
+screen are one word), `final_state_unmet` when it matched one of the step's destinations (a frame
+the final-state judgement found not to be the step's final state,
+[resource-declarations.md](resource-declarations.md), "Final-state targets"; a destination that
+is the page the step left included), `input_not_taken` when it matched the step's own page,
+`returned_to_own_page` when it did so at the end of an observation window (which opens on a frame
+of the destination: the screen came back), and `other_page_shown` when it matched another page of
+the package. Only a page that exists solely as a loading copy (a page of the package's loading
+set) is outside the page set, so a last frame never names one and `loading_page_shown` is not
+given here. A page of the page set that a confirmation adds to its loading pages (`loading.add`)
+or declares as its wait page is in that set and is judged by the rules above, so as another page
+it gives `other_page_shown`, as in a linear step ("What the program saw"); under `on` its frames
+are transition frames, and a wait that ends on them ends with `loading_limit`. A run that stands
+on an error page no operation leaves gets `error_page_no_exit`. A wait step whose `max_ms` runs
+out on its own page gets `wait_max_reached`. `contained_task_requires_scheduler` names the
+failure whose decision asked for the recovery, the one its terminal holds, as `failure_code`, and
+that failure's `confirmation_problem` when it was a confirmation's. Of these four codes'
+page-graph ends, one still carries no `confirmation_problem`: `contained_task_requires_scheduler`
+after a refusal before the input (a guard's or an input recheck's) that asked for the recovery,
+whose `failure_code` names that refusal; every other end carries a word. A guard's refusal
+(`contained_task_guard_refused`, in either execution mode) says why as
 `guard_problem` (vocabulary `guard_problem`): `page_mismatch` when the frame's page is not the
 guard's page, a later attempt's frame on another page included; `target_not_passed` when the
 guard's target was evaluated on its page and did not pass, with `failure_code` the target's

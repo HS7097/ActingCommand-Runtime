@@ -462,6 +462,12 @@ actingcommand_contract::outcome_vocabulary! {
         NothingRecognised => "nothing_recognised",
         /// The screen stayed unchanged until the still limit (page graph).
         ScreenStill => "screen_still",
+        /// The awaited page was on screen at the end, but the state the step declares for it did
+        /// not hold (page graph, Workflow #469 K2 fix round 2).
+        FinalStateUnmet => "final_state_unmet",
+        /// A wait step's own page stayed on screen until its `max_ms` ran out (page graph,
+        /// Workflow #469 K2 fix round 2).
+        WaitMaxReached => "wait_max_reached",
         /// The wait ended on its loading allowance.
         LoadingLimit => "loading_limit",
         /// The step reached a page the package declares as an error page.

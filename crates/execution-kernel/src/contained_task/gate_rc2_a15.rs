@@ -222,8 +222,9 @@ fn a15_an_unrecognised_last_frame_names_no_page() {
 
 // Requirement 2: an observation window that ends without its destination names the page of its
 // last frame. The step arrives on `page_b`, the screen goes back to `page_a` for the rest of the
-// window and the confirmation budget after it. Workflow #469 K2: the last frame is on the step's
-// own page, whose word the page graph gives by that comparison alone.
+// window and the confirmation budget after it. Workflow #469 K2 (fix round 2): the last frame is
+// on the step's own page after the destination had passed, which opened the window: the screen
+// came back to it.
 #[test]
 fn a15_a_window_end_without_its_destination_names_the_last_page() {
     let window = task(json!({"observation_window": {"until": "window_end", "window_ms": 300}}));
@@ -235,7 +236,7 @@ fn a15_a_window_end_without_its_destination_names_the_last_page() {
             "page_ids": ["page_b"],
             "attempts": 1,
             "page_id": "page_a",
-            "confirmation_problem": "input_not_taken"
+            "confirmation_problem": "returned_to_own_page"
         })
     );
 }

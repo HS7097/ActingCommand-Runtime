@@ -1387,8 +1387,8 @@ destination, and infers no click and no guard for a wait step; a wait step is no
     `confirmation_problem` of a page-graph confirmation, [linear-steps.md](linear-steps.md)).
   - `max_ms` reached on `from` ends the run there: with `on_timeout`, Completed on `from` with that
     key as its scheduling outcome, the step finishing on `from` (a keyed end); without it,
-    `contained_task_step_unconfirmed` with `page_id` the wait page (Workflow #469 K2: and no
-    `confirmation_problem`).
+    `contained_task_step_unconfirmed` with `page_id` the wait page (Workflow #469 K2: and
+    `confirmation_problem` `wait_max_reached`).
   - The task deadline gives `contained_task_timeout`, as everywhere.
 - **A wait page.** In the confirmation of a `click`, `application` or `select` step, frames on the
   wait page pause the confirmation clock, as a handled shared interrupt does, up to `max_ms` of
