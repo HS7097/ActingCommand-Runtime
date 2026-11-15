@@ -1,6 +1,6 @@
 # Runtime watchdog
 
-`actingctl watchdog` (Workflow #374) starts the Runtime of an A/B installation, or
+The Runtime watchdog (Workflow #374) starts the Runtime of an A/B installation, or
 (from v0.12.1, Workflow #390 WD-1) of a single-location root, again when it is gone
 without a formal close: a crash, a closed console window, an end in
 Task Manager, a reboot; and when its last start ended in an error, a held start that
@@ -9,8 +9,9 @@ closed formally, that is alive, that the installer is working on, or whose last 
 ended in a fatal outcome; those stay down, and the fatal case stays down loudly. Task
 Scheduler runs one tick a minute through `<root>\tools\actingwatch.exe`. From Workflow #434
 LAB-4 the watchdog is the crate `crates/watchdog`: `actingwatch.exe` runs the tick in its own
-process (see "Launcher") and `actingctl watchdog` runs the same code until LAB-7 deletes
-actingctl ([lab-two-entries.md](lab-two-entries.md) §7, §8.1).
+process (see "Launcher"), and the Lab's rescue rows `alive`, `watchdog install` and `watchdog
+uninstall` run the same code ([lab-two-entries.md](lab-two-entries.md) §7, §8.1); `actingctl
+watchdog` ran it too until LAB-7 (0.12.62) deleted actingctl.
 
 The watchdog reads the ledger never and writes it never. It adds no event type, no
 fact and no persisted Runtime structure. It is a read-only consumer of `owner.lock`
@@ -22,8 +23,10 @@ operational file `<root>\watchdog\state.json`, outside the ledger (below).
 
 ## Commands
 
-All take `--root <install root>` and print one report on stdout (see "Exit codes").
-They run before `--state-root` parsing, like `mcp-serve`; no other command changes.
+Each acts on one root and prints one report on stdout (see "Exit codes").
+`<root>\tools\actingwatch.exe` runs them for the root it lies in (below; `run-once` is its tick,
+without a word), and the Lab's rescue module runs `status` (its row `alive`), `install` and
+`uninstall` (`watchdog install`, `watchdog uninstall`) for its own root.
 
 | Command | Effect |
 |---|---|
@@ -32,14 +35,14 @@ They run before `--state-root` parsing, like `mcp-serve`; no other command chang
 | `install` | Registers or refreshes the task (below) and creates `<root>\watchdog\`. Idempotent. |
 | `uninstall` | Deletes the task; every file under `<root>\watchdog\` stays. `was_registered` says whether there was one. The root need not be a working installation any more. |
 
-When the process runs with an inherited installation (through the fixed entry
-`<root>\runtime\actingctl.exe`), its root must be `--root`; otherwise
-`watchdog_root_mismatch`.
+When the process runs with an inherited installation (started through a fixed entry), its
+root must be the root it acts on; otherwise `watchdog_root_mismatch`.
 
-From LAB-4, `<root>\tools\actingwatch.exe status|install|uninstall` answers as `actingctl
-watchdog <word> --root <root>` for the root it lies in, with the same report, codes and exits;
-it takes no `--root`. Another word is `actingctl_usage_invalid`, and a program that is not
-`<root>\tools\actingwatch.exe` is `watchdog_launcher_misplaced`, each as actingctl's result line,
+From LAB-4, `<root>\tools\actingwatch.exe status|install|uninstall` answers the command of that
+word for the root it lies in (until LAB-7 as `actingctl watchdog <word> --root <root>` did, with
+the same report, codes and exits); it takes no `--root`. Another word is
+`actingctl_usage_invalid`, and a program that is not `<root>\tools\actingwatch.exe` is
+`watchdog_launcher_misplaced`, each as the Lab's result line (`crates/lab-ops`' `cli_line`),
 exit 1.
 
 **Where a subcommand of actingwatch prints** (LAB-4 fix 1). actingwatch is a GUI-subsystem
@@ -47,8 +50,8 @@ program, which Windows starts without standard handles in its parent's console. 
 word, it first attaches to its parent's console when there is one
 (`AttachConsole(ATTACH_PARENT_PROCESS)`, through `actingcommand-host-metrics`'
 `standard_handles::attach_parent_console`, so actingwatch itself still forbids unsafe code):
-the report line, the developer line and any `DIAG actingctl:` line then appear in that console,
-on its stdout and stderr, in the words `actingctl watchdog` prints. Handles the parent gave it
+the report line, the developer line and any `DIAG actingctl:` line (the lines keep that prefix)
+then appear in that console, on its stdout and stderr. Handles the parent gave it
 (a redirection or a pipe) stay as they are and receive the same lines; a parent without a
 console (Explorer, a GUI) leaves nothing to attach to, and nothing is shown. The exit code is
 set on every path (0, 1 or 2 by the top's category; 1 for a refused command line). An
@@ -83,16 +86,17 @@ and `install` refuses with it. The state root is the config's `state_root` and m
 be absolute (`watchdog_state_root_invalid`). The report names the layout and the
 config (`layout`, `config`; see "Exit codes").
 
-A single-location root's installer is `actingctl install` (Workflow #421,
-[install-cli.md](install-cli.md)). It, and any deploy or successor script that replaces
+A single-location root's installer is the Lab's rescue module (Workflow #421, Workflow #434
+LAB-3; [install-cli.md](install-cli.md)). It, and any deploy or successor script that replaces
 the root's `runtime\` or `tools\`, holds `install\writer.lock` exclusively for the
 whole replacement (creating the file when it is missing), or disables the task first.
 While the lock is held the launcher runs nothing and a tick answers
 `watchdog_installer_busy` (row 7a). While `install\current.json` names an unfinished
 installer update or rollback (or its undo), a tick that would consider a start answers
-`watchdog_installer_unfinished` (row 7a″). `actingctl start` and `restart` without
-`--config` still need an A/B selection: on a single-location root they refuse with
-`watchdog_layout_unknown`; pass `--config`.
+`watchdog_installer_unfinished` (row 7a″). The manual start (`start::start`, which the Lab's
+`restart` runs, and `up` on an A/B root) without a configuration still needs an A/B selection:
+on a single-location root it refuses with `watchdog_layout_unknown`; the Lab's `restart` passes
+the root's configuration there.
 
 ## Observation
 
@@ -139,7 +143,7 @@ installer update or rollback (or its undo), a tick that would consider a start a
    and closed the err log. A log's tail is read through its own open handle, so its size is
    the file's own too. A log whose time cannot be read is
    `watchdog_log_unreadable` (`path`); a log gone between the listing and the read is passed
-   over. `actingctl install`'s shutdown evidence reads the same list the same way, and its
+   over. The installer's shutdown evidence reads the same list the same way, and its
    rollback gate dates a start log without a time in its name by the file's own modification
    time. Since 0.12.28 actingd also makes its own stdout and stderr not inheritable at its
    start, so no child it starts keeps its log open ("Logs held open" below).
@@ -333,9 +337,8 @@ to 6 minutes on the 10-24 ledger). It lies in `60000..=3600000`; a value outside
 integer is `config_value_invalid` (`config_key`, `config_value_problem`, `range_min`,
 `range_max`), and the tick is `watchdog_misconfigured` with it as the cause (row 1). Every
 wait for a start uses the same window: the readiness above (`start_timeout` carries it as
-`timeout_ms`), the formal-start test (`[at − 2 s, at + start window]`), `actingctl start` and
-`restart` (their default readiness, which an explicit `--ready-timeout-s` overrides, and
-their wait for `run.lock`, the window plus 20 s) and `uninstall`'s wait for `run.lock` (the
+`timeout_ms`), the formal-start test (`[at − 2 s, at + start window]`), the manual start of the
+Lab's `restart` and `up` (its readiness and its wait for `run.lock`, the window plus 20 s) and `uninstall`'s wait for `run.lock` (the
 window plus 20 s; the defaults file's window when the root no longer resolves). The key is
 read from the file at every tick and command, never from the Runtime's configuration in
 effect, so an instruction cannot change it ([runtime-config.md](runtime-config.md), "The
@@ -454,7 +457,7 @@ Without the product, a registered task fails every minute (the launcher is gone,
 | `watchdog.log` | UTF-8 lines `<RFC3339 UTC> <unix_ms> <LEVEL> <code> key=value…`, written on a decision change, a start, an error; a decision line's fields are its outcome's values and one `cause` field per link, then developer fields (Workflow #378 A5). The launcher's own failures and the tick's stderr land here too; a task tick prints no per-tick summary there, and repeats a misconfiguration only when the last structured line is a different one. A quiet day writes nothing. |
 | `state.json` | Operational memory across ticks, schema `actingcommand.runtime-watchdog-state.v2` (Workflow #378 A5): `root`, the last tick and task tick, `grace_until_unix_ms`, `last_decision` (`{code, values}`, the log-on-change key), `decision_since_unix_ms`, `exhausted_since_unix_ms`, `formal_start_at_unix_ms`, `process_present_since_unix_ms` and the last 10 `starts` (`at_unix_ms`, `method`, `log`, `start_result` `{code, values}`: `watchdog_start_pending` until the start ends, then `watchdog_started_runtime`, `start_timeout` or the failure's code; `generation`, absent for a single-location root; `actingd_pid`, `owner_epoch`). Written to a temporary file, flushed to disk and renamed. Readers ignore unknown fields. `run-once` and `install` rename a document of another schema version (version 1 included) `state.json.other-schema-<ms>` with a WARN `watchdog_state_reset` line and replace it by a fresh state, so the budget restarts; a corrupt document is `watchdog_state_unreadable` (row 1). |
 | `actingd-<unix_ms>.log` | stdout and stderr of each start. |
-| `run.lock` | Held exclusively by a tick; a second concurrent tick answers `watchdog_run_in_progress` (exit 0). `actingctl start` and `restart` hold it through their start (Workflow #389 MCP-10). |
+| `run.lock` | Held exclusively by a tick; a second concurrent tick answers `watchdog_run_in_progress` (exit 0). The manual start (the Lab's `restart`, and `up` on an A/B root) holds it through its start (Workflow #389 MCP-10). |
 | `task.xml` | The definition `install` registered last. |
 
 `state.json` is not a ledger structure and no Runtime component reads it (Workflow
@@ -518,7 +521,7 @@ the Runtime must write stdout and stderr to such a log (X3):
 | the console | `%LOCALAPPDATA%\ActingCommand\logs\actingd-<ms>.log` |
 | a logon script | `<root>\actingd-autostart-<stamp>.out.log` and `.err.log` |
 | an operator's WMI restart script | `<root>\actingd-wmi-<stamp>.log` |
-| `actingctl start`, `actingctl restart` (Workflow #389 MCP-10: the manual start above, holding `run.lock`, waiting for readiness up to the start window unless `--ready-timeout-s` is given (#411 A66); while acsetup or `actingctl install` holds `install\writer.lock` both refuse as row 7a does, with `start_runtime_refused` caused by `watchdog_installer_busy`, and while `install\current.json` names an unfinished installer operation as row 7a″ does, caused by `watchdog_installer_unfinished` (Workflow #421 INST-1), `restart` before it stops anything; `restart --wait-idle` reads Status every 10 s while it waits for idle, since each Status records a ledger observation) | `<root>\actingd-<ms>.log` |
+| the Lab's `restart`, and `up` on an A/B root (Workflow #389 MCP-10: the manual start above, holding `run.lock`, waiting for readiness up to the start window (#411 A66; until LAB-7 actingctl's `start` and `restart` ran it, with `--ready-timeout-s` and `--wait-idle`); while acsetup or the installer holds `install\writer.lock` both refuse as row 7a does, with `start_runtime_refused` caused by `watchdog_installer_busy`, and while `install\current.json` names an unfinished installer operation as row 7a″ does, caused by `watchdog_installer_unfinished` (Workflow #421 INST-1), `restart` before it stops anything) | `<root>\actingd-<ms>.log` |
 | the watchdog | `<root>\watchdog\actingd-<ms>.log` |
 | acsetup's Startup-folder launcher | the UI's side: the UI major's launcher has acforward write its own and actingd's output to `<root>\actingd-autostart-<stamp>.log` (Workflow #378, model §16 A-3). A launcher start that writes no log is, for the Runtime, a hand start (next row). |
 | a hand start in a terminal | actingd's fallback log, for a start refusal only: when its stderr is a console or absent, actingd also appends the refusal's daemon lines to `%LOCALAPPDATA%\ActingCommand\logs\actingd-<ms>.log`, with `install_root` once it resolved its installation (Workflow #378 A6a). A stop after the start has no log: it shows only as `watchdog_formal_close_unlogged` in `status`. |
