@@ -29492,7 +29492,7 @@ by any code:
 | word | the one situation | refuses or warns | exit |
 |---|---|---|---|
 | `final_frame_missing` (in `record archive`'s `lab.warnings`) | the manifest the answer names (v2) has `material.final_frame` `null`: the last effective step is not a screen that arrived after an effect on record | warns, the archive stands | 0 |
-| `copy_to_only` (`validation_failed`, `details{argument: "all_frames", reason}`) | `--all-frames` without `--copy-to` | refuses, before the session is read | 2 |
+| `copy_to_only` (`validation_failed`, `details{argument: "all_frames", reason}`) | `--all-frames` without `--copy-to` | refuses, before the session is read | 1 (2 under `--via`; the train of stage one) |
 
 The manifest's own vocabularies are members, not outcome words: `copy.frames` `material` or `all`,
 `outcome` `performed` or `indeterminate` (a click execution's words).
@@ -29570,6 +29570,31 @@ review of #1763 at `bebf984e`).
   `sent_on_unstored_capture` `null`. No test leaves the gate map; no code or word is added.
 - *Not here:* the fakes' capture scripts for S1-2's stillness loop, which is not on this branch;
   the join lengthens them.
+
+**Joined in the train of stage one** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1b.md`, which merges this slice at `8031b17f` and #463 S1-7 into the
+branch of S1-1, S1-2 and S1-3 on main `3581a8af`; the coordinator's rulings, not the owner's words).
+- *The step table's own member is read* (a). `material.clicks[].sent_on_unstored_capture` of a press
+  whose execution names its own frame before (`derived: false`) is the execution's
+  `sent_on_unstored_capture` (§1.402, fix round 3; absent there, so `false`, unless the press was
+  sent on a capture that was not stored); a press whose frame the manifest derives (`derived: true`:
+  `do --capture --record`, a press recorded the old way) carries `null`, and so does an application
+  operation, whose receipt records no such member (`click_of`, `archive.rs`).
+- *The screen after* (with §1.403). A row's `after_frame` is the last capture after its effect, the
+  captures before it superseded in the step the first opened; the contract's "frames after press
+  k" are the frames of that row recorded at or after the press's `at_unix_ms`, so the loop's earlier
+  captures are among them.
+- *`--all-frames` without `--copy-to`* (h). The refusal is `validation_failed`, and actinglab's own
+  command line answers every failure with exit 1 (`cli_module::own_line`), the Lab's other refusals
+  of a flag without the flag it needs included; the class's 2 is a `--via` line's. The contract and
+  the codes table above say so; the test pins 1.
+- *Tests.* The gate's fake (`Screens`) has a clock moved by its waits; each point press now takes
+  one capture before it and four after it, each application operation (`Bench::operated`) one and
+  three, and the tests that press or operate expect the loop's frame ids, superseded frames, final
+  frames and the press's default wait of 100 ms; none switches the loop off. New:
+  `s15_train_the_material_says_what_the_step_table_says_of_the_capture_a_press_was_sent_on`
+  (`false` on a stored capture, `true` on a marked step whose capture was not stored, `null` for a
+  `do` press), in this slice's gate entry.
 
 ### 1.424 Slice #463 S1-7 (0.12.64): a recording holds its instance (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one asks nothing of the agent but to start recording, play and end recording; the read-only investigation `rd-1115/record-hold-investigation.md`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s17-record-hold.md`, stacked on #463 S1-1, §1.402, cut from its head `24e48b47cd` on main `b7c47129`, its fix round 3 `124e2b4de2` merged; fix round 2 by the coordinator's work order `rd-1115/brief-463-s17-fix2.md` after the independent review `rd-1115/review-1762.md`)
 
@@ -29700,6 +29725,36 @@ makes the start fail (fix round 2 leaves it as built).
 before and hold nothing; a recording active across the deploy holds nothing until it ends. Through
 MCP the hold is taken by both servers, which run the installation's actinglab; `record start`
 waits as the pause waits, up to 335 s, so a caller must give it that time.
+
+**Joined in the train of stage one** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1b.md`, which merges this slice at `b67eaa7e` after #463 S1-5, §1.406,
+into the branch of S1-1, S1-2 and S1-3 on main `3581a8af`; the coordinator's rulings, not the
+owner's words).
+- *One press path* (c). A `tap`, `swipe` or `long-tap --record` press does, under the recording
+  lock: the planned press's refusals; S1-1's capture before it; this slice's status read on a
+  connection of its own (`hold_warning_read`, in `send_recorded_press`, immediately before each
+  press is sent, so twice when S1-1's retry sends it again on a second capture, the second read's
+  word answered); the press on that capture's frame reference; S1-2's captures until still on the
+  command's clock, its bounds checked first. The word follows `after_not_still` in
+  `record.warnings`, of the answer and of a failure whose details carry `record`. `do --capture
+  --record` reads it before its one Lab operation, as built.
+- *Application operations* (d). `session app <verb> --record` reads the status inside the
+  operation's closure, after the plan and S1-3's capture before it, immediately before the
+  operation's connection; the word joins `record.warnings` beside `after_not_still`, in the answer
+  and in a failure whose details carry `record`. The three `app` rows list `ApplicationLifecycle`,
+  `ObserveReadonly` and `Status`, with the train's parameters.
+- *`record archive`* (e). S1-5's manifest; the session header archived, an own hold written `kept`;
+  S1-5's copy (its manifest written last), an own hold named `kept` in a copy's failure; the
+  answer's `lab.warnings`; then the release, last. Named again by `--record-id`, it reads the
+  manifest S1-5's rules name and tries the release again; `record reopen` carries an own hold as
+  built, and the next archive writes the next manifest, v2.
+- *Tests* (i). In this slice's gate entry:
+  `s17_train_nothing_listening_at_the_runtime_address_starts_holding_nothing` (a runtime-info whose
+  address no longer listens: `no_runtime_listening`, no hold),
+  `s17_train_force_over_a_header_that_cannot_be_read_says_so` (`replaced_header_unread` with the
+  header's path), and on the fake Runtime host
+  `s17_train_do_capture_record_on_an_instance_that_is_not_held_says_so` (`instance_not_held` in
+  `record.warnings` of `do --capture --record`).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

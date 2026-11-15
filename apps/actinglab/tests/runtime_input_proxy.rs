@@ -5508,3 +5508,79 @@ fn s17_an_application_operation_on_an_instance_that_is_not_held_says_so() {
     );
     assert_eq!(state.application_calls.load(Ordering::Acquire), 1);
 }
+
+/// The train of stage one (brief rd-1115/brief-463-train-s1b.md, i; #463 S1-7 fix round 2): a
+/// recording started while nothing listened holds nothing; once the fake Runtime host runs, its
+/// step's frame is taken with `observe --capture --record` (the package of the L4 test above), and
+/// `do --capture --record --tap-rect 0,0,1,1` on the instance, whose scheduling is not paused,
+/// presses and records the tap all the same (the semantic package of `do --tap` above), its
+/// `record.warnings` `["instance_not_held"]` from the status read before the press on a connection
+/// of its own.
+#[test]
+fn s17_train_do_capture_record_on_an_instance_that_is_not_held_says_so() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let observe_package = root.path().join("observe.zip");
+    write_zip(&observe_package, &[
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+    ]);
+    let resources = root.path().join("resources");
+    let semantic_package = root.path().join("semantic.zip");
+    write_semantic_resources(&resources);
+    write_semantic_package(&semantic_package, &resources);
+    let started = s17_record_start(&config, &runtime_root, &local);
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-train-s17-do-not-held");
+
+    let observed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            observe_package.to_str().expect("observe package path"),
+            "--record",
+        ],
+    );
+    let pressed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--capture",
+            "--zip",
+            semantic_package.to_str().expect("semantic package path"),
+            "--record",
+            "--tap-rect",
+            "0,0,1,1",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert!(observed["record"]["frame"].is_object(), "{observed}");
+    assert_eq!(pressed["record"]["status"], "click_recorded", "{pressed}");
+    assert_eq!(
+        pressed["record"]["warnings"],
+        json!(["instance_not_held"]),
+        "{pressed}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+}

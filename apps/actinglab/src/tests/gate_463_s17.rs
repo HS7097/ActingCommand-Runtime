@@ -54,14 +54,24 @@
 //   application operation makes, each on a connection of its own: not paused,
 //   `instance_not_held`; paused by another party, nothing; a status that gets no answer, and no
 //   Runtime at all, `instance_hold_unread`.
+// The train of stage one (rd-1115/brief-463-train-s1b.md, i: the words and the path fix round 2
+// added without a test):
+// - `s17_train_nothing_listening_at_the_runtime_address_starts_holding_nothing`: the runtime-info
+//   names a loopback address where nothing listens any more (a scripted Runtime that stopped):
+//   `record start` goes on, exit 0, `hold {state: none, warnings: [no_runtime_listening],
+//   runtime_error}`, and the header holds no hold.
+// - `s17_train_force_over_a_header_that_cannot_be_read_says_so`: `record start --force` over a
+//   session header that is no JSON goes on, exit 0, its `hold.warnings` ending with
+//   `replaced_header_unread` and `hold.replaced_header {path, error}`, `path` the header's as the
+//   answer's own `path` names it.
 // No device, no clock, no sleep; made-up aliases.
 
 use super::gate_434_lab5b4::{Isolated, printed};
 use super::*;
 use actingcommand_contract::{
-    InstancePauseStage, InstancePauseState, OwnerEpoch, RuntimeControlPlaneStatus,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeInstanceStatus, RuntimeOperation,
-    RuntimeReceiptState, RuntimeRequest, RuntimeResult, SchedulingDrainSummary,
+    InstancePauseStage, InstancePauseState, OwnerEpoch, RUNTIME_INFO_FILE,
+    RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInstanceStatus,
+    RuntimeOperation, RuntimeReceiptState, RuntimeRequest, RuntimeResult, SchedulingDrainSummary,
     SchedulingPauseExpectation, SchedulingPauseReason, SchedulingPauseScope,
     SchedulingResumeCaptureCheck, SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
 };
@@ -1022,4 +1032,61 @@ fn s17_the_status_read_before_a_press_names_what_it_found() {
         crate::commands::hold_warning_read(INSTANCE),
         Some("instance_hold_unread")
     );
+}
+
+#[test]
+fn s17_train_nothing_listening_at_the_runtime_address_starts_holding_nothing() {
+    let _guard = env_lock();
+    let place = Place::new();
+    // The installation's runtime-info names a loopback address where nothing listens any more: a
+    // scripted Runtime that took no connection and stopped.
+    let gone = ScriptedRuntime::start(&place.runtime(), |_| Vec::new());
+    let record = gone.finish();
+    assert!(record.connections.is_empty());
+    assert!(record.unscripted.is_empty());
+    assert!(place.runtime().join(RUNTIME_INFO_FILE).is_file());
+
+    let (code, started) = place.start(RECORD_ID, &[]);
+    assert_eq!(code, 0, "{started}");
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    assert_eq!(
+        started["hold"]["warnings"],
+        json!(["no_runtime_listening"]),
+        "{started}"
+    );
+    assert!(started["hold"]["runtime_error"].is_string(), "{started}");
+    assert!(started["record"].get("hold").is_none(), "{started}");
+    let header = place.header();
+    assert_eq!(header["record_id"], RECORD_ID, "{header}");
+    assert_eq!(header["status"], "active", "{header}");
+    assert!(header.get("hold").is_none(), "{header}");
+}
+
+#[test]
+fn s17_train_force_over_a_header_that_cannot_be_read_says_so() {
+    let _guard = env_lock();
+    let place = Place::new();
+    fs::create_dir_all(place.session()).expect("the session directory");
+    fs::write(place.header_path(), b"not a session header").expect("an unreadable header");
+
+    let (code, started) = place.start(RECORD_ID, &["--force"]);
+    assert_eq!(code, 0, "{started}");
+    // Nothing listens here (no runtime-info), and the replaced header could not be read.
+    assert_eq!(
+        started["hold"]["warnings"],
+        json!(["no_runtime_listening", "replaced_header_unread"]),
+        "{started}"
+    );
+    assert_eq!(
+        started["hold"]["replaced_header"]["path"], started["path"],
+        "{started}"
+    );
+    assert!(
+        started["hold"]["replaced_header"]["error"].is_string(),
+        "{started}"
+    );
+    let header = place.header();
+    assert_eq!(header["record_id"], RECORD_ID, "{header}");
+    assert_eq!(header["status"], "active", "{header}");
+    assert!(header.get("hold").is_none(), "{header}");
 }
