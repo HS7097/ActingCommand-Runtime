@@ -28964,8 +28964,9 @@ that is not `true` or sits on a maintenance rule, a realization, limited or fixe
 rule of a maintenance-role package, a timeline event that invalidates the application update fact;
 after it: a package another game's rules already name or an id two composed items share,
 `rule_id_conflict`, and the compile of the joined catalog) is counted as composed, so the lists
-then say more than will happen; the placement's own post check fails in that case, and a placement
-made while a Runtime runs keeps its hold.
+then say more than will happen; for a game bound to an instance the placement's own post check
+fails in that case (the composer leaves out a game no instance is bound to, and the post check does
+not judge it), and a placement made while a Runtime runs keeps its hold.
 
 ```json
 "schedule_changes": {
@@ -29074,7 +29075,10 @@ readiness's eight (they still come from the contract crate's function; the new w
 in the same registry (`StandardPackRegistry::get`, the lookup of the host's
 `GameRegistry::package_path`), at most three layers (the execution kernel's
 `MAX_PREREQUISITE_DEPTH`); a layer the registry does not list, or one already in the chain, ends
-it and counts nothing (the host refuses that run, another check's refusal). The rescue module
+it and counts nothing (the host refuses that run, another check's refusal); in that case, and with
+a fourth layer, the host refuses the whole run while the plan still counts the package that starts
+the chain and the layers before its end as used, so the lists hold more than what runs, as for a
+root the composer would refuse (the train's correction after the re-review). The rescue module
 links neither the host nor the kernel, and the contract crate has no reader of the member, so the
 plan reads it with its own readers: `Archive::read` for the zip's `packs/<directory>/control.json`
 and the bounded `read_root_file` for the installed one (a file it cannot read leaves the
@@ -29221,7 +29225,8 @@ placement is refused `place_enables_unknown`, nothing written, no pause sent. Th
 **Round 3** (S3-1's fix round 3 merged, its head `5c28a2a4`; coordinator work order
 `rd-1115/brief-463-s32-fix3.md`, after an independent review of round 2, the coordinator's
 rulings, not the owner's words; no main merged). S3-1's `enters` may now hold a package used only
-as a layer of the prerequisite chain of a scheduled one (the plan's role `prerequisite`); its type
+as a layer of the prerequisite chain of a package scheduled or holding one of readiness's words
+(the plan's role `prerequisite`); its type
 and what `None` means are unchanged, so `authorize` is unchanged and `--enables` names such a
 package too ([install-cli.md](install-cli.md), "The authorization a placement names", "The
 parameters"). The outcome codes entry of `install-cli.md` said that `place_enables_unknown`

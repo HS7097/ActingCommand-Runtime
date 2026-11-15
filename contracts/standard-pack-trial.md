@@ -166,9 +166,10 @@ The refusals come in this order: the command line's own (a flag the row does not
 beyond it, a flag given twice, `--plan`, `--instance` and `--package` absent, an option without its
 value, `--variable`), then the authorization's bounds, the package path, the state directory's
 place, the package's reading and admission, the variables' values, `--expect`, and last `--root`'s
-own: a root that is no directory, or whose directory name is no game's (`validation_failed`); a
-root file that cannot be read, or is larger than the package input limit (`validation_failed`);
-a root without `bundle.json`, or a root file that breaks its shape, a limit or a reference
+own: a root that is no directory, or whose directory name cannot be read as text
+(`validation_failed`); a root file that cannot be read, or is larger than the package input limit
+(`validation_failed`); a root without `bundle.json`, or a root file that breaks its shape, a limit
+or a reference, a directory name that is not the bundle's game among them (`game_mismatch`)
 (`standard_pack_root_invalid`).
 
 ## The record

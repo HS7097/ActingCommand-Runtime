@@ -1399,7 +1399,10 @@ the rescue face:
     side's registry does not list, or one already in the chain, ends the chain and counts
     nothing: the host refuses that run at preparation, which is another check's refusal, and the
     plan says nothing of it; so does a `control.json` that is no JSON object or whose member is no
-    string (the package's admission refuses it). The installed side's `control.json` is read as
+    string (the package's admission refuses it). In that case, and with a fourth layer, the host
+    refuses the whole run while the plan still counts the package that starts the chain and the
+    layers before its end as used, so the lists hold more than what runs, as for a root the
+    composer would refuse (below). The installed side's `control.json` is read as
     its root files are (at most 32 MiB), the zip's from its member
     `packs/<directory>/control.json`. The rescue module does not link the host or the execution
     kernel, and the contract crate has no reader of the member, so the plan reads it itself, with
@@ -1427,8 +1430,9 @@ the rescue face:
     rule of a maintenance-role package, a timeline event that invalidates the application update
     fact; after it: a package another game's rules already name or an id two composed items
     share, `rule_id_conflict`, and the compile of the joined catalog) is counted as composed, so
-    the lists then say more than will happen; the placement's own post check fails in that case,
-    and a placement made while a Runtime runs keeps its hold. **`leaves`**: `scheduled` before
+    the lists then say more than will happen; for a game bound to an instance the placement's own
+    post check fails in that case (the composer leaves out a game no instance is bound to, and the
+    post check does not judge it), and a placement made while a Runtime runs keeps its hold. **`leaves`**: `scheduled` before
     and not after, a role it held before and does not after (so every package used before leaves
     when the zip carries no `schedule.json`, and a prerequisite leaves with the last package
     whose chain reached it), or no longer carried by the zip (also one never scheduled).
@@ -1461,7 +1465,7 @@ the rescue face:
     board comment's address, say), non-blank, at most 1024 bytes, no control character.
     `--enables <package_id>`, repeated: every package of the plan's `enters`, once each (since
     S3-1's fix round 3 also a package used only as a layer of the prerequisite chain of a
-    scheduled one), and absent when nothing enters. There is no default, no variable and no
+    package scheduled or holding one of readiness's words), and absent when nothing enters. There is no default, no variable and no
     switch that places without them.
   - **The checks**, after the plan and before the hold, any pause and any write, once for both
     paths (with a Runtime and while it is stopped), in this order, each refusal with `plan_id`
