@@ -1257,15 +1257,18 @@ cap. The first candidate is taken.
   index is taken, and the next candidate is taken on the same frame. The evaluation is recorded
   as a guard evaluation is, with the diagnostic phase `when` ([Task diagnostic
   stream](task-diagnostic-stream.md)); one that does not conclude ends the run with
-  `contained_task_recognition_failed`.
+  `contained_task_recognition_failed`, or, when the vision provider failed or answered
+  invalidly, with `contained_task_vision_provider_failed` (#469 D4b, since 0.12.63), with the same
+  detail.
 - **`on_guard_refused: next_candidate`.** When the click's guard refuses
   (`contained_task_guard_refused`) on its step's frame at the step's first attempt, before any
   input of the step, the step finishes on the frame's page without an input (a `StepFinished`
   with no `EffectIntent`), stays counted in the run's executed steps, and the next candidate is
   taken on the same frame as the next step. A guard that could not be evaluated
-  (`contained_task_guard_evaluation_failed`), a sampling timeout (observe-only retries), a refusal
-  on a later attempt and a refusal of an input recheck (Workflow #390 EXEC-2) keep the operation's
-  failure decision.
+  (`contained_task_guard_evaluation_failed`, or `contained_task_vision_provider_failed` when the
+  vision provider failed or answered invalidly, #469 D4b, since 0.12.63), a sampling timeout
+  (observe-only retries), a refusal on a later attempt and a refusal of an input recheck (Workflow
+  #390 EXEC-2) keep the operation's failure decision.
 - A candidate passed over in either way is not taken again on that frame; the next frame of the
   run starts the page's candidates again.
 - **No candidate left.** When every candidate of the page was passed over on the frame, the run
@@ -1324,7 +1327,8 @@ admits them by code.
   registered reason (a plain miss); a composite fails definitely when its members' definite fails
   decide it (one of `all_of`, every one of `any_of`). A page mismatch, `value_test_unresolved` and
   every other registered reason, a guard that could not be evaluated
-  (`contained_task_guard_evaluation_failed`), a sampling timeout, a refusal on a later attempt or
+  (`contained_task_guard_evaluation_failed`, or `contained_task_vision_provider_failed` for a
+  failure of the vision provider, #469 D4b), a sampling timeout, a refusal on a later attempt or
   by an input recheck, and another member failing alone keep the operation's failure decision.
   The failing member is read from the guard target's evaluation, never from a developer detail.
   It adds no code and no record.
