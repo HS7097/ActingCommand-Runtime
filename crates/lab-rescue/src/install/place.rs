@@ -77,15 +77,15 @@ use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
-    BundleIndex, GOALS_PACKAGE_REVISION, LOADING_PREFIX, LoadingTarget, MAX_NOTICE_FILE_BYTES,
-    NOTICES_PACKAGE_REVISION, NoticeBound, NoticeEntry, NoticeIssue, RESERVED_TABLES_DIRECTORY,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRootBytes,
-    StandardPackRootIssue, VARIABLES_PACKAGE_REVISION, check_notice_listing, check_notice_pack_ids,
-    check_notice_size, check_notice_text, notice_relative_path, parse_standard_pack_loading,
-    read_standard_pack_root,
+    BundleIndex, BundleRevisionNeed, LOADING_PREFIX, LoadingTarget, MAX_NOTICE_FILE_BYTES,
+    NoticeBound, NoticeEntry, NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
+    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRootBytes, StandardPackRootIssue,
+    check_notice_listing, check_notice_pack_ids, check_notice_size, check_notice_text,
+    control_declares_variables, notice_relative_path, package_edge_holds,
+    parse_standard_pack_loading, read_standard_pack_root,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -501,8 +501,10 @@ fn notice_refusal(zip: &Path, game: &str, issue: &NoticeIssue) -> Outcome {
 /// Workflow #444 NOTICES-2: the notices directory of the bundle `zip` of `game`, `notices` (each
 /// file's path below the directory and its member), held to the contract crate's rules before
 /// anything is held or written: a bundle that carries it declares a `package` maximum
-/// (`package[1]`) of [`NOTICES_PACKAGE_REVISION`] at least (`notice_undeclared`, at
-/// `<zip>\interfaces.json`); the listing with the sizes the zip declares (`sizes`, by member)
+/// (`package[1]`) of the contract crate's `NOTICES_PACKAGE_REVISION` at least (`notice_undeclared`,
+/// at `<zip>\interfaces.json`; Workflow #464 P3: the contract crate's rule
+/// [`BundleRevisionNeed::Notices`], which the readiness item I2 calls too); the listing with the
+/// sizes the zip declares (`sizes`, by member)
 /// keeps the set rule; no pack of `package_ids` is named like the directory; and each file, read
 /// through its bound plus one byte, keeps the size and text rules with what was read.
 fn check_notices<'a>(
@@ -514,12 +516,13 @@ fn check_notices<'a>(
     notices: &BTreeMap<String, String>,
     package_ids: impl IntoIterator<Item = &'a str>,
 ) -> Result<(), Outcome> {
-    if package[1] < NOTICES_PACKAGE_REVISION {
+    let need = BundleRevisionNeed::Notices;
+    if !need.declared_by(package) {
         return Err(invalid(zip).caused_by(
             Outcome::new(SharedCode::StandardPackRootInvalid)
                 .game(game)
                 .path(zip.join(INTERFACES_FILE))
-                .standard_pack_problem(StandardPackProblem::NoticeUndeclared)
+                .standard_pack_problem(need.problem())
                 .json_pointer(String::new()),
         ));
     }
@@ -542,21 +545,24 @@ fn check_notices<'a>(
 }
 
 /// Workflow #455 G-R1 fix round 1: a bundle zip of `game` that carries `goals.json` declares a
-/// `package` maximum (`package[1]`) of [`GOALS_PACKAGE_REVISION`] at least, as one that carries the
-/// notices directory declares [`NOTICES_PACKAGE_REVISION`] ([`check_notices`]): otherwise
-/// `pack_invalid` caused by `standard_pack_root_invalid` with `goal_undeclared` at
+/// `package` maximum (`package[1]`) of the contract crate's `GOALS_PACKAGE_REVISION` at least, as
+/// one that carries the notices directory declares `NOTICES_PACKAGE_REVISION` ([`check_notices`]):
+/// otherwise `pack_invalid` caused by `standard_pack_root_invalid` with `goal_undeclared` at
 /// `<zip>\interfaces.json`, the pointer empty, before anything is held or written. Workflow #463
 /// V1 fix round 3: the revision is 14, which brought version 2, the one version this build reads
 /// (12 brought version 1, which it reads no more); only the file's name is read here, so a zip
 /// that carries `goals.json` of any version declares 14, and the version is the check's
-/// (`goal_version_retired`), which `post_check` runs through `standard-pack check`.
+/// (`goal_version_retired`), which `post_check` runs through `standard-pack check`. Workflow #464
+/// P3: the contract crate's rule [`BundleRevisionNeed::Goals`], which the readiness item I2 calls
+/// too.
 fn check_goals_declared(zip: &Path, game: &str, package: [u64; 2]) -> Result<(), Outcome> {
-    if package[1] < GOALS_PACKAGE_REVISION {
+    let need = BundleRevisionNeed::Goals;
+    if !need.declared_by(package) {
         return Err(invalid(zip).caused_by(
             Outcome::new(SharedCode::StandardPackRootInvalid)
                 .game(game)
                 .path(zip.join(INTERFACES_FILE))
-                .standard_pack_problem(StandardPackProblem::GoalUndeclared)
+                .standard_pack_problem(need.problem())
                 .json_pointer(String::new()),
         ));
     }
@@ -565,13 +571,16 @@ fn check_goals_declared(zip: &Path, game: &str, package: [u64; 2]) -> Result<(),
 
 /// Workflow #463 V1 fix round 1: a bundle zip of `game` whose packs declare variables (a pack's
 /// `control.json`, its member of `pack_members`, an object with the top-level member
-/// `variables`) declares a `package` maximum (`package[1]`) of [`VARIABLES_PACKAGE_REVISION`] at
-/// least, as one that carries `goals.json` declares [`GOALS_PACKAGE_REVISION`]
-/// ([`check_goals_declared`]): otherwise `pack_invalid` caused by `standard_pack_root_invalid`
-/// with `variable_undeclared` at `<zip>\interfaces.json`, the pointer empty, naming the first such
-/// pack in the order of `package_ids`, before anything is held or written. Only the member's
-/// presence is read here: what the variables declare, and a `control.json` that is no JSON
-/// object, are admission's, which `post_check` runs through `standard-pack check`.
+/// `variables`) declares a `package` maximum (`package[1]`) of the contract crate's
+/// `VARIABLES_PACKAGE_REVISION` at least, as one that carries `goals.json` declares
+/// `GOALS_PACKAGE_REVISION` ([`check_goals_declared`]): otherwise `pack_invalid` caused by
+/// `standard_pack_root_invalid` with `variable_undeclared` at `<zip>\interfaces.json`, the pointer
+/// empty, naming the first such pack in the order of `package_ids`, before anything is held or
+/// written. Only the member's presence is read here: what the variables declare, and a
+/// `control.json` that is no JSON object, are admission's, which `post_check` runs through
+/// `standard-pack check`. Workflow #464 P3: the contract crate's rule
+/// ([`BundleRevisionNeed::Variables`], [`control_declares_variables`]), which the readiness item
+/// I2 calls too.
 fn check_variables_declared<'a>(
     archive: &mut Archive,
     zip: &Path,
@@ -580,7 +589,8 @@ fn check_variables_declared<'a>(
     pack_members: &BTreeMap<String, BTreeMap<String, String>>,
     package_ids: impl IntoIterator<Item = &'a str>,
 ) -> Result<(), Outcome> {
-    if package[1] >= VARIABLES_PACKAGE_REVISION {
+    let need = BundleRevisionNeed::Variables;
+    if need.declared_by(package) {
         return Ok(());
     }
     for package_id in package_ids {
@@ -591,15 +601,12 @@ fn check_variables_declared<'a>(
             continue;
         };
         let control = archive.read(member)?;
-        let declares = serde_json::from_slice::<Value>(files::without_bom(&control))
-            .ok()
-            .is_some_and(|control| control.get("variables").is_some());
-        if declares {
+        if control_declares_variables(&control) {
             return Err(invalid(zip).caused_by(
                 Outcome::new(SharedCode::StandardPackRootInvalid)
                     .game(game)
                     .path(zip.join(INTERFACES_FILE))
-                    .standard_pack_problem(StandardPackProblem::VariableUndeclared)
+                    .standard_pack_problem(need.problem())
                     .json_pointer(String::new())
                     .package_id(package_id),
             ));
@@ -734,7 +741,8 @@ pub(crate) fn plan(
     // refused through `package` and not through a member this installer does not know. Workflow
     // #451 PLACE-PKG: read by the bundle's own rule (the schema, every value under `speaks` a pair,
     // `speaks.package` named), not by the rule of a Runtime's declaration, which names all six v1
-    // interfaces; a missing, unreadable or malformed file is the refusal below.
+    // interfaces; a missing, unreadable or malformed file is the refusal below. Workflow #464 P3:
+    // the edge is the contract crate's rule, which the readiness item I2 calls too.
     let declared = archive
         .read(INTERFACES_FILE)
         .ok()
@@ -744,7 +752,7 @@ pub(crate) fn plan(
         .installer_speaks()
         .and_then(|speaks| speaks.get("package").copied());
     let package = match (declared, own) {
-        (Some(declared), Some(own)) if own[0] <= declared[1] && declared[1] <= own[1] => declared,
+        (Some(declared), Some(own)) if package_edge_holds(own, declared) => declared,
         _ => {
             return Err(super::refusal(PLACE, InstallRefusal::InterfaceEdge)
                 .path(zip.join(INTERFACES_FILE))

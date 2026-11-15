@@ -5697,6 +5697,15 @@ pub struct DispatchTerms<'a> {
     pub expected_duration_ms: u64,
 }
 
+/// Workflow #464 P1 fix round 2 (`contracts/standard-pack-authoring.md`, "A pending value"):
+/// whether `task`'s trigger is a manual request (`benefit::manual_request`: an instruction of the
+/// `session.` family required from the trigger's root through `all` alone), which the placement
+/// never judges by its value. The one rule the placement reads, so that `standard-pack adopt`
+/// answers by it.
+pub fn is_manual_request(task: &TaskSpec) -> bool {
+    manual_request(task)
+}
+
 /// RR-1 (register §1.221): the terms of the dispatch intent the evaluation builds for `task` on
 /// `instance` with the pair's snapshot `state`: the activity profile the instance selects, and the
 /// pair's expected duration E (SCH-M ED-1, at most the task's runtime ceiling), else the task's

@@ -21,7 +21,7 @@ mod validation;
 mod variables;
 
 pub use codes::{
-    DeviceGroupWait, PolicyCode, PolicyInput, PolicyInputProblem, RefreshLimit,
+    BenefitGap, DeviceGroupWait, PolicyCode, PolicyInput, PolicyInputProblem, RefreshLimit,
     SchedulingRulePolicyCode,
 };
 pub use compiler::*;

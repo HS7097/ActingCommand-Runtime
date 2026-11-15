@@ -2793,7 +2793,7 @@ the end of the B train (plan §4); until then they are admitted by code. Gate: e
 | B12-1 | `input_recheck: {kind: "still_frames", frames, region?, max_distance_milli?}` | resource file format (task schema `0.9`, no version change) (exec 126) | BT-B12 | resource side | `frames` 2..=32 and `frames - 1` control capture intervals within the control step timeout; `region` `{x, y, width, height}` with a positive size inside the coordinate space; `max_distance_milli` an unsigned integer (Runtime admission, `contained_task_operation_invalid`); the declaration gate refuses a wrong shape (`resource_declaration_invalid`: `InvalidType`, `UnknownField`, `MissingField`) and an older task schema `UnconsumedField` |
 | B12-2 | the `still_frames` recheck | rule (no shape change) (exec 126) | BT-B12 | BT-B12 | fresh frames one control capture interval apart; the count restarts at 0 when the guard fails or no page passes, and at 1 when the region's frame change since the frame before exceeds the threshold (default 1500 milli, D8: the whole frame on a 16×9 grid); the input is drawn from and bound to the last frame |
 | B12-3 | `contained_task_input_still_unconfirmed` (error, `ladder_class` `pack_logic_mismatch`, values `pack_operation_id`, `timeout_ms`) | new code (pending) (exec 126) | BT-B12 | BT-B12 | the step timeout ended before the frames held and stayed still; the input is refused through the operation's failure decision (page graph) or ends the run (`linear_steps`) |
-| B12-4 | an `input_recheck` of any kind under `linear_steps` | admission rule (no shape change) (exec 126) | BT-B12 | resource side | `contained_task_linear_invalid` `reason=input_recheck` is retired; each fresh frame is evaluated against the step's page only; a refusal ends the run as a guard refusal does |
+| B12-4 | an `input_recheck` of any kind under `linear_steps` | admission rule (no shape change) (exec 126) | BT-B12 | resource side | `contained_task_linear_invalid` `reason=input_recheck` is retired; each fresh frame is evaluated against the step's page only; a refusal ends the run as a guard refusal does; within revision 6 |
 | B12-5 | `frame_change_digest`, `frame_change_milli`, `FRAME_CHANGE_MAX_MILLI` (`actingcommand_recognition::color_digest`, re-exported by the execution kernel) | Runtime-internal interface (memory only) | BT-B12 | BT-B12 | the one frame-change measure: the `color_digest.v1` digest of a region (the whole frame by default) on 16×9 cells, each axis at most the region's pixels; the change is the digests' `mean_milli`, no cell excluded; still at most 1500 by default |
 
 ### 1.156 Slice E4 (0.12.x): four refusals and warnings say what is wrong (#411 B27, B28, B34, B39 A part; B-train plan §6, Q15)
@@ -25131,12 +25131,16 @@ an existing code; no record, member, code or configuration key is added, and `le
 `runtime-client`, `actingd-config` and `runtime-outcomes` do not move.
 
 **Nobody checks the 13** (closing round). That 13 is written by the resource repository's
-packaging (the bundle's `interfaces.json`); no component checks it: `place` holds a bundle's
+packaging (the bundle's `interfaces.json`) and, since #464 P2 (§1.376, the train 0.12.61b), by the
+Lab's own `standard-pack build` for a bundle it builds, whose revision table counts a select step of
+a `linear_steps` pack as 13 ([resource-verify.md](resource-verify.md), "The `package` revision");
+nothing checks it when a bundle is placed or a package is admitted: `place` holds a bundle's
 maximum to its own range and asks 10 only of a bundle with the notices directory and 14 only of
 one with `goals.json` or one whose packs declare `variables`
 (`crates/lab-rescue/src/install/place.rs`, `check_notices`, `check_goals_declared` and
-`check_variables_declared`), never 13 of a select step, and the Runtime does not check a package's
-declared range at admission (as for revision 11, §1.343). So an earlier installer places a bundle
+`check_variables_declared`), never 13 of a select step (`standard-pack ready`'s item I2, #464 P3,
+§1.375, asks what `place` asks), and the Runtime does not check a package's declared range at
+admission (as for revision 11, §1.343). So an earlier installer places a bundle
 whose packs declare a select step and that declares less than 13, and an earlier Runtime then
 refuses that package at every run (`contained_task_linear_invalid`, `reason=operation_effect`).
 
@@ -25213,6 +25217,578 @@ a select step at admission (`reason=operation_effect`), before any lease, and it
 a bundle that declares `package` 13 through its `package` edge. A rollback stays open while no root
 is placed from such a bundle. A bundle with such a package that declares less than 13 is placed by
 an earlier installer too, and every run of that package is refused (closing round, "Interface").
+
+### 1.375 Slice #464 P3 (0.12.61): `standard-pack ready`, whether each pack goes straight into scheduling and what it waits for (Workflow #464; the owner asked, 11-14 on board #464, that a recorded pack whose value and other results are settled go straight into scheduling; the design `rd-1114/464-pack-build-design.md`, sections A, C.1, F and the row P3 of G, with the coordinator's rulings on its section H, rulings 3 and 7 and the cut of the first three slices; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1114/brief-464-p3-ready.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on the root check and the four answers, coordinator work order `rd-1114/brief-1718-fix1.md`, main `1e67d1c5` merged; fix round 2, after a second review, the coordinator's closing work order on the same main; main `2eaf9b7e` (release 0.12.60) merged, coordinator work order `rd-1115/brief-1718-main.md`; main `60c28e64` (the train 0.12.61a) merged, with the coordinator's two points, coordinator work order `rd-1115/brief-1718-main2.md`)
+
+This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364);
+merging main `155366bb`, whose train 0.12.60d took §1.365 to §1.368 (#453 S3, S4, S9 and S12),
+renumbered it 1.369; merging main `1e67d1c5` in fix round 1, whose #1708 (#455 G-R2s) holds
+§1.369, it takes 1.375, the number the coordinator assigned (the numbers between belong to other
+open pull requests). The sibling slices P1 (`standard-pack adopt`) and P2 (`standard-pack
+build`), written at the same time, take the numbers their merges give them. Merging main
+`2eaf9b7e`, whose train 0.12.60e took §1.370 to §1.373 (#463 L1, L2 and U1, #437 ORD-1c), keeps
+1.375. The slice ships in 0.12.61 (release 0.12.60 is cut without it). Merging main `60c28e64`,
+whose train 0.12.61a holds §1.374 (#463 K1) and §1.378 (#463 V1), keeps 1.375, between them.
+
+**What it is.** One function, `actingcommand_resource_tooling::judge_standard_pack_readiness`,
+judges the readiness items of every pack of one game root (twelve as first built, thirteen since
+fix round 1), and the core row `standard-pack
+ready` (`actinglab standard-pack ready --root <game root>`, MCP `ac_standard_pack_ready`) answers it
+([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness", which holds the item table).
+The function takes the root, the bundle's declared `package` range where the caller holds it, and
+what the caller read of an installation, each part optional, so that adopt's answer (the check tree
+it lays out), the build's `build.json` (the root it lays out before the zip, and the range it
+computes) and the placement plan (the zip's `interfaces.json`, the configuration's instances, the
+installer's range, check-config, `actingd suspended`, `vision check`) can call it with what each
+holds; those three calls are a follow-up, and `place --plan` is not changed here (another pull
+request changes the rescue module).
+
+**Which existing function judges each item** (the work order's first step, established by reading):
+S1 the Runtime's loader (`PreparedContainedTask::describe_navigation_path`, the admission
+`standard-pack check` and `package bundle` run per pack); S2 the contract crate's
+`classify_standard_pack_packages` over `standard_pack_maintenance_packages`, as the composer
+classifies, once the composer accepted the file; S3 the composer's coverage
+(`benefit_warnings`, `benefit_followers` and, new, `benefit_pending`, a read-only accessor of the
+rules the coverage already counts pending: the composer decides nothing differently); S4 the
+composer, `compose_standard_pack_rules`, with one instance per server, as `standard-pack check`
+runs it (resource tooling's `compose_check` now calls a `compose_per_server` that also takes the
+subsystems; its answer is byte for byte the one of before); S5 the admitted descriptor
+(`entry_pages`, `prerequisite_package_id`, `navigation_entry_pages`) against the registry, the page
+list and `return_home_package`, the resolution of [linear-steps.md](linear-steps.md),
+"Return-home fallback"; S6 the descriptor's `recognition_models`, `standard-pack check`'s `models`
+(the loader's `validate_model_reference` refuses a target that names no model, so S6 fails only
+with S1); I1 the configuration's `policy.facts.instances` (game and server; the Runtime's status
+tells only the game); I2 the placing program's own `package` declaration against the zip's
+`interfaces.json`, the rule of `place` (an installed root keeps no `interfaces.json`); I3 nothing
+(ruling 3); I4 check-config's `config_manifest.subsystems` (or the Runtime's `config.subsystems`)
+given to the composer, which refuses a `requires` word they do not name; I5 `actingd suspended`
+(`suspended`, `packs`), which reads the state root's ledger read only; I6 the rescue row `vision
+check`'s `required_models` (`present`, `identity_matches`): an installation keeps a model in
+`<vision root>\models\<model_ref>\` (the `vision` section's `root`, else `<install root>\vision`),
+whose identity is computed from its files at first use, so only `vision check` (which hashes) or
+the Runtime tells it. Read without a Runtime: I1, I2, I4, I5 and I6 (each through the configuration
+or a live build's offline child); while the Runtime runs, its status tells the game of I1 and the
+subsystems of I4, and `actingd suspended` (I5) and `vision check` (I6) can be read as well (fix
+round 1: the first text named only I1's game and I4).
+
+**What the row reads.** The game root only: it writes nothing, starts nothing (no child, no Runtime
+request) and reads no installation and no secret, so its installation items are `not_judged`
+(`installation_not_read`) and the answer says `installation: not_read`. The rescue module, which
+reads the configuration and runs check-config, `actingd suspended` and `vision check`, is changed
+by another pull request tonight; the follow-up gives the function those readings.
+
+**Codes, keys and words.** `package_dispatch_waiting` (warning, ladder class none; required
+`package_id`, `readiness_item`, `readiness_problem`; optional `game`, `server`, `task_id`,
+`pool_id`, `page_ids`, `required_revision`, `range_min`, `range_max`, `instance_id`, `model_name`
+and, since fix round 1, `blocking_package_id`; the other check's own outcome as its cause) and
+`package_readiness_unjudged` (info, ladder class none; required `package_id`, `readiness_item`,
+`readiness_unjudged`), both resource tooling's, both pending; one domain code each, the reason a
+vocabulary value (spec amendment of 10-24). Keys `readiness_item`, `readiness_problem`,
+`readiness_unjudged` (vocabularies of resource tooling's `codes.rs`: thirteen items, twenty-one
+problems since the second merge of main (twenty in fix round 2, nineteen in fix round 1), nine
+unjudged words since fix round 1; twelve, fifteen and eight as first built),
+`required_revision` (integer) and, since fix round 1, `blocking_package_id` (name). Fix round 1
+adds two vocabularies no key carries, the answer's own members: `readiness_state` (four words) and
+`readiness_role` (eight words). No configuration key, record type, payload member, fact, wire
+shape or interface revision.
+
+**The operation table.** One row, `standard-pack ready` (module `core`, offline, writes nothing,
+entries `lab`, slice `464-P3`, which actinglab's `BUILT_SLICES` and the MCP server's
+`ACTINGLAB_SLICES` name); served by actinglab's own command, as `standard-pack check` is (the
+engine's commands 64, the core strict rows 2, the command inventory 103 commands, the census's
+refusing commands 62; with #464 P1 and P2 beside it, in the train 0.12.61b, 66, 2, 105 and 64), so
+`lab_ops::core_ops` does not serve it and MCP serves it through a `serve`
+child. Its capability entry is `offline`, `read_only`; under `--dry-run` it has no effect
+([actinglab-dry-run.md](actinglab-dry-run.md)).
+
+**Tests** (`crates/resource-tooling/src/gate_464_p3.rs`, gate map `contracts/test-gates/exec.toml`):
+a complete pack answers `dispatchable`; without an installation only the six root items are
+answered; each of S1 to S5 and I1, I2, I4, I5, I6 fails alone on one change of the complete
+fixture, named by its item and problem, with its values and cause; I3 is information in every
+case. Adapted: `apps/actinglab/src/tests/gate_434_lab5a.rs`, whose router check named
+`standard-pack check` as the one core row actinglab's own command serves; the requirement adds a
+second, `standard-pack ready`.
+
+**Fix round 1** (the independent review's two findings and its suggestions, the coordinator's
+rulings in the work order). The principle: the answer never says more than is true, so no pack is
+answered dispatchable, or complete, that the Runtime would refuse or never dispatch.
+(1) S5 runs the pack's prerequisite chain through the kernel's own predicate,
+`actingcommand_execution_kernel::PrerequisiteChain` (`new`, `may_fall_back`, `next` with the
+registry's return-home package of the dependent's server, `begin`, `admit`, `finish`), as the host's
+`resolve_prerequisite_chain` does before a run, each layer the descriptor the loader admitted here;
+the kernel's rules are called, not copied. An unbound layer stays `prerequisite_unregistered`, now
+caused by the kernel's `contained_task_prerequisite_unbound`; any other refusal (another game,
+server or resolution, a layer that cannot be one, a cycle, too deep, the step limit) or a layer the
+loader refuses is the new `prerequisite_refused`, the kernel's code (or the layer's
+`package_invalid`) the cause; both name the layer in the new key `blocking_package_id`.
+(2) The function runs `standard-pack check` on the root first (`check_standard_pack_root`,
+called): each of its refusals (`details.issues`, else `details.outcome`, else its code alone) is
+carried by the pack it names (its `package_id`, else the pack whose directory its `path` is), or by
+every pack when it names none, as a failing item: under S1 for the `package_invalid` of a named pack,
+under S4 for `standard_pack_root_invalid` of `schedule.json`, otherwise under the new static item S7
+`root_checked` (`check_refused`); a pack the refusal does not name fails S7 `root_refused` naming the
+pack it does (the check judged nothing after its first refusal), and the pack whose S1 or S4
+carries it has S7 not judged (`check_stopped`). The check's warnings are the answer's new member
+`warnings` (ruling 7). (3) Four answers, the pack's `readiness` (vocabulary `readiness_state`):
+`waiting` (an item fails; an item of the root not judged never counts as holding), `ready_to_place`
+(every root item holds, no item fails, the installation's not all judged), `dispatchable` (every
+item holds, I3 information) and `not_scheduled` (a maintenance-role pack no rule schedules, with its
+`roles`, vocabulary `readiness_role`); the counts `dispatchable`, `ready_to_place`, `waiting` and
+`not_scheduled` replace `dispatchable`, `waiting` and `not_judged`. A pack whose every rule rides
+with another rule's chain waits, S3 `head_waiting` naming the head's pack, while that pack waits
+(repeated until nothing changes). (4) Tests, `gate_464_p3` (exec gate row "#464 P3"): a
+`linear_steps` pack whose unlisted entry its server's return-home package reaches holds S5
+`return_home` with the check's `package_bundle_entry_page_unlisted`, and without one fails
+`entry_unreachable` alone; S5 `navigation` and `application_entry` on the same kind of pack; the
+chain refused for a prerequisite of another server, a cycle and four declared layers, each with the
+kernel's code; a root the check refuses (a loading copy without `loading.json`) with no pack
+complete; each of the four answers; a follower behind a waiting head. Existing tests adapted
+because the requirement changes what they pin: the complete pack holds thirteen items with S7
+(`p3_a_complete_pack_answers_dispatchable`); without an installation the seven root items hold and
+the pack is `ready_to_place`, not `not_judged`
+(`p3_without_an_installation_only_the_root_items_are_answered`); a binding without its server
+leaves the pack `ready_to_place` (`p3_i1_…`); the unregistered prerequisite's cause and layer
+(`p3_s5_…`) and S7 `check_stopped` beside S1 (`p3_s1_…`) are pinned as well. (5) Texts: the
+catalog's handling of `package_readiness_unjudged` says that no caller hands an installation's
+readings yet; `composition_refused` is S4's only; the contract's section "Readiness" says what
+`dispatchable` does not include (a positive net benefit, judged at run time), the four answers,
+where the installation's items are judged, and what can be read while the Runtime runs. The
+merge of main `1e67d1c5` also gives `compose_per_server` the composer's input G-R2s made required
+(`IrreversiblePackages`), which the readiness reads as `standard-pack check` reads it
+(`root_irreversibility`). The row still reads the game root only and starts no child process.
+
+**Fix round 2** (the second review's three suggestions, all taken by the coordinator). (1) A
+page-graph pack run as the run's own package keeps its home entry, which takes its server's
+return-home package through no chain (R23), and S5 held for it by `return_home` whenever such a
+package was registered; the Runtime's entry (the host's `run_preflighted_contained_task`) refuses
+the package first when the kernel refuses it. S5 now judges it so, by the kernel's own functions:
+the package the loader admitted here, `TaskPackageDescriptor::require_configured_package_id`, then
+`TaskPackageDescriptor::prerequisite_incompatibility_with` with `configured_return_home` true, the
+function the host's `configured_return_home_incompatibility` calls (another game, server or
+resolution, a package that cannot be a layer, one that declares a prerequisite package of its own).
+A refusal fails S5 with the new problem `return_home_refused` (`prerequisite_refused` names a
+refused chain, which this is not), the kernel's code (`contained_task_prerequisite_incompatible`,
+`contained_task_prerequisite_mismatch`) or the package's `package_invalid` the cause and
+`blocking_package_id` the package. A pack whose chain took the return-home package as a layer (a
+`linear_steps` pack) is judged by the chain as before. Tests, `gate_464_p3` (exec gate row "#464
+P3"): a page-graph business pack with an entry page set (an entry the Runtime checks) fails S5
+`return_home_refused` alone, caused by `contained_task_prerequisite_incompatible` and naming the
+return-home package, when that package has another resolution
+(`p3_fr2_s5_a_return_home_package_of_another_resolution_is_refused`) and when it declares a
+prerequisite package (`p3_fr2_s5_a_return_home_package_that_declares_a_prerequisite_is_refused`);
+no existing test changes. (2) The catalog's text of `check_refused` no longer names store update
+cooldowns and probe keys: those are `standard-pack check`'s refusals of `schedule.json`, which S4
+carries. (3) actinglab's module text says thirteen items.
+
+**Second merge of main** (main `60c28e64`, the train 0.12.61a: #463 K1, `package` 13, a
+`linear_steps` task with a select step, §1.374; #463 V1, `package` 14, a package's `variables` and
+version 2 of `goals.json`, §1.378; coordinator work order `rd-1115/brief-1718-main2.md`). The merge
+keeps both sides in section order (the register, the exec gate rows, resource tooling's test
+modules). Two points of the work order. (1) A wrong number: the operation table's row
+`standard-pack ready` said that six installation items are `not_judged`; the row reads no
+installation, and the items it leaves unjudged are five (I1, I2, I4, I5, I6; I3 is an information
+line). The row's note and the request's `installation` member text now say five; the contract's
+section "Readiness", the gate row and the tests already did. (2) Item I2 held a copy of the rule of
+`place` at the edge (`min <= max_declared <= max` only), so after the train it answered a bundle
+`place` refuses as holding: `place` also asks 14 of a bundle that carries `goals.json` or whose
+packs declare `variables` (10 of one that carries the notices directory; nothing asks 13). The rule
+now lives in the contract crate, `package_edge_holds`, `BundleRevisionNeed` (`revision`,
+`problem`, `declared_by`) and `control_declares_variables`, and both call it: the rescue module's
+`place` at its edge and in its three checks (its refusals byte for byte as before), and I2, which
+after the edge asks each need the game root carries (the notices directory unless a pack is named
+like it, `goals.json`, the first pack in `bundle.json`'s order whose `control.json` declares
+`variables`) of the declared maximum, in `place`'s order. A need the declaration lacks fails I2
+with the new problem `revision_undeclared` (`required_revision` the revision asked), caused by
+`place`'s refusal, `standard_pack_root_invalid` with `notice_undeclared`, `goal_undeclared` or
+`variable_undeclared` at the root's `interfaces.json`, the pointer empty, `package_id` the
+declaring pack for `variables`; `place` refuses a bundle whole, so every pack of the root answers
+it. Test, `gate_464_p3` (exec gate row "#464 P3"):
+`p3_i2_variables_in_a_bundle_that_declares_less_fail_package_revision_alone`. No existing test
+changes; no code, key or configuration key is added (one vocabulary word).
+
+**At deploy.** Nothing to do: a new read-only command and tool. **Rollback** (below 0.12.61): the
+row and its tool are gone; nothing is persisted.
+
+### 1.376 Slice #464 P2 (0.12.61): `standard-pack build`, a game's whole standard pack from one commit of its working root, on the steps of `resource verify` (Workflow #464; the owner asked on 11-14 that the Lab build a game's standard pack by itself, board #464; the design `rd-1114/464-pack-build-design.md`, its sections A, C.1, C.2, D and E and the row "P2 build" of its section G, read on main `17197d8e`, with the coordinator's rulings on its section H, not the owner's words; coordinator work orders `rd-1114/brief-464-p2-build.md`, read on main `17197d8e`, `rd-1114/brief-1719-fix1.md` (fix round 1, after the independent review and CI), `rd-1114/brief-1719-fix2.md` (fix round 2, after the second review), `rd-1115/brief-1719-main.md` (after release 0.12.60) and `rd-1115/brief-1719-rev1314.md` (revisions 13 and 14, after the train 0.12.61a); main `155366bb` merged, then main `1e67d1c5` in fix round 1, then main `2eaf9b7e` (release 0.12.60), then main `60c28e64` (the train 0.12.61a); the number 1.376 is the coordinator's, the numbers between belong to other open pull requests)
+
+**What it is.** A new authoring row of the operation table, `standard-pack build` (command `actinglab
+standard-pack build --repo <checkout> --source-repository <owner>/<name> --out <directory>
+[--commit <40-hex>]`, MCP tool `ac_standard_pack_build`, served through a `serve` child), which
+builds one game's whole standard pack from one commit of its working root and writes it, ready for
+`place`, into a new or empty directory: the zip, `SHA256SUMS` and `build.json`
+([resource-verify.md](resource-verify.md), "`standard-pack build`"; [package-reference.md](package-reference.md),
+"The built standard pack").
+
+**What the code showed before the build** (the work order's three questions). (1) `resource
+verify`'s steps live in `apps/actinglab/src/resource_verify.rs` and its `steps.rs`, `bundle.rs` and
+`git.rs`, which call the library code of `crates/resource-tooling` (`package_bundle`,
+`check_standard_pack_root`): one function, `verify`, ran them in order, so it could become the one
+both rows call (`run_steps`, with the row as `StepsFor`) without a change to what `resource verify`
+reports. The function stays in the Lab, where the steps are, not in `crates/resource-tooling` as the
+design's slice table says; that changes no step. (2) `package bundle` lays `pages.json`,
+`interrupts.json`, `navigation.json`, `schedule.json`, `display-layout.json`, `loading.json` with
+`loading/`, `notices/` and, since G-R1 (§1.356), `goals.json`; `resource verify` passes all of them
+but `goals.json`. `tables/`: the contract defines the zip's `tables/<listed id>.json` (the
+installer's `place`) and the index member `tables`, which `package bundle` does not write (the
+repositories' bundle script was to add it); the build adds both. `ui.json`: see fix round 1. (3)
+The range is the zip's `interfaces.json` `package [r, r]`, `r` fixed: 3, or 10 with `notices/`. The
+content decides more than the design's three cases (fix round 1 below).
+
+**One function.** `resource verify` calls `run_steps` with `StepsFor::Verify` and passes what it
+passed before: its report is the same for the same input. `standard-pack build` calls it with
+`StepsFor::Build`, its work in `<out>/work/`, and differs in five things: the checkout's read paths
+are every input its bundle carries (`schedule.json`, `display-layout.json`, `loading.json`,
+`goals.json`, `ui.json` and the files under `loading/`, `notices/` and `tables/` besides `resource
+verify`'s); `package bundle` gets `goals.json` (`--goals`); the repository's tables, read as the
+Runtime reads a game root's (`read_standard_pack_tables`), go into the zip and its installed root,
+listed in the zip's `bundle.json` `tables`; its `ui.json` goes into the zip (fix round 1); and
+`interfaces.json` declares the revision the content needs. The product is written only when every
+step passed: the zip copied from `<out>/work/out/`, `SHA256SUMS` and `build.json`
+(`actingcommand.standard-pack-build.v1`; the source repository, the commit, its tree, the Tools head
+and executable SHA-256, and, read back from the zip, the game, the range, the root files and
+directories, the packs and the zip's name, SHA-256 and size; no readiness member, which the
+readiness slice's function adds later). A tree with any change is refused by the precondition;
+`--out` that is a file, a directory that is not empty, one whose parent is no directory or one
+inside `--repo` is refused before anything is read. Nothing is written into the repository and
+nothing is deleted.
+
+**Fix round 1** (the independent review and CI on `d4d3d2a6`; work order `rd-1114/brief-1719-fix1.md`).
+
+- **The revision, complete and exact.** The first build counted the members of the `package` rows 4
+  to 9 and 11 by name anywhere in a pack's JSON, and nothing of the root: too low for the members
+  the register's B-train sections put into revision 6 (they joined it "which BT-PK6 declares", and
+  DB-2 declared 6 in 0.12.37) and for `interrupts.json`'s `limit_cause` and `result`, too high for
+  `post_admission_ocr`, which a task of schema `0.7` or `0.8` must write. The table of
+  resource-verify.md, "The `package` revision", now lists every member, file and value a `package`
+  row of [component-interfaces.md](component-interfaces.md), the register sections it cites and the
+  B train's sections put into a revision, each with its file (a pack's `control.json`, task file,
+  selection-policy document or navigation projection; the root's `interrupts.json`, `notices/`,
+  `goals.json`), the member that holds it, the value it must hold and its condition: 43 member rows
+  and 4 file rows (`apps/actinglab/src/resource_verify/revision.rs`; 45 and 4 since revisions 13
+  and 14, below). The conditional ones:
+  `post_admission_ocr` of a task of schema `0.9` only; an `input_recheck` of any kind only in a pack
+  whose `control.json` names `linear_steps` (resource-declarations.md: "until then it, and an input
+  recheck under `linear_steps`, are admitted by code"); `dictionary` only in a value whose `type` is
+  `unsigned_integer` (the `dictionary` of a `dictionary_entry` value is older); `on_guard_refused`
+  only as an object. No row depends on anything outside the archive. A game root's `tables/` and
+  `ui.json` need no revision. `resource verify` keeps its fixed rule (3, or 10), so the two rows can
+  declare different revisions for one commit, and it checks neither `goals.json` nor `tables/`:
+  both are known differences for a follow-up slice on `resource verify`.
+- **`ui.json`.** It is a root file of the standard package root (package-reference.md, "Standard
+  package root"), which `place` places and sets aside when a zip carries none, so placing a build
+  without it took the console's labels away. The build carries it into the zip, as it carries the
+  tables, when `parse_standard_pack_ui` takes it against the zip's `bundle.json`; each violation of a
+  refused file fails the `bundle` step as `standard_pack_root_invalid`, and `build.json` lists it
+  among the root files.
+- **The product.** Each of the three files is written under its `.part` name and renamed when all
+  three are complete, `build.json` last; a final name that exists is never replaced. `--out` that
+  does not exist is made by the `bundle` step, so a call the checkout precondition refuses leaves
+  nothing behind. A `--out` inside an installation root is not refused: no code of the Lab or the
+  rescue module tells whether a directory lies inside one (`lab-ops`'s `executable_install_root`
+  and `locate::installed_root` find the root of a running program by its place).
+- **The codes' names.** The outcome guard's G8 refused the first names: the prefix `standard_pack_`
+  belongs to the contract's and runtime-host's fragments, not the Lab's. The three codes take the
+  prefix `resource_` of the Lab's fragment, as `resource verify`'s own do:
+  `resource_build_output_invalid`, `resource_build_failed`, `resource_build_write_failed`.
+- **The row's slice.** The row's `slice` was `LAB-2`, another slice's word, only because one more
+  word made rustfmt break the line of `BUILT_SLICES` and MCP's test misread it. It is now its own,
+  `PACK-BUILD`, in actinglab's `BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`, and the test
+  (`gate_434_lab5g2a::actinglab_built_slices`) finds the `[` after the `=` wherever the line breaks.
+- main `1e67d1c5` (§1.369 G-R2s) merged; this section moved from 1.369 to 1.376.
+
+**Fix round 2** (the second review; work order `rd-1114/brief-1719-fix2.md`).
+
+- **Revision 7's anchor.** The row looked for a `repeated_anchor` layout's anchor among the `anchors`
+  of its own task file only, while the parser resolves it among every template target of the
+  derived pack (§1.282 FS1-3; resource-declarations.md: `verify_templates[]` entries take `mask`,
+  `maskRange` and `scales` as `anchors[]` entries do), so a pack whose masked anchor stood in
+  `verify_templates` or in another task declared 6 where it needs 7. The table now collects, for
+  each pack, the target ids of every `anchors[]` (`page/<id>`) and `verify_templates[]` (`<id>`)
+  entry of every task file that declares one of the three members, and judges each layout's anchor
+  against that set.
+- **An input recheck under `linear_steps`** stays at revision 6 (the coordinator's ruling on the
+  question fix round 1 left): §1.155 B12-4 now says "within revision 6", as the table computes.
+- **Texts.** resource-verify.md says that a rename failing half way can leave the zip, or the zip
+  and `SHA256SUMS`, under their final names without `build.json`, the mark of a complete build, and
+  says what the table matches instead of "neither lower nor higher".
+
+**Main `2eaf9b7e` merged** (release 0.12.60 and the train before it; work order
+`rd-1115/brief-1719-main.md`). The slice ships in 0.12.61 (release 0.12.60 is cut without it): its
+codes' `since`, this section, its rows of the gate map and its contract sentences say 0.12.61. The
+section keeps 1.376, and nothing of its behaviour changes.
+
+**Revisions 13 and 14** (main `60c28e64` merged, the train 0.12.61a: #463 K1, §1.374, and V1,
+§1.378, which brought the `package` rows 13 and 14; work order `rd-1115/brief-1719-rev1314.md`).
+The table stopped at 12: it passed a select step of a `linear_steps` task and a package's
+`variables` through and counted `goals.json` 12 whatever it held, so a bundle built from such
+content would declare too little, the installer would place it or refuse it for the wrong reason,
+and an earlier Runtime would refuse its package at every run. Three rows now
+(resource-verify.md, "The `package` revision"):
+
+- **13**: in a pack whose `control.json` `execution_mode` is `linear_steps`, the member `select` of
+  an element of a task's `operations`, holding an object. That is where the kernel's admission
+  finds a select step (`TaskOperation.select`, an `Option` that an absent member or `null` leaves
+  empty; `TaskProgram::validate_linear` takes it as `LinearEffect::Select`); that reader is private
+  to the kernel crate, which actinglab does not depend on, so the table reads the same member. A
+  page-graph select step keeps its revision.
+- **14**: a pack's `control.json` with the top-level member `variables`, whatever it holds, as the
+  installer's `place` reads it (`check_variables_declared`; `VARIABLES_PACKAGE_REVISION`).
+- **14**: `goals.json` at the zip's root, by its presence, as `place` reads it
+  (`check_goals_declared`; `GOALS_PACKAGE_REVISION`, 14 since V1 fix round 3), whatever version it
+  holds. A version 1 file is refused by the check (`goal_version_retired` at `/schema_version`:
+  `package bundle --goals` refuses it, so the build fails at its `bundle` step), not by the
+  revision. No content needs 12 any more.
+
+The table has 45 member rows and 4 file rows. Tests (gate map `apps.toml`, "#464 P2 revisions 13
+and 14"): `p2_revision_13_select_step_of_a_linear_steps_pack_only` (over entries needing 11, a
+`linear_steps` select step 13; the same select step in a `navigable_route` pack, and a
+`linear_steps` click step, 11); `p2_revision_14_variables_of_control` (over entries needing 13, a
+control with `variables` 14, without it 13); `p2_revision_14_goals_json` (renamed from
+`p2_revision_12_goals_json`: over entries needing 13, `goals.json` 14, a version 1 document too,
+without the file 13); `p2_a_select_step_declares_13_and_with_variables_14` (a bundle's entries
+whose `linear_steps` pack has a select step: 13 without variables, 14 with them). Adapted, because
+V1 fix round 3 changes what it pinned: `p2_notices_give_package_10_and_goals_give_12`, renamed
+`p2_notices_give_package_10_and_goals_give_14`, whose `goals.json` is version 2 (`package bundle
+--goals` refuses version 1) and whose zip and `build.json` declare [14, 14]. The rows' helper
+`assert_row` takes its base from `assert_row_over`, whose base may lie more than one below the row
+(no content needs 12). The file holds 59 tests; neither renamed test was on main, so no
+`[[retired]]` entry is needed. The merge kept both sides in section order: this section between
+§1.374 and §1.378, the gate map's rows of #464 P2 before #463 V1's, and in `bundle.rs` the build's
+`goals.json` with main's note that its packer declares 14.
+
+**Codes.** Three, in the actinglab fragment, since 0.12.61, review pending:
+`resource_build_output_invalid` (`path`), `resource_build_failed` (`failed_step_count`,
+caused by the steps' outcome) and `resource_build_write_failed` (`path`). No key, word or
+vocabulary is added; a dirty tree's refusal is caused by `resource_verify_checkout_dirty`, a
+refused `ui.json` is `standard_pack_root_invalid`. The outcome code index is regenerated
+(actinglab 43 codes).
+
+**Counts.** The command inventory (`ratchet/actinglab_commands.json`) 103 commands, 47 arms; the
+strict rows 31, the census's group (a) 62, the commands of actinglab's own rows
+(`engine::COMMANDS`) 64; the built slices 7. With #464 P1 and P3 beside it, in the train
+0.12.61b: 105 commands, 47 arms; the strict rows 32; group (a) 64; `engine::COMMANDS` 66; the built
+slices 9.
+
+**Tests.** `apps/actinglab/src/tests/gate_464_p2.rs` (gate map `apps.toml`, "#464 P2", "#464 P2
+fix round 1", "#464 P2 fix round 2" and "#464 P2 revisions 13 and 14"; 59 tests), on a neutral fixture repository made with git (RV-1's
+files): `resource verify` of a commit reports what RV-1 pins and `standard-pack build` of it
+writes that zip byte for byte and the same `SHA256SUMS`; `notices/` gives 10 and `goals.json` 12 (14 since revisions 13 and 14, above) (and `resource verify` of that commit
+still leaves `goals.json` out and declares 10); a tracked change and an untracked file are refused
+`resource_build_failed` caused by `resource_verify_checkout_dirty`, `--out` not made (fix round 1,
+adapted: it pinned an empty `--out`), and an `--out` that holds a file or lies inside the
+repository `resource_build_output_invalid`; `build.json` matches the zip and has no other member.
+Fix round 1: a commit's `tables/` is carried, listed and needs no revision, and a refused table
+fails the build with the reader's refusal; a commit's `ui.json` is carried and listed, and a
+refused one fails the build with `standard_pack_root_invalid`; one test per row of the revision
+table (47; 49 since revisions 13 and 14, above), each over entries one revision below the row: with the row's member, file or value the
+row's revision, without it one lower. `gate_434_lab5g2a::mcp_tools_from_op_table`'s reader of
+`BUILT_SLICES` is adapted (it finds the list wherever rustfmt breaks the line). Fix round 2: three
+more of revision 7, each over entries needing 6 and differing only in what the row detects (a
+`verify_templates` entry with `mask` as the anchor; the masked anchor in another task file of the
+pack; `maskRange` alone), and `p2_revision_7_masked_anchor_of_a_repeated_anchor_layout` adapted (its
+layout names the anchor by its target id, `page/a`, as the parser resolves it).
+
+**What is not changed.** `package bundle`'s behaviour and flags; `place` and the rescue module;
+`resource verify`'s report and its fixed number; the recording and the kernel; no interface
+revision, configuration key, record type or wire shape moves; `build.json` gains no member.
+
+**At deploy.** Nothing changes for an installation: the operation is offline and the Runtime does
+not run it. Once a Tools release carries it, the resource repositories' scripts can shrink (a later
+slice, one pull request per repository): the release script to the Tools pin check, one
+`standard-pack build` and the publication of its zip and `SHA256SUMS`; its workflow's sparse
+checkout to the whole tree without LFS.
+
+**Rollback** (below 0.12.61). Nothing is persisted; an earlier Tools has no `standard-pack build`
+and refuses the words, and a built zip places on any installer whose `package` range holds its
+declared maximum.
+
+### 1.377 Slice #464 P1 (0.12.61): `actinglab standard-pack adopt` makes a recorded package a member of its game's standard pack in a resource repository's checkout (Workflow #464; the design `rd-1114/464-pack-build-design.md`, sections A, B, C.1, C.2, D and the row "P1 adopt" of G with its tests, and the coordinator's rulings 1, 2, 7 and 8 on board #464, not the owner's words; the coordinator's ruling on the value's origin, sent during the slice: adopt never writes `fixed_value_origin: "model"` on a caller's word; coordinator work order `rd-1114/brief-464-p1-adopt.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on what is derived and on the check tree, coordinator work order `rd-1114/brief-1722-fix1.md`, main `1e67d1c5`; fix round 2, after the review of fix round 1, with the coordinator's rulings on its other points, coordinator work order `rd-1115/brief-1722-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged)
+
+This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364); the
+train 0.12.60d (#453 S3, S4, S9 and S12) and #455 G-R2s, merged first, took §1.365 to §1.369, and
+the merge of main `1e67d1c5` renumbered this entry; in fix round 1 the coordinator assigned it
+1.377, the numbers before it being taken by other open pull requests. The slice ships in 0.12.61
+(release 0.12.60 is cut without it): its codes are `since` 0.12.61. The operation, its decision
+document, its checks, what it derives and what it writes are
+[standard-pack-authoring.md](standard-pack-authoring.md); this entry records what the slice
+established, built and left.
+
+**Established before building (the design's open points).** (1) An outcome predicate on the rule
+itself must name an outcome key its package declares: a scheduled run is refused for a key the
+package does not declare (the outcome declaration of [scheduling/README.md](scheduling/README.md),
+`policy_run_outcome_declaration_mismatch`), so every such predicate of the schedule as it would be
+written, given, derived or kept, is checked against every key the entry task's
+`scheduling_outcome.mappings` declares, and a key it does not declare refuses the call
+`decision_invalid` at the predicate's pointer before anything is written; a given predicate on a
+declared key keeps its key, and the derived `feedback_stop` names only declared keys (fix round 1;
+as first built the derivation put the first declared key into every such predicate it derived or
+copied, and given and kept predicates went unchecked; since fix round 2 every reader the compiled
+schedule holds, an activity target's measure included, and every key the rule reads of another
+task, below). The Tools do not check that key themselves (`standard-pack check` composes a rule on
+an undeclared key), so adopt is where it is kept. (2)
+Whether a recording's first decision
+was evaluated is read from the package itself: the entry task's provenance (`source` `lab_record`,
+`record_id`, `cross_check.status`, `warnings` with `first_decision_not_evaluated`,
+`steps[].click.needs_review`, [lab-recording.md](lab-recording.md)), and an application step,
+which the offline simulation never passes; nothing of the recording's state directory is read for
+it. (3) Nothing is deleted in the checkout, so a replaced pack directory is moved, not copied and
+removed: with the state directory on another volume than the checkout the move cannot be made, and
+since fix round 1 that is refused `replace_across_volumes` before the first write (as first built
+the move failed `adopt_write_failed` after the new directory was written as its `.part`, and every
+later call was refused `pack_exists`). (4) `--dry-run` runs the check tree too, which is written
+under the state directory only; nothing of the checkout is written. None of the four changes the
+operation's shape, so the slice was built as designed.
+
+**Fix round 1** (after an independent review; the coordinator's work order and rulings). The
+answer never says more than is true, and a call that cannot finish fails before it writes:
+
+| Item | Before | Now |
+|---|---|---|
+| `--replace` across volumes | the move of the replaced directory failed after the new one was written | the volumes of the checkout and of the kept place (the nearest existing part of each, links resolved: drive or share on Windows, device elsewhere) are compared before the first write; `replace_across_volumes` says to give a `--state-dir` on the checkout's volume and, for a recording, its package by `--package`; a seam of `AdoptWorktree` (`volume`) lets the gate stand for two volumes |
+| Outcome keys | the derivation forced the first declared key; given and kept predicates unchecked | every own-outcome predicate of the schedule as written checked against all declared keys, `decision_invalid` at its pointer (in the decision when it gave the member, else in `schedule.json`), the details `declared_outcome_keys` |
+| `feedback_stop` | the most frequent of the file's rules, copied and renamed | never copied: "this rule's own run ended with a key its package declares" for every key of a normal end (not `busy`, no `remedy`), under `any` for several (`package`, with `how`) |
+| `expected_duration_ms` | the package's waits (some 700 ms a step) | never below the neutral 60000 when derived (`neutral_floor`, with `how`); the decision may state it |
+| One role | a business decision left a `maintenance.json` entry, so the composer did not judge the rule; a lifted hold left no trace | the class decides: a business or held decision removes the package's `maintenance.json` entries, a decision of another class than held lifts a hold; `removed_entries` and `replaced_entries` list each with its pointer; a role `pages.json`, `navigation.json` or `interrupts.json` gives is refused `decision_invalid` at `/class`; without a decision the class reads a maintenance role as maintenance |
+| Warnings | only those naming the package or its rule | every warning of the check, the game's included |
+| `pending` | answered `undeclared` and a warning | `waits_for_value`: the evaluator's reason `benefit_unknown` with its `benefit_gap` (a registered code and word) and the same in words; `pending` for a follower of a chain refused `decision_invalid` at `/value`; a new business rule may give no value only when the check finds it a follower |
+| Writes | root files renamed over whatever was there; a failed second rename left the old directory moved away | each root file read again and compared before the first write and before its rename, `adopt_write_failed` when it changed, nothing more renamed; the old directory moved back by a rename when the new one cannot take its place |
+| Leftovers | `... is left from an earlier adoption` | the message names every leftover and says what to do ("If a call was interrupted") |
+| Check tree | a new `adopt-check/<ms>/` each call, never reused, colliding within a millisecond | one tree for each checkout, `adopt-check/<last segment>-<16 hex of the SHA-256 of its resolved path>/`, marked `.adopt-check-tree`, the marker locked for the call, emptied at the start of a call only when the marker is there; `check_tree_unmarked`, `check_tree_busy` |
+
+The lint finding of the first CI run (`clippy::unnecessary_to_owned` in `Existing::pointing`) is
+fixed. `BenefitGap` is exported by `crates/policy` for the answer's outcome; nothing of the policy
+crate's behaviour changes.
+
+**Fix round 2** (after the review of fix round 1; the coordinator's work order and rulings, not the
+owner's words):
+
+| Item | Before | Now |
+|---|---|---|
+| Outcome keys of the rule | only rules and pools scanned for readers of the rule's outcome; an activity target's measure, which the Runtime also compares, unchecked | after the check of the tree, every key the schedule as that check compiled it reads of the rule's outcome, from the policy crate's own `CompiledCatalog::referenced_outcome_keys` (rules' triggers and stops, pools' observations, activity targets' measures: the one copy of the rule the Runtime runs), against the package's declared keys; the refusal at the first reader in file order of the rules the composer composes, the pools and the activity profiles, its message naming that reader by its id (item 9) |
+| Outcome keys of another task | a predicate of the rule reading another task's outcome unchecked, so that task was refused at every dispatch and the rule never came due | every outcome predicate of the rule as it would be written that reads another task checked against the keys the package of that task declares (its `packs/<package_id>` read as `package preflight` reads it), `decision_invalid` at its pointer, the details naming that task, its package and its declared keys |
+| The check tree | a link at its place was emptied through; made by `create_dir` and then marked, so a crash between left it unmarked and two first calls could refuse one `check_tree_unmarked` | a link (a symbolic link, a junction) at its place refused `check_tree_link` before anything is opened or cleared; made whole as `<checkout>.new-<process>-<count>/` with its marker and renamed into place, a call that finds another's tree there first removing its own and going on (busy at worst) |
+| `/class` | refused for `business` and `held` beside a role another root file gives | refused for `business` only; a package `pages.json` names that is not run through is adoptable as held |
+| Maintenance by `uses` alone | the package's business rule silently given `maintenance: true` | refused `business_rule_in_the_way` at `/rules/<i>` of `schedule.json`, naming the rule's id |
+| A manual request | answered `waits_for_value` ("not dispatched") although the evaluator dispatches it unjudged | the policy crate's `is_manual_request` on the compiled task (new, the placement's own `manual_request`): `value_not_judged` `manual_request` and no `waits_for_value`; a follower `value_not_judged` `follower`; the contract's table of which rules are dispatched and which wait ("`pending`" with a valued `produces` is judged and dispatched) |
+| Two root files | each written as its `.part` and renamed in turn | both `.part` files written first, then renamed one after the other, first the file that gives the new role (`maintenance.json` for the class maintenance, `schedule.json` otherwise), so that an interruption between the two renames leaves a `.part` and two roles; the leftover's message says which file was not renamed and how to finish or undo; without a decision, a held entry or business rule beside a `maintenance.json` entry is refused `repository_invalid` at that entry, saying what to do; `written` lists the files in the order renamed |
+| Texts | the error of a member nothing derives named the file's rules for `feedback_stop`; "the task runs once for each time its trigger comes true"; `git diff` shows which | `feedback_stop`'s error names the package's keys (never copied); after one normal end inside the activity window the rule is not dispatched again in that window (`how` and the contract); "look whether the file holds the package's rule or entry" |
+
+The seam `AdoptWorktree::rename` (every rename of the writes, `fs::rename` by default) lets the gate
+make the second rename fail and let another writer change a root file in between. The answer's
+`written` follows the renames. Root files with changes not committed are still read and written as
+they are (several adoptions before one commit). The check of the tree keeps the catalog its
+composition compiled (`ScheduleReport::compiled` in `crates/resource-tooling/src/standard_pack_schedule.rs`,
+`check_standard_pack_root_with_catalog` in `standard_pack_check.rs`); the answer of `standard-pack
+check` and of `package bundle` is unchanged. `crates/policy` gains `is_manual_request`, a public
+call of the placement's own rule; nothing of its behaviour changes.
+
+**Fix round 3** (after the review of fix round 2; the coordinator's work order, not the owner's
+words; main `2eaf9b7e` unchanged, no merge):
+
+| Item | Before | Now |
+|---|---|---|
+| The advice after an interruption | "run adopt again with the decision it was given" (two roles) and "then run adopt again" (a leftover `.part`), which the call's own new `packs/<package_id>`, in place and not committed, refused `pack_exists` or, with `--replace`, `pack_dirty` | every message that meets what an interrupted or stopped call left says what does work, each step followed through the checks: move the root `.part` files out, commit `packs/<package_id>` or put it back as it was, then adopt with `--replace` and the decision (two roles, a leftover root `.part`, a root file another writer changed); move a `packs/<package_id>.part` out and run adopt as that call was run; to finish, rename a trusted `.part` only where that finishes the adoption |
+| A root file's `.part` | "that file whole as the call computed it"; the other root file "renamed or not changed" | trusted only when it reads as that root file (the schedule reader, the list of `maintenance.json` entries) and is in the canonical form, its final newline included, as a finished write leaves it; the message names each `.part` trusted or not and why; a `.part` not trusted means no root file was renamed; for one trusted `.part`, the other file's three states (renamed, not to change, to change with its `.part` not written yet) |
+| A business rule | a rule without the `maintenance` member, so an unmarked rule beside its package's `maintenance.json` entry (one legal role) was refused `business_rule_in_the_way` or as two roles | a rule the composer judges by its value, by the composer's own rule (the policy crate's new `is_judged_rule`, the composer's `judged`), in the `uses`-alone check, the two-roles check, the class an earlier adoption gave and the derivation's tiers |
+| The check tree's temporary directory | `<checkout>.new-<process>-<count>/`, never cleared after a crash, so a later process with the same number failed `adopt_write_failed` without advice | `<checkout>.new-<process>-<ms>-<count>/`, a name another directory holds passed over for the next count; while a call holds the tree, every directory beside it named so (three numbers) that carries the marker is cleared, one without the marker left alone, a link of that name refused `check_tree_link` before anything is cleared |
+| A crash that leaves nothing behind | after `packs/<package_id>` was put in place and before the first root `.part`: only "was adopted before; give --replace" | the `pack_exists` message names what the root files hold of the package and, when they hold nothing beside its directory, says that an adoption was interrupted before it wrote them (or the directory was put there by hand) and what to do; no new word |
+
+`crates/policy` gains `is_judged_rule`, a public call of the composer's own `judged`; nothing of
+its behaviour changes. The descriptions of `adopt_refused`, `adopt_write_failed` and the words
+`repository_invalid`, `pack_exists`, `check_tree_link` and `business_rule_in_the_way` say the same.
+
+**Fix round 4** (after the review of fix round 3; the coordinator's work order
+`rd-1115/brief-1722-fix4.md`, not the owner's words; main `2eaf9b7e` unchanged, no merge):
+
+| Item | Before | Now |
+|---|---|---|
+| "Commit `packs/<package_id>`, then `--replace`" | given as always followed, though a call that began without the directory never ran the volume check, so with the default state directory on another volume than the checkout the advised call was refused `replace_across_volumes` | the advice (after a leftover root `.part`, after a root file another writer changed) says that put back as it was the directory needs no state directory on the checkout's volume (absent, `--replace` moves nothing; committed, that call passed the check with its `--state-dir`), and that committed as that call left it, `--replace` needs a `--state-dir` on the checkout's volume and, with another one, a recording's package by `--package`; the contract's "always" is gone |
+| `pack_exists` with the directory alone | "interrupted or placed by hand", and "put it back, run again as before", which ends in the same refusal for a committed directory | told apart by what the call reads: a role `pages.json`, `navigation.json` or `interrupts.json` gives (the file named, and what the call accepts: `held` or `maintenance` with `--decide`, never `business`), or no root file naming the package (interrupted, or placed by hand); either way `git status` tells whether the directory is committed, and the advice ends: absent, adopt without `--replace`; committed, with `--replace` and a state directory on the checkout's volume |
+| Two roles | its message said `packs/<package_id>` is not committed, and told a business rule beside the entry, which the composer never judges there | only a call with `--replace` meets the check, after `pack_dirty` passed, so the message says the directory is committed or absent and to run adopt again with `--replace`, the same `--state-dir` and the decision; the branch of a business rule beside the entry, which could not be reached, is removed with its texts (the contract, `adopt_refused`, the word `repository_invalid`) |
+| A maintenance decision without a trigger | gave the rule beside its package's `maintenance.json` entry `"maintenance": true` | the rule declares maintenance only when the composer would otherwise judge it by its value (its own `is_judged_rule` on the rule without the declaration, with the role the call leaves); beside the entry or another root file's role the rule is kept as written, which the composer does not need changed, and a declaration would only add its checks of a declared rule (`limited` refused, the tier of its `priority`) |
+| Flushing | the `.part` files written and renamed without a flush, though the texts say an untrusted root `.part` means no root file was renamed | every file renamed into place, or whose directory is (`packs/<package_id>.part/`'s files, both root `.part` files, the check tree's marker), is flushed (`sync_all`) before the rename, as the Runtime's own writers of state do; the sentence stands |
+| The outcome guard's G2 (CI of fix round 3) | `finished_part` returned `Result<(), String>` | it returns the module's own `LabResult<()>`: `adopt_refused` `repository_invalid` at the `.part`, the operating system's refusal as the cause where there is one, whose message the leftover's message folds in |
+
+No code, word or key is added or removed: the vocabulary `adopt_problem` keeps its 17 words.
+
+**Built.**
+
+| Part | Where |
+|---|---|
+| The operation (repository, recording, package and decision read; the checks; the plan; the check tree; the writes) | `crates/resource-tooling/src/adopt.rs`, `standard_pack_adopt` |
+| The canonical form of a JSON document, shared | `crates/actingcommand-contract/src/standard_pack_schedule.rs`, `canonical_json_bytes` |
+| The command line, the version control's answer (`git status --porcelain=v1 -z --untracked-files=all`, `GIT_OPTIONAL_LOCKS=0`, the redirecting variables removed) | `apps/actinglab/src/standard_pack_cli.rs`, `run_adopt`, `GitWorktree` |
+| The row `standard-pack adopt` (authoring, slice `SP-ADOPT`, built: actinglab's `BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`), its command, its strict flag lists, its census group, its capability, its options in `help`, its dry-run mode (preview `dry_run`), the inventory (103 commands; 105 with #464 P2 and P3, in the train 0.12.61b) | `contracts/lab-operations.json`; `apps/actinglab/src/cli_module/{words,engine,own_flags}.rs`; `apps/actinglab-mcp/src/tools.rs`; `apps/actinglab/src/{commands/capabilities,cli_information,dry_run_gate}.rs`; `ratchet/actinglab_commands.json` |
+| Two codes, one value key and its vocabulary | below |
+
+**The value's origin (the coordinator's ruling).** A decided value is `"pending"` or a number of
+the pack's own, written as `fixed_value_milli` without `fixed_value_origin` and answered in
+`given` with the origin `pack`; a decision that names the origin `model` is refused
+`value_origin_model` at `/value/origin` before anything is written. A rule met again that carries
+`fixed_value_origin: "model"` keeps both members whatever the decision names, answered in
+`model_kept`. [standard-pack-schedule.md](standard-pack-schedule.md) ("The fixed value") gained
+that `acmodel bindings apply` is not built yet and that no writer of `model` exists today.
+
+**Outcome codes** (since 0.12.61; catalog domain `adopt_`, owners `resource-tooling` and
+`runtime-host`).
+
+| Code | Category, ladder | Values |
+|---|---|---|
+| `adopt_refused` | error, none | `adopt_problem` (required); `path`, `entry`, `json_pointer`, `package_id`, `member`, `count` |
+| `adopt_write_failed` | error, none | `path` (required); `paths` |
+
+The value key `adopt_problem` (codes mode kept) takes the vocabulary `adopt_problem`, 17 words:
+`repository_invalid`, `recording_not_current`, `package_invalid`, `package_mismatch`,
+`pack_exists`, `pack_dirty`, `recording_unreviewed`, `local_path`, `decision_invalid`,
+`value_origin_model`, `rule_refused`, `root_file_not_canonical`, since fix round 1
+`replace_across_volumes`, `check_tree_unmarked`, `check_tree_busy`, and since fix round 2
+`check_tree_link`, `business_rule_in_the_way` (`crates/resource-tooling/src/codes.rs`,
+`AdoptProblem`). The answer's `waits_for_value` carries the policy's registered `benefit_unknown`
+with its `benefit_gap`; no code is added for it, nor for `value_not_judged`, whose `because`
+(`follower`, `manual_request`) is a member of the answer, not a registered word.
+
+**Tests** (exec gate `#464 P1`, `crates/resource-tooling/src/gate_464_p1.rs`, a made-up repository
+of the game `neutral`, server `test`, whose rule stops on the key its package declares): the first
+adoption's exact writes (the derived `feedback_stop` from the package, `expected_duration_ms` at the
+neutral floor) and the post-check bundle; a second adoption refused; `--replace` keeping the rule
+byte for byte and the old directory; the model's value kept through three re-adoptions and the
+`model` origin refused; every check's refusal writing nothing; the classes `held` and
+`maintenance`; a pending value answering, in the evaluator's reason and in words, that the task
+waits for its value; `--dry-run`; a JSON container and a ZIP alike; and since fix round 1
+`--replace` across two volumes the test's machine tells apart refused before anything is written,
+an own-outcome predicate on an undeclared key refused at its pointer (a given trigger, a given
+`feedback_stop`, a kept rule) and a given one on a declared key written as given, and the check
+tree reused by the next call, emptied but for its marker, and a directory there without the marker
+left untouched with the call refused; and since fix round 2 that given stop on one of a package's
+two keys (not the derivation's stop on both), an activity target measuring the rule's outcome on an
+undeclared key refused at its pointer, a trigger reading another task's outcome on a key that
+task's package does not declare refused and on one it declares adopted, a business and a held
+adoption ending the package's `maintenance.json` entry and answering it, `pending` for a follower
+refused, another writer's `schedule.json` not renamed over, the old pack directory moved back when
+the new one cannot take its place, and a check tree another call holds refused `check_tree_busy`
+(seven tests; the test of fix round 1 on own-outcome keys adapted to the two-key package, as the
+work order asks); and since fix round 3 the steps the refusals advise after a call stopped between
+its two renames accepted one after the other, ending in one role, and a rule that declares no
+maintenance a business rule without its package's `maintenance.json` entry and that package's one
+maintenance role beside it (two tests); and since fix round 4 the directories a crash left beside
+the check tree, the one with the marker cleared, the one without it left, a link of that name
+refused `check_tree_link` before anything is cleared (one test), with the two tests of fix round 3
+adapted as the work order asks: the two roles' message saying the directory is committed or
+absent, and the maintenance decision by its uses alone keeping `schedule.json` byte for byte.
+
+**What is not added.** No configuration key, record type, payload member, fact, wire shape or
+interface revision; no persisted structure of the Runtime changes. No file of the recording, the
+rescue module, the kernel or `package bundle` changes.
+
+**What is left (reported, not built here).** The readiness of an adopted package (the slice
+`standard-pack ready`), building a pack without a recording (`standard-pack build`), the
+repository's regression case, catalog section and census row (named in the answer's `next`), and a
+writer of `fixed_value_origin: "model"`.
+
+**At deploy.** Nothing to do: the operation runs offline, on a checkout a person names.
+
+**Rollback** (below 0.12.61). Nothing is persisted; a build before the slice has no row
+`standard-pack adopt` and leaves an adopted checkout as it is.
 
 ### 1.378 Slice V1 (0.12.61): a package declares its variables, `control.json` `variables`, their root check and their place in `goals.json`; `package` revision 14 (Workflow #463 L4; the design `rd-1114/463-l4-design.md`, "Readings: what holds", section A, section D's "goals.json placement", section E, section F's second point, the row V1 of section G and section H items 1, 2, 5, 7 and 9 to 12, with "The coordinator's rulings on I", read on main `155366bb`; the coordinator's rulings of 11-14 in the work order and its two additions of the same night (the `package` revision is 14, revision 13 being Workflow #463 K1's; this section's number), not the owner's words; coordinator work order `rd-1114/brief-463-v1-package-variables.md`, read on main `155366bb`, main `1e67d1c5` merged; fix round 1, after the independent review, coordinator work order `rd-1114/brief-1723-fix1.md`; the closing round, after the review of fix round 1, coordinator work order `rd-1115/brief-1723-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged; fix round 3, `goals.json` version 2, coordinator work order `rd-1115/brief-1723-fix3.md`, on main `2eaf9b7e`)
 

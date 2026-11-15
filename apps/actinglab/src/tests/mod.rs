@@ -182,6 +182,10 @@ mod gate_449_rec_arch;
 // `--record`.
 #[path = "gate_463_l1.rs"]
 mod gate_463_l1;
+// Workflow #464 P2: `standard-pack build` builds a game's standard pack from one commit on the
+// steps of `resource verify`, whose report is as before.
+#[path = "gate_464_p2.rs"]
+mod gate_464_p2;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

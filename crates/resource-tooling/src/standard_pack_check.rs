@@ -123,7 +123,7 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::{
     ContainedTaskError, NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
 };
-use actingcommand_policy::standard_pack_fact_probes;
+use actingcommand_policy::{CompiledCatalog, standard_pack_fact_probes};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -269,6 +269,15 @@ impl RootFileInputs {
 pub fn check_standard_pack_root(
     request: StandardPackCheckRequest,
 ) -> LabResult<StandardPackCheckResponse> {
+    check_standard_pack_root_with_catalog(request).map(|(response, _)| response)
+}
+
+/// [`check_standard_pack_root`], and the catalog its composition of `schedule.json` compiled
+/// (`None` for a root without the file). Workflow #464 P1 fix round 2: `standard-pack adopt`
+/// reads the adopted rule in it as the Runtime reads it.
+pub(crate) fn check_standard_pack_root_with_catalog(
+    request: StandardPackCheckRequest,
+) -> LabResult<(StandardPackCheckResponse, Option<CompiledCatalog>)> {
     let root = std::path::absolute(&request.root)
         .map_err(|error| LabError::usage(format!("{}: {error}", request.root.display())))?;
     let metadata = fs::metadata(&root).map_err(|error| unreadable(&root, &error))?;
@@ -384,6 +393,8 @@ pub fn check_standard_pack_root(
     let mut benefit_followers = Vec::new();
     // #428 SCHED-C1f1: and the consumptions read from a fact, each with its key and fallback.
     let mut consumption_facts = None;
+    // Workflow #464 P1 fix round 2: and the catalog the composition compiled.
+    let mut compiled = None;
     if let Some(schedule) = bytes(STANDARD_PACK_SCHEDULE_FILE) {
         let maintenance = bytes(STANDARD_PACK_BUNDLE_FILE)
             .and_then(|bundle| serde_json::from_slice::<BundleIndex>(bundle).ok())
@@ -406,6 +417,7 @@ pub fn check_standard_pack_root(
         benefit_provenance = Some(report.benefit_provenance);
         benefit_followers = report.benefit_followers;
         consumption_facts = Some(report.consumption_facts);
+        compiled = Some(report.compiled);
         // UPD-1 fix round 1 (review L6): a store update rule needs a cooldown.
         store_update_cooldowns(
             &game,
@@ -453,7 +465,7 @@ pub fn check_standard_pack_root(
     if fs::symlink_metadata(&loading).is_ok() {
         present.push(STANDARD_PACK_LOADING_FILE);
     }
-    Ok(StandardPackCheckResponse {
+    let response = StandardPackCheckResponse {
         status: "checked".to_owned(),
         root: root.display().to_string(),
         game,
@@ -467,7 +479,8 @@ pub fn check_standard_pack_root(
         notices,
         models,
         variable_provenance,
-    })
+    };
+    Ok((response, compiled))
 }
 
 /// The cross-check of one game root (module doc): the report's warnings, or the first package
