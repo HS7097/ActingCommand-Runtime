@@ -26108,9 +26108,9 @@ built here.
   (`map_ocr`).
 - A generated package states no `package` revision: `record stop` writes a content directory
   (control, resources, task, policies, crops) and no `interfaces.json`; the revision of a bundle is the
-  packaging's (`package bundle`, #1719). A package with a select step needs `package` 13
-  (component-interfaces.md row 13); the contract says so, and `record stop`'s output does not name it
-  (a later slice may, once the bundle computes it).
+  packaging's (`package bundle`, #1719, merged as Workflow #464 P2, §1.376: `standard-pack build`
+  counts a select step as 13). A package with a select step needs `package` 13
+  (component-interfaces.md row 13); the contract says so, and `record stop`'s output does not name it.
 - The guard: a select step needs one; `guard_target` finds none on a page with only OCR marks, and
   `record_select_invalid` `guard_missing` refuses it at mark time (in the probe's render) and at stop.
 - K1's `select_on_empty_target` (the `on_empty` page is not the target page) means, for a recording,

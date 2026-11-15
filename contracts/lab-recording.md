@@ -860,9 +860,11 @@ belongs to the select.
 
 **`package` revision.** A `linear_steps` task with a select step needs `package` 13
 ([component-interfaces.md](component-interfaces.md), row 13). `record stop` writes no revision: a
-content directory declares none, and the revision of a bundle is the packaging's (`package
-bundle`, a later change); an earlier Runtime refuses such a package at admission
-(`contained_task_linear_invalid`, `reason=operation_effect`).
+content directory declares none, and the revision of a bundle is the packaging's (the resource
+repository's, and since Workflow #464 P2 the Lab's own `standard-pack build`, whose revision table
+counts a select step as 13, [resource-verify.md](resource-verify.md), "The `package` revision");
+an earlier Runtime refuses such a package at admission (`contained_task_linear_invalid`,
+`reason=operation_effect`).
 
 ### Forbidden marks and anchors
 
