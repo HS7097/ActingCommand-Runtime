@@ -27447,6 +27447,76 @@ revision or record shape is added.
 **At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
 0.12.62 shows the values its terminal outcome recorded.
 
+### 1.397 Slice #469 H1 (0.12.62): an unavailable application says who withdrew it (Workflow #469; the owner's decision of 11-15 on board #469 that the most mixed codes carry a reason word; the design `rd-1115/status-codes-a-design.md`, Part 2's three facts, place 3 of A-1 and the slice row H1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `a5827228` (after #1738 and #1739))
+
+The coordinator gave this slice 1.397; 1.395, 1.396, 1.398 and 1.399 belong to the slices
+dispatched with it (K1, K2, H2, H3). It ships in 0.12.62.
+
+**What it is.** `instance_unavailable`, the evaluator's placement reason of every decision of an
+instance projected `available = false`, carries `availability_source` (V0's vocabulary, §1.386),
+with `device_link_state` and `device_hold` where the record names them
+([instance-fact-store.md](instance-fact-store.md), "Who withdrew it"). The word is read from the
+active `session.instance.available` record the projection resolves for the instance
+(`project_policy_instances`, `crates/runtime-host/src/host/policy_dispatch.rs`), by its own members
+`source_detector` and `source_snapshot_id` (`HostShared::availability_withdrawal`,
+`crates/runtime-host/src/host/facts.rs`, beside the publishers whose detectors and prefixes it
+reads): the configured seed `configured`; the backend self-check gate's `backend_selfcheck:`
+`self_check`, which a fenced instance and a gated one configured unavailable share (the split is
+the design's later H1b); `device_link:<state>` `device_link` with the state; `device_state:<hold>`
+`device_state` with the hold; another publisher's `false` `other_publisher`; no record holding
+`false` `facts_missing`. A state or hold token the vocabulary does not know leaves its detail out.
+
+**Where it is set, and the design's one wrong turn.** The design placed the attach after the
+evaluation, beside `attach_missing_instance_fact_reasons`, and expected the word in the schedule
+explanation. The explanation is built inside `PolicyHost::evaluate`
+(`crates/runtime-host/src/policy_host.rs`, "before the host adds its notes to the decisions"), so a
+value set after the evaluation never reaches `ac_schedule`; for the same reason
+`policy_instance_fact_missing` never stood behind `instance_unavailable` there. So the host
+computes the words in its projection, hands them to the evaluation in `PolicyEvaluationContext`
+(`availability_withdrawals`) and sets them (`set_availability_words`) after every step that judges
+the evaluation (signals, eligibility staging, arbitration) and right before the explanation: the
+explanation's rows, the held records built from them, the cycle's decisions and the fact refresh
+recorder's reading see the word; nothing before it does. The policy crate does not change.
+
+**A restart.** The reason row is built from the active record alone, which the ledger keeps whole
+(`fact.published` carries the record with its detector and snapshot id) and the fact store
+reloads at a start; nothing of it is in memory. The same record gives the same word after a
+restart (test 7, on the configured seed, which the start does not publish again). A gated
+instance's availability is decided again by its start (the withdrawal before its preparation,
+then its self-check), and the word follows the record that leaves.
+
+**What does not change.** The reason's code, its detail text and its other values (none); which
+decisions are blocked, their eligibility, wake and order; the explanation's `since_unix_ms`
+(`same_clock` compares the code) and a held record's start, id and gate code; the clock-slot
+records, read before the words are set; the planning lane's `instance_unavailable`, which carries
+none. A held record's `caused_by` is the row's why whole, so it carries the word. A not-run reason
+has no failure identity or streak.
+
+**Texts.** `instance_unavailable`'s catalog text (`policy.json`) says when each word is set; the
+index is regenerated. [instance-fact-store.md](instance-fact-store.md) gains "Who withdrew it".
+
+**Tests.** `crates/runtime-host/src/tests/gate_469_h1.rs` (gate map `host.toml`, "#469 H1"), the
+fixture instance (no self-check gate) with one task due at 10:00 UTC, the production evaluation
+path on a manual clock: one test per word (1-6), each asserting the task's one
+`instance_unavailable` reason on the cycle's decision has exactly the word's values and the
+evaluator's detail text, and the explanation's candidate row and not-running row carry the same
+why: `configured` (the configuration's seed `false`), `self_check`, `device_link` with
+`device_link_state` `absent` and `device_state` with `device_hold` `thermal` (each through its
+publisher's own function, by three test hooks of `RuntimeHost`), `other_publisher` and
+`facts_missing` (a record of another detector holding `false`, and one holding a string; the
+cycle's decision still carries `policy_instance_fact_missing`); after a restart the same seed
+record and the same word (7); a word that changes from `other_publisher` to `facts_missing` keeps
+the row's `since_unix_ms`, and the one held record written past the 30-minute default has the
+first unavailable evaluation's start, its signal id and `gate_code` `instance_unavailable` (8).
+No existing test changes, no golden changes, no test leaves the gate map.
+
+**Counts.** One gate file of 8 tests and one gate map row; one member of `PolicyEvaluationContext`;
+one more member of the projection's tuple. No code, key, word, configuration key, record shape or
+interface revision is added.
+
+**At deploy.** Nothing to do: the word is computed at each evaluation from the records an
+installation already holds.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

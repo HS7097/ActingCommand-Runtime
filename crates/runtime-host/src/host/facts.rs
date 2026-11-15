@@ -896,6 +896,70 @@ impl HostShared {
         })
     }
 
+    /// Workflow #469 H1 (register §1.397; the design's place 3): who withdrew the availability of
+    /// an instance the policy projection found unavailable, read from `record`, the active
+    /// `session.instance.available` record the projection resolved for it. A record holding
+    /// `false` names its publisher: the configured seed (`configured`), the backend self-check
+    /// gate (`self_check`, which also withdraws a fenced instance and a gated one configured
+    /// unavailable under the same source), the device link (`device_link`, with the state its
+    /// snapshot names) or the device state (`device_state`, with the hold its snapshot names),
+    /// and any other publisher `other_publisher`. Without such a record the instance is
+    /// unavailable because a policy instance fact is missing or unreadable (`facts_missing`).
+    pub(super) fn availability_withdrawal(
+        record: Option<&FactRecord>,
+    ) -> crate::policy_host::AvailabilityWithdrawal {
+        use crate::codes::{AvailabilitySource, DeviceHold};
+        use actingcommand_contract::DeviceLinkState;
+        let withdrawal = |source: AvailabilitySource| crate::policy_host::AvailabilityWithdrawal {
+            source,
+            device_link_state: None,
+            device_hold: None,
+        };
+        let Some(record) = record.filter(|record| {
+            matches!(
+                record.content,
+                FactContent::Inline {
+                    value: ContractFactValue::Boolean(false)
+                }
+            )
+        }) else {
+            return withdrawal(AvailabilitySource::FactsMissing);
+        };
+        let detector = record.source_detector.as_str();
+        let snapshot = record.source_snapshot_id.as_str();
+        if detector == POLICY_INSTANCE_SEED_DETECTOR {
+            return withdrawal(AvailabilitySource::Configured);
+        }
+        if detector == BACKEND_SELFCHECK_AVAILABILITY_DETECTOR
+            && snapshot.starts_with(BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX)
+        {
+            return withdrawal(AvailabilitySource::SelfCheck);
+        }
+        if detector == DEVICE_LINK_AVAILABILITY_DETECTOR
+            && let Some(state) = snapshot.strip_prefix(DEVICE_LINK_AVAILABILITY_SNAPSHOT_PREFIX)
+        {
+            return crate::policy_host::AvailabilityWithdrawal {
+                device_link_state: DeviceLinkState::ALL
+                    .iter()
+                    .copied()
+                    .find(|known| known.as_str() == state),
+                ..withdrawal(AvailabilitySource::DeviceLink)
+            };
+        }
+        if detector == DEVICE_STATE_AVAILABILITY_DETECTOR
+            && let Some(hold) = snapshot.strip_prefix(DEVICE_STATE_AVAILABILITY_SNAPSHOT_PREFIX)
+        {
+            return crate::policy_host::AvailabilityWithdrawal {
+                device_hold: DeviceHold::ALL
+                    .iter()
+                    .copied()
+                    .find(|known| known.as_str() == hold),
+                ..withdrawal(AvailabilitySource::DeviceState)
+            };
+        }
+        withdrawal(AvailabilitySource::OtherPublisher)
+    }
+
     /// Workflow #317 sc2: republishes the configured seed of `session.instance.available`
     /// (`available`, with the seed's own detector, snapshot id and digest) as a new observation
     /// at the host clock, through [`Self::publish_fact`].
