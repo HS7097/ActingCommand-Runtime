@@ -60,7 +60,7 @@ fn proposal_a_b_c_pipeline_requires_reports_and_authoritative_approvals() {
     });
     assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
     record_target_approval(
-        &mut client,
+        &host,
         "approval:proposal-plan-a",
         preview_a.approval_target().expect("plan target"),
     );
@@ -69,7 +69,7 @@ fn proposal_a_b_c_pipeline_requires_reports_and_authoritative_approvals() {
     });
     assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
     record_target_approval(
-        &mut client,
+        &host,
         "approval:proposal-template-a",
         ApprovalTarget::Catalog {
             catalog_hash: base.catalog_hash().to_owned(),
@@ -201,7 +201,7 @@ fn proposal_a_b_c_pipeline_requires_reports_and_authoritative_approvals() {
     });
     assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
     record_target_approval(
-        &mut client,
+        &host,
         "approval:proposal-plan-b",
         preview_b.approval_target().expect("class B plan target"),
     );

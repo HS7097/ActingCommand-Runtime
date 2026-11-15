@@ -1389,10 +1389,9 @@ impl HostShared {
     /// (`lease_cooldown`) is prepared once more after the first pass, once that cooldown ended;
     /// every takeover cooldown ends at the same deadline (the scheduler's start plus
     /// `takeover_cooldown_ms`), which bounds the whole wait. A second refusal is recorded like
-    /// the first and is a failed self-check (`lease_cooldown`).
-    /// INST-1 (Workflow #390): an install start settles the self-checks of every prepared
-    /// instance once all are prepared (`settle_install_selfchecks`); one unreachable device
-    /// leaves only its instance unavailable, and only a start that reached no device ends.
+    /// the first and is a failed self-check (`lease_cooldown`). One unreachable device leaves only
+    /// its instance unavailable (Workflow #434 LAB-6S4a: the held start's verdict over every
+    /// prepared instance, INST-1, went with the held start).
     pub(super) fn prepare_physical_instances_on_start(&self) -> RuntimeHostResult<()> {
         let instances = lock(
             &self.registered_instances,
@@ -1403,7 +1402,6 @@ impl HostShared {
         .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
         .collect::<Vec<_>>();
         let mut cooling = Vec::new();
-        let mut checks = Vec::new();
         for (instance_alias, instance_id) in instances {
             self.check_install_preparation()?;
             self.withhold_policy_instance_availability(instance_id)?;
@@ -1417,22 +1415,19 @@ impl HostShared {
             }) {
                 continue;
             }
-            match self.prepare_physical_instance_on_start(&instance_alias, instance_id)? {
-                (_, Some(cooldown_until)) => {
-                    cooling.push((instance_alias, instance_id, cooldown_until));
-                }
-                (check, None) => checks.push((instance_id, check)),
+            if let (_, Some(cooldown_until)) =
+                self.prepare_physical_instance_on_start(&instance_alias, instance_id)?
+            {
+                cooling.push((instance_alias, instance_id, cooldown_until));
             }
         }
         for (instance_alias, instance_id, cooldown_until) in cooling {
             let wait_ms = cooldown_until.saturating_sub(self.monotonic_ms()?);
             thread::sleep(Duration::from_millis(wait_ms));
             self.check_install_preparation()?;
-            let (check, _) =
-                self.prepare_physical_instance_on_start(&instance_alias, instance_id)?;
-            checks.push((instance_id, check));
+            self.prepare_physical_instance_on_start(&instance_alias, instance_id)?;
         }
-        self.settle_install_selfchecks(&checks)
+        Ok(())
     }
 
     /// One start preparation of `instance_id` under its admission guard. Returns its self-check
@@ -1860,7 +1855,8 @@ impl HostShared {
                         instance_alias,
                         self.mark_resources_in_use()?,
                         frame_store.memory_budget(),
-                        self.install_preparation_deadline()?,
+                        // Workflow #434 LAB-6S4a: only a held start's release bounded the opens.
+                        None,
                     )),
                 }
             }

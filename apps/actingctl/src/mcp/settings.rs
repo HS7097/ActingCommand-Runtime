@@ -6,7 +6,7 @@
 //! on unchanged. Until U-3 the tool is in the observer tier, which is always on: changing a
 //! setting is not tiered, every change is recorded (model §5.6, Alice: 「只要有记录就不怕乱改」).
 
-use super::operator::{CLI, record_provenance};
+use super::operator::{CLI, write_interaction};
 use super::runtime::client_error;
 use super::tools::{
     Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument, out_of_range,
@@ -23,15 +23,12 @@ pub(super) fn config_set(context: &ToolContext<'_>, arguments: &Map<String, Valu
     let arguments = Arguments::new(arguments, &["changes"])?;
     let changes = changes(arguments.value("changes"))?;
     let connection = context.runtime.connect_fresh(CLI.0, CLI.1)?;
-    let write = record_provenance(connection, "ac_config_set", None, CLI, None)?;
+    let client = write_interaction(&connection)?;
     let configured =
-        configure::configure(&write.client, changes).map_err(|error| client_error(&error))?;
-    Ok(ToolSuccess {
-        result: Value::Object(
-            configure::configured_answer(&configured).map_err(super::packs::encode_failed)?,
-        ),
-        warnings: write.warnings,
-    })
+        configure::configure(&client, changes).map_err(|error| client_error(&error))?;
+    Ok(ToolSuccess::new(Value::Object(
+        configure::configured_answer(&configured).map_err(super::packs::encode_failed)?,
+    )))
 }
 
 /// #402 HS-2: whether the call's changes name an instance's backend key (a call whose `changes`

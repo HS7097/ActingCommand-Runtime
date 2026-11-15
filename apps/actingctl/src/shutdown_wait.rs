@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The shutdown wait of `request-shutdown --wait` and `install-transition --wait` (Workflow #382
-//! A-1, G11). Workflow #434 LAB-1b: the wait itself moved to `crates/lab-ops`
-//! (`actingcommand_lab_ops::shutdown_wait`), which serves the operation `shutdown`; this gives its
-//! failure as `ActingctlError::ShutdownWait`, as actingctl's callers and the G11 gate read it.
-//! `start`, `restart` and `install` (in `crates/lab-rescue` since LAB-3) take the crate's wait
-//! directly.
+//! Test-only: the shutdown wait of `request-shutdown --wait` (Workflow #382 A-1, G11). Workflow
+//! #434 LAB-1b: the wait itself moved to `crates/lab-ops` (`actingcommand_lab_ops::shutdown_wait`),
+//! which serves the operation `shutdown`; this gives its failure as `ActingctlError::ShutdownWait`,
+//! as the G11 gate reads it. `start`, `restart` and `install` (in `crates/lab-rescue` since LAB-3)
+//! take the crate's wait directly. Workflow #434 LAB-6S4a (0.12.63): `install-transition --wait`,
+//! the one product caller of the wait here, is gone, so only the gate mounts this module.
 
 use crate::ActingctlError;
 use actingcommand_contract::RuntimeShutdownTarget;
@@ -14,21 +14,10 @@ use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
-// Test-only: the G11 gate (`gate_382_a1`) waits with its own clock and liveness probe.
-#[cfg(test)]
+// The G11 gate (`gate_382_a1`) waits with its own clock and liveness probe.
 pub(crate) use actingcommand_lab_ops::shutdown_wait::Poller;
 
-/// [`shutdown_wait::wait_for_shutdown`], its failure as `ActingctlError::ShutdownWait`.
-pub(crate) fn wait_for_shutdown(
-    state_root: &Path,
-    target: &RuntimeShutdownTarget,
-    wait: Duration,
-) -> Result<Value, ActingctlError> {
-    shutdown_wait::wait_for_shutdown(state_root, target, wait).map_err(ActingctlError::ShutdownWait)
-}
-
 /// [`shutdown_wait::wait_with`], its failure as `ActingctlError::ShutdownWait`.
-#[cfg(test)]
 pub(crate) fn wait_with(
     state_root: &Path,
     target: &RuntimeShutdownTarget,

@@ -57,8 +57,7 @@ pub(crate) fn ui_refusal(
 }
 
 /// Whether the `ui` channel takes a request of `kind` (§2.3 steps 1 and 5): a handshake kind
-/// (`Health`, `BindChannel`) or a kind of the UI list. The identity card, which the request
-/// table still files with the handshake, is no kind of the list: `ui` refuses it.
+/// (`Health`, `BindChannel`) or a kind of the UI list.
 pub(crate) const fn ui_takes_kind(kind: RuntimeOperationKind) -> bool {
     matches!(
         kind,
@@ -151,7 +150,6 @@ pub(crate) const fn kind_location(kind: RuntimeOperationKind) -> &'static str {
     match kind {
         Kind::Health => "runtime_health",
         Kind::RequestShutdown => "request_runtime_shutdown",
-        Kind::InstallTransition => "install_transition",
         Kind::Status => "runtime_status",
         Kind::ProjectInterface => "runtime_project_interface",
         Kind::ProjectPolicyInputIdentity => "project_policy_input_identity",
@@ -200,8 +198,6 @@ pub(crate) const fn kind_location(kind: RuntimeOperationKind) -> &'static str {
         Kind::RecordDebugEvent => "record_runtime_debug_event",
         Kind::ReleaseLabPin => "release_lab_pin",
         Kind::RecordClientAction => "record_client_action",
-        Kind::DeclareGovernanceIdentity => "declare_governance_identity",
-        Kind::RecordApprovalDecision => "record_approval_decision",
         Kind::StartAgentSession => "start_agent_session",
         Kind::ResumeAgentSession => "resume_agent_session",
         Kind::AgentSessionStatus => "agent_session_status",
@@ -215,8 +211,6 @@ pub(crate) const fn kind_location(kind: RuntimeOperationKind) -> &'static str {
         Kind::ResourceTargetView => "resource_target_view",
         Kind::ConfigureSettings => "configure_settings",
         Kind::BindChannel => "bind_channel",
-        Kind::UpgradeState => "upgrade_state",
-        Kind::UpgradeStateStatus => "upgrade_state_status",
         Kind::LoadPack => "load_pack",
         Kind::UnloadPack => "unload_pack",
         Kind::RunInstanceTask => "run_instance_task",

@@ -51,33 +51,28 @@ fn transition_event_id(host: &RuntimeHost, event_type: EventType, catalog_hash: 
     }
 }
 
-// A person's approval decision about `generation`, through a governance connection.
+// A person's approval decision about `generation` (Workflow #434 LAB-6S4a: through the host's
+// transcription, the approval request being gone; `config.catalog` follows it the same way).
 fn decide(host: &RuntimeHost, generation: &CatalogGeneration, disposition: ApprovalDisposition) {
-    let mut client = TestClient::connect(host);
-    client.declare_governance_identity();
-    let request = client.governance_request(RuntimeOperation::RecordApprovalDecision {
-        decision: ApprovalDecisionRecord::new(
-            "approval:fixture-a",
-            disposition,
-            ApprovalTarget::Catalog {
-                catalog_hash: generation.catalog_hash().to_owned(),
-                catalog_version: generation.catalog_version(),
+    let decision = ApprovalDecisionRecord::new(
+        "approval:fixture-a",
+        disposition,
+        ApprovalTarget::Catalog {
+            catalog_hash: generation.catalog_hash().to_owned(),
+            catalog_version: generation.catalog_version(),
+        },
+        actingcommand_contract::ApprovalReasonCode::new(
+            if disposition == ApprovalDisposition::Revoked {
+                "user_revoked"
+            } else {
+                "user_confirmed"
             },
-            actingcommand_contract::ApprovalReasonCode::new(
-                if disposition == ApprovalDisposition::Revoked {
-                    "user_revoked"
-                } else {
-                    "user_confirmed"
-                },
-            )
-            .expect("approval reason"),
         )
-        .expect("approval decision"),
-    });
-    assert_eq!(
-        client.send(&request).state(),
-        RuntimeReceiptState::Completed
-    );
+        .expect("approval reason"),
+    )
+    .expect("approval decision");
+    host.transcribe_configured_approval(&decision)
+        .expect("approval recorded");
 }
 
 #[test]

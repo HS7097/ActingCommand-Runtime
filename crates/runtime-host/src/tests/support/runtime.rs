@@ -54,27 +54,9 @@ impl RuntimeClock for ManualRuntimeClock {
     }
 }
 
-const TEST_GOVERNANCE_CLIENT: &str = "runtime-host-test";
-
-fn test_governance_policy() -> GovernancePolicy {
-    GovernancePolicy {
-        allowed_clients: Some(BTreeSet::from([TEST_GOVERNANCE_CLIENT.to_owned()])),
-    }
-}
-
-fn test_governance_card() -> actingcommand_contract::GovernanceIdentityCard {
-    actingcommand_contract::GovernanceIdentityCard {
-        client: TEST_GOVERNANCE_CLIENT.to_owned(),
-        client_version: None,
-        instance: None,
-    }
-}
-
 struct TestClient {
     stream: TcpStream,
     ids: IdentifierIssuer,
-    /// One governance identity card per connection (Workflow #318 cfg4).
-    governance_declared: bool,
     /// #71 FLK-07: the fatal state of the host this client connected to ([`Self::connect`]), so
     /// a receipt it cannot read names what the Runtime under test latched; `None` for a client
     /// connected by address or state root.
@@ -108,7 +90,6 @@ impl TestClient {
         Self {
             stream,
             ids: IdentifierIssuer::new().expect("identifier issuer"),
-            governance_declared: false,
             host_fatal: None,
         }
     }
@@ -165,42 +146,6 @@ impl TestClient {
             operation,
         )
         .expect("governance runtime request")
-    }
-
-    fn declare_governance_identity(&mut self) {
-        if self.governance_declared {
-            return;
-        }
-        // Workflow #434 LAB-6S3: the governance requests (an approval, an installation transition)
-        // are not on the UI list, so the connection binds `cli`, as actingctl's does, before a
-        // (User, Ui) request binds it to `ui` from its envelope. A connection an earlier request
-        // bound keeps its channel, which is not `ui`.
-        let bind = self.request(RuntimeOperation::BindChannel {
-            channel: actingcommand_contract::RuntimeChannel::Cli,
-            via: None,
-            initiator: None,
-        });
-        let bound = self.send(&bind);
-        assert!(
-            bound.state() == RuntimeReceiptState::Completed
-                || bound.outcome().code().as_str() == "channel_binding_exists",
-            "{bound:?}"
-        );
-        assert_ne!(
-            bound.channel(),
-            Some(actingcommand_contract::RuntimeChannel::Ui),
-            "{bound:?}"
-        );
-        let request = self.governance_request(RuntimeOperation::DeclareGovernanceIdentity {
-            card: test_governance_card(),
-        });
-        let receipt = self.send(&request);
-        assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
-        assert!(matches!(
-            receipt.result(),
-            Some(RuntimeResult::GovernanceIdentityAccepted)
-        ));
-        self.governance_declared = true;
     }
 
     fn send(&mut self, request: &RuntimeRequest) -> RuntimeReceipt {

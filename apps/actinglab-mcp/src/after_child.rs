@@ -15,13 +15,13 @@
 //!   `record_action`): once the child of a call of `observe` or `do` with `capture` true answered,
 //!   whatever its `dry_run` says (the coordinator's ruling 2 of 2026-11-13: as today's server
 //!   records it), one `RecordClientAction{surface mcp, control_id the tool, kind command, value
-//!   the envelope's req_id}` on a connection of its own, after the identity card, through the
-//!   steps a write's provenance takes (`runtime::record_provenance`). Its warnings, today's three:
-//!   `client_action_without_req_id` when the envelope carries no `req_id` (recorded all the same,
-//!   without a value), the recording's own (`mcp_identity_declaration_refused`), and
-//!   `client_action_not_recorded` caused by the failure when the recording fails; the call's
-//!   answer stands, and the Lab command is never run again. A call no child answered records
-//!   nothing.
+//!   the envelope's req_id}` on a connection of its own (`runtime::record_capture_action`; until
+//!   Workflow #434 LAB-6S4a after the identity card, since LAB-6S4a, 0.12.63, without it). Its
+//!   warnings: `client_action_without_req_id` when the envelope carries no `req_id` (recorded all
+//!   the same, without a value) and `client_action_not_recorded` caused by the failure when the
+//!   recording fails (the card's refusal, `mcp_identity_declaration_refused`, went with the
+//!   card); the call's answer stands, and the Lab command is never run again. A call no child
+//!   answered records nothing.
 //! - **The Lab overflow rule** ([`overflow_rule`]; today's `finish`, `fits_as_job`,
 //!   `keep_frame_parts`, `BINDING_PARTS` and `FRAME_PARTS`): a child's success line (`exit_code`
 //!   0) with those warnings joined that does not fit this server's answer budget as sent in the
@@ -195,9 +195,9 @@ fn records_capture(row: &str, params: &Map<String, Value>) -> bool {
 /// The client action of a call of the tool `tool` with `params` after its child answered (today's
 /// `record_action`): recorded on a connection of its own to the Runtime of this server's state
 /// root, naming the call's `instance` as it gives it and carrying `req_id` as a path-safe string
-/// when there is one. Its warnings: `client_action_without_req_id` without one, the recording's
-/// own, and `client_action_not_recorded` caused by the failure (an unlocated state root, the
-/// client's failure, or `client_action_invalid`) when it was not recorded.
+/// when there is one. Its warnings: `client_action_without_req_id` without one, and
+/// `client_action_not_recorded` caused by the failure (an unlocated state root, the client's
+/// failure, or `client_action_invalid`) when it was not recorded.
 fn client_action(tool: &str, params: &Map<String, Value>, req_id: Option<&str>) -> Vec<Value> {
     let mut warnings = Vec::new();
     if req_id.is_none() {
@@ -208,14 +208,13 @@ fn client_action(tool: &str, params: &Map<String, Value>, req_id: Option<&str>) 
     let value = req_id.map(|id| ClientActionValue::PathSafeString(id.to_owned()));
     let instance = params.get(INSTANCE).and_then(Value::as_str);
     let recorded = runtime::place().state_root.and_then(|state_root| {
-        runtime::record_provenance(&state_root, tool, instance, value)
+        runtime::record_capture_action(&state_root, tool, instance, value)
             .map_err(|failed| failed.outcome())
     });
-    match recorded {
-        Ok(write) => warnings.extend(write.warnings),
-        Err(cause) => warnings.push(cli_line::warning(
+    if let Err(cause) = recorded {
+        warnings.push(cli_line::warning(
             &Outcome::new(ActingctlCode::ClientActionNotRecorded).caused_by(cause),
-        )),
+        ));
     }
     warnings
 }
