@@ -1281,7 +1281,10 @@
         {"name": "x", "form": "positional", "type": "integer", "required": true},
         {"name": "y", "form": "positional", "type": "integer", "required": true},
         {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-1: the tap is a step of the instance's recording, a box of one pixel at the point, with the screen before it and the screen after it; no dry run"},
-        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-1, with record: 0 to 60000, default 800: the wait between the press and the screen after it"}
+        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-1, with record: 0 to 60000, default 100 (#463 S1-2): the wait between the press and the first capture of the screen after it"},
+        {"name": "interval_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-2, with record: 20 to 1000, default 100: from the start of one capture of the screen after the press to the start of the next (at once after a slower capture)"},
+        {"name": "still_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-2, with record: 0 to 5000, default 300: the screen is still when it has not changed for still_ms, however long a capture takes: the newest capture and the unbroken run of captures before it within the Runtime's frame-change bound of the newest hold an earlier one, and the newest started at least still_ms after the run's first; 0: the first capture is the screen after it, untested"},
+        {"name": "still_max_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-2, with record: 0 to 60000, default 5000, at most 120 times interval_ms: no capture starts later than this after the first; at the bound the last capture is the screen after it and record.warnings holds after_not_still"}
       ],
       "help": "Taps one point of an instance's screen through the Runtime; with record, the press is a step of the instance's recording, with the screens before and after.",
       "output": "as today's command; with record, its record: the step, the screen before and the screen after",
@@ -1293,7 +1296,7 @@
       "source": ["actinglab tap"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it"
     },
     {
       "name": "swipe",
@@ -1306,7 +1309,10 @@
         {"name": "y2", "form": "positional", "type": "integer", "required": true},
         {"name": "duration_ms", "form": "positional", "type": "integer", "required": true},
         {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-1: the swipe is a step of the instance's recording, a drag between boxes of one pixel at its two points, with the screen before it and the screen after it; no dry run"},
-        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-1, with record: 0 to 60000, default 800: the wait between the press and the screen after it"}
+        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-1, with record: 0 to 60000, default 100 (#463 S1-2): the wait between the press and the first capture of the screen after it"},
+        {"name": "interval_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-2, with record: 20 to 1000, default 100: from the start of one capture of the screen after the press to the start of the next (at once after a slower capture)"},
+        {"name": "still_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-2, with record: 0 to 5000, default 300: the screen is still when it has not changed for still_ms, however long a capture takes: the newest capture and the unbroken run of captures before it within the Runtime's frame-change bound of the newest hold an earlier one, and the newest started at least still_ms after the run's first; 0: the first capture is the screen after it, untested"},
+        {"name": "still_max_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-2, with record: 0 to 60000, default 5000, at most 120 times interval_ms: no capture starts later than this after the first; at the bound the last capture is the screen after it and record.warnings holds after_not_still"}
       ],
       "help": "Swipes between two points of an instance's screen through the Runtime; with record, a step of the instance's recording with the screens before and after.",
       "output": "as today's command; with record, its record: the step, the screen before and the screen after",
@@ -1318,7 +1324,7 @@
       "source": ["actinglab swipe"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it"
     },
     {
       "name": "long-tap",
@@ -1329,7 +1335,10 @@
         {"name": "y", "form": "positional", "type": "integer", "required": true},
         {"name": "duration_ms", "form": "positional", "type": "integer", "required": true},
         {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-1: the long press is a step of the instance's recording, a box of one pixel at the point held for duration_ms (1 to 60000), with the screen before it and the screen after it; no dry run"},
-        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-1, with record: 0 to 60000, default 800: the wait between the press and the screen after it"}
+        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-1, with record: 0 to 60000, default 100 (#463 S1-2): the wait between the press and the first capture of the screen after it"},
+        {"name": "interval_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-2, with record: 20 to 1000, default 100: from the start of one capture of the screen after the press to the start of the next (at once after a slower capture)"},
+        {"name": "still_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-2, with record: 0 to 5000, default 300: the screen is still when it has not changed for still_ms, however long a capture takes: the newest capture and the unbroken run of captures before it within the Runtime's frame-change bound of the newest hold an earlier one, and the newest started at least still_ms after the run's first; 0: the first capture is the screen after it, untested"},
+        {"name": "still_max_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-2, with record: 0 to 60000, default 5000, at most 120 times interval_ms: no capture starts later than this after the first; at the bound the last capture is the screen after it and record.warnings holds after_not_still"}
       ],
       "help": "Presses and holds one point of an instance's screen through the Runtime; with record, a step of the instance's recording with the screens before and after.",
       "output": "as today's command; with record, its record: the step, the screen before and the screen after",
@@ -1341,7 +1350,7 @@
       "source": ["actinglab long-tap"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it"
     },
     {
       "name": "key",

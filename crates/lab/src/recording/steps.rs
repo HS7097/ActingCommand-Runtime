@@ -471,7 +471,8 @@ pub(crate) struct Arrival {
     pub(crate) closed_step: Option<u32>,
     pub(crate) frame: RecordedFrame,
     /// #463 S1-1: the step of a press recorded by the command that makes it whose after frame this
-    /// frame became ([`note_after_frame`]).
+    /// frame became; #463 S1-2: or, for a capture of the press's after loop, whose after frame the
+    /// loop names when it ends ([`name_after_frame`]).
     pub(crate) pressed_step: Option<u32>,
 }
 
@@ -496,23 +497,32 @@ pub(crate) fn live_primary(step: &RecordingStep) -> Option<&RecordedFrame> {
 /// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): a frame that opens a step
 /// is the after frame of the press of the step before it when that press was recorded by the
 /// command that makes it (its execution names its `before_frame`), was performed, and has no after
-/// frame yet: the first frame that arrived after it. Returns that step. A press of `do --capture
-/// --record` names no `before_frame` and is left as it was.
-fn note_after_frame(recording: &mut LabRecording, frame_id: &str) -> Option<u32> {
+/// frame yet. Returns that step. A press of `do --capture --record` names no `before_frame` and is
+/// left as it was. #463 S1-2: only the step; [`name_after_frame`] writes the frame.
+fn awaiting_after_frame(recording: &LabRecording) -> Option<u32> {
     let index = last_effective(recording)?;
-    let click = recording
-        .steps
-        .iter_mut()
-        .find(|step| step.index == index)?
+    let click = step_ref(recording, index)?.click.as_ref()?;
+    let execution = click.execution.as_ref()?;
+    (click.executed() && execution.before_frame.is_some() && execution.after_frame.is_none())
+        .then_some(index)
+}
+
+/// #463 S1-2 (`contracts/lab-recording.md`, "Recording while playing"): the one place a press's
+/// `after_frame` is written: the press of step `index` names `frame_id`, the last capture of its
+/// own after loop when the loop ends (`record_after_frame`), or, when the loop stored nothing, the
+/// first frame that opens a step after it ([`arrive`]).
+pub(crate) fn name_after_frame(
+    recording: &mut LabRecording,
+    index: u32,
+    frame_id: &str,
+) -> LabResult<()> {
+    let execution = step_mut(recording, index)?
         .click
-        .as_mut()?;
-    let performed = click.executed();
-    let execution = click.execution.as_mut()?;
-    if !performed || execution.before_frame.is_none() || execution.after_frame.is_some() {
-        return None;
-    }
+        .as_mut()
+        .and_then(|click| click.execution.as_mut())
+        .ok_or_else(|| step_not_found(index))?;
     execution.after_frame = Some(frame_id.to_owned());
-    Some(index)
+    Ok(())
 }
 
 /// #463 S1-1: how the frame after the press of step `index` was taken, on its execution.
@@ -693,6 +703,30 @@ pub(crate) fn arrive(
     meta: &FrameMeta,
     label: &str,
 ) -> LabResult<Arrival> {
+    arrive_naming(session, loaded, mode, meta, label, true)
+}
+
+/// #463 S1-2 (`contracts/lab-recording.md`, "Recording while playing"): a capture of the after loop
+/// of a press recorded by the command that makes it arrives as a device frame does, without naming
+/// itself the press's `after_frame`: the loop names its last capture when it ends. Its `Arrival`
+/// still answers the press it follows (`pressed_step`).
+pub(crate) fn arrive_after_press(
+    session: &mut Session,
+    loaded: LoadedFrame,
+    meta: &FrameMeta,
+    label: &str,
+) -> LabResult<Arrival> {
+    arrive_naming(session, loaded, ArrivalMode::Device, meta, label, false)
+}
+
+fn arrive_naming(
+    session: &mut Session,
+    loaded: LoadedFrame,
+    mode: ArrivalMode,
+    meta: &FrameMeta,
+    label: &str,
+    names_after_frame: bool,
+) -> LabResult<Arrival> {
     let plan = plan_arrival(&session.recording, mode)?;
     let entry = admit_frame(session, loaded, "primary", meta, label)?;
     match plan {
@@ -716,7 +750,10 @@ pub(crate) fn arrive(
                 step.closed = true;
                 step.closed_by = Some(by.to_string());
             }
-            let pressed_step = note_after_frame(&mut session.recording, &entry.frame_id);
+            let pressed_step = awaiting_after_frame(&session.recording);
+            if let Some(pressed) = pressed_step.filter(|_| names_after_frame) {
+                name_after_frame(&mut session.recording, pressed, &entry.frame_id)?;
+            }
             let index = next_step_index(&session.recording)?;
             session
                 .recording
@@ -4229,8 +4266,8 @@ fn gesture_execution_unsupported(index: u32, gesture: ClickGesture) -> LabError 
 
 /// Records the Runtime outcome of a planned click on its step. #463 S1-1: with `names_frames` (a
 /// press recorded by the command that makes it, `record_press`), the execution names the step's
-/// live primary frame as its `before_frame`, and the first frame that arrives after it becomes its
-/// `after_frame` ([`note_after_frame`]); `do --capture --record` names none. Fix round 3: beside
+/// live primary frame as its `before_frame`, and the frame after it becomes its `after_frame`
+/// ([`name_after_frame`]); `do --capture --record` names none. Fix round 3: beside
 /// `before_frame`, `sent_on_unstored_capture` when such a press was sent on a capture its command
 /// did not store (`record_press` hands it; every other caller passes `false`).
 pub(crate) fn commit_click(

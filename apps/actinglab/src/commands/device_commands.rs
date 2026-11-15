@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Workflow #434 LAB-5B3: the flags `touch-probe` reads: `--touch-backend`, only to refuse it
 /// (actingd owns the backend; actinglab's parser takes the flag globally). Workflow #434 LAB-5B4:
@@ -544,8 +544,16 @@ pub(crate) enum DirectTouchCommand {
 
 /// Workflow #434 LAB-5B2: the flags `tap`, `swipe` and `long-tap` take beside their positional
 /// arguments: #463 S1-1, `--record` (the press is a step of the instance's recording) and its wait
-/// before the screen after the press, `--after-ms <ms>` (with `--record` only, `record_flag_gate`).
-pub(crate) const DIRECT_TOUCH_FLAGS: [&str; 2] = ["--record", "--after-ms"];
+/// before the screen after the press, `--after-ms <ms>`; #463 S1-2, how the screen after it is
+/// captured until it is still, `--interval-ms <ms>`, `--still-ms <ms>` and `--still-max-ms <ms>`
+/// (the four with `--record` only, `record_flag_gate`).
+pub(crate) const DIRECT_TOUCH_FLAGS: [&str; 5] = [
+    "--record",
+    "--after-ms",
+    "--interval-ms",
+    "--still-ms",
+    "--still-max-ms",
+];
 
 /// #463 S1-1: of [`DIRECT_TOUCH_FLAGS`], those that take no value, as the command line of `tap`,
 /// `swipe` and `long-tap` is parsed (`FlagArgs::parse_switches`).
@@ -651,7 +659,7 @@ impl DirectTouchCommand {
 
     /// #463 S1-1: the press `--record` records for this command: a tap or a long press by its
     /// point, a swipe by its two points and duration as `do --capture --record --swipe` plans it;
-    /// the frame after it `after_ms` after the press (800 without it).
+    /// the first capture after it `after_ms` after the press (100 without it).
     fn record_press_request(&self, after_ms: Option<u64>) -> RecordPressRequest {
         let (click, point_press) = match *self {
             Self::Tap { x, y } => (
@@ -799,11 +807,13 @@ fn direct_touch_answer(
 /// input sent through the Runtime's input proxy with that frame's reference (built as `do
 /// --capture`'s online scene builds one), once more on a new capture when the Runtime no longer
 /// held that frame (fix round 3), its outcome recorded, and after a performed press the wait
-/// (`--after-ms`, 800 without it) and the frame after it, both captures as `capture --record` takes
+/// (`--after-ms`, 100 without it) and the frame after it, both captures as `capture --record` takes
 /// its frame. The answer is the command's own with `record`; a press that was not performed
 /// answers as the command does without `--record` and records no press. A failure after a
 /// performed and recorded press (the input lease's release, the receipt's encoding) is answered
-/// after the frame after it, with `record` and `input_outcome` in its details.
+/// after the frame after it, with `record` and `input_outcome` in its details. #463 S1-2: after the
+/// wait the screen is captured until it is still (`--interval-ms`, `--still-ms`, `--still-max-ms`,
+/// `record_after_frame`), every capture kept; the last is the frame after.
 fn run_recorded_touch(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -814,6 +824,12 @@ fn run_recorded_touch(
         .optional("--after-ms")
         .map(|value| parse_after_ms(&value))
         .transpose()?;
+    let mut request = command.record_press_request(after_ms);
+    request.after.interval_ms = after_capture_ms(flags, "--interval-ms", "interval_ms")?;
+    request.after.still_ms = after_capture_ms(flags, "--still-ms", "still_ms")?;
+    if let Some(bound) = after_capture_ms(flags, "--still-max-ms", "still_max_ms")? {
+        request.after.still_max_ms = bound;
+    }
     let instance = resolve_instance_id(global, config)?;
     let lock = super::session_record::record_flag_begin(
         global,
@@ -829,6 +845,7 @@ fn run_recorded_touch(
     );
     let mut frames = PressFrames {
         endpoint: &endpoint,
+        origin: Instant::now(),
     };
     let mut sent = None;
     let mut press =
@@ -838,12 +855,7 @@ fn run_recorded_touch(
             sent = Some(pressed);
             Ok(commit)
         };
-    let recorded = record_press(
-        &lock,
-        &command.record_press_request(after_ms),
-        &mut press,
-        &mut frames,
-    );
+    let recorded = record_press(&lock, &request, &mut press, &mut frames);
     // Not sent: the recording's refusal, or the input's own error, as they are.
     let Some(SentPress {
         input_outcome,
@@ -893,6 +905,23 @@ fn parse_after_ms(value: &str) -> CliOutcome<u64> {
         ))
         .with_details(json!({"argument": "after_ms", "reason": "range", "after_ms": value}))
     })
+}
+
+/// #463 S1-2: `flag` (`--interval-ms`, `--still-ms` or `--still-max-ms`) when it is given, a whole
+/// number of milliseconds (the recording checks its range and the bound of the captures it allows);
+/// anything else is `validation_failed` with `details{argument, reason: "range"}`.
+fn after_capture_ms(flags: &FlagArgs, flag: &str, argument: &str) -> CliOutcome<Option<u64>> {
+    flags
+        .optional(flag)
+        .map(|value| {
+            value.parse::<u64>().map_err(|_| {
+                CliError::usage(format!(
+                    "{flag} takes a whole number of milliseconds, got {value}"
+                ))
+                .with_details(json!({"argument": argument, "reason": "range", "value": value}))
+            })
+        })
+        .transpose()
 }
 
 /// `error` with the input outcome of the press it followed as the member `input_outcome` of its
@@ -1079,14 +1108,21 @@ fn encoded<T: serde::Serialize>(value: &T, failures: &mut Vec<String>) -> Option
 /// `long-tap --record`: each frame is taken as `capture --record` takes it (the `ObserveReadonly`
 /// read), on the Runtime's capture endpoint of the command's instance (fix round 3: no local
 /// device configuration); fix round 2: with the reference of the frame the Runtime committed for
-/// its observation, which the press is sent with.
+/// its observation, which the press is sent with. #463 S1-2: the clock's readings are the time
+/// since `origin`, the command's start of the recording's work (a monotonic clock, as `wait` sleeps
+/// on it).
 struct PressFrames<'a> {
     endpoint: &'a runtime_capture_backend::RuntimeCaptureEndpoint,
+    origin: Instant,
 }
 
 impl RecordFramePorts for PressFrames<'_> {
     fn wait(&mut self, duration: Duration) {
         std::thread::sleep(duration);
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        self.origin.elapsed()
     }
 
     fn capture(&mut self) -> CliOutcome<CapturedFrame> {

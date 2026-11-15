@@ -64,6 +64,11 @@
 // - `s11_a_second_refusal_is_answered_as_it_is_and_records_no_press`: the second press is refused
 //   too, as the frame being unavailable or otherwise: capture, press, capture, press and nothing
 //   more; the error is the fake's own, unmarked; no click recorded; both captures stay in step 1.
+// #463 S1-2 (register §1.403) adapts these tests: their presses ask for one capture 800 ms after
+// the press with no stillness test (`--after-ms 800 --still-ms 0`, [`one_capture_after`]), since
+// the default now captures until the screen is still, and `after_capture` names `interval_ms` and
+// `still_ms`; the fake's clock moves only by its waits. The train of stage one gives fix round 3's
+// two tests the same request.
 // Frames are synthetic 1280x720 (a square of one colour at the top left on gray); no Runtime, no
 // device; the tests read no clock and never sleep.
 
@@ -217,19 +222,25 @@ enum Shot {
 /// The fake Runtime's capture and the caller's clock: the shots its captures take, in order, the
 /// bench's count of the captures that took a frame (each one's reference is [`reference`] of its
 /// number), and what it was asked and answered, in the log it shares with the press and in
-/// `captured`.
+/// `captured`. #463 S1-2: the clock (`now`) moves only by the waits; a capture takes no time.
 struct FakeDevice<'a> {
     shots: VecDeque<Shot>,
     count: &'a Cell<u32>,
     log: &'a RefCell<Vec<String>>,
     captured: &'a RefCell<Vec<Option<InputFrameReference>>>,
+    now: Duration,
 }
 
 impl RecordFramePorts for FakeDevice<'_> {
     fn wait(&mut self, duration: Duration) {
+        self.now += duration;
         self.log
             .borrow_mut()
             .push(format!("wait {}", duration.as_millis()));
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        self.now
     }
 
     fn capture(&mut self) -> LabResult<CapturedFrame> {
@@ -370,6 +381,7 @@ impl Bench {
                 count: &self.captures,
                 log: &log,
                 captured: &captured,
+                now: Duration::ZERO,
             };
             let mut press = |plan: &ClickPlan,
                              frame: InputFrameReference|
@@ -470,6 +482,16 @@ fn files_under(dir: &Path) -> Vec<(String, Vec<u8>)> {
     files
 }
 
+// #463 S1-2: the frame after a press as these tests take it, one capture 800 ms after the press
+// with no stillness test (`--after-ms 800 --still-ms 0`); the captures that repeat until the screen
+// is still are S1-2's gate.
+fn one_capture_after() -> AfterCapture {
+    AfterCapture {
+        still_ms: Some(0),
+        ..AfterCapture::for_press(Some(800))
+    }
+}
+
 // `tap <x> <y> --record`, the frame after it 800 ms after the press.
 fn tap_request(x: i32, y: i32) -> RecordPressRequest {
     RecordPressRequest {
@@ -477,7 +499,7 @@ fn tap_request(x: i32, y: i32) -> RecordPressRequest {
         point_press: Some(PointPress::Tap {
             point: RecordPoint { x, y },
         }),
-        after: AfterCapture::for_press(None),
+        after: one_capture_after(),
     }
 }
 
@@ -489,7 +511,7 @@ fn long_press_request(x: i32, y: i32, duration_ms: u64) -> RecordPressRequest {
             point: RecordPoint { x, y },
             duration_ms,
         }),
-        after: AfterCapture::for_press(None),
+        after: one_capture_after(),
     }
 }
 
@@ -508,7 +530,7 @@ fn swipe_request(from: (i32, i32), to: (i32, i32), duration_ms: u64) -> RecordPr
             ..PlanClickRequest::default()
         },
         point_press: None,
-        after: AfterCapture::for_press(None),
+        after: one_capture_after(),
     }
 }
 
@@ -523,11 +545,14 @@ fn performed(pressed: Pressed) -> (RecordPressOutcome, Vec<String>, Vec<InputAct
     (outcome, pressed.log, pressed.inputs)
 }
 
-// The frame after a press as S1-1 takes it: the wait, one capture, no stillness test.
+// The frame after a press as these tests take it: the wait, one capture, no stillness test
+// (#463 S1-2: `interval_ms` and `still_max_ms` the defaults, `still_ms` 0, `still` null).
 fn after_capture(after_ms: u64) -> Value {
     json!({
         "after_ms": after_ms,
-        "still_max_ms": 0,
+        "interval_ms": 100,
+        "still_ms": 0,
+        "still_max_ms": 5000,
         "still": null,
         "waited_ms": after_ms,
         "captures": 1,
@@ -598,7 +623,9 @@ fn s11_a_tap_on_a_new_recording_records_the_screens_before_and_after() {
             "path": next["frames"][0]["path"],
             "sha256": next["frames"][0]["sha256"],
             "after_ms": 800,
-            "still_max_ms": 0,
+            "interval_ms": 100,
+            "still_ms": 0,
+            "still_max_ms": 5000,
             "still": null,
             "waited_ms": 800,
             "captures": 1,

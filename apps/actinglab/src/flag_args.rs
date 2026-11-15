@@ -259,7 +259,8 @@ impl FlagArgs {
     /// Refuses every flag outside `accepted`, the command's flag list (Workflow #434 LAB-5B2: the
     /// one constant its row is held equal to). `key` and `text` take positional arguments only (an
     /// empty list); #463 S1-1: `tap`, `swipe` and `long-tap` take `--record` and `--after-ms`
-    /// beside theirs. The refusal names what the command takes.
+    /// beside theirs, and (#463 S1-2) `--interval-ms`, `--still-ms` and `--still-max-ms`. The
+    /// refusal names what the command takes.
     pub(super) fn reject_flags(&self, command: &str, accepted: &[&str]) -> CliOutcome<()> {
         let names = self
             .flags

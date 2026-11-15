@@ -71,6 +71,9 @@ mod gate_463_r4;
 // --record`), with the screen before it and the screen after it.
 #[cfg(test)]
 mod gate_463_s11;
+// #463 S1-2: a press is recorded with a fresh screen before it and a still screen after it.
+#[cfg(test)]
+mod gate_463_s12;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

@@ -3434,3 +3434,24 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::s11_tap_record_answers_a_denied_input_as_tap_and_keeps_the_capture_before_it",
 ]
 incident = ["#463 S1-1"]
+
+# #463 S1-2 (0.12.64; register §1.403; briefs rd-1115/brief-463-s12-still-after.md, rd-1115/brief-463-s12-fix2.md, which replaces its rulings where they differ, and rd-1115/brief-463-s12-fix3.md, fix round 3 after the independent review; contracts/lab-recording.md, "Recording while playing", "The screen after"): after a recorded press the screen is captured until it is still and every capture is kept, stillness the Runtime's one frame-change measure; still (fix round 3) when the screen has not changed for still_ms, the newest capture and the unbroken run before it within the bound of the newest holding an earlier one, the newest starting at least still_ms after the run's first. record_press under the recording lock with a fake Runtime (its input answer, its captures, the caller's clock moving only by its waits and the time a capture is scripted to take), on synthetic 160x90 screens of one colour: an animation that settles, captures every 100 ms: four unchanged needed, six captures, all frames of step 2 in order, all but the last superseded, the last step 1's after_frame, after_capture {100, 100, 300, 5000, true, 600, 6, 5}, no warning (1); captures of 400 ms each: two unchanged suffice, three captures, waited_ms 900 (2); a change in the middle of a run: the run starts again, eight captures (3); screens that never settle, for (still_max_ms, interval_ms) (0, 100), (250, 100), (300, 100), (1000, 50), (5000, 100) and (12000, 100): exactly 1 + still_max_ms / interval_ms captures (121 at the last), every one kept, the last the frame after, still false, record.warnings ["after_not_still"] (4); a clock that does not advance: the loop ends by count at 11 captures, still false (5); a capture of 250 ms: the next starts at once, five captures, waited_ms 650 (6); the same screen four times: four entries of one sha256 and path, two files in the frame store (7); two taps: step 2 holds the first tap's five loop captures, then the frame the second tap was sent on; step 1's after_frame stays the loop's last (8); still_ms 0: one capture, still null (9); a capture that fails midway: the two taken kept, the last the after frame, after_capture unfinished, the capture's own device_error with after {after_ms, taken: true, captures: 2} (10); interval_ms, still_ms and still_max_ms each out of its range: validation_failed range with min and max, nothing captured, pressed or written (11); a bound of more than 120 intervals: validation_failed still_max_ms range, max 120 x interval_ms, interval_ms, nothing captured, pressed or written (12); actinglab: tap, swipe and long-tap with --interval-ms, --still-ms or --still-max-ms and without --record: validation_failed record_only, no Runtime state root made (13); the three with --record and a value of the three flags that is no whole number: validation_failed range, no Runtime state root made (14). It adapts the tests of #463 S1-1 above that take the frame after a press (their requests --after-ms 800 --still-ms 0, after_capture with interval_ms and still_ms; the fake's clock) and, in runtime_input_proxy, tap --record --after-ms 0 gains --still-ms 0
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s12::s12_an_animation_that_settles_keeps_every_capture_and_the_last_is_the_frame_after",
+    "actingcommand-lab::lib::gate_463_s12::s12_captures_of_400_ms_are_still_after_two_unchanged",
+    "actingcommand-lab::lib::gate_463_s12::s12_a_change_in_the_middle_of_a_run_starts_it_again",
+    "actingcommand-lab::lib::gate_463_s12::s12_a_screen_that_never_settles_is_taken_to_the_bound_and_warned",
+    "actingcommand-lab::lib::gate_463_s12::s12_a_clock_that_does_not_advance_ends_the_loop_by_count",
+    "actingcommand-lab::lib::gate_463_s12::s12_a_capture_slower_than_the_interval_is_followed_at_once",
+    "actingcommand-lab::lib::gate_463_s12::s12_identical_captures_are_one_file_and_several_entries",
+    "actingcommand-lab::lib::gate_463_s12::s12_two_presses_keep_the_after_loop_then_the_press_frame_in_order",
+    "actingcommand-lab::lib::gate_463_s12::s12_still_ms_0_takes_one_capture_untested",
+    "actingcommand-lab::lib::gate_463_s12::s12_a_capture_that_fails_midway_keeps_what_was_taken",
+    "actingcommand-lab::lib::gate_463_s12::s12_each_parameter_out_of_its_range_is_refused_before_anything",
+    "actingcommand-lab::lib::gate_463_s12::s12_more_than_120_intervals_in_the_bound_are_refused_before_anything",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s12::s12_the_flags_of_the_captures_after_a_press_need_record",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s12::s12_the_flags_of_the_captures_after_a_press_take_whole_numbers",
+]
+incident = ["#463 S1-2"]

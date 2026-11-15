@@ -666,18 +666,28 @@ const RECORD_ONLY_FLAGS: [&str; 5] = [
     "--next-frame-out",
 ];
 
-/// #463 S1-1: the flag `tap`, `swipe` and `long-tap` take with `--record` only: the wait before the
-/// screen after the press.
-const PRESS_RECORD_ONLY_FLAGS: [&str; 1] = ["--after-ms"];
+/// #463 S1-1: the flags `tap`, `swipe` and `long-tap` take with `--record` only: the wait before
+/// the screen after the press and (#463 S1-2) how its captures repeat until the screen is still.
+/// `--interval-ms`, which other commands take for their own, is refused only on these three
+/// ([`PRESS_COMMANDS`]).
+const PRESS_RECORD_ONLY_FLAGS: [&str; 4] = [
+    "--after-ms",
+    "--interval-ms",
+    "--still-ms",
+    "--still-max-ms",
+];
+
+/// #463 S1-2: the device commands that record a press with `--record`.
+const PRESS_COMMANDS: [&str; 3] = ["tap", "swipe", "long-tap"];
 
 /// Workflow #336: `--record` takes no value, never comes with `--state-dir`, and is accepted
 /// only on `capture`, `observe --capture`, `do --capture`, (R24) `session app` /
 /// `session instance app` with one of its four actions and (#463 S1-1) `tap`, `swipe` and
 /// `long-tap`; `observe`, `do`, `session app` and the three device commands refuse it with
 /// `--dry-run`. `--tap-rect` exists only with it, and so (#463 L1) do the flags of the one-call
-/// form, [`RECORD_ONLY_FLAGS`], and (#463 S1-1) the wait of a recorded press,
-/// [`PRESS_RECORD_ONLY_FLAGS`]. FlagArgs accepts unknown flags, so without this gate they would be
-/// silently ignored.
+/// form, [`RECORD_ONLY_FLAGS`], and (#463 S1-1) the wait of a recorded press and (#463 S1-2) its
+/// captures after it, [`PRESS_RECORD_ONLY_FLAGS`]. FlagArgs accepts unknown flags, so without this
+/// gate they would be silently ignored.
 fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
     let args = &invocation.args;
     if !args.iter().any(|arg| arg == "--record") {
@@ -693,8 +703,13 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
                 "{flag} is accepted only with do --capture --record"
             )));
         }
+        let press = matches!(
+            invocation.command.as_slice(),
+            [cmd] if PRESS_COMMANDS.contains(&cmd.as_str())
+        );
         if let Some(flag) = PRESS_RECORD_ONLY_FLAGS
             .iter()
+            .filter(|flag| press || **flag != "--interval-ms")
             .find(|flag| args.iter().any(|arg| arg == **flag))
         {
             return Err(CliError::usage(format!(
