@@ -123,6 +123,22 @@ this repository builds on the same contract crate. A run's status is the client'
 answered by no Runtime yet ([global-ledger-query.md](global-ledger-query.md)), so no interface
 revision moves.
 
+Workflow #463 S3-3 (since 0.12.63): the terminal also names the business end the run finished on
+as `outcome_key`, the `outcome_key` of the package's `scheduling_outcome` mapping whose terminal
+page the run completed on: its target page, one of its ending pages
+([linear-steps.md](linear-steps.md), "Endings"), a select's `on_empty` page, or any other terminal
+page one of its mappings names (a page graph's terminal pages included). The host writes that key on the terminal fact
+(`scheduling_disposition`, beside the effect evidence the mapping was chosen by), and the fold
+takes the key from that fact, in Full and Brief alike, with no other read; the effect evidence is
+not projected. It is absent when the terminal carries no disposition: a failed or cancelled run,
+a completed run whose package declares no mappings, and a run whose keying the host refused (that
+run is committed failed). It is never an empty text and never derived from the final page. A
+completed run is therefore not read as the business having succeeded: the key says which end it
+was. `run show` and MCP `ac_get_run` answer the status as it is, and so does the overview's
+`run`; the diagnosis's `runs` lists failed and open runs only, which carry none; the run list's
+row (`actingctl runs`, MCP `ac_runs`) builds its own members and does not carry it. As for
+`failure_values`, no interface revision moves.
+
 The run listing reads by run (Workflow #391 item 3): it first lists the runs of the
 window by their main admission (`task.requested`), their entry facts
 (`task.entry_preflight`) and their terminal (`task.completed`, `task.failed`,

@@ -505,6 +505,10 @@ pub struct ContainedTaskError {
     /// recognition short, so that recognition has no result; the observation's retry decision
     /// closes it as abandoned ([`SampleRetries::retry`]).
     recognition_abandoned: bool,
+    /// Workflow #463 U1b: a linear step's closing decision found a screen the package never
+    /// recorded, whichever code the run ends with; the runtime names the frame of the run's
+    /// `Failure` pin by this verdict, not by the code.
+    closing_unrecorded: bool,
 }
 
 impl ContainedTaskError {
@@ -523,6 +527,7 @@ impl ContainedTaskError {
             ppocr_diagnostics: Vec::new(),
             values: None,
             recognition_abandoned: false,
+            closing_unrecorded: false,
         }
     }
 
@@ -537,7 +542,22 @@ impl ContainedTaskError {
             ppocr_diagnostics: Vec::new(),
             values: None,
             recognition_abandoned: false,
+            closing_unrecorded: false,
         }
+    }
+
+    /// Workflow #463 U1b: the failure ends a run whose closing decision found a screen the
+    /// package never recorded.
+    fn with_closing_unrecorded(mut self) -> Self {
+        self.closing_unrecorded = true;
+        self
+    }
+
+    /// Workflow #463 U1b: whether a linear step's closing decision found a screen the package
+    /// never recorded and ended the run with this failure, whichever its code
+    /// ([`UnrecordedScreenEnd`]): the frame of the run's `Failure` pin is that decision's last.
+    pub fn closing_found_unrecorded(&self) -> bool {
+        self.closing_unrecorded
     }
 
     /// Workflow #386 SR-1: a failure of `code` whose outcome carries the values `values` adds to
@@ -3017,6 +3037,16 @@ pub trait ContainedTaskRuntime {
         false
     }
 
+    /// Workflow #463 U1b (`contracts/linear-steps.md`, "A screen the package never recorded"):
+    /// the code a linear step's closing decision ends the run with when it finds a screen the
+    /// package never recorded, read once at the run's start as [`Self::host_started_run`] is. The
+    /// runtime decides it (a scheduled run past its package's break-in ends with
+    /// `page_confirmation_failed`); the decision itself does not change. A runtime that keeps no
+    /// break-in answers [`UnrecordedScreenEnd::Dedicated`].
+    fn unrecorded_screen_end(&self) -> UnrecordedScreenEnd {
+        UnrecordedScreenEnd::Dedicated
+    }
+
     /// Workflow #463 U1, fix round 2 (rule 6): the runtime-clock time the run has left before the
     /// runtime would end it otherwise or find it over its budget: its own deadline, or the end of
     /// its admitted runtime budget, whichever comes first. `None` for a run with neither; a linear
@@ -3041,6 +3071,17 @@ pub trait ContainedTaskRuntime {
     fn standard_pack_table(&mut self, _path: &str) -> Option<Arc<LoadedTable>> {
         None
     }
+}
+
+/// Workflow #463 U1b: which code a linear step's closing decision ends the run with when it finds
+/// a screen the package never recorded ([`ContainedTaskRuntime::unrecorded_screen_end`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnrecordedScreenEnd {
+    /// `contained_task_linear_unrecorded_screen` (Workflow #463 U1).
+    Dedicated,
+    /// `page_confirmation_failed`, with the detail, the values and the timing that code has for
+    /// the same end.
+    PageConfirmation,
 }
 
 /// Test plan E-3 (EXEC-I3): the time since `started` on the runtime's clock
@@ -5155,6 +5196,9 @@ impl PreparedContainedTask {
                     own_task_run: entry == ContainedTaskEntry::Ordinary
                         && options.application_entry == ApplicationEntryRun::AfterInitialFrame
                         && !runtime.host_started_run(),
+                    // Workflow #463 U1b: the code an unrecorded verdict ends with, as the
+                    // runtime tells it.
+                    unrecorded_end: runtime.unrecorded_screen_end(),
                     restart_segment: false,
                 },
             );

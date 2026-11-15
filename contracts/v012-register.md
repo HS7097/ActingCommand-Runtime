@@ -27618,6 +27618,254 @@ revision or record shape is added.
 **At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
 0.12.62 shows the values its terminal outcome recorded.
 
+### 1.388 Slice #463 R4 and #464 P4 (0.12.63): a stopped recording takes an optional step after one of its steps from a frame; `record stop` keeps its earlier output, refuses an installed root and answers the adoption's skeleton (Workflow #463; the owner's rule two on board #463, that only the main path is recorded and that what a run meets later is added from that run's frame without recording again, with the owner's agreement of 11-15 that a stopped recording takes an optional step too; Workflow #464, the design `rd-1114/464-pack-build-design.md`, sections A and B and the slice row P4 with its tests, and the coordinator's ruling 5 on board #464, not the owner's words; coordinator work orders `rd-1115/brief-463-nb-common.md` and `rd-1115/brief-463-r4p4-after-stop.md`, read on main `1a962a54` (#463 R2 merged))
+
+1.388 is the number the coordinator assigned this section (the numbers between are slices
+dispatched with this one). The slice ships in 0.12.63 (release 0.12.62 is cut without it).
+
+**What it is.** R4: a `record mark` request's `optional_after {step, frame, samples, page, add,
+reuse, click, settle_ms}` (command `record mark --optional-after <k>`) inserts, on a stopped
+recording, a pop-up a run met after step k's press, after which the path goes on, as an optional
+step from its frame; `remove_inserted` (`--remove-inserted <n>`) gives it up. `record stop`
+generates it in its place and checks it as every optional step. P4: `record stop` keeps the output
+an earlier stop wrote, refuses a `--lab-dir` inside an installed root and answers
+`adoption_example`. Contract: [lab-recording.md](lab-recording.md), "Inserting an optional step
+after stop", "Writing" and "Output". Nothing of the kernel changes: an optional step is already
+what it runs.
+
+**Where, by reading.**
+- The order of the steps came from their serial numbers alone (`steps.rs` `effective_indices`,
+  `generate.rs` `effective_steps`: sorted by `index`). One function, `path_order`, now gives it:
+  the steps recorded on the path by serial number, each followed by the steps inserted after it,
+  by theirs; `effective_indices`, `effective_steps` and `record status` read it, so the package's
+  numbering, its pages, the runs of optional steps (`optional_runs`) and self-check item 7 see the
+  inserted step in its place without change.
+- The frame is admitted as R2 admits an ending's (`apply_ending`: `scaled_to_recording`,
+  `admit_frame`, `scaled_from`); the step's marks, click, page and `optional` go through
+  `apply_marks` with a request naming the new step, so every mark rule and self-test, the click
+  rules and `apply_optional` (not the first step, no application) hold unchanged. The step is
+  closed as `--close-step` closes a step whose click was declared and never executed.
+- Giving it up drops the step as `--drop-step` does: serial and frame numbers are never reused,
+  and a dropped step is no step of the package, so the package generated before comes back but
+  for its generation time.
+- `record_frame_size_mismatch` (a frame of another size that is no pure scale) and
+  `record_optional_settle_invalid` (a settle above 60000) say exactly what they say for a step and
+  an ending, and are reused. `record_mark_in_use` refuses giving up a step whose mark another step,
+  a transition or an ending reuses, or another page forbids, as `--drop-step` refuses it.
+- P4: `replace_in_place` (`container.rs`) deleted the set-aside file after the rename; it keeps it
+  and finds a free `.old-<ms>` name first. `preflight_lab_dir` gains the installed-root check
+  (the directory made absolute, and its nearest existing part with links resolved), which every
+  `--lab-dir` path reaches before anything is written, `--dry-run` and the `already_generated`
+  copy included.
+- `binding_example` is read by `record draft` (`apps/actinglab/src/record_draft.rs`) and by
+  `ac_binding_draft` (`apps/actingctl/src/mcp/lab.rs`), each taking the package path from its
+  `scheduled_execution.package_path`, and `lab-operations.json`'s `record stop` row says it gives
+  "the binding parts record draft takes"; the slice therefore adds `adoption_example` beside it
+  and keeps it, the removal the work order asks for being left to the coordinator.
+
+**The request members** `optional_after` and `remove_inserted` (new members of
+`actingcommand.lab-record-mark.v1`), two flags (rows `optional_after` and `remove_inserted` of
+`lab-operations.json` `record mark`). A member beside either is refused (`with_other_change`),
+never dropped. `recording.json`: a step's `inserted_after`, absent on every other step, so a
+recording without one is byte-identical to one written before. `record status`, `step_state`
+and the step provenance of the package carry `inserted_after` on such a step only; `record status`
+lists the steps in the order they run. The answer's statuses `optional_step_inserted` and
+`optional_step_removed`. `record stop`'s answer: `kept` (present only when a file was set aside)
+and `adoption_example {command, decision}`.
+
+**Codes and words** (`contracts/outcome-codes/lab.json`; catalog key `optional_after_problem`,
+vocabulary `optional_after_problem`): `record_optional_after_invalid` (error, exit 3, value
+`optional_after_problem`, refuses, nothing written): `recording_active`, `with_other_change`,
+`step_unknown`, `step_last`, `step_application`, `no_marks`, `no_click` (the work order's
+situations) and, one situation each, `clears_optional` (`--not-optional` on an inserted step,
+which would make a step never recorded on the path required) and `not_inserted`
+(`remove_inserted` naming no inserted step). `record_lab_dir_invalid` (exit 2) gains the reason
+`inside_installed_root` with `details.installed_root`. The catalog's `handling` of
+`contained_task_linear_unrecorded_screen` (a text; nothing its released snapshot fixes) and the
+row `record mark` of [lab-operations.json](lab-operations.json) say the way that now exists for a
+pop-up after which the path goes on.
+
+Tests: Lab `gate_463_r4.rs` (exec gate row "#463 R4", ten tests): an inserted pop-up generated in
+its place, regenerated with another content hash and admitted; the kernel's interpreter pressing
+it when it shows and going on without it; every `optional_after_problem` word and the frame of
+another ratio; item 7's two refusals on an inserted step; giving it up giving back the package
+generated before but for its generation time; a recording without one; a frame of a pure scale
+converted; P4's three: the kept `.old-<ms>`, the installed root refused, a first stop writing as
+before with `adoption_example`. Adapted: `gate_336_pkgs5::s5_t3_…` pinned that no set-aside file
+is left beside a replaced `--lab-dir` package; the requirement keeps it, so the test now asserts it
+is there with the earlier bytes. No golden changes, no test leaves the gate map.
+
+**Fix round 2** (after the full review; coordinator work order `rd-1115/brief-463-r4p4-fix2.md`,
+the coordinator's rulings, not the owner's words, but for the owner's rule in item 4). A step has a
+serial number (`index`, what `record mark --step`, `--optional-after` and `--remove-inserted` take)
+and a number inside the package (`artifact_step`, what `step_<nn>_click` is made of); they differ
+once a step is inserted after the stop or dropped.
+- Self-check item 7's refusals name both: `record_optional_step_ambiguous` adds `record_index`,
+  `record_optional_skip_target_insensitive` adds `record_index` and `optional_record_index`, as
+  `record_step_self_mismatch` does (members of a refusal's `details`, not outcome keys).
+- From a run that stopped on an unrecorded screen to the step to insert after: `record status` prints
+  `artifact_step` on every effective step (`step_view` numbers them by `effective_indices`, the
+  order `record stop` numbers them in), so the one way is written down where an agent reads it at
+  that moment (the catalog's `handling` of `contained_task_linear_unrecorded_screen`, its text
+  only; the contract's "The members"; the note of `optional_after` in `lab-operations.json`): find
+  the row whose `artifact_step` equals the number in `pack_operation_id` and take its `index`.
+- An installed root is a directory holding the installer's state file `install\state.json`
+  ([install-cli.md](install-cli.md), "Layout"); a child named `install` alone (a folder of
+  installers, matched without case on Windows) refused before and is none now.
+- `adoption_example.decision` is `{"schema_version": "actingcommand.pack-decision.v1", "class":
+  "held", "held": {"reason": ""}}` (the owner's rule: a package that has not run through on a real
+  device is registered and stays held): adopt refuses its blank reason (`decided_held`,
+  `bounded_text` in `crates/resource-tooling/src/adopt.rs`) and accepts it once filled; before, the
+  class and trigger `pending` were refused.
+- "Output" no longer advises placing the package under an installed root's `packages/<game>/`
+  (P4 refuses that); the Lab's MCP server keeps `adoption_example` beside the binding parts when it
+  shortens an exported `record stop` answer.
+
+Tests: in `gate_463_r4.rs`, item 7's test asserts both numbers of each refusal; the run test asserts
+each press inside its step's click box; the installed-root test holds `install\state.json` and adds
+a plain folder `Install` beside a target that validates; the first-stop test pins the held
+skeleton; new: the way from a run's operation to the serial number and an insertion there that runs
+after the step the run stopped at, two steps inserted after one step (in the order inserted, giving
+up one leaving the other), and `--remove-inserted` refused `record_mark_in_use`; in
+`session_record.rs`, the command line's `--optional-after` and `--remove-inserted` against the
+request form (beside R2's test of `--ending`). Adapted: `apps/actinglab-mcp/tests/serve_calls.rs`
+`mcp_lab_overflow_rule`, whose kept binding parts now include `adoption_example`. No code, key or
+word is added; no test leaves the gate map.
+
+**At deploy.** A second `record stop` of a recording leaves `<name>.old-<ms>` beside its package,
+in the recording's `lab/out/` and in `--lab-dir`; nothing deletes them. A `--lab-dir` under an
+installed root (for example `<install root>\packages\<game>\`) is refused: a recording reaches the
+schedule through `standard-pack adopt`, which `adoption_example` spells for it.
+
+### 1.389 Slice #463 U1b (0.12.63): the unrecorded-screen code only during a package's break-in (Workflow #463; the owner's ruling on board #463 that the code and its pause at once hold only within a period after a package is first run, the ordinary failure handling otherwise; the numbers and the scope are the coordinator's proposal the owner agreed to; the rest are the coordinator's rulings in the work orders, not the owner's words; coordinator work orders `rd-1115/brief-463-u1b-break-in.md`, read on main `1a962a54`, `rd-1115/brief-463-u1b-fix2.md`, fix round 2 after main `44cbab53`, v0.12.62, and `rd-1115/brief-463-u1b-fix3.md`, fix round 3 after main `326ae285`)
+
+1.389 is the number the coordinator assigned this section; the numbers before it are other slices
+dispatched with this one. The slice ships in 0.12.63 (release 0.12.62 is cut without it): its keys'
+`since`, its new code's `since`, this section, its rows of the gate map and its contract sentences
+say 0.12.63.
+
+**What it is.** `contained_task_linear_unrecorded_screen` (§1.372) ends a scheduled run, and pauses
+its pair at once, only while the pair (catalog task, instance) is in the break-in of the content of
+the package it runs ([policy-suspension.md](policy-suspension.md), "A failure that pauses at its
+first occurrence", "Only during a package's break-in"):
+
+- the content is the main package's content hash, 12 hex digits as the failure identity's `m`
+  segment, read when a scheduled run of a `linear_steps` main package is prepared
+  (`ScheduledMain::content`, `host/failure_settlement.rs`) through the lift checks' memory of each
+  package location's hash (`LiftChecks::current`, PKG-S3), so a location measured within
+  `scheduling.suspension.lift_check_min_interval_ms` is not measured again (a package replaced
+  inside the interval is judged and counted against the content measured before until the
+  interval ends); a page-graph package has none and counts nothing, and (fix round 3) a
+  `linear_steps` package whose content is not measured has none, its run counting nothing and
+  judged as outside its break-in;
+- the break-in starts at the first run of that content on the pair that began its package (its
+  kernel run's `PackageAdmitted` recorded: `ContainedRunControl::package_began`, noted into the
+  run's resolution when its execution returns) and was settled as a success or a failure, counts
+  each such run (never a stop, a condition end or a run that never began its package: the live
+  settlement decides it, `host/policy_outcome.rs`), and ends when at least
+  `scheduling.suspension.break_in_runs` (default 20) have settled and at least
+  `scheduling.suspension.break_in_ms` (default 604 800 000) have passed since the first; another
+  content starts a new one;
+- before a scheduled run executes the host judges it on the Runtime clock
+  (`HostShared::scheduled_run_past_break_in`) and notes it on the run's control; the kernel asks
+  once at the run's start (`ContainedTaskRuntime::unrecorded_screen_end`, as it asks
+  `host_started_run`) and keeps the answer in `LinearRun::unrecorded_end`. The closing decision,
+  its conditions and its control flow are unchanged. Since the merge of main (Workflow #469 K1,
+  §1.395) the decision's verdict becomes a code in one function, `closing_end` (`linear.rs`): the
+  verdict `unrecorded_screen` ends the run with the dedicated code only when the runtime's answer
+  is `Dedicated`; past the break-in it ends with `page_confirmation_failed`, that end's detail and
+  timing, and K1's word `confirmation_problem` `unrecorded_screen`, which every end of the closing
+  decision carries. Either failure carries the verdict
+  (`ContainedTaskError::closing_found_unrecorded`), and the host names the frame of the run's
+  `Failure` pin as `artifact_id` by that verdict, not by the code (`page_confirmation_failed` gains
+  the optional value `artifact_id`). The pause stays the code's (`pauses_task`, unchanged), and its
+  `policy_task_paused` carries Workflow #469 H2's `pause_cause` `unrecorded_screen` (§1.398); past
+  the break-in the failure follows `on_failure` and a pause it reaches says the word of how
+  (`repeated_failure`, `retries_exhausted`, `sensitive_task`). Direct and Lab runs keep the
+  dedicated code.
+- a break-in that cannot be established ends no run and fails no preparation (fix rounds 2 and
+  3): the run goes on as one outside its break-in, and the host records the warning
+  `policy_break_in_unread` (a Warning `runtime.failed` with the run's links; the failure its
+  `caused_by` link; since fix round 3 the required word `break_in_problem`, `content_unmeasured`
+  or `record_unread`). A broken lock of the host's run state and a failure to write that record
+  end the run, as everywhere.
+
+**Persisted.** One optional member of the pair's value record `policy.control_state_recorded`
+(register L7, `PolicyControlStateRecord::break_in`, `{content_hash, runs,
+first_settled_at_unix_ms}`), written by the settlement that counts a run; a loading start loads it
+with the decision memory. No dispatch record holds it (a success does not name the content it
+ran), so a start that seeds ([ledger-observer.md](ledger-observer.md) §11.5, a root's second
+start) and a re-alignment before the seeding take each pair's from its latest value record
+(`recorded_break_ins`, `policy_host.rs`; `PolicyControlState::restore_break_ins`); before fix round
+2 the seeding start lost it, and so did every record it wrote. What 0.12.62 and earlier recorded
+does not name the content a successful run ran, so a ledger written before this slice gives every
+pair no break-in: such a pair is inside from its first run on this build, until 20 runs that began
+the package have settled and seven days have passed since the first; a screen the package never
+recorded then pauses it at once until its content changes (policy-suspension.md, "A package that
+ran before this build"). No `ledger` revision is declared (the owner's ruling of 11-15 on
+compatibility).
+
+**Keys** (`actingd-config` revision 33, [component-interfaces.md](component-interfaces.md)):
+`scheduling.suspension.break_in_runs` (integer `1..=4294967295`, default `20`) and
+`scheduling.suspension.break_in_ms` (milliseconds, default `604800000`), settable (their rows of
+the key table, `Settable::Yes`), read before each scheduled run executes, no per-instance form.
+Every root's manifest holds them, as the assembly renders every key with a default from the
+defaults file; a manifest without them has no such setting, and `ConfigureSettings` of one is
+`config_key_unknown` (what the first CI run of the gate's eighth test met: its manifest did not
+hold them).
+
+**Where a person sees it.** `actingd suspended`'s list `break_ins`: per pair whose latest value
+record carries a break-in, its content, `runs` of `runs_needed`, the first's time, `since_first_ms`
+of `ms_needed` and `in_break_in`, judged by the configuration the report loads. Fix round 2: the
+report's now is the ledger's latest event, its head row, as `remedies` and `held` take it, not the
+ledger's latest time (the maximum over every row, which counts rows stamped by the system clock).
+
+**Codes.** One added, `policy_break_in_unread` (runtime-host, warning, ladder class `none`, since
+0.12.63): a scheduled run's break-in could not be established before it executed; it refuses
+nothing and ends no process. Fix round 3 adds its required value `break_in_problem` (the key and
+the vocabulary `break_in_problem`, `BreakInProblem` in `runtime-host/src/codes.rs`, two words:
+`content_unmeasured`, `record_unread`) and widens its texts to both. The outcome code index is
+regenerated after main `326ae285` (LAB-6S4a) and again in the 0.12.63 train, beside R4's and
+S3-7's codes: 3875 active codes of 3963, runtime-host 1158 (1111 active), warnings 154.
+`page_confirmation_failed` gains the optional value `artifact_id`; the two
+kernel codes' descriptions say when each is raised.
+
+**Tests.** Gate `host.toml` "#463 U1b", `tests/gate_463_u1b.rs`, eight tests: inside (with K1's
+word and H2's `pause_cause`), after (with K1's word), one of the two reached, a condition end and a
+stop, a new content, a restart, a direct run, the keys set while running. Fix round 2 changes two
+of them, whose first CI run failed for a reason of the test or the product: the restart now
+restarts as an installation does and asserts each start's kind from its start report (the root's
+second start seeds, its third loads; the break-in kept on both), and the keys' test starts from a
+manifest that holds the two keys at their defaults as the assembly renders them (and asserts
+those defaults, 20 and 604 800 000, settable). gate_463_u1's tests stand unchanged (a new package
+has no break-in, so its pair is inside). Adapted only where a struct gained a member:
+`gate_422_ln3` names `break_in: None`, and the `failure_settlement` unit test `content: Ok(None)`
+(fix round 3; `None` before) and `began: false`.
+
+**Fix round 3** (the independent review of fix round 2, "can merge", and the coordinator's
+rulings in work order `rd-1115/brief-463-u1b-fix3.md`; main `326ae285`, LAB-6S4a, merged first,
+the outcome code index regenerated and `install-control` [0, 0] beside `actingd-config` 33 in the
+architecture test). A break-in's own bookkeeping never fails a run: a package whose content the
+preparation cannot measure (the containment's refusal; before, `.ok()` dropped it and the run
+went on as inside, counted nothing and recorded nothing), and the preparation's reads of the
+Runtime clock, of `scheduling.suspension.lift_check_min_interval_ms` and of the lift checks'
+memory (before, each failed the preparation, fatally), are kept as `content_unmeasured`
+(`ScheduledMain::content` is `Err`, `HostShared::measure_break_in_content`); the reads before the
+run of the two keys, of the pair's break-in and of the clock are `record_unread`. Both are
+recorded before the run executes and judge the run outside its break-in. What goes up as it goes
+up everywhere (`scheduled_past_break_in`'s outer `Err`): a lock of the scheduled runs'
+resolutions or of the policy's state another thread left broken, and a failure to build or write
+the warning; before, every error of the verdict, these included, became the warning. The contract
+says what the lift checks' memory means for a package replaced inside the interval. Three tests
+(9 to 11): a run whose prerequisite layer failed never began its package and counts nothing; a
+content not measured and a break-in not read each record one warning with its word, the run
+going on outside (a one-shot test hook makes each read fail, `fail_next_break_in_read_for_test`,
+as gate_463_u1 makes a run's budget end fail: no fixture makes them fail otherwise); and
+`actingd suspended`'s `break_ins` row before and after the break-in ends.
+
+**At deploy.** Nothing to do; a pair that ran before starts its break-in at its first run on this
+build that began its package.
+
 ### 1.395 Slice #469 K1 (0.12.62): a linear step's end says what was seen (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, place 1 of A-1 in its linear parts and the row K1 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after V0, §1.386))
 
 The coordinator gave this slice 1.395: main `b6fe6ec2` holds the sections up to §1.386; 1.387 to
@@ -28245,6 +28493,449 @@ the others rest on the places named above). Test 3 of the kernel file is strengt
 adapted: what it pinned stays pinned. No golden changes, no test leaves the gate map.
 
 **At deploy.** Nothing to do: a run recorded before 0.12.63 keeps the code it ended with.
+
+### 1.410 Slice #463 S3-3 (0.12.63): a run's read names the outcome key it finished on (Workflow #463; the owner's approval of 11-15 of the three-stage blueprint of package making as a whole, which lifted its pause, recorded on board #463; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-3", with §2.4 "How the result is read back" and the row W9 of §1.1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s33-outcome-key.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.410: main `44cbab53` holds the sections up to §1.400. The slice
+ships in 0.12.63.
+
+**Why.** A recorded package may end in more than one way: on its target page, or on an ending page
+added later from a real frame ([linear-steps.md](linear-steps.md), "Endings", §1.380). Each end is
+named by the `outcome_key` of the package's `scheduling_outcome` mapping, and the host already
+writes that key on the run's terminal fact. The run's read (`run show`, MCP `ac_get_run`,
+`actingcommand.run-status.v1`) dropped it: a reader saw "completed on page X" and mapped the page to
+the key by hand (the design's H12). A run that ended normally is not the business having succeeded;
+the key says which end it was, and the trial the design plans for stage three (S3-11) is to
+compare it with the end expected.
+
+**What the terminal fact holds.** `TerminalCommitted.scheduling_disposition` is a
+`SchedulingDisposition` (`crates/actingcommand-contract/src/event/payload.rs`) of two members:
+`outcome_key`, the key of the one mapping whose effect condition and terminal page the run's end
+matched (the host's `select_scheduling_disposition`, called when the terminal is checked), and
+`effect`, the designated-effect evidence that chose the condition (`kind`
+`no_designated_effect`, `designated_effect_completed` with its step and operation, or
+`designated_effects` with one tally per member of a set). The fact's own validation lets only a
+success without an outcome carry one, and only with a final page. This slice reads the key alone;
+the effect evidence is not projected.
+
+**What it is.** One optional member of `ContainedRunTerminal`
+(`crates/actingcommand-contract/src/run_summary.rs`), `outcome_key` (a text), right after
+`outcome`. `RunFold` takes it from the `TerminalCommitted` fact it takes the terminal from: no
+record is read for it and no query is added. It knows no key, compares none and never derives one
+from the final page.
+
+| The run | `outcome_key` |
+|---|---|
+| completed on the package's target page | the target mapping's key |
+| completed on an ending page | that ending's key |
+| completed on another terminal page a mapping names (a select's `on_empty` page, a terminal page of a page graph) | that mapping's key |
+| completed, its package declaring no `scheduling_outcome` | absent |
+| failed or cancelled | absent |
+| a keying the host refused (`contained_task_outcome_*`: the run is committed failed) | absent |
+
+Absent is no member (`skip_serializing_if`), never an empty text: a terminal without a disposition
+serializes byte for byte as before.
+
+**Readers** (as in §1.387, every one on the same contract crate, none kept for an earlier shape):
+runtime-client's `ContainedRunStatus.terminal`, brief and full, carries the fold's terminal as it
+is; lab-ops's `run_show` answers that status as it is (`answer` is the status's JSON), so actinglab
+`run show`, MCP `ac_get_run` (actingctl's `runs::get_run` calls `run_show::read` and
+`run_show::answer`) and the problem report's `run` part carry the member without a line of their
+own, as does the overview's `run` (a brief status); a `QueryRuns` row's status carries it. The
+diagnosis's `runs` are brief statuses too, but it lists failed and open runs only (its
+`FAILED_OR_OPEN`), none of which has a disposition, and its `runs_grouped` keeps its groups. The
+run list's row (`run_list::row`: `actingctl runs`, MCP `ac_runs`, actinglab `run list`) builds its
+own members and does not take it.
+
+**Interfaces.** No revision moves, as for `failure_values` (§1.387, the precedent this slice
+follows): a run's status is the client's projection of `QueryEvents` pages, whose shape is
+unchanged, and `QueryRuns` is carried by no operation yet; `ledger` does not move, no record
+changes.
+
+**Faces.** `ac_get_run` and actinglab `run show`: `terminal {outcome, outcome_key?, failure_code?,
+failure_values?, final_page?, executed_steps?, cancellation_reason?, sequence, event_id}`; the
+overview's `run`: the same terminal of the brief status. The contract texts:
+[runtime-state-observation.md](runtime-state-observation.md) ("Contained-run queries"),
+[global-ledger-query.md](global-ledger-query.md) (the P32 B-1 note), and the notes of the rows
+`status` and `run show` of [lab-operations.json](lab-operations.json). The tool texts of the MCP
+servers are not changed.
+
+**Counts.** One member of `ContainedRunTerminal` (nine from eight); `gate_c2.rs` holds 15 tests (14
+before); one new gate map row (`contract.toml`).
+
+**Tests.** `crates/runtime-client/src/tests/gate_c2.rs`,
+`s3_3_a_run_terminal_names_the_outcome_key_of_the_end_it_finished_on` (gate map `contract.toml`,
+"#463 S3-3"), on the ScriptedRuntime ledger of the run-status gates (R7), in brief and in full: a
+run completed on its target page whose terminal carries the disposition `task_done` answers
+`outcome_key` `task_done`, one completed on an ending page with `task_short` answers `task_short`,
+each with the page it finished on, in the struct and in the status's JSON; a failed run, a
+cancelled run and a completed run of a package without mappings (no disposition) have no
+`outcome_key`, in the struct or in the JSON. No existing test changes, no golden changes, no test
+leaves the gate map.
+
+**What is not changed.** The ledger's records and the host (the key was already written); the
+scheduler and its `outcome` predicate; the fold's anomaly rules and what makes a run's state; the
+run list's row and the grouped reads; every outcome code, its keys and its words; the outcome code
+index (no fragment changes). No outcome code, outcome value key, word, configuration key,
+interface revision or record shape is added.
+
+**At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
+0.12.63 whose terminal carries a disposition shows its key.
+
+### 1.411 Slice #463 S3-4 (0.12.63): a first adoption as held needs two flags and no decision file (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making, board #463; the rule the work order states, that a package not run through on a real device is registered with its rules and stays held; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-4", with §1.1 rows W1 to W3, §1.2 H1, H3 and H16 and §2.1 "Missing" item 1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s34-adopt-held.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.411; the numbers between §1.400 and this one belong to slices
+dispatched with it. The slice ships in 0.12.63.
+
+**What it is.** `standard-pack adopt` takes `--held-reason <text>` and an optional
+`--held-reference <text>`, which are exactly the decision `{schema_version, class: "held", held:
+{reason, reference?}}`. The resource tooling's request names where its decision comes from
+(`AdoptDecision`: `Document`, the path `--decide` gives; `Held`, the two texts); for the second it
+builds that document (`held_document` in `crates/resource-tooling/src/adopt.rs`) and hands it to
+the document's own reader (`Decision::of_document`: the part of `Decision::read` after the file is
+read and parsed, split out unchanged), at the place among the checks where a document is read. So
+every check and every byte written is the one a document of the class `held` gives; there is no
+second path ([standard-pack-authoring.md](standard-pack-authoring.md), "A held decision by two
+flags").
+
+**The texts' limits.** Those of the document's `held` (`decided_held`, at most 1024 bytes, the
+schedule reader's bound): a non-blank text without a control character. A blank reason is refused
+`adopt_refused` `decision_invalid` at `/held/reason`, as the document's blank reason is; the outcome
+names no `path`, since no file was read (`decision_invalid` already leaves out an empty one).
+
+**The command line's refusals.** Before the checkout, the state directory or any file is read:
+`--decide` beside `--held-reason` (with `--held-reference` or without it) is `validation_failed`,
+exit 2, naming `--held-reason`; `--decide` beside `--held-reference` alone, and `--held-reference`
+without `--held-reason`, which it needs, the same naming `--held-reference`; each with
+`argument_problem` `conflicting` and the details of the command line's other conflicts
+(`argument`, `argument_problem`, `arguments`), as `do --operation` without `--capture` is refused.
+No code, word or key is added; the outcome catalog and its index do not change.
+
+**On a package already scheduled.** The one-role table's row `held` (its held entry; its rule, if
+any, kept and not composed while the hold lasts; every `maintenance.json` entry of the package
+removed) is what a decision of the class `held` does today: such a decision wants no rule, so the
+package's rule is kept as written and the held entry is added beside it. So `--replace
+--held-reason` on a package its business rule schedules keeps that rule and writes its hold, as the
+document does. Nothing here lifts a hold: that stays a decision of another class given by
+`--decide` ("Repeating").
+
+**Texts.** The refusal of a first adoption without a decision names `--held-reason` beside
+`--decide`; `help`'s options of the command (`adopt_options`); the row `standard-pack adopt` of
+[lab-operations.json](lab-operations.json) gains the parameters `held_reason` and `held_reference`
+(strings, not required), which the MCP tool `ac_standard_pack_adopt` takes, its schema generated
+from the row, and `decide`'s note and the row's notes say so;
+[standard-pack-authoring.md](standard-pack-authoring.md): "The operation" (the line and two
+inputs), "The decision document" (the new part "A held decision by two flags"), and the row "The
+decision document" of "The checks". The Lab's MCP manual (`apps/actinglab-mcp/MANUAL.md`,
+"Adoption") still lists the tool's parameters without the two; it is not this slice's file.
+
+**Tests.** `crates/resource-tooling/src/gate_464_p1.rs`, on P1's fixtures, gate map `exec.toml`
+"#463 S3-4": `s34_a_first_adoption_by_the_held_reason_writes_what_the_held_document_writes` (a
+package not run through, adopted first by the two texts: its held entry with both and no rule, the
+repository byte for byte what the same document writes on a repository of its own, the answers
+alike; a blank reason by the texts and by the document alike refused `decision_invalid` at
+`/held/reason`, nothing written) and
+`s34_the_held_reason_on_a_scheduled_package_keeps_its_rule_and_writes_its_hold` (`--replace` by the
+reason and by the document alike on a package its business rule schedules: the rules byte for
+byte, the held entry beside them, nothing removed or replaced, the two repositories alike).
+`apps/actinglab/src/tests/gate_463_s34.rs`, gate map `apps.toml` "#463 S3-4":
+`s34_the_held_flags_beside_decide_or_the_reference_alone_are_refused_before_anything_is_read` (the
+three refusals of the command line, five lines, with paths that do not exist, none made).
+Adapted: P1's helper `request` in `gate_464_p1.rs` hands its decision's path on as
+`AdoptDecision::Document`, since the request's member became that source; no assertion changes. No
+golden changes, no test leaves the gate map.
+
+**What is not changed.** What adopt checks and writes for a decision document, the classes
+`business` and `maintenance`, readiness, `standard-pack build` and the recording side.
+
+**At deploy.** Nothing to do.
+
+### 1.412 Slice #463 S3-5 (0.12.63): adoption answers the adopted pack's readiness (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making, board #463, whose third stage checks a package for readiness once it is adopted; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-5" and §2.1 "Missing" item 3; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s35-adopt-readiness.md`, built on the head `8169acf4` of S3-4's branch, §1.411)
+
+The coordinator gave this slice 1.412; it stands on S3-4 (§1.411) and ships with it in 0.12.63.
+
+**What it is.** `standard-pack adopt` already lays out the game root the build would produce, in
+its check tree (`<state>/adopt-check/<checkout>/installed/<game>/`), and checks it with
+`standard-pack check`. After every check of the adoption passed, and by the same path under
+`--dry-run`, it now calls the readiness function (`judge_standard_pack_readiness`, called, not
+copied) on that directory with no installation and no declared `package` range, and answers the
+adopted pack's row as `readiness` ([standard-pack-authoring.md](standard-pack-authoring.md), "The
+answer"): `package_id`, `server`, `readiness`, `roles` and the thirteen `items`, the row
+`standard-pack ready --root` answers for that directory. The five items an installation tells are
+`not_judged` (`installation_not_read`) and I3 is information, so the pack answers `ready_to_place`
+at best. A refused adoption answers no readiness. The question "held, waiting for a value, ready to
+place?" no longer needs a build and a second command on a copied path.
+
+**Where it is judged.** `crates/resource-tooling/src/adopt.rs`: the check tree's `Checked` keeps
+the directory it laid out (`installed`); `standard_pack_adopt` judges the readiness after the
+writes (or, under `--dry-run`, after the list of what it would write), immediately before the
+answer is built (`adopted_readiness`). The readiness function only reads; the tree is the one the
+checks read, and nothing the adoption checks, writes or refuses changes.
+
+**When the function refuses.** The adoption's own result is not changed: the answer carries
+`readiness_not_judged` in place of `readiness`, `{outcome, text}`, as `waits_for_value` carries a
+secondary finding (a registered outcome and the same in words): `outcome` is the function's refusal
+with its code as the function answered it (the outcome its error carries, else its code relayed),
+`text` the same in words. A row of the pack missing from the function's answer is answered so too,
+with `package_invalid` "is no package of the bundle", the function's own code for that case. No
+code, word or key is added; the outcome catalog and its index do not change.
+
+**Where the design and the code differ.** The design names S3 `value_pending` for a business rule
+with `"pending"` alone. The readiness function answers `value_undeclared` there: adopt writes no
+fixed value and no entry for `"pending"`, and the composer counts such a rule undeclared (adopt's
+own `coverage` says `undeclared`); `value_pending` is a rule that reads an entry or a pool with the
+pending marker. The tests take the function's words (the coordinator's ruling 4).
+
+**Texts.** [standard-pack-authoring.md](standard-pack-authoring.md): its opening paragraph (the
+answer says how far the laid-out root makes the package ready; readiness on an installation stays
+another slice's), "`--dry-run`" and "The answer" (the members and the part "The adopted pack's
+readiness"). [lab-operations.json](lab-operations.json): the row `standard-pack adopt`'s `output`
+names the readiness row; its `notes` lose P1's clause "the readiness of the package is another
+slice's" and gain the sentence of this slice. The sentence of
+[standard-pack-schedule.md](standard-pack-schedule.md), "Readiness", that adopt's answer, the
+build's `build.json` and the placement plan "are to call it" is not this slice's file and stays.
+
+**Tests.** `crates/resource-tooling/src/gate_464_p1.rs`, on P1's fixtures, gate map `exec.toml`
+"#463 S3-5": each case adopted first under `--dry-run`, then for real, both answering the same row
+and no `readiness_not_judged`:
+`s35_a_held_adoption_answers_its_pack_waiting_for_its_hold` (adopted by S3-4's `--held-reason`:
+`waiting`, S2 `classified` failing alone with `held`, S3 not judged `no_rule`),
+`s35_a_business_rule_with_pending_alone_answers_its_pack_waiting_for_its_value` (`waiting`, S3
+`valued` failing alone with `value_undeclared` naming the rule, caused by
+`standard_pack_benefit_undeclared`),
+`s35_a_business_rule_with_its_value_answers_its_pack_ready_to_place` (`ready_to_place`, the seven
+items of the game root holding, S2 by `scheduled`, S3 by `complete`) and
+`s35_a_maintenance_entry_by_its_uses_answers_its_pack_not_scheduled_with_its_role`
+(`not_scheduled`, `roles` `startup`, S2 by `maintenance_role`, S3 by `maintenance_tier`). The tests
+assert only members the readiness row has on this branch. No test is adapted, no golden changes,
+no test leaves the gate map.
+
+**What is not changed.** What adopt checks, writes and refuses; the readiness function
+(`standard_pack_ready.rs`); `standard-pack build`; the placement.
+
+**Carried from the review of S3-4 (§1.411), on this branch, nothing of it changing behaviour.**
+`apps/actinglab-mcp/MANUAL.md` ("Adoption") names `held_reason` and `held_reference`. Adopt's
+messages that named only `--decide` (a pack directory a maintenance role of another root file
+owns, a directory no root file names, two roles, a first adoption without a decision, and the
+advice to run an interrupted adoption again) name `--held-reason` beside it, and so do the matching
+sentences of [standard-pack-authoring.md](standard-pack-authoring.md); its part "A held decision
+by two flags" says that the command line cannot give a text that is the word `true` or begins with
+`--` (the flag parser takes no such word as a value), which goes through a decision document.
+Three tests: `gate_464_p1.rs`
+`s34_a_held_package_adopted_again_by_the_held_reason_takes_the_reason_and_keeps_its_reference` and
+`s34_held_texts_outside_their_limits_are_refused_alike_by_the_flags_and_by_a_document` (gate map
+`exec.toml`), and `apps/actinglab/src/tests/gate_463_s34.rs`
+`s34_the_held_flags_on_the_command_line_reach_the_adoption_with_their_two_texts` (gate map
+`apps.toml`), each under "#463 S3-4".
+
+**At deploy.** Nothing to do.
+
+### 1.413 Slice #463 S3-6 (0.12.63): readiness names a hold's reason and lists each pack's own warnings (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-6" and §2.3, "Other gaps of this point", read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s36-ready-held-reason.md`, read on main `44cbab53`; fix round 2, coordinator brief `rd-1115/brief-463-s36-fix2.md`, on main `b7c47129`)
+
+The coordinator gave this slice 1.413: main `44cbab53` holds the sections up to §1.400, and the
+numbers between belong to slices dispatched with it. The slice ships in 0.12.63.
+
+**What it is.** A held pack waits with a reason someone wrote (`schedule.json` holds
+`{package_id, reason, reference?}`), and the warnings of `standard-pack check` were listed for the
+root only. Now, in `judge_standard_pack_readiness`
+([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness"):
+
+- A pack whose S2 fails `held` answers `held` on its row, `{reason, reference?}`: the reason and
+  the reference of its `held` entry as written, `reference` absent where the entry writes none
+  (absent, not empty), `held` absent from every other pack's row (both levels
+  `skip_serializing_if = "Option::is_none"`). It is the shape the `held` entry and adoption's
+  decision ([standard-pack-authoring.md](standard-pack-authoring.md), `held`) give the same two
+  texts: text for a reader, never evaluated and used to decide nothing (the contract: nothing
+  evaluates it by machine). S2's outcome is what it was before the slice
+  (`package_dispatch_waiting` with `readiness_problem` `held` and nothing more), and which items
+  fail and why is unchanged: the hold is looked up by package id in the composer-accepted file's
+  `held` list, the list the classification reads, only for a pack whose S2 item fails with the word
+  `held`.
+- Each pack's row gains `warnings`: the warnings of `standard-pack check` that name the pack, in
+  the check's order. The answer's `warnings` stays as it was, so a pack's warning is listed in both
+  places. A pack no warning names answers no `warnings` member, as a pack without `roles` answers
+  no `roles` (the row's precedent, `skip_serializing_if = "Vec::is_empty"`).
+
+**Where the code corrected the design.** The work order's ruling 3 names a warning's pack by
+its `package_id`, and the design's test asks that "a variable that does not apply appears on the
+declaring pack's row". The root check of the variables (`variable_report`, Workflow #463 V1, §1.378)
+names the declaring pack only by `path`, its `control.json`, and carries no `package_id`. So a
+warning names a pack by its `package_id` (a pack of the registry), else by a `path` that lies under
+the pack's directory in the game root (`CheckWarning::read`). That is not the rule the root check's
+refusals follow: `CheckRefusal::read` takes the `package_id`, else the pack whose relative
+directory name, as the registry writes it, the `path` is, and compares nothing under it. Fix round
+2 lets a warning's `path` that is the pack's relative directory name itself name that pack too, as
+the refusals' comparison does. A warning that names no pack (a rule's hint by `task_id`, a refused
+`goals.json`) is on no row and stays in the answer's `warnings`. The check's warnings are not
+changed.
+
+**Codes, keys and words.** None: no code, no key, no key type and no vocabulary word.
+`package_dispatch_waiting` carries what it carried before the slice (warning, ladder class none,
+exit status 0: `standard-pack ready` answers the readiness beside `lab_operation_completed` and
+refuses nothing). No fragment under `contracts/outcome-codes/` changes, and the outcome code index
+is current.
+
+**The callers.** `judge_standard_pack_readiness` has one caller in the product,
+`actinglab standard-pack ready` (`apps/actinglab/src/standard_pack_cli.rs`), which serializes the
+whole answer; the operation table's row `standard-pack ready` is served by that command (the CLI
+module's engine) and its MCP tool `ac_standard_pack_ready` through a `serve` child, so all three
+print the row's `held` and `warnings` with no change of their own. Adopt, the build and the
+placement plan do not call it on this branch (slices S3-5, S3-7 and S3-15); the module
+documentation says what S3-7 makes `standard-pack build`'s answer do (call it on the installed root
+its steps laid out, as `ready --root` does; `build.json` does not carry it). The row's `output` in
+[lab-operations.json](lab-operations.json) names both members.
+
+**Interface revisions.** None moves. The readiness answer belongs to no interface revision: P3 and
+its fix round 1, which added `readiness`, `roles`, `warnings` and the counts, wrote "No
+configuration key, record type, payload member, fact, wire shape or interface revision" (§1.375),
+and so does this slice: `held` and `warnings` are members of the answer's rows. The outcome model is
+not touched: `runtime-outcomes` stays 1, `actingcommand.outcome.v1` and
+`actingcommand.outcome-codes.v1` stay.
+
+**Tests** (`crates/resource-tooling/src/gate_463_s36.rs`, gate map `contracts/test-gates/exec.toml`
+"#463 S3-6"): a pack held with a reason and a reference fails S2 `held` alone among its items, its
+row's `held` `{reason, reference}` as written; a pack held with a reason of more than 256 bytes and
+one held with a reason in Chinese, neither with a reference, carry the reason byte for byte and no
+`reference`, in the row and serialized; S2's outcome carries no `held_*` value, in the row and
+serialized; a pack not held answers no `held`
+(`s36_a_held_pack_s2_names_its_reason_and_reference`); two packs that declare one variable
+differently each list on their own row, in the check's order, the check's
+`standard_pack_package_unclassified` naming them by `package_id` and its
+`standard_pack_root_invalid` `variable_conflict` naming their `control.json` by `path`, the answer's
+`warnings` equal to the check's own, and the other packs answer no `warnings`
+(`s36_a_variable_that_does_not_apply_is_listed_on_the_declaring_pack_s_row`); a root the check
+warns nothing of answers each row with the members it had before
+(`s36_a_root_without_warnings_answers_as_before`); the composer's hint of a rule that declares no
+value, by its `task_id` and without a `package_id` or a `path`, is the answer's one warning, the
+check's own, and is on no pack's row (`s36_a_warning_that_names_no_pack_is_on_no_row`, fix round
+2). No existing test changes; none leaves the gate map.
+
+**Fix round 2** (coordinator brief `rd-1115/brief-463-s36-fix2.md`, after the independent review;
+its ruling replaces ruling 2 of the work order). The first round carried the hold as two outcome
+keys of S2, `held_reason` and `held_reference`, and, since a reason may hold 1024 bytes
+(`MAX_SCHEDULE_TEXT_BYTES`) where the free-text key type `name` ends at 256, added a key type
+`text` to the outcome contract, the outcome guard and the problem report. The coordinator ruled
+for the row: a new value type of the outcome model is permanent once released, differs from `name`
+only by its bound, and would let later code put a kilobyte of free text into outcomes that travel
+to ledgers and receipts; the reason of a hold is text for a reader, never evaluated, and the row is
+where a reader looks. So the key type `text` and the two keys went, with everything changed only
+for them (the key table, the catalog and its fragment `resource-tooling.json`, the outcome guard's
+scalar types, [runtime-outcomes.md](runtime-outcomes.md), [problem-report.md](problem-report.md)
+and the report archive's masks): each of those files is main's again, and none was released. The
+review's two smaller points were taken: the path rule above, and the test of a warning that names
+no pack. Main `b7c47129` (§1.401) was merged in.
+
+**What is not changed.** What readiness decides (the thirteen items and their verdicts, the four
+answers, the counts), the composer, `standard-pack check` and its warnings, adopt, the build, the
+placement, the outcome catalog and key table, the record shapes and the configuration.
+
+**At deploy.** Nothing to do: a read-only answer gains members; nothing is persisted.
+
+### 1.414 Slice #463 S3-7 (0.12.63): `standard-pack build` answers its packs' readiness and names the placement's plan as the next command (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making as a whole, board #463; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-7", with §1.1 rows W6, W7, W10 and §1.2 H10, H13; the coordinator's rulings in the work order, not the owner's words, its ruling 1 changing the design; coordinator work order `rd-1115/brief-463-s37-build-readiness.md`, read on main `44cbab53`; main `326ae285` (#1744, LAB-6S4a) merged before the push; fix round 2 after the independent review, coordinator work order `rd-1115/brief-463-s37-fix2.md`, main `b7c47129` (#1750, #469 D4b, §1.401) merged first)
+
+The coordinator gave this slice 1.414: main `44cbab53` holds the sections up to §1.400, and the
+numbers between them and this one belong to slices dispatched with it. The slice ships in 0.12.63.
+
+**What it is.** `standard-pack build` (§1.376) turns one clean commit of a resource repository into
+the zip a placement takes and answered the files and the steps. To learn whether the packs it built
+were ready one copied a path out of the answer into `standard-pack ready --root` (§1.375; the
+design's H10), and to plan a placement two more into `place` (H13). The answer now says both
+([resource-verify.md](resource-verify.md), "`standard-pack build`", "The answer"):
+
+- `readiness`, the readiness of `<out>/work/installed/<game>/`, judged by
+  `judge_standard_pack_readiness`, called, not copied, as `standard-pack ready --root` calls it (no
+  installation, no declared range): that row's answer for that root, `installation` `not_read`, the
+  five installation items `not_judged`, each pack `waiting` with every reason, `ready_to_place` or
+  `not_scheduled`;
+- (fix round 2) `warnings`, beside a readiness the function refused: `resource_build_readiness_refused`;
+- `next.place`, the words of the Lab's command line after the program's name (fix round 2),
+  `["place", "<zip>", "--sums", "<SHA256SUMS>", "--plan"]`, the paths of `files`.
+
+**What the code showed** (the design's §6 and the work order's rulings 2 and 3).
+
+- **The installed root is kept.** The `bundle` step makes `work/installed/<game>/`
+  (`apps/actinglab/src/resource_verify/bundle.rs`, after the read-back), lays the root files and the
+  packs into it and checks it with `standard-pack check`. No code of `resource verify` or of the
+  build deletes: there is no removal call in `apps/actinglab/src/resource_verify.rs` or its
+  modules, and its, the step's and the build's module docs say that nothing is deleted. A build
+  whose steps all passed has laid the root
+  out: the step leaves before it only on an error or after a failure it recorded. So after every
+  successful build the root is there. The readiness is judged once the product is written, while
+  the root exists; a root that is not there is never judged but refused by the function.
+- **What `standard-pack ready` hands in.** `declared_package: None` and `installation: None`
+  (`apps/actinglab/src/standard_pack_cli.rs`, its `ready` arm). The design took `declared_package`
+  from the zip's `interfaces.json`; by ruling 2 the build does what the row does and hands in none.
+  Without an installation it changes nothing: I2 answers `not_judged` `installation_not_read` before
+  it reads the declared range.
+
+**Ruling 1, which changes the design.** The design put the readiness into `build.json` too and
+moved its schema to v2. `build.json` does not change: its members, its schema
+`actingcommand.standard-pack-build.v1` and the capability's `build_schema` stay. Readiness is a
+judgement of a root at a moment, which any reader can ask for again; the file records the build.
+The contract says that the answer carries the readiness and the next command and the file does not.
+
+**When the readiness cannot be computed.** The function refuses with its own codes
+(`validation_failed` for a root that is no directory or cannot be read, `standard_pack_root_invalid`
+for a root file the structure check refuses, `package_invalid`). The answer then has no
+`readiness` and has `readiness_refused`, that refusal in the envelope's error form (`code`,
+`message`, `blocked_by`, `details`); the build still exits 0, its product written. No readiness is
+answered that was not computed. Fix round 2 (the review: a reader of the answer's outcome and
+warnings did not see it): the answer's `warnings` then holds exactly one `{outcome}`, the form the
+Lab's answers carry a warning in (`lab_ops::cli_line::warning`; the build's answer had no
+`warnings` before), `resource_build_readiness_refused` (warning, `path` the root) caused by the
+refusal's own code, relayed; its developer line is the program's form (`cli_line::developer_text`),
+`WARN actinglab: resource_build_readiness_refused path=<root> [caused_by: <code>] <message>`. The
+precedent needs a code of its own (the Lab's warnings are the answering program's warning codes,
+the cause a link: `preflight_failed`, `client_action_not_recorded`; a developer line's level is its
+outcome's category, and the function's codes are errors), so one is added: a code of the build's
+own prefix with this one cause.
+
+| Code | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `resource_build_readiness_refused` (actinglab, warning, `none`, pending, since 0.12.63; `path` required; the cause the refusal's code) | the product is written and the readiness function refused the installed root | warns | 0 |
+
+**The next command.** The plan only (ruling 4): a placement is an act under the owner's
+authorization, and no answer hands out the line that places. Fix round 2: its words are those of
+the Lab's command line after the program's name, as every `next` of the Lab holds a command
+(the rescue module's `{status: ["op", "status"]}`; [install-cli.md](install-cli.md), "Who runs an
+argv"), so no reader parses a shell line; the paths are the ones the build wrote, unquoted. The
+`actinglab` that runs them is the one of the installation the bundle is to be placed into
+(`place` acts on the root of the `actinglab.exe` that runs it, [install-cli.md](install-cli.md),
+"The Lab's rescue module").
+
+**The answer's size** (fix round 2). The readiness of a real game makes the answer large: through
+the Lab's MCP server an answer above its budget is exported whole to a file by that server's
+overflow rule ([lab-two-entries.md](lab-two-entries.md) §9.3) and never cut; the contract says so.
+
+**Tests.** `apps/actinglab/src/tests/gate_463_s37.rs`, gate map `apps.toml` "#463 S3-7", on P2's
+neutral fixture repository with a `schedule.json` of one valued pool: a commit whose pack A is held
+(a held entry, no rule) and whose pack B has a rule with a complete value answers A `waiting`, its
+S2 failing `held`, and B `ready_to_place`, the readiness equal to the answer of `standard-pack
+ready --root` for the kept root, and `build.json` the answer's `build`, v1, its eleven members; a
+commit whose two packs both have such a rule answers both `ready_to_place`, their installation
+items `not_judged` `installation_not_read`; `next` is the plan's five words of the zip and
+`SHA256SUMS` written. Fix round 2: `s37_a_refused_readiness_is_a_warning_of_the_answer`. No fixture
+makes the function refuse the installed root after the `bundle` step passed (the step lays the root
+out and checks it with `standard-pack check`, whose structure check the function runs, and nothing
+of the build runs between), so it drives the function that builds the answer's readiness members
+(`resource_verify::build::readiness_members`, reached by the gate through a re-export compiled for
+tests only) on a root that is not there and on an empty one: no `readiness`, `readiness_refused`
+with the function's own code (`validation_failed`, `standard_pack_root_invalid`), and in `warnings`
+exactly one `{outcome}`, `resource_build_readiness_refused`, a warning, `path` the root, caused by
+that code. The tests assert only members of the readiness that exist on main `44cbab53` (ruling
+5). Adapted in fix round 2: `s37_next_place_is_the_plan_line_of_the_files_written` pinned the one
+line with quoted paths, which the requirement changes; it asserts the five words. No golden
+changes, no test leaves the gate map.
+
+**What is not changed.** What the build writes (the zip, `SHA256SUMS`, `build.json`, the work
+tree), its steps and their refusals, the readiness function, adopt and the placement. Fix round 2
+corrects, with the review's words, the texts of other slices that named `build.json` as a later
+caller of the readiness: [standard-pack-schedule.md](standard-pack-schedule.md), "Readiness", the
+notes of the row `standard-pack ready` and [package-reference.md](package-reference.md), "The built
+standard pack"; the doc of `crates/resource-tooling/src/standard_pack_ready.rs` is another fix
+round's.
+
+**At deploy.** Nothing to do: the answer gains its members, and nothing on disk changes.
 
 ### 1.408 Slice #463 S3-1 (0.12.63): the placement plan lists the packages that enter or leave scheduling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that no package enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-1, with §1.1 rows W10 and W11, §2.5 and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s31-place-plan.md`, read on main `44cbab53`)
 

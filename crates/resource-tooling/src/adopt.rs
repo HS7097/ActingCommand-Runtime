@@ -11,7 +11,9 @@
 //!   (`--record-id`, its `lab/out/<package_id>.<zip|json>`) or any content directory or container
 //!   (`--package`); the decision document `actingcommand.pack-decision.v1` ([`Decision`]), which
 //!   holds only what the Lab cannot know and is required on a first adoption; the Lab's state
-//!   directory, which holds the recordings, the kept copies and the check trees.
+//!   directory, which holds the recordings, the kept copies and the check trees. Workflow #463
+//!   S3-4: or, in place of a document, a held decision's reason and reference
+//!   ([`AdoptDecision::Held`]), which are that document of the class `held` and are read as it is.
 //! - **The checks**, every one before the first write, in this order: the repository, no leftover
 //!   of an interrupted call; the recording; the package, admitted as `package preflight` admits
 //!   it, its game and server those of `applications.json`; its `package_id` a directory name and
@@ -78,8 +80,8 @@ use crate::codes::{AdoptProblem, ResourceToolingCode};
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{check_standard_pack_root_with_catalog, root_issue_outcome};
 use crate::{
-    PackageBundleRequest, StandardPackCheckRequest, StandardPackCheckResponse,
-    StandardPackRootFiles, package_bundle,
+    PackReadiness, PackageBundleRequest, StandardPackCheckRequest, StandardPackCheckResponse,
+    StandardPackReadyRequest, StandardPackRootFiles, judge_standard_pack_readiness, package_bundle,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, OutcomeEnvelope};
@@ -257,14 +259,30 @@ pub enum AdoptSource {
     Package(PathBuf),
 }
 
+/// Where the adoption's decision comes from (Workflow #463 S3-4).
+#[derive(Debug, Clone)]
+pub enum AdoptDecision {
+    /// `--decide <decision.json>`: the decision document at this path.
+    Document(PathBuf),
+    /// `--held-reason <text> [--held-reference <text>]`: exactly the decision `{schema_version,
+    /// class: "held", held: {reason, reference?}}`, built as that document and read by the
+    /// reader of a document, so that every check and every byte written is the document's.
+    Held {
+        /// The held entry's `reason` text (the name is the one the decision's reader uses for
+        /// it; the outcome guard keeps the word `reason` for typed reasons).
+        rationale: String,
+        reference: Option<String>,
+    },
+}
+
 /// Workflow #464 P1: `actinglab standard-pack adopt --repo <checkout> (--record-id <id> |
-/// --package <path>) [--decide <decision.json>] [--replace] [--state-dir <dir>]` under the
-/// global `--dry-run`.
+/// --package <path>) [--decide <decision.json> | --held-reason <text> [--held-reference <text>]]
+/// [--replace] [--state-dir <dir>]` under the global `--dry-run`.
 #[derive(Debug, Clone)]
 pub struct StandardPackAdoptRequest {
     pub repo: PathBuf,
     pub source: AdoptSource,
-    pub decision: Option<PathBuf>,
+    pub decision: Option<AdoptDecision>,
     pub replace: bool,
     pub dry_run: bool,
     /// The Lab's state directory: the recordings, the kept copies and the check trees.
@@ -444,6 +462,17 @@ pub struct RecordingReview {
     pub run_through: bool,
 }
 
+/// Workflow #463 S3-5: the readiness function refused the check tree's game root (or answered no
+/// row of the adopted pack), so the pack's readiness was not judged; the adoption is the same
+/// without it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadinessNotJudged {
+    /// The function's refusal, with its code as the function answered it.
+    pub outcome: Outcome,
+    /// The same in words.
+    pub text: String,
+}
+
 /// The answer of `standard-pack adopt`.
 #[derive(Debug, Clone, Serialize)]
 pub struct StandardPackAdoptResponse {
@@ -510,6 +539,16 @@ pub struct StandardPackAdoptResponse {
     /// The checkout's check tree, `<state>/adopt-check/<checkout>/`, kept until the next call on
     /// the checkout empties it.
     pub check_tree: String,
+    /// Workflow #463 S3-5: the adopted pack's row of the readiness of the check tree's game root
+    /// `installed/<game>/`, as the readiness function answers it there with no installation (the
+    /// row `standard-pack ready` answers for that root), judged after every check passed, under
+    /// `--dry-run` too; absent only beside `readiness_not_judged`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readiness: Option<PackReadiness>,
+    /// Workflow #463 S3-5: why the readiness was not judged, when the readiness function refused
+    /// the check tree's game root or answered no row of the pack; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readiness_not_judged: Option<ReadinessNotJudged>,
     /// The repository's own items adopt does not write (a regression case, the census row, the
     /// catalog section), each by its path when the checkout holds it.
     pub next: Vec<String>,
@@ -657,9 +696,20 @@ pub fn standard_pack_adopt(
         }
     }
 
-    // The decision; without one, the class of the earlier adoption.
+    // The decision; without one, the class of the earlier adoption. Workflow #463 S3-4: a held
+    // decision's two texts are that document, handed to the document's own reader.
     let decision = match &request.decision {
-        Some(path) => Some(Decision::read(&absolute(path)?, &root.schedule)?),
+        Some(AdoptDecision::Document(path)) => {
+            Some(Decision::read(&absolute(path)?, &root.schedule)?)
+        }
+        Some(AdoptDecision::Held {
+            rationale,
+            reference,
+        }) => Some(Decision::of_document(
+            held_document(rationale, reference.as_deref()),
+            Path::new(""),
+            &root.schedule,
+        )?),
         None => None,
     };
     let class = match (
@@ -671,7 +721,9 @@ pub fn standard_pack_adopt(
         (None, None) => {
             return Err(refused(
                 adopt(AdoptProblem::DecisionInvalid).json_pointer(""),
-                "a first adoption needs --decide <decision.json>".to_owned(),
+                "a first adoption needs --decide <decision.json>, or --held-reason <text> to \
+                 adopt the package as held"
+                    .to_owned(),
             ));
         }
     };
@@ -918,6 +970,13 @@ pub fn standard_pack_adopt(
             moved.map(|path| path.display().to_string()),
         )
     };
+    // Workflow #463 S3-5: every check passed (a refused adoption answers no readiness); the
+    // adopted pack's readiness on the game root the check tree laid out, by the same path under
+    // `--dry-run`. It changes nothing of the adoption.
+    let (readiness, readiness_not_judged) = match adopted_readiness(&check.installed, &package_id) {
+        Ok(row) => (Some(row), None),
+        Err(why) => (None, Some(why)),
+    };
     Ok(StandardPackAdoptResponse {
         status: if request.dry_run {
             "validated".to_owned()
@@ -951,7 +1010,42 @@ pub fn standard_pack_adopt(
         would_write,
         kept,
         check_tree: check.tree.display().to_string(),
+        readiness,
+        readiness_not_judged,
         next: next_items(&repo, &root.game),
+    })
+}
+
+/// Workflow #463 S3-5: the row of the adopted pack `package_id` of the readiness of the check
+/// tree's game root `installed` (`<tree>/installed/<game>/`), judged by the readiness function,
+/// called as it is, with no installation, so `ready_to_place` at best. When that function refuses
+/// the root, or answers no row of the pack (the function's own `package_invalid`, "is no package
+/// of the bundle"), why it was not judged: the refusal's outcome and the same in words.
+fn adopted_readiness(
+    installed: &Path,
+    package_id: &str,
+) -> Result<PackReadiness, ReadinessNotJudged> {
+    let not_judged = |error: &LabError| ReadinessNotJudged {
+        outcome: cause_of(error),
+        text: format!(
+            "the readiness of {package_id} was not judged on the check tree's game root {}: \
+             {error}; the adoption is answered without it",
+            installed.display()
+        ),
+    };
+    judge_standard_pack_readiness(&StandardPackReadyRequest {
+        root: installed.to_path_buf(),
+        declared_package: None,
+        installation: None,
+    })
+    .map_err(|error| not_judged(&error))?
+    .packs
+    .into_iter()
+    .find(|pack| pack.package_id == package_id)
+    .ok_or_else(|| {
+        not_judged(&LabError::package_invalid(format!(
+            "{package_id} is no package of the bundle"
+        )))
     })
 }
 
@@ -1158,8 +1252,9 @@ fn interrupted(repo: &Path, leftovers: &[String]) -> String {
     said.push(finish);
     said.push(format!(
         "to run that adoption again instead: move the root .part files out of the checkout; {}; \
-         then run adopt with --replace and the --decide that call was given, if any, which writes \
-         the package's one role from the root files as they are; to undo it: move the root .part \
+         then run adopt with --replace and the decision that call was given (--decide, or \
+         --held-reason, with --held-reference when that call had one), if any, which writes the \
+         package's one role from the root files as they are; to undo it: move the root .part \
          files out, put packs/<package_id> back as it was, and restore with the version control \
          a root file that call renamed (to its last commit: a change not committed before that \
          call is not in it)",
@@ -1704,9 +1799,11 @@ impl Existing {
                     "{pack} is there and {file} gives {package_id} a maintenance role, while \
                      schedule.json holds no rule or held entry of it and maintenance.json no \
                      entry of it for its server: the directory belongs to the pack by {file}. \
-                     Adopt takes such a package with --decide of the class held (its hold beside \
-                     that role) or maintenance (a rule by its trigger, or a maintenance.json \
-                     entry by its uses), never business, which is refused beside that role. \
+                     Adopt takes such a package with a decision of the class held (its hold \
+                     beside that role: --held-reason <text> [--held-reference <text>], or \
+                     --decide) or maintenance (--decide: a rule by its trigger, or a \
+                     maintenance.json entry by its uses), never business, which is refused beside \
+                     that role. \
                      {committed}; then, with it absent, run adopt without --replace, or, with it \
                      committed, run adopt with --replace; {replace}; nothing was written"
                 ),
@@ -1717,8 +1814,9 @@ impl Existing {
                      adoption of it was interrupted after it put that directory in place and \
                      before it wrote the root files, or the directory was put there by hand. \
                      {committed}; then, with it absent, run adopt without --replace with \
-                     --decide, as a first adoption, or, with it committed, run adopt with \
-                     --replace and --decide; {replace}; nothing was written"
+                     --decide or --held-reason, as a first adoption, or, with it committed, run \
+                     adopt with --replace and --decide or --held-reason; {replace}; nothing was \
+                     written"
                 ),
             };
         }
@@ -1799,7 +1897,8 @@ impl Existing {
                  directory with changes, and moves a committed one only to a state directory on \
                  the checkout's volume), so nothing comes before: to finish that adoption, run \
                  adopt again with --replace, this --state-dir and the decision that call was given \
-                 (--decide), which writes one role. To undo it: put {pack} back as it was before \
+                 (--decide, or --held-reason, with --held-reference when that call had one), which \
+                 writes one role. To undo it: put {pack} back as it was before \
                  that call (absent, or as its earlier commit) and restore schedule.json and \
                  maintenance.json with the version control. Nothing was written"
             ),
@@ -1845,6 +1944,18 @@ impl Decision {
             fs::read(path).map_err(|error| invalid("", &format!("{}: {error}", path.display())))?;
         let document = serde_json::from_slice::<Value>(strip_bom(&bytes))
             .map_err(|error| invalid("", &format!("not JSON: {error}")))?;
+        Self::of_document(document, path, schedule)
+    }
+
+    /// The document `document` read from `path`, checked on its own and against the file's pools.
+    /// Workflow #463 S3-4: also a document the call built ([`held_document`]), whose `path` is
+    /// empty, as no file was read.
+    fn of_document(
+        document: Value,
+        path: &Path,
+        schedule: &StandardPackSchedule,
+    ) -> LabResult<Self> {
+        let invalid = |pointer: &str, message: &str| decision_invalid(path, pointer, message);
         let Value::Object(document) = document else {
             return Err(invalid("", "the decision is no JSON object"));
         };
@@ -1975,6 +2086,22 @@ impl Decision {
     fn invalid(&self, pointer: &str, message: &str) -> LabError {
         decision_invalid(&self.path, pointer, message)
     }
+}
+
+/// Workflow #463 S3-4: the decision document `{schema_version, class: "held", held: {reason,
+/// reference?}}` of `--held-reason` and `--held-reference`, which [`Decision::of_document`] reads
+/// as it reads a document given by its path; the texts as given, so that its reader checks them.
+fn held_document(rationale: &str, reference: Option<&str>) -> Value {
+    let mut held = Map::new();
+    held.insert(HELD_REASON.to_owned(), json!(rationale));
+    if let Some(reference) = reference {
+        held.insert(HELD_REFERENCE.to_owned(), json!(reference));
+    }
+    let mut document = Map::new();
+    document.insert(SCHEMA_VERSION.to_owned(), json!(PACK_DECISION_SCHEMA));
+    document.insert("class".to_owned(), json!("held"));
+    document.insert(HELD.to_owned(), Value::Object(held));
+    Value::Object(document)
 }
 
 /// `value`: `"pending"`, or `{fixed_value_milli, origin?}` whose origin, when written, is `pack`.
@@ -2313,7 +2440,9 @@ impl Plan {
             let decision = inputs.decision.ok_or_else(|| {
                 refused(
                     adopt(AdoptProblem::DecisionInvalid).json_pointer(""),
-                    "a first adoption needs --decide <decision.json>".to_owned(),
+                    "a first adoption needs --decide <decision.json>, or --held-reason <text> \
+                     to adopt the package as held"
+                        .to_owned(),
                 )
             })?;
             let rule_id = decision
@@ -3546,6 +3675,9 @@ fn value_wait(rule: &Map<String, Value>, pools: &[ScheduleItem]) -> Option<Value
 /// The check tree and what its checks answered.
 struct Checked {
     tree: PathBuf,
+    /// Workflow #463 S3-5: its game root `installed/<game>/`, the bundle's installed layout the
+    /// check read.
+    installed: PathBuf,
     answer: StandardPackCheckResponse,
     /// The bundle's warnings, which the check of the installed layout does not repeat (the
     /// recognition packages its maintenance declarations leave undeclared).
@@ -3931,11 +4063,13 @@ fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
             copy_tree(&source, &installed.join(&name))?;
         }
     }
-    let (answer, compiled) =
-        check_standard_pack_root_with_catalog(StandardPackCheckRequest { root: installed })
-            .map_err(|error| composed(error, &tree))?;
+    let (answer, compiled) = check_standard_pack_root_with_catalog(StandardPackCheckRequest {
+        root: installed.clone(),
+    })
+    .map_err(|error| composed(error, &tree))?;
     Ok(Checked {
         tree,
+        installed,
         answer,
         bundle_warnings: bundle.warnings,
         compiled,
@@ -4178,8 +4312,9 @@ fn unchanged(
         format!(
             "written or moved before: {listed:?}; nothing is removed: compare with the version \
              control; move the root .part files this call wrote out of the checkout; {}; then run \
-             adopt again with --replace and this call's --decide, if any, which reads the root \
-             files as they are now",
+             adopt again with --replace and this call's decision (--decide, or --held-reason, with \
+             --held-reference when this call had one), if any, which reads the root files as they \
+             are now",
             new_directory_step(pack, "this call")
         )
     };

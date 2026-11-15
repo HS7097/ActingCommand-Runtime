@@ -249,6 +249,9 @@ mod gate_458_close_isolates;
 // Workflow #463 U1 (0.12.60; register §1.372): a linear step on a screen its package never
 // recorded ends with its own code, names its frame and pauses only its own pair, at once.
 mod gate_463_u1;
+// Workflow #463 U1b (0.12.63; register §1.389): the unrecorded-screen code only during a pair's
+// break-in of its package's content; after it `page_confirmation_failed`, its frame still named.
+mod gate_463_u1b;
 // Workflow #469 K1 (0.12.62; register §1.395): the word a linear step's end carries reaches the
 // policy record and leaves the failure identity and the streak as they are.
 mod gate_469_k1;

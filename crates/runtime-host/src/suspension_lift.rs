@@ -37,7 +37,8 @@ const MAPPING_CHANGED: &str = "?";
 
 /// The content hash of the package at `path` (M-PKG §3.3, D3), in lowercase hex, or why it
 /// could not be measured: the containment refusal's code when the refusal names one. Called
-/// only when a scheduled failure is settled and by a lift check.
+/// only when a scheduled failure is settled and by a lift check ([`LiftChecks::current`], which
+/// since Workflow #463 U1b a scheduled `linear_steps` run's preparation reads too).
 pub(crate) fn measure_package_hash(path: &str) -> Result<String, Option<Code>> {
     Containment::new()
         .measure_content_hash(Path::new(path), Instant::now() + MEASURE_BUDGET)
@@ -171,7 +172,8 @@ impl LiftChecks {
 
     /// The content hash of the package at `path` as of `time`: the latest measurement while it
     /// is younger than the interval, else a new one. Workflow #386 SR-3: a suspended task
-    /// package's lift check reads it too.
+    /// package's lift check reads it too. Workflow #463 U1b fix round 2: and a scheduled run's
+    /// preparation of a `linear_steps` package, for its pair's break-in.
     pub(crate) fn current(
         &self,
         path: &str,

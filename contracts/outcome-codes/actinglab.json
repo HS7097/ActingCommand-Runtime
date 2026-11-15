@@ -634,6 +634,22 @@
       "common_causes": "The disk is full; the directory is read-only or locked; another program changed the work directory during the build.",
       "handling": "Free space or choose a writable directory, then build again into a new directory."
     },
+    "resource_build_readiness_refused": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "actinglab standard-pack build wrote its product, and the resource tooling's readiness function, called as standard-pack ready --root calls it, refused the installed root the steps laid out, <out>/work/installed/<game>/, which path names. Its cause is the refusal's own code (validation_failed for a root that is no longer there or cannot be read, standard_pack_root_invalid for a root file the structure check refuses, package_invalid). The answer carries no readiness: its readiness_refused is the refusal and this warning is in its warnings. The build succeeded: it exits 0 and its product stands (Workflow #463 S3-7).",
+      "common_causes": "Another program removed or changed the build's work directory after the steps had checked it; the disk could not be read.",
+      "handling": "The zip, SHA256SUMS and build.json are complete. Judge the readiness with actinglab standard-pack ready --root on the installed root once it can be read again, or build again into a new directory."
+    },
     "resource_check_release_retired": {
       "category": "error",
       "ladder_class": "none",

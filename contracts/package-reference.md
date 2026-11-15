@@ -556,7 +556,10 @@ commit}` and no version or tag (above), and `build.json` names the source reposi
 and its tree, the Tools head and the executable's SHA-256 that built it, and, read back from the
 zip, the game, the `package` range, the root files and directories, every pack with its file count
 and size, and the zip's name, SHA-256 and size. The build refuses a tree with any change, so every
-build has a commit; no digest names a pack. `build.json` has no readiness member yet.
+build has a commit; no digest names a pack. `build.json` has no readiness member: the build's
+answer carries the readiness of the installed root it laid out and the placement's plan line, and
+the file does not (#463 S3-7, since 0.12.63; [resource-verify.md](resource-verify.md),
+"`standard-pack build`").
 
 ### Maintenance declarations
 

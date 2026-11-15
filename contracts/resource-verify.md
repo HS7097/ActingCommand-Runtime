@@ -299,7 +299,45 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
   caused by the OS failure); the files already written stay.
 - **The answer** (exit 0, the CLI module's line, its members flat): `build` (the document of
   `build.json`), `out`, `files` (`zip`, `sums`, `build`, `work`, absolute paths) and `steps` (each
-  step as the report lists it).
+  step as the report lists it); and (#463 S3-7, since 0.12.63; register
+  [v012-register.md](v012-register.md) §1.414) `readiness`, `warnings` and `next`:
+  - **`readiness`** is the readiness of the installed root the `bundle` step laid out and checked,
+    `<out>/work/installed/<game>/`. The build keeps that root after a successful build, in every
+    case: the step makes it, nothing of the build deletes, and a build whose steps all passed has
+    laid it out. It is judged by the resource tooling's one function,
+    `judge_standard_pack_readiness`, called, not copied, as `standard-pack ready --root` calls it on
+    that root: no installation and no declared `package` range handed in. So the answer is that
+    row's answer for that root ([standard-pack-schedule.md](standard-pack-schedule.md),
+    "Readiness"): `installation` `not_read`, the five installation items `not_judged`
+    (`installation_not_read`), I3 an information line, and each pack `waiting` with every reason,
+    `ready_to_place` or `not_scheduled`, never `dispatchable`.
+  - It is judged once the product is written, while the root exists, and changes nothing of the
+    build's success. A root the function refuses (one no longer there, unreadable, or refused by
+    the structure check) is not judged: `readiness` is then absent and `readiness_refused` is the
+    function's refusal in the envelope's error form (`code`, `message`, `blocked_by`, `details`;
+    its code one of the function's own), and the build still exits 0. No readiness is ever
+    answered that was not computed.
+  - **`warnings`** (fix round 2), present only when not empty, each `{outcome}` as the Lab's
+    answers carry a warning: beside such a refusal exactly one, `resource_build_readiness_refused`
+    (warning; `path` the installed root), caused by the refusal's own code, so that a reader of
+    the answer's outcome and warnings sees it. Its developer line is the program's form, `WARN
+    actinglab: resource_build_readiness_refused path=<root> [caused_by: <code>] <message>`, on
+    stderr.
+  - The readiness of a real game makes the answer large: through the Lab's MCP server an answer
+    above its budget is exported whole to a file by that server's overflow rule
+    ([lab-two-entries.md](lab-two-entries.md) §9.3, "The Lab overflow rule") and never cut.
+  - **`next.place`** is the placement's plan of the files written as the words of the Lab's
+    command line after the program's name, as every `next` of the Lab holds a command (fix round
+    2): `["place", "<zip>", "--sums", "<SHA256SUMS>", "--plan"]`, the two paths those of `files`,
+    as the build wrote them, for the `actinglab` of the installation the bundle is to be placed
+    into (`place` acts on the root of the `actinglab.exe` that runs it:
+    [install-cli.md](install-cli.md), "The Lab's rescue module"). It is the plan's line only: a
+    placement is an act under the owner's authorization, and no answer hands out the line that
+    places.
+  - **`build.json` carries none of them.** Readiness is a judgement of a root at a moment, which any
+    reader can ask for again (`standard-pack ready --root`); the file records the build. Its
+    members, its schema `actingcommand.standard-pack-build.v1` and the capability's `build_schema`
+    stay as they are.
 - **Refusals** as `resource verify`'s: global `--dry-run` `dry_run_unsupported`, after flag parsing
   only, with no alternative; the device, Runtime and instance options
   `offline_device_scope_forbidden`; any other flag, a flag twice, a flag without its value, a
@@ -333,8 +371,9 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
 root, in byte order), `root_directories` (its directories but `packs`, in byte order) and `packs`
 (its `bundle.json` packs in their order, without `path`) are read back from the zip written, whose
 name, SHA-256 (the one `SHA256SUMS` names) and size `zip` gives; `commit` and `tree` are the
-checkout's, `executable_sha256` the `tools` step's. It has no readiness member: whether a pack is
-ready to be dispatched is judged by another slice's function, which a later slice adds here.
+checkout's, `executable_sha256` the `tools` step's. It has no readiness member: (#463 S3-7) the
+build's answer carries the readiness of its installed root and the next command ("The answer"
+above), and the file does not.
 
 ### The `package` revision
 
