@@ -862,7 +862,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Watchdog decision: the Runtime owner answers.",
+      "description": "Watchdog decision: the Runtime owner answers. Workflow #469 V0: the rescue's alive reads it, by this code's name, as the Runtime being alive: it reads the watchdog's status again every 500 ms until the decision is this one or its wait ends (alive --wait then refuses runtime_not_running).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -908,7 +908,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Watchdog decision: the installer holds the writer lock.",
+      "description": "Watchdog decision: the installer holds the writer lock. Workflow #469 V0: although info, the rescue's start of the Runtime reads it as a refusal: start_runtime_refused, caused by it, exit 1.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -953,7 +953,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Watchdog decision: another tick holds the run lock.",
+      "description": "Watchdog decision: another tick holds the run lock. Workflow #469 V0: although info, the rescue's start of the Runtime reads it as a refusal: start_runtime_refused, caused by it, exit 1.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

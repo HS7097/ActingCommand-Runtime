@@ -337,7 +337,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A session preparation step passed its deadline.",
+      "description": "A session preparation step passed its deadline. Workflow #469 V0: it is on the policy's always-severe list (is_severe_policy_failure), so a scheduled run that ends with it pauses its task on the application at the first failure, whatever its class says.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1576,6 +1576,8 @@
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "failure_code": "optional",
+        "confirmation_problem": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -1585,7 +1587,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A contained task reached a step that only a scheduler-backed runtime can run.",
+      "description": "A contained task reached a step that only a scheduler-backed runtime can run. Workflow #469 V0 (since 0.12.62): failure_code, when present, is the code of the failure whose decision asked for the recovery, and confirmation_problem, when that failure was a confirmation failure, what the program saw there.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1927,6 +1929,8 @@
       "values": {
         "page_id": "optional",
         "artifact_id": "optional",
+        "guard_problem": "optional",
+        "failure_code": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -1936,7 +1940,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A contained task operation's guard did not pass before its input. page_id is the page of the frame the guard judged on and artifact_id that frame, the run's GuardRejection pin (#411 A30).",
+      "description": "A contained task operation's guard did not pass before its input. page_id is the page of the frame the guard judged on and artifact_id that frame, the run's GuardRejection pin (#411 A30). Workflow #469 V0 (since 0.12.62): guard_problem, when present, says why the guard refused, and failure_code beside target_not_passed is the target's own failure.",
       "common_causes": "On the frame before an input, the page recognised is not the guard's page, or the guard's target was evaluated on that page and did not pass: the screen is not in the state the operation expects, or the target no longer matches it. No on_guard_refused passed the operation over or ended the run with a key, and no on_error recovery was requested.",
       "handling": "Look at the frame artifact_id names and at page_id, the page it showed (actingctl run evidence --run-id <run_id>): another page means the flow differs from the pack there, the guard's page with a failing target means the target no longer matches; both are the pack author's. A scheduled run's failure starts the default recovery ladder (trigger pack_logic), and the same refusal again with a similar frame can pause the task (actingctl diagnose lists it under suspended)."
     },
@@ -2032,7 +2036,7 @@
     },
     "contained_task_declared_operation_page_mismatch": {
       "category": "error",
-      "ladder_class": "none",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2049,7 +2053,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.10",
-      "description": "#412 Lab B-3: a Lab operation ran the declared operation pack_operation_id, which runs from the page page_ids (its declared from), and the first page the kernel recognised was page_id. The run ended before any input.",
+      "description": "#412 Lab B-3: a Lab operation ran the declared operation pack_operation_id, which runs from the page page_ids (its declared from), and the first page the kernel recognised was page_id. The run ended before any input. Workflow #469 V0 (since 0.12.62): its class is pack_logic_mismatch, the screen differing from the declaration; it starts nothing, since only a Lab operation raises it and a Lab operation's failure reaches no trigger of the recovery ladder and no warning count.",
       "common_causes": "The device did not show the operation's page when the Lab operation started.",
       "handling": "Bring the device to the operation's from page, or name an operation of the page it shows."
     },
@@ -2070,6 +2074,7 @@
         "loading_page_id": "optional",
         "loading_ms": "optional",
         "loading_limit_ms": "optional",
+        "confirmation_problem": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2079,7 +2084,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A page-graph step's postcondition was not confirmed within its wait and its operation decided to fail. pack_operation_id is the operation, page_ids its destination pages, attempts its attempts; page_id is the page the last frame of the wait matched and is absent when that frame matched no page; artifact_id is that frame. STILL-1: held_ms and limit_ms are present when the wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when the wait ended on a transition frame after its loading allowance was spent under execution.loading.mode on; page_id is then the page of the package the loading page suppressed, if one held.",
+      "description": "A page-graph step's postcondition was not confirmed within its wait and its operation decided to fail. pack_operation_id is the operation, page_ids its destination pages, attempts its attempts; page_id is the page the last frame of the wait matched and is absent when that frame matched no page; artifact_id is that frame. STILL-1: held_ms and limit_ms are present when the wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when the wait ended on a transition frame after its loading allowance was spent under execution.loading.mode on; page_id is then the page of the package the loading page suppressed, if one held. Workflow #469 V0 (since 0.12.62): confirmation_problem, when present, says what the program saw where the wait ended.",
       "common_causes": "The tap was ignored (page_id is the departure page); the screen moved to a page the step does not expect (page_id is that page); the last frame matched no page (no page_id: an animation, a dialog the package does not declare, or a page whose targets no longer match).",
       "handling": "Read page_id and look at the frame artifact_id names: an ignored tap needs a longer settle or a click box that lands on the control; an unexpected page needs that page declared as a destination or an interrupt; no page needs the frame's page declared or its targets fixed."
     },
@@ -2090,6 +2095,7 @@
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "confirmation_problem": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2099,7 +2105,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A page-graph step reached a declared error page and its operation decided to fail; or (#411 A45) a page-graph run observed a page it declares as an error page and no operation leaves that page, so it ended there before any input from it.",
+      "description": "A page-graph step reached a declared error page and its operation decided to fail; or (#411 A45) a page-graph run observed a page it declares as an error page and no operation leaves that page, so it ended there before any input from it. Workflow #469 V0 (since 0.12.62): confirmation_problem, when present, says which the run met (error_page, error_page_no_exit).",
       "common_causes": "After a step's input the screen showed a page the task lists in error_pages, and the operation, which declares retries, had no retryable on_error recovery to request, so it failed there; or a wait step saw such a page, or the run stood on an error page no operation leaves. An operation that declares no retries fails with page_confirmation_failed (hit_error_page=true) instead.",
       "handling": "Read after_page in the detail of the run's runtime.failed record and the run's last frames (actingctl run evidence --run-id <run_id>): if the application did show its error page, the run stopped as the package declares and the cause is the application's state then; if the page was recognised wrongly, its targets are the pack author's to fix. A scheduled run's failure starts the default recovery ladder (trigger pack_logic) and does not pause the task by repetition."
     },
@@ -2157,6 +2163,7 @@
         "page_ids": "required",
         "attempts": "required",
         "artifact_id": "optional",
+        "confirmation_problem": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2166,7 +2173,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.60",
-      "description": "Workflow #463 U1: after the input of a linear_steps click or select step (pack_operation_id, after attempts attempts) the step's closing decision found a screen the package never recorded: where its failed wait ended the run with page_confirmation_failed (the last attempt's arrival, the next page after a seen intermediate page or skip target, the continued wait after a late gate, a retry decision that saw neither page), it observed for the step timeout, and from its first frame to its bound's end no frame passed the pages the wait awaited or the step's own page (page_ids, the awaited pages first and the step's own page last), none was a loading frame or showed a shared interrupt page, its last two captures and its first and last frames were unchanged by the Runtime's one frame-change measure, and no other page the package declares passed on its last frame. The closing decision never inputs, never hands a frame to the shared interrupt pages and only classifies: every other end of it keeps page_confirmation_failed, and so does every error raised by its own capture, recognition or evaluation, whatever its kind; the one exception is a failure of the Runtime's own bookkeeping (a record it cannot write), which ends the run as it ends any run. It is made only in a task's own run (a scheduled, a direct or a Lab run of the package; never a prerequisite, return-home, navigation or interrupt layer, a startup package or a ladder rung), outside a restart segment, after a wait that neither missed the intermediate page nor ended on its loading allowance, for a package without sample consensus, and when the run's time left before its deadline or the end of its admitted runtime budget is at least twice its bound (a scheduled run whose budget's end could not be read makes none). The run ends with no further input; its detail and timing are those page_confirmation_failed gives that end (operation, attempts, after_page, hit_error_page, transition, intermediate_seen, awaited). artifact_id is the frame of the run's Failure pin, the closing decision's last frame. A scheduled run pauses its pair (catalog task, instance) at once, whatever its on_failure, with no rerun; nothing else is paused. Its class starts the stuck-recovery ladder through the default item pack_logic, as page_confirmation_failed does.",
+      "description": "Workflow #463 U1: after the input of a linear_steps click or select step (pack_operation_id, after attempts attempts) the step's closing decision found a screen the package never recorded: where its failed wait ended the run with page_confirmation_failed (the last attempt's arrival, the next page after a seen intermediate page or skip target, the continued wait after a late gate, a retry decision that saw neither page), it observed for the step timeout, and from its first frame to its bound's end no frame passed the pages the wait awaited or the step's own page (page_ids, the awaited pages first and the step's own page last), none was a loading frame or showed a shared interrupt page, its last two captures and its first and last frames were unchanged by the Runtime's one frame-change measure, and no other page the package declares passed on its last frame. The closing decision never inputs, never hands a frame to the shared interrupt pages and only classifies: every other end of it keeps page_confirmation_failed, and so does every error raised by its own capture, recognition or evaluation, whatever its kind; the one exception is a failure of the Runtime's own bookkeeping (a record it cannot write), which ends the run as it ends any run. It is made only in a task's own run (a scheduled, a direct or a Lab run of the package; never a prerequisite, return-home, navigation or interrupt layer, a startup package or a ladder rung), outside a restart segment, after a wait that neither missed the intermediate page nor ended on its loading allowance, for a package without sample consensus, and when the run's time left before its deadline or the end of its admitted runtime budget is at least twice its bound (a scheduled run whose budget's end could not be read makes none). The run ends with no further input; its detail and timing are those page_confirmation_failed gives that end (operation, attempts, after_page, hit_error_page, transition, intermediate_seen, awaited). artifact_id is the frame of the run's Failure pin, the closing decision's last frame. A scheduled run pauses its pair (catalog task, instance) at once, whatever its on_failure, with no rerun; nothing else is paused. Its class starts the stuck-recovery ladder through the default item pack_logic, as page_confirmation_failed does. Workflow #469 V0 (since 0.12.62): confirmation_problem, when present, is unrecorded_screen, the word page_confirmation_failed carries for the same screen.",
       "common_causes": "A result the recording never met: a dialog nobody recorded (a balance that is not enough, a notice, a confirmation), or a page a game update added, shown after the step's click. Also a static screen nobody declared that outlasted the failed wait and the closing decision (a connecting overlay, a slow loading screen).",
       "handling": "Take the pinned frame as a file: artifact_id is no material reference by itself; actinglab run evidence <request_id> lists the run's frames as material references <seq>:<event_id>:<artifact_id>, and the one whose last part is this artifact_id is the pinned frame; actinglab material <ref> --out <dir> writes it as <dir>/<sha256>.png (the MCP tool ac_material with mode export writes the same file). Take it in time: a pinned frame nobody confirmed as read is removed once frame_retention_evidence_max_age_days (a top-level key, 15 by default) have passed since its ingestion, and one confirmed as read at the ledger store's next pass. A screen that ends the business after the path's last press (too little balance, nothing to collect) is an ending of the recording, its message left on the screen: on the stopped recording, actinglab record mark --ending --frame <png> --outcome-key <key> with a mark of that screen only (such as --template of its message) adds it, and actinglab record stop regenerates the package, which then ends that run Completed on the screen with that key; a frame of another resolution that is a pure scale of the recording's is converted by the Lab itself, so give the file as written. Every other answer is a new recording: a pop-up after which the path goes on (an optional step), a result after an earlier press or a branch that continues the business (a step and a page). A slow screen is declared as a page or a loading page. A changed package content lifts the pause at the pair's next due evaluation; actingd suspended and ac_diagnose list the paused pair until then."
     },
@@ -2248,6 +2255,7 @@
         "loading_page_id": "optional",
         "loading_ms": "optional",
         "loading_limit_ms": "optional",
+        "confirmation_problem": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2257,7 +2265,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A step's expected page was not confirmed after its input. STILL-1: held_ms and limit_ms are present when the wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when the wait ended on a transition frame after its loading allowance was spent under execution.loading.mode on. LOAD-4 (since 0.12.38): so in a linear_steps task, for the wait of the intermediate page, of the next step's page or of its candidates, and of the retry decision.",
+      "description": "A step's expected page was not confirmed after its input. STILL-1: held_ms and limit_ms are present when the wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when the wait ended on a transition frame after its loading allowance was spent under execution.loading.mode on. LOAD-4 (since 0.12.38): so in a linear_steps task, for the wait of the intermediate page, of the next step's page or of its candidates, and of the retry decision. Workflow #469 V0 (since 0.12.62): confirmation_problem, when present, says what the program saw where the confirmation ended.",
       "common_causes": "After a step's input the page it expects next did not pass within its confirmation wait: in a page-graph task an operation that declares no retries (none of retryable, max_attempts, retry_interval_ms) ended its wait without a destination page or on a declared error page (hit_error_page=true), or a retry's wait matched no page at all; in a linear_steps task the next step's page did not pass after the step's attempts. held_ms or loading_ms mean the wait ended early on an unchanged or a loading screen.",
       "handling": "Read the detail of the run's runtime.failed record (after_page is the page the last frame matched, or <unrecognized>) and the run's frames (actingctl run evidence --run-id <run_id>): the step's own page means its input did not take, another page needs declaring as a destination or an interrupt, no page needs the frame's page declared or its targets fixed; all are the pack author's. A scheduled run's failure starts the default recovery ladder (trigger pack_logic), and the same failure again with a similar frame can pause the task until the package changes."
     },
@@ -2427,7 +2435,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A recognition observation (capture, multi-frame sampling and recognition) did not finish within its window, and every observe-only retry (attempts: the configured base plus the pacing curve's extra retries) ran out too; stage names the observation. A retry never repeats an input. A scheduled run that ends with it settles as a condition termination and is rerun after the condition lifts (contracts/policy-suspension.md). Not a recovery ladder trigger.",
+      "description": "A recognition observation (capture, multi-frame sampling and recognition) did not finish within its window, and every observe-only retry (attempts: the configured base plus the pacing curve's extra retries) ran out too; stage names the observation. A retry never repeats an input. A scheduled run that ends with it settles as a condition termination and is rerun after the condition lifts (contracts/policy-suspension.md). Not a recovery ladder trigger. Workflow #469 V0: the condition termination is by name (the default scheduling.rerun.condition_codes lists it); no default trigger item reads its class.",
       "common_causes": "A slow or stalled emulator under host load; a page whose consensus needs more frames than its window allows at the current pacing.",
       "handling": "Nothing to repair for one occurrence; the rerun follows. Repeated occurrences at stage s0 mean the package's sampling or timeouts are too tight."
     },
@@ -2469,7 +2477,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The frame geometry changed between recognition samples.",
+      "description": "The frame geometry changed between recognition samples. Workflow #469 V0: by this code's name, the confirmation wait after an input (a page-graph step's confirmation, a linear step's wait after its input) takes it as a frame that did not confirm the step and waits on in its window; every other observation (an entry, a frame before an input, a retry's decision) ends the run with it.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2533,7 +2541,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A candidate sampling of a selection step did not finish within its window, and every observe-only retry (attempts) ran out too. Same rule as recognition_sample_deadline_exceeded: a new timing context per retry, no repeated input, a condition termination with a rerun. Not a recovery ladder trigger.",
+      "description": "A candidate sampling of a selection step did not finish within its window, and every observe-only retry (attempts) ran out too. Same rule as recognition_sample_deadline_exceeded: a new timing context per retry, no repeated input, a condition termination with a rerun. Not a recovery ladder trigger. Workflow #469 V0: the condition termination is by name (the default scheduling.rerun.condition_codes lists it); no default trigger item reads its class.",
       "common_causes": "A slow or stalled emulator under host load.",
       "handling": "Nothing to repair for one occurrence; the rerun follows."
     },
@@ -3784,7 +3792,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A recovery graph node's detection did not match.",
+      "description": "A recovery graph node's detection did not match. Workflow #469 V0: only the Lab runs a recovery graph; no run of the Runtime ends with this code. A node that fails takes its on_error or ends the graph Failed with a text reason, and save_on_error saves the code: detect_failed and action_failed are treated alike, whatever their classes.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -3804,7 +3812,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Every action of a recovery graph node failed.",
+      "description": "Every action of a recovery graph node failed. Workflow #469 V0: only the Lab runs a recovery graph; no run of the Runtime ends with this code. A node that fails takes its on_error or ends the graph Failed with a text reason, and save_on_error saves the code: detect_failed and action_failed are treated alike, whatever their classes.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -4050,7 +4058,7 @@
     },
     "recognition_sample_budget_invalid": {
       "category": "error",
-      "ladder_class": "budget_or_permission",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -4067,7 +4075,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Admission refused a task package whose declared sampling needs more time (required_ms) than the smaller of its step and task timeouts (limit_ms); pack_operation_id names the operation when one operation exceeds it. It is a suspend code by default: the Runtime suspends the task package until its content or the Runtime build changes (contracts/policy-suspension.md). Not a recovery ladder trigger.",
+      "description": "Admission refused a task package whose declared sampling needs more time (required_ms) than the smaller of its step and task timeouts (limit_ms); pack_operation_id names the operation when one operation exceeds it. It is a suspend code by default: the Runtime suspends the task package until its content or the Runtime build changes (contracts/policy-suspension.md). Not a recovery ladder trigger. Workflow #469 V0 (since 0.12.62): its class is declaration_error, decided from the declarations without looking at the screen.",
       "common_causes": "A package written for an older kernel whose budget rule was looser; a package whose consensus or candidate sampling declarations outgrew its timeouts.",
       "handling": "Raise the package's step or task timeout, or reduce its declared sampling, and replace the package; the suspension lifts when its content hash changes."
     },

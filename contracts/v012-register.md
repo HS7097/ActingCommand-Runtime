@@ -27293,6 +27293,110 @@ declare an ending page declares [15, 15], which an installer of [3, 14] refuses 
 
 **Rollback** (below 0.12.61). Nothing is persisted; an earlier Tools has no `standard-pack build`.
 
+### 1.386 Slice #469 V0 (0.12.62): the reason words of the most mixed codes and their keys, and the registry's small defects that change nothing (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, the places 1, 2, 3, 4, 6 and 8 of A-1, A-2 items 1 to 4, A-3 and the rows V0, D1, D2 and D3 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-v0-words-and-registry.md`, read on main `d32d4d6c` (after #1728 and #1731))
+
+The coordinator gave this slice 1.386: main `d32d4d6c` holds the sections up to §1.385, and 1.387
+belongs to a slice dispatched with this one. The slice ships in 0.12.62 (release 0.12.61 is cut
+without it).
+
+**What it is.** The words a reader needs to see why one of the most mixed codes ended something,
+written down, and nothing else: no emitter sets any of them yet. The slices that set them (the
+design's K1, K2, H1, H2, H3) come after this one and each finds its vocabulary here. A word comes
+only from what the program already knows where it raises the code, goes into the outcome's values
+and never into its detail text (the failure identity hashes fragments of that text), and changes
+nothing the program does next: for one code, every word leads to the same next step. Every word is
+a `vocab:` value, which codes mode keeps.
+
+| Vocabulary and key | Words | Enum | Codes that carry it |
+|---|---|---|---|
+| `confirmation_problem` | 21: the design's place 1 (`input_not_taken`, `awaited_page_late`, `other_page_shown`, `loading_page_shown`, `transition_shown`, `interrupt_shown`, `screen_moving`, `unrecorded_screen`, `nothing_recognised`, `screen_still`, `loading_limit`, `error_page`, `deadline_reached`, `check_failed`, `neither_page`, the five `unjudged_*`) and place 2's `error_page_no_exit` | `ConfirmationProblem`, `crates/execution-kernel/src/codes.rs` | `page_confirmation_failed`, `contained_task_step_unconfirmed`, `contained_task_error_page_reached`, `contained_task_linear_unrecorded_screen`, `contained_task_requires_scheduler` |
+| `guard_problem` | 3: `page_mismatch`, `target_not_passed`, `page_moved` | `GuardProblem`, the same file | `contained_task_guard_refused` |
+| `availability_source` | 6: `configured`, `self_check`, `device_link`, `device_state`, `other_publisher`, `facts_missing` | `AvailabilitySource`, `crates/runtime-host/src/codes.rs` | `instance_unavailable` |
+| `pause_cause` | 7: `severe_failure`, `unrecorded_screen`, `runtime_budget_exceeded`, `interrupted_again`, `sensitive_task`, `repeated_failure`, `retries_exhausted` | `PauseCause`, the same file | `policy_task_paused` |
+
+Each vocabulary is `review` `pending` with its `source`; each word's text is the design's line
+for it, the five `unjudged_*` written one by one from the design's shared line. The `pause_cause`
+texts end with how the pause lifts as the program lifts it: when the package changes, with no
+manual lift ([policy-suspension.md](policy-suspension.md), "Lifting (R19)"); the design's
+sentence for all seven also said "or a person resumes the task", which no code does, so it is not
+written.
+
+**Optional values on ten codes** (all optional now; the last slice that sets a word at every site
+makes it required). Before writing, each code was read in its fragment and in every file under
+`released/`: all ten are `pending`, `active`, and in no release file, as the design says.
+
+| Code | Values added |
+|---|---|
+| `page_confirmation_failed`, `contained_task_step_unconfirmed`, `contained_task_error_page_reached`, `contained_task_linear_unrecorded_screen` | `confirmation_problem` |
+| `contained_task_requires_scheduler` | `failure_code` (the existing key), `confirmation_problem` |
+| `contained_task_guard_refused` | `guard_problem`, `failure_code` |
+| `instance_unavailable` | `availability_source`, and the existing `device_link_state` and `device_hold` |
+| `policy_task_paused` | `pause_cause`, `failure_code` |
+| `policy_retry_backoff_active` | `failure_code` |
+| `emulator_control_failed` | the existing `stage` and `device_category` |
+
+Each code's description says what the new value holds when present.
+
+**The always-severe list (D2).** `nemu_app_index_requires_paired_input` leaves
+`severe_policy_failure_codes` (`crates/actingcommand-contract/src/event/payload.rs`). It was
+retired in 0.12.39 (#402 HS-3, §1.271 row HS3-6; `released/0.12.39.json`); nothing raises it: no registry
+variant, no literal outside the list, only two comments in `apps/actingd/src/config.rs` and
+`apps/actingd/src/config/gate_hs1.rs`. No test counts the list: the ledger's tests name one listed
+and one unlisted code, and the outcome guard's bridge names the function, not its entries.
+
+**Two classes (D3).** `recognition_sample_budget_invalid` is `declaration_error` (it was
+`budget_or_permission`): refused at admission from the declarations, without looking at the
+screen. `contained_task_declared_operation_page_mismatch` is `pack_logic_mismatch` (it was `none`):
+the screen differs from the declaration. Both in the registry macro and the fragment (G1). Before
+the second, the path from a Lab declared operation's end to the ladder was read: the operation
+(`run_lab_declared_operation`, `crates/runtime-host/src/host/lab_operation.rs`) holds a
+`LabOperation` claim and notes no ladder source, so `ladder_trigger_for` finds no trigger for it
+and the task stage's `match_trigger` is never called (only a policy run and a direct run note a
+source, `crates/runtime-host/src/host/contained_task.rs`); the kernel's failure goes into the
+operation's terminal artifact and its receipt, and its only ledger record is `command.rejected`,
+whose outcome is `command_rejected`, so the warning count (`count_stability_record`, which counts
+a record by its own outcome's code) never sees the kernel's code. Under the defaults no trigger
+item reads `declaration_error` either.
+
+**Texts (D1).** [runtime-config.md](runtime-config.md) and [emulator-control.md](emulator-control.md)
+name `device_link_lost` in the default of `recovery_ladder.exclude_codes`, as the defaults file has
+since §1.52. runtime-config.md says that `scheduling.feature_lock.codes` and
+`.locked_valid_for_ms` are for SR-5a and SR-5b, which are not built (nothing reads either key, no
+run ends with `contained_task_feature_locked`), and that of `performance.calibration.*` P-m's
+learning view reads `apply`, `learning_max_stage` and `learning_backstop_bp` while P-a, which reads
+the rest, `trouble_codes` among them, is not built. The catalog texts of the codes the design's
+A-2 item 1 leaves as they are say what the program does with them: `display_map_unresolved`,
+`perf_run_yielded` and `perf_hold_expired` (not raised yet), `recognition_pack_text_read_refused`,
+`device_link_lost`, `application_foreground_unknown`, `recovery_readiness_adb_unconfirmed` and
+`preparation_deadline_exceeded` (on the always-severe list), `policy_settlement_interrupted`,
+`contained_task_interrupt_environment_limit_reached`, `standard_pack_package_unclassified`,
+`watchdog_installer_busy`, `watchdog_run_in_progress`, `watchdog_alive`, `lease_busy`,
+`lease_cooldown`, `max_steps_reached`, `consecutive_unchanged_threshold_reached`,
+`recognition_sample_deadline_exceeded`, `candidate_sample_deadline_exceeded`,
+`recognition_sample_geometry_changed`, `detect_failed` and `action_failed`. The other codes of the
+always-severe list keep their texts.
+
+**The rule for new code (A-3).** [runtime-outcomes.md](runtime-outcomes.md), "Deciding from an
+outcome", after "Classes": decide by class or by word, never by name. No guard holds it yet.
+
+**Counts.** The catalog header holds 676 keys (672 before), 250 vocabularies (246) and 1932 words
+(1895). No code is added or retired, so the index's README counts do not change; its
+`execution-kernel.md` shows the two new classes. No README states these totals.
+
+**Tests.** None is added: no behaviour changes. The gates are G1 (registry class = fragment), G7
+(key table and the four enums = catalog) and the index's `--check`. No existing test pins either
+corrected class: `d1_l9` of `crates/runtime-config/src/ladder_tests.rs` asserts that no default
+trigger item matches `recognition_sample_budget_invalid` at any stage, which `declaration_error`
+keeps.
+
+**What is not changed.** Every place that builds or raises an outcome; every detail text; the
+failure identity, the streak, the frame rules, the lists other than the one entry; every class and
+category but D3's two; no interface revision, record shape or configuration key.
+
+**At deploy.** Nothing changes for an installation: no emitter sets a new value, the two class
+changes reach no trigger under the defaults, and the removed list entry names a code no build
+since 0.12.39 raises.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
