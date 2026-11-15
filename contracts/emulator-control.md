@@ -605,7 +605,9 @@ of the instance, which fails only that run, #411 A7; with the capture self-check
 `return_home` and `application_restart` rungs are skipped `capture_unavailable`, so the climb
 reaches the emulator restart); exclusions `contained_task_prerequisite_*` and
 `contained_task_return_home_entry_unmatched` (the gate codes of `contracts/linear-steps.md`,
-"Prerequisite packages" and "Return-home fallback").
+"Prerequisite packages" and "Return-home fallback"), and `device_link_lost` (Workflow #398
+RD-2, the coordinator's ruling on model-398 §16 item 5: a cable is not something the ladder can
+fix).
 `contained_task_navigation_entry_unconfirmed` is not excluded (Workflow #373 NAV-5, wave-17
 acceptance ruling 7, in place of M-373 §9.4's proposal): the page list says the run reached its
 entry and the package's own check says it did not, so the Runtime does not know where it is,
