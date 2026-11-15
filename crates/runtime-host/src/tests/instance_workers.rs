@@ -11,9 +11,9 @@
 use super::*;
 use crate::host::ContainedTaskCheckpointPoint as LapsePoint;
 use actingcommand_contract::{
-    DiagnosticCode, InstallTransitionAction, InstallTransitionPhase, LeasePayload,
-    RecoveryLadderOutcome, RecoveryRung, RecoveryRungOutcome, RequestId, RuntimeLifecyclePhase,
-    RuntimePayload, SchedulerPayload, SchedulingPauseScope, StartupPackageDisposition,
+    DiagnosticCode, LeasePayload, RecoveryLadderOutcome, RecoveryRung, RecoveryRungOutcome,
+    RequestId, RuntimeLifecyclePhase, RuntimePayload, SchedulerPayload, SchedulingPauseScope,
+    StartupPackageDisposition,
 };
 use actingcommand_scheduler::ClaimKind;
 
@@ -975,113 +975,6 @@ fn a_pause_that_cancels_rung_three_s_package_run_ends_the_climb_at_warning() {
     assert_eq!(
         ladder_releases(&events, run.context.lease_token().lease_id()).len(),
         1
-    );
-    assert!(run.host.fatal_error().expect("runtime health").is_none());
-    run.host.close().expect("close host");
-}
-
-/// Workflow #369 §5.2: an install drain during a climb cancels nothing the ladder holds; the
-/// ladder ends at its next holding check (`recovery_ladder_drain_requested`, exhausted at
-/// Warning), releases once, and the install drain completes.
-#[test]
-fn an_install_drain_during_a_climb_ends_the_ladder_and_drains() {
-    let run = ladder_fixture(400);
-    run.fail_scheduled_run();
-    wait_for_rung_run(&run.host, POLICY_INSTANCE_ALIAS);
-    let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let connection = ConnectionId::new(72).expect("connection");
-    let governance = |operation| {
-        RuntimeRequest::new(
-            ids.mint_request_id().expect("request id"),
-            ids.mint_correlation_id().expect("correlation id"),
-            None,
-            EventActor::User,
-            EventSource::Ui,
-            unix_ms_now().expect("wall clock"),
-            operation,
-        )
-        .expect("governance request")
-    };
-    // Workflow #434 LAB-6S3: the connection binds `cli`, as actingctl's does; bound from the
-    // (User, Ui) envelope it would be `ui`, which the UI list refuses an installation transition.
-    let bound = run
-        .host
-        .process_request_for_test(
-            &governance(RuntimeOperation::BindChannel {
-                channel: actingcommand_contract::RuntimeChannel::Cli,
-                via: None,
-                initiator: None,
-            }),
-            connection,
-        )
-        .expect("binding");
-    assert_eq!(bound.state(), RuntimeReceiptState::Completed, "{bound:?}");
-    let declared = run
-        .host
-        .process_request_for_test(
-            &governance(RuntimeOperation::DeclareGovernanceIdentity {
-                card: test_governance_card(),
-            }),
-            connection,
-        )
-        .expect("declaration");
-    assert_eq!(declared.state(), RuntimeReceiptState::Completed);
-    let target = run.host.runtime_info().shutdown_target();
-    let begin = run
-        .host
-        .process_request_for_test(
-            &governance(RuntimeOperation::InstallTransition {
-                target,
-                action: InstallTransitionAction::BeginDrain {
-                    transition_id: "s2-drain-during-climb".to_owned(),
-                    timeout_ms: 120_000,
-                },
-            }),
-            connection,
-        )
-        .expect("begin drain");
-    assert!(
-        !matches!(
-            begin.state(),
-            RuntimeReceiptState::Denied | RuntimeReceiptState::Failed
-        ),
-        "{begin:?}"
-    );
-    wait_for_ladder_end(&run.host, POLICY_INSTANCE_ALIAS);
-    wait_until("the install drain", || {
-        let status = run
-            .host
-            .process_request_for_test(
-                &governance(RuntimeOperation::InstallTransition {
-                    target,
-                    action: InstallTransitionAction::Query {
-                        transition_id: "s2-drain-during-climb".to_owned(),
-                    },
-                }),
-                connection,
-            )
-            .expect("install status");
-        matches!(
-            status.result(),
-            Some(RuntimeResult::InstallTransition { status })
-                if status.phase == InstallTransitionPhase::Drained
-        )
-    });
-    let events = all_events(&run.host);
-    let (finished, outcome, _) = ladder_finished(&events).expect("ladder finished");
-    assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
-    // Ledger revision 3 (#378 A3): the severity is the category of the ladder end's outcome.
-    assert_eq!(
-        ladder_end_code(finished),
-        Some("recovery_ladder_interrupted")
-    );
-    assert_eq!(finished.severity(), EventSeverity::Warning);
-    let rungs = rung_outcomes(&events);
-    assert!(
-        rungs
-            .iter()
-            .any(|(_, _, reason)| reason.as_deref() == Some("recovery_ladder_drain_requested")),
-        "{rungs:?}"
     );
     assert!(run.host.fatal_error().expect("runtime health").is_none());
     run.host.close().expect("close host");

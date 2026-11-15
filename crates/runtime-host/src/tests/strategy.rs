@@ -561,7 +561,7 @@ fn strategic_report_is_local_deterministic_and_promotes_only_after_approval() {
     });
     assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
     record_target_approval(
-        &mut client,
+        &host,
         "approval:strategy-plan",
         first
             .preview()
@@ -692,7 +692,7 @@ fn strategic_report_is_local_deterministic_and_promotes_only_after_approval() {
     });
     assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
     record_target_approval(
-        &mut client,
+        &host,
         "approval:strategy-successor",
         successor_first
             .preview()

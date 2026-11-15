@@ -139,10 +139,9 @@ fn switch(slots: Slots, unix_ms: u64, sources: &CatalogSources) -> Slots {
     slots
 }
 
-// A person approves the catalog generation `intent` was evaluated under.
+// A person approves the catalog generation `intent` was evaluated under (Workflow #434 LAB-6S4a:
+// through the host's transcription, the approval request being gone).
 fn approve(host: &RuntimeHost, intent: &DispatchIntent) {
-    let mut client = TestClient::connect(host);
-    client.declare_governance_identity();
     for approval_id in &intent.approval_refs {
         let decision = ApprovalDecisionRecord::new(
             approval_id.as_str(),
@@ -155,14 +154,8 @@ fn approve(host: &RuntimeHost, intent: &DispatchIntent) {
                 .expect("approval reason"),
         )
         .expect("approval decision");
-        let request =
-            client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });
-        let receipt = client.send(&request);
-        assert_eq!(
-            receipt.state(),
-            RuntimeReceiptState::Completed,
-            "{receipt:?}"
-        );
+        host.transcribe_configured_approval(&decision)
+            .expect("approval recorded");
     }
 }
 

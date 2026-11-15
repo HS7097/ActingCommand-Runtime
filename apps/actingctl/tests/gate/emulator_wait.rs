@@ -12,8 +12,8 @@
 //   after the CLI has gone, and the vendor control is reached once the test lets it.
 
 use crate::emulator_controller::{EmulatorCall, FakeEmulatorController};
-use crate::held_runtime::GATE_WAIT;
 use crate::mcp_harness::{McpServer, accepted};
+use crate::no_instance_runtime::GATE_WAIT;
 use actingcommand_contract::{
     ApplicationLifecycleAction, BackendOpenEntry, EmulatorInstanceAction, FencedWrite,
     IdentifierIssuer, InstanceId, InstanceStuckRecovery,

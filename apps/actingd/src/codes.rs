@@ -170,7 +170,8 @@ actingcommand_contract::outcome_codes! {
         SuspendedOptionInvalid => "suspended_option_invalid": error / none,
         SuspendedConfigMissing => "suspended_config_missing": error / none,
         SuspendedReportEncodeFailed => "suspended_report_encode_failed": error / none,
-        InstallHeldInputInvalid => "install_held_input_invalid": error / none,
+        // Workflow #434 LAB-6S4a: `install_held_input_invalid` is retired in 0.12.63 with the
+        // `--install-held` start; the start's arguments that name it are `usage_invalid`.
         UsageInvalid => "usage_invalid": error / none,
         PolicyBootstrapStateInvalid => "policy_bootstrap_state_invalid": error / none,
         PolicyCatalogPlanChanged => "policy_catalog_plan_changed": error / none,
