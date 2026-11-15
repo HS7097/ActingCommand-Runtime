@@ -4,37 +4,39 @@
 // recording holds its instance, and the recording library keeps the hold's facts the `record`
 // command hands it in (the session header's `hold`) and says what they mean; it asks no Runtime.
 // - `s17_the_session_header_carries_the_hold_and_the_lab_reads_it`: a header with an own hold, as
-//   the `record` command writes it, starts the Lab recording as before; `record status`'s hold is
-//   `own` with its reason, its Lab view is the one of a twin header without the hold, and the
-//   step table holds nothing of it.
+//   the `record` command writes it: the Lab's own reading of the header (`read_old_record`, the
+//   view every Lab command takes) carries the hold; the Lab recording starts on it; `record
+//   status`'s hold is then `own` with its reason, `{state: own, reason}` (fix round 2: every
+//   assertion fails when the header's hold is not read).
 // - `s17_record_status_shows_each_of_the_four_states`: own (an active session under its own
 //   pause), foreign with the other party's reason, none (no hold, and no header), kept (an own
 //   pause the end could not release, and one of an ended session whose release did not get as far).
 // - `s17_what_a_recording_holds_comes_from_what_record_start_met`: the pause it set is its own; a
 //   pause the instance showed is another party's unless it is the replaced recording's own (taken
-//   over); with no Runtime answering the replaced recording's own pause is carried over, nothing
+//   over); with nothing listening the replaced recording's own pause is carried over, nothing
 //   else; at the end an own pause is kept until its release, another party's is dropped.
-// - `s17_a_recording_without_a_hold_is_unchanged`: a header without the member reads as holding
-//   nothing; a hold not kept writes no `kept`; `record start` and `record archive` of the library
-//   leave such a header byte for byte as it was written.
+// - `s17_a_recording_without_a_hold_is_unchanged`: what keeps a header without a hold as it was
+//   (fix round 2: every assertion fails when it is taken away): `record status` of a header
+//   without the member is exactly `{state: none}`, no `reason`; a hold not kept writes no `kept`,
+//   one kept writes it; a hold read without `kept` is not kept. (The `record` command's header
+//   without the member, byte for byte, is pinned by actinglab's gate_463_s17, whose start with
+//   nothing listening writes exactly the members it wrote before the slice.)
 // Temporary state directories only; no Runtime, no device, no clock read by the tests.
 
-use crate::recording::store::{old_record_path, recording_path};
+use crate::recording::store::{old_record_path, read_old_record};
 use crate::{
-    LAB_RECORDING_HOLD_PREFIX, RecordArchiveOptions, RecordStartOptions, RecordingHold,
-    RecordingHoldFound, RecordingHoldState, RecordingHoldView, RecordingLock, record_archive,
-    record_hold_status, record_start, record_status,
+    LAB_RECORDING_HOLD_PREFIX, RecordStartOptions, RecordingHold, RecordingHoldFound,
+    RecordingHoldState, RecordingHoldView, RecordingLock, record_hold_status, record_start,
 };
 use serde_json::{Value, json};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 const INSTANCE: &str = "neutral.instance";
 const RECORD_ID: &str = "record_0463_s17";
 const TASK_ID: &str = "neutral_task";
 const STARTED_AT: u64 = 1_700_000_000_000;
-const WRITTEN_BY: &str = "0123456789abcdef0123456789abcdef01234567";
 const OWN: &str = "lab-record-1700000000000";
 const OTHER: &str = "operator";
 
@@ -57,8 +59,8 @@ impl Bench {
     }
 
     /// The session header with `status` and, when given, `hold`, as the `record` command writes
-    /// it; its bytes.
-    fn header(&self, status: &str, hold: Option<Value>) -> Vec<u8> {
+    /// it.
+    fn header(&self, status: &str, hold: Option<Value>) {
         let mut header = json!({
             "schema_version": "session-record-v0",
             "record_id": RECORD_ID,
@@ -75,12 +77,7 @@ impl Bench {
             header["hold"] = hold;
         }
         let bytes = serde_json::to_vec_pretty(&header).expect("session JSON");
-        fs::write(old_record_path(&self.state(), INSTANCE), &bytes).expect("session file");
-        bytes
-    }
-
-    fn header_bytes(&self) -> Vec<u8> {
-        fs::read(old_record_path(&self.state(), INSTANCE)).expect("session file")
+        fs::write(old_record_path(&self.state(), INSTANCE), bytes).expect("session file");
     }
 
     fn lock(&self) -> RecordingLock {
@@ -98,8 +95,12 @@ impl Bench {
         record_hold_status(&self.state(), INSTANCE).expect("record status's hold")
     }
 
-    fn lab(&self) -> Value {
-        json!(record_status(&self.state(), INSTANCE).expect("record status"))
+    /// The hold of the header as the Lab's own reading of it (`read_old_record`) carries it.
+    fn read_hold(&self) -> Option<RecordingHold> {
+        read_old_record(&self.state(), INSTANCE)
+            .expect("the session header reads")
+            .expect("a session header")
+            .hold
     }
 }
 
@@ -118,19 +119,19 @@ fn view(state: RecordingHoldState, reason: Option<&str>) -> RecordingHoldView {
     }
 }
 
-fn step_table(state: &Path) -> String {
-    fs::read_to_string(recording_path(state, RECORD_ID)).expect("step table")
-}
-
 #[test]
 fn s17_the_session_header_carries_the_hold_and_the_lab_reads_it() {
     let held = Bench::new();
     held.header("active", Some(json!({"reason": OWN, "own": true})));
+    // The Lab's own reading of the header carries the hold the command wrote.
+    assert_eq!(
+        held.read_hold(),
+        Some(hold(OWN, true, false)),
+        "the Lab reads the header's hold"
+    );
+    // The Lab recording starts on such a header, and the hold stays the header's.
     held.start();
-    let twin = Bench::new();
-    twin.header("active", None);
-    twin.start();
-
+    assert_eq!(held.read_hold(), Some(hold(OWN, true, false)));
     assert_eq!(
         held.hold(),
         view(RecordingHoldState::Own, Some(OWN)),
@@ -140,12 +141,6 @@ fn s17_the_session_header_carries_the_hold_and_the_lab_reads_it() {
         json!(held.hold()),
         json!({"state": "own", "reason": OWN}),
         "record status shows its state and reason"
-    );
-    // The Lab part reads the header as before: its view is the twin's, without the hold.
-    assert_eq!(held.lab(), twin.lab());
-    assert!(
-        !step_table(&held.state()).contains("\"hold\""),
-        "the step table holds nothing of the hold"
     );
 }
 
@@ -250,7 +245,7 @@ fn s17_what_a_recording_holds_comes_from_what_record_start_met() {
             Some(&replaced_kept),
             Some(hold(OWN, true, false)),
         ),
-        // No Runtime answering: the replaced recording's own pause is carried over, nothing else.
+        // Nothing listening: the replaced recording's own pause is carried over, nothing else.
         (&RecordingHoldFound::NoRuntime, None, None),
         (
             &RecordingHoldFound::NoRuntime,
@@ -280,21 +275,9 @@ fn s17_what_a_recording_holds_comes_from_what_record_start_met() {
 #[test]
 fn s17_a_recording_without_a_hold_is_unchanged() {
     let bench = Bench::new();
-    let written = bench.header("active", None);
-    assert_eq!(bench.hold(), view(RecordingHoldState::Unheld, None));
-    bench.start();
-    let archived = record_archive(
-        &bench.lock(),
-        &RecordArchiveOptions {
-            record_id: None,
-            copy_to: None,
-            written_by: WRITTEN_BY.to_owned(),
-        },
-    )
-    .expect("record archive");
-    assert!(archived.ends_session, "{archived:?}");
-    // The library never writes the session header: it is what the `record` command wrote.
-    assert_eq!(bench.header_bytes(), written);
+    bench.header("active", None);
+    // `record status` of a header without the member: exactly `none`, without a `reason` member.
+    assert_eq!(json!(bench.hold()), json!({"state": "none"}));
     // A hold that is not kept writes no `kept`; one that is writes it.
     assert_eq!(
         json!(hold(OWN, true, false)),

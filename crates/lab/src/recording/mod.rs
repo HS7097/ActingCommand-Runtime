@@ -31,8 +31,9 @@ pub(crate) mod store;
 pub use archive::{record_archive, record_archive_copy, record_reopen};
 pub use hold::{
     LAB_RECORDING_HOLD_PREFIX, LAB_RECORDING_WARNING_HOLD_UNREAD,
-    LAB_RECORDING_WARNING_INSTANCE_NOT_HELD, LAB_RECORDING_WARNING_RUNTIME_NOT_ANSWERING,
-    RecordingHold, RecordingHoldFound, RecordingHoldState, RecordingHoldView, record_hold_status,
+    LAB_RECORDING_WARNING_INSTANCE_NOT_HELD, LAB_RECORDING_WARNING_NO_RUNTIME_LISTENING,
+    LAB_RECORDING_WARNING_REPLACED_HEADER_UNREAD, RecordingHold, RecordingHoldFound,
+    RecordingHoldState, RecordingHoldView, record_hold_status,
 };
 pub use lock::RecordingLock;
 pub use model::*;

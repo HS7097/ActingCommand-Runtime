@@ -14,25 +14,46 @@
 //   shows the instance paused with `operator`: `status` only, nothing paused; the header keeps
 //   `{reason: operator, own: false}`, `record status` shows `foreign`; `record archive` makes no
 //   connection at all, answers `release: not_own` and the header keeps no hold.
-// - `s17_with_no_runtime_the_recording_starts_holding_nothing`: no Runtime: the start answers
-//   `hold {state: none, warnings: [runtime_not_answering]}`, its header has no `hold` member, and
-//   the archive has nothing to release.
-// - `s17_a_refused_pause_starts_nothing`: the pause is denied: the start fails, no session header
-//   and no recording directory are written.
+// - `s17_with_no_runtime_the_recording_starts_holding_nothing`: nothing listens (fix round 2: the
+//   word `no_runtime_listening`): the start answers `hold {state: none, warnings:
+//   [no_runtime_listening]}`, its header has exactly the members a header had before the slice
+//   (no `hold`), and the archive has nothing to release.
+// - `s17_a_refused_pause_starts_nothing`: the pause is denied: the start fails; the header it wrote
+//   before the pause does not stay when there was none, and a stopped header that was there is put
+//   back byte for byte (fix round 2); no recording directory; no connection beyond the two.
 // - `s17_the_archive_releases_its_own_pause_found_by_its_reason_after_a_restart`: a second scripted
 //   Runtime (a new owner epoch, the pause restored at revision 1, another instance paused by
 //   another party beside it): `status`, then one `resume_scheduling` of the recording's instance
 //   expecting that epoch and revision 1; the header keeps no hold.
-// - `s17_a_release_that_fails_keeps_the_hold_and_names_the_resume`: the resume is denied: the
-//   manifest and the archived header stand, the failure's details carry `hold {kept: true}` and
-//   `next.resume` with the pause the status showed, `record status` shows `kept`; named again
-//   with no Runtime answering, the archive tries the release again and answers
-//   `runtime_not_running` with `next.resume` without `--expect`.
+// - `s17_a_release_that_fails_keeps_the_hold_and_names_the_resume`: the resume is denied: no
+//   connection beyond the one; the manifest and the archived header stand, the failure's details
+//   carry `hold {kept: true}` and (fix round 2) `next.release`, `record archive --record-id <id>`
+//   with the instance and the state directory, never an unconditional resume; `record status`
+//   shows `kept`; named again with no Runtime answering, the archive tries the release again and
+//   answers `runtime_not_running` with the same `next.release`.
 // - `s17_a_refused_stop_keeps_the_hold`: `record stop --timeout-ms 0` is refused before anything:
 //   no connection, the header still active with its own hold.
 // - `s17_record_start_force_takes_the_hold_over`: a second `record start --force` finds the
 //   instance paused with the first recording's reason: `status` only, the new header holds that
 //   pause as its own (`taken_over`), one pause in all.
+// Fix round 2 (the coordinator's brief rd-1115/brief-463-s17-fix2.md):
+// - `s17_a_lost_answer_to_the_pause_leaves_the_hold_for_record_stop`: the connection ends after
+//   `pause_scheduling` was sent: the start fails (`runtime_not_running`) with `hold {reason, own:
+//   true}` in its details and the header stays, active and naming that hold; the next `record
+//   stop` sends `status`, then one `resume_scheduling` expecting the pause the status shows, and
+//   answers `stopped` with `hold {reason, own: true, release: resumed, resumed}`; the header is
+//   stopped without a hold.
+// - `s17_record_reopen_carries_an_own_hold_to_the_reopened_recording`: two recordings archived
+//   while nothing listened; the header (the second's) kept an own pause; `record reopen` of the
+//   first writes its header with that hold, `record status` shows `kept`; its `record archive`
+//   sends `status` and one `resume_scheduling` of that pause, and the header keeps no hold.
+// - `s17_record_start_after_an_end_that_kept_its_hold_takes_it_over`: an archived header that kept
+//   its own pause, the instance shown paused with that reason: a `record start` without `--force`
+//   sends `status` only and holds the pause as its own (`taken_over`).
+// - `s17_the_status_read_before_a_press_names_what_it_found`: the read every `--record` press and
+//   application operation makes, each on a connection of its own: not paused,
+//   `instance_not_held`; paused by another party, nothing; a status that gets no answer, and no
+//   Runtime at all, `instance_hold_unread`.
 // No device, no clock, no sleep; made-up aliases.
 
 use super::gate_434_lab5b4::{Isolated, printed};
@@ -55,6 +76,8 @@ const TASK: &str = "neutral_task";
 const RECORD_ID: &str = "record_s17";
 /// Another party's pause reason.
 const OTHER: &str = "operator";
+/// An own pause an earlier recording's end kept.
+const KEPT: &str = "lab-record-1700000000000";
 /// The requests of every connection's handshake.
 const HANDSHAKE: [&str; 2] = ["health", "bind_channel"];
 
@@ -122,6 +145,42 @@ impl Place {
         serde_json::from_slice(&fs::read(self.header_path()).expect("the session header"))
             .expect("the session header's JSON")
     }
+
+    /// Writes `header` as the session header; its bytes.
+    fn write_header(&self, header: &Value) -> Vec<u8> {
+        fs::create_dir_all(self.session()).expect("the session directory");
+        let bytes = serde_json::to_vec_pretty(header).expect("the session header's JSON");
+        fs::write(self.header_path(), &bytes).expect("the session header");
+        bytes
+    }
+
+    /// The recording directory of `record_id`.
+    fn recording_dir(&self, record_id: &str) -> PathBuf {
+        Path::new(&self.session())
+            .join("record-artifacts")
+            .join(record_id)
+    }
+}
+
+/// A session header of an earlier recording `record_id` in `status`, as the `record` command
+/// writes one, with `hold` when given.
+fn earlier_header(record_id: &str, status: &str, hold: Option<Value>) -> Value {
+    let mut header = json!({
+        "schema_version": "session-record-v0",
+        "record_id": record_id,
+        "task_id": TASK,
+        "instance": INSTANCE,
+        "status": status,
+        "holder": null,
+        "lease_id": null,
+        "started_at_unix_ms": 1_700_000_000_000_u64,
+        "updated_at_unix_ms": 1_700_000_000_000_u64,
+        "steps": []
+    });
+    if let Some(hold) = hold {
+        header["hold"] = hold;
+    }
+    header
 }
 
 fn instance_id() -> InstanceId {
@@ -212,6 +271,13 @@ fn denied(request: &RuntimeRequest, code: RuntimeErrorCode) -> ScriptedAnswer {
         RuntimeReceiptState::Denied,
         RuntimeErrorProjection::new(code, false).receipt_outcome(None, None),
     )
+}
+
+/// A connection whose status shows the instance not paused and whose pause is denied.
+fn refusing_the_pause(owner_epoch: OwnerEpoch) -> ScriptedConnection {
+    ScriptedConnection::new()
+        .request(status(owner_epoch, vec![instance(INSTANCE, None)]))
+        .request(|request| denied(request, RuntimeErrorCode::InvalidRequest))
 }
 
 /// The operation of each request a connection received, as the wire spells it.
@@ -405,7 +471,7 @@ fn s17_with_no_runtime_the_recording_starts_holding_nothing() {
     assert_eq!(started["hold"]["state"], "none", "{started}");
     assert_eq!(
         started["hold"]["warnings"],
-        json!(["runtime_not_answering"]),
+        json!(["no_runtime_listening"]),
         "{started}"
     );
     assert!(started["hold"]["runtime_error"].is_string(), "{started}");
@@ -414,8 +480,27 @@ fn s17_with_no_runtime_the_recording_starts_holding_nothing() {
             .expect("the session header"),
     )
     .expect("JSON");
-    assert!(
-        header.get("hold").is_none(),
+    // Fix round 2: a header without a hold has exactly the members it had before the slice.
+    let members = header
+        .as_object()
+        .expect("the header is an object")
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        members,
+        std::collections::BTreeSet::from([
+            "schema_version",
+            "record_id",
+            "task_id",
+            "instance",
+            "status",
+            "holder",
+            "lease_id",
+            "started_at_unix_ms",
+            "updated_at_unix_ms",
+            "steps",
+        ]),
         "a header without a hold: {header}"
     );
     let (code, archived) = record("archive", &[]);
@@ -430,14 +515,12 @@ fn s17_a_refused_pause_starts_nothing() {
     let place = Place::new();
     let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
         vec![
-            ScriptedConnection::new()
-                .request(status(owner_epoch, vec![instance(INSTANCE, None)]))
-                .request(|request| denied(request, RuntimeErrorCode::InvalidRequest)),
+            refusing_the_pause(owner_epoch),
+            refusing_the_pause(owner_epoch),
         ]
     });
+    // No header before: the one written before the pause does not stay.
     let (code, refused) = place.start(RECORD_ID, &[]);
-    let record = runtime.finish();
-
     assert_eq!(code, 1, "{refused}");
     assert_eq!(refused["outcome"]["code"], "device_error", "{refused}");
     assert!(
@@ -446,18 +529,35 @@ fn s17_a_refused_pause_starts_nothing() {
             .is_some_and(|message| message.contains("started nothing")),
         "{refused}"
     );
-    assert_eq!(
-        operations(&record.connections[0]),
-        wire(&["status", "pause_scheduling"])
-    );
     assert!(!place.header_path().exists(), "no session header");
     assert!(
-        !Path::new(&place.session())
-            .join("record-artifacts")
-            .join(RECORD_ID)
-            .exists(),
+        !place.recording_dir(RECORD_ID).exists(),
         "no recording directory"
     );
+    // A stopped header before: put back byte for byte.
+    let earlier = place.write_header(&earlier_header("record_s17_earlier", "stopped", None));
+    let (code, again) = place.start(RECORD_ID, &[]);
+    let record = runtime.finish();
+
+    assert_eq!(code, 1, "{again}");
+    assert_eq!(again["outcome"]["code"], "device_error", "{again}");
+    assert_eq!(
+        fs::read(place.header_path()).expect("the earlier header"),
+        earlier,
+        "the earlier header put back as it was"
+    );
+    assert!(
+        !place.recording_dir(RECORD_ID).exists(),
+        "no recording directory"
+    );
+    assert!(record.unscripted.is_empty(), "a connection beyond the two");
+    assert_eq!(record.connections.len(), 2);
+    for connection in &record.connections {
+        assert_eq!(
+            operations(connection),
+            wire(&["status", "pause_scheduling"])
+        );
+    }
 }
 
 #[test]
@@ -537,9 +637,21 @@ fn s17_a_release_that_fails_keeps_the_hold_and_names_the_resume() {
     let record = runtime.finish();
 
     assert_eq!(code, 1, "{kept}");
+    assert!(record.unscripted.is_empty(), "a connection beyond the one");
+    assert_eq!(record.connections.len(), 1);
     assert_eq!(
         operations(&record.connections[0]),
         wire(&["status", "resume_scheduling"])
+    );
+    assert_eq!(
+        resume_asked(&record.connections[0]),
+        (
+            scope(),
+            Some(SchedulingPauseExpectation {
+                owner_epoch: epoch,
+                revision: 1
+            })
+        )
     );
     assert_eq!(kept["outcome"]["code"], "device_error", "{kept}");
     let details = &kept["details"];
@@ -547,11 +659,19 @@ fn s17_a_release_that_fails_keeps_the_hold_and_names_the_resume() {
         details["hold"],
         json!({"reason": own, "own": true, "kept": true})
     );
-    let expected = json!({"owner_epoch": epoch, "revision": 1}).to_string();
-    assert_eq!(
-        details["next"]["resume"],
-        json!(["resume", INSTANCE, "--expect", expected])
-    );
+    // Fix round 2: the command that tries the release again, never an unconditional resume.
+    let session = place.session();
+    let release = json!([
+        "record",
+        "archive",
+        "--record-id",
+        RECORD_ID,
+        "--instance",
+        INSTANCE,
+        "--state-dir",
+        session
+    ]);
+    assert_eq!(details["next"], json!({"release": release}), "{kept}");
     // The archive stands: its manifest written, the header archived and keeping the hold.
     assert_eq!(details["lab"]["manifest"]["written"], true, "{kept}");
     let manifest = details["lab"]["manifest"]["path"]
@@ -579,8 +699,9 @@ fn s17_a_release_that_fails_keeps_the_hold_and_names_the_resume() {
         "{again}"
     );
     assert_eq!(
-        again["details"]["next"]["resume"],
-        json!(["resume", INSTANCE])
+        again["details"]["next"],
+        json!({"release": release}),
+        "{again}"
     );
     assert_eq!(
         place.header()["hold"],
@@ -675,5 +796,230 @@ fn s17_record_start_force_takes_the_hold_over() {
     assert_eq!(
         second["hold"],
         json!({"state": "own", "reason": own, "taken_over": true})
+    );
+}
+
+#[test]
+fn s17_a_lost_answer_to_the_pause_leaves_the_hold_for_record_stop() {
+    let _guard = env_lock();
+    let place = Place::new();
+    // The connection ends once the pause was sent: whether the pause was made is not known.
+    let lost = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
+        vec![
+            ScriptedConnection::new()
+                .request(status(owner_epoch, vec![instance(INSTANCE, None)]))
+                .request(|_| ScriptedAnswer::Close),
+        ]
+    });
+    let (code, failed) = place.start(RECORD_ID, &[]);
+    let record = lost.finish();
+
+    assert_eq!(code, 1, "{failed}");
+    assert_eq!(failed["outcome"]["code"], "runtime_not_running", "{failed}");
+    assert!(record.unscripted.is_empty(), "a connection beyond the one");
+    assert_eq!(record.connections.len(), 1);
+    assert_eq!(
+        operations(&record.connections[0]),
+        wire(&["status", "pause_scheduling"])
+    );
+    let (_, own, _) = pause_asked(&record.connections[0]);
+    // The header stays as written before the pause, naming the own hold; the failure carries it.
+    let header = place.header();
+    assert_eq!(header["status"], "active", "{header}");
+    assert_eq!(header["hold"], json!({"reason": own, "own": true}));
+    assert_eq!(
+        failed["details"]["hold"],
+        json!({"reason": own, "own": true}),
+        "{failed}"
+    );
+    let (code, shown) = place.record("status", &[]);
+    assert_eq!(code, 0, "{shown}");
+    assert_eq!(shown["hold"], json!({"state": "own", "reason": own}));
+
+    // The next record stop releases the pause the status shows with that reason.
+    let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
+        vec![
+            ScriptedConnection::new()
+                .request(status(
+                    owner_epoch,
+                    vec![instance(INSTANCE, Some((own.as_str(), 1)))],
+                ))
+                .request(resumed),
+        ]
+    });
+    let epoch = runtime.owner_epoch();
+    let (code, stopped) = place.record("stop", &[]);
+    let record = runtime.finish();
+
+    assert_eq!(code, 0, "{stopped}");
+    assert!(record.unscripted.is_empty(), "a connection beyond the one");
+    assert_eq!(record.connections.len(), 1);
+    assert_eq!(
+        operations(&record.connections[0]),
+        wire(&["status", "resume_scheduling"])
+    );
+    assert_eq!(
+        resume_asked(&record.connections[0]),
+        (
+            scope(),
+            Some(SchedulingPauseExpectation {
+                owner_epoch: epoch,
+                revision: 1
+            })
+        )
+    );
+    assert_eq!(stopped["status"], "stopped", "{stopped}");
+    assert_eq!(stopped["hold"]["reason"], json!(own), "{stopped}");
+    assert_eq!(stopped["hold"]["own"], true, "{stopped}");
+    assert_eq!(stopped["hold"]["release"], "resumed", "{stopped}");
+    assert_eq!(
+        stopped["hold"]["resumed"]["kind"], "scheduling_resumed",
+        "{stopped}"
+    );
+    assert!(stopped["record"].get("hold").is_none(), "{stopped}");
+    let header = place.header();
+    assert_eq!(header["status"], "stopped", "{header}");
+    assert!(header.get("hold").is_none(), "{header}");
+}
+
+#[test]
+fn s17_record_reopen_carries_an_own_hold_to_the_reopened_recording() {
+    let _guard = env_lock();
+    let place = Place::new();
+    // Two recordings, each started and archived while nothing listened: neither holds anything.
+    for record_id in ["record_s17_a", "record_s17_b"] {
+        let (code, started) = place.start(record_id, &[]);
+        assert_eq!(code, 0, "{started}");
+        let (code, archived) = place.record("archive", &[]);
+        assert_eq!(code, 0, "{archived}");
+    }
+    // The header, the second recording's, kept an own pause its end could not release.
+    let mut header = place.header();
+    assert_eq!(header["record_id"], "record_s17_b", "{header}");
+    header["hold"] = json!({"reason": KEPT, "own": true, "kept": true});
+    place.write_header(&header);
+
+    // The first recording reopened: the header it writes names that own pause, and asks nothing.
+    let (code, reopened) = place.record("reopen", &["--record-id", "record_s17_a"]);
+    assert_eq!(code, 0, "{reopened}");
+    let header = place.header();
+    assert_eq!(header["record_id"], "record_s17_a", "{header}");
+    assert_eq!(header["status"], "active", "{header}");
+    assert_eq!(
+        header["hold"],
+        json!({"reason": KEPT, "own": true, "kept": true})
+    );
+    let (code, shown) = place.record("status", &[]);
+    assert_eq!(code, 0, "{shown}");
+    assert_eq!(shown["hold"], json!({"state": "kept", "reason": KEPT}));
+
+    // The reopened recording's end releases it by its reason.
+    let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
+        vec![
+            ScriptedConnection::new()
+                .request(status(
+                    owner_epoch,
+                    vec![instance(INSTANCE, Some((KEPT, 2)))],
+                ))
+                .request(resumed),
+        ]
+    });
+    let epoch = runtime.owner_epoch();
+    let (code, archived) = place.record("archive", &[]);
+    let record = runtime.finish();
+
+    assert_eq!(code, 0, "{archived}");
+    assert!(record.unscripted.is_empty(), "a connection beyond the one");
+    assert_eq!(record.connections.len(), 1);
+    assert_eq!(
+        operations(&record.connections[0]),
+        wire(&["status", "resume_scheduling"])
+    );
+    assert_eq!(
+        resume_asked(&record.connections[0]),
+        (
+            scope(),
+            Some(SchedulingPauseExpectation {
+                owner_epoch: epoch,
+                revision: 2
+            })
+        )
+    );
+    assert_eq!(archived["hold"]["reason"], KEPT, "{archived}");
+    assert_eq!(archived["hold"]["release"], "resumed", "{archived}");
+    let header = place.header();
+    assert_eq!(header["record_id"], "record_s17_a", "{header}");
+    assert_eq!(header["status"], "archived", "{header}");
+    assert!(header.get("hold").is_none(), "{header}");
+}
+
+#[test]
+fn s17_record_start_after_an_end_that_kept_its_hold_takes_it_over() {
+    let _guard = env_lock();
+    let place = Place::new();
+    place.write_header(&earlier_header(
+        "record_s17_earlier",
+        "archived",
+        Some(json!({"reason": KEPT, "own": true, "kept": true})),
+    ));
+    let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
+        vec![ScriptedConnection::new().request(status(
+            owner_epoch,
+            vec![instance(INSTANCE, Some((KEPT, 2)))],
+        ))]
+    });
+    // No --force: the earlier recording is not active.
+    let (code, started) = place.start(RECORD_ID, &[]);
+    let record = runtime.finish();
+
+    assert_eq!(code, 0, "{started}");
+    assert!(record.unscripted.is_empty(), "a connection beyond the one");
+    assert_eq!(record.connections.len(), 1);
+    assert_eq!(operations(&record.connections[0]), wire(&["status"]));
+    let header = place.header();
+    assert_eq!(header["record_id"], RECORD_ID, "{header}");
+    assert_eq!(header["hold"], json!({"reason": KEPT, "own": true}));
+    assert_eq!(
+        started["hold"],
+        json!({"state": "own", "reason": KEPT, "taken_over": true})
+    );
+}
+
+#[test]
+fn s17_the_status_read_before_a_press_names_what_it_found() {
+    let _guard = env_lock();
+    let place = Place::new();
+    let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
+        vec![
+            ScriptedConnection::new().request(status(owner_epoch, vec![instance(INSTANCE, None)])),
+            ScriptedConnection::new().request(status(
+                owner_epoch,
+                vec![instance(INSTANCE, Some((OTHER, 1)))],
+            )),
+            ScriptedConnection::new().request(|_| ScriptedAnswer::Close),
+        ]
+    });
+    let not_held = crate::commands::hold_warning_read(INSTANCE);
+    let held = crate::commands::hold_warning_read(INSTANCE);
+    let unanswered = crate::commands::hold_warning_read(INSTANCE);
+    let record = runtime.finish();
+
+    assert_eq!(not_held, Some("instance_not_held"));
+    assert_eq!(held, None, "another party's pause holds the instance");
+    assert_eq!(unanswered, Some("instance_hold_unread"));
+    assert!(
+        record.unscripted.is_empty(),
+        "a connection beyond the three"
+    );
+    assert_eq!(record.connections.len(), 3);
+    for connection in &record.connections {
+        assert_eq!(operations(connection), wire(&["status"]));
+    }
+    // No Runtime at all: whether the instance is held is not known either.
+    let missing = place.isolated.temp.path().join("no-runtime");
+    let _missing = use_runtime_state_root(&missing);
+    assert_eq!(
+        crate::commands::hold_warning_read(INSTANCE),
+        Some("instance_hold_unread")
     );
 }

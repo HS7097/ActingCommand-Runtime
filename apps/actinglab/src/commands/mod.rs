@@ -53,7 +53,7 @@ pub(crate) use navigation_recovery::{
 #[cfg(test)]
 pub(crate) use path_io::{JSON_TMP_SEQ, write_json_file};
 pub(crate) use path_io::{ensure_path_within, read_json_file, write_json_file_atomic};
-pub(crate) use record_hold::{add_hold_warning, hold_warning_read};
+pub(crate) use record_hold::{add_hold_warning, add_hold_warning_to_failure, hold_warning_read};
 pub(crate) use semantic_ledger::{finish_semantic_result_with_ledger, semantic_ledger_context};
 #[cfg(test)]
 pub(crate) use session_contracts::{

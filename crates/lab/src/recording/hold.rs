@@ -10,11 +10,12 @@
 //! - **The reason** of the recording's own pause is `lab-record-<ms>`, `<ms>` the recording's start
 //!   (its session header's `started_at_unix_ms`), as the Lab's rescue module names its holds
 //!   `lab-<word>-<ms>` ([`RecordingHold::reason_for`]).
-//! - **What a new recording holds** ([`RecordingHold::at_start`]): the pause it set; or the pause the
-//!   instance already showed, its own when it is the pause of the recording whose header it
-//!   replaces (taken over, so neither doubled nor lost), another party's otherwise; or, when no
-//!   Runtime answered, the replaced recording's own pause, which the Runtime restores at its start,
-//!   else nothing.
+//! - **What a new recording holds** ([`RecordingHold::at_start`]): the pause it sets (the command
+//!   writes it into the header before it sends the pause, fix round 2); or the pause the instance
+//!   already showed, its own when it is the pause of the recording whose header it replaces (taken
+//!   over, so neither doubled nor lost), another party's otherwise; or, when nothing listens where
+//!   the installation's Runtime would, the replaced recording's own pause, which the Runtime
+//!   restores at its start, else nothing.
 //! - **At the end** ([`RecordingHold::ended`]): an own pause stays the header's, marked kept, until
 //!   the release lifts it (the command then writes the header without it); another party's is no
 //!   longer the recording's.
@@ -22,7 +23,7 @@
 //!   `none`, or `kept`: an own pause that the end of the recording could not release.
 //!
 //! A header without the member is one without a hold: every header written before this slice,
-//! and every recording started while no Runtime answered, byte for byte as before.
+//! and every recording started while nothing listened, byte for byte as before.
 
 use super::store::read_old_record;
 use actingcommand_contract::LabResult;
@@ -32,8 +33,16 @@ use std::path::Path;
 /// The pause reason of a recording's own hold, before the recording's start in milliseconds.
 pub const LAB_RECORDING_HOLD_PREFIX: &str = "lab-record-";
 
-/// `record start`'s warning word: no Runtime answered, so the recording holds nothing.
-pub const LAB_RECORDING_WARNING_RUNTIME_NOT_ANSWERING: &str = "runtime_not_answering";
+/// `record start`'s warning word in `hold.warnings` (fix round 2): no connection to the
+/// installation's Runtime could be opened at all (no state root located, no runtime-info that
+/// names an address, nothing listening there), so no scheduler can dispatch and the recording
+/// holds nothing of its own. A Runtime that listens but does not complete the handshake fails the
+/// start instead.
+pub const LAB_RECORDING_WARNING_NO_RUNTIME_LISTENING: &str = "no_runtime_listening";
+/// `record start --force`'s warning word in `hold.warnings` (fix round 2): the session header it
+/// replaces could not be read, so a pause the earlier recording took, if any, is not released by
+/// this recording (it is another party's to it).
+pub const LAB_RECORDING_WARNING_REPLACED_HEADER_UNREAD: &str = "replaced_header_unread";
 /// The warning word of a `--record` press or application operation in `record.warnings`: the
 /// status read before it showed the instance's scheduling not paused, so the material may be mixed
 /// with a scheduled task's screens.
@@ -61,11 +70,13 @@ pub struct RecordingHold {
 /// What `record start` met on the instance, handed in by the command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordingHoldFound {
-    /// The command paused the instance's scheduling with this reason.
+    /// The command pauses the instance's scheduling with this reason (the header names it before
+    /// the pause is sent).
     Paused(String),
     /// The instance's scheduling was already paused, with this reason; nothing was sent.
     Shown(String),
-    /// No Runtime answered: nothing can dispatch, and nothing was paused.
+    /// Nothing listens where the installation's Runtime would: nothing can dispatch, and nothing
+    /// was paused.
     NoRuntime,
 }
 
@@ -77,10 +88,10 @@ impl RecordingHold {
 
     /// What a new recording holds, from what `record start` met (`found`) and the hold of the
     /// session header it replaces (`replaced`, `None` without one):
-    /// - the pause it set: its own;
+    /// - the pause it sets: its own;
     /// - a pause the instance already showed: its own when the replaced header held exactly that
     ///   pause as its own (taken over), another party's otherwise;
-    /// - no Runtime answering: the replaced header's own pause, which the Runtime restores at its
+    /// - nothing listening: the replaced header's own pause, which the Runtime restores at its
     ///   start, taken over; else nothing.
     pub fn at_start(found: &RecordingHoldFound, replaced: Option<&Self>) -> Option<Self> {
         let replaced_own = replaced.filter(|replaced| replaced.own);

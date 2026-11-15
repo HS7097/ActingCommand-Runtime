@@ -920,7 +920,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Start a recording",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json record start: starts a recording session and its Lab recording for task_id, kept in actinglab's state files (state_dir). It opens no Runtime connection and records no client.action. --force is never passed: an active recording is not overwritten from here; ending it is ac_record_stop, overwriting it is for the person on the CLI.",
+            "Runs actinglab --json record start: starts a recording session and its Lab recording for task_id, kept in actinglab's state files (state_dir). The installed actinglab holds the instance (contracts/lab-recording.md, A recording holds its instance): through the Runtime it pauses the instance's scheduling with the recording's own reason lab-record-<ms> and waits as that pause waits (a scheduled run in flight drained: up to 300 s, then the pause's 30 s checkpoint grace and the IO timeout), answering hold; an instance another party paused is held by that pause, never resumed; with no Runtime listening it holds nothing (hold.warnings no_runtime_listening). This server records no client.action. --force is never passed: an active recording is not overwritten from here; ending it is ac_record_stop, overwriting it is for the person on the CLI.",
             lab_errors!(),
             lab_job!()
         ),
@@ -952,7 +952,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Stop a recording",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json record stop: stops the recording session and generates its linear-steps package (lab_dir for the package directory; dry_run validates and writes nothing), answered verbatim, with lab.binding_example, lab.binding_requires and the other binding parts ac_binding_draft takes. Only the stop that generates the package answers lab.binding_requires; a later one answers lab.status already_generated without it. After ac_record_mark on a stopped recording, the next stop generates the package again and answers lab.status regenerated. An answer larger than the output budget still carries lab.binding_example, lab.binding_requires, lab.prerequisite_entry_example and lab.catalog_on_failure_example inline when they fit. It opens no Runtime connection and records no client.action.",
+            "Runs actinglab --json record stop: stops the recording session and generates its linear-steps package (lab_dir for the package directory; dry_run validates and writes nothing), answered verbatim, with lab.binding_example, lab.binding_requires and the other binding parts ac_binding_draft takes. Only the stop that generates the package answers lab.binding_requires; a later one answers lab.status already_generated without it. After ac_record_mark on a stopped recording, the next stop generates the package again and answers lab.status regenerated. An answer larger than the output budget still carries lab.binding_example, lab.binding_requires, lab.prerequisite_entry_example and lab.catalog_on_failure_example inline when they fit. Once the stop ended the recording, the installed actinglab resumes the recording's own scheduling pause through the Runtime, found by its reason, and answers hold; a release that fails keeps the hold and answers its failure with hold.kept and next.release (record stop again). This server records no client.action.",
             lab_errors!(),
             lab_job!()
         ),
@@ -1033,7 +1033,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Archive a recording",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json record archive: ends the instance's active recording as material only (no marks needed), writes its manifest beside its frames and step table and keeps every file; record_id names an archived recording again, or one record start --force left behind; copy_to, an absolute path of a directory that does not exist or is empty, receives a checked copy. The answer is verbatim. It changes the recording files only: no Runtime connection, no client.action.",
+            "Runs actinglab --json record archive: ends the instance's active recording as material only (no marks needed), writes its manifest beside its frames and step table and keeps every file; record_id names an archived recording again, or one record start --force left behind; copy_to, an absolute path of a directory that does not exist or is empty, receives a checked copy. The answer is verbatim. Once the archive's files are written, the installed actinglab resumes the recording's own scheduling pause through the Runtime, found by its reason, and answers hold; a release that fails keeps the hold and answers its failure with hold.kept and next.release (record archive with record_id). This server records no client.action.",
             lab_errors!(),
             lab_job!()
         ),

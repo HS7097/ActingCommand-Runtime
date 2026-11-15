@@ -5397,8 +5397,8 @@ fn s17_record_start_and_archive_hold_and_release_the_instance_on_the_runtime() {
     host.close().expect("close host");
 }
 
-/// #463 S1-7: a recording started while no Runtime answered holds nothing
-/// (`runtime_not_answering`); once the fake Runtime host runs, a `tap --record` on its instance,
+/// #463 S1-7: a recording started while nothing listened holds nothing (fix round 2:
+/// `no_runtime_listening`); once the fake Runtime host runs, a `tap --record` on its instance,
 /// whose scheduling is not paused, is pressed and recorded all the same, `record.warnings`
 /// `["instance_not_held"]`; under another party's pause the next one warns nothing; `record
 /// archive` holds nothing to release and leaves that pause as it is.
@@ -5413,7 +5413,7 @@ fn s17_a_press_on_an_instance_that_is_not_held_says_so() {
     assert_eq!(started["hold"]["state"], "none", "{started}");
     assert_eq!(
         started["hold"]["warnings"],
-        json!(["runtime_not_answering"]),
+        json!(["no_runtime_listening"]),
         "{started}"
     );
     let state = Arc::new(FakeState::default());
@@ -5459,4 +5459,49 @@ fn s17_a_press_on_an_instance_that_is_not_held_says_so() {
     );
     drop(client);
     host.close().expect("close host");
+}
+
+/// #463 S1-7 fix round 2: a recording started while nothing listened holds nothing; once the fake
+/// Runtime host runs, `session app launch --record` on its instance, whose scheduling is not
+/// paused, runs the operation and records it as the recording's entry step all the same, and its
+/// `record.warnings` is `["instance_not_held"]`, read before the operation on a connection of its
+/// own.
+#[test]
+fn s17_an_application_operation_on_an_instance_that_is_not_held_says_so() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let started = s17_record_start(&config, &runtime_root, &local);
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-s17-application-not-held");
+
+    let launched = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "session",
+            "app",
+            "launch",
+            "--record",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(
+        launched["record"]["status"], "application_recorded",
+        "{launched}"
+    );
+    assert_eq!(
+        launched["record"]["warnings"],
+        json!(["instance_not_held"]),
+        "{launched}"
+    );
+    assert_eq!(state.application_calls.load(Ordering::Acquire), 1);
 }

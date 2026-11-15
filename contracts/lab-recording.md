@@ -152,10 +152,12 @@ Output adds `lab_recording{status, reason?, path, record_id, defaults}`,
 or the default) and `record_flag_reachable` (whether this state root is that one; when it is
 not, frames can only be added with `record mark --frame`).
 
-#463 S1-7: before anything is written, `record start` holds the instance (its scheduling paused
-with the recording's own reason, or another party's pause it finds), keeps the hold in the
-session header (`hold`) and answers `hold{state, reason?, taken_over?, paused?, warnings?,
-runtime_error?}`; a pause the Runtime refuses starts nothing ("A recording holds its instance").
+#463 S1-7: `record start` holds the instance (its scheduling paused with the recording's own
+reason, or another party's pause it finds), keeps the hold in the session header (`hold`; fix
+round 2: written before the pause is sent, put back when the Runtime refuses the pause) and
+answers `hold{state, reason?, taken_over?, paused?, warnings?, runtime_error?, replaced_header?}`;
+it waits as the pause waits, up to 335 s; a pause the Runtime refuses starts nothing ("A recording
+holds its instance").
 
 ### record mark
 
@@ -1676,28 +1678,35 @@ $lab = 'C:\ActingCommand\tools\actinglab.exe'
 
 ## A recording holds its instance
 
-#463 S1-7 (0.12.63; the owner approved the three-stage blueprint of package making on board #463,
+#463 S1-7 (0.12.64; the owner approved the three-stage blueprint of package making on board #463,
 whose stage one asks nothing of the agent but to start recording, play and end recording; the rules
-here are the coordinator's). An agent's presses are separate commands with seconds or minutes of
-thinking between them, and each holds the instance's input lease for its press alone. Before this
+here are the coordinator's, fix round 2 included). An agent's presses are separate commands with
+seconds or minutes of thinking between them, and each holds the instance's input lease for its
+press alone. Before this
 slice nothing kept the scheduler from dispatching a scheduled task to the instance between two
 presses: the task's screen became a press's screen after it and opened the next step, and nothing
 warned. A recording now holds its instance itself: nothing else is asked of the agent.
 
 **Taking the hold (`record start`).** After the start's own refusals (`record_session_active`, the
-options) and before anything is written, `record start` connects to the Runtime the `--record`
-commands reach (`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, else the default state root) and reads its
-status once:
+options), `record start` connects to the Runtime the `--record` commands reach
+(`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, else the default state root; the connection's handshake is
+`Health`, then `BindChannel`) and reads its status once. Nothing is written so far, so nothing
+needs undoing when this fails. Then (fix round 2: the session header knows the hold before the
+Runtime is asked to pause):
 
-- **The instance's scheduling is not paused:** it is paused as the Lab's `pause` row pauses it
-  (`PauseScheduling` of the instance, `lab_ops::scheduling`), with that row's drain (300000 ms) and
-  the recording's own reason `lab-record-<ms>`, `<ms>` the recording's start (its session header's
-  `started_at_unix_ms`, which every `--record` answer names as `record_started_at_unix_ms`), as
-  the Lab's rescue module names its holds `lab-<word>-<ms>`. The pause waits by its own rules
-  ([scheduling-pause.md](scheduling-pause.md), "Instance pause: three stages"): a scheduled run in
-  flight is drained, or stopped at its next checkpoint once the drain elapsed
-  (`contained_task_paused`, its task evaluated again), and an active lease is waited for; so
-  `record start` may take up to the drain plus 30 s.
+- **The instance's scheduling is not paused:** the session header is written first, naming the
+  recording's own hold `{reason, own: true}`, and only then is the instance paused as the Lab's
+  `pause` row pauses it (`PauseScheduling` of the instance, `lab_ops::scheduling`), with that row's
+  drain (300000 ms) and the recording's own reason `lab-record-<ms>`, `<ms>` the recording's start
+  (its session header's `started_at_unix_ms`, which every `--record` answer names as
+  `record_started_at_unix_ms`), as the Lab's rescue module names its holds `lab-<word>-<ms>`. The
+  pause waits by its own rules ([scheduling-pause.md](scheduling-pause.md), "Instance pause: three
+  stages"): a scheduled run in flight is drained, or stopped at its next checkpoint once the drain
+  elapsed (`contained_task_paused`, its task evaluated again), and an active lease is waited for.
+  **So `record start` waits until the instance's running task has ended:** the client waits for the
+  pause's receipt up to the drain (300000 ms), the pause's checkpoint grace
+  (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`, 30000 ms) and its IO timeout (5000 ms), 335 s in all. A
+  caller with a shorter time limit (a tool call, a shell's command timeout) must give it that time.
 - **The instance is already paused** (another party's pause, which a pause would meet as
   `scheduling_already_paused`): nothing is sent. The recording runs under that pause, holds nothing
   of its own, remembers its reason as another party's, and never resumes it.
@@ -1705,30 +1714,66 @@ status once:
   a start after an end that kept its hold, below): when the status shows exactly the replaced
   session header's own reason, that pause is taken over, the new header's own (`taken_over`):
   never paused twice, never lost.
-- **No Runtime answers** (no state root located, no runtime-info, nobody listening, a handshake that
-  fails): nothing can dispatch. The recording starts holding nothing (an own pause of the replaced
-  header is carried over: the Runtime restores it at its start), and the answer says so,
-  `hold.warnings` `["runtime_not_answering"]` with `hold.runtime_error`, the connection's failure.
-  A press with `--record` needs the Runtime anyway.
-- **A status or a pause the Runtime refuses**, or leaves unanswered once the connection is made:
-  `record start` fails with it (`device_error`, or `runtime_not_running` when the Runtime is
-  unavailable, as the Lab answers every Runtime failure), its message saying it paused nothing and
-  started nothing, and writes nothing: no session header, no recording.
+- **Nothing listens** (no state root located, no runtime-info that names an address, nothing
+  accepting a connection at that address: no Runtime is running): nothing can dispatch. The
+  recording starts holding nothing (an own pause of the replaced header is carried over: the
+  Runtime restores it at its start), exit 0, and the answer says so: `hold.warnings`
+  `["no_runtime_listening"]` with `hold.runtime_error`, the connection's failure. A press with
+  `--record` needs the Runtime anyway.
+- **Something listens, but the handshake does not complete** (`Health` or `BindChannel` fails, is
+  refused or gets no answer): a Runtime is there and may dispatch, so whether the instance would be
+  held cannot be known. `record start` fails and writes nothing, with the failure as the Lab's
+  commands that need the Runtime answer it (`runtime_slice_cli::map_runtime_error`:
+  `runtime_not_running` when no receipt said otherwise, `device_error` when the Runtime refused
+  with a code that is not one of unavailability). The client's connect reads the runtime-info,
+  opens the connection and shakes hands in one call and does not say which of the two failed; so
+  after a failed connect `record start` opens one plain connection to the address the
+  runtime-info names, within the client's IO timeout, and closes it at once without sending
+  anything: accepted, something listens; refused, nothing does. The Runtime takes a connection
+  closed before its first frame as an ordinary close.
+- **A status the Runtime refuses**, or leaves unanswered once the connection is made: `record
+  start` fails with it as above, its message saying it paused nothing and started nothing, and
+  writes nothing.
+- **A pause the Runtime refuses** (its receipt says no pause was made: denied, or failed as a
+  whole, which lifts the gate it closed): the session header is put back as it was before (when
+  there was none, the new one does not stay), and `record start` fails with the refusal, its
+  message saying it paused nothing and started nothing: no recording.
+- **Any other end of the pause** (the connection lost, the wait for the receipt ended, the process
+  killed or timed out by its caller): the session header stays as written, because a pause with
+  that reason may exist. The failure (`runtime_not_running` when the connection was lost) carries
+  `hold: {reason, own: true}` in its details, and so does every failure after the header names the
+  hold (the Lab recording's start, the state directory's reach). `record stop` (or `record start
+  --force`) then finds the header and releases by its reason; a release that finds no such pause
+  is `already_gone`. (`record archive` of such a header, whose Lab recording never started, is
+  refused as `lab_recording_missing`.)
+- **`--force` over a session header that cannot be read** (fix round 2): the start goes on, which
+  is what `--force` is for, but the hold that header named is not known: a pause the earlier
+  recording took, if any, shows as another party's to this recording and is not released by it.
+  The answer says so: `hold.warnings` gains `replaced_header_unread`, and `hold.replaced_header:
+  {path, error}` names the header's path (as the answer's `path` names it) and why it could not be
+  read.
 
 The session header keeps what the recording holds: `hold: {reason, own}`, `own` `true` for its own
 pause (set or taken over), `false` for another party's. A header that holds nothing has no `hold`
-member, byte for byte as before: every header written before 0.12.63, and one started while no
-Runtime answered. The recording library keeps these facts and says what they mean; the `record`
+member, byte for byte as before: every header written before 0.12.64, and one started while
+nothing listened. The recording library keeps these facts and says what they mean; the `record`
 command asks the Runtime and hands them in. The answer adds `hold: {state, reason?, taken_over?,
-paused?, warnings?, runtime_error?}`: `state` as `record status` shows it, `paused` the Runtime's
-`SchedulingPaused` result.
+paused?, warnings?, runtime_error?, replaced_header?}`: `state` as `record status` shows it,
+`paused` the Runtime's `SchedulingPaused` result. Both warning words are warnings: the start goes
+on and exits 0.
 
-**While it plays.** Each `tap`, `swipe` and `long-tap --record` and each `session app … --record`
-reads the status once before it: a press on its own connection, before its input lease (the input
-proxy's preparation reads none); an application operation on a connection of its own, so that a
-read that fails never stands in the operation's way. When the instance's scheduling shows not
-paused (neither its own pause nor the global pause), the press or the operation is still made and
-recorded, and
+| `hold.warnings` word | Its one cause | Refuses or warns | Exit |
+|---|---|---|---|
+| `no_runtime_listening` | no connection to the installation's Runtime could be opened at all, so the recording holds nothing of its own | warns | 0 |
+| `replaced_header_unread` | `--force` replaced a session header that could not be read, so a pause the earlier recording took, if any, is not released by this one | warns | 0 |
+
+**While it plays.** Each `tap`, `swipe` and `long-tap --record`, each `do --capture --record` and
+each `session app … --record` reads the status once before it, on a connection of its own (fix
+round 2: a press's read no longer shares the press's connection, so a read that fails never leaves
+that connection dead and the press `not_submitted`; `do --capture --record`, the one form today's
+MCP server records a press with, reads it too, by the same function). When the instance's
+scheduling shows not paused (neither its own pause nor the global pause), the press or the
+operation is still made and recorded, and
 `record.warnings` holds `instance_not_held`: the material may be mixed with a scheduled task's
 screens. When the read gets no answer, `instance_hold_unread`: whether it is held is not known. A
 pause of anyone counts as held. A press under the recording's own pause is an operator request, which
@@ -1761,13 +1806,15 @@ recording stays active and keeps the hold):
   it keeps: the release's failure (`runtime_not_running` when no Runtime answered, else the
   Runtime's refusal as the Lab maps it, `device_error`), exit 1 on the command line and the class's
   exit under `--via`; its message names the hold and says the end is done; its details are the
-  end's answer (`record`, `path`, `lab`) with `hold: {reason, own: true, kept: true}` and
-  `next.resume`, the `resume` row's command that lifts the pause: `["resume", "<instance>",
-  "--expect", "<the pause the status showed>"]` when the status was read, else `["resume",
-  "<instance>"]` (read `status` first, and resume only while the instance shows the reason).
-  `record status` shows `kept`. `record archive --record-id <id>` of the archived recording and
-  `record stop` of the stopped one try the release again, and the next `record start` of the
-  instance takes the pause over while the status still shows it.
+  end's answer (`record`, `path`, `lab`) with `hold: {reason, own: true, kept: true}` and (fix
+  round 2) `next.release`, the command that tries the release again and can release only the
+  recording's own pause, found by its reason: `["record", "stop", "--instance", "<instance>",
+  "--state-dir", "<dir>"]` for a stopped recording, `["record", "archive", "--record-id", "<id>",
+  "--instance", "<instance>", "--state-dir", "<dir>"]` for an archived one (an archive without
+  `--record-id` finds no active recording and is refused, `record_session_not_active`, retrying
+  nothing). `next` never offers an unconditional `resume` of the instance, which could lift a
+  pause that is not the recording's (a person's). `record status` shows `kept`, and the next
+  `record start` of the instance takes the pause over while the status still shows it.
 - A copy that fails answers its failure as before, with `hold: {reason, own: true, kept: true}` in
   its details: the release was not tried; `record archive --record-id <id> --copy-to <dir>` tries
   both again.
@@ -1783,16 +1830,20 @@ or no session header), `kept` (an own pause the recording's end could not releas
 it: a pause has no expiry and comes back after a restart; `status` and the overview show it with
 its reason `lab-record-<ms>`.
 
-**At a deploy.** The rescue module's guard `foreign_pauses` (`guards --for stop`) lists a
-recording's pause as another party's, and the deploy keeps it as known: its hold takes only the
-instances not paused, so it neither pauses that instance again nor resumes it, the Runtime restores
-the pause at its start, and the recording's end then releases it by its reason in the new owner
-epoch.
+**At a deploy.** The deploy's guard `foreign_pauses` (`guards --for stop`,
+`crates/lab-rescue/src/install/guards.rs`) reports a recording's pause as another party's (the
+guard fails on it); the rescue module records that report and goes on without touching the pause
+(its hold takes only the instances not paused, so it neither pauses that instance again nor resumes
+it); and the restarted Runtime restores the pause at its start (in its new owner epoch, at revision
+1, stage `released`). The recording's end then releases it by its reason in the new owner epoch.
 
 **Today's MCP server** (`actingctl mcp-serve`) runs `record start`, `record stop` and `record
 archive` as actinglab children (`apps/actingctl/src/mcp/lab.rs`, `Program::call`): its
 `ac_record_start`, `ac_record_stop` and `ac_record_archive` hold and release as the command line
-does, whatever its own texts say; they are not changed here.
+does, and (fix round 2, texts only) their descriptions say so: the installed Lab they run holds
+the instance at the start and releases it at the stop or the archive. An author-tier session
+holding and releasing its own recording's instance is intended (the coordinator's ruling); no
+behaviour of that server changes.
 
 ## Application steps
 
