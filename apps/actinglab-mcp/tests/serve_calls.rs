@@ -2935,6 +2935,8 @@ fn goal_page() -> actingcommand_contract::GoalView {
             sha256: None,
             standard_pack_problem: None,
             json_pointer: None,
+            path: None,
+            io_kind: None,
         },
         entries: vec![pick],
         orphans: Vec::new(),

@@ -27017,6 +27017,8 @@ fix round 2 `0eb82c5a`).
   again for certain.
 - *Tests*: host `gate_463_v3`'s pure checks hold the three words; `v3_fix2_a_root_no_check_since_the_start_read_answers_root_failing`.
 
+**Fix round 3** (coordinator brief `rd-1115/brief-1731-fix3.md`): the MCP test's made-up page gains `path` and `io_kind`; actinglab's words hold a positional word its type refuses on a line read with `--instance` until the words are counted, so `goals set <inst> <name> <value> --instance <x>` is refused `repeated` as `lab-two-entries.md` §9.3 says (it was `wrong_type`); `gate_434_cli_in` writes a number for a `json` positional; new host test `v3_fix3_a_game_root_without_schedule_json_answers_no_schedule`.
+
 **At deploy.** Nothing to do beyond the build: no configuration key, no store shape change. A
 console that sends either kind needs a Runtime of `runtime-client` 9; an older Runtime drops the
 connection. After a start the goal page answers `not_checked_yet` until the workbench's first

@@ -1977,3 +1977,74 @@ fn v3_fix2_a_root_no_check_since_the_start_read_answers_root_failing() {
     );
     scene.close();
 }
+
+// ---- Fix round 3 (coordinator brief rd-1115/brief-1731-fix3.md, item 4).
+
+// Fix round 3, item 4: a game root without `schedule.json` answers a word of its own, which asking
+// again does not change. The root holds its bundle and its package but no `schedule.json` (the file
+// set aside in a folder of the test's own) when the host starts and at the workbench's first check:
+// the page answers the declaration state `no_schedule`, nothing else, and lists nothing; a `set` of
+// the variable, a `set` of an other target (which needs no declaration) and a `clear` are each
+// refused `no_schedule`, nothing written. With the file back, the next check reads the root and the
+// page lists `pick` again.
+#[test]
+fn v3_fix3_a_game_root_without_schedule_json_answers_no_schedule() {
+    let aside = TempDir::new().expect("a folder for the file set aside");
+    let kept = aside.path().join("schedule.json");
+    let scene = Scene::with(|packs| {
+        place_game_root(packs, &pick_only());
+        fs::rename(packs.join(GAME_A).join("schedule.json"), kept.as_path())
+            .expect("set the root's schedule.json aside");
+    });
+    let schedule = scene.packs.path().join(GAME_A).join("schedule.json");
+    scene.cycle(POLICY_NOW_UNIX_MS, 6);
+    let unscheduled = scene.view();
+    let words = [
+        set_op("pick", &json!("item_a")),
+        set_op("stock", &json!({"resource": POOL_A, "at_least": 5})),
+        clear_op("pick"),
+    ]
+    .into_iter()
+    .map(|op| {
+        denied(&scene.edit(op, None, POLICY_NOW_UNIX_MS), INVALID)
+            .value("goal_problem")
+            .cloned()
+    })
+    .collect::<Vec<_>>();
+
+    assert_eq!(
+        serde_json::to_value(&unscheduled.declaration).expect("the declaration state encodes"),
+        json!({"state": "no_schedule"}),
+        "{unscheduled:?}"
+    );
+    assert!(
+        unscheduled.entries.is_empty()
+            && unscheduled.orphans.is_empty()
+            && unscheduled.remedy_parameters.is_empty()
+            && unscheduled.other_targets.is_empty(),
+        "{unscheduled:?}"
+    );
+    let no_schedule = json!(GoalProblem::NoSchedule.as_str());
+    assert!(
+        words.len() == 3 && words.iter().all(|word| word.as_ref() == Some(&no_schedule)),
+        "the variable, an other target and a clear: {words:?}"
+    );
+    assert_eq!(scene.view().version, 0, "nothing was written");
+
+    fs::rename(kept, schedule).expect("the root's schedule.json back");
+    scene.cycle(POLICY_NOW_UNIX_MS + CHECK_INTERVAL_MS, 7);
+    let read = scene.view();
+    assert_eq!(
+        read.declaration.state,
+        GoalDeclarationRead::Absent,
+        "{read:?}"
+    );
+    assert_eq!(
+        read.entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["pick"]
+    );
+    scene.close();
+}

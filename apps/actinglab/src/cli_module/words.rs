@@ -315,7 +315,31 @@ impl Stop {
 /// line gives the positional instance as well (`repeated`, naming the word in the instance's
 /// place). Without it, the flag stops the reading ([`Stop::Flagged`]) and every word is read as
 /// before.
+///
+/// Workflow #463 V3 fix round 3 (#1731; `contracts/lab-two-entries.md` §9.3): with the flag, a
+/// positional word its type refuses is held until the line's words are counted. On a line that
+/// gives the instance twice the other positionals are read one place off (the instance's word
+/// fills the next one), so a word of a typed positional there (`goals set <inst> <name> <value>
+/// --instance <x>`: the name read as the JSON value) is refused `repeated` as the rule says, not
+/// for its type; on a line without a word too many the held refusal is the answer, and a refusal
+/// read after it gives way to it, so every other line is refused as before.
 fn read(operation: &Operation, rest: &[String], flagged: bool) -> Result<Map<String, Value>, Stop> {
+    let mut held = None;
+    let reading = read_words(operation, rest, flagged, &mut held);
+    match held {
+        Some(refusal) => Err(Stop::Refused(refusal)),
+        None => reading,
+    }
+}
+
+/// [`read`]'s reading of the words; `held` keeps the first positional word its type refused on a
+/// line read with the flag, cleared when the line holds a word too many.
+fn read_words(
+    operation: &Operation,
+    rest: &[String],
+    flagged: bool,
+    held: &mut Option<Outcome>,
+) -> Result<Map<String, Value>, Stop> {
     let mut params = Map::new();
     let positionals = operation
         .params
@@ -420,17 +444,27 @@ fn read(operation: &Operation, rest: &[String], flagged: bool) -> Result<Map<Str
                     append(&mut params, &param.name, typed(param, word, word)?);
                 }
                 Some(param) => {
-                    put(&mut params, param, typed(param, word, word)?, word)?;
+                    match typed(param, word, word) {
+                        Ok(value) => put(&mut params, param, value, word)?,
+                        // Workflow #463 V3 fix round 3 (#1731): held until the words are counted.
+                        Err(refusal) if flagged => {
+                            if held.is_none() {
+                                *held = Some(refusal);
+                            }
+                        }
+                        Err(refusal) => return Err(refusal.into()),
+                    }
                     next += 1;
                 }
                 // Workflow #434 CLI-IN: a word beyond the other positionals, with the flag: the
                 // line gives the positional instance too, the word in the instance's place, which
-                // the refusal names.
+                // the refusal names (Workflow #463 V3 fix round 3: whatever word was held).
                 None if flagged => {
                     let repeated = instance_place
                         .and_then(|place| given.get(place))
                         .copied()
                         .unwrap_or(word);
+                    *held = None;
                     return Err(usage(Some(repeated), ArgumentProblem::Repeated).into());
                 }
                 None => return Err(usage(Some(word), ArgumentProblem::Unknown).into()),
