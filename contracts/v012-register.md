@@ -28261,14 +28261,16 @@ the `--plan` answer and the answer's step `plan`) answers `schedule_changes`
 enter or leave scheduling"). The packages of the bundle's game are classified on the installed
 game root and on the zip's root by the contract crate's own `standard_pack_maintenance_packages`
 and `classify_standard_pack_packages`, called, not copied (the module already depends on the
-contract crate; no dependency is added). The roles by file are that same function called on one
-root file at a time, as `standard-pack adopt` reads them.
+contract crate; no dependency is added). The roles are readiness's words, found by that same
+function called on the entries of one use, or on one list of the root files, at a time (fix round
+2, below). **`enters` is exactly the packages the scheduler will dispatch, or use in a supporting
+role, after the placement and did not before.**
 
 ```json
 "schedule_changes": {
   "packages": [
     {"package_id": "neutral.handler", "before": {"state": "absent"},
-     "after": {"state": "maintenance_role", "roles": ["interrupts.json"]}, "content": "new"},
+     "after": {"state": "maintenance_role", "roles": ["handler"]}, "content": "new"},
     {"package_id": "neutral.waiting",
      "before": {"state": "held", "reason": "not yet run on a device", "reference": "board-reference-1"},
      "after": {"state": "scheduled"}, "content": "unchanged"}
@@ -28281,11 +28283,11 @@ root file at a time, as `standard-pack adopt` reads them.
 
 | Member | What it holds |
 |---|---|
-| `packages` | each package whose part or pack content changes, by package id: `before`, `after` (`state` `scheduled`, `held` with `reason` and `reference`, `maintenance_role`, `unclassified`, `absent` or `unread`; `roles`, the root files that give it a maintenance role, when there is one) and `content` (its pack item's `new`, `replace` or `unchanged`; absent for a pack the zip no longer carries) |
-| `enters` | sorted package ids: `scheduled` after and not before, or a role after it did not have before (from absent, held, unclassified, a role only, or unread) |
-| `leaves` | sorted package ids: `scheduled` before and, read after, not; a role lost; no longer carried by the zip |
-| `content_only` | sorted package ids that take part in scheduling (scheduled, or with a role) before and after in the same way and whose pack is replaced |
-| `unread` | only when a side could not be read: `{root, failure}`, `root` `installed` or `bundle`, the failure as a warning; that side's packages `unread` (without roles when its root files failed, with them when its `schedule.json` did); nothing is refused |
+| `packages` | each package whose part or pack content changes, or that a list names, by package id: `before`, `after` (`state` `scheduled`, `held` with `reason` and `reference`, `maintenance_role`, `unclassified`, `absent` or `unread`; `roles`, readiness's words `startup`, `return_home`, `recognition`, `features`, `edge`, `chain`, `handler`, `then_run`, when there is one) and `content` (its pack item's `new`, `replace` or `unchanged`; absent for a pack the zip no longer carries) |
+| `enters` | sorted package ids the scheduler dispatches, or uses in a role, after and did not before: `scheduled` after and not before, or a role word after it did not hold before; only a composed side counts (its root holds a `schedule.json` the reader and the composer's reference check take), and an installed side that could not be read counts none; a package of a server no instance is bound to is listed too |
+| `leaves` | sorted package ids: `scheduled` before and not after; a role word lost; no longer carried by the zip |
+| `content_only` | sorted package ids the scheduler uses before and after in the same way and whose pack is replaced |
+| `unread` | only when a side could not be read: `{root, failure}`, `root` `installed` or `bundle`, the failure as a warning; that side's packages `unread` (without roles when its root files failed, with them when its `schedule.json` did); with the zip's side unread none of `enters`, `leaves` and `content_only` is answered; nothing is refused |
 
 **What it replaces.** The plan's answer had a member `schedule_changes`, a boolean: whether the
 game's `schedule.json` changes. The work order names the new member `schedule_changes` (S3-2
@@ -28297,19 +28299,64 @@ placement still reads the same fact from the items (`Placement::schedule_changes
 **Words.** No outcome code, no key and no vocabulary word of the catalog is added; the fragments
 and the index are unchanged. The states above are words of the plan's answer only; the failures
 under `unread` are the existing `standard_pack_root_invalid` (at the file, its problem and
-pointer), `foreign_os_error` and `foreign_data_error`, each a warning beside a plan that exits 0.
+pointer) and `foreign_os_error`, each a warning beside a plan that exits 0.
 
 **Tests.** `crates/lab-rescue/src/install/gate_463_s31.rs`, gate map `apps.toml` "#463 S3-1", on
 the fake host with an installer of `package` [3, 10] and bundles declaring [3, 3], each plan
 leaving the game root byte for byte as it was and pausing nothing: a new pack with a rule enters
 from `absent`; a lifted hold enters, its `before` `held` with the entry's reason and reference; an
 added hold leaves; a pack replaced with its rule unchanged is `content_only`; a new
-`interrupts.json` handler enters by its role, the `pages.json` feature not listed; on a game's
-first root every pack a rule names enters, a held one and one in no set are listed and do not; a
-zip that is the installed root has its eight items `unchanged` and lists nothing. Each asserts the
-whole `schedule_changes`. Adapted: `s5_unbound_composition_passes_at_once` of
+`interrupts.json` handler enters by its role (`handler`), the `pages.json` feature not listed; on
+a game's first root every pack a rule names enters, a held one and one in no set are listed and do
+not; a zip that is the installed root has its eight items `unchanged` and lists nothing. Each
+asserts the whole `schedule_changes`. Adapted: `s5_unbound_composition_passes_at_once` of
 `gate_453_cold_place.rs` asserted the boolean `true`; it asserts the plan's item `schedule.json`
 `new`. No golden changes, no test leaves the gate map.
+
+**Fix round 2** (the slice's independent review, its seven items to change and its table against
+the composer; coordinator work order `rd-1115/brief-463-s31-fix2.md`, the coordinator's rulings,
+not the owner's words; main `b7c47129` merged, §1.401 kept before this section). The next slice
+makes a placement name exactly the packages of `enters`, so `enters` must be exactly the packages
+the scheduler dispatches, or uses in a supporting role, after the placement and did not before.
+(1) A side whose root holds no `schedule.json` composes nothing (the workbench leaves such a game
+out, [standard-pack-schedule.md](standard-pack-schedule.md), "Unload"; the composer reads only
+the games of bound instances whose root holds the file): none of its packages counts as scheduled
+or as holding a role for `enters`, `leaves` and `content_only`; `packages` still shows the
+standing and the roles its root files give. So over an installed root without the file every
+package the zip schedules or gives a role enters, and a zip without the file makes nothing enter
+and every package used before leave. No exception was found: the bundle's `recognition` entry is
+read in the Runtime only by the workbench's composition (`host/standard_pack_schedule.rs`,
+`ScheduleGame`), which leaves the game out without the file; the fact refresh runs the
+recognition package each instance's configuration binds (`instances[].recognition_package`),
+which no placement writes. (2) and (4) One notion of an unread side: its root files or its
+`schedule.json` cannot be read or parsed, or the composer's own reference check
+(`validate_standard_pack_schedule_references`, called after the reader, on both sides) refuses
+the file. An unread installed side counts nothing before, so everything scheduled or holding a
+role after enters. (3) With the zip's side unread (only its `schedule.json` can be: the plan
+refuses its other root files) `ScheduleChanges::enters` is `None` and the answer carries
+`packages` and `unread` and none of the three lists. (5) Roles are readiness's words (the
+contract crate's `MaintenanceUse` and `NavigationRole`, the tokens of the vocabulary
+`readiness_role`), found by `standard_pack_maintenance_packages` called on the entries of one use
+at a time and on one list at a time (the features, the edges, the recovery chain, the handlers,
+the `then.run` packages); a package enters when it gains a word it did not hold, whichever file
+gives it. (7) The sentence on a `bundle.json` the index does not take (`foreign_data_error`) is
+gone: the root reader has already parsed the same bytes the same way and refused them as
+`standard_pack_root_invalid`. Also: the installed side's files are read as readiness reads a
+root file, at most 32 MiB (`foreign_os_error` with `io_kind` `file_too_large` beyond it), and a
+package of a server no instance is bound to is listed in `enters` like any other, since binding an
+instance later needs no placement. Tests (6), in the same gate file, a second entry "#463 S3-1"
+of `apps.toml`, each asserting the whole `schedule_changes` (the failure under `unread` by its
+code and values): an installed root without `schedule.json` (the zip's scheduled pack and its
+feature package, role unchanged, both enter); a zip without it (nothing enters, its new handler
+shown with its role; the scheduled pack and the feature package leave); an installed
+`schedule.json` the reader refuses (both enter, `unread` `installed` with `schedule_invalid`); the
+zip's refused (`packages` and `unread` `bundle` only); a rule of the zip naming a package it does
+not carry (the same, `rule_package_unregistered` at `/rules/2/package_id`); a `startup` entry
+gaining `return_home`, an edge package added to the recovery chain and a handler that also
+becomes `then.run` (all three enter with readiness's words); a scheduled pack and a pack in no
+set that the zip no longer carries (both leave, no `content`). Adapted:
+`s31_a_new_interrupt_handler_enters_by_its_role` asserted the role `interrupts.json`; it asserts
+`handler` (the requirement changes the word).
 
 **What is not changed.** The items, the plan document and the plan id, every check of the plan and
 after the placement, the hold, the journal and its inputs, `place`'s parameters and refusals, and

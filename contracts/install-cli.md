@@ -1353,42 +1353,62 @@ the rescue face:
   - **The classification.** The packages of the bundle's game are classified on the installed
     game root (`<standard_packs.root>\<game>` as it is: `bundle.json`, `pages.json`,
     `interrupts.json`, `navigation.json` and `display-layout.json` read as every reader reads
-    them, the bundle's `maintenance` entries, and `schedule.json`) and on the zip's root (the
-    same files of the zip), each by the contract crate's own `standard_pack_maintenance_packages`
-    and `classify_standard_pack_packages`, the functions readiness calls. A root without
-    `schedule.json` has no rule and no hold.
+    them, the bundle's `maintenance` entries, and `schedule.json`; since fix round 2 each file
+    read as readiness reads a game root's file, at most 32 MiB) and on the zip's root (the same
+    files of the zip), each by the contract crate's own `standard_pack_maintenance_packages` and
+    `classify_standard_pack_packages`, the functions readiness calls. A side is **composed** when
+    its root holds a `schedule.json` that the contract crate's reader and the composer's own
+    reference check (`validate_standard_pack_schedule_references`: every rule's and every held
+    entry's package is a package of the root, every `server` a server of one) both take: the
+    workbench leaves a game root without `schedule.json` out of its composition, and a game whose
+    file its composer refuses keeps the rules of the active generation, which the plan does not
+    read ([standard-pack-schedule.md](standard-pack-schedule.md), "Unload", "Last good rules").
   - **A package's part** on one side, `{state, reason?, reference?, roles?}`: `state` is
     `scheduled` (named by a rule and not held), `held` (with the entry's `reason` and, when
     written, its `reference`), `maintenance_role` (a role only), `unclassified` (in no set),
     `absent` (not listed by that root's `bundle.json`: a game's first root, a pack the zip no
-    longer carries) or `unread` (below). `roles`, present only when there is one, names the root
-    files whose entries give it a maintenance role: `bundle.json` (its `maintenance` entries),
-    `pages.json` (the features), `navigation.json` (the edges and the recovery chain),
-    `interrupts.json` (the handlers and the `then.run` packages), each found by calling
-    `standard_pack_maintenance_packages` on that file alone. A package held or scheduled that has
-    a role is `held` or `scheduled` with its `roles`.
-  - **`packages`**: each package whose part or pack content changes, by package id,
-    `{package_id, before, after, content?}`; `content` is the state of its pack item (`new`,
-    `replace`, `unchanged`), absent for a pack the zip no longer carries (its folder stays in
-    place; only `bundle.json` stops listing it).
-  - **`enters`**, the sorted package ids that enter scheduling: `scheduled` after and not before
-    (from `absent`, `held`, `unclassified`, `maintenance_role` or `unread`), or with a role after
-    that it did not have before. A lifted hold enters; on a game's first root every package a rule
-    names or a root file gives a role enters. **`leaves`**: `scheduled` before and, read after,
-    not (a hold added, its rules gone), a role it had and has no more, or no longer carried by
-    the zip. **`content_only`**: a package that takes part in scheduling (scheduled, or with a
-    role) before and after in the same way and whose pack is replaced. A package may enter and
-    leave at once (it loses its rule and gains a role). The plan of a bundle that changes nothing
-    lists nothing in any of the four.
+    longer carries) or `unread` (below); on a root without `schedule.json` it is what the root
+    files say (`maintenance_role` or `unclassified`). `roles`, present only when there is one,
+    names the supporting parts the root files give it, in readiness's words (the vocabulary
+    `readiness_role`, [standard-pack-schedule.md](standard-pack-schedule.md), "Readiness") and
+    readiness's order: `startup`, `return_home`, `recognition` (the uses of its `bundle.json`
+    `maintenance` entry), `features` (`pages.json`), `edge`, `chain` (the edges and the recovery
+    chain of `navigation.json`), `handler`, `then_run` (the handlers and the `then.run` packages
+    of `interrupts.json`), each found by calling `standard_pack_maintenance_packages` on the
+    entries of one use, or on one list, alone. A package held or scheduled that has a role is
+    `held` or `scheduled` with its `roles`.
+  - **`packages`**: each package whose part or pack content changes, or that one of the lists
+    names, by package id, `{package_id, before, after, content?}`; `content` is the state of its
+    pack item (`new`, `replace`, `unchanged`), absent for a pack the zip no longer carries (its
+    folder stays in place; only `bundle.json` stops listing it).
+  - **`enters`** is exactly the packages the scheduler will dispatch, or use in a supporting
+    role, after the placement and did not before: the sorted package ids `scheduled` after and
+    not before, or holding a role after that they did not hold before, whichever root file the
+    role comes from. Only a composed side counts: on a side that is not composed, and on an
+    installed side that could not be read, no package counts as scheduled or as holding a role,
+    for `enters`, `leaves` and `content_only` alike. So a lifted hold enters; on a game's first
+    root, and over an installed root without `schedule.json`, every package the zip schedules or
+    gives a role enters; a zip without `schedule.json` makes nothing enter. A package of a server
+    to which no instance is bound is listed like any other: binding an instance later needs no
+    placement, so the authorization covers it now. **`leaves`**: `scheduled` before and not
+    after, a role it held before and does not after (so every package used before leaves when the
+    zip carries no `schedule.json`), or no longer carried by the zip (also one never scheduled).
+    **`content_only`**: a package the scheduler uses before and after in the same way and whose
+    pack is replaced. A package may enter and leave at once (it loses its rule and gains a role).
+    The plan of a bundle that changes nothing lists nothing in any of the four.
   - **`unread`**, present only when a side could not be read: `[{root, failure}]`, `root`
     `installed` or `bundle`, the failure as a warning (`{outcome}`). A file of the installed root
-    that cannot be read (`foreign_os_error`), root files the reader refuses
-    (`standard_pack_root_invalid` at the file, its problem and pointer) or a `bundle.json` the
-    bundle index does not take (`foreign_data_error`) leave every package of that side `unread`
-    without roles; a `schedule.json` the reader refuses (the installed one, or the zip's, which
-    the plan itself does not check) leaves each package of that side `unread` with its roles.
-    An `unread` before counts as neither scheduled nor holding a role for `enters`; a package
-    `unread` after enters and leaves by its roles only. Nothing is refused for it.
+    that cannot be read, or one larger than the bound (`foreign_os_error`; `io_kind`
+    `file_too_large` for the bound), or root files the reader refuses (`standard_pack_root_invalid`
+    at the file, its problem and pointer) leave every package of that side `unread` without roles;
+    a `schedule.json` that the reader or the composer's reference check refuses
+    (`standard_pack_root_invalid` at that file, its problem and pointer; the plan itself checks
+    neither side's) leaves each package of that side `unread` with its roles. The zip's side is
+    unread only through its `schedule.json`: the plan refuses a zip whose other root files the
+    reader refuses. An unread installed side counts nothing before, so every package scheduled
+    or holding a role after enters, and `leaves` and `content_only` are not complete. With the
+    zip's side unread the answer carries `packages` and `unread` and none of the three lists:
+    what the scheduler uses after the placement is not known. Nothing is refused for it.
 - **`vision manifest --provider cpu|directml` and `vision check`** (Workflow #453 S7, since
   0.12.60; register §1.355; [vision-model-folders.md](vision-model-folders.md), "The manifest";
   the coordinator's rulings on board #453, not the owner's words). Two read-only rows, `runtime`

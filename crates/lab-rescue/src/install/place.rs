@@ -34,7 +34,13 @@
 //!   (`before`, `after`, `content`) and the sorted package ids that `enters`, `leaves` and changes
 //!   `content_only` ([`ScheduleChanges`]). The plan document, its id, its items and every check
 //!   are as before; a root that cannot be read for it refuses nothing and is named under
-//!   `unread`.
+//!   `unread`. Fix round 2: `enters` is exactly the packages the scheduler dispatches, or uses in
+//!   a supporting role, after the placement and did not before. A side the scheduler does not
+//!   compose (its root holds no `schedule.json`) counts no package as scheduled or as holding a
+//!   role; a side whose `schedule.json` the contract crate's reader or the composer's own reference
+//!   check refuses is unread; an unread installed side counts nothing before; with the zip's side
+//!   unread no list is answered (`enters` `None`). Roles are readiness's words, found by the
+//!   contract crate's function on one use or one list at a time.
 //! - **The operation** (`kind` `pack_place`, journalled) while a Runtime runs: the hold of the
 //!   instances bound to the bundle's game (`pause`), then each item that changes (`pack_item`:
 //!   written to
@@ -86,17 +92,18 @@ use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, BundleRevisionNeed, LOADING_PREFIX, LoadingTarget,
-    MAX_NOTICE_FILE_BYTES, NoticeBound, NoticeEntry, NoticeIssue, RESERVED_TABLES_DIRECTORY,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRegistry,
-    StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue, StandardPackSchedule,
-    check_notice_listing, check_notice_pack_ids, check_notice_size, check_notice_text,
-    classify_standard_pack_packages, control_declares_variables, notice_relative_path,
-    package_edge_holds, parse_standard_pack_loading, parse_standard_pack_schedule,
-    read_standard_pack_root, standard_pack_maintenance_packages,
+    BundleIndex, BundleMaintenance, BundleRevisionNeed, InterruptThen, LOADING_PREFIX,
+    LoadingTarget, MAX_NOTICE_FILE_BYTES, MaintenanceUse, NavigationRole, NoticeBound, NoticeEntry,
+    NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
+    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRegistry, StandardPackRoot,
+    StandardPackRootBytes, StandardPackRootIssue, StandardPackSchedule, check_notice_listing,
+    check_notice_pack_ids, check_notice_size, check_notice_text, classify_standard_pack_packages,
+    control_declares_variables, notice_relative_path, package_edge_holds,
+    parse_standard_pack_loading, parse_standard_pack_schedule, read_standard_pack_root,
+    standard_pack_maintenance_packages, validate_standard_pack_schedule_references,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -121,6 +128,10 @@ const ROOT_KEY: &str = "standard_packs.root";
 const CHECK_INTERVAL_KEY: &str = "standard_packs.check_interval_ms";
 /// The period of the waits' reads (the hold's busy-read period, fixed by the contract).
 const POLL_MS: u64 = 500;
+/// Workflow #463 S3-1 fix round 2: the most of one root file of the installed game root the plan
+/// reads, the bound readiness reads a game root's file with (the resource tools' buffered payload
+/// bound, 32 MiB); a file beyond it leaves the installed side unread.
+const ROOT_FILE_BYTES: u64 = 32 * 1024 * 1024;
 /// The Tools' Lab program, which runs `standard-pack check`.
 const LAB_PROGRAM: &str = "actinglab.exe";
 /// The root files a bundle zip may carry, in the order they are placed: `bundle.json` first (the
@@ -266,7 +277,9 @@ impl Placement {
 
 /// Workflow #463 S3-1: how a package takes part in scheduling as one game root gives it, from the
 /// sets of the contract crate's [`classify_standard_pack_packages`]. A package both held or
-/// scheduled and maintenance-role is `held` or `scheduled`, its roles beside the word.
+/// scheduled and maintenance-role is `held` or `scheduled`, its roles beside the word. Fix round
+/// 2: on a side the scheduler does not compose (its root holds no `schedule.json`) the word is
+/// what the root files say, and it counts for nothing ([`Side::used`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Standing {
@@ -281,19 +294,40 @@ enum Standing {
     /// Not a package of the root's registry (a game's first root, a pack the zip does not carry).
     Absent,
     /// The root could not be read for it: its files, or (with its roles known) its
-    /// `schedule.json`; the failure under `unread`.
+    /// `schedule.json`, which the contract crate's reader or (fix round 2) the composer's own
+    /// reference check refuses; the failure under `unread`.
     Unread,
+}
+
+/// Workflow #463 S3-1 fix round 2: a supporting part a root file gives a package, named by
+/// readiness's words (the vocabulary `readiness_role`, `contracts/standard-pack-schedule.md`,
+/// "Readiness"), which are the contract crate's own: a `bundle.json` `maintenance[]` entry's use
+/// ([`MaintenanceUse`]: `startup`, `return_home`, `recognition`) or the part one list of the root
+/// files gives it in a run ([`NavigationRole`]: `features`, `edge`, `chain`, `handler`,
+/// `then_run`). Ordered as readiness lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Role {
+    Use(MaintenanceUse),
+    Run(NavigationRole),
+}
+
+impl Role {
+    /// Its word.
+    fn value(self) -> Value {
+        match self {
+            Self::Use(purpose) => json!(purpose),
+            Self::Run(role) => json!(role.as_str()),
+        }
+    }
 }
 
 /// Workflow #463 S3-1: a package's part in scheduling on one side of a placement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Part {
     standing: Standing,
-    /// The root files whose entries give it a maintenance role, by their names (the bundle's
-    /// `maintenance` entries, `bundle.json`; the features, `pages.json`; the edges and the
-    /// recovery chain, `navigation.json`; the handlers and `then.run` packages,
-    /// `interrupts.json`); `None` when the root's files could not be read.
-    roles: Option<BTreeSet<&'static str>>,
+    /// Fix round 2: the supporting parts the root files give it ([`Role`]); `None` when the
+    /// root's files could not be read.
+    roles: Option<BTreeSet<Role>>,
     /// Of a held package, its entry's `reason` and `reference`.
     held: Option<(String, Option<String>)>,
 }
@@ -309,15 +343,9 @@ impl Part {
             }
         }
         if let Some(roles) = self.roles.as_ref().filter(|roles| !roles.is_empty()) {
-            value["roles"] = json!(roles);
+            value["roles"] = Value::Array(roles.iter().map(|role| role.value()).collect());
         }
         value
-    }
-
-    /// Whether it takes part in scheduling: scheduled, or with a maintenance role.
-    fn takes_part(&self) -> bool {
-        self.standing == Standing::Scheduled
-            || self.roles.as_ref().is_some_and(|roles| !roles.is_empty())
     }
 }
 
@@ -330,6 +358,10 @@ struct Side {
     /// What a package the side does not list is: `absent`, or `unread` when the side's root files
     /// could not be read (its registry is then not known).
     missing: Standing,
+    /// Fix round 2: whether the scheduler composes the side: its root holds a `schedule.json` that
+    /// the contract crate's reader and the composer's own reference check take. Otherwise the
+    /// scheduler dispatches no package of it and uses none in a role ([`Side::used`]).
+    composed: bool,
     /// Why the side's files or its `schedule.json` could not be read.
     unread: Option<Outcome>,
 }
@@ -340,6 +372,7 @@ impl Side {
         Self {
             parts: BTreeMap::new(),
             missing: Standing::Unread,
+            composed: false,
             unread: Some(failure),
         }
     }
@@ -355,10 +388,23 @@ impl Side {
             },
         }
     }
+
+    /// Fix round 2: what the scheduler uses of `part` on this side: whether it dispatches it, and
+    /// the roles it uses it in; nothing on a side it does not compose (no `schedule.json`, or one
+    /// refused, or root files that could not be read).
+    fn used(&self, part: &Part) -> (bool, BTreeSet<Role>) {
+        if !self.composed {
+            return (false, BTreeSet::new());
+        }
+        (
+            part.standing == Standing::Scheduled,
+            part.roles.clone().unwrap_or_default(),
+        )
+    }
 }
 
 /// Workflow #463 S3-1: one package whose part in scheduling or whose content the placement
-/// changes.
+/// changes, or that one of the lists names.
 #[derive(Debug, Clone)]
 struct Change {
     package_id: String,
@@ -371,19 +417,21 @@ struct Change {
 
 /// Workflow #463 S3-1: what a placement changes of its game's scheduling, the plan's
 /// `schedule_changes`. Read only: nothing a placement writes or checks reads it.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct ScheduleChanges {
-    /// Each package whose part or content changes, by package id.
+    /// Each package whose part or content changes, or that a list names, by package id.
     packages: Vec<Change>,
-    /// The package ids, sorted, that enter scheduling: scheduled after and not before, or with a
-    /// maintenance role after that they did not have before (from absent, held, unclassified or
-    /// unread alike).
-    pub(crate) enters: Vec<String>,
-    /// Those that leave it: scheduled before and, read after, not (a hold added, the rule gone),
-    /// without a role after that they had before, or no longer carried by the zip.
+    /// Fix round 2: the package ids, sorted, that enter scheduling: exactly the packages the
+    /// scheduler dispatches, or uses in a supporting role, after the placement and did not before
+    /// (scheduled after and not before, or a role after that it did not hold before; a side the
+    /// scheduler does not compose, and an installed side that could not be read, count none).
+    /// `None` when the zip's side could not be read: then no list is answered.
+    pub(crate) enters: Option<Vec<String>>,
+    /// Those that leave it: scheduled before and not after, a role before that they do not hold
+    /// after, or no longer carried by the zip. Answered only with `enters`.
     leaves: Vec<String>,
-    /// Those that take part in scheduling before and after in the same way and whose pack is
-    /// replaced.
+    /// Those that the scheduler uses before and after in the same way and whose pack is replaced.
+    /// Answered only with `enters`.
     content_only: Vec<String>,
     /// The sides that could not be read (`installed`, `bundle`) with the failure.
     unread: Vec<(&'static str, Outcome)>,
@@ -404,45 +452,38 @@ impl ScheduleChanges {
             .chain(after.parts.keys())
             .cloned()
             .collect::<BTreeSet<_>>();
-        let mut changes = Self::default();
+        // Fix round 2: with the zip's side unread nothing after is known, so no list is answered.
+        let listing = after.unread.is_none();
+        let mut packages = Vec::new();
+        let mut enters = Vec::new();
+        let mut leaves = Vec::new();
+        let mut content_only = Vec::new();
         for package_id in ids {
             let was = before.part(&package_id);
             let will = after.part(&package_id);
             let content = contents.get(package_id.as_str()).copied();
-            // Roles not known after give none; roles not known before make every role after new.
-            let gains_role = match (&was.roles, &will.roles) {
-                (_, None) => false,
-                (None, Some(gained)) => !gained.is_empty(),
-                (Some(had), Some(has)) => !has.is_subset(had),
-            };
-            let loses_role = match (&was.roles, &will.roles) {
-                (Some(had), Some(has)) => !had.is_subset(has),
-                _ => false,
-            };
-            let enters = (will.standing == Standing::Scheduled
-                && was.standing != Standing::Scheduled)
-                || gains_role;
-            let leaves = (was.standing == Standing::Scheduled
-                && !matches!(will.standing, Standing::Scheduled | Standing::Unread))
-                || loses_role
+            let (was_scheduled, had) = before.used(&was);
+            let (is_scheduled, has) = after.used(&will);
+            let entering = (is_scheduled && !was_scheduled) || !has.is_subset(&had);
+            let leaving = (was_scheduled && !is_scheduled)
+                || !had.is_subset(&has)
                 || (will.standing == Standing::Absent && was.standing != Standing::Absent);
-            let content_only = !enters
-                && !leaves
+            let replaced_only = !entering
+                && !leaving
                 && content == Some(ItemState::Replace)
-                && was.standing != Standing::Unread
-                && will.standing != Standing::Unread
-                && was.takes_part();
-            if enters {
-                changes.enters.push(package_id.clone());
+                && (was_scheduled || !had.is_empty());
+            if listing && entering {
+                enters.push(package_id.clone());
             }
-            if leaves {
-                changes.leaves.push(package_id.clone());
+            if listing && leaving {
+                leaves.push(package_id.clone());
             }
-            if content_only {
-                changes.content_only.push(package_id.clone());
+            if listing && replaced_only {
+                content_only.push(package_id.clone());
             }
-            if was != will || content.is_some_and(|state| state != ItemState::Unchanged) {
-                changes.packages.push(Change {
+            let listed = listing && (entering || leaving || replaced_only);
+            if listed || was != will || content.is_some_and(|state| state != ItemState::Unchanged) {
+                packages.push(Change {
                     package_id,
                     before: was,
                     after: will,
@@ -450,16 +491,22 @@ impl ScheduleChanges {
                 });
             }
         }
-        for (side, failure) in [("installed", before.unread), ("bundle", after.unread)] {
-            if let Some(failure) = failure {
-                changes.unread.push((side, failure));
-            }
+        let unread = [("installed", before.unread), ("bundle", after.unread)]
+            .into_iter()
+            .filter_map(|(side, failure)| failure.map(|outcome| (side, outcome)))
+            .collect();
+        Self {
+            packages,
+            enters: listing.then_some(enters),
+            leaves,
+            content_only,
+            unread,
         }
-        changes
     }
 
-    /// `{packages, enters, leaves, content_only, unread?}`, `unread` only when a side could not be
-    /// read, each `{root, failure}` with the failure as a warning.
+    /// `{packages, enters?, leaves?, content_only?, unread?}`: the three lists only when the zip's
+    /// side was read (`enters` is not `None`); `unread` only when a side could not be read, each
+    /// `{root, failure}` with the failure as a warning.
     fn value(&self) -> Value {
         let packages = self
             .packages
@@ -476,12 +523,12 @@ impl ScheduleChanges {
                 value
             })
             .collect::<Vec<_>>();
-        let mut value = json!({
-            "packages": packages,
-            "enters": self.enters,
-            "leaves": self.leaves,
-            "content_only": self.content_only,
-        });
+        let mut value = json!({"packages": packages});
+        if let Some(enters) = &self.enters {
+            value["enters"] = json!(enters);
+            value["leaves"] = json!(self.leaves);
+            value["content_only"] = json!(self.content_only);
+        }
         if !self.unread.is_empty() {
             value["unread"] = json!(
                 self.unread
@@ -967,60 +1014,87 @@ fn root_issue(game: &str, base: &Path, issue: &StandardPackRootIssue) -> Outcome
         .json_pointer(issue.pointer.clone())
 }
 
-/// Workflow #463 S3-1: the maintenance roles of the packages of `root` with the bundle's entries
-/// `maintenance`, each by the root file that gives it: the contract crate's
-/// [`standard_pack_maintenance_packages`] called once per file, on that file alone.
-fn maintenance_roles(
-    root: &StandardPackRoot,
-    maintenance: &[BundleMaintenance],
-) -> BTreeMap<String, BTreeSet<&'static str>> {
-    let empty = StandardPackRoot {
+/// Workflow #463 S3-1 fix round 2: a root with no file and an empty registry, the base of the
+/// roots [`maintenance_roles`] hands the contract crate's function one list at a time.
+fn bare_root() -> StandardPackRoot {
+    StandardPackRoot {
         registry: StandardPackRegistry::default(),
         pages: None,
         interrupts: None,
         navigation: None,
         display_layout: None,
-    };
-    let sources = [
-        (
-            STANDARD_PACK_BUNDLE_FILE,
-            standard_pack_maintenance_packages(maintenance, &empty),
-        ),
-        (
-            STANDARD_PACK_PAGES_FILE,
-            standard_pack_maintenance_packages(
-                &[],
-                &StandardPackRoot {
-                    pages: root.pages.clone(),
-                    ..empty.clone()
-                },
-            ),
-        ),
-        (
-            STANDARD_PACK_NAVIGATION_FILE,
-            standard_pack_maintenance_packages(
-                &[],
-                &StandardPackRoot {
-                    navigation: root.navigation.clone(),
-                    ..empty.clone()
-                },
-            ),
-        ),
-        (
-            STANDARD_PACK_INTERRUPTS_FILE,
-            standard_pack_maintenance_packages(
-                &[],
-                &StandardPackRoot {
-                    interrupts: root.interrupts.clone(),
-                    ..empty
-                },
-            ),
-        ),
-    ];
-    let mut roles: BTreeMap<String, BTreeSet<&'static str>> = BTreeMap::new();
-    for (file, packages) in sources {
+    }
+}
+
+/// Workflow #463 S3-1 fix round 2: `root` with only the list that gives the part `role` in a run
+/// (the features of `pages.json`, the edges or the recovery chain of `navigation.json`, the
+/// handlers or the `then.run` packages of `interrupts.json`), every other list and file left out.
+fn only_list(root: &StandardPackRoot, role: NavigationRole) -> StandardPackRoot {
+    let mut only = bare_root();
+    match role {
+        NavigationRole::Features => only.pages.clone_from(&root.pages),
+        NavigationRole::Edge | NavigationRole::Chain => {
+            only.navigation = root.navigation.clone().map(|mut navigation| {
+                if role == NavigationRole::Edge {
+                    navigation.recovery_chain.clear();
+                } else {
+                    navigation.edges.clear();
+                }
+                navigation
+            });
+        }
+        NavigationRole::Handler | NavigationRole::ThenRun => {
+            only.interrupts = root.interrupts.clone().map(|mut interrupts| {
+                for interrupt in &mut interrupts.interrupts {
+                    if role == NavigationRole::Handler {
+                        interrupt.then = InterruptThen::Resume;
+                    } else {
+                        interrupt.handlers.clear();
+                    }
+                }
+                interrupts
+            });
+        }
+    }
+    only
+}
+
+/// Workflow #463 S3-1: the supporting parts of the packages of `root` with the bundle's entries
+/// `maintenance`. Fix round 2: each named by readiness's word ([`Role`]) and found as readiness
+/// finds it, by the contract crate's [`standard_pack_maintenance_packages`] called on the entries
+/// of one use at a time and then on one list of the root files at a time ([`only_list`]), so that
+/// a part gained inside one file is a part gained.
+fn maintenance_roles(
+    root: &StandardPackRoot,
+    maintenance: &[BundleMaintenance],
+) -> BTreeMap<String, BTreeSet<Role>> {
+    let bare = bare_root();
+    let uses = maintenance
+        .iter()
+        .flat_map(|entry| entry.uses.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let mut sources = Vec::new();
+    for purpose in uses {
+        let entries = maintenance
+            .iter()
+            .filter(|entry| entry.uses.contains(&purpose))
+            .cloned()
+            .collect::<Vec<_>>();
+        sources.push((
+            Role::Use(purpose),
+            standard_pack_maintenance_packages(&entries, &bare),
+        ));
+    }
+    for role in NavigationRole::ALL.iter().copied() {
+        sources.push((
+            Role::Run(role),
+            standard_pack_maintenance_packages(&[], &only_list(root, role)),
+        ));
+    }
+    let mut roles: BTreeMap<String, BTreeSet<Role>> = BTreeMap::new();
+    for (role, packages) in sources {
         for package_id in packages {
-            roles.entry(package_id).or_default().insert(file);
+            roles.entry(package_id).or_default().insert(role);
         }
     }
     roles
@@ -1028,10 +1102,12 @@ fn maintenance_roles(
 
 /// Workflow #463 S3-1: the side of the root files `root` of `game` (`None`: the root holds none),
 /// with the bundle's maintenance entries `maintenance` and the bytes of its `schedule.json`
-/// (`None`: it holds none, so no rule and no hold), classified by the contract crate's
-/// [`classify_standard_pack_packages`] over [`standard_pack_maintenance_packages`], as readiness
-/// calls them. A `schedule.json` the crate's reader refuses leaves each package `unread` with its
-/// roles, the refusal kept with the file below `base`.
+/// (`None`: it holds none), classified by the contract crate's [`classify_standard_pack_packages`]
+/// over [`standard_pack_maintenance_packages`], as readiness calls them. Fix round 2: a root
+/// without `schedule.json` is not composed (its packages keep the standing and the roles its root
+/// files give them, and count for nothing); a `schedule.json` that the contract crate's reader or
+/// the composer's own reference check ([`validate_standard_pack_schedule_references`]) refuses
+/// leaves each package `unread` with its roles, the refusal kept with the file below `base`.
 fn classified_side(
     game: &str,
     root: Option<&StandardPackRoot>,
@@ -1043,12 +1119,18 @@ fn classified_side(
         return Side {
             parts: BTreeMap::new(),
             missing: Standing::Absent,
+            composed: false,
             unread: None,
         };
     };
     let roles = maintenance_roles(root, maintenance);
     let roles_of = |package_id: &str| Some(roles.get(package_id).cloned().unwrap_or_default());
-    let schedule = match schedule_bytes.map(parse_standard_pack_schedule) {
+    let read = schedule_bytes.map(|bytes| {
+        parse_standard_pack_schedule(bytes).and_then(|schedule| {
+            validate_standard_pack_schedule_references(&root.registry, &schedule).map(|()| schedule)
+        })
+    });
+    let schedule = match read {
         None => StandardPackSchedule::default(),
         Some(Ok(schedule)) => schedule,
         Some(Err(issue)) => {
@@ -1067,6 +1149,7 @@ fn classified_side(
             return Side {
                 parts,
                 missing: Standing::Absent,
+                composed: false,
                 unread: Some(root_issue(game, base, &issue)),
             };
         }
@@ -1106,15 +1189,37 @@ fn classified_side(
     Side {
         parts,
         missing: Standing::Absent,
+        composed: schedule_bytes.is_some(),
         unread: None,
     }
 }
 
+/// Workflow #463 S3-1 fix round 2: the root file `path` of the installed game root, read as
+/// readiness reads a game root's file: at most [`ROOT_FILE_BYTES`] and one byte; `None` when it
+/// is not there. A file beyond the bound is `foreign_os_error` with `io_kind` `file_too_large`.
+fn read_root_file(path: &Path) -> Result<Option<Vec<u8>>, Outcome> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(files::os_failure(path, &error, IoOp::Open)),
+    };
+    let mut bytes = Vec::new();
+    file.take(ROOT_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| files::os_failure(path, &error, IoOp::Read))?;
+    if bytes.len() as u64 > ROOT_FILE_BYTES {
+        let beyond = std::io::Error::from(std::io::ErrorKind::FileTooLarge);
+        return Err(files::os_failure(path, &beyond, IoOp::Read));
+    }
+    Ok(Some(bytes))
+}
+
 /// Workflow #463 S3-1: the installed game root `game_root` of `game` as it is, classified
 /// ([`classified_side`]): its root files read as every reader reads them
-/// ([`read_standard_pack_root`]), its bundle's maintenance entries and its `schedule.json`. A
-/// file that cannot be read, root files the reader refuses, or a `bundle.json` the index does not
-/// take leave the side unread; nothing is refused.
+/// ([`read_standard_pack_root`]), its bundle's maintenance entries (from the `bundle.json` the
+/// reader took) and its `schedule.json`, each file read as readiness reads it
+/// ([`read_root_file`], fix round 2). A file that cannot be read, or root files the reader
+/// refuses, leave the side unread; nothing is refused.
 fn installed_side(game: &str, game_root: &Path) -> Side {
     let mut present = BTreeMap::new();
     for name in [
@@ -1125,15 +1230,12 @@ fn installed_side(game: &str, game_root: &Path) -> Side {
         STANDARD_PACK_DISPLAY_LAYOUT_FILE,
         STANDARD_PACK_SCHEDULE_FILE,
     ] {
-        let path = game_root.join(name);
-        match std::fs::read(&path) {
-            Ok(bytes) => {
+        match read_root_file(&game_root.join(name)) {
+            Ok(Some(bytes)) => {
                 present.insert(name, bytes);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Side::unreadable(files::os_failure(&path, &error, IoOp::Read));
-            }
+            Ok(None) => {}
+            Err(failure) => return Side::unreadable(failure),
         }
     }
     let bytes = |name: &str| present.get(name).map(Vec::as_slice);
