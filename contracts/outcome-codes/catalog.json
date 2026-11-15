@@ -2748,6 +2748,14 @@
     "declaration_sha256": {
       "type": "hash",
       "description": "The sha256 of a variable's declaration as its control.json writes it, in compact JSON (Workflow #463 V2, since 0.12.61)."
+    },
+    "goal_name": {
+      "type": "token",
+      "description": "The name an EditGoal named: an entry of the application's goals.json, a variable a package declares, or an other resource target's id; absent when the request's name has no entry name's form (Workflow #463 V3, since 0.12.61)."
+    },
+    "goal_problem": {
+      "type": "vocab:goal_problem",
+      "description": "Why an EditGoal was refused before the fact write gate (Workflow #463 V3, since 0.12.61)."
     }
   },
   "vocabularies": {
@@ -9567,6 +9575,73 @@
         },
         "root_unchecked": {
           "description": "No root check judged the variable for the application's game: the Runtime's table of the bound packages was built before an instance of that game was known."
+        }
+      }
+    },
+    "goal_problem": {
+      "description": "Why an EditGoal was refused before the fact write gate, the value goal_problem of goal_value_invalid, one word per situation a reader can tell apart (Workflow #463 V3, contracts/runtime-interface.md \"Goal request kinds\", since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/runtime/goals.rs",
+        "enum": "GoalProblem"
+      },
+      "tokens": {
+        "name_unknown": {
+          "description": "The name is no entry of the application's page (no entry of goals.json, no variable of a package the active catalog binds on the application, no remedy parameter of such a package) and, for a set, the value is no other resource target {resource, at_least}; for a clear, no stored value and no target has the name; or the name has no entry name's form."
+        },
+        "holds_no_value": {
+          "description": "The name is a heading or a note entry of goals.json, which holds no value."
+        },
+        "tier_not_built": {
+          "description": "The name is a tier entry of goals.json: no reader of this build reads a tier's value (Workflow #455 G-R5 builds it), so none is stored."
+        },
+        "remedy_parameter": {
+          "description": "The name is a remedy parameter of a bound package, which remedy set writes with the permission it scopes; the goal page shows it read-only."
+        },
+        "variable_not_applying": {
+          "description": "The name is a variable that does not apply in the application's game root; variable_problem says why. No value is stored for it."
+        },
+        "value_not_json": {
+          "description": "value_json is no JSON text."
+        },
+        "wrong_type": {
+          "description": "The value is not of the entry's type, or an object of other members than its own (json_pointer names the member)."
+        },
+        "out_of_range": {
+          "description": "An integer value below min or above max, or a resource at_least below 1 or above the pool's capacity or the safe integers (range_min, range_max)."
+        },
+        "off_step": {
+          "description": "An integer value within its range but on no step from min."
+        },
+        "not_an_option": {
+          "description": "A choice value, or an item of an ordered value, that is none of the declaration's options (json_pointer names the item)."
+        },
+        "key_repeated": {
+          "description": "An ordered value that names one key twice (json_pointer names the later one)."
+        },
+        "count_out_of_range": {
+          "description": "An ordered value of fewer than min_count or more than max_count keys (range_min, range_max)."
+        },
+        "value_too_large": {
+          "description": "The value's canonical text is longer than the store keeps, 1024 bytes (range_max)."
+        },
+        "pool_not_targetable": {
+          "description": "The pool of a resource value is no pool the application can target (pool_id)."
+        },
+        "pool_unvalued": {
+          "description": "The pool of a resource value is targetable only with its own step or importance, which a goal by name does not carry: its valuation lacks scale or gap (pool_id)."
+        },
+        "deadline_unsupported": {
+          "description": "A resource value carries by_unix_ms: no reader of this build reads a deadline (Workflow #455 G-R4 builds it), so none is stored."
+        },
+        "value_not_set": {
+          "description": "A clear of a name that holds no stored value: nothing to clear."
+        },
+        "record_unreadable": {
+          "description": "The application's stored record is neither a v2 nor a v3 record the readers read (a v1 policy, or rows the reader refuses): write its whole document with targets set first."
+        },
+        "record_out_of_limits": {
+          "description": "The edited record would hold more targets (16) or entries (96) than a record keeps (range_max)."
         }
       }
     }

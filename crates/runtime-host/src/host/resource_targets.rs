@@ -209,8 +209,9 @@ struct WrittenTargets {
 
 /// The instance fact that holds `composed`, observed at `observed_at_unix_ms`, the clock of the
 /// request: its rows, its expiry (a v1 or v2 policy's lifetime, with the runtime default TTL
-/// policy; none for a v3 record or a withdrawal) and its identity.
-fn policy_record(
+/// policy; none for a v3 record or a withdrawal) and its identity. Workflow #463 V3: the record an
+/// `EditGoal` writes too.
+pub(super) fn policy_record(
     scope: &FactScope,
     composed: &ComposedResourceTargets,
     observed_at_unix_ms: u64,
@@ -298,6 +299,34 @@ impl HostShared {
             &outcome_keys,
             None,
         )?;
+        let view = self.resource_target_view_of(
+            &policy,
+            &facts,
+            instance_alias,
+            time,
+            RESOURCE_TARGET_VIEW_OPERATION.into(),
+        )?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::ResourceTargetView {
+                view: Box::new(view),
+            },
+            failure_outcome: None,
+        })
+    }
+
+    /// The view `ResourceTargetView` answers for `instance_alias` from `facts`, the projection
+    /// taken under the locks the caller holds (policy outcome gate, `policy`, fact write gate), at
+    /// `time`; each refusal names `operation`. Workflow #463 V3: the goal page answers it too.
+    pub(super) fn resource_target_view_of(
+        &self,
+        policy: &PolicyHost,
+        facts: &EvaluationFacts,
+        instance_alias: &str,
+        time: EvaluationTime,
+        operation: actingcommand_contract::outcome::Location,
+    ) -> RuntimeHostResult<ResourceTargetView> {
         let instance = facts
             .instances
             .iter()
@@ -305,25 +334,25 @@ impl HostShared {
             .ok_or_else(|| {
                 RuntimeHostError::request(
                     HostCode::ResourceTargetViewInstanceUnconfigured,
-                    RESOURCE_TARGET_VIEW_OPERATION,
+                    operation,
                     RuntimeErrorCode::InstanceUnknown,
                 )
             })?;
         let catalog = policy.active_loaded();
         let compiled = catalog.as_ref().map(|catalog| catalog.compiled());
         let (targetable, not_targetable) = match compiled {
-            Some(compiled) => targetable_resources(compiled, &facts, instance, time)
+            Some(compiled) => targetable_resources(compiled, facts, instance, time)
                 .map_err(resource_target_view_error)?,
             None => (Vec::new(), Vec::new()),
         };
-        let active = match active_resource_targets(compiled, &facts, instance, time)
+        let active = match active_resource_targets(compiled, facts, instance, time)
             .map_err(resource_target_view_error)?
         {
             StoredResourceTargets::None => None,
             StoredResourceTargets::Unreadable { code } => {
                 return Err(RuntimeHostError::request(
                     HostCode::ResourceTargetViewPolicyUnreadable,
-                    RESOURCE_TARGET_VIEW_OPERATION,
+                    operation,
                     RuntimeErrorCode::LedgerFailure,
                 )
                 .with_native_detail(code.as_str().to_owned()));
@@ -342,7 +371,7 @@ impl HostShared {
                     .ok_or_else(|| {
                         RuntimeHostError::request(
                             HostCode::ResourceTargetViewPolicyInconsistent,
-                            RESOURCE_TARGET_VIEW_OPERATION,
+                            operation,
                             RuntimeErrorCode::LedgerFailure,
                         )
                     })?;
@@ -373,7 +402,7 @@ impl HostShared {
         let view = ResourceTargetView {
             instance_alias: instance_alias.to_owned(),
             policy_instance: instance.instance_id.clone(),
-            evaluated_at_unix_ms: sample.unix_ms,
+            evaluated_at_unix_ms: time.unix_ms,
             as_of_ledger_position: facts.ledger_position,
             catalog_hash: compiled.map(|compiled| compiled.catalog_hash().to_owned()),
             targetable,
@@ -385,18 +414,11 @@ impl HostShared {
         view.validate().map_err(|_| {
             RuntimeHostError::request(
                 HostCode::ResourceTargetViewInvalid,
-                RESOURCE_TARGET_VIEW_OPERATION,
+                operation,
                 RuntimeErrorCode::RuntimeHalted,
             )
         })?;
-        Ok(OperationSuccess {
-            state: RuntimeReceiptState::Completed,
-            terminal: None,
-            result: RuntimeResult::ResourceTargetView {
-                view: Box::new(view),
-            },
-            failure_outcome: None,
-        })
+        Ok(view)
     }
 }
 

@@ -144,6 +144,26 @@ impl VariableTable {
     pub fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
+
+    /// Workflow #463 V3: the package the catalog task `task_id` runs and the variables it
+    /// declares, in declaration order, as the table read them; `None` when it declares none or the
+    /// table could not read it.
+    pub fn task_variables(&self, task_id: &str) -> Option<(&str, &[PackageVariable])> {
+        self.tasks
+            .get(task_id)
+            .map(|task| (task.package_id.as_str(), task.variables.as_slice()))
+    }
+
+    /// The word the root check keeps the variable `name` from applying with in `game`
+    /// (`root_unchecked` when no root check judged that game); `None` when it applies. Workflow
+    /// #463 V3 moved this reading of the table out of [`plan_variable_values`], which calls it, so
+    /// that the goal page reads the one judgement a dispatch reads.
+    pub fn not_applying(&self, game: &str, name: &str) -> Option<VariableProblem> {
+        match self.games.get(game) {
+            Some(names) => names.get(name).copied(),
+            None => Some(VariableProblem::RootUnchecked),
+        }
+    }
 }
 
 /// When and through which channel the value an application holds was set.
@@ -235,7 +255,6 @@ pub fn plan_variable_values(
     }
     for instance in &facts.instances {
         let entries = stored_v3_entries(facts, &instance.instance_id);
-        let judged = table.games.get(&instance.game_id);
         for task in &catalog.catalog().tasks.tasks {
             let Some(declared) = table.tasks.get(&task.id) else {
                 continue;
@@ -248,10 +267,7 @@ pub fn plan_variable_values(
                 not_applied: Vec::new(),
             };
             for variable in &declared.variables {
-                let root = match judged {
-                    Some(names) => names.get(&variable.name).copied(),
-                    None => Some(VariableProblem::RootUnchecked),
-                };
+                let root = table.not_applying(&instance.game_id, &variable.name);
                 let resolved = resolve(variable, entries.get(&variable.name), root);
                 if let Some(problem) = resolved.problem {
                     pair.not_applied.push(NotAppliedValue {

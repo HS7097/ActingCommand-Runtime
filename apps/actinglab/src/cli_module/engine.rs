@@ -2,8 +2,9 @@
 
 //! The operations actinglab's own commands serve (Workflow #434 LAB-2; register §1.287, LAB-2
 //! row): the debugging and authoring rows, the core rows `app launch|restart|stop` (actinglab's
-//! `session app`) and `standard-pack check` (a core row since Workflow #434 LAB-5F fix 1) and the
-//! two `user-config` rows. [`COMMANDS`] names each row's command
+//! `session app`), `standard-pack check` (a core row since Workflow #434 LAB-5F fix 1) and
+//! `package variables` (Workflow #463 V3) and the two `user-config` rows. [`COMMANDS`] names each
+//! row's command
 //! (Workflow #434 LAB-5A: before it, a row named its command in `params_more`). The operation's
 //! short words are given to that command: its words, the row's positional words, then the
 //! instance as `--instance`, the row's options and switches and the further flags the command
@@ -34,7 +35,7 @@ pub(crate) enum Line {
 
 /// The command of every row actinglab's own command serves: the row's name, the command's words
 /// and how the row's command line reaches it.
-pub(crate) const COMMANDS: [(&str, &[&str], Line); 63] = [
+pub(crate) const COMMANDS: [(&str, &[&str], Line); 64] = [
     ("app launch", &["session", "app", "launch"], Line::Declared),
     (
         "app restart",
@@ -118,6 +119,12 @@ pub(crate) const COMMANDS: [(&str, &[&str], Line); 63] = [
     ("package loading", &["package", "loading"], Line::AsWritten),
     ("package fmt", &["package", "fmt"], Line::AsWritten),
     ("package edit", &["package", "edit"], Line::AsWritten),
+    // Workflow #463 V3: a core row, as `standard-pack check` is; it only reads.
+    (
+        "package variables",
+        &["package", "variables"],
+        Line::AsWritten,
+    ),
     (
         "resource catalog",
         &["resource", "catalog"],

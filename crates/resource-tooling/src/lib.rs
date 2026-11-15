@@ -134,6 +134,8 @@ mod package_directory;
 mod package_loading;
 mod package_publish;
 mod package_validate;
+// Workflow #463 V3: `package variables`, what one package's control declaration declares.
+mod package_variables;
 mod resource_convert;
 mod resource_restore;
 mod standard_pack_check;
@@ -162,6 +164,7 @@ pub use package_publish::{
     open_published_package,
 };
 pub use package_validate::validate_package;
+pub use package_variables::package_variables;
 pub use resource_convert::{
     Bundle, OperationParser, ParseOutputs, ResolvedResourceRoot, canonical_game, canonical_locale,
     canonical_server, resolve_resource_root, validate_maa_semantic_declarations,

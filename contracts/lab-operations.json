@@ -47,6 +47,8 @@
     {"kind": "StopInstanceRun", "class": "write", "console_today": true},
     {"kind": "EditPackSchedule", "class": "write", "console_today": false},
     {"kind": "ApplyResourceTargets", "class": "write", "console_today": false},
+    {"kind": "GoalView", "class": "read", "console_today": false},
+    {"kind": "EditGoal", "class": "write", "console_today": false},
     {"kind": "EditResourceTarget", "class": "write", "console_today": false},
     {"kind": "AcquirePlayerHold", "class": "write", "console_today": false},
     {"kind": "ReleasePlayerHold", "class": "write", "console_today": false},
@@ -1082,6 +1084,89 @@
       "slice": "R-8",
       "status": "planned",
       "notes": "#429 R-8: requests add Status, the read that resolves an instance scope's <inst>; a run in progress is not stopped"
+    },
+    {
+      "name": "goals",
+      "module": "core",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
+        {"name": "package", "form": "option", "type": "string", "required": false, "note": "a package_id: only the entries of the variables that package declares, and its remedy parameters"}
+      ],
+      "help": "Reads the goal page of one application: each entry with its value, its default and whether it is in effect, and the record's version.",
+      "output": "the goal page (GoalViewed): game_id, version (the next expected_version), declaration, entries, orphans, remedy_parameters, other_targets and targets",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "required",
+      "entries": ["lab", "ui"],
+      "requests": ["GoalView", "Status"],
+      "source": [],
+      "new": "#463 V3, #455 G-R2b (GoalView)",
+      "slice": "463-V3",
+      "status": "planned",
+      "notes": "Workflow #463 V3 (0.12.61, runtime-client 9): requests add Status, the read that resolves <inst>; the Runtime reads its memory only and records nothing"
+    },
+    {
+      "name": "goals get",
+      "module": "core",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
+        {"name": "name", "form": "positional", "type": "string", "required": true, "note": "an entry's name: a goals.json entry, a variable, or a stored value no entry offers any more"}
+      ],
+      "help": "Reads one entry of an application's goal page by its name: its value, its default, who set it and whether it is in effect.",
+      "output": "instance_alias, version and the entry (or, for a stored value no entry offers any more, orphan)",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "required",
+      "entries": ["lab", "ui"],
+      "requests": ["GoalView", "Status"],
+      "source": [],
+      "new": "#463 V3, #455 G-R2b (GoalView)",
+      "slice": "463-V3",
+      "status": "planned",
+      "notes": "Workflow #463 V3: a name the page does not hold is refused as <name> not_recognised"
+    },
+    {
+      "name": "goals set",
+      "module": "core",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
+        {"name": "name", "form": "positional", "type": "string", "required": true, "note": "an entry's or a variable's name; a name no entry has with the value {resource, at_least} sets an other resource target"},
+        {"name": "value", "form": "positional", "type": "json", "required": true, "note": "the value as JSON: a string for a choice, a number, true or false, a list of option values, or {at_least} for a resource entry"},
+        {"name": "expected_version", "form": "option", "type": "integer", "required": false, "note": "the version goals answered; 0 while the application has no record; absent: compare nothing"}
+      ],
+      "help": "Sets one value of an application's goal page by its name, checked against its declaration; the next run of a package that reads it reads it.",
+      "output": "the edit (GoalEdited): version (the next expected_version), event_id, replayed, replaced_target_id",
+      "writes": true,
+      "irreversible": false,
+      "runtime": "required",
+      "entries": ["lab", "ui"],
+      "requests": ["EditGoal", "Status"],
+      "source": [],
+      "new": "#463 V3, #455 G-R2b (EditGoal)",
+      "slice": "463-V3",
+      "status": "planned",
+      "notes": "Workflow #463 V3: a value the page does not take is goal_value_invalid with goal_problem; a run in progress is not stopped; nothing is recomposed"
+    },
+    {
+      "name": "goals clear",
+      "module": "core",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
+        {"name": "name", "form": "positional", "type": "string", "required": true, "note": "an entry's or a variable's name, or a stored value's no entry offers any more"},
+        {"name": "expected_version", "form": "option", "type": "integer", "required": false, "note": "the version goals answered; 0 while the application has no record; absent: compare nothing"}
+      ],
+      "help": "Clears one value of an application's goal page by its name, so the next run reads the default; a resource entry's target is removed.",
+      "output": "the edit (GoalEdited): version (the next expected_version), event_id, replayed",
+      "writes": true,
+      "irreversible": false,
+      "runtime": "required",
+      "entries": ["lab", "ui"],
+      "requests": ["EditGoal", "Status"],
+      "source": [],
+      "new": "#463 V3, #455 G-R2b (EditGoal)",
+      "slice": "463-V3",
+      "status": "planned",
+      "notes": "Workflow #463 V3: a name that holds no stored value is goal_value_invalid with goal_problem value_not_set"
     },
     {
       "name": "crash-log",
@@ -2279,6 +2364,25 @@
       "source": ["actinglab package edit"],
       "slice": "LAB-2",
       "status": "planned"
+    },
+    {
+      "name": "package variables",
+      "module": "core",
+      "params": [
+        {"name": "package", "form": "option", "type": "dir", "required": true, "note": "a package's content directory"}
+      ],
+      "help": "Reads the variables one package's control declaration declares, with their defaults, and its remedy parameters, as the Runtime reads them.",
+      "output": "package, package_id, variables (each name, type, default_json and declaration) and parameters (each capability, irreversible, parameter_name, options, default_option)",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": [],
+      "new": "#463 V3 (what a package offers to set by name)",
+      "slice": "463-V3",
+      "status": "planned",
+      "notes": "Workflow #463 V3 (0.12.61): actinglab's own package variables, a core row as standard-pack check is; it reads the control declaration through the Runtime's metadata reader, needs no Runtime, writes nothing and starts nothing"
     },
     {
       "name": "package view export",

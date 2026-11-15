@@ -26,7 +26,8 @@ use super::{
     MAX_TASKS_PER_RESOURCE_TARGET, ParsedResourceTargets, RESOURCE_TARGETS_SCHEMA_VERSION_V2,
     ROW_KIND, ROW_POLICY, ROW_TARGET, ROW_TASK, ResourceTargetSpecV2, ResourceTargetsDocument,
     ResourceTargetsDocumentV2, ResourceTargetsError, RowsDecodeError, TargetApplicationV2,
-    TargetCondition, TargetMode, TargetObservation, TargetPolicyState, TargetRule, check_target_v2,
+    TargetCondition, TargetMode, TargetObservation, TargetPolicyState, TargetRule, TargetWeight,
+    check_target_v2,
     declaration_rejection, decode_rows_v2, encode_rows_v2, manual_offset_name, mode_name,
     observe_target, present, rejected_at, rule_name, valid_identifier, weight_name,
 };
@@ -707,59 +708,89 @@ fn encode_rows_v3(
     setter: Option<TargetSetter>,
     entries: Vec<EntryRow>,
 ) -> Vec<BTreeMap<String, ContractFactScalar>> {
+    let mut rows = vec![policy_header(document, policy_sha256)];
+    rows.extend(
+        document
+            .targets
+            .iter()
+            .map(|target| target_row(target, setter)),
+    );
+    rows.extend(task_rows(&document.targets));
+    rows.extend(entries.into_iter().map(|entry| entry.row));
+    rows
+}
+
+/// The `policy` header row of a v3 record of `document` whose identity is `policy_sha256`.
+fn policy_header(
+    document: &ResourceTargetsDocumentV3,
+    policy_sha256: &str,
+) -> BTreeMap<String, ContractFactScalar> {
     let text = |value: &str| ContractFactScalar::String(value.to_owned());
-    let integer =
-        |value: u64| ContractFactScalar::Integer(i64::try_from(value).unwrap_or(i64::MAX));
-    let mut rows = vec![BTreeMap::from([
+    BTreeMap::from([
         (ROW_KIND.to_owned(), text(ROW_POLICY)),
         ("schema_version".to_owned(), text(&document.schema_version)),
         ("instance".to_owned(), text(&document.instance)),
         ("policy_sha256".to_owned(), text(policy_sha256)),
-    ])];
-    for target in &document.targets {
-        let TargetCondition::AtLeast { amount } = target.condition;
-        let mut row = BTreeMap::from([
-            (ROW_KIND.to_owned(), text(ROW_TARGET)),
-            ("id".to_owned(), text(&target.id)),
-            ("resource".to_owned(), text(&target.resource)),
-            ("at_least".to_owned(), integer(amount)),
-            ("mode".to_owned(), text(mode_name(target.apply.mode))),
-            ("weight".to_owned(), text(weight_name(target.apply.weight))),
-        ]);
-        if let Some(scale) = target.scale {
-            row.insert("scale".to_owned(), integer(scale));
-        }
-        if let Some(importance_milli) = target.importance_milli {
-            row.insert("importance_milli".to_owned(), integer(importance_milli));
-        }
-        if let Some(rule) = target.rule {
-            row.insert("rule".to_owned(), text(rule_name(rule)));
-        }
-        if let Some(manual_offset) = target.apply.manual_offset {
-            row.insert(
-                "manual_offset".to_owned(),
-                text(manual_offset_name(manual_offset)),
-            );
-        }
-        if let Some(valid_until) = target.valid_until_unix_ms {
-            row.insert(FIELD_VALID_UNTIL.to_owned(), integer(valid_until));
-        }
-        if let Some(setter) = setter {
-            set_by(&mut row, setter);
-        }
-        rows.push(row);
+    ])
+}
+
+/// The `target` row of a v3 record of `target`: a v2 target row, its own `valid_until_unix_ms`
+/// when it has one, and `set_unix_ms`, `channel` and `initiator` when `setter` set it.
+fn target_row(
+    target: &ResourceTargetSpecV3,
+    setter: Option<TargetSetter>,
+) -> BTreeMap<String, ContractFactScalar> {
+    let text = |value: &str| ContractFactScalar::String(value.to_owned());
+    let integer =
+        |value: u64| ContractFactScalar::Integer(i64::try_from(value).unwrap_or(i64::MAX));
+    let TargetCondition::AtLeast { amount } = target.condition;
+    let mut row = BTreeMap::from([
+        (ROW_KIND.to_owned(), text(ROW_TARGET)),
+        ("id".to_owned(), text(&target.id)),
+        ("resource".to_owned(), text(&target.resource)),
+        ("at_least".to_owned(), integer(amount)),
+        ("mode".to_owned(), text(mode_name(target.apply.mode))),
+        ("weight".to_owned(), text(weight_name(target.apply.weight))),
+    ]);
+    if let Some(scale) = target.scale {
+        row.insert("scale".to_owned(), integer(scale));
     }
-    for target in &document.targets {
-        for task in target.tasks.iter().flatten() {
-            rows.push(BTreeMap::from([
-                (ROW_KIND.to_owned(), text(ROW_TASK)),
-                ("target".to_owned(), text(&target.id)),
-                ("task".to_owned(), text(task)),
-            ]));
-        }
+    if let Some(importance_milli) = target.importance_milli {
+        row.insert("importance_milli".to_owned(), integer(importance_milli));
     }
-    rows.extend(entries.into_iter().map(|entry| entry.row));
-    rows
+    if let Some(rule) = target.rule {
+        row.insert("rule".to_owned(), text(rule_name(rule)));
+    }
+    if let Some(manual_offset) = target.apply.manual_offset {
+        row.insert(
+            "manual_offset".to_owned(),
+            text(manual_offset_name(manual_offset)),
+        );
+    }
+    if let Some(valid_until) = target.valid_until_unix_ms {
+        row.insert(FIELD_VALID_UNTIL.to_owned(), integer(valid_until));
+    }
+    if let Some(setter) = setter {
+        set_by(&mut row, setter);
+    }
+    row
+}
+
+/// One `task` row per task reference of `targets`, in document order.
+fn task_rows(targets: &[ResourceTargetSpecV3]) -> Vec<BTreeMap<String, ContractFactScalar>> {
+    let text = |value: &str| ContractFactScalar::String(value.to_owned());
+    targets
+        .iter()
+        .flat_map(|target| {
+            target.tasks.iter().flatten().map(|task| {
+                BTreeMap::from([
+                    (ROW_KIND.to_owned(), text(ROW_TASK)),
+                    ("target".to_owned(), text(&target.id)),
+                    ("task".to_owned(), text(task)),
+                ])
+            })
+        })
+        .collect()
 }
 
 /// The entries of `stored` when it is a readable v3 record of `instance_id`, each with its row as
@@ -1187,4 +1218,419 @@ pub(super) fn lapsed_coverage(
         }
     }
     covered
+}
+
+// ---- Workflow #463 V3 (register §1.383; contracts/resource-targets.md, "One value by name"):
+// the goal page's reading of a stored record and the one-row edit `EditGoal` writes. ----
+
+/// Workflow #463 V3: one entry row of a stored v3 record as the goal page reads it: its name, its
+/// value with the row's canonical text, and who set it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredGoalEntry {
+    pub name: String,
+    pub value: serde_json::Value,
+    pub value_json: String,
+    pub set: TargetSetter,
+}
+
+/// Workflow #463 V3: one target of a stored record as the goal page reads it, with who set it
+/// when its row names it (a target of a v3 document or of an `EditGoal`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredGoalTarget {
+    pub target: ResourceTargetSpecV3,
+    pub set: Option<TargetSetter>,
+}
+
+/// Workflow #463 V3: an instance's stored `session.resource_targets` record as the goal page and
+/// `EditGoal` read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoredGoalRecord {
+    /// No record, or a withdrawal.
+    Empty,
+    /// A readable v2 policy: its targets, each with the policy's lifetime as its own.
+    V2 { targets: Vec<ResourceTargetSpecV3> },
+    /// A readable v3 record: its targets and its entries, each in its order.
+    V3 {
+        targets: Vec<StoredGoalTarget>,
+        entries: Vec<StoredGoalEntry>,
+    },
+    /// A v1 policy, or rows neither the v2 nor the v3 reader reads.
+    Unreadable,
+}
+
+impl StoredGoalRecord {
+    /// The stored entries, in their order; none but in a v3 record.
+    pub fn entries(&self) -> &[StoredGoalEntry] {
+        match self {
+            Self::V3 { entries, .. } => entries,
+            Self::Empty | Self::V2 { .. } | Self::Unreadable => &[],
+        }
+    }
+
+    /// The stored targets, in their order, each with who set it when its row names it.
+    pub fn targets(&self) -> Vec<StoredGoalTarget> {
+        match self {
+            Self::V2 { targets } => targets
+                .iter()
+                .map(|target| StoredGoalTarget {
+                    target: target.clone(),
+                    set: None,
+                })
+                .collect(),
+            Self::V3 { targets, .. } => targets.clone(),
+            Self::Empty | Self::Unreadable => Vec::new(),
+        }
+    }
+}
+
+/// Whether `row` is a row of `kind`.
+fn is_row(row: &BTreeMap<String, ContractFactScalar>, kind: &str) -> bool {
+    matches!(row.get(ROW_KIND), Some(ContractFactScalar::String(row_kind)) if row_kind == kind)
+}
+
+/// Who set `row`, when it names it: its `set_unix_ms`, `channel` and optional `initiator`.
+fn row_setter(row: &BTreeMap<String, ContractFactScalar>) -> Option<TargetSetter> {
+    let set_unix_ms = match row.get(FIELD_SET_AT) {
+        Some(ContractFactScalar::Integer(at)) => u64::try_from(*at).ok()?,
+        _ => return None,
+    };
+    let channel = match row.get(FIELD_CHANNEL) {
+        Some(ContractFactScalar::String(word)) => [
+            RuntimeChannel::Cli,
+            RuntimeChannel::Mcp,
+            RuntimeChannel::Ui,
+            RuntimeChannel::Lab,
+        ]
+        .into_iter()
+        .find(|channel| channel.as_str() == word)?,
+        _ => return None,
+    };
+    let initiator = match row.get(FIELD_INITIATOR) {
+        None => None,
+        Some(ContractFactScalar::String(word)) => Some(Initiator::from_word(word)?),
+        Some(_) => return None,
+    };
+    Some(TargetSetter {
+        set_unix_ms,
+        channel,
+        initiator,
+    })
+}
+
+/// Workflow #463 V3: `instance_id`'s stored record `stored` (its rows; `None` without one), whose
+/// fact expires at `expires_at_unix_ms`, as the goal page reads it: a v3 record read by the v3
+/// reader with each row's setter, a v2 policy read by the v2 reader with its lifetime on each
+/// target, a withdrawal as no record, anything else as unreadable. Nothing is judged against a
+/// declaration here.
+pub fn stored_goal_record(
+    stored: Option<&[BTreeMap<String, ContractFactScalar>]>,
+    expires_at_unix_ms: Option<u64>,
+    instance_id: &str,
+) -> StoredGoalRecord {
+    let Some(stored) = stored else {
+        return StoredGoalRecord::Empty;
+    };
+    let rows = policy_rows(stored);
+    if declares_v3_rows(&rows) {
+        let Ok(decoded) = decode_rows_v3(&rows, instance_id) else {
+            return StoredGoalRecord::Unreadable;
+        };
+        let setters = stored
+            .iter()
+            .filter(|row| is_row(row, ROW_TARGET))
+            .map(row_setter);
+        let targets = decoded
+            .targets
+            .iter()
+            .zip(setters)
+            .map(|(target, set)| StoredGoalTarget {
+                target: ResourceTargetSpecV3::of_v2(&target.target, target.valid_until_unix_ms),
+                set,
+            })
+            .collect();
+        let entries = decoded
+            .entries
+            .into_iter()
+            .filter_map(|entry| {
+                let row = stored.get(entry.index)?;
+                let value_json = match row.get(FIELD_VALUE_JSON) {
+                    Some(ContractFactScalar::String(text)) => text.clone(),
+                    _ => return None,
+                };
+                Some(StoredGoalEntry {
+                    name: entry.name,
+                    value: entry.value,
+                    value_json,
+                    set: row_setter(row)?,
+                })
+            })
+            .collect();
+        return StoredGoalRecord::V3 { targets, entries };
+    }
+    match decode_rows_v2(&rows, instance_id) {
+        Ok(decoded) if decoded.targets.is_empty() => StoredGoalRecord::Empty,
+        Ok(decoded) => StoredGoalRecord::V2 {
+            targets: decoded
+                .targets
+                .iter()
+                .map(|target| ResourceTargetSpecV3::of_v2(target, expires_at_unix_ms))
+                .collect(),
+        },
+        Err(_) => StoredGoalRecord::Unreadable,
+    }
+}
+
+/// Workflow #463 V3: the one change of an `EditGoal`, as the record takes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoalRecordEdit {
+    /// The entry row of `name` holds `value`: replaced where it stands, or added after the others.
+    SetEntry {
+        name: String,
+        value: serde_json::Value,
+    },
+    /// The entry row of `name` is removed.
+    ClearEntry { name: String },
+    /// The target `id` on the pool `resource`, at least `at_least`, mode `adjust`, its step,
+    /// importance and rule the pool's valuation, no tasks and no lifetime: it replaces the target
+    /// on that pool whatever its id (and a target of that id on another pool), else is added
+    /// after the others.
+    SetTarget {
+        id: String,
+        resource: String,
+        at_least: u64,
+    },
+    /// The target `id` and its task rows are removed.
+    ClearTarget { id: String },
+}
+
+/// Workflow #463 V3: why a stored record cannot take an edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalRecordRefusal {
+    /// The stored record is a v1 policy, or rows neither the v2 nor the v3 reader reads.
+    Unreadable,
+    /// The value's canonical text is longer than an entry row keeps
+    /// ([`MAX_RESOURCE_TARGET_ENTRY_VALUE_BYTES`]).
+    ValueTooLarge,
+    /// The canonical writer refuses the value (a fraction, an integer beyond 2^53 - 1), or its
+    /// text holds a control character.
+    ValueInvalid,
+    /// The edited record would hold more targets than a record keeps (16).
+    TargetsFull,
+    /// The edited record would hold more entries than a record keeps
+    /// ([`MAX_RESOURCE_TARGET_ENTRIES`]).
+    EntriesFull,
+    /// The edited record is no record the v3 reader reads back: an internal fault.
+    Inconsistent,
+}
+
+/// Workflow #463 V3: what an edit composed: the record, and the id of the target a `SetTarget`
+/// replaced on its pool when that target had another id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditedGoalRecord {
+    pub composed: ComposedResourceTargets,
+    pub replaced_target_id: Option<String>,
+}
+
+/// A target an edit keeps: its document form and its stored row, `None` for a row the edit
+/// writes anew without a setter (a v2 policy's target, as a v2 document's over a v3 record).
+struct KeptTarget {
+    target: ResourceTargetSpecV3,
+    row: Option<BTreeMap<String, ContractFactScalar>>,
+}
+
+/// The targets and entries of `instance_id`'s stored record as an edit keeps them: a v3 record's
+/// with their rows as stored, a v2 policy's targets with the policy's lifetime
+/// (`expires_at_unix_ms`) as their own, none without a record or for a withdrawal; any other
+/// record is unreadable.
+fn kept_parts(
+    stored: Option<&[BTreeMap<String, ContractFactScalar>]>,
+    expires_at_unix_ms: Option<u64>,
+    instance_id: &str,
+) -> Result<(Vec<KeptTarget>, Vec<EntryRow>), GoalRecordRefusal> {
+    let Some(stored) = stored else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let rows = policy_rows(stored);
+    if declares_v3_rows(&rows) {
+        let decoded =
+            decode_rows_v3(&rows, instance_id).map_err(|_| GoalRecordRefusal::Unreadable)?;
+        let target_rows = stored.iter().filter(|row| is_row(row, ROW_TARGET)).cloned();
+        let targets = decoded
+            .targets
+            .iter()
+            .zip(target_rows)
+            .map(|(target, row)| KeptTarget {
+                target: ResourceTargetSpecV3::of_v2(&target.target, target.valid_until_unix_ms),
+                row: Some(row),
+            })
+            .collect();
+        let entries = decoded
+            .entries
+            .into_iter()
+            .filter_map(|entry| {
+                stored.get(entry.index).map(|row| EntryRow {
+                    name: entry.name,
+                    value: entry.value,
+                    row: row.clone(),
+                })
+            })
+            .collect();
+        return Ok((targets, entries));
+    }
+    let decoded = decode_rows_v2(&rows, instance_id).map_err(|_| GoalRecordRefusal::Unreadable)?;
+    let targets = decoded
+        .targets
+        .iter()
+        .map(|target| KeptTarget {
+            target: ResourceTargetSpecV3::of_v2(target, expires_at_unix_ms),
+            row: None,
+        })
+        .collect();
+    Ok((targets, Vec::new()))
+}
+
+/// Workflow #463 V3 (`contracts/resource-targets.md`, "One value by name"): the record `edit`
+/// writes over `instance_id`'s stored record `stored` (its rows, whose fact expires at
+/// `expires_at_unix_ms`; `None` without one), the one row it writes set by `setter`. Every other
+/// row is kept as it is stored: the other entries and the v3 targets with who set them; a v2
+/// policy's targets become v3 targets with the policy's lifetime and no setter, as under a v2
+/// document applied over a v3 record. The identity is the document the record holds; a record
+/// left with no target and no entry is the withdrawal. The whole record is read back by the v3
+/// reader before it is answered. The caller judges the name and the value against the
+/// declaration first; a `ClearEntry` or `ClearTarget` of a name the record does not hold changes
+/// nothing of its rows.
+pub fn edit_goal_record(
+    stored: Option<&[BTreeMap<String, ContractFactScalar>]>,
+    expires_at_unix_ms: Option<u64>,
+    instance_id: &str,
+    edit: &GoalRecordEdit,
+    setter: TargetSetter,
+) -> Result<EditedGoalRecord, GoalRecordRefusal> {
+    let (mut targets, mut entries) = kept_parts(stored, expires_at_unix_ms, instance_id)?;
+    let mut replaced_target_id = None;
+    match edit {
+        GoalRecordEdit::SetEntry { name, value } => {
+            goal_entry_value_fits(value)?;
+            let entry = ResourceTargetEntry {
+                name: name.clone(),
+                value: value.clone(),
+            };
+            let row = entry_row(&entry, Some(setter)).map_err(|_| GoalRecordRefusal::ValueInvalid)?;
+            match entries.iter_mut().find(|kept| kept.name == *name) {
+                Some(kept) => *kept = row,
+                None if entries.len() >= MAX_RESOURCE_TARGET_ENTRIES => {
+                    return Err(GoalRecordRefusal::EntriesFull);
+                }
+                None => entries.push(row),
+            }
+        }
+        GoalRecordEdit::ClearEntry { name } => entries.retain(|kept| kept.name != *name),
+        GoalRecordEdit::SetTarget {
+            id,
+            resource,
+            at_least,
+        } => {
+            let target = ResourceTargetSpecV3 {
+                id: id.clone(),
+                resource: resource.clone(),
+                condition: TargetCondition::AtLeast { amount: *at_least },
+                scale: None,
+                importance_milli: None,
+                rule: None,
+                apply: TargetApplicationV2 {
+                    mode: TargetMode::Adjust,
+                    weight: TargetWeight::ScoreStage,
+                    manual_offset: None,
+                },
+                tasks: None,
+                valid_until_unix_ms: None,
+                deadline: None,
+            };
+            // A target id is unique in a record: one of this id on another pool goes too.
+            targets.retain(|kept| kept.target.id != *id || kept.target.resource == *resource);
+            let row = Some(target_row(&target, Some(setter)));
+            match targets
+                .iter_mut()
+                .find(|kept| kept.target.resource == *resource)
+            {
+                Some(kept) => {
+                    if kept.target.id != *id {
+                        replaced_target_id = Some(kept.target.id.clone());
+                    }
+                    *kept = KeptTarget { target, row };
+                }
+                None if targets.len() >= MAX_RESOURCE_TARGETS => {
+                    return Err(GoalRecordRefusal::TargetsFull);
+                }
+                None => targets.push(KeptTarget { target, row }),
+            }
+        }
+        GoalRecordEdit::ClearTarget { id } => targets.retain(|kept| kept.target.id != *id),
+    }
+    let document = composed_document(
+        instance_id,
+        targets.iter().map(|kept| kept.target.clone()).collect(),
+        &entries,
+    );
+    let policy_sha256 = document
+        .identity()
+        .map_err(|_| GoalRecordRefusal::Inconsistent)?;
+    let rows = match &document {
+        ComposedDocument::Withdrawal(withdrawal) => encode_rows_v2(withdrawal, &policy_sha256),
+        ComposedDocument::V3(composed) => {
+            let mut rows = vec![policy_header(composed, &policy_sha256)];
+            rows.extend(targets.iter().map(|kept| {
+                kept.row
+                    .clone()
+                    .unwrap_or_else(|| target_row(&kept.target, None))
+            }));
+            rows.extend(task_rows(&composed.targets));
+            rows.extend(entries.into_iter().map(|entry| entry.row));
+            if decode_rows_v3(&policy_rows(&rows), instance_id).is_err() {
+                return Err(GoalRecordRefusal::Inconsistent);
+            }
+            rows
+        }
+    };
+    Ok(EditedGoalRecord {
+        composed: ComposedResourceTargets {
+            policy_sha256,
+            rows,
+            expires_at_unix_ms: None,
+            valid_until_unix_ms: None,
+            conditions: Vec::new(),
+        },
+        replaced_target_id,
+    })
+}
+
+/// Workflow #463 V3: whether an entry row keeps `value`: its canonical text is at most
+/// [`MAX_RESOURCE_TARGET_ENTRY_VALUE_BYTES`] bytes (else `ValueTooLarge`) and the canonical writer
+/// takes it without a control character in its text (else `ValueInvalid`). The rule of the v3
+/// reader and of [`edit_goal_record`], for the checks before the fact write gate.
+pub fn goal_entry_value_fits(value: &serde_json::Value) -> Result<(), GoalRecordRefusal> {
+    match entry_value_text(value) {
+        Ok(_) => Ok(()),
+        Err(ResourceTargetsRejectionReason::OutOfRange) => Err(GoalRecordRefusal::ValueTooLarge),
+        Err(_) => Err(GoalRecordRefusal::ValueInvalid),
+    }
+}
+
+/// Workflow #463 V3: the capacity the pool `pool_id` of `catalog` that covers `instance` is held
+/// to in `facts` at `time`, read as the evaluator reads it (a capacity the catalog writes, or the
+/// one its capacity fact gives); `None` when the catalog has no such pool or its capacity fact
+/// gives none.
+pub fn pool_capacity(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    instance: &InstanceSnapshot,
+    pool_id: &str,
+    time: EvaluationTime,
+) -> Option<u64> {
+    let pool = catalog.catalog().pools.pools.iter().find(|pool| {
+        pool.id == pool_id && crate::evaluator::scope_matches_instance(&pool.scope, instance)
+    })?;
+    crate::evaluator::pool_bound(pool, facts, time)
+        .ok()
+        .map(crate::evaluator::PoolBound::capacity)
 }

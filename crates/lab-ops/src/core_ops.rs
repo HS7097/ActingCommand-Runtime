@@ -128,11 +128,15 @@ pub fn serves(operation: &Operation) -> bool {
     }
     // `app launch|restart|stop` are actinglab's own `session app` (the engine), and (Workflow #434
     // LAB-5F fix 1, a core row since the coordinator's ruling of 2026-11-11) `standard-pack check`
-    // is actinglab's own `standard-pack check`.
+    // is actinglab's own `standard-pack check`; Workflow #463 V3: `package variables` likewise.
     operation.module == crate::table::OperationModule::Core
         && !matches!(
             name,
-            "app launch" | "app restart" | "app stop" | "standard-pack check"
+            "app launch"
+                | "app restart"
+                | "app stop"
+                | "standard-pack check"
+                | "package variables"
         )
 }
 
@@ -713,6 +717,11 @@ fn served(
         "task stop" => task_stop(params, client)?,
         "pack-schedule" => pack_schedule_view(params, client)?,
         "pack-schedule set" => pack_schedule_set(params, client)?,
+        // Workflow #463 V3: one application's goals, read and set by name.
+        "goals" => goals_view(params, client)?,
+        "goals get" => goals_get(params, client)?,
+        "goals set" => goals_edit(params, client, GoalChange::Set)?,
+        "goals clear" => goals_edit(params, client, GoalChange::Clear)?,
         "run start" => run_start(params, client)?,
         "run stop" => run_stop(params, client)?,
         "reset" => {
@@ -822,6 +831,99 @@ fn pack_schedule_set(params: Params<'_>, client: &RuntimeClient) -> Result<Exit,
     Ok(cli_line::success(
         members,
         &Outcome::new(ReceiptCode::EditPackScheduleCompleted),
+    ))
+}
+
+/// Workflow #463 V3: `goals <inst> [--package <package_id>]`, `GoalView`: the application's goal
+/// page, every entry with its value, its default and whether it is in effect, beside the read's
+/// success code; with `--package`, only the entries of the variables that package declares and its
+/// remedy parameters. A refusal is the client's failure.
+fn goals_view(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
+    let alias = alias_of(client, required_text(params, "instance")?)?;
+    let mut view = client
+        .goal_view(&alias)
+        .map_err(|error| client_failed(&error))?;
+    if let Some(package_id) = text(params, "package") {
+        view.entries
+            .retain(|entry| entry.packages.iter().any(|declaring| declaring == package_id));
+        view.remedy_parameters
+            .retain(|parameter| parameter.package_id == package_id);
+    }
+    let members = serde_json::to_value(view)
+        .map(|value| cli_line::members(value, RESULT_MEMBER))
+        .map_err(|error| output_failed(&error))?;
+    Ok(cli_line::success(
+        members,
+        &Outcome::new(ReceiptCode::GoalViewCompleted),
+    ))
+}
+
+/// Workflow #463 V3: `goals get <inst> <name>`, `GoalView`: the page's one entry of that name (or
+/// the stored value of that name no entry offers any more, as `orphan`), with the page's version,
+/// beside the read's success code. A name the page does not hold is refused as `<name>`
+/// `not_recognised`; a refusal of the read is the client's failure.
+fn goals_get(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
+    let alias = alias_of(client, required_text(params, "instance")?)?;
+    let name = required_text(params, "name")?;
+    let view = client
+        .goal_view(&alias)
+        .map_err(|error| client_failed(&error))?;
+    let mut members = Map::new();
+    members.insert("instance_alias".to_owned(), Value::from(view.instance_alias.clone()));
+    members.insert("version".to_owned(), Value::from(view.version));
+    let found = match view.entries.iter().find(|entry| entry.name == name) {
+        Some(entry) => serde_json::to_value(entry).map(|entry| ("entry", entry)),
+        None => match view.orphans.iter().find(|orphan| orphan.name == name) {
+            Some(orphan) => serde_json::to_value(orphan).map(|orphan| ("orphan", orphan)),
+            None => return Err(usage("<name>", ArgumentProblem::NotRecognised)),
+        },
+    };
+    let (member, value) = found.map_err(|error| output_failed(&error))?;
+    members.insert(member.to_owned(), value);
+    Ok(cli_line::success(
+        members,
+        &Outcome::new(ReceiptCode::GoalViewCompleted),
+    ))
+}
+
+/// Workflow #463 V3: which change `goals set` and `goals clear` send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GoalChange {
+    Set,
+    Clear,
+}
+
+/// Workflow #463 V3: `goals set <inst> <name> <value> [--expected-version]` and `goals clear <inst>
+/// <name> [--expected-version]`, `EditGoal`: one value of the page set (the value as JSON) or
+/// cleared, compared with the record's version when one is given (`0`: no record yet). The answer
+/// is the edit (the record's version after it, the next `--expected-version`, and its event)
+/// beside the edit's success code; a refusal is the refused receipt beside its outcome.
+fn goals_edit(params: Params<'_>, client: &RuntimeClient, change: GoalChange) -> Result<Exit, Exit> {
+    let alias = alias_of(client, required_text(params, "instance")?)?;
+    let name = required_text(params, "name")?.to_owned();
+    let op = match change {
+        GoalChange::Set => {
+            let value = params
+                .get("value")
+                .ok_or_else(|| usage("<value>", ArgumentProblem::Required))?;
+            actingcommand_contract::GoalEdit::Set {
+                name,
+                value_json: value.to_string(),
+            }
+        }
+        GoalChange::Clear => actingcommand_contract::GoalEdit::Clear { name },
+    };
+    let expected_version = unsigned(params, "expected_version")?;
+    let edited = match client.edit_goal(&alias, expected_version, op) {
+        Ok(edited) => edited,
+        Err(error) => return receipt_refused(error),
+    };
+    let members = serde_json::to_value(edited)
+        .map(|value| cli_line::members(value, RESULT_MEMBER))
+        .map_err(|error| output_failed(&error))?;
+    Ok(cli_line::success(
+        members,
+        &Outcome::new(ReceiptCode::EditGoalCompleted),
     ))
 }
 

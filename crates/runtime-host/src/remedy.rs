@@ -587,8 +587,9 @@ fn findings(
     findings
 }
 
-/// Whether a task of `scope` covers `instance`.
-fn covers(scope: &ScopeSelector, instance: &InstanceSnapshot) -> bool {
+/// Whether a task of `scope` covers `instance`. Workflow #463 V3: the goal page reads the packages
+/// the active catalog binds on an instance through it too.
+pub(crate) fn covers(scope: &ScopeSelector, instance: &InstanceSnapshot) -> bool {
     match scope {
         ScopeSelector::Instance { instance_id } => *instance_id == instance.instance_id,
         ScopeSelector::Server { server_id } => *server_id == instance.server_id,

@@ -231,6 +231,8 @@ mod online_observation;
 mod package_debug;
 // Workflow #429 R-8: `EditPackSchedule` and `PackScheduleView`.
 mod pack_schedule;
+// Workflow #463 V3: `GoalView` and `EditGoal`.
+mod goals;
 mod performance;
 mod planning;
 mod policy_catalog;

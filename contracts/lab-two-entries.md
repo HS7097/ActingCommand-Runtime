@@ -258,6 +258,8 @@ holds `ui` to it (section 2.3 step 5); `lab_ops_ui_allows_is_the_tables_ui_kinds
 | `StopInstanceRun` | write | built by #429 R-6's first slice (0.12.53) and R-6b (since 0.12.55; `v012-register.md` §1.314, §1.316): it stops a client's direct run and a run the scheduler started (a fact refresh read included), and the Runtime resets the device itself; a stopped scheduled run settles as a stop, neither a success nor a failure of its task; only a run the Runtime started for itself is refused, with `run_origin` `host`. A stop ends this run only: a task whose trigger still holds is dispatched again once its cooldown has passed (at the next evaluation when the stopped run outlasted it); a closing row (`pack-schedule set`) or a pause keeps it from running (runtime-interface.md, "Workbench request kinds") |
 | `EditPackSchedule` | write | built by #429 R-8 (0.12.55), with the read `PackScheduleView`: it replaces one task package's rows in one scope's pack schedule list, a compare-and-swap with `expected_version`; a run in progress is not stopped (instance-fact-store.md, "Pack schedule facts") |
 | `ApplyResourceTargets` | write | on the list since Workflow #455 T1-R (0.12.60; `v012-register.md` §1.351), before the console sends it: the whole resource target document of one instance, the one `ResourceTargetView` reads ([resource-targets.md](resource-targets.md), "Entry and receipts"), a compare-and-swap with `expected_version` (the view's `active.version`, `0` without `active`; another version is `fact_observation_version_conflict` with `current_version`, nothing written). The owner asked that the console set an application's goals as the Lab does (board #455, step 1); the coordinator's ruling on board #455, not the owner's words, reverses LAB-6S3's decision that refused the kind here |
+| `GoalView` | read | on the list since Workflow #463 V3 (0.12.61; `v012-register.md` §1.383), before the console reads it: one application's goal page, every entry with its value, its default and whether it is in effect, from the Runtime's memory ([runtime-interface.md](runtime-interface.md), "Goal request kinds") |
+| `EditGoal` | write | on the list since Workflow #463 V3 (0.12.61), before the console sends it: one value of the goal page set or cleared by its name, checked before the fact write gate (`goal_value_invalid`), a compare-and-swap with `expected_version` |
 | `RunInstanceTask`, `EditResourceTarget`, `AcquirePlayerHold`, `ReleasePlayerHold` | write | on the list before they are built (#429 R-5, R-13c, R-7b); until then the Runtime answers them `not_implemented` |
 | `RecordClientAction` | write | transitional: the console's button trace, until UI-L1 ships; LAB-7 takes it off the list, since the G14 record's initiator replaces it |
 
@@ -656,7 +658,10 @@ from their core rows.
   exactly the rows of module `authoring`. `standard-pack check`, which the rescue module's `place`
   runs as its post-check (section 7), is a row of the core module: it is listed and served
   wherever the Lab runs, whatever the key says, so that an installation without the authoring
-  module still places packages. `standard-pack compose` stays an authoring row.
+  module still places packages. `standard-pack compose` stays an authoring row. Workflow #463 V3
+  (0.12.61): `package variables`, what one package's control declaration declares, which only
+  reads and needs no Runtime, is a core row too ([package-variables.md](package-variables.md),
+  "Reading and setting a value by name").
 - `lab_module_debugging` retires (`actingd-config` 28): still accepted when a boolean, with no
   effect, noted with the caveat `config_key_retired` by the commands that read it, as
   `install.guard.blocked_windows` is. The debugging operations are always there.
@@ -960,14 +965,16 @@ sentence fails that test.
     "Slice LAB-5G2b" and "Slice LAB-5G2b, second part"; the coordinator's rulings on board #434,
     6775192250 points 1, 9, 11, 12, 17 and 18, 6784514298 and of 2026-11-12, not the owner's
     words).
-    - *Which.* A row `lab_ops::core_ops` serves (the core rows but `app launch|restart|stop` and
-      `standard-pack check`, and `run start`, `run stop`, `reset`, `drill`) is served by it in the
+    - *Which.* A row `lab_ops::core_ops` serves (the core rows but `app launch|restart|stop`,
+      `standard-pack check` and, since Workflow #463 V3, `package variables`, and `run start`,
+      `run stop`, `reset`, `drill`) is served by it in the
       server's process. Since the slice's second part (0.12.57), on Windows, where the rescue
       module runs, a rescue row the module serves (`lab_rescue::rescue::serves`; its MCP rows
       `mcp config`, `mcp entries` and `mcp plan` among them) is served by it in the server's
       process; since LAB-6S0 (0.12.58) so are the rows whose `detach` the front gives true
       (`tools::SUPPLIED`: `deploy` and `rollback`, section 5). Since LAB-5G4b every other offered
-      row (the three `app` rows and `standard-pack check`, the debugging and authoring rows
+      row (the three `app` rows, `standard-pack check` and `package variables`, the debugging
+      and authoring rows
       actinglab's own commands serve, `record draft` among them: actinglab's own command since
       LAB-5G4c, 0.12.57, MCP's `ac_binding_draft` ported; register §1.287, "Slice LAB-5G4c") is
       served by a `serve` child ("Calls served by `serve` children", below). Since LAB-6S0 no

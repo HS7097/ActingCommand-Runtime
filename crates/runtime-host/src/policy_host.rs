@@ -1613,6 +1613,10 @@ pub(crate) struct PolicyHost {
     /// Workflow #463 V2: the `goal_value_not_applied` warnings the last evaluations decided and
     /// the cycle's recorder has not taken yet ([`Self::take_variable_warnings`]).
     variable_warnings: Vec<Outcome>,
+    /// Workflow #463 V3 (register §1.383): the remedy parameters the last evaluation's remedy plan
+    /// resolved, its `policy_dispatch_parameters` per (task, instance) before the variable values
+    /// joined it, which the goal page shows read-only. Memory only; none before an evaluation.
+    resolved_parameters: BTreeMap<(String, String), DecisionReason>,
 }
 
 /// SCHED-C1d (register §1.299 SC1-11): what the host recorded of the capped episodes as
@@ -2167,6 +2171,7 @@ impl PolicyHost {
             held: held::HeldMemory::default(),
             variable_warned: BTreeSet::new(),
             variable_warnings: Vec::new(),
+            resolved_parameters: BTreeMap::new(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -3767,6 +3772,9 @@ impl PolicyHost {
         // bound package declares a remedy or remedies are off.
         let (remedy_plan, remedy_decisions) =
             self.remedy_plan(&active.compiled, facts, time, remedy)?;
+        // Workflow #463 V3: the remedy parameters it resolved, for the goal page's read-only list.
+        self.resolved_parameters
+            .clone_from(&remedy_plan.run_parameters);
         // Workflow #463 V2 (register §1.382; `contracts/package-variables.md`, "The run"): the
         // variable values of every pair whose bound package declares variables, read from this
         // evaluation's facts (the memory store's projection; no ledger read) and the table's
@@ -4752,6 +4760,23 @@ impl PolicyHost {
             ));
         };
         completed_policy_run_identity(event, &dispatch.data, execution, BTreeSet::new())
+    }
+
+    /// Workflow #463 V3: the remedy table in effect (the bound packages with their variables and
+    /// what they provide), for the goal page; `None` before the first evaluation under the active
+    /// catalog built one.
+    pub(crate) fn built_table(&self) -> Option<crate::remedy::BuiltTable> {
+        self.remedies.table().cloned()
+    }
+
+    /// Workflow #463 V3: the `policy_dispatch_parameters` the last evaluation's remedy plan gave
+    /// the pairs of `instance_id`, by task, before the variable values joined it.
+    pub(crate) fn resolved_parameters(&self, instance_id: &str) -> BTreeMap<String, DecisionReason> {
+        self.resolved_parameters
+            .iter()
+            .filter(|((_, instance), _)| instance == instance_id)
+            .map(|((task_id, _), reason)| (task_id.clone(), reason.clone()))
+            .collect()
     }
 
     /// Workflow #411 B15 R4, test only: the remedy table in effect.

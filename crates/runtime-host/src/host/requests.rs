@@ -844,6 +844,20 @@ impl HostShared {
             RuntimeOperation::ReleasePlayerHold { .. } => Err(not_implemented(
                 actingcommand_contract::codes::ContractLocation::ReleasePlayerHold,
             )),
+            // Workflow #463 V3 (register §1.383): one application's goal page, read from memory,
+            // and one value of it set or cleared under the fact write gate.
+            RuntimeOperation::GoalView { instance_alias } => self.goal_view(instance_alias),
+            RuntimeOperation::EditGoal {
+                instance_alias,
+                expected_version,
+                op,
+            } => self.edit_goal(
+                validated,
+                instance_alias,
+                *expected_version,
+                op,
+                connection_id,
+            ),
         }
     }
 }

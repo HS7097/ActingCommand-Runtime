@@ -175,6 +175,9 @@ mod tests {
     // Workflow #463 V2 (0.12.61; register §1.382): the values a selected dispatch hands its run
     // for its package's variables.
     mod gate_463_v2;
+    // Workflow #463 V3 (0.12.61; register §1.383): the record one `EditGoal` writes, and the goal
+    // page's reading of a stored record.
+    mod gate_463_v3;
 
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is marked: the gate tests' roots hold

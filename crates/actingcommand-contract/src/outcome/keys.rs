@@ -821,4 +821,9 @@ outcome_keys! {
     variable_values: records(variable_name, variable_source; value_json, set_unix_ms, set_channel, variable_problem),
     declaration_sha256: hash,
     // ---- Workflow #463 V2: end ----
+    // ---- Workflow #463 V3 (an application's goals read and set by name,
+    // contracts/runtime-interface.md "Goal request kinds"): the name an `EditGoal` named and why it
+    // was refused; kept in codes mode. ----
+    goal_name: token,
+    goal_problem: vocab(goal_problem),
 }

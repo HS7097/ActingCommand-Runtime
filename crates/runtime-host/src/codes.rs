@@ -1888,6 +1888,8 @@ actingcommand_contract::outcome_locations! {
         DeviceDiagnosticBudgetClosed => "device_diagnostic_budget_closed",
         DeviceDiagnosticCountOverflow => "device_diagnostic_count_overflow",
         DrainPausedInstance => "drain_paused_instance",
+        // Workflow #463 V3 (register §1.383): one value of an application's goal page by name.
+        EditGoal => "edit_goal",
         // Workflow #429 R-0 (register §1.213): the workbench's kinds, refused `not_implemented`
         // until their slices (R-8, R-13c) add the behaviour; R-8 (register §1.308) built the edit.
         EditPackSchedule => "edit_pack_schedule",
@@ -1940,6 +1942,8 @@ actingcommand_contract::outcome_locations! {
         GatePumpPerformanceControl => "gate_pump_performance_control",
         GateRecoveryPause => "gate_recovery_pause",
         GateRecoveryPreparation => "gate_recovery_preparation",
+        // Workflow #463 V3 (register §1.383): one application's goal page.
+        GoalView => "goal_view",
         // Workflow #369 S6b.
         HandOffToClaim => "hand_off_to_claim",
         HandOffToLadder => "hand_off_to_ladder",
@@ -3400,6 +3404,12 @@ actingcommand_contract::outcome_codes! {
         /// the reason `variable_problem` names. Written once per (application, name, declaration)
         /// after a start; the run goes on.
         NotApplied => "goal_value_not_applied": warning / none,
+        /// Error (Workflow #463 V3, since 0.12.61). An `EditGoal` was refused before the fact
+        /// write gate: the name it names (`goal_name`, when it has an entry name's form) or its
+        /// value is none the application's goal page takes, for the reason `goal_problem` names
+        /// (with `json_pointer`, `range_min`, `range_max`, `pool_id` or `variable_problem` where
+        /// they apply). Denied; nothing is appended.
+        Invalid => "goal_value_invalid": error / none,
     }
 }
 // ---- Workflow #463 V2: end ----

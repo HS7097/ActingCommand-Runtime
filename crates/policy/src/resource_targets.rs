@@ -23,6 +23,11 @@ pub use v3::{
 };
 // Workflow #463 V2: the entry rows a run's variables read.
 pub(crate) use v3::{StoredEntry, stored_v3_entries};
+// Workflow #463 V3: the goal page's reading of a stored record and the one-row edit.
+pub use v3::{
+    EditedGoalRecord, GoalRecordEdit, GoalRecordRefusal, StoredGoalEntry, StoredGoalRecord,
+    StoredGoalTarget, edit_goal_record, goal_entry_value_fits, pool_capacity, stored_goal_record,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 

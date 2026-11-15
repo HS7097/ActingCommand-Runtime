@@ -21704,6 +21704,33 @@
       "common_causes": "The package was updated and its declaration no longer takes the value set before; or a package of the root that declares the variable can do something irreversible, or declares it differently from another package.",
       "handling": "Set a value the current declaration takes (targets set with entries), or clear the entry so the default is read on purpose; for a variable that does not apply, fix the root as standard-pack check's warning says."
     },
+    "goal_value_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "goal_problem": "required",
+        "goal_name": "optional",
+        "json_pointer": "optional",
+        "range_min": "optional",
+        "range_max": "optional",
+        "pool_id": "optional",
+        "variable_problem": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "Workflow #463 V3 (contracts/runtime-interface.md, \"Goal request kinds\"): an EditGoal was refused before the fact write gate, for the reason goal_problem names: the name is no entry of the application's goal page (name_unknown), holds no value (holds_no_value), is a tier no reader of this build reads (tier_not_built), a remedy parameter (remedy_parameter) or a variable that does not apply in the game root (variable_not_applying, with variable_problem); or the value is no JSON (value_not_json), not of the entry's type (wrong_type), outside its range or off its step (out_of_range, off_step, with range_min and range_max), no option (not_an_option), a repeated key (key_repeated), of a count outside its range (count_out_of_range), longer than the store keeps (value_too_large), on a pool the application cannot target or that needs its own step (pool_not_targetable, pool_unvalued, with pool_id), with a deadline (deadline_unsupported); or a clear of a name that holds nothing (value_not_set); or the stored record is no record the readers read (record_unreadable) or the edit would hold more targets or entries than a record keeps (record_out_of_limits). goal_name names the request's name when it has an entry name's form; json_pointer points into the value. Denied; nothing is appended and the stored record is unchanged.",
+      "common_causes": "A value written by hand or by an agent that the declaration does not take; a package update that removed the option, narrowed the range or changed the type; a name of another application's game.",
+      "handling": "Read the page (goals get) and set a value the entry's declaration takes; for variable_not_applying fix the root as standard-pack check's warning says; for record_unreadable write the whole document with targets set first."
+    },
     "priority_offset_unknown_task": {
       "category": "warning",
       "ladder_class": "none",
@@ -25063,6 +25090,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: drain paused instance."
     },
+    "edit_goal": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "A Runtime host operation or stage: edit goal (Workflow #463 V3, EditGoal)."
+    },
     "edit_pack_schedule": {
       "owner": "runtime-host",
       "layer": "host",
@@ -25430,6 +25465,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: gate recovery preparation."
+    },
+    "goal_view": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "A Runtime host operation or stage: goal view (Workflow #463 V3, GoalView)."
     },
     "hand_off_to_claim": {
       "owner": "runtime-host",

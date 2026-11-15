@@ -18125,6 +18125,34 @@
       "description": "A completed receipt of a PackScheduleView request: for one instance, each scope's pack schedule list version and, per task package of the instance's tasks, whether it is schedulable now and which layer decided, from the Runtime's memory; nothing is recorded. Workflow #378 A4: one success code per request kind (Workflow #429 R-0c adds the kind; R-8 first completes it).",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the view."
+    },
+    "request_goal_view_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "A completed receipt of a GoalView request (Workflow #463 V3, runtime-client 9): one application's goal page, every entry of its game's goals.json and every variable a package the active catalog binds on it declares, each with its default, its stored value, who set it and whether it is in effect, from the Runtime's memory; nothing is recorded. Workflow #378 A4: one success code per request kind.",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; send the result's version as the next EditGoal's expected_version."
+    },
+    "request_edit_goal_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "A completed receipt of an EditGoal request (Workflow #463 V3, runtime-client 9): one value of an application's goal page was set or cleared by its name and the application's session.resource_targets record published as one fact.published (or, replayed, the record already held it); the result names the record's version after the edit and that event. Workflow #378 A4: one success code per request kind.",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; send the result's version as the next edit's expected_version."
     }
   },
   "locations": {

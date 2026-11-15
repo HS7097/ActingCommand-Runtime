@@ -256,6 +256,9 @@ mod gate_463_k1;
 // application for its package's variable, a start reads it again, and a value not applied is
 // warned once.
 mod gate_463_v2;
+// Workflow #463 V3 (0.12.61; register §1.383): an application's goals read and set by name
+// (`GoalView`, `EditGoal`).
+mod gate_463_v3;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
 // one worker per device, the group's occupancy, pause, gates, session rule and refusals.
 mod gate_mapp1b;

@@ -303,6 +303,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("package preflight", Mode::NoEffect),
     ("package check", Mode::NoEffect),
     ("package inspect", Mode::NoEffect),
+    // Workflow #463 V3: it reads one package's control declaration only.
+    ("package variables", Mode::NoEffect),
     ("operation validate", Mode::NoEffect),
     ("operation inspect", Mode::NoEffect),
     ("operation explain", Mode::NoEffect),

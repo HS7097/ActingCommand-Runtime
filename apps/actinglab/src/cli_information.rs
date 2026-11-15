@@ -179,6 +179,8 @@ pub(super) fn help_data() -> Value {
             ],
             "standard-pack check": crate::standard_pack_cli::options(),
             "standard-pack compose": crate::standard_pack_cli::compose_options(),
+            // Workflow #463 V3.
+            "package variables": crate::package_cli::variables_options(),
             "package fmt": [
                 "--package <content directory>",
                 "--check (writes nothing; fails with package_fmt_check_failed naming every JSON file that is not canonical)"

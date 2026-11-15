@@ -141,7 +141,7 @@ const fn reads(row: &'static str, names: &'static [&'static str]) -> Reads {
 }
 
 /// The rows whose parameters `core_ops` reads in this process.
-pub static READ_HERE: [Reads; 30] = [
+pub static READ_HERE: [Reads; 34] = [
     reads("facts", &["instance", "program", "config", "prefix"]),
     reads("schedule", &["instance"]),
     reads("run show", &["id"]),
@@ -184,6 +184,14 @@ pub static READ_HERE: [Reads; 30] = [
     reads("run stop", &["id", "cancel_only"]),
     reads("reset", &["instance"]),
     reads("drill", &["instance", "device"]),
+    // Workflow #463 V3: one application's goals, read and set by name.
+    reads("goals", &["instance", "package"]),
+    reads("goals get", &["instance", "name"]),
+    reads(
+        "goals set",
+        &["instance", "name", "value", "expected_version"],
+    ),
+    reads("goals clear", &["instance", "name", "expected_version"]),
 ];
 
 const fn word(name: &'static str) -> Part {

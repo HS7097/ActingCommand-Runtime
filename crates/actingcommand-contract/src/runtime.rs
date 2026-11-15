@@ -79,6 +79,10 @@ pub use agent_wake::*;
 // Workflow 114-A (register §1.236, since 0.12.36): the frozen vocabularies of `ScheduleHistory`.
 mod schedule_history;
 pub use schedule_history::*;
+// Workflow #463 V3 (Workflow #455 G-R2b; register §1.383, since 0.12.61; `runtime-client` 9): the
+// two requests that read and set one application's goals by name.
+mod goals;
+pub use goals::*;
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
 // distribution/windows/component-interfaces.json when older peers can no longer use these two.
@@ -91,7 +95,9 @@ pub use schedule_history::*;
 // 0.12.35): the player hold's two request kinds, their results, three status members and three
 // start report members (`player_hold.rs`), declared [2, 4]; R-7b, which first fills a status
 // member, raises `min` to 4. Revision 8 (Workflow #434 LAB-6S1a, since 0.12.58): the optional
-// `initiator` of `BindChannel`, `ChannelBound` and the receipt, declared [3, 8].
+// `initiator` of `BindChannel`, `ChannelBound` and the receipt, declared [3, 8]. Revision 9
+// (Workflow #463 V3, since 0.12.61): the request kinds `GoalView` and `EditGoal` with their results
+// (`goals.rs`), declared [3, 9].
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
@@ -4204,6 +4210,23 @@ pub enum RuntimeOperation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         startup_package: Option<PlayerHoldStartupChoice>,
     },
+    // Workflow #463 V3 (Workflow #455 G-R2b; register §1.383, since 0.12.61; `runtime-client` 9;
+    // `goals.rs`): one application's goals, read and set by name.
+    /// Reads one application's goal page (`GoalView`): every entry of its game's `goals.json`,
+    /// every variable a package the active catalog binds on it declares, each with its default,
+    /// its stored value, who set it and whether it is in effect, and the stored values no entry
+    /// offers any more. A general read that records nothing.
+    GoalView { instance_alias: String },
+    /// Sets or clears one value of one application's goal page by its name (`EditGoal`), with
+    /// `expected_version` only while the goal record's version is that one (`0`: no record). The
+    /// Runtime checks the name and the value before the fact write gate (`goal_value_invalid`),
+    /// then replaces or removes the one row of the record under the gate.
+    EditGoal {
+        instance_alias: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_version: Option<u64>,
+        op: GoalEdit,
+    },
 }
 
 impl RuntimeOperation {
@@ -4403,7 +4426,11 @@ impl RuntimeOperation {
             | Self::ClearMonitor { instance_alias }
             | Self::ResourceTargetView { instance_alias }
             // Workflow #429 R-0c: only the alias until R-8, as for R-0's kinds.
-            | Self::PackScheduleView { instance_alias } => validate_instance_alias(instance_alias),
+            | Self::PackScheduleView { instance_alias }
+            // Workflow #463 V3: the alias; the Runtime judges the name and the value
+            // (`goal_value_invalid`).
+            | Self::GoalView { instance_alias }
+            | Self::EditGoal { instance_alias, .. } => validate_instance_alias(instance_alias),
             // Workflow #428 S168-LB1a: a key prefix is a non-empty start of an instance fact key.
             Self::InstanceFactSnapshot {
                 instance,
@@ -4560,6 +4587,8 @@ impl RuntimeOperation {
             | Self::RunInstanceTask { instance_alias, .. }
             | Self::StopInstanceRun { instance_alias, .. }
             | Self::EditResourceTarget { instance_alias, .. }
+            // Workflow #463 V3: the goal edit, bound to one instance as R-0's edit.
+            | Self::EditGoal { instance_alias, .. }
             // Workflow #429 R-7a: the player hold's two kinds, bound to one instance as R-0's.
             | Self::AcquirePlayerHold { instance_alias, .. }
             | Self::ReleasePlayerHold { instance_alias, .. } => Some(instance_alias),
@@ -4708,6 +4737,8 @@ impl fmt::Debug for RuntimeOperation {
             Self::PackScheduleView { .. } => "RuntimeOperation::PackScheduleView(<redacted>)",
             Self::AcquirePlayerHold { .. } => "RuntimeOperation::AcquirePlayerHold(<redacted>)",
             Self::ReleasePlayerHold { .. } => "RuntimeOperation::ReleasePlayerHold(<redacted>)",
+            Self::GoalView { .. } => "RuntimeOperation::GoalView(<redacted>)",
+            Self::EditGoal { .. } => "RuntimeOperation::EditGoal(<redacted>)",
         })
     }
 }
@@ -5690,6 +5721,11 @@ pub enum RuntimeResult {
     PlayerHoldAcquired(Box<PlayerHoldAcquired>),
     /// `ReleasePlayerHold`: the hold is lifted.
     PlayerHoldReleased(Box<PlayerHoldReleased>),
+    // Workflow #463 V3 (register §1.383; `runtime-client` 9): the goal page's two results.
+    /// `GoalView`: one application's goal page.
+    GoalViewed { view: Box<GoalView> },
+    /// `EditGoal`: the goal record's version after the edit and the event that holds it.
+    GoalEdited { edited: GoalEdited },
 }
 
 /// A Runtime's answer to one request (receipt v2, Workflow #378 A4). Every receipt carries
