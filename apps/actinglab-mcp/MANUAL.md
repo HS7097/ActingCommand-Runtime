@@ -223,11 +223,13 @@ naming this file.
   a press performed without a failure, as `capture --record` takes it, opening the next step
   (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
-  `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, `replace`, `state_dir`)
-  makes a stopped recording's package, or any package, a member of its game's standard pack in a
-  resource repository's checkout, through a child: the pack directory, its rule (or held entry, or
-  maintenance entry) and the `requires` words, each derived member answered with where it came
-  from. Every check runs before the first write; a refusal is `adopt_refused`, its
+  `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
+  optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any
+  package, a member of its game's standard pack in a resource repository's checkout, through a
+  child: the pack directory, its rule (or held entry, or maintenance entry) and the `requires`
+  words, each derived member answered with where it came from. `held_reason` and `held_reference`
+  (Workflow #463 S3-4, 0.12.63) are the decision of the class `held` without a document, read as a
+  document given by `decide` is; not with `decide`, and `held_reference` only with `held_reason`. Every check runs before the first write; a refusal is `adopt_refused`, its
   `adopt_problem` naming the check, and wrote nothing; with `dry_run` nothing is written in the
   checkout. Its `value` is `"pending"` or a number of the pack's own: a decision that names the
   origin `model` is refused (`value_origin_model`).
