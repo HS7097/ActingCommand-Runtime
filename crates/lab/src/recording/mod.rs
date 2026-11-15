@@ -17,6 +17,8 @@ pub(crate) mod generate;
 pub(crate) mod lock;
 pub(crate) mod marks;
 pub(crate) mod model;
+// #463 R1: a step that chooses in a list of fixed slots by the name read in each slot.
+pub(crate) mod select;
 pub(crate) mod steps;
 pub(crate) mod store;
 

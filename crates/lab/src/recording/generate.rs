@@ -9,11 +9,12 @@ use super::follow::{follow_invalid, located_page_problem};
 use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
     ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame,
-    RecordedMark, RecordingDefaults, RecordingStep, SelfTestMargin, StepClick, StepOptional,
-    StepTransition,
+    RecordedMark, RecordingDefaults, RecordingStep, SelectConfirmSpec, SelectSpec, SelfTest,
+    SelfTestMargin, SelfTestStatus, StepClick, StepOptional, StepSelect, StepTransition,
 };
+use super::select::{on_empty_key, select_invalid};
 use super::store::{blocked, invalid, with_details};
-use crate::codes::ClickFollowProblem;
+use crate::codes::{ClickFollowProblem, SelectProblem};
 use actingcommand_contract::{
     LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
     SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, TaskSchema,
@@ -235,10 +236,38 @@ impl Plan {
     pub(crate) fn operation_id(&self, step: &PlanStep) -> String {
         let kind = if step.step.application.is_some() {
             "app"
+        } else if step.step.select.is_some() {
+            // #463 R1: a select step's operation.
+            "select"
         } else {
             "click"
         };
         format!("step_{}_{kind}", self.numbered(step.number))
+    }
+
+    /// #463 R1: the candidate layout of the select of `step`, `layout/step_ii`.
+    pub(crate) fn select_layout_id(&self, step: &PlanStep) -> String {
+        format!("layout/step_{}", self.numbered(step.number))
+    }
+
+    /// #463 R1: the OCR target that reads the name in slot `slot` of the select of `step`,
+    /// `select/step_ii/slot_kk`.
+    pub(crate) fn select_slot_target_id(&self, step: &PlanStep, slot: usize) -> String {
+        format!("select/step_{}/slot_{slot:02}", self.numbered(step.number))
+    }
+
+    /// #463 R1: the policy document of the select of `step`, `policies/step_ii_select.json`
+    /// below the task directory.
+    pub(crate) fn select_policy_path(&self, step: &PlanStep) -> String {
+        format!("policies/{}.json", self.operation_id(step))
+    }
+
+    /// #463 R1: the select steps of the package, in path order, with their selects.
+    pub(crate) fn select_steps(&self) -> Vec<(&PlanStep, &StepSelect)> {
+        self.steps
+            .iter()
+            .filter_map(|step| step.step.select.as_ref().map(|select| (step, select)))
+            .collect()
     }
 
     /// The page the effect of step `index` (0-based) must reach: the next step's page.
@@ -444,6 +473,79 @@ fn refuse_optional_positions(steps: &[PlanStep], game: &str) -> LabResult<()> {
     Ok(())
 }
 
+/// #463 R1: the rules every select step of the package keeps, as `record mark` checks them: it is
+/// not optional and its click declares no retry, gesture or follow; its `on_empty` key is neither
+/// the usual ending's nor another select step's, and its wanted value's name is its own. Each is
+/// `record_select_invalid` with its word.
+fn refuse_select_rules(steps: &[PlanStep], task_id: &str) -> LabResult<()> {
+    let done = done_key(task_id);
+    let mut keys = BTreeMap::new();
+    let mut wanted = BTreeMap::new();
+    for step in steps {
+        let Some(select) = &step.step.select else {
+            continue;
+        };
+        let index = step.step.index;
+        let refuse =
+            |problem: SelectProblem, message: String| select_invalid(Some(index), problem, message);
+        if step.step.optional.is_some() {
+            return Err(refuse(
+                SelectProblem::OnOptionalStep,
+                format!(
+                    "step {index} selects in a list and is optional; a select step's page is its \
+                     list"
+                ),
+            ));
+        }
+        if let Some(click) = &step.step.click {
+            if click.retry.is_some() {
+                return Err(refuse(
+                    SelectProblem::WithRetry,
+                    format!("step {index} selects in a list and its click declares a retry"),
+                ));
+            }
+            if click.gesture.is_some() {
+                return Err(refuse(
+                    SelectProblem::WithGesture,
+                    format!("step {index} selects in a list and its click declares a gesture"),
+                ));
+            }
+            if click.follow.is_some() {
+                return Err(refuse(
+                    SelectProblem::WithFollow,
+                    format!("step {index} selects in a list and its click follows a mark"),
+                ));
+            }
+        }
+        let key = on_empty_key(task_id, &select.declaration);
+        if key == done {
+            return Err(refuse(
+                SelectProblem::OnEmptyKeyReserved,
+                format!("the on_empty key '{key}' of step {index} is the usual ending's key"),
+            ));
+        }
+        if let Some(other) = keys.insert(key.clone(), index) {
+            return Err(refuse(
+                SelectProblem::OnEmptyKeyTaken,
+                format!("the on_empty key '{key}' of step {index} is also step {other}'s"),
+            ));
+        }
+        let name = select.declaration.wanted.name.clone();
+        if let Some(other) = wanted.insert(name.clone(), index) {
+            return Err(refuse(
+                SelectProblem::WantedNameTaken,
+                format!("the wanted name '{name}' of step {index} is also step {other}'s"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The key of the usual ending, `<task_id>_done`.
+pub(crate) fn done_key(task_id: &str) -> String {
+    format!("{task_id}_done")
+}
+
 /// A timeout given on the command line must lie in 1..=1800000 (`validation_failed`, exit 2).
 pub(crate) fn validate_timeout_option(name: &str, value: Option<u64>) -> LabResult<()> {
     if value.is_some_and(|value| !(1..=MAX_TIMEOUT_MS).contains(&value)) {
@@ -467,7 +569,7 @@ fn requires_invalid(requires: &str, reason: &str, message: String) -> LabError {
 
 /// The marks of a page: own marks then reused ids, without the members of its `any_of`
 /// checks (a member of an `any_of` check is not required on its own).
-fn required_ids(
+pub(crate) fn required_ids(
     own: &[RecordedMark],
     reused: &[String],
     marks: &BTreeMap<String, RecordedMark>,
@@ -486,6 +588,26 @@ fn required_ids(
         .collect::<BTreeSet<_>>();
     ids.into_iter()
         .filter(|id| !any_of_members.contains(id))
+        .collect()
+}
+
+/// The marks a step's page requires in the package: [`required_ids`] of its own and reused marks,
+/// without (#463 L2 fix 1) the located-text mark its click follows, which is the click's guard
+/// and target and no mark of the page. `marks` holds every mark the page names. #463 R1 fix 1:
+/// the mark-time check that no other step's page passes on a select's frames reads it too.
+pub(crate) fn page_required(
+    step: &RecordingStep,
+    marks: &BTreeMap<String, RecordedMark>,
+) -> Vec<String> {
+    let followed_text = step
+        .click
+        .as_ref()
+        .and_then(|click| click.follow.as_ref())
+        .map(|follow| follow.mark_id.as_str())
+        .filter(|id| marks.get(*id).is_some_and(RecordedMark::locates_text));
+    required_ids(&step.marks, &step.reused, marks)
+        .into_iter()
+        .filter(|id| Some(id.as_str()) != followed_text)
         .collect()
 }
 
@@ -717,16 +839,7 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
         });
         // #463 L2 fix 1: the located-text mark a click follows is the click's guard and target,
         // and no mark of the step's page, which its other marks recognize.
-        let followed_text = step
-            .click
-            .as_ref()
-            .and_then(|click| click.follow.as_ref())
-            .map(|follow| follow.mark_id.as_str())
-            .filter(|id| marks.get(*id).is_some_and(RecordedMark::locates_text));
-        let required = required_ids(&step.marks, &step.reused, &marks)
-            .into_iter()
-            .filter(|id| Some(id.as_str()) != followed_text)
-            .collect::<Vec<_>>();
+        let required = page_required(step, &marks);
         let (transition_page, transition_required) = match &step.transition {
             Some(StepTransition::Page {
                 marks: transition_marks,
@@ -833,6 +946,9 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
         }
     }
     refuse_optional_positions(&steps, &game)?;
+    // #463 R1: the rules a select step keeps from its marking on, checked again where the package
+    // is generated.
+    refuse_select_rules(&steps, &recording.task_id)?;
     let runs = optional_runs(&steps)?;
 
     let size = recording.coordinate_space.ok_or_else(|| {
@@ -942,7 +1058,8 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
 /// The default task timeout (R24 section 4.3 with Workflow #339 section 2.5):
 /// `S·[step 1 is no application entry] + Σ a·(g + w + (b − w)⁺ + p + T) + Σ_app E +
 /// Σ (a − 1)·(r + S) + Σ_runs max(settle) + 10000`, where `g` is the duration of a drag or a
-/// long press (Workflow #390 LAB-2) and 0 for a tap.
+/// long press (Workflow #390 LAB-2) and 0 for a tap; #463 R1: plus `S` for each select step, its
+/// confirmation on a fresh frame.
 ///
 /// The sums before the settles take every optional step as shown, the longest path; a run
 /// settles only when it is skipped, at most once, so it adds its largest settle.
@@ -998,6 +1115,10 @@ fn default_timeout(
         total = total.saturating_add(attempts.saturating_mul(attempt));
         if application {
             total = total.saturating_add(APPLICATION_MARGIN_MS);
+        }
+        // #463 R1: a single-frame select confirms its choice on one fresh frame of its page.
+        if step.step.select.is_some() {
+            total = total.saturating_add(step_timeout);
         }
         total = total.saturating_add(
             attempts
@@ -1400,6 +1521,20 @@ fn step_provenance(plan: &Plan, step: &PlanStep) -> LabResult<Value> {
         }
         entry.insert("click".into(), provenance);
     }
+    // #463 R1: only a select step records its select: the declaration, the name its demonstration
+    // pressed, its `on_empty` key and the decisions of its mark-time self-test.
+    if let Some(select) = &step.step.select {
+        entry.insert(
+            "select".into(),
+            json!({
+                "declaration": select.declaration,
+                "pressed": select.declaration.pressed_name(),
+                "on_empty_key": on_empty_key(&plan.task_id, &select.declaration),
+                "marked_at_unix_ms": select.marked_at_unix_ms,
+                "self_test": select.self_test
+            }),
+        );
+    }
     // Workflow #390 LAB-2: only a page that forbids marks or has an anchor records them.
     if !step.forbidden.is_empty() {
         entry.insert("forbidden".into(), json!(step.forbidden));
@@ -1662,6 +1797,11 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
             }
         }
     }
+    // #463 R1: one OCR target per slot of every select, which no page rule names: the identity
+    // feature of the select's layout reads its text.
+    for (step, select) in plan.select_steps() {
+        ocr.extend(select_slot_targets(plan, step, &select.declaration));
+    }
     let mut families = Map::new();
     for (name, targets) in [
         ("anchors", anchors),
@@ -1676,6 +1816,341 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
     }
     Ok(families)
 }
+
+/// #463 R1: the most `expected` values an OCR target lists (the recognition pack's limit).
+const SELECT_EXPECTED_LIMIT: usize = 64;
+
+/// #463 R1: the feature of a select's layout that reads each slot's name.
+pub(crate) const SELECT_FEATURE: &str = "name";
+
+/// #463 R1: the OCR targets of the slots of a select: each slot's name region read with the
+/// select's OCR members, `contains`, case-insensitive. Its `expected` values are the names'
+/// distinct aliases in declaration order, at most [`SELECT_EXPECTED_LIMIT`]: the target's own
+/// verdict is read by no page rule, and the layout's identity feature maps the read text over the
+/// whole domain, so a domain with more aliases lists its first ones.
+fn select_slot_targets(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> Vec<Value> {
+    let mut expected = Vec::new();
+    let mut seen = BTreeSet::new();
+    for alias in select.names.iter().flat_map(|name| name.aliases.iter()) {
+        if expected.len() < SELECT_EXPECTED_LIMIT && seen.insert(alias.as_str()) {
+            expected.push(alias.clone());
+        }
+    }
+    let confidence = f64::from(select.read.minimum_confidence_milli) / 1000.0;
+    select
+        .slots
+        .iter()
+        .enumerate()
+        .map(|(slot, declared)| {
+            json!({
+                "id": plan.select_slot_target_id(step, slot),
+                "region": region_json(declared.name),
+                "languages": select.read.languages,
+                "timeout_ms": select.read.timeout_ms,
+                "match_mode": "contains",
+                "expected": expected,
+                "case_sensitive": false,
+                "minimum_confidence": confidence,
+                "model_ref": select.read.model_ref,
+                "model_sha256": select.read.model_sha256
+            })
+        })
+        .collect()
+}
+
+/// #463 R1: the `fixed_slots` layout of a select on its step's page: the one identity feature
+/// `name` over the select's names (`ocr_aliases`), and each slot's rectangle, click box and name
+/// target.
+fn select_layout_json(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> LabResult<Value> {
+    let page = step.page_id()?;
+    let entries = select
+        .names
+        .iter()
+        .map(|name| json!({"id": name.id, "aliases": name.aliases}))
+        .collect::<Vec<_>>();
+    let slots = select
+        .slots
+        .iter()
+        .enumerate()
+        .map(|(slot, declared)| {
+            json!({
+                "rect": rect_json(declared.rect),
+                "click": rect_json(declared.click_rect()),
+                "targets": {SELECT_FEATURE: plan.select_slot_target_id(step, slot)}
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "id": plan.select_layout_id(step),
+        "page_id": page,
+        "kind": "fixed_slots",
+        "features": [{
+            "name": SELECT_FEATURE,
+            "value": "identity",
+            "identity": {
+                "entries": entries,
+                "recognition": {
+                    "kind": "ocr_aliases",
+                    "max_distance": select.matching.max_distance,
+                    "minimum_margin": select.matching.minimum_margin,
+                    "minimum_confidence_milli": select.read.minimum_confidence_milli
+                }
+            }
+        }],
+        "slots": slots
+    }))
+}
+
+/// #463 R1: the policy document of a select with `allowed` as its one gate's values: the
+/// `enum_string` field `name` over the names, the gate `wanted.<name>` keeping `allowed` (the
+/// wanted value's default; a constant of the package until a later slice reads it as a variable)
+/// and dropping an unknown name, `none_allowed` with one required candidate, the lowest candidate
+/// id first, and the `on_empty` key as the `empty` outcome key. The mark-time self-test evaluates
+/// the pressed name with the same document and the pressed name as `allowed`.
+pub(crate) fn select_policy_document(
+    plan: &Plan,
+    step: &PlanStep,
+    select: &SelectSpec,
+    allowed: &str,
+) -> Value {
+    let base = format!("{}_step_{}", plan.task_id, plan.numbered(step.number));
+    json!({
+        "schema_version": "actingcommand.selection-policy.v1",
+        "policy_id": plan.operation_id(step),
+        "applies_to": {
+            "candidate_layout_id": plan.select_layout_id(step),
+            "outcome_keys": {
+                "selected": format!("{base}_selected"),
+                "empty": on_empty_key(&plan.task_id, select),
+                "insufficient": format!("{base}_insufficient"),
+                "ambiguous": format!("{base}_ambiguous"),
+                "unknown": format!("{base}_unknown")
+            }
+        },
+        "fields": [{
+            "name": SELECT_FEATURE,
+            "value_type": {
+                "type": "enum_string",
+                "allowed": select.names.iter().map(|name| name.id.as_str()).collect::<Vec<_>>()
+            }
+        }],
+        "facts": [],
+        "gates": [{
+            "gate_id": format!("wanted.{}", select.wanted.name),
+            "predicate": {
+                "kind": "string_in",
+                "value": {"source": "field", "field": SELECT_FEATURE},
+                "allowed": [allowed]
+            },
+            "on_unknown": {"kind": "drop_candidate"}
+        }],
+        "scoring": [],
+        "selection": {"mode": "none_allowed", "required_count": 1},
+        "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+    })
+}
+
+/// #463 R1: the `select` of a select step's operation: its layout, its policy document, its
+/// `on_empty` key and, when declared, its confirmation.
+fn select_json(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> Value {
+    let mut declaration = Map::new();
+    declaration.insert("layout_id".into(), json!(plan.select_layout_id(step)));
+    declaration.insert(
+        "policy".into(),
+        json!({"path": plan.select_policy_path(step)}),
+    );
+    declaration.insert(
+        "on_empty".into(),
+        json!({"outcome_key": on_empty_key(&plan.task_id, select)}),
+    );
+    if let Some(confirm) = select.confirm {
+        declaration.insert(
+            "confirm".into(),
+            json!(match confirm {
+                SelectConfirmSpec::CandidateSet => "candidate_set",
+                SelectConfirmSpec::Decision => "decision",
+            }),
+        );
+    }
+    Value::Object(declaration)
+}
+
+/// #463 R1: the probe package a select step's mark-time self-test admits: the step alone as
+/// `record stop` generates it, its page with every mark the page names (`marks`: the step's own
+/// marks, its reused and forbidden marks and their check members), its select operation, and a
+/// destination page that never passes (two color marks on one pixel, one black and one white,
+/// both within a distance of 1), so that the step's page is the one page that can pass on its
+/// frames. The budgets are the largest a package declares: a budget is checked by `record stop`,
+/// never when a mark is recorded.
+pub(crate) fn select_probe_plan(
+    recording: &LabRecording,
+    step: &RecordingStep,
+    marks: Vec<RecordedMark>,
+) -> LabResult<Plan> {
+    let size = recording.coordinate_space.ok_or_else(|| {
+        blocked(
+            "record_step_frame_missing",
+            "the recording has no frame, so it has no coordinate space",
+        )
+    })?;
+    let mut probe = step.clone();
+    probe.optional = None;
+    probe.transition = None;
+    let mut by_id = marks
+        .into_iter()
+        .map(|mark| (mark.id.clone(), mark))
+        .collect::<BTreeMap<_, _>>();
+    let impossible = [
+        (PROBE_DARK_MARK, [0_u8, 0, 0]),
+        (PROBE_LIGHT_MARK, [255_u8, 255, 255]),
+    ]
+    .map(|(id, expected)| RecordedMark {
+        id: id.to_string(),
+        family: MarkFamily::Color,
+        step: u32::MAX,
+        transition_of: None,
+        region: Some(RecordRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        }),
+        search: None,
+        threshold: None,
+        metric: None,
+        crop: None,
+        expected: Some(expected),
+        max_distance: Some(1.0),
+        columns: None,
+        rows: None,
+        cells: None,
+        exclude_cells: None,
+        max_mean_milli: None,
+        max_cell: None,
+        ocr: None,
+        all_of: None,
+        any_of: None,
+        scales: None,
+        mask: None,
+        unique: None,
+        value_test: None,
+        self_test: SelfTest {
+            status: SelfTestStatus::NotEvaluated,
+            reason: None,
+            frames: 0,
+            single_sample: false,
+            min_score: None,
+            margin: None,
+            matched_rect: None,
+            location_ambiguous: None,
+            max_observed_distance: None,
+            mean_milli: None,
+            max_cell: None,
+            members: None,
+            matched_scales_milli: None,
+        },
+        created_at_unix_ms: 0,
+        initiator: String::new(),
+    });
+    let mut emitted = probe
+        .marks
+        .iter()
+        .map(|mark| mark.id.clone())
+        .collect::<Vec<_>>();
+    for id in by_id.keys() {
+        if !emitted.contains(id) {
+            emitted.push(id.clone());
+        }
+    }
+    for mark in impossible {
+        emitted.push(mark.id.clone());
+        by_id.insert(mark.id.clone(), mark);
+    }
+    let width = 2;
+    let page = match &probe.page {
+        Some(name) => format!("step_01_{name}"),
+        None => "step_01".to_string(),
+    };
+    let required = required_ids(&probe.marks, &probe.reused, &by_id);
+    let anchor_pages = probe
+        .anchor
+        .iter()
+        .map(|anchor| (anchor.clone(), page.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let first = PlanStep {
+        number: 1,
+        page: Some(page),
+        required,
+        forbidden: probe.forbidden.clone(),
+        anchor: probe.anchor.clone(),
+        transition_page: None,
+        transition_required: Vec::new(),
+        step: probe,
+    };
+    let end = RecordingStep {
+        index: u32::MAX,
+        page: None,
+        dropped: false,
+        converted_to_transition: false,
+        frames: Vec::new(),
+        marks: Vec::new(),
+        reused: Vec::new(),
+        click: None,
+        click_guard: None,
+        application: None,
+        optional: None,
+        forbidden: Vec::new(),
+        anchor: None,
+        select: None,
+        transition: None,
+        closed: true,
+        closed_by: None,
+        initiator: String::new(),
+    };
+    let last = PlanStep {
+        number: 2,
+        page: Some("step_02".to_string()),
+        required: vec![PROBE_DARK_MARK.to_string(), PROBE_LIGHT_MARK.to_string()],
+        forbidden: Vec::new(),
+        anchor: None,
+        transition_page: None,
+        transition_required: Vec::new(),
+        step: end,
+    };
+    Ok(Plan {
+        record_id: recording.record_id.clone(),
+        task_id: recording.task_id.clone(),
+        game: PROBE_GAME.to_string(),
+        server: PROBE_SERVER.to_string(),
+        locale: PROBE_LOCALE.to_string(),
+        package_id: format!("{PROBE_GAME}.{PROBE_SERVER}.{}", recording.task_id),
+        requires: None,
+        size,
+        defaults: recording.defaults.clone(),
+        generated_at_unix_ms: recording.updated_at_unix_ms,
+        steps: vec![first, last],
+        runs: Vec::new(),
+        marks: by_id,
+        emitted,
+        anchor_pages,
+        width,
+        arrival_timeout_ms: MAX_STEP_TIMEOUT_MS,
+        application_arrival_timeout_ms: DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS,
+        step_timeout_ms: MAX_STEP_TIMEOUT_MS,
+        timeout_ms: MAX_TIMEOUT_MS,
+        warnings: Vec::new(),
+        needs_review: Vec::new(),
+    })
+}
+
+/// #463 R1: the probe package's game, server and locale; it names no game.
+const PROBE_GAME: &str = "lab_probe";
+const PROBE_SERVER: &str = "probe";
+const PROBE_LOCALE: &str = "en-US";
+/// #463 R1: the two color marks of the probe's destination page, which never pass together; the
+/// prefix `select/` is reserved, so no recorded mark takes either id.
+const PROBE_DARK_MARK: &str = "select/probe_dark";
+const PROBE_LIGHT_MARK: &str = "select/probe_light";
 
 fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
     let step = &plan.steps[index];
@@ -1719,6 +2194,51 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
             json!({
                 "source": application.source,
                 "request_id": application.executed.as_ref().map(|executed| executed.request_id.clone())
+            }),
+        );
+    } else if let Some(select) = &step.step.select {
+        // #463 R1: a select step chooses in its list of fixed slots by the names read there and
+        // taps the chosen slot once; it has no click of its own, declares no retry and needs a
+        // guard, from its page's required marks as a click step's.
+        let page = step.page_id()?.to_string();
+        operation.insert(
+            "purpose".into(),
+            json!(format!("Lab recording step {} (select)", step.number)),
+        );
+        operation.insert("from".into(), json!(page));
+        operation.insert("to".into(), json!(next_page));
+        operation.insert(
+            "select".into(),
+            select_json(plan, step, &select.declaration),
+        );
+        let guard = guard_json(plan, step, &page)?.ok_or_else(|| {
+            select_invalid(
+                Some(step.step.index),
+                SelectProblem::GuardMissing,
+                format!(
+                    "step {} selects in a list, and a select step needs a guard: its page has no \
+                     template, color, color digest or check mark (a page with only OCR marks \
+                     gives none); add a mark that recognizes the screen, for example a template \
+                     of its title",
+                    step.step.index
+                ),
+            )
+        })?;
+        operation.insert("guard".into(), guard);
+        operation.insert(
+            "expect_after".into(),
+            json!({
+                "page_id": next_page,
+                "timeout_ms": plan.arrival_timeout_ms,
+                "interval_ms": ARRIVAL_INTERVAL_MS
+            }),
+        );
+        operation.insert("post_delay_ms".into(), json!(CLICK_POST_DELAY_MS));
+        provenance.insert(
+            "select".into(),
+            json!({
+                "pressed": select.declaration.pressed_name(),
+                "wanted": select.declaration.wanted
             }),
         );
     } else {
@@ -2031,16 +2551,39 @@ pub(crate) fn render(
         json!(first.page.clone().unwrap_or_else(|| "any".to_string())),
     );
     task.insert("target_page".into(), json!(target));
-    task.insert(
-        "scheduling_outcome".into(),
-        json!({"mappings": [{
-            "outcome_key": format!("{}_done", plan.task_id),
+    // #463 R1: after the usual ending, one mapping per select step: its `on_empty` key on its
+    // page, where an empty decision ends the run.
+    let mut mappings = vec![json!({
+        "outcome_key": done_key(&plan.task_id),
+        "effect": "no_designated_effect",
+        "terminal_pages": [target]
+    })];
+    let mut layouts = Vec::new();
+    let mut policies = Vec::new();
+    for (step, select) in plan.select_steps() {
+        mappings.push(json!({
+            "outcome_key": on_empty_key(&plan.task_id, &select.declaration),
             "effect": "no_designated_effect",
-            "terminal_pages": [target]
-        }]}),
-    );
+            "terminal_pages": [step.page_id()?]
+        }));
+        layouts.push(select_layout_json(plan, step, &select.declaration)?);
+        policies.push((
+            plan.select_policy_path(step),
+            select_policy_document(
+                plan,
+                step,
+                &select.declaration,
+                &select.declaration.wanted.default,
+            ),
+        ));
+    }
+    task.insert("scheduling_outcome".into(), json!({"mappings": mappings}));
     for (name, targets) in target_families(plan)? {
         task.insert(name, targets);
+    }
+    // #463 R1: the layouts of the select steps, present only when the package has one.
+    if !layouts.is_empty() {
+        task.insert("candidate_layouts".into(), Value::Array(layouts));
     }
     task.insert("page_rules".into(), Value::Object(page_rules(plan)));
     let mut operations = Vec::new();
@@ -2062,6 +2605,10 @@ pub(crate) fn render(
         format!("{task_dir}/task.json"),
         pretty(&Value::Object(task))?,
     );
+    // #463 R1: the policy document of each select step, beside its task.
+    for (path, document) in policies {
+        entries.insert(format!("{task_dir}/{path}"), pretty(&document)?);
+    }
     for (id, asset) in plan.template_assets() {
         let bytes = crops.get(&id).ok_or_else(|| {
             invalid(

@@ -34,6 +34,8 @@ actingcommand-runtime-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+# Workflow #467 RPT-1: `report export` writes its archive as one zip.
+zip = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

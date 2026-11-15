@@ -3192,3 +3192,61 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_463_v1::v1_a_root_without_variables_answers_without_the_listing",
 ]
 incident = ["#463 V1"]
+
+# Workflow #463 K2 (0.12.61; register §1.380; brief rd-1115/brief-463-k2-linear-endings.md; design rd-1114/463-l3l5-design.md section B and the coordinator's rulings 4 and 5 on board #463; contracts/linear-steps.md, "Endings"), admission: a linear package from home over the list to done whose scheduling outcome names one ending page (short) beside the target page, and one that names two (short, spare), is admitted by validate_linear and by the whole admission (1); validate_linear refuses: an ending page that is an operation's intermediate page (contained_task_linear_invalid reason=ending_page), an ending page and the target page each in two mappings written with and without the game prefix (reason=terminal_page_duplicate), an ending page in two mappings written alike (contained_task_outcome_declaration_invalid, the declaration's own check), an optional step's page named as a terminal page (reason=terminal_page) (2); the package with endings is no prerequisite, no return-home package (configured or not) and no entry recovery package (linear_endings), the same package without its endings is each (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_a_linear_task_with_one_or_two_endings_is_admitted",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_linear_admission_refuses_each_ending_rule_with_its_reason",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_a_package_with_endings_is_no_prerequisite_and_no_return_home_package",
+]
+incident = ["#463 K2"]
+
+# Workflow #463 K2 (0.12.61; register §1.380), execution, on scripted frames and the scripted clock, the path open (home to list), buy (list to done), endings short then spare: short after buy's tap: Completed on short after 2 steps with no kernel key, buy's StepFinished naming it, its arrival awaiting short, spare, done; done after the tap: Completed on done (1); a frame showing done and short together: Completed on short (2); buy leading to popup, the page of the optional last step dismiss: short after buy, its candidates popup, short, spare, done, Completed on short after 2 steps; popup then spare after dismiss, its candidates short, spare, done, Completed on spare after 3 steps (3); buy retried (2 attempts, 10 ms): 21 black frames then short: the retry decision awaits short, spare, done, list and its first frame ends the run Completed on short with no second input, 22 frames (4); buy without retry: 21 black frames then short: the closing decision's first frame shows short and the run still fails page_confirmation_failed with awaited=short,spare,done and the arrival's timing (5); a black screen on every frame: contained_task_linear_unrecorded_screen with awaited=short,spare,done, page_ids short, spare, done, list, attempts 1, 21 + 101 frames (6); the same package without endings on the black screen: U1's code with no awaited=, page_ids done, list, the arrival awaiting done alone (7); a select step pick (list to done, on_empty mapped) whose tap reaches short: one record selected, one tap inside the first card, Completed on short after 2 steps, its arrival awaiting short, done (8)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_the_last_input_reaching_an_ending_completes_the_run_on_it",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_an_ending_and_the_target_page_on_one_frame_end_on_the_ending",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_endings_after_a_run_of_optional_steps_that_ends_the_path",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_a_late_ending_in_the_retry_decision_continues_without_another_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_a_late_ending_in_the_closing_decision_still_fails",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_neither_page_on_a_still_screen_is_the_unrecorded_screen_with_the_endings_awaited",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_without_endings_the_last_step_awaits_and_fails_as_before",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_a_select_step_whose_tap_reaches_an_ending_completes_the_run_on_it",
+]
+incident = ["#463 K2"]
+
+# Workflow #463 K2 fix round 1 (0.12.61; register §1.380; brief rd-1115/brief-1727-fix1.md, items 3 and 6; contracts/linear-steps.md, "Endings"), on the same packages: validate_linear refuses an ending page that buy's confirmation adds as a loading page (expect_after.loading.add, with its max_ms) and one that is buy's wait page (expect_after.wait_page), each contained_task_linear_invalid reason=ending_page (1); a control that declares store_update with the two endings is refused contained_task_linear_invalid reason=store_update_endings, and the same control with the usual ending alone passes validate_linear (2); the select step pick, last, in a package that also maps the ending short, with both cards closed and read: one record empty, one input (open's tap), pick's StepFinished on the list, Completed on the list after 2 steps with its on_empty key task_not_found (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_an_ending_page_that_a_confirmation_adds_or_waits_on_is_refused_ending_page",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_a_store_update_package_that_declares_an_ending_page_is_refused",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_a_select_steps_empty_end_in_a_package_with_an_ending_keeps_its_key",
+]
+incident = ["#463 K2"]
+
+# #463 R1 (0.12.61; register §1.381; brief rd-1115/brief-463-r1-record-select.md; design rd-1114/463-l3l5-design.md, sections C.1 and C.2 and the coordinator's rulings; contracts/lab-recording.md, "Selecting in a list"): a Lab recording step chooses in a list of fixed slots by the name read in each slot. On synthetic 96x64 frames with a scripted OCR provider that reads one block per marker pixel (ALPHA, BRAVO), two slots and the names item_a and item_b: a select marked with the pressed name item_a and the default item_b is accepted, its click (source select) slot 0 where ALPHA stands, its self-test passed with the primary frame's decisions (pressed slot 0, default slot 1), the declaration kept in recording.json; record stop generates the select operation step_01_select (layout/step_01, policies/step_01_select.json, on_empty neutral_task_not_found, the color guard, no click), the fixed_slots layout with its identity entries and slot targets, the two OCR slot targets (expected ALPHA, BRAVO), the mappings neutral_task_done on step_02 and neutral_task_not_found on step_01, the policy's one gate wanted.list_item allowing item_b with drop_candidate, none_allowed with one candidate, no control variables, lab.selects and the first decision would_click on slot 1; the daemon's admission takes the package and its simulation taps inside slot 1 (1); record_select_invalid with each select_problem, nothing written: with_follow, with_gesture, with_click, with_retry, on_optional_step, with_application, default_not_in_names, name_id_invalid (a name id), wanted_name_invalid (the wanted name; fix round 1), name_duplicate, pressed_not_in_names, on_empty_key_invalid, on_empty_key_reserved (the usual ending's key; fix round 1), slot_outside_frame, kernel_refused (a read timeout above the OCR limit), guard_missing (a page with only an OCR mark), and a mark id under select/ is record_mark_id_reserved (2); a second select step with the first one's wanted name is wanted_name_taken, with its on_empty key on_empty_key_taken, nothing written, and with its own name and key (on a list that is a screen of its own) it is accepted on the slot its default selects (3); a select on the last step of a stopped recording is on_final_step, nothing written (4); a sample with the pressed name in the other slot is accepted, each frame reporting its decisions (5); a recorded press in slot 1 makes a select pressing item_a select_press_mismatch, nothing written, and one pressing item_b is accepted on slot 1 (6); a slot that reads nothing is select_name_unread with slot 1, low_confidence and the default's decision blocked, a pressed name on no slot select_pressed_absent, nothing written (7); without an OCR model a select with no press to keep is refused lab_ocr_unavailable, and one on a step whose press was recorded is not_evaluated (lab_ocr_unavailable) with its click kept, record stop listing select/step_01 in marks_not_evaluated, the cross-check partially_evaluated with selects_not_evaluated [1], its frames undetermined and the first decision not evaluated (8); L1's one call with a select's mark request plans the press inside the slot the pressed name selects, performs it, records it and opens the next step with the next frame (9); a given on_empty key is the select's on_empty, its mapping and the policy's empty key, and a primary frame without the default name gives the first decision would_end_empty with that key (10); after record stop the select declared again with the default item_a regenerates the package with that gate value and another content hash (11); a recording without a select has no select key, no layout, no OCR target, no policy document, one mapping, a click operation and no selects, and its files, control, resources and task without provenance equal the constants the test holds (12). Fix round 1 (brief rd-1115/brief-1729-fix1.md; frames' decisions by kind, {result, slot?}, in 1, 5, 9 and 10): a select on the application entry step, with optional false or alone, is with_application, nothing written (13); after record stop a select over the recorded tap of step 1 keeps the tap's rectangle and source in select.click_before, clear_select gives them back, the steps equal those before and record stop regenerates the same package but for its generation time (14); a select on a list where step 1's page also passes is select_other_page_passes naming step 1 and frame f0002, nothing written (15); the probe built from the stopped recording's step holds the package's policy document byte for byte, its layout, slot targets and select operation but for expect_after's timeout (16)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_r1::r1_a_marked_select_is_accepted_generated_and_admitted",
+    "actingcommand-lab::lib::gate_463_r1::r1_each_select_rule_is_refused_with_its_word",
+    "actingcommand-lab::lib::gate_463_r1::r1_a_second_select_has_its_own_wanted_name_and_on_empty_key",
+    "actingcommand-lab::lib::gate_463_r1::r1_a_select_on_the_last_step_of_a_stopped_recording_is_refused",
+    "actingcommand-lab::lib::gate_463_r1::r1_a_sample_with_the_pressed_name_in_another_slot_is_accepted",
+    "actingcommand-lab::lib::gate_463_r1::r1_a_press_outside_the_selected_slot_is_refused",
+    "actingcommand-lab::lib::gate_463_r1::r1_an_unread_slot_or_an_absent_pressed_name_is_refused",
+    "actingcommand-lab::lib::gate_463_r1::r1_without_an_ocr_model_the_select_is_not_evaluated",
+    "actingcommand-lab::lib::gate_463_r1::r1_one_call_records_a_select_step",
+    "actingcommand-lab::lib::gate_463_r1::r1_the_on_empty_key_is_the_given_one_and_ends_an_empty_first_decision",
+    "actingcommand-lab::lib::gate_463_r1::r1_a_default_changed_after_stop_regenerates_another_package",
+    "actingcommand-lab::lib::gate_463_r1::r1_a_recording_without_a_select_generates_as_before",
+    "actingcommand-lab::lib::gate_463_r1::r1_fix1_a_select_on_an_application_step_is_refused",
+    "actingcommand-lab::lib::gate_463_r1::r1_fix1_a_select_added_after_stop_and_taken_off_generates_the_package_again",
+    "actingcommand-lab::lib::gate_463_r1::r1_fix1_a_select_on_a_frame_another_page_passes_on_is_refused",
+    "actingcommand-lab::lib::gate_463_r1::r1_fix1_the_probe_holds_the_select_step_record_stop_generates",
+]
+incident = ["#463 R1"]

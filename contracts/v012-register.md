@@ -25296,7 +25296,9 @@ shape or interface revision.
 entries `lab`, slice `464-P3`, which actinglab's `BUILT_SLICES` and the MCP server's
 `ACTINGLAB_SLICES` name); served by actinglab's own command, as `standard-pack check` is (the
 engine's commands 64, the core strict rows 2, the command inventory 103 commands, the census's
-refusing commands 62; with #464 P1 and P2 beside it, in the train 0.12.61b, 66, 2, 105 and 64), so
+refusing commands 62; with #464 P1 and P2 beside it, in the train 0.12.61b, 66, 2, 105 and 64;
+with #467 RPT-1 too, which removed the placeholder `report export`, in the train 0.12.61c, 66, 2,
+104 and 64), so
 `lab_ops::core_ops` does not serve it and MCP serves it through a `serve`
 child. Its capability entry is `offline`, `read_only`; under `--dry-run` it has no effect
 ([actinglab-dry-run.md](actinglab-dry-run.md)).
@@ -25567,7 +25569,9 @@ refused `ui.json` is `standard_pack_root_invalid`. The outcome code index is reg
 strict rows 31, the census's group (a) 62, the commands of actinglab's own rows
 (`engine::COMMANDS`) 64; the built slices 7. With #464 P1 and P3 beside it, in the train
 0.12.61b: 105 commands, 47 arms; the strict rows 32; group (a) 64; `engine::COMMANDS` 66; the built
-slices 9.
+slices 9. With #467 RPT-1 too, in the train 0.12.61c: 104 commands, 46 arms (its placeholder
+`report export` and the group `report` removed); the strict rows 32; group (a) 64;
+`engine::COMMANDS` 66; the built slices 10.
 
 **Tests.** `apps/actinglab/src/tests/gate_464_p2.rs` (gate map `apps.toml`, "#464 P2", "#464 P2
 fix round 1", "#464 P2 fix round 2" and "#464 P2 revisions 13 and 14"; 59 tests), on a neutral fixture repository made with git (RV-1's
@@ -25718,7 +25722,7 @@ No code, word or key is added or removed: the vocabulary `adopt_problem` keeps i
 | The operation (repository, recording, package and decision read; the checks; the plan; the check tree; the writes) | `crates/resource-tooling/src/adopt.rs`, `standard_pack_adopt` |
 | The canonical form of a JSON document, shared | `crates/actingcommand-contract/src/standard_pack_schedule.rs`, `canonical_json_bytes` |
 | The command line, the version control's answer (`git status --porcelain=v1 -z --untracked-files=all`, `GIT_OPTIONAL_LOCKS=0`, the redirecting variables removed) | `apps/actinglab/src/standard_pack_cli.rs`, `run_adopt`, `GitWorktree` |
-| The row `standard-pack adopt` (authoring, slice `SP-ADOPT`, built: actinglab's `BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`), its command, its strict flag lists, its census group, its capability, its options in `help`, its dry-run mode (preview `dry_run`), the inventory (103 commands; 105 with #464 P2 and P3, in the train 0.12.61b) | `contracts/lab-operations.json`; `apps/actinglab/src/cli_module/{words,engine,own_flags}.rs`; `apps/actinglab-mcp/src/tools.rs`; `apps/actinglab/src/{commands/capabilities,cli_information,dry_run_gate}.rs`; `ratchet/actinglab_commands.json` |
+| The row `standard-pack adopt` (authoring, slice `SP-ADOPT`, built: actinglab's `BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`), its command, its strict flag lists, its census group, its capability, its options in `help`, its dry-run mode (preview `dry_run`), the inventory (103 commands; 105 with #464 P2 and P3, in the train 0.12.61b; 104 in the train 0.12.61c, whose #467 RPT-1 removed the placeholder `report export`) | `contracts/lab-operations.json`; `apps/actinglab/src/cli_module/{words,engine,own_flags}.rs`; `apps/actinglab-mcp/src/tools.rs`; `apps/actinglab/src/{commands/capabilities,cli_information,dry_run_gate}.rs`; `ratchet/actinglab_commands.json` |
 | Two codes, one value key and its vocabulary | below |
 
 **The value's origin (the coordinator's ruling).** A decided value is `"pending"` or a number of
@@ -26062,6 +26066,558 @@ module's `gate_455_gr1` goal bytes), `goals_reader_is_strict`'s "another version
 (`actingcommand.goals.v3`, still `malformed`), and the rescue module's three `gate_455_gr1` tests
 read `GOALS_PACKAGE_REVISION`, so their installer declares [3, 14] and their goals bundle [14, 14]
 (the gate row gains the incident `#463 V1`). No golden changes; no test leaves the gate map.
+
+### 1.379 Slice #467 RPT-1 (0.12.61): `report export`, one problem report archive of the errors view (Workflow #467; the owner's words on board #467, as the work order quotes them, are the requirement, with her answers of 11-14 to the design's first page as the coordinator recorded them; the rulings are the coordinator's, not the owner's words; the design `rd-1114/problem-report-export-design.md`, its row RPT-1 of section G; coordinator work orders `rd-1114/brief-467-rpt1-report-export.md`, read on main `1e67d1c5`, and `rd-1115/brief-467-rpt1-cont.md`, its continuation after the first implementer stopped, main `2eaf9b7e` (release 0.12.60) merged)
+
+1.379 is the number the coordinator gave this slice; 1.374 to 1.378 belong to pull requests open
+when it was given. The slice ships in 0.12.61 (release 0.12.60 is cut without it): its codes'
+`since` is 0.12.61. The contract is [problem-report.md](problem-report.md).
+
+**Why.** A tester's task failed, and what he could send (the console's task cards, a window of
+ledger rows, two process logs) did not hold the failure; the evidence was in the Runtime's ledger
+and artifacts and took several Lab commands of someone who knows the Lab to get out. The owner
+asked for one action that exports the error log, in the console and in the Lab, and later that it
+follow the ledger's views (the errors view now, the package view next, RPT-2). This slice is the
+Lab's half of the errors view: one archive, with a page a person reads first.
+
+**Established by reading** (the work order's points, before any code).
+- *The placeholder.* actinglab's own `report export --last-error --out <path>` wrote an archive
+  that held no error data (`apps/actinglab/src/resource_runtime_support.rs`, `run_report` and
+  `REPORT_EXPORT_READS`; the group `report` of `main.rs`'s dispatch and `OWN_GROUPS`; its help in
+  `cli_help.rs`; its read list in `cli_module/own_flags.rs`'s work list; two lines of
+  `gate_434_lab5b5`'s corpus and its line of `LINES`; the inventory `ratchet/actinglab_commands.json`;
+  [lab-two-entries.md](lab-two-entries.md) §9.3, LAB-5B5's list; [actinglab-dry-run.md](actinglab-dry-run.md)).
+  No console code and nothing in `distribution/` but a past release note names it. Deleted here
+  (ruling Q6); the words are the row's.
+- *The reads it calls.* `runs`' listing (`list_contained_runs`: one listing a window and instance,
+  one brief status read a run), `run show`'s and `run evidence`'s reads by request id (every
+  step: one `QueryEvents` page sequence over the run's eight record types), `events`' row shape,
+  `material`'s `resolve` (one page at the reference's sequence) and `read_whole` (verified
+  ranges); a run of a hundred steps costs one evidence read of a few pages. Every read of the
+  module that selects a record names a request id, or an instance with the report's window (a
+  time-bounded page starts at the window's first record, [ledger-observer.md](ledger-observer.md),
+  "LN-WS"); none reads without an instance, none from the ledger's first record. The one read that
+  selects none, the errors view's search's read of the ledger's head (fix round 1; a page whose
+  range starts past every sequence, with no other condition), carries no instance (fix round 2
+  says so). No row's answer changes: the module calls their code, it extracts nothing.
+- *Ruling Q4.* `task.recognition_completed` holds for each target matched or not (`passed`) and
+  its box, and since ledger revision 4 `candidate_scores`: for each candidate page `passed`,
+  `best_score_milli` and `first_failed_target_id` (at most 16 pages, `omitted` the rest); no
+  target's score and no threshold. So both readings were partly right: the scores come from the
+  diagnostic stream (8 MiB at most), else as far as that record holds them.
+- *The roots.* The installation root is the program's own place (`core_ops::Place::root`), the
+  state root the module's located one. No function compared resolved paths; `report.rs`'s
+  `refuse_output` resolves the longest existing part of a path (`fs::canonicalize`: junctions,
+  links, letter case), keeps the rest as written, takes out `.` and `..`, and compares without
+  regard to ASCII case.
+- *The Runtime.* The row is `runtime: required` in this slice: without a Runtime it answers the
+  Runtime client's failure; the part that needs none comes with RPT-3.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| the module | `crates/lab-ops/src/report.rs` (the request, the runs chosen, the failing step, the frames chosen, the parts, the size bound, the archive's manifest, the answer), `report/source.rs` (the trait `Source`, every method a read, and `RuntimeSource`, which reads through the rows' code within one deadline), `report/scores.rs` (the stream's records, the failing step's span, the scores from the stream or the recognition record, `no_frames`' text removal), `report/summary.rs` (`SUMMARY.md`, `summary.json`, the display line), `report/archive.rs` (the masks, the zip, the write through a partial file) |
+| the row | `contracts/lab-operations.json`: `report export`, module `core`, slice `RPT-1`, eight parameters, `runtime` `required`, `entries` `["lab", "ui"]`, `Status`, `QueryEvents`, `ReadMaterial`; served by `core_ops` (`report_line`), its parameters in `core_reads::READ_HERE`; actinglab offers it (`BUILT_SLICES`), and so does the Lab's MCP server (`ACTINGLAB_SLICES`; `tools::SUPPLIED` gives `out` the export directory, ruling Q7) |
+| the codes | `crates/lab-ops/src/codes.rs` and [outcome-codes/actingctl.json](outcome-codes/actingctl.json): `report_exported`, `report_output_refused`, `report_write_failed`, `report_part_missing`, `report_trimmed` (`report_` is a prefix of the owner `actingctl`) |
+| the dependency | `zip` (the workspace's 0.6, already in the lock file) for `crates/lab-ops` |
+| the placeholder | deleted (above); the inventory is 46 dispatch arms and 101 commands (104 with #464 P1, P2 and P3 beside it, in the train 0.12.61c); the help lists 35 own commands of the inventory |
+| the texts | [problem-report.md](problem-report.md) (new, in [README.md](README.md)); [lab-two-entries.md](lab-two-entries.md) §9.3 and the MCP front's own members; [actinglab-dry-run.md](actinglab-dry-run.md); `apps/actinglab-mcp/MANUAL.md`; the inventory's counts in both READMEs |
+
+**What a report holds** (the contract has every member): the summary page, its data, the
+manifest, the versions (each member's build manifest, each game root's bundle source), and for
+each failed or unfinished run of the window (at most `max_runs`, five by default, two at most of
+one package that ended with one code) its status, its steps, its scores, its geometry, the failing
+step's stream excerpt and at most three frames; for each instance the newest 200 rows of its
+errors view. The summary names for each run its terminal code with the catalog's description, the
+step it ended in, the page that step and the run started from, the last page recognised, the
+targets with matched, last and best score, threshold and margin (an OCR target's text and its
+confidence), and one display line ("device 1920×1080, package 1280×720, scale 3/2, recognition
+on the reduced frame", or "… not scaled"); the run that ended normally before the newest on its
+instance is listed in one line. The owner's defaults: frames in unless `no_frames` (which takes
+the text OCR read out too, ruling Q5), 24 hours, five runs, 24 MiB (frames left out first, then
+the stream excerpts, then the errors files; the summary, the manifest and each run's status,
+steps and scores never). What is never in it, whatever the switches: the configuration's salt,
+the state root's key file, a device serial; a path's `\Users\<name>\` segment and the user's and
+computer's names are masked in every text part.
+
+**Tests** (`crates/lab-ops/src/gate_467_rpt1.rs`, a made-up `Source` and temporary folders, no
+Runtime, no clock; `apps/actinglab/src/tests/gate_467_rpt1.rs`; the contract and apps gate maps):
+the summary of two failed runs (the code and its description, the step and its pages, a template
+below its threshold with its last and best score and margin, an OCR target's text, the display
+line of a scaled run and of one of the package's size, the run before the newest, the frames,
+the versions; the archive's name, order and digests; a second export never replaces the first);
+the stream filtered to the failing step, and the scores from the recognition record when the
+stream is above 8 MiB; the frames chosen, each once, a removed frame named missing; the output
+refused inside either root (letter case, `..`, the root itself) and through the row before the
+Runtime is reached; no salt, key, serial or unmasked name in any entry; only reads, no
+confirmation, client action or capture in the module's code; `no_frames`; the size bound's order
+and what it says; each instance's errors view with its counts; every read in order with its
+request id or its instance and window; the table's row; and actinglab's placeholder gone (the
+words are the module's, `--last-error` refused by name, an output inside the state root refused,
+nothing written without a Runtime). Adapted (the requirement changes what they pin): the help's
+own commands (35, `gate_434_cli_help`), LAB-5B5's lines and corpus (`gate_434_lab5b5`), the MCP
+front's own members (`gate_434_lab5g2b`).
+
+**Fix round 1** (coordinator brief `rd-1115/brief-1725-fix1.md`, after the slice's independent
+review, which found every read bounded, nothing of the configuration or a secret written and the
+output refusals holding; still 0.12.61, nothing of it shipped in 0.12.60).
+- *CI.* The test fake sorts with `sort_by_key` (lint); the secrets test has the private bindings
+  written by their one writer, `devices bind` from a made-up adb listing, so that no file but the
+  binding reader and writer names the file (architecture guard T10, untouched).
+- *A listing not read to its end* (`runs`' listing answers no run for an incomplete listing) is
+  `report_part_missing` naming its instance; the summary and its data say for each instance
+  whether its listing was read to its end, and "no failed or unfinished run" is said only when
+  every listing was. The same for the run before the newest.
+- *Still over the bound* with every part that may be left out left out: the archive is written,
+  and `report_trimmed` (`report_fit` `still_over`), the manifest's and the summary's data's
+  `within_bound`, the summary's size line and the answer's `within_bound` say so.
+- *`no_frames`* leaves out every member that holds text or a value read from a frame, in the
+  stream's records and the errors view's rows (the table of [problem-report.md](problem-report.md)
+  section 6: OCR text, derived and matched expected text, an OCR block's text, the neural
+  recognition's labels, a colour digest's observed cells, a value test's read texts and values,
+  `raw_text` evidence at any depth); what measures a frame without showing it stays.
+- *The manifest's `secrets`* says what is true: the configuration is read whole for its
+  `standard_packs.root` and nothing of it is written.
+- *The codes* (the coordinator's ruling, provisional while the owner refines the status codes on
+  board #469): `report_part_missing` requires `report_part` and `report_part_reason`
+  (`file`, `alias`, `request_id` where they apply; before, `file` alone was required and a
+  listing's failure named `summary.json`), `report_write_failed` requires `report_write_step`
+  (and names a partial file it leaves behind in `retained`), `report_trimmed` requires
+  `report_fit`, `report_output_refused` requires `report_output_root`. Five keys and five
+  vocabularies are new in [outcome-codes/catalog.json](outcome-codes/catalog.json) and the key
+  table (`crates/actingcommand-contract/src/outcome/keys.rs`), each vocabulary an enum of
+  `crates/lab-ops/src/codes.rs`: `report_part` (10 tokens), `report_part_reason` (7; 8 since fix
+  round 2), `report_write_step` (5), `report_fit` (2), `report_output_root` (2); `since` 0.12.61,
+  pending; the index is regenerated. No code is added.
+- *The reads.* The runs are read before the errors views, and an errors view is its newest 200
+  rows found by `events`' search for the newest records (CLI-EV, §1.306; `events::newest_in_window`
+  calls the search's own parts, with the window's first record as its floor, and changes no
+  answer of `events`), not the window read from its start; no total is counted, and a search
+  that stopped above the window's start is a part missing.
+- *The size* is measured in packed bytes (each part zipped alone, less the end record, plus the
+  rendered summary, data and manifest), not the unpacked sum with a reserve.
+- *A failed write* names the partial file it left behind (`retained`).
+- *The summary page* says the screenshots can show a player's name and numbers and that the
+  export can be made without them (`--no-frames`).
+- *The masks* replace the user's and the computer's names (its NetBIOS name, its DNS host name
+  and its full DNS name, the last two from `actingcommand-host-metrics`, whose `dns_full_name` is
+  new beside `dns_host_name`) wherever they stand, inside longer words and without regard to case,
+  when at least three characters long, and a `Users` folder's segment behind one or more
+  separators (a doubly escaped path too); [problem-report.md](problem-report.md) section 7 says
+  what is and is not replaced.
+- *Tests.* New: `rpt1_fix1_a_listing_not_read_to_its_end_never_says_none`,
+  `rpt1_fix1_still_over_the_bound_is_said_in_the_manifest_the_summary_and_the_answer`,
+  `rpt1_fix1_no_frames_leaves_out_every_text_and_value_read_from_a_frame`,
+  `rpt1_fix1_the_masks_replace_names_inside_words_escaped_paths_and_dns_names`, in the row's gate.
+  Adapted (the items change what they pin): the errors view's summary lines and data (no total,
+  item 7), the reads' order (item 7), the size bound's fixture (incompressible excerpts within
+  1 MiB of packed bytes, item 8), the part named missing for a stream above 8 MiB (the run's
+  excerpt, `too_large`), the fake source's error type, and the secrets fixture (above).
+
+**Fix round 2** (coordinator brief `rd-1115/brief-1725-fix2.md`, after the review of fix round 1,
+which found its items done, every read bounded, the vocabularies registered and required, the
+packed size measured as written and the tests failing when the behaviour breaks; main
+`60c28e64` (the train 0.12.61a, #463 K1 §1.374 and V1 §1.378) merged; still 0.12.61). The
+contract's sections 2, 5, 6, 7 and 9 say each point.
+- *The masks* (the coordinator's ruling, which replaces round 1's item 11) never search a
+  member's name, a number, a hash, an id the Runtime gave, a code or a word of a closed
+  vocabulary: by the member that holds a string (the report's own list of id, hash, code and word
+  members; in an outcome's `values`, the outcome key table's type of the key), by its shape
+  (`sha256:…`, 40 or 64 hexadecimal digits, a typed id, a material reference), or because it
+  names an entry of the archive. A name of five characters or more is replaced wherever it
+  stands; a shorter one only where it stands alone; the `Users` folder's segment whatever its
+  length. The summary page masks each value as it writes it, by the same rule; before, it was
+  masked whole, labels and codes included. Fix round 3 (`rd-1115/brief-1725-fix3.md`) narrows
+  the shorter names, so that the rule has three tiers, as [problem-report.md](problem-report.md)
+  section 7 states them: a name of five characters or more is replaced wherever it stands, inside
+  a longer word too; one of three or four characters only where it stands alone; one of one or
+  two characters only as the segment after a `Users` folder.
+- *The entries' names* are built from masked text (an instance's folder from its masked alias,
+  `<user>` written `_user_`; a run's from its id, which the masks keep), and the manifest, the
+  summary's data and the page name each entry as the archive does.
+- *The search's floor carries the instance*: `events::window_start` reads the instance's first
+  record of the window (the instance beside the time bound); the head's read selects no row and
+  carries none, which the contract, this register and [lab-two-entries.md](lab-two-entries.md)
+  §9.3 now say. No answer of `events` changes.
+- *The deadline.* The errors view's search is held to its step's 20 s and the report's deadline:
+  `events::newest_in_window` reads its pages through `EventPages` (the Runtime client, or a test's
+  made-up Runtime) and starts none once its time is spent (`EventPages::late`, false for the
+  client, so `events` itself is unchanged); a search so cut is `report_part_missing`
+  (`errors_view`, `not_read_to_end` at the step's limit, `budget_spent` at the deadline) and writes
+  no row. `report::errors_view` is the composition the Runtime source and the tests share.
+- *One word, one cause*: a search that read its largest window is `search_windows_spent`, new in
+  `report_part_reason` (8 tokens; catalog, enum and the code's description), apart from
+  `not_read_to_end` (the Runtime cut a read short); `summary.json` says which (`stopped`). The
+  index is regenerated.
+- *The masks say what they could not learn*: a name not set or that the system cannot be asked
+  for (`user_name`, `netbios_name`, `dns_host_name`, `dns_full_name`) is named in the manifest's
+  `names_not_looked_for`.
+- *A run the Runtime does not find* (`run evidence`'s `run_unknown`) is `runtime_refused`.
+- *The summary page* names the command's own option `--no-frames`, not a console control that
+  does not exist yet.
+- *`no_frames`' rule*: no text and no game quantity read from a frame; recognition's own measures
+  (a match score, a mean colour, a brightness ratio) and an identity a package defines
+  (`observed_identity` of the `selection_*` codes) stay.
+- *The scheduler's readings* (`basis_readings`, `pool_reading`, `maximum`): checked in the code,
+  their codes are `info` reasons of a decision's reason chain, never a record's own outcome, and
+  an errors view row carries only that; the contract says why they never reach the report.
+- *Tests.* New: `rpt1_fix2_the_masks_keep_member_names_hashes_and_ids_and_replace_a_short_name_alone`,
+  `rpt1_fix2_an_alias_holding_the_name_names_its_entry_as_the_manifest_does`,
+  `rpt1_fix2_every_read_of_the_errors_search_carries_the_instance`,
+  `rpt1_fix2_the_deadline_cuts_the_errors_search_and_the_part_says_so`, in the row's gate.
+  Adapted (the items change what they pin): round 1's masks test (short names alone, the ruling
+  replacing item 11), the reads' code (`errors_view`), the fake's errors view (`stopped`).
+
+**At deploy.** Nothing to configure: the Lab programs of 0.12.61 have the row
+(`actinglab report export --out <dir>`, `ac_report_export` on `actinglab-mcp`). A script that
+called the placeholder gets `actingctl_usage_invalid` for `--last-error`. `actingctl mcp-serve`
+has no tool for it yet (RPT-4); the console's button is the UI repository's (UI-RPT-1).
+
+**Rollback** (below 0.12.61). Nothing is persisted: no ledger record, configuration key, fact or
+interface revision is added. An older actinglab answers the words with its placeholder again.
+
+### 1.380 Slice #463 K2 (0.12.61): a `linear_steps` task ends normally on a declared ending page (Workflow #463; the owner's requirement on board #463 that the business is done with its last press, that every declared ending is a normal end and never a failure, and that a rare ending can be added later without recording again; the coordinator's rulings 4 and 5 on the design note `rd-1114/463-l3l5-design.md` and the rulings of the work order, not the owner's words; coordinator work order `rd-1115/brief-463-k2-linear-endings.md`, read on main `60c28e64`, which holds the train of K1 and V1)
+
+The coordinator gave this slice 1.380: main `60c28e64` holds the sections up to §1.378; 1.375 to
+1.377 and 1.379 belong to open pull requests, 1.381 and 1.382 to slices dispatched with this one.
+The slice ships in 0.12.61.
+
+**What it is.** The kernel's half of the design's L5 ([linear-steps.md](linear-steps.md),
+"Endings"): no new task member. A `scheduling_outcome` mapping whose terminal page is neither the
+target page nor the page of a select step that declares `on_empty` names an ending page, a page no
+operation leaves or reaches. Wherever the target page is a candidate at the path's end (the last
+operation's, and those of a run of optional steps whose skip target is the target page), the ending
+pages are candidates right before it, in mapping order; one that passes passes at once, never after
+a settle, and the run finishes Completed on it through `finish_success`. The last `StepFinished` and
+the terminal's final page name it; the kernel gives no key of its own and the host keys the run by
+the page's one mapping, as it keys the target page. The retry decision and U1's closing decision
+await the same list, then the step's own page. Adding an ending to a recording after its stop (R2)
+and every part of the Lab are later slices.
+
+**Where, by reading (the work order's five points).**
+- *The page set.* A `scheduling_outcome` terminal page enters a source package's page set by itself
+  (`build_pages`, `declared_scheduling_outcome_page_ids`, as §1.374 read); a contained package's page
+  set is its pages file; linear admission resolves each terminal page against the detector
+  (`resolve_page_reference`) and refuses one that resolves to none or several
+  (`contained_task_page_set_invalid`). `declaration.validate()` refuses a page that two mappings of one
+  effect condition write alike (`mapping_overlap`, so `contained_task_outcome_declaration_invalid`; a
+  linear task's mappings are all `no_designated_effect`), but it compares pages as written: one
+  detector page written with and without the game prefix passes it, and the host would fail the run
+  at its end with `contained_task_outcome_mapping_conflict` (it matches mapped pages by anchor).
+  `terminal_page_duplicate` is the word for that situation alone, after the resolution: the same
+  writing stays the declaration's own refusal, so no situation has two words.
+- *K1's rules after an ending.* A page that is a select step's `on_empty` page is never an ending: a
+  mapping that lists it is held by `select_on_empty_terminal` (no mapping or another key), and two
+  mappings that list it by `terminal_page_duplicate` (written two ways) or the declaration's
+  `mapping_overlap` (written alike), checked first, since the one keyed-terminal rule's "exactly one"
+  covers the duplicate too. `select_on_empty_target` is unchanged (that page is the target page). A
+  select step's page without `on_empty`, or its destination, named as a terminal page is a page of the
+  path, `terminal_page` as K1's tests pin. An `on_empty` page is the select step's own `from`, so an
+  ending is never one.
+- *The host.* `select_scheduling_disposition` (`crates/runtime-host/src/host/contained_task.rs`)
+  takes the last attempt's `StepFinished` of the run's last dispatched step, requires it to name the
+  final page (by anchor), takes the one `no_designated_effect` mapping that lists that page and
+  compares its key with the kernel's only when the kernel gives one. An ending's run has that
+  `StepFinished`, that final page and one mapping, so it is keyed by its mapping with no host change;
+  the host test pins it.
+- *The `package` revision.* Row 13's reasoning holds: every Runtime before this slice refuses a
+  terminal page other than the target page or an `on_empty` page at admission
+  (`contained_task_linear_invalid`, `reason=terminal_page`, before `PackageAdmitted`), so every run of
+  such a package would fail, and the installer must refuse the bundle instead. **`package` 15**
+  (Interface, below).
+- *The scheduler* (fix round 1 corrects this point). The host projects, per task and instance, the
+  outcome of the latest completion in admission order (`outcome_key_snapshot` in `policy_host.rs`,
+  the projection in `policy_dispatch.rs`): when that run succeeded, its key is `true`, every other
+  key of the task the catalog references `false`, and `<key>.duration_ms` and
+  `<key>.completed_at_unix_ms` hold its duration and completion time; when it failed or was
+  stopped, nothing is projected for the pair, whose keys then read `outcome_missing` until a later
+  success. The `outcome` predicate compares such a value, a boolean for a key (`evaluator.rs`); a
+  metric reads integers only, so of a key it reads `<key>.duration_ms` or
+  `<key>.completed_at_unix_ms`, never the key itself (`strategy.rs`). A rule sees which end the
+  pair's latest run reached when that run succeeded; nothing counts the ends over several runs.
+
+**Admission** (`contained_task_linear_invalid`, no `operation=`):
+
+| Rule | `reason` |
+|---|---|
+| every terminal page is the target page, an `on_empty` page or a page no operation leaves or reaches (widened; a page of the path stays refused) | `terminal_page` |
+| an ending page is no operation's intermediate page and no page an operation's confirmation adds as a loading page or waits on | `ending_page` (new) |
+| no detector page is a terminal page of two mappings, after resolution | `terminal_page_duplicate` (new) |
+| a package with an ending page is no prerequisite and no return-home package (`contained_task_prerequisite_incompatible`, after `select_on_empty` in `scheduling_outcome_incompatibility`) | `linear_endings` (new) |
+| (fix round 1) a package whose `control.json` declares `store_update` declares no ending page | `store_update_endings` (new) |
+
+The design's `ending_page` also named the steps' own pages and optional pages. Those are pages of
+the path, which `terminal_page` already refuses and K1's and Workflow #336's tests pin
+(`gate_463_k1`, `gate_e5_linear`); the work order changes no existing test, so they keep that word,
+and `ending_page` is the one word for an ending page the step's intermediate or loading waits
+evaluate apart from its candidates. `store_update_endings` (fix round 1, item 3 of the work order
+`rd-1115/brief-1727-fix1.md`): any success of a package that declares `store_update` clears
+`health.application.update_required` (UPD-1, the host's terminal of a Completed run), a run that
+finished on an ending page included, so `validate_linear`, which reads the control declaration,
+refuses the combination after it has collected the endings, before K1's `on_empty` rules. The four
+new words are detail values of existing codes,
+registered where their family's words are, in the admission tables of
+[linear-steps.md](linear-steps.md) ("Admission", "Endings", "Prerequisite packages"); no outcome
+code, no key and no vocabulary changes, so the outcome code index does not change (its `--check`
+still reads "is current"). `declares_linear_endings` (the prerequisite check, on the admitted
+package) compares the declared pages by canonical anchor, which name one detector page each once
+admission resolved them, so it finds the plan's endings.
+
+**Execution and records.** `LinearPlan` gains `endings`, filled once the scheduling outcome is
+checked, after the loading pages are held to the candidates they held before. `candidates` puts the
+endings before the target page where it ends the path; `LinearCandidates.run_set` keeps a run's
+candidates of more than one page on `linear_wait_set` (skip target last, settle), and the endings and
+the target page of a last operation outside a run go to one `linear_wait`, as one page did, so its
+geometry and consensus-window handling stay those of the last step's wait (the design did not say
+which wait; a run's set would have settled nothing and been slower to tolerate a moved display).
+`validate_sampling_budget` counts the endings in every candidate list and asks the continued wait's
+budget only of a run's set, the one list that continued wait watches. `run_linear_steps` finishes on a
+passing ending page before the optional-run matching. Records are the ordinary success's: no event
+type, payload member or enum value is added.
+
+**A task without an ending** is run and recorded as before: its plan's endings are empty,
+`candidates` computes the lists it computed, `run_set` is true exactly where the list was a run's of
+more than one page (the old routing and the old budget check), every arrival confirms its
+operation's adjustments as before, and the details are the same. Its admission changes in two
+declarations, both one detector page written with and without the game prefix in two mappings:
+the target page so written was admitted and failed every run at its end with
+`contained_task_outcome_mapping_conflict`, and is now refused at admission
+(`terminal_page_duplicate`); an `on_empty` page so written was refused `select_on_empty_terminal`,
+and is now refused `terminal_page_duplicate`.
+
+**Resource adjustments** (fix round 1, item 1, the coordinator's ruling; this replaces the known
+limit the first round left as a question): an operation that arrives on an ending page confirms no
+adjustment. `run_linear_steps` asks `is_ending` of the page that passed before the confirmation and
+does not call `confirm_resource_adjustments` for an ending; the frame is handed to recognition
+before that, as on every arrival, so the ending page's own readings are joined and published. The
+rule is the page the operation arrived on, not its declared destination: after a run of optional
+steps the operation before the run may arrive on the target page, which is not its destination,
+and is confirmed there as before. The host's join check before `Finalizing` (every handed-off frame
+joined, every confirmation joined) holds with no confirmation, as after a select step's empty end.
+A reader of the ledger sees the run Completed on the ending page with its key, no adjustment record
+of that operation, and the adjusted key's earlier record unchanged. The page-graph path is
+untouched.
+
+**Known limit** (fix round 1, item 4, read only; [linear-steps.md](linear-steps.md), "Endings"): a
+rule's `consumes` and `produces` have no condition by outcome key. The policy settles no run's
+effects into a pool, whose amount is its latest reading; until a reading of the pool observed after
+a task's latest dispatch, the reserve gate (step 3), its spend allowance and a capped pool's lines
+count the task's declared consumption as consumption the reading does not show yet
+(`unshown_consumption` in `resource_targets.rs`, `capped.rs`), whatever the run's end. A run that
+finished on an ending is so held as one consumption until the pool's next reading, which corrects
+it; `produces` enters only the expectations of later decisions (net benefit, forward projection).
+
+**Interface: `package` 15**, by row 13's reasoning ([component-interfaces.md](component-interfaces.md),
+"What a range means": a bundle's maximum is the revision its packs need). The Runtime declares
+`package` [3, 15] (13 is Workflow #463 K1's, 14 V1's, 15 this slice's, the same release;
+`distribution/windows/component-interfaces.json`; the architecture pin
+`the_runtime_declares_each_v0120_interface_revision_once` and its comment; row 15; the statements of
+rows 13 and 14, [package-variables.md](package-variables.md) and
+[standard-pack-goals.md](standard-pack-goals.md); §1.374 and §1.378 keep the [3, 14] their slices
+declared). A pack without an ending page keeps its revision; a bundle whose packs declare one
+declares [15, 15], which the `package` edge of an earlier installer refuses in the plan, before the
+hold and any write. **Nobody checks the 15**: it is written by the resource repository's packaging
+(the bundle's `interfaces.json`; `record stop` generates no ending yet, and the Lab's
+`standard-pack build`, §1.376, does not compute it: its revision table has no row for 15 yet),
+and `place` holds a bundle's maximum to its own range and asks 10 only of a bundle with the
+notices directory and 14 only of one with `goals.json` or one whose packs declare `variables`
+(`crates/lab-rescue/src/install/place.rs`, `check_notices`, `check_goals_declared`,
+`check_variables_declared`), never 15 of an ending, and the Runtime does not check a package's declared range at admission. So an earlier installer places a
+bundle whose packs declare an ending and that declares less than 15, and an earlier Runtime refuses
+that package at every run (`reason=terminal_page`). `ledger`, `runtime-client`, `actingd-config` and
+`runtime-outcomes` do not move.
+
+**At deploy.** No installed `linear_steps` package names a terminal page other than its target page
+or an `on_empty` page (an earlier build refused one), so none gains an ending. Two declarations
+change their answer, each one detector page written with and without the game prefix in two
+mappings: a target page so written was admitted and failed every run at its end with
+`contained_task_outcome_mapping_conflict`, and is now refused at admission
+(`contained_task_linear_invalid`, `reason=terminal_page_duplicate`); an `on_empty` page so written
+was `select_on_empty_terminal` and is now `terminal_page_duplicate`. A package that declares
+`store_update` and an ending page could not be admitted before either (`reason=terminal_page`), so
+`store_update_endings` refuses nothing that was admitted. The Runtime declares `package` [3, 15]; a
+bundle that declares 15 is placed only by this build's installer or a later one. The recording side
+that adds endings is a later slice.
+
+**Rollback** (below 0.12.61). No record shape changes; a build below refuses a linear package with
+an ending page at admission (`reason=terminal_page`), before any lease, and its installer refuses a
+bundle that declares `package` 15 through its `package` edge. A rollback stays open while no root is
+placed from such a bundle; a bundle with such a package that declares less than 15 is placed by an
+earlier installer too, and every run of that package is refused.
+
+Tests: kernel `gate_463_k2.rs` (exec gate rows "#463 K2"): one and two endings admitted; each refusal
+with its code and detail (`ending_page` for an intermediate page; `terminal_page_duplicate` for an
+ending page and for the target page written two ways; the declaration's own refusal written alike;
+`terminal_page` for an optional step's page); `linear_endings` for the prerequisite, return-home and
+entry recovery checks, none without endings; the last input reaching an ending (Completed on it,
+no kernel key, the arrival awaiting the endings then the target page) and the usual ending; an ending
+and the target page on one frame; endings after a run of optional steps that ends the path, from the
+operation before the run and from its member; a late ending under a retry (continued, no second
+input) and under the closing decision (still `page_confirmation_failed`); U1's code on a still
+screen with `awaited=` listing the endings; the same package without endings (no `awaited=`, the
+target page awaited alone); a select step whose tap reaches an ending. Host `gate_463_k2.rs` (host
+gate row "#463 K2"): a direct run that ends on the ending gets its mapping's key, and one that ends on
+the target page the usual key. Adapted because the requirement changes what it pins (the build's
+`package` range), name kept: the rescue module's
+`install::gate_463_v1::v1_the_build_declares_package_through_revision_14` holds [3, 15] and 14 within
+it (its gate row gains the incident `#463 K2`), and the architecture pin. No golden changes; no test
+leaves the gate map.
+
+Fix round 1 (`rd-1115/brief-1727-fix1.md`), new tests: kernel `gate_463_k2.rs` (a new exec gate
+row, incident `#463 K2`): `ending_page` for an ending page that the last operation's confirmation adds as a
+loading page and for one that is its wait page; `store_update_endings` for a control that declares
+`store_update` beside the two endings, the same control with the usual ending alone admitted by
+linear admission; a select step's empty end in a package that also maps an ending, Completed on its
+page with its `on_empty` key and no tap of its own. Host `gate_463_k2.rs` (a new host gate row,
+incident `#463 K2`), on a fresh host and its own clock as the D2-S3 host gate runs adjustments: the last
+press declares an adjustment with an amount; arriving on the ending page the run is Completed on
+it, the adjusted key keeps its earlier record and the ending page's reading is published; arriving
+on the target page the adjustment is written as before. Comments that still named this build's
+installer [3, 14] (`install::gate_455_gr1`, `install::gate_463_v1`, the G-R1 row of `apps.toml`)
+now name the tests' installer [3, 14] and this build's [3, 15]; no test changes.
+
+### 1.381 Slice #463 R1 (0.12.61): a recording marks a select over fixed slots, and `record stop` generates it (Workflow #463; the owner's words of 11-14 on board #463, as the work order quotes them, and the owner's rule that what stands in a list is chosen by what is read, confirmed on a fresh frame and never guessed, are the requirement; the design note `rd-1114/463-l3l5-design.md`, sections C.1, C.2, C.4, D, E "R1 (L3b)" and F, with "The coordinator's rulings on G", read on main `60c28e64`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-r1-record-select.md`, read on main `60c28e64`)
+
+1.381 is the number the coordinator assigned this section (1.375 to 1.377 and 1.379 are open pull
+requests', 1.380 and 1.382 slices dispatched with this one). The slice ships in 0.12.61.
+
+**What it is.** The recording side of the design's L3 for one screen: a `record mark` request's
+`select` marks a step as "choose in this list by name" ([lab-recording.md](lab-recording.md),
+"Selecting in a list"), and `record stop` generates the select step K1 runs (§1.374;
+[linear-steps.md](linear-steps.md), "Select steps"). A list that scrolls (R3), an ending added after
+the stop (R2) and the wanted value as a variable (V2, V4) are other slices; nothing of them is
+built here.
+
+**Where, by reading.**
+- The mark request is parsed by serde into `MarkRequest` (`crates/lab/src/recording/model.rs`; one
+  parse for `record mark --request`/`--request-json`, the MCP tools, which pass the request object
+  unchanged and describe only its `schema_version`, and L1's one call, `parse_mark_request`), checked
+  in `validate_mark_request` (`recording_api.rs`), applied in `apply_marks` (`recording/steps.rs`)
+  and stored by `save`; `record stop` plans, renders and checks in `generate.rs` and
+  `crosscheck.rs`. L1 changed none of these (its one call calls `mark_session`, the same code); L2
+  added the located-text mark and its follow. A select step's click is an ordinary click of the step
+  (`source: "select"`), so `do --capture --record` and L1's one call press it with no change to their
+  code.
+- The kernel's dry run (`dry_run_select`) needs an admitted `PreparedContainedTask` holding the step,
+  the operation id, the frame, a fact snapshot and instant, the run parameters and an optional policy
+  document; it evaluates the frame against the package's whole page set (exactly the step's page must
+  pass) before it projects and decides. The Lab calls it, copying nothing: at mark time on a probe
+  package rendered by `record stop`'s own `render` (the step alone, its marks, select operation,
+  layout, slot targets and policy, and a destination page that can never pass: two color marks, black
+  and white, on one pixel, within a distance of 1), admitted by `PreparedContainedTask::
+  load_content_entries` with the Lab's provider; the policy with the pressed name is the override
+  document, decoded into the kernel's type by inference. Its budgets are the largest a package
+  declares, since a budget is `record stop`'s check only (as L2 fix 1 holds for OCR budgets).
+- The policy document (`crates/selection-policy/src/schema.rs`): `fields[{name, value_type:
+  {type: "enum_string", allowed}}]`, the gate `{gate_id, predicate: {kind: "string_in", value:
+  {source: "field", field}, allowed}, on_unknown: {kind: "drop_candidate"}}`, `tie_break[{kind:
+  "candidate_id", direction: "lowest_first"}]`, `applies_to.outcome_keys` with all five keys
+  (`selected`, `empty`, `insufficient`, `ambiguous`, `unknown`; identifiers of at most 128 bytes); an
+  `enum_string` holds at most 1024 members, the identity domain's limit, and the identity field's
+  enum must equal the layout's domain. An OCR target's `expected` holds at most 64 distinct values
+  (`MAX_VISION_EXPECTED_VALUES`), so the design's "every alias" cannot hold for a large domain: the
+  slot targets list the names' distinct aliases in order, the first 64. Nothing reads a slot
+  target's own verdict: the layout's identity feature maps the read text over the whole domain
+  (`map_ocr`).
+- A generated package states no `package` revision: `record stop` writes a content directory
+  (control, resources, task, policies, crops) and no `interfaces.json`; the revision of a bundle is the
+  packaging's (`package bundle`, #1719, merged as Workflow #464 P2, §1.376: `standard-pack build`
+  counts a select step as 13). A package with a select step needs `package` 13
+  (component-interfaces.md row 13); the contract says so, and `record stop`'s output does not name it.
+- The guard: a select step needs one; `guard_target` finds none on a page with only OCR marks, and
+  `record_select_invalid` `guard_missing` refuses it at mark time (in the probe's render) and at stop.
+- K1's `select_on_empty_target` (the `on_empty` page is not the target page) means, for a recording,
+  that a select stands on no last step: on an active recording the last step is the open step and
+  gets its next screen; on a stopped recording the last step is fixed, and a select there is refused
+  at mark time with its own word, `on_final_step`; at stop a last step with a select is the existing
+  `record_final_step_has_click`.
+
+**The request member** `select` (request form only; [lab-recording.md](lab-recording.md)):
+`slots[]` (1 to 16; `rect`, optional `click`, `name`), `read`, `names[]`, `match`, `wanted {name,
+default}`, optional `pressed`, `on_empty_key` (default `<task_id>_not_found`) and `confirm`
+(`candidate_set` or `decision`); fix round 1: `clear_select` (request form only), which takes a
+select off. Additive: an older build refuses either as an unknown member. The `select/` prefix of
+mark ids is reserved (`record_mark_id_reserved`), the ids of the generated slot targets and of the
+probe's marks.
+
+**Codes and words** (`contracts/outcome-codes/lab.json`, catalog key and vocabulary
+`select_problem`): `record_select_invalid` (error, exit 3, value `select_problem`), words
+`with_follow`, `with_gesture`, `with_click`, `with_retry`, `on_optional_step`, `with_application`,
+`on_final_step`, `slot_outside_frame`, `name_id_invalid`, `wanted_name_invalid`, `name_duplicate`,
+`default_not_in_names`, `pressed_not_in_names`, `wanted_name_taken`, `on_empty_key_invalid`,
+`on_empty_key_reserved`, `on_empty_key_taken`, `guard_missing`, `kernel_refused`: nineteen words,
+the design's nine and, one situation each, ten more (fix round 1 split `name_id_invalid`, which
+had stood for `wanted.name` too, and `on_empty_key_taken`, which had stood for the `_done` key
+too). The self-test's reasons of `record_mark_rejected` (unregistered, as every reason of that
+code): `select_name_unread`, `select_pressed_absent`, `select_press_mismatch`,
+`select_other_page_passes` (fix round 1), and the existing `self_test_error` for a dry run that
+fails; at stop the first three inside `record_step_self_mismatch`. Without an OCR model a select
+is `not_evaluated` (`lab_ocr_unavailable`) and listed in `marks_not_evaluated` as `select/<page>`;
+one whose step has no recorded press is refused `lab_ocr_unavailable`, as L2's located-text click.
+
+**The wanted value is a constant** (the coordinator's ruling): the one gate `wanted.<name>` keeps
+`allowed: [<default>]` and `control.json` has no `variables` member; `select.wanted {name, default}`
+stays in the recording, so that the slice that reads a variable rewrites that gate and adds the
+declaration. It is changed today by `record mark` with the select declared again (also on a stopped
+recording, then `record stop`, `regenerated`) or by the one line of the policy document.
+
+**`record stop`** generates `candidate_layouts[]`, the slot targets, the operation `step_ii_select`
+(guard, `expect_after`, `post_delay_ms`, no click, no retry), `policies/step_ii_select.json`, the
+mapping of the `on_empty` key after `<task_id>_done`, the step's provenance (declaration, pressed
+name, key, mark-time decisions) and `lab.selects`; the default task timeout adds `S` per select step.
+Self-checks: admission by the kernel; the first decision of a select at step 1 by the dry run on its
+primary frame (a selected slot then the simulated tap inside it, `simulate_contained_task_at`; an
+empty decision `would_end_empty` with the key); item 8, every live frame decided by the dry run on
+the admitted package (the step's page the one page that passes; every name known; on the primary
+frame the pressed name selects the slot the press hit). A recording without a select generates the
+same bytes: every addition is absent without one.
+
+**Fix round 1** (coordinator brief `rd-1115/brief-1729-fix1.md`, after the independent review).
+- A select on the application entry step, which has no frame, was dropped (`apply_application`
+  answered for a request naming no application): it is now `with_application` on an application
+  step and `record_step_frame_missing` on any other step without a frame. The same path drops no
+  other member: `replace_click` and `replace_transition` are permissions that change nothing by
+  themselves on any path, `optional_settle_ms` goes with `optional`, `frame` is a conflict there,
+  and every other member needs a frame.
+- The contract now says which read bounds the Lab refuses (`validation_failed`, exit 2) and which
+  only the kernel's admission refuses (`kernel_refused`, exit 3, the kernel's code in
+  `loader_code`); no bound of the kernel is copied.
+- A select declared on a step whose tap has an outcome on record (also after `record stop`) keeps
+  the tap's own rectangle, source and mark in `select.click_before`; `clear_select` gives them back
+  (the select's own executed press: `record_click_executed`), so the recording generates the
+  package it generated before.
+- Each frame's decision is reported by its kind (`selected` with its slot, `empty`, `ambiguous`,
+  `insufficient`, `unknown`, `blocked`) in the mark's answer, `recording.json` and `lab.selects`
+  (`frames[{frame_id, pressed, default}]`, replacing `pressed_slot` and `default_slot`); the first
+  decision answers `would_end_empty` only for an empty decision.
+- The words above; the probe's select step is pinned by a test against the one `record stop`
+  generates; another step's page the mark knows is checked on the select's frames at mark time
+  (`select_other_page_passes`); the MCP tool `ac_record_mark` names `select` and `clear_select`.
+
+Tests: Lab `gate_463_r1.rs` (exec gate row "#463 R1", sixteen tests): accepted, generated and
+admitted with its tap inside the default's slot; each `select_problem` and the reserved prefix; the
+second select's own name and key; `on_final_step`; a sample with the pressed name in the other slot;
+a press outside the selected slot; an unread slot (its default `blocked`) and an absent pressed name;
+without an OCR model; L1's one call; a given `on_empty` key and an empty first decision; a default
+changed after stop regenerating another package; a recording without a select, compared with
+constants (no existing test compares a generated package with one); fix round 1: a select on an
+application step; a select added after stop and taken off regenerating the package as before;
+another step's page on the select's frame; the probe's select step against the package's. Fix
+round 1 adapted this slice's own tests where the requirement changed what they pin (the frames'
+decisions by kind, the two new words, a second list that is a screen of its own). No existing test
+of main changes, no golden changes, no test leaves the gate map.
+
+**At deploy.** Nothing installed changes but one: a mark id beginning with `select/` is now
+refused (`record_mark_id_reserved`), the one change for a recording without a select. No recording
+holds a select before this build, and a recording without one is read, written and generated as
+before. A package generated with a select step needs a Runtime of 0.12.61 or later (`package` 13;
+an earlier Runtime refuses it at admission).
+
+**Rollback** (below 0.12.61). An earlier `actinglab` does not decode a recording that holds a select
+(`lab_recording_unreadable`, the file left as it is) and refuses a request with one
+(`validation_failed`); a generated package with a select step is refused by an earlier Runtime at
+admission.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

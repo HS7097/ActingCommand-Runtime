@@ -57,6 +57,9 @@ mod gate_463_l1;
 // #463 L2: a recorded step presses what it finds by its name (a located-text mark it follows).
 #[cfg(test)]
 mod gate_463_l2;
+// #463 R1: a recorded step chooses in a list of fixed slots by the name read in each slot.
+#[cfg(test)]
+mod gate_463_r1;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

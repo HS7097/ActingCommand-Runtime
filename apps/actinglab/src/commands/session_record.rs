@@ -3237,6 +3237,9 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         forbid: flags.values("--forbid"),
         anchor: record_flag_value(flags, "--anchor")?,
         clear_anchor: record_flag_switch(flags, "--no-anchor")?,
+        // #463 R1: a select is declared, and (fix 1) taken off, by the request form only.
+        select: None,
+        clear_select: false,
     };
     let timeout_ms = millis("--transition-timeout-ms")?;
     let min_ms = millis("--min-ms")?;

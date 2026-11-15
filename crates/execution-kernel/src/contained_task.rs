@@ -108,6 +108,9 @@ mod gate_463_u1;
 // Workflow #463 K1: a linear task runs a select step and ends empty normally.
 #[cfg(test)]
 mod gate_463_k1;
+// Workflow #463 K2: a linear task ends normally on a declared ending page.
+#[cfg(test)]
+mod gate_463_k2;
 // Workflow #463 V1: a package's declared variables at kernel admission.
 #[cfg(test)]
 mod gate_463_v1;
@@ -3944,8 +3947,9 @@ impl PreparedContainedTask {
     /// return-home package too) and a request's own entry recovery package alike: the first
     /// declaration that admission accepts only together with a `scheduling_outcome` and that
     /// keeps the package from running as a layer (resource readings and adjustments, a select
-    /// step with `on_empty`, stage `end_pages`, a keyed `on_max_runs` or `on_guard_refused`, a
-    /// designated scheduling operation), or `None`. A `scheduling_outcome` without any of them is
+    /// step with `on_empty`, Workflow #463 K2's ending pages of a `linear_steps` package, stage
+    /// `end_pages`, a keyed `on_max_runs` or `on_guard_refused`, a designated scheduling
+    /// operation), or `None`. A `scheduling_outcome` without any of them is
     /// allowed there and ignored: the run's scheduling disposition maps its own package's only.
     fn scheduling_outcome_incompatibility(&self) -> Option<&'static str> {
         if self.program.resource_readings.is_some() {
@@ -3967,6 +3971,11 @@ impl PreparedContainedTask {
             // Workflow #308 SEL-L4b (S0 §1.4 (g)): an early end on the step's own page would
             // leave the dependent package short of its entry page.
             Some("select_on_empty")
+        } else if self.declares_linear_endings() {
+            // Workflow #463 K2 (`contracts/linear-steps.md`, "Endings"): a run that ends on an
+            // ending page ends short of the package's target page, so short of a dependent
+            // package's entry page and of the home page.
+            Some("linear_endings")
         } else if self
             .program
             .phases

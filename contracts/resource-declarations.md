@@ -1561,6 +1561,11 @@ path `control.json` and the refused member as `json_pointer`):
 - the package declares an `application` operation that launches or restarts the assigned
   application, its way back (`store_way_back_missing`, at `/store_update`).
 
+Workflow #463 K2 (since 0.12.61): a `linear_steps` store update package declares no ending page,
+since every success of a store update package clears the update fact and a run that finished on an
+ending page is a success (`contained_task_linear_invalid`, `reason=store_update_endings`;
+[linear-steps.md](linear-steps.md), "Endings").
+
 **Layers.** A `store_update` package is never a layer: the prerequisite incompatibility answers
 `store_update`, so it is no prerequisite, return-home, navigation edge, recovery chain, interrupt
 handler or `then.run` package (`contained_task_prerequisite_incompatible` `reason=store_update`,

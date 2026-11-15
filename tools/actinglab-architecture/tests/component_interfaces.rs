@@ -138,7 +138,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   Workflow #463 V1 (0.12.61, register §1.378) raises it to 14: a package's `variables` in its
 ///   `control.json`, which an earlier Runtime refuses at its declaration gate, and (its fix round
 ///   3) version 2 of `goals.json`, which a bundle that carries it declares with 14; a pack without
-///   them keeps its revision, so [3, 14].
+///   them keeps its revision, so [3, 14]. Workflow #463 K2 (0.12.61, register §1.380) raises it to
+///   15: a `linear_steps` task's ending pages, which every Runtime before it refuses at admission
+///   (`reason=terminal_page`); a pack without one keeps its revision, so [3, 15].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -165,7 +167,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
-    ("package", [3, 14]),
+    ("package", [3, 15]),
     ("runtime-client", [3, 8]),
     ("runtime-outcomes", [1, 1]),
 ];

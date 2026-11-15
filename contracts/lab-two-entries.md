@@ -884,9 +884,13 @@ sentence fails that test.
     `explain`, `user-config get|set`, `env resolve|status`, `lab run|validate|replay-evidence|status|
     vendor-stdio-selftest`, `package run`, `control inspect|verify|probe-click|diff`, `session
     status|throat-policy|capture-policy|record-policy|self-heal-policy|contract|api|transport|
-    monitor-policy|instance|app|stream`, `run open|export`, `report export`) parse their command line
-    by a read list too, with the same three rules and the same refusal; `lab arbitrator`, `control
-    export` and `operation run` refuse every line. **No own command of actinglab ignores a flag.**
+    monitor-policy|instance|app|stream`, `run open|export`, and until Workflow #467 RPT-1 `report
+    export`) parse their command line by a read list too, with the same three rules and the same
+    refusal; `lab arbitrator`, `control export` and `operation run` refuse every line. **No own
+    command of actinglab ignores a flag.** Since RPT-1 (0.12.61) `report export` is no own command:
+    its placeholder (`--last-error --out <path>`, an archive that held no error data) is deleted
+    and the words are the core row `report export` ([problem-report.md](problem-report.md)), which
+    refuses `--last-error` as a flag it does not declare.
     Pass-throughs: none; no own command hands its words to another program or a pack. `stream`
     reads the words after `--input-relay` or `--interactive-input` as the relay action's, which
     checks them, and without either reads no word but a first `check`; a line the global
@@ -914,6 +918,18 @@ sentence fails that test.
       names their instance (section 9.3's first rule), before or after the words alike; a line
       that begins with it and has another global option before the words is refused naming
       `--instance` as before.
+  - **`report export`** (Workflow #467 RPT-1, 0.12.61; register §1.379;
+    [problem-report.md](problem-report.md)): a core row the CLI module serves, `lab_ops::report`
+    called by `core_ops`, which reads its parameters itself (`core_reads::READ_HERE`). It writes
+    one problem report archive of the view `errors` into the directory `out` names, after it has
+    refused an output inside the installation root or the state root and before it reaches the
+    Runtime; it reads only through the rows' own read code (`status`, `runs`, `events`, `run
+    show`, `run evidence`, `material`), each read that selects a record by a request id or by an
+    instance with the window (the one read that selects none, the errors view's search's read of
+    the ledger's head, a page whose range starts past every sequence, carries neither; fix round
+    2), and confirms, captures and pins nothing. Its Runtime is required; the part that needs
+    none, and the views `package` and `run`, come with later slices. The words took the place of
+    actinglab's own placeholder of the same words (the coordinator's ruling Q6).
   - `--envelope` is gone: nothing needs it once actinglab's own command lines answer as before.
   - The catalog holds no phrase for a code, so the line for people is the code with its values,
     and none is made up; the small table is the result's members. The CLI module locates the
@@ -1016,7 +1032,9 @@ sentence fails that test.
       `out`, the front gives its export directory; `material` takes the boolean `export` (true:
       the whole material is written there and the answer names the file; else its text is read)
       and `frame` is always written there; `deploy` and `rollback` take no `detach`, which is
-      always true through MCP (section 5), and since LAB-6S0 run detached as `Lab-MCP`.
+      always true through MCP (section 5), and since LAB-6S0 run detached as `Lab-MCP`. Since
+      Workflow #467 RPT-1 (0.12.61) `report export` takes no `out` either: its archive is always
+      written into the export directory (the coordinator's ruling Q7).
     - *Refused before anything is sent or written,* with the argument as the call names it: as
       `arguments_invalid`, a member the row does not declare and a parameter the front gives
       itself (`unknown`), a member of the wrong type (`wrong_type`; text that is none of its
@@ -1095,11 +1113,11 @@ sentence fails that test.
     - *Which.* A row the server gives neither to `lab_ops::core_ops` nor to the rescue module, and
       that is not refused for a reason of its own (a rescue row where the module does not run,
       which is not offered), is served by a child: one rule (`tools::serving`, `Serving::Child`),
-      no list of row names. On Windows all 146 offered rows are served (49 by `core_ops` and 33 by
+      no list of row names. On Windows all 155 offered rows are served (50 by `core_ops` and 39 by
       the rescue module in the server's process, `deploy` and `rollback` among them since
-      LAB-6S0, 64 by children, `standard-pack adopt` among them since Workflow #464 P1,
+      LAB-6S0, 66 by children, `standard-pack adopt` among them since Workflow #464 P1,
       `standard-pack build` since Workflow #464 P2 and `standard-pack ready` since Workflow #464
-      P3); elsewhere all 113 are served (49 and 64).
+      P3); elsewhere all 116 are served (50 and 66).
     - *The children.* `actinglab.exe` beside the server's own file, started as `actinglab.exe
       serve --stdio --front mcp` (section 8.2) with the environment today's server gives its Lab
       child: `ACTINGCOMMAND_RUNTIME_STATE_ROOT` set to the server's state root when it is known,
