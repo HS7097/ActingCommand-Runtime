@@ -777,10 +777,14 @@ A select step of a contained task (see [the selection graph](selection-graph.md)
   The evaluator still reads no clock and no ledger.
 - The snapshot also holds the run's read-only parameters (Workflow #411 B15,
   [remedies.md](remedies.md), section 4; written ahead of slice R5): one record
-  `session.dispatch.parameter.<name>` = `<value>` (a string, instance scope) per parameter the
-  package declares, the value its policy dispatch carries in `policy_dispatch_parameters`, or the
-  declared default for a run without a dispatch. The records are an overlay, never stored. A
-  document reads one as an `enum_string` field with the declared options and should use
+  `session.dispatch.parameter.<name>` = `<value>` (a string, instance scope) per parameter and,
+  Workflow #463 L4 (slice V2, 0.12.61), per variable the package declares, the value its policy
+  dispatch carries in `policy_dispatch_parameters`, or the declared default for a run without a
+  dispatch. The records are an overlay, never stored. A document reads a parameter or a `choice`
+  variable as an `enum_string` fact with the declared options, a `switch` as `boolean`, an
+  `integer` as `integer`, and an `ordered` variable as a record list (key column `key`, column
+  `rank`, an integer from 1 in the list's order) through `keyed_fact`
+  ([package-variables.md](package-variables.md), "The run"), and should use
   `on_unknown: abort_evaluation`; `input_sha256` covers the overlay, so two runs that differ only
   in a value differ in that hash. Workflow #411 B8: a policy run of a catalog task that opts in
   (`dispatch_parameters: true`) also holds its dispatch's schedule values in the same overlay,

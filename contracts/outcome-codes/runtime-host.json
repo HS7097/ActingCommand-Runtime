@@ -21678,6 +21678,32 @@
       "common_causes": "A publisher wrote a record list longer than 256 rows under a key a catalog reads; the fact store holds record lists of up to 1024 rows since 0.12.55.",
       "handling": "Keep a list the scheduler reads at 256 rows or fewer, or read it in a select step's selection document instead; a list reading under inventory.list. is never the scheduler's."
     },
+    "goal_value_not_applied": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "package_id": "required",
+        "variable_name": "required",
+        "declaration_sha256": "required",
+        "variable_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "Workflow #463 V2 (contracts/package-variables.md, \"The run\"): a new policy dispatch of task_id on the application instance_id reads the declared default of the variable variable_name of its package package_id (its declaration's sha256 declaration_sha256) instead of the value set on the application, for the reason variable_problem names: the set value no longer fits the declaration (not_an_option, out_of_range, off_step, type_changed, keys_removed, count_out_of_range, key_repeated), is longer than a dispatch carries (value_too_long), or the variable does not apply in the game root (irreversible_by_root, declaration_conflict, goal_name_conflict, name_out_of_limits, cap_range, root_unchecked). The dispatch's policy_dispatch_parameters records the default with variable_source default and the same variable_problem. Nothing is refused and the stored value is not rewritten. Written once per (application, variable name, declaration) after a start (a Warning runtime.failed record of the policy driver); a restart may write it once more.",
+      "common_causes": "The package was updated and its declaration no longer takes the value set before; or a package of the root that declares the variable can do something irreversible, or declares it differently from another package.",
+      "handling": "Set a value the current declaration takes (targets set with entries), or clear the entry so the default is read on purpose; for a variable that does not apply, fix the root as standard-pack check's warning says."
+    },
     "priority_offset_unknown_task": {
       "category": "warning",
       "ladder_class": "none",

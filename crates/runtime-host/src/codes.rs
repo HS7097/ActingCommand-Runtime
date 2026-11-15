@@ -3387,6 +3387,22 @@ actingcommand_contract::outcome_codes! {
         Exceeded => "policy_fact_rows_exceeded": warning / none,
     }
 }
+
+// ---- Workflow #463 V2 (register §1.382; contracts/package-variables.md, "The run"): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's code of a value set on an application that a dispatch does not hand its run
+    /// (Workflow #463 V2). No existing code fits: `policy_fact_rows_exceeded` names a projection's
+    /// record list, and no remedy code speaks of a package's variable.
+    pub(crate) enum GoalValueCode {
+        /// Warning (since 0.12.61). A new dispatch of the task (`task_id`) on the application
+        /// (`instance_id`) reads the default of its package's (`package_id`) variable
+        /// (`variable_name`, declared as `declaration_sha256`) instead of the value set there, for
+        /// the reason `variable_problem` names. Written once per (application, name, declaration)
+        /// after a start; the run goes on.
+        NotApplied => "goal_value_not_applied": warning / none,
+    }
+}
+// ---- Workflow #463 V2: end ----
 // ---- #428 S168-LB1a: end ----
 
 // ---- Workflow #438 HELD-1 (register §1.322 HELD-R1 to HELD-R4; `contracts/scheduling/README.md`,

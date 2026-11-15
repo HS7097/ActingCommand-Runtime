@@ -2708,6 +2708,46 @@
     "application_switch_step": {
       "type": "vocab:application_switch_step",
       "description": "Which step of the switch that brings a member of a device group to the front before its run failed (Workflow #437 MAPP-2a, since 0.12.59)."
+    },
+    "variable_name": {
+      "type": "token",
+      "description": "A variable a package's control.json declares, the last segment of the key session.dispatch.parameter.<name> a run reads it under (Workflow #463 V2, since 0.12.61)."
+    },
+    "value_json": {
+      "type": "name",
+      "description": "The value a run reads of a variable, as compact JSON: an option value in quotes, a whole number, true or false, or a list of option values; at most 256 bytes (Workflow #463 V2, since 0.12.61)."
+    },
+    "variable_source": {
+      "type": "vocab:variable_source",
+      "description": "Where the value a policy run reads of a variable comes from: the value set on the application, or the package's default (Workflow #463 V2, since 0.12.61)."
+    },
+    "set_unix_ms": {
+      "type": "unix_ms",
+      "description": "When the value an application holds for a variable was set: its entry row's set_unix_ms in the session.resource_targets v3 record (Workflow #463 V2, since 0.12.61)."
+    },
+    "set_channel": {
+      "type": "vocab:channel",
+      "description": "The channel of the connection that set the value an application holds for a variable: its entry row's channel (Workflow #463 V2, since 0.12.61)."
+    },
+    "variable_problem": {
+      "type": "vocab:variable_problem",
+      "description": "Why the value set on an application for a variable was not handed to a run, which reads the package's default (Workflow #463 V2, since 0.12.61)."
+    },
+    "variable_values": {
+      "type": "records",
+      "fields": {
+        "variable_name": "required",
+        "variable_source": "required",
+        "value_json": "optional",
+        "set_unix_ms": "optional",
+        "set_channel": "optional",
+        "variable_problem": "optional"
+      },
+      "description": "The values a policy dispatch hands its run for the variables its package declares, one record each in declaration order: the name, where the value comes from, the value (absent only for a default longer than 256 bytes, which the run reads from its package), when and through which channel the application's value was set when it holds one, and why that value was not applied when it was not (Workflow #463 V2, since 0.12.61)."
+    },
+    "declaration_sha256": {
+      "type": "hash",
+      "description": "The sha256 of a variable's declaration as its control.json writes it, in compact JSON (Workflow #463 V2, since 0.12.61)."
     }
   },
   "vocabularies": {
@@ -9461,6 +9501,74 @@
           "description": "The run's renewal of its lease after the startup run handed the key back was refused or failed: the lease lost, lapsed or taken over (failure_code the scheduler's refusal). The member's application was started and no task of the run ran (Workflow #437 MAPP-2d, since 0.12.60)."
         }
       }
+    },
+    "variable_source": {
+      "description": "Where the value a policy run reads of a package's variable comes from, the value variable_source of a variable_values record (Workflow #463 V2, contracts/package-variables.md \"The run\", since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/package_variables.rs",
+        "enum": "VariableSource"
+      },
+      "tokens": {
+        "set": {
+          "description": "The application's entry row of the variable's name in its session.resource_targets v3 record, the value a person or an agent set."
+        },
+        "default": {
+          "description": "The package's declared default."
+        }
+      }
+    },
+    "variable_problem": {
+      "description": "Why the value set on an application for a package's variable was not handed to a run, which reads the default instead: the value variable_problem of goal_value_not_applied and of a variable_values record (Workflow #463 V2, contracts/package-variables.md \"The run\", since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/package_variables.rs",
+        "enum": "VariableProblem"
+      },
+      "tokens": {
+        "not_an_option": {
+          "description": "A choice value that is none of the declaration's options."
+        },
+        "out_of_range": {
+          "description": "An integer value below the declaration's min or above its max."
+        },
+        "off_step": {
+          "description": "An integer value within the range but on no step from min."
+        },
+        "type_changed": {
+          "description": "A value that is not of the variable's type: no string for a choice, no whole number for an integer, no boolean for a switch, no list of strings for an ordered variable."
+        },
+        "keys_removed": {
+          "description": "An ordered value whose keys the declaration still offers are fewer than min_count once the others are left out."
+        },
+        "count_out_of_range": {
+          "description": "An ordered value of offered keys only whose count is below min_count, or whose offered keys are more than max_count."
+        },
+        "key_repeated": {
+          "description": "An ordered value that names one key twice."
+        },
+        "value_too_long": {
+          "description": "A value whose compact JSON is longer than the 256 bytes a dispatch's reason carries."
+        },
+        "irreversible_by_root": {
+          "description": "A package of the game root that declares the variable counts as able to do something irreversible by the whole root (the root check's variable_irreversible_by_root)."
+        },
+        "declaration_conflict": {
+          "description": "Packages of the game root declare the name differently (the root check's variable_conflict at a declaration)."
+        },
+        "goal_name_conflict": {
+          "description": "An entry of the game root's goals.json uses the name for anything but its placement (the root check's variable_conflict at the name)."
+        },
+        "name_out_of_limits": {
+          "description": "The name is the game root's 97th or later (the root check's variable_out_of_limits)."
+        },
+        "cap_range": {
+          "description": "A package reads the variable as a designated effect's cap and it is no integer from 0 to 1000 (the root check's variable_cap_range)."
+        },
+        "root_unchecked": {
+          "description": "No root check judged the variable for the application's game: the Runtime's table of the bound packages was built before an instance of that game was known."
+        }
+      }
     }
   },
   "domains": {
@@ -9495,6 +9603,9 @@
       "runtime-host"
     ],
     "held_": [
+      "runtime-host"
+    ],
+    "goal_value_": [
       "runtime-host"
     ],
     "release_": [

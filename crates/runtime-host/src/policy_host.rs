@@ -1606,6 +1606,13 @@ pub(crate) struct PolicyHost {
     /// Workflow #438 HELD-1 (register §1.322 HELD-R6): the holds this start reported and has not
     /// ended. Memory only; a host starts with none, and no decision reads it.
     held: held::HeldMemory,
+    /// Workflow #463 V2 (register §1.382): each (instance, variable name, declaration sha256)
+    /// whose `goal_value_not_applied` this start wrote. Memory only, nothing on disk: a restart
+    /// writes it once more.
+    variable_warned: BTreeSet<(String, String, String)>,
+    /// Workflow #463 V2: the `goal_value_not_applied` warnings the last evaluations decided and
+    /// the cycle's recorder has not taken yet ([`Self::take_variable_warnings`]).
+    variable_warnings: Vec<Outcome>,
 }
 
 /// SCHED-C1d (register §1.299 SC1-11): what the host recorded of the capped episodes as
@@ -2158,6 +2165,8 @@ impl PolicyHost {
             capped_kept: CappedKept::default(),
             rows_exceeded_warned: BTreeMap::new(),
             held: held::HeldMemory::default(),
+            variable_warned: BTreeSet::new(),
+            variable_warnings: Vec::new(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -3758,6 +3767,23 @@ impl PolicyHost {
         // bound package declares a remedy or remedies are off.
         let (remedy_plan, remedy_decisions) =
             self.remedy_plan(&active.compiled, facts, time, remedy)?;
+        // Workflow #463 V2 (register §1.382; `contracts/package-variables.md`, "The run"): the
+        // variable values of every pair whose bound package declares variables, read from this
+        // evaluation's facts (the memory store's projection; no ledger read) and the table's
+        // variables, judged by game once per table. They join the plan's
+        // `policy_dispatch_parameters`, whether remedies are on or off.
+        let variable_plan = self
+            .remedies
+            .table()
+            .map(|table| {
+                actingcommand_policy::plan_variable_values(
+                    &active.compiled,
+                    facts,
+                    table.variables(),
+                )
+            })
+            .unwrap_or_default();
+        let remedy_plan = remedy_plan.with_variable_values(&variable_plan);
         // Workflow #427-B: the dispatches admitted or running and the limit of concurrent runs
         // (Workflow #429 R-2: the configuration's value in effect as the cycle starts).
         let run_slots = self.run_slots(max_concurrent_runs)?;
@@ -4046,6 +4072,29 @@ impl PolicyHost {
             .filter(|intent| !self.seen_dispatches.contains_key(&intent.decision_id))
             .cloned()
             .collect();
+        // Workflow #463 V2: a value set on an application that a new dispatch does not hand its
+        // run is warned once per (instance, name, declaration) since the start, in memory only.
+        for intent in &pending_dispatch_intents {
+            for value in variable_plan.not_applied(&intent.task_id, &intent.instance_id) {
+                let key = (
+                    intent.instance_id.clone(),
+                    value.variable_name.clone(),
+                    value.declaration_sha256.clone(),
+                );
+                if self.variable_warned.insert(key) {
+                    self.variable_warnings.push(
+                        Outcome::new(crate::codes::GoalValueCode::NotApplied)
+                            .operation(HostLocation::EvaluatePolicyCycle)
+                            .instance_id(intent.instance_id.as_str())
+                            .task_id(intent.task_id.as_str())
+                            .package_id(value.package_id.as_str())
+                            .variable_name(value.variable_name.as_str())
+                            .declaration_sha256(value.declaration_sha256.as_str())
+                            .variable_problem(value.problem),
+                    );
+                }
+            }
+        }
         // SS-4: the basis of each new intent, as this evaluation read its facts; its admission
         // arms the pair's guard (`commit_admission`).
         self.no_progress.capture(
@@ -4597,6 +4646,13 @@ impl PolicyHost {
     /// Workflow #411 B15 R4: the remedy signals the last evaluation decided, for its recorder.
     pub(crate) fn take_remedy_signals(&mut self) -> Vec<PolicyPlanningSignalEventData> {
         self.remedies.take_pending()
+    }
+
+    /// Workflow #463 V2: the `goal_value_not_applied` warnings the evaluations since the last call
+    /// decided, each once per (instance, variable name, declaration) since the start, for the
+    /// cycle's recorder.
+    pub(crate) fn take_variable_warnings(&mut self) -> Vec<Outcome> {
+        std::mem::take(&mut self.variable_warnings)
     }
 
     /// Workflow #411 B15 R4 (model-b15 §7.8, at start): per pair of a task that declares a

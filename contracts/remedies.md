@@ -234,18 +234,28 @@ For a blocked pair whose key K declares `need` N and `capabilities` C:
   snapshots and any other in-run read of instance facts. The package's selection policy declares
   the key as an `enum_string` field with the declared options and should use
   `on_unknown: abort_evaluation` ([selection-policy.md](selection-policy.md), "In-task consumer").
+  A package's variables (Workflow #463 L4, slice V2, 0.12.61) are overlaid under the same prefix
+  with their kind's type, and their values and sources travel on the same reason as
+  `variable_values` ([package-variables.md](package-variables.md), "The run"), whether remedies
+  are on or off.
 - **Runs without a dispatch** (direct runs, Lab online and offline runs): the overlay holds every
-  declared parameter with its declared default. Nothing is recorded for them; the defaults are
-  package data, so the run is reproducible from the package.
+  declared parameter and variable with its declared default. Nothing is recorded for them; the
+  defaults are package data, so the run is reproducible from the package. Workflow #463 V2: no
+  request gives a live run without a dispatch a variable's value; that member is slice V3's.
 - **Lab single-step evaluations** (#411 Lab RP): the kernel's `dry_run_select` and the scan replay
   (`actinglab replay --select <operation> --scan <file>`) evaluate one select step with the same
   overlay on the snapshot they evaluate, the declared defaults, observed at the evaluation's
-  instant. The scan replay takes `--parameter <name>=<value>`, repeatable with one flag per
+  instant. The scan replay takes `--parameter <name>=<value>` and (Workflow #463 L4, slice V2)
+  `--variable <name>=<json>`, each repeatable with one flag per
   distinct name: the value replaces that parameter's default, as a dispatch's chosen value does.
   A name the package does not declare (any name, on a package that declares none) or a value that
   is not one of the parameter's declared options is refused (`validation_failed` naming
   `--parameter`, `argument_problem` `not_recognised`), and a name given twice is `repeated`;
   neither is ever ignored. A package that declares no parameter evaluates exactly as before.
+  `--variable` is refused the same way, naming `--variable`: a name the package declares no
+  variable of, a value its declaration does not take exactly as given, or a right side that is no
+  JSON is `not_recognised`, a name given twice `repeated`, and `--variable` without `--select`
+  `conflicting`.
 - **Never stored.** The overlay appends no record, takes no fact identity, and is not visible to
   `InstanceFactSnapshot` or `ac_facts`.
 - **Reserved prefix.** `PublishFact` / `PublishFacts` of any key under `session.dispatch.` is

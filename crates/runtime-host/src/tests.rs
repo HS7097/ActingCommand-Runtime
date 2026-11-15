@@ -252,6 +252,10 @@ mod gate_463_u1;
 // Workflow #463 K1 (0.12.61; register §1.374): a linear select step that ends empty gets its
 // `on_empty` key from the host's scheduling disposition.
 mod gate_463_k1;
+// Workflow #463 V2 (0.12.61; register §1.382): a dispatch hands its run the value set on the
+// application for its package's variable, a start reads it again, and a value not applied is
+// warned once.
+mod gate_463_v2;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
 // one worker per device, the group's occupancy, pause, gates, session rule and refusals.
 mod gate_mapp1b;

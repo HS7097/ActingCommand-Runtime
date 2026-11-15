@@ -21,6 +21,8 @@ pub use v3::{
     RESOURCE_TARGETS_SCHEMA_VERSION_V3, ResourceTargetEntry, ResourceTargetSpecV3,
     ResourceTargetsDocumentV3, TargetSetter,
 };
+// Workflow #463 V2: the entry rows a run's variables read.
+pub(crate) use v3::{StoredEntry, stored_v3_entries};
 
 use std::collections::{BTreeMap, BTreeSet};
 

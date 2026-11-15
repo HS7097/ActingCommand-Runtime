@@ -127,6 +127,8 @@ pub use actingcommand_execution_kernel::{
 pub use actingcommand_execution_kernel::{ScanDeclaration, ScanDryRun, replay_scan};
 // #411 Lab RP: the run parameters a Lab evaluation reads, given with `--parameter`.
 pub use actingcommand_execution_kernel::GivenParameterProblem;
+// Workflow #463 V2: the variable values the scan replay reads, given with `--variable`.
+pub use actingcommand_execution_kernel::GivenVariableProblem;
 
 pub use actingcommand_execution_kernel::{
     DriveNavigationGraph, parse_environment_catalog_value, validate_control_declaration,

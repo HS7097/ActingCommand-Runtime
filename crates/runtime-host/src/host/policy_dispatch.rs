@@ -1625,6 +1625,12 @@ impl HostShared {
         for signal in remedy_signals {
             self.record_policy_planning_signal(signal)?;
         }
+        // Workflow #463 V2 (register §1.382): each value set on an application that this cycle's
+        // new dispatches do not hand their runs, once per (instance, name, declaration) since the
+        // start.
+        let variable_warnings =
+            lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?.take_variable_warnings();
+        self.report_variable_warnings(variable_warnings)?;
         // Workflow #386 SR-2b-1: the `policy_rerun_exhausted` records of runs an online
         // reconciliation settled (this cycle's), not yet recorded; the start records its own
         // before it completes.
@@ -4091,6 +4097,35 @@ impl HostShared {
                         RuntimeLifecycleFailureStage::PolicyDriver.location(),
                         "runtime_host",
                         HostLocation::ProjectPolicyFacts.as_str(),
+                    ),
+                    AuditInput::new(),
+                ),
+            )?;
+            self.fatal.report_warning(&outcome);
+        }
+        Ok(())
+    }
+
+    /// Workflow #463 V2 (`contracts/package-variables.md`, "The run"): each
+    /// `goal_value_not_applied` as a Warning `runtime.failed` record of the policy driver, as
+    /// `policy_fact_rows_exceeded` is written; the run goes on with the variable's default.
+    fn report_variable_warnings(&self, warnings: Vec<Outcome>) -> RuntimeHostResult<()> {
+        for outcome in warnings {
+            self.append_event_raw(
+                EventSeverity::Warning,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                self.events.system_links()?,
+                RuntimePayloadDraft::failed(
+                    DiagnosticCode::RuntimeDiagnostic,
+                    EffectDisposition::NotPerformed,
+                    outcome.clone(),
+                    DiagnosticDetailDraft::new(
+                        "policy_variable_values",
+                        RuntimeLifecycleFailureStage::PolicyDriver.location(),
+                        "runtime_host",
+                        HostLocation::EvaluatePolicyCycle.as_str(),
                     ),
                     AuditInput::new(),
                 ),

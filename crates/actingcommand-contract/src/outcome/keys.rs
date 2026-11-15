@@ -810,4 +810,15 @@ outcome_keys! {
     // ---- Workflow #437 MAPP-2a (contracts/device-group.md "The switch before a run"): which step
     // of the switch before a member's run failed; kept in codes mode. ----
     application_switch_step: vocab(application_switch_step),
+    // ---- Workflow #463 V2 (a run reads its package's variables, contracts/package-variables.md
+    // "The run"): begin ----
+    variable_name: token,
+    value_json: name,
+    variable_source: vocab(variable_source),
+    set_unix_ms: unix_ms,
+    set_channel: vocab(channel),
+    variable_problem: vocab(variable_problem),
+    variable_values: records(variable_name, variable_source; value_json, set_unix_ms, set_channel, variable_problem),
+    declaration_sha256: hash,
+    // ---- Workflow #463 V2: end ----
 }

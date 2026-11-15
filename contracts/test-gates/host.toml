@@ -4011,3 +4011,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_k1::k1_a_linear_select_that_ends_empty_gets_its_on_empty_key_from_the_host",
 ]
 incident = ["#463 K1"]
+
+# Workflow #463 V2 (0.12.61; register §1.382; brief rd-1115/brief-463-v2-variables-run.md; contracts/package-variables.md, "The run"), the host's half, in composer mode on a manual clock and a fake device, one rule due at every evaluation whose package declares the choice variable pick (item_a, item_b, default item_b): with no value set the dispatch's policy_dispatch_parameters records pick's default (variable_source default, value_json "item_b") and the run's parameters read it from that reason; a value set through ApplyResourceTargets on lab (a v3 document of entries alone, item_a) is the next dispatch's (source set, set_unix_ms the Runtime's time at the request, set_channel lab) and its run reads it; after a restart the stored value is read again unchanged; a value the declaration does not take (item_z) reads the default with variable_problem not_an_option and who set it on each of the next two dispatches, while exactly one Warning runtime.failed goal_value_not_applied names the instance, the task, the package, the variable, its declaration sha256 and the word
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again",
+]
+incident = ["#463 V2"]

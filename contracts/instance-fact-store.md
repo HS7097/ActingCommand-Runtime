@@ -1134,6 +1134,12 @@ Written ahead of its code (B15 R0); slice R5 implements it.
   each value given to the scan replay (`--parameter <name>=<value>`) in place of its default
   (#411 Lab RP; [remedies.md](remedies.md), section 4). A reason without `run_parameters` (one
   that carries only Workflow #411 B8's values) leaves the parameters at their declared defaults.
+  Per variable of the package (Workflow #463 L4, slice V2, 0.12.61) the same snapshots hold
+  `session.dispatch.parameter.<name>` with its kind's type: a string, a boolean, an integer, or a
+  `record_list` of rows `{key, rank}` (rank from 1); the value of the dispatch's `variable_values`
+  when the package's declaration takes it, else, and on a run without a dispatch, the declared
+  default, each `--variable <name>=<json>` of the scan replay in place of its default
+  ([package-variables.md](package-variables.md), "The run").
 - Workflow #411 B8: for a policy run whose `policy_dispatch_parameters` carries schedule values
   (a task that opts in with `dispatch_parameters: true`), the same snapshots also hold, per value,
   the record `session.dispatch.schedule.<key>` with its type: `next_occurrence_unix_ms` and

@@ -3132,3 +3132,17 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_463_v1::v1_a_root_without_variables_answers_without_the_listing",
 ]
 incident = ["#463 V1"]
+
+# Workflow #463 V2 (0.12.61; register §1.382; brief rd-1115/brief-463-v2-variables-run.md; contracts/package-variables.md, "The run"; the design's "Not verified", points 1 and 3), the kernel and the Lab: a run without a dispatch reads each kind of variable at its default under session.dispatch.parameter.<name> with its kind's type (a string, an integer, a record list of rows {key, rank} from 1, a boolean), observed at the snapshot's instant with confidence 1000 and no expiry, and the overlaid snapshot passes its up-front check; the parameters of provides alone are those of the package without variables and a package without variables reads exactly its parameters (1); a choice variable read by an enum_string gate keeps the candidate whose field is its value, the default and a dispatched value alike, a dispatched value that is no option reads the default, and the decision's input_sha256 differs per value (2); an integer variable is the right side of an integer_compare gate: 0 keeps both readings, 100 the higher, 200 none, empty (3); a switch variable reads as a boolean (4); an ordered variable read through keyed_fact picks the best-ranked candidate present and is empty when none is listed (5); a designated effect's max_repeats {fact_key: session.dispatch.parameter.cap} reads its cap from an integer variable: the default 2 without a dispatch, a dispatched 3, a dispatched 11 above the max the default, the cap read once (6); actinglab replay --select --scan refuses --variable as --parameter: a name the package does not declare, an option it does not offer, another type, no <name>=<json>, a right side that is no JSON, a variable of a package that declares none are not_recognised, a name twice repeated, a whole replay conflicting, and a value the declaration takes passes the argument check (7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_v2::v2_each_kind_is_overlaid_with_its_type_and_passes_the_up_front_check",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_v2::v2_a_choice_variable_gates_an_enum_string_field",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_v2::v2_an_integer_variable_is_the_threshold_of_an_integer_compare",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_v2::v2_a_switch_variable_reads_as_a_boolean",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_v2::v2_an_ordered_variable_ranks_the_candidates_through_keyed_fact",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_out2::v2_a_fact_cap_reads_an_integer_variable_under_the_parameter_prefix",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_v2_replay::v2_replay_refuses_an_undeclared_or_unfit_variable_and_takes_a_fit_one",
+]
+incident = ["#463 V2"]

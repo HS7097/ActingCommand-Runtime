@@ -281,10 +281,13 @@ scheduling.
 Workflow #455 G-R2a (0.12.60; register §1.361; the design `rd-1114/455-goals-design-final.md`
 §3.4): the goal document's value store. The console and the Lab will read and write an
 application's goals in one document; this version holds them in the record that already
-exists, `session.resource_targets`, with no new fact key and no new file. Nothing reads the
-entries yet, and nothing writes them one at a time yet: the goal view and the edit of one entry
-(G-R2b), the pack's declaration (G-R1), deadlines (G-R4) and tiers (G-R5) are later slices. The
-same entry, parser, 64 KiB bound and general reasons as v1 and v2.
+exists, `session.resource_targets`, with no new fact key and no new file. Since Workflow #463 V2
+(0.12.61; [package-variables.md](package-variables.md), "The run") a policy dispatch reads an
+entry whose name is a variable of the dispatched package as that variable's value, judged at
+use against the package's declaration; no other entry is read. Nothing writes the entries one at
+a time yet: the goal view and the edit of one entry (G-R2b, Workflow #463 V3), deadlines (G-R4)
+and tiers (G-R5) are later slices. The same entry, parser, 64 KiB bound and general reasons as v1
+and v2.
 
 ```json
 {
@@ -316,7 +319,9 @@ same entry, parser, 64 KiB bound and general reasons as v1 and v2.
 
 The reader is as strict as v2's: an unknown member anywhere is `unknown_field`, and every
 refusal names its field. The closed reason set is unchanged: no word is added. This slice
-checks an entry's form only: it does not know the pack's declaration (G-R1, G-R2b).
+checks an entry's form only: it does not know the pack's declaration (G-R1, G-R2b). Workflow #463
+V2: a value a package's variable does not take is stored as written and judged when a run is to
+read it, which then reads the default (`goal_value_not_applied`, [package-variables.md](package-variables.md)).
 
 **Version probe.** Exactly when the top-level `schema_version` is the string
 `actingcommand.resource-targets.v3` the Runtime takes the v3 checks; the v2 probe and the v1

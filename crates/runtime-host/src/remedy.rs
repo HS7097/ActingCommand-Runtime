@@ -10,7 +10,8 @@
 //!   Workflow #442 REM-1: the table keeps the digest of the procedure manifest it was built from
 //!   (or that there was none) and is built again when the manifest in place differs; each table
 //!   taken into effect says in one developer line what it found, and names the catalog tasks
-//!   without a package location.
+//!   without a package location. Workflow #463 V2: the same scan keeps the bound packages'
+//!   variables, with each game's root check run once per table (`VariableTable`).
 //! - **The state** (§7.8): the outcome key each settled run of a task that declares a remedy
 //!   ended on (read from its terminal's `scheduling_disposition` whether or not the catalog
 //!   references it), the `signal:remedy:` planning signals already recorded and the stops no
@@ -34,7 +35,7 @@ use actingcommand_execution_kernel::{
 use actingcommand_policy::{
     CompiledCatalog, InstanceSnapshot, PolicyCode, RemedyChoiceRow, RemedySignal, RemedyStop,
     RemedyTable, RemedyTableCapability, RemedyTableEdge, RemedyTableParameter, RemedyTableProvider,
-    RemedyTableRemedy, ScopeSelector, TaskSpec,
+    RemedyTableRemedy, ScopeSelector, TaskSpec, VariablePackage, VariableTable, VariableTableTask,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -125,9 +126,18 @@ pub(crate) struct BuiltTable {
     unbound_tasks: Vec<String>,
     catalog_hash: String,
     built_at_unix_ms: u64,
+    /// Workflow #463 V2 (`contracts/package-variables.md`, "The run"): the variables the bound
+    /// packages declare, read by the same scan, with each game's root check run once for this
+    /// table ([`VariableTable::build`]). Memory only; dropped with the table.
+    variables: VariableTable,
 }
 
 impl BuiltTable {
+    /// Workflow #463 V2: the variables of the bound packages, judged by game.
+    pub(crate) fn variables(&self) -> &VariableTable {
+        &self.variables
+    }
+
     /// Workflow #442 REM-1: the catalog tasks without a package location, in catalog order. Read
     /// by the tests only: the product reads the list through the two developer lines below.
     #[cfg(test)]
@@ -340,6 +350,7 @@ pub(crate) fn build_table(
         .iter()
         .map(|(task_id, package_id)| ((*task_id).to_owned(), (*package_id).to_owned()))
         .collect();
+    let variables = variable_table(tasks, &declared, &unreadable, instances);
     BuiltTable {
         table: RemedyTable {
             remedies,
@@ -356,7 +367,50 @@ pub(crate) fn build_table(
         unbound_tasks,
         catalog_hash: catalog.catalog_hash().to_owned(),
         built_at_unix_ms,
+        variables,
     }
+}
+
+/// Workflow #463 V2 (`contracts/package-variables.md`, "A variable that does not apply"): the
+/// variable table of the catalog tasks that have a package location, in catalog order: each with
+/// the games of the `instances` its scope covers and what its package declares (`declared`), or
+/// as unreadable when the scan could not read its location (`unreadable`). The policy crate runs
+/// the root check per game once, here, not per dispatch ([`VariableTable::build`]).
+fn variable_table(
+    tasks: &[TaskSpec],
+    declared: &BTreeMap<&str, RemedyDeclarations>,
+    unreadable: &[UnreadablePackage],
+    instances: &[InstanceSnapshot],
+) -> VariableTable {
+    let unread = unreadable
+        .iter()
+        .flat_map(|package| package.tasks.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    let rows = tasks
+        .iter()
+        .filter_map(|task| {
+            let package = match declared.get(task.id.as_str()) {
+                Some(declarations) => Some(VariablePackage {
+                    package_id: declarations.package_id.clone(),
+                    variables: declarations.variables.clone(),
+                    cap_fact_keys: declarations.cap_fact_keys.clone(),
+                    capabilities: declarations.declared_capabilities(),
+                }),
+                None if unread.contains(task.id.as_str()) => None,
+                None => return None,
+            };
+            Some(VariableTableTask {
+                task_id: task.id.clone(),
+                games: instances
+                    .iter()
+                    .filter(|instance| covers(&task.scope, instance))
+                    .map(|instance| instance.game_id.clone())
+                    .collect(),
+                package,
+            })
+        })
+        .collect::<Vec<_>>();
+    VariableTable::build(&rows)
 }
 
 /// The edges "blocked task to a provider of its remedies' capabilities" that lie on a cycle over

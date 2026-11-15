@@ -25,9 +25,13 @@
 //! reads as a designated effect's cap is an `integer` from 0 to at most [`MAX_VARIABLE_CAP`]. A
 //! name that breaks one of these is reported and does not apply; the root still runs.
 //!
-//! Only the declaration is built here: nothing resolves a value, nothing overlays
-//! `session.dispatch.parameter.<name>`, and no run reads a variable (later slices of #463). A
-//! package without `variables` reads as before.
+//! Workflow #463 V2 (register §1.382; `contracts/package-variables.md`, "The run"): the rules a
+//! value is judged by when a run reads it, one copy for the policy crate, the kernel and the Lab:
+//! [`PackageVariable::judge`] (a value set on an application that no longer fits the declaration
+//! gives the word [`VariableProblem`] says it with, and the run reads the default),
+//! [`PackageVariable::fact_value`] (the overlay `session.dispatch.parameter.<name>` with its
+//! kind's type) and [`variables_not_applying`] (the names the root check keeps from applying,
+//! with their word). A package without `variables` reads as before.
 
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
 use crate::standard_pack_goals::{
@@ -36,9 +40,12 @@ use crate::standard_pack_goals::{
     MAX_GOAL_NAME_BYTES, MAX_GOAL_ORDERED_COUNT, MIN_GOAL_CHOICE_OPTIONS, bounded,
 };
 use crate::standard_pack_ui::{MAX_PACK_UI_TITLE_BYTES, at};
-use crate::{MAX_DESIGNATED_EFFECT_REPEATS, ProvidedCapability, remedy_token_valid};
+use crate::{
+    FactScalar, FactValue, MAX_DESIGNATED_EFFECT_REPEATS, ProvidedCapability, remedy_token_valid,
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A package's control declaration, whose `variables` this module reads.
@@ -57,10 +64,71 @@ pub const MAX_ROOT_VARIABLES: usize = MAX_GOAL_ENTRIES;
 /// The largest `max` of an `integer` variable a package reads as a designated effect's cap: the
 /// highest cap a designated effect takes.
 pub const MAX_VARIABLE_CAP: i64 = MAX_DESIGNATED_EFFECT_REPEATS as i64;
-/// The key prefix under which a later slice (V2) overlays a variable for a run, the one remedy
-/// parameters use (`contracts/remedies.md` §4); the root check reads it only to know which
-/// variable a designated effect's cap reads.
+/// The key prefix under which a run reads a variable (Workflow #463 V2), the one remedy parameters
+/// use (`contracts/remedies.md` §4); the root check reads it to know which variable a designated
+/// effect's cap reads.
 pub const VARIABLE_FACT_KEY_PREFIX: &str = "session.dispatch.parameter.";
+/// Workflow #463 V2: the longest text of a value a dispatch's reason carries
+/// (`variable_values[].value_json`, a `name` of the key table).
+pub const MAX_VARIABLE_VALUE_JSON_BYTES: usize = 256;
+/// Workflow #463 V2: the key column of the rows an `ordered` variable is overlaid with.
+pub const ORDERED_VARIABLE_KEY_COLUMN: &str = "key";
+/// Workflow #463 V2: the column of the rows an `ordered` variable is overlaid with that holds each
+/// key's place in the list, 1 for the first.
+pub const ORDERED_VARIABLE_RANK_COLUMN: &str = "rank";
+
+crate::outcome_vocabulary! {
+    /// Workflow #463 V2 (vocabulary `variable_source`): where the value a policy run reads of a
+    /// variable comes from.
+    pub enum VariableSource: "variable_source" {
+        /// The application's entry row of the variable's name in its `session.resource_targets`
+        /// v3 record, the value a person or an agent set.
+        Set => "set",
+        /// The package's declared default.
+        Default => "default",
+    }
+}
+
+crate::outcome_vocabulary! {
+    /// Workflow #463 V2 (vocabulary `variable_problem`): why a value set on an application was
+    /// not handed to a run, which reads the package's default instead; one word per situation.
+    pub enum VariableProblem: "variable_problem" {
+        /// A `choice` value that is none of the declaration's options.
+        NotAnOption => "not_an_option",
+        /// An `integer` value below `min` or above `max`.
+        OutOfRange => "out_of_range",
+        /// An `integer` value within the range but on no step from `min`.
+        OffStep => "off_step",
+        /// A value that is not of the variable's type.
+        TypeChanged => "type_changed",
+        /// An `ordered` value whose keys the declaration still offers are fewer than `min_count`.
+        KeysRemoved => "keys_removed",
+        /// An `ordered` value of offered keys only whose count is outside `min_count` to
+        /// `max_count`, or whose offered keys are more than `max_count`.
+        CountOutOfRange => "count_out_of_range",
+        /// An `ordered` value that names one key twice.
+        KeyRepeated => "key_repeated",
+        /// A value whose text is longer than a dispatch's reason carries
+        /// ([`MAX_VARIABLE_VALUE_JSON_BYTES`]).
+        ValueTooLong => "value_too_long",
+        /// A package that declares the variable counts as able to do something irreversible by
+        /// the root (`variable_irreversible_by_root`).
+        IrreversibleByRoot => "irreversible_by_root",
+        /// The root's declarations of the name are not byte-identical (`variable_conflict`).
+        DeclarationConflict => "declaration_conflict",
+        /// An entry of the root's `goals.json` uses the name for anything but its placement
+        /// (`variable_conflict` at the name).
+        GoalNameConflict => "goal_name_conflict",
+        /// The name is the root's 97th or later (`variable_out_of_limits`).
+        NameOutOfLimits => "name_out_of_limits",
+        /// A package reads the variable as a designated effect's cap and it is no `integer` from
+        /// 0 to 1000 (`variable_cap_range`).
+        CapRange => "cap_range",
+        /// No root check judged the variable for the application's game: the Runtime's table
+        /// was built before an instance of that game was known.
+        RootUnchecked => "root_unchecked",
+    }
+}
 
 /// The type of a variable (`type`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -182,11 +250,160 @@ impl PackageVariable {
         self.kind.variable_type()
     }
 
-    /// The fact key a later slice overlays the variable's value under, and a designated effect's
-    /// cap names to read it: [`VARIABLE_FACT_KEY_PREFIX`] and the name.
+    /// The fact key a run reads the variable's value under (Workflow #463 V2), and a designated
+    /// effect's cap names to read it: [`VARIABLE_FACT_KEY_PREFIX`] and the name.
     pub fn fact_key(&self) -> String {
         format!("{VARIABLE_FACT_KEY_PREFIX}{}", self.name)
     }
+
+    /// Workflow #463 V2: the declared default as a JSON value: a string, an integer, a boolean
+    /// or a list of option values.
+    pub fn default_value(&self) -> Value {
+        match &self.kind {
+            VariableKind::Choice { default, .. } => Value::String(default.clone()),
+            VariableKind::Integer { default, .. } => Value::from(*default),
+            VariableKind::Switch { default } => Value::Bool(*default),
+            VariableKind::Ordered { default, .. } => {
+                Value::Array(default.iter().cloned().map(Value::String).collect())
+            }
+        }
+    }
+
+    /// Workflow #463 V2: `sha256:<hex>` of the entry as written, in compact JSON: a changed
+    /// declaration of the name has another one, so `goal_value_not_applied` is written once per
+    /// (application, name, this).
+    pub fn declaration_sha256(&self) -> String {
+        let compact = serde_json::to_vec(&self.declaration).unwrap_or_default();
+        format!("sha256:{:x}", Sha256::digest(compact))
+    }
+
+    /// Workflow #463 V2 (`contracts/package-variables.md`, "A set value that no longer fits"):
+    /// `value`, set on an application, judged against this declaration when a run is to read it.
+    /// The value the run reads, or the word that says why it reads the default instead:
+    ///
+    /// - `choice`: a string (else `type_changed`) that is one of the options (else
+    ///   `not_an_option`);
+    /// - `integer`: a whole number in the safe range (else `type_changed`) from `min` to `max`
+    ///   (else `out_of_range`) on a step from `min` (else `off_step`);
+    /// - `switch`: a boolean (else `type_changed`);
+    /// - `ordered`: a list of strings (else `type_changed`), each once (else `key_repeated`); the
+    ///   keys the declaration no longer offers are left out and the rest is read in its order;
+    ///   fewer than `min_count` left is `keys_removed` when a key was left out and
+    ///   `count_out_of_range` when none was, more than `max_count` is `count_out_of_range`.
+    ///
+    /// The stored value is never rewritten: this only says what one run reads.
+    pub fn judge(&self, value: &Value) -> Result<Value, VariableProblem> {
+        match &self.kind {
+            VariableKind::Choice { options, .. } => {
+                let Value::String(chosen) = value else {
+                    return Err(VariableProblem::TypeChanged);
+                };
+                if options.iter().any(|option| option.value == *chosen) {
+                    Ok(value.clone())
+                } else {
+                    Err(VariableProblem::NotAnOption)
+                }
+            }
+            VariableKind::Integer { min, max, step, .. } => {
+                let Some(number) = value.as_i64() else {
+                    return Err(VariableProblem::TypeChanged);
+                };
+                if !(*min..=*max).contains(&number) {
+                    Err(VariableProblem::OutOfRange)
+                } else if (i128::from(number) - i128::from(*min)) % i128::from(*step) != 0 {
+                    Err(VariableProblem::OffStep)
+                } else {
+                    Ok(Value::from(number))
+                }
+            }
+            VariableKind::Switch { .. } => match value {
+                Value::Bool(_) => Ok(value.clone()),
+                _ => Err(VariableProblem::TypeChanged),
+            },
+            VariableKind::Ordered {
+                options,
+                min_count,
+                max_count,
+                ..
+            } => {
+                let Value::Array(items) = value else {
+                    return Err(VariableProblem::TypeChanged);
+                };
+                let mut seen = BTreeSet::new();
+                for item in items {
+                    let Value::String(key) = item else {
+                        return Err(VariableProblem::TypeChanged);
+                    };
+                    if !seen.insert(key.as_str()) {
+                        return Err(VariableProblem::KeyRepeated);
+                    }
+                }
+                let offered = items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|key| options.iter().any(|option| option.value == *key))
+                    .collect::<Vec<_>>();
+                let count = offered.len() as u64;
+                if count < *min_count {
+                    return Err(if offered.len() < items.len() {
+                        VariableProblem::KeysRemoved
+                    } else {
+                        VariableProblem::CountOutOfRange
+                    });
+                }
+                if count > *max_count {
+                    return Err(VariableProblem::CountOutOfRange);
+                }
+                Ok(Value::Array(
+                    offered
+                        .into_iter()
+                        .map(|key| Value::String(key.to_owned()))
+                        .collect(),
+                ))
+            }
+        }
+    }
+
+    /// Workflow #463 V2 (`contracts/package-variables.md`, "The run"): the value of the overlay
+    /// record `session.dispatch.parameter.<name>` that holds `value` (the default, or what
+    /// [`Self::judge`] let through): a `choice` a string, a `switch` a boolean, an `integer` an
+    /// integer, an `ordered` variable a record list of one row `{key, rank}` per key in its
+    /// order, `rank` from 1. `None` for a value not of the variable's type.
+    pub fn fact_value(&self, value: &Value) -> Option<FactValue> {
+        match &self.kind {
+            VariableKind::Choice { .. } => value
+                .as_str()
+                .map(|text| FactValue::String(text.to_owned())),
+            VariableKind::Integer { .. } => value.as_i64().map(FactValue::Integer),
+            VariableKind::Switch { .. } => value.as_bool().map(FactValue::Boolean),
+            VariableKind::Ordered { .. } => value
+                .as_array()?
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let rank = i64::try_from(index).ok()?.checked_add(1)?;
+                    Some(BTreeMap::from([
+                        (
+                            ORDERED_VARIABLE_KEY_COLUMN.to_owned(),
+                            FactScalar::String(item.as_str()?.to_owned()),
+                        ),
+                        (
+                            ORDERED_VARIABLE_RANK_COLUMN.to_owned(),
+                            FactScalar::Integer(rank),
+                        ),
+                    ]))
+                })
+                .collect::<Option<Vec<_>>>()
+                .map(FactValue::RecordList),
+        }
+    }
+}
+
+/// Workflow #463 V2: the text a dispatch's reason carries a variable's value as (`value_json`):
+/// compact JSON, which for the values a run reads (option values, whole numbers, booleans and
+/// lists of option values) is their one spelling.
+pub fn variable_value_json(value: &Value) -> String {
+    value.to_string()
 }
 
 /// A variable's type with its members.
@@ -817,6 +1034,62 @@ pub fn check_root_variables(
         }
     }
     checked
+}
+
+/// Workflow #463 V2 (`contracts/package-variables.md`, "A variable that does not apply"): each
+/// name of `packages` that the root check `checked` ([`check_root_variables`] of the same
+/// packages) keeps from applying, with the word a run's record and `goal_value_not_applied` say
+/// it with: `variable_out_of_limits` is `name_out_of_limits`, `variable_conflict` at a
+/// declaration `declaration_conflict` and at a name (a `goals.json` entry's) `goal_name_conflict`,
+/// `variable_irreversible_by_root` `irreversible_by_root` and `variable_cap_range` `cap_range`.
+/// The check reports one problem per name, so a name has one word. It reads the check's answer
+/// only: the rules stay [`check_root_variables`]'s.
+pub fn variables_not_applying(
+    packages: &[RootPackageVariables],
+    checked: &RootVariables,
+) -> BTreeMap<String, VariableProblem> {
+    let mut not_applying = BTreeMap::new();
+    for issue in &checked.issues {
+        let Some(package) = packages
+            .iter()
+            .find(|package| package.package_id == issue.package_id)
+        else {
+            continue;
+        };
+        let Some(rest) = issue
+            .issue
+            .pointer
+            .strip_prefix(VARIABLES_POINTER)
+            .and_then(|rest| rest.strip_prefix('/'))
+        else {
+            continue;
+        };
+        let (index, member) = match rest.split_once('/') {
+            Some((index, member)) => (index, Some(member)),
+            None => (rest, None),
+        };
+        let Some(variable) = index
+            .parse::<usize>()
+            .ok()
+            .and_then(|index| package.variables.get(index))
+        else {
+            continue;
+        };
+        let word = match (issue.issue.problem, member) {
+            (StandardPackProblem::VariableOutOfLimits, _) => VariableProblem::NameOutOfLimits,
+            (StandardPackProblem::VariableConflict, Some("name")) => {
+                VariableProblem::GoalNameConflict
+            }
+            (StandardPackProblem::VariableConflict, _) => VariableProblem::DeclarationConflict,
+            (StandardPackProblem::VariableIrreversibleByRoot, _) => {
+                VariableProblem::IrreversibleByRoot
+            }
+            (StandardPackProblem::VariableCapRange, _) => VariableProblem::CapRange,
+            _ => continue,
+        };
+        not_applying.entry(variable.name.clone()).or_insert(word);
+    }
+    not_applying
 }
 
 /// Why a name of the root does not apply, at which member of which declarations, each

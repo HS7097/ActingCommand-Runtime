@@ -6,8 +6,9 @@
 //! stores it in the same instance fact `session.resource_targets`, without expiry, each row a
 //! request wrote naming when and through which channel it was set. The evaluator reads a v3
 //! record's targets as a v2 policy's: the targets whose own lifetime has not passed weigh as an
-//! active v2 policy's, the others say what an expired v2 policy says. Nothing reads the entries
-//! yet. Nothing here reads a clock, a file or the network.
+//! active v2 policy's, the others say what an expired v2 policy says. Workflow #463 V2: a run's
+//! package variables read the entries ([`stored_v3_entries`]). Nothing here reads a clock, a file
+//! or the network.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1083,6 +1084,72 @@ pub(super) fn stored_v3_targets(
             .map(|target| ResourceTargetSpecV3::of_v2(&target.target, target.valid_until_unix_ms))
             .collect(),
     )
+}
+
+/// Workflow #463 V2 (`contracts/package-variables.md`, "The run"): one entry of a stored v3
+/// record as a run's variables read it: its value, and when and through which channel it was set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredEntry {
+    pub(crate) value: serde_json::Value,
+    pub(crate) set_unix_ms: u64,
+    pub(crate) channel: RuntimeChannel,
+}
+
+/// Workflow #463 V2: the entries of `instance_id`'s stored record by name, each with its row's
+/// `set_unix_ms` and `channel`, when that record is a readable v3 record (the record
+/// [`stored_v3_targets`] reads); none for any other record, so every variable reads its default.
+/// Read from the evaluation's facts, which the host projects from its memory store: no ledger.
+pub(crate) fn stored_v3_entries(
+    facts: &EvaluationFacts,
+    instance_id: &str,
+) -> BTreeMap<String, StoredEntry> {
+    let Some(record) = facts.facts.iter().rfind(|fact| {
+        fact.fact_key == RESOURCE_TARGETS_FACT_KEY
+            && matches!(&fact.scope, ScopeSelector::Instance { instance_id: id } if id == instance_id)
+    }) else {
+        return BTreeMap::new();
+    };
+    let FactValue::RecordList(rows) = &record.value else {
+        return BTreeMap::new();
+    };
+    if !declares_v3_rows(rows) {
+        return BTreeMap::new();
+    }
+    let Ok(decoded) = decode_rows_v3(rows, instance_id) else {
+        return BTreeMap::new();
+    };
+    let channels = [
+        RuntimeChannel::Cli,
+        RuntimeChannel::Mcp,
+        RuntimeChannel::Ui,
+        RuntimeChannel::Lab,
+    ];
+    decoded
+        .entries
+        .into_iter()
+        .filter_map(|entry| {
+            // The v3 reader took the row's `set_unix_ms` and `channel` already.
+            let row = rows.get(entry.index)?;
+            let set_unix_ms = match row.get(FIELD_SET_AT) {
+                Some(FactScalar::Integer(at)) => u64::try_from(*at).ok()?,
+                _ => return None,
+            };
+            let channel = match row.get(FIELD_CHANNEL) {
+                Some(FactScalar::String(word)) => channels
+                    .into_iter()
+                    .find(|channel| channel.as_str() == word)?,
+                _ => return None,
+            };
+            Some((
+                entry.name,
+                StoredEntry {
+                    value: entry.value,
+                    set_unix_ms,
+                    channel,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// The tasks of `instance` that lapsed v3 targets covered, each with the lifetime of the first

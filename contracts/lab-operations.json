@@ -2608,6 +2608,7 @@
         {"name": "select", "form": "option", "type": "string", "required": false},
         {"name": "scan", "form": "option", "type": "file", "required": false},
         {"name": "parameter", "form": "option", "type": "key_value", "required": false, "repeat": true},
+        {"name": "variable", "form": "option", "type": "key_value", "required": false, "repeat": true},
         {"name": "seed", "form": "option", "type": "unsigned", "required": false},
         {"name": "standard_pack_root", "form": "option", "type": "dir", "required": false}
       ],

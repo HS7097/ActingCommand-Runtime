@@ -24,6 +24,15 @@
 //! not declare, a value that is not one of its declared options, a name given twice, a malformed
 //! `--parameter` and `--parameter` without `--select` are refused with `validation_failed` naming
 //! `--parameter`, never ignored.
+//!
+//! Workflow #463 V2 (`contracts/package-variables.md`, "Runs without a dispatch"): the scan's
+//! policy also reads the package's variables as a run does, each at its declared default, each
+//! `--variable <name>=<json>` replacing its variable's default, the counterpart of `--parameter`
+//! with its refusals: a name the package does not declare, a value its declaration does not take
+//! exactly as given (an option no longer offered, a number out of range or off its step, another
+//! type, a list that repeats or drops a key), a value that is not `<name>=<json>`, a name given
+//! twice and `--variable` without `--select` are refused with `validation_failed` naming
+//! `--variable`, never ignored.
 
 use super::codes::ActinglabCode;
 use super::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
@@ -31,9 +40,9 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Detail;
 use actingcommand_contract::{ContainedTaskRequest, InstanceFactSnapshot, ScanCoverageState};
 use actingcommand_lab::{
-    ExternallyVerifiedBundle, GivenParameterProblem, OfflineReplayEnd, OfflineReplayError,
-    OfflineReplayFacts, PreparedContainedTask, ScanDeclaration, replay_contained_task_with_tables,
-    replay_scan_with_tables,
+    ExternallyVerifiedBundle, GivenParameterProblem, GivenVariableProblem, OfflineReplayEnd,
+    OfflineReplayError, OfflineReplayFacts, PreparedContainedTask, ScanDeclaration,
+    replay_contained_task_with_tables, replay_scan_with_tables,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -50,13 +59,14 @@ const MAX_FACTS_BYTES: u64 = 4 * 1024 * 1024;
 /// A scan declaration is a few hundred bytes; a saved one stays well inside this bound.
 const MAX_SCAN_BYTES: u64 = 1024 * 1024;
 /// Workflow #434 LAB-5B2: the flags `replay` takes.
-pub(crate) const REPLAY_FLAGS: [&str; 8] = [
+pub(crate) const REPLAY_FLAGS: [&str; 9] = [
     "--package",
     "--frames",
     "--facts",
     "--select",
     "--scan",
     "--parameter",
+    "--variable",
     "--seed",
     crate::lab_tables::STANDARD_PACK_ROOT_FLAG,
 ];
@@ -78,7 +88,7 @@ pub(super) fn run_replay(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
             select,
             &paths,
             (&facts, facts_used),
-            &args.parameters,
+            (&args.parameters, &args.variables),
             args.standard_pack_root.as_deref(),
         );
     }
@@ -138,6 +148,9 @@ struct ReplayArgs {
     select: Option<ScanSelect>,
     /// #411 Lab RP: the `--parameter <name>=<value>` given, in order (read only with `select`).
     parameters: Vec<(String, String)>,
+    /// Workflow #463 V2: the `--variable <name>=<json>` given, in order (read only with
+    /// `select`).
+    variables: Vec<(String, Value)>,
     /// Workflow #406 T4: the whole replay's seed (`--seed`), 0 without it; read only without
     /// `select`.
     seed: Option<u64>,
@@ -216,6 +229,13 @@ impl ReplayArgs {
                 "replay reads --parameter only with --select <operation> and --scan <file>",
             ));
         }
+        let variables = given_variables(flags)?;
+        if select.is_none() && !variables.is_empty() {
+            return Err(variable_refusal(
+                "conflicting",
+                "replay reads --variable only with --select <operation> and --scan <file>",
+            ));
+        }
         // Workflow #406 T4: the whole replay draws from `--seed`; a scan replay does not read it.
         let seed = crate::lab_draw::seed_flag(flags)?;
         if select.is_some() && seed.is_some() {
@@ -233,9 +253,56 @@ impl ReplayArgs {
             facts: single_path(flags, "--facts")?,
             select,
             parameters,
+            variables,
             seed,
         })
     }
+}
+
+/// Workflow #463 V2: the `--variable <name>=<json>` values as given, before anything is read, one
+/// flag per distinct name: a flag without its value is `value_missing`, a value that is not
+/// `<name>=<json>` (no `=`, an empty name, or a right side that is no JSON) is `not_recognised`,
+/// and a name given twice is `repeated`, as `--parameter`'s.
+fn given_variables(flags: &FlagArgs) -> CliOutcome<Vec<(String, Value)>> {
+    let mut given: Vec<(String, Value)> = Vec::new();
+    for text in flags.values("--variable") {
+        if text == "true" || text.trim().is_empty() {
+            return Err(variable_refusal(
+                "value_missing",
+                "replay takes --variable <name>=<json>",
+            ));
+        }
+        let Some((name, value)) = text.split_once('=').and_then(|(name, json)| {
+            let value = serde_json::from_str::<Value>(json).ok()?;
+            (!name.is_empty()).then_some((name, value))
+        }) else {
+            return Err(variable_refusal(
+                "not_recognised",
+                format!("--variable {text} is not <name>=<json>"),
+            ));
+        };
+        if given.iter().any(|(given, _)| given == name) {
+            return Err(variable_refusal(
+                "repeated",
+                format!(
+                    "replay takes --variable {name} once; a repeated variable is refused, never last-wins"
+                ),
+            ));
+        }
+        given.push((name.to_owned(), value));
+    }
+    Ok(given)
+}
+
+/// Workflow #463 V2: a refused `--variable`, as [`parameter_refusal`] refuses `--parameter`:
+/// `validation_failed` (exit 2) with the details `{argument: "--variable", argument_problem,
+/// arguments: [{argument, argument_problem}]}`.
+fn variable_refusal(problem: &str, message: impl Into<String>) -> CliError {
+    CliError::usage(message).with_details(json!({
+        "argument": "--variable",
+        "argument_problem": problem,
+        "arguments": [{"argument": "--variable", "argument_problem": problem}],
+    }))
 }
 
 /// #411 Lab RP: the `--parameter <name>=<value>` values as given, before anything is read, one
@@ -309,33 +376,55 @@ fn single_value(flags: &FlagArgs, name: &str) -> CliOutcome<Option<String>> {
 /// the details. #411 Lab RP: the scan's policy reads the package's declared parameter defaults,
 /// each of `parameters` replacing its parameter's default; a parameter the package does not
 /// declare, or a value that is not one of its options, is refused before any frame is read.
+/// Workflow #463 V2: and its variables' defaults, each of `variables` replacing its variable's
+/// default; a variable the package does not declare, or a value its declaration does not take as
+/// given, is refused before any frame is read.
 fn run_scan_replay(
     package: &Path,
     select: &ScanSelect,
     paths: &[PathBuf],
     (facts, facts_used): (&OfflineReplayFacts, Value),
-    parameters: &[(String, String)],
+    (parameters, variables): (&[(String, String)], &[(String, Value)]),
     standard_pack_root: Option<&Path>,
 ) -> CliOutcome<Value> {
     let declaration = read_scan(&select.declaration)?;
     let task = admit(package)?;
     let tables = crate::lab_tables::run_tables(standard_pack_root, &task, replay_instant(facts))?;
-    let run_parameters = task.given_run_parameters(parameters).map_err(|refusal| {
+    let variable_values = task.given_variable_values(variables).map_err(|refusal| {
         let name = &refusal.name;
         match refusal.problem {
-            GivenParameterProblem::Undeclared => parameter_refusal(
+            GivenVariableProblem::Undeclared => variable_refusal(
                 "not_recognised",
-                format!("the package declares no parameter {name}"),
+                format!("the package declares no variable {name}"),
             ),
-            GivenParameterProblem::NotAnOption => parameter_refusal(
+            GivenVariableProblem::Unfit => variable_refusal(
                 "not_recognised",
-                format!("the value given for {name} is not one of its declared options"),
+                format!("the value given for {name} is not one its declaration takes as given"),
             ),
-            GivenParameterProblem::Repeated => {
-                parameter_refusal("repeated", format!("replay takes --parameter {name} once"))
+            GivenVariableProblem::Repeated => {
+                variable_refusal("repeated", format!("replay takes --variable {name} once"))
             }
         }
     })?;
+    let run_parameters = task
+        .given_run_parameters(parameters)
+        .map_err(|refusal| {
+            let name = &refusal.name;
+            match refusal.problem {
+                GivenParameterProblem::Undeclared => parameter_refusal(
+                    "not_recognised",
+                    format!("the package declares no parameter {name}"),
+                ),
+                GivenParameterProblem::NotAnOption => parameter_refusal(
+                    "not_recognised",
+                    format!("the value given for {name} is not one of its declared options"),
+                ),
+                GivenParameterProblem::Repeated => {
+                    parameter_refusal("repeated", format!("replay takes --parameter {name} once"))
+                }
+            }
+        })?
+        .with_variables(variable_values);
     let frames = paths
         .iter()
         .map(|path| crate::package_cli::offline::read_fixture_frame(path.as_path()))

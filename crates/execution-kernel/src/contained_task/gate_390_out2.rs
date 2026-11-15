@@ -651,3 +651,79 @@ fn ss6_t6_a_fact_cap_on_the_run_cap_reads_the_dispatch_run_cap() {
         );
     }
 }
+
+// Workflow #463 V2 (0.12.61; register §1.382; contracts/package-variables.md, "The run"; the
+// design's "Not verified", its third point): a package's
+// `max_repeats: {"fact_key": "session.dispatch.parameter.cap"}` reads its cap from the package's
+// `integer` variable `cap` (0 to 10, default 2), overlaid under the parameter prefix as the run's
+// parameters are. A run without a dispatch reads the default and collects twice; a policy run
+// reads the value its dispatch carries (3) and collects three times; a dispatched value the
+// declaration does not take (11, above its max) reads the default. The snapshot holds the one
+// record of the variable, and the cap is read once.
+#[test]
+fn v2_a_fact_cap_reads_an_integer_variable_under_the_parameter_prefix() {
+    const VARIABLE_KEY: &str = "session.dispatch.parameter.cap";
+    let capped = || {
+        let mut package = task(
+            loop_operations(),
+            declaration(json!([{"operation_id": "collect",
+                "max_repeats": {"fact_key": VARIABLE_KEY}}])),
+        );
+        package.control.variables = actingcommand_contract::parse_package_variables(
+            &json!([{"name": "cap", "type": "integer", "title": {"en": "Collect at most"},
+                     "min": 0, "max": 10, "default": 2}]),
+            &[],
+        )
+        .expect("an integer variable");
+        package
+    };
+    for (case, dispatched, cap) in [
+        ("no dispatch: the default", None, 2_u32),
+        ("the dispatched value", Some(json!(3)), 3),
+        ("a dispatched value above the max", Some(json!(11)), 2),
+    ] {
+        let package = capped();
+        let parameters = match &dispatched {
+            None => package.default_run_values(),
+            Some(value) => package
+                .dispatched_run_parameters(Vec::new(), NOW_UNIX_MS - 1_000)
+                .with_variables(
+                    package.dispatched_variable_values(&[("cap".to_owned(), value.clone())]),
+                ),
+        };
+        let mut snapshot = InstanceFactSnapshot {
+            snapshot_id: "snapshot:v2".to_owned(),
+            ledger_position: 1,
+            context: InstanceFactContext {
+                instance_id: "neutral.instance".to_owned(),
+                server_id: "test".to_owned(),
+                game_id: "neutral".to_owned(),
+            },
+            records: Vec::new(),
+        };
+        parameters.overlay(&mut snapshot, NOW_UNIX_MS);
+        assert_eq!(
+            snapshot
+                .records
+                .iter()
+                .map(|record| (record.key.as_str(), &record.content))
+                .collect::<Vec<_>>(),
+            [(
+                VARIABLE_KEY,
+                &FactContent::Inline {
+                    value: FactValue::Integer(i64::from(cap))
+                }
+            )],
+            "{case}"
+        );
+        let collects = usize::try_from(cap).expect("a count");
+        let mut screens = vec![Screen::Home; collects + 1];
+        screens.push(Screen::Terminal);
+        let mut runtime = ScriptedRuntime::new(screens, Facts::Records(snapshot.records));
+        let ended = succeeded(package.run(&mut runtime));
+        assert_eq!(runtime.effects_of("collect"), collects, "{case}");
+        assert_eq!(runtime.effects_of("leave"), 1, "{case}");
+        assert_eq!(runtime.fact_reads, 1, "{case}");
+        assert_eq!(caps(&ended), vec![("collect".to_owned(), cap)], "{case}");
+    }
+}

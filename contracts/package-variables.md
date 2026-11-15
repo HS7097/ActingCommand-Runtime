@@ -1,6 +1,7 @@
 # Package variables (`control.json` `variables`)
 
-Workflow #463 L4, slice V1 (Runtime 0.12.61; [v012-register.md](v012-register.md) §1.378). A
+Workflow #463 L4, slices V1 and V2 (Runtime 0.12.61; [v012-register.md](v012-register.md) §1.378,
+§1.382). A
 package made by recording, or by hand, leaves named slots that are filled from outside: "which
 one", "how many", "in which order". A **variable** is such a slot: a value the package's policies
 read at run time and do not choose themselves. The owner's requirement (board #463): the value
@@ -8,7 +9,8 @@ may come from a person in the console, from an agent through the Lab, or from th
 default, which its author or the model's export writes.
 
 This document is what V1 builds: the declaration, the names a game root shares, the root check,
-the place on the goal page, the default's origin, and the interface revision.
+the place on the goal page, the default's origin, and the interface revision; and what V2 builds
+(Runtime 0.12.61, register §1.382): the run, "The run" below.
 
 ## What is built now, and what is not
 
@@ -29,37 +31,46 @@ the place on the goal page, the default's origin, and the interface revision.
   the revision also brings `goals.json` version 2, and `place` refuses a bundle that carries the
   file and declares less (`goal_undeclared`).
 
-**What does not apply is not enforced at run time yet.** "Does not apply" (a name the root check
-reports, "Shared names and the root check") is in this slice a warning and nothing more. The root
-check is part of `actinglab standard-pack check`, and wherever that check runs it only warns (its
-exit stays 0). The installer runs it: the post check of `place` runs the installation's
-`<root>\tools\actinglab.exe --json standard-pack check --root <game root>` after every placement
-(its row `not_evaluated` when the installation holds no such file) and reads only its exit code
-(`crates/lab-rescue/src/install/place.rs`, `check_step`), so a variable warning does not stop a
-placement, its row `standard_pack_check` is `pass` with `{exit: 0}`, and the answer, warnings
-included, is not kept (it is kept only when the check fails).
-`resource verify`'s `bundle` step runs it on its installed root and relays the warnings.
-`package bundle` and the Runtime's host do not run it, and no run reads a variable at all. The
-slice that hands values to a run (V2) must enforce it in the Runtime, for a conflicting name and
-for a variable of a package that counts as irreversible by the whole root alike: such a variable
-is handed no value from outside.
+**Built in V2** (Runtime 0.12.61, register §1.382; "The run" below):
 
-**Not built in V1; nothing here promises it:**
+- a policy dispatch hands its run a value for every variable its package declares: the value set
+  on the application (its entry row of that name in `session.resource_targets`), judged against the
+  declaration when the run is to read it, else the package default; recorded with its source as
+  `variable_values` on the dispatch's `policy_dispatch_parameters`, and overlaid as
+  `session.dispatch.parameter.<name>` with the kind's type;
+- a set value not applied is warned once (`goal_value_not_applied`);
+- a run without a dispatch reads the defaults; the Lab's scan replay takes
+  `--variable <name>=<json>`.
 
-- **No run reads a variable.** Nothing resolves a value, nothing overlays
-  `session.dispatch.parameter.<name>` for a variable, and the reason chain of a dispatch records
-  no variable. A package that declares variables runs exactly as the same package without them:
-  its parameters, its defaults and its run are unchanged. Handing the value to a run, with its
-  source, is slice V2.
-- **No one sets or sees a value.** The Lab rows, the MCP tools, the requests that set and read a
-  value per application and the console's goal page are slices V3 (the Lab and the view) and V5
-  (the console).
+**What does not apply is enforced at run time since V2.** "Does not apply" (a name the root check
+reports, "Shared names and the root check") is, in `actinglab standard-pack check`, a warning: the
+check only warns wherever it runs (its exit stays 0). The installer runs it: the post check of
+`place` runs the installation's `<root>\tools\actinglab.exe --json standard-pack check --root
+<game root>` after every placement (its row `not_evaluated` when the installation holds no such
+file) and reads only its exit code (`crates/lab-rescue/src/install/place.rs`, `check_step`), so a
+variable warning does not stop a placement, its row `standard_pack_check` is `pass` with
+`{exit: 0}`, and the answer, warnings included, is not kept (it is kept only when the check
+fails). `resource verify`'s `bundle` step runs it on its installed root and relays the warnings.
+`package bundle` does not run it. Since V2 the Runtime runs the same check (the contract crate's
+`check_root_variables` and `IrreversiblePackages`, no second copy) over the packages its remedy
+table reads, and a variable that does not apply is handed no value from outside: the run reads its
+default, whatever the application holds ("A variable that does not apply").
+
+**Not built; nothing here promises it:**
+
+- **No one sets or sees a value by name.** The Lab rows, the MCP tools, the requests that set and
+  read a value per application and the console's goal page are slices V3 (the Lab and the view)
+  and V5 (the console). Since V2 a value is set by writing the application's goal document
+  (`targets set` with `entries`, [resource-targets.md](resource-targets.md)), and the next
+  dispatch reads it.
+- **No live run without a dispatch takes a value.** A direct run and a Lab run read the defaults;
+  giving them values needs a member on a request (`ac_run_pack`, `--variable` on a run), which is
+  slice V3's, with its `runtime-client` revision. Only the offline scan replay takes
+  `--variable`.
 - **No recording writes a variable.** Generating a variable from a recording's selection, and
   editing its default after `record stop`, are slice V4.
 - **No table-backed list** (`from_table`), no `table` type and no value-test operand that reads a
   variable: later slices, each with its own revision.
-- **No enforcement of "does not apply" at run time** (fix round 1): V2 enforces it in the Runtime,
-  for a conflicting name and for a package irreversible by the root alike (above).
 
 ## The declaration
 
@@ -150,7 +161,7 @@ member is added to anything a run or a record carries.
 A variable's name is a name of the game root, not of the package. Several packages of one root
 may declare the same name only with **byte-identical declarations** (the entry as written, member
 order included, compared in compact JSON); they then form one variable, with one value per
-application in a later slice.
+application (one entry row of its name, which every package declaring it reads, V2).
 
 `actinglab standard-pack check --root <game root>` reads every package of the registry with the
 Runtime's metadata reader (`read_remedy_declarations`, which answers a package's `variables` and the
@@ -169,12 +180,11 @@ then declaration order), the first of these holds:
 Each problem is one `standard_pack_root_invalid` warning with `game`, `path` (the package's
 `control.json`), `standard_pack_problem` and `json_pointer`, after the composition's warnings and
 before those of `goals.json`. **The root still runs**, and no variable of that name applies (as a
-refused `goals.json` applies no entry): in this slice that is what the warning says, and nothing
-enforces it at run time. The check warns only, wherever it runs: the installer's `place` runs it
-after every placement and reads its exit code only, so a warning passes its post check;
-`package bundle` and the Runtime's host do not run it; and no run reads a variable. The slice
-that hands values to a run (V2) must enforce it in the Runtime, for a conflicting name and for a
-package irreversible by the root alike ("What is built now, and what is not"). A `goals.json` the reader refuses applies
+refused `goals.json` applies no entry). The check warns only, wherever it runs: the installer's
+`place` runs it after every placement and reads its exit code only, so a warning passes its post
+check; `package bundle` does not run it. Since V2 the Runtime enforces it: it runs the same check
+over the packages it binds and hands a variable that does not apply no value from outside, for a
+conflicting name and for a package irreversible by the root alike ("The run"). A `goals.json` the reader refuses applies
 no entry, so it takes no name. The root check's four words, like V1's three others
 (`goal_variable_unknown` of the placement, fix round 1's `variable_undeclared` of the installer
 and fix round 3's `goal_version_retired` of a version 1 `goals.json`), are words of the existing
@@ -214,6 +224,118 @@ released format does not change its shape in place, so the file of the five type
 (`actingcommand.goals.v2`, fix round 3, the coordinator's ruling 2 on the design's questions): a
 version 1 file is `goal_version_retired` at `/schema_version`; no pack carries either.
 
+## The run
+
+Workflow #463 V2 (Runtime 0.12.61; register §1.382). The owner's requirement (board #463, 11-14):
+the number in a variable may come from a mathematical model, from a person or an agent, or from
+elsewhere. The Runtime hands a run the value it is given and computes none: there are two sources,
+the value set on the application and the package default.
+
+**Resolution, once per selected dispatch.** For every variable of the dispatched package, in
+declaration order:
+
+1. **Set on the application**: the entry row of the variable's name in the application's
+   `session.resource_targets` v3 record ([resource-targets.md](resource-targets.md), "Document
+   `actingcommand.resource-targets.v3`"), with its `set_unix_ms` and `channel`, as the evaluation's
+   facts hold it (the Runtime's memory store, projected for the evaluation: no ledger read is added
+   to a dispatch); a record of another version, or one the v3 reader refuses, holds no entry.
+2. **The package default**, otherwise.
+
+There is no third source: the Runtime never computes a value and never rewrites a stored one. An
+option such as `auto` hands the choice to the package's own policy, which reads facts and tables.
+Resolution does not read `scheduling.remedy.enabled`: it runs with remedies on or off.
+
+**A set value that no longer fits its declaration** is judged when a run is to read it
+(`PackageVariable::judge`, the contract crate's one copy, which the kernel and the Lab read too);
+the run reads the default, and the record and the warning name the word of the vocabulary
+`variable_problem`:
+
+| Kind | The set value | The run reads | `variable_problem` |
+|---|---|---|---|
+| `choice` | no string | the default | `type_changed` |
+| `choice` | a string that is no option | the default | `not_an_option` |
+| `integer` | no whole number in the safe range | the default | `type_changed` |
+| `integer` | below `min` or above `max` | the default | `out_of_range` |
+| `integer` | in the range, on no step from `min` | the default | `off_step` |
+| `switch` | no boolean | the default | `type_changed` |
+| `ordered` | no list of strings | the default | `type_changed` |
+| `ordered` | a list that names a key twice | the default | `key_repeated` |
+| `ordered` | keys the declaration no longer offers, the rest at least `min_count` | the rest, in its order (source `set`) | none |
+| `ordered` | keys no longer offered, the rest fewer than `min_count` | the default | `keys_removed` |
+| `ordered` | offered keys only, fewer than `min_count` or more than `max_count` | the default | `count_out_of_range` |
+| any | a value the declaration takes whose compact JSON is longer than 256 bytes | the default | `value_too_long` |
+
+**A variable that does not apply** is handed no value from outside: the run reads its default,
+whatever the application holds. The Runtime runs the root check (`check_root_variables`, with
+`IrreversiblePackages`; the rules stay the contract crate's) once per remedy table, over the
+packages the table reads, grouped by the game of the instances each catalog task covers: each
+package once in catalog order, no `goals.json` (the Runtime reads none, so `goal_name_conflict`
+arises only in `standard-pack check`), and a task whose package could not be read counts as an
+unreadable package of its game, the safe side of the rule. Each name the check reports takes the
+word of its problem (`variables_not_applying`):
+
+| The root check's problem | `variable_problem` |
+|---|---|
+| `variable_conflict` at a declaration | `declaration_conflict` |
+| `variable_conflict` at the name (a `goals.json` entry) | `goal_name_conflict` |
+| `variable_irreversible_by_root` | `irreversible_by_root` |
+| `variable_out_of_limits` | `name_out_of_limits` |
+| `variable_cap_range` | `cap_range` |
+| (no check judged the instance's game: the table was built before an instance of it was known) | `root_unchecked` |
+
+The table is built at the first evaluation under a catalog, again when the procedure manifest in
+place changes, and at the remedy table's interval while a round is open, a stop recorded or an
+instance waits for its client update; it is memory only and dropped with the table. A package of
+the game root that no catalog task binds is not read by the Runtime: `standard-pack check` judges
+the whole root.
+
+**The overlay.** Each variable is overlaid as `session.dispatch.parameter.<name>`, the key remedy
+parameters use, with its kind's type (`PackageVariable::fact_value`): a `choice` a string, a
+`switch` a boolean, an `integer` an integer, an `ordered` variable a record list of one row
+`{key, rank}` per key in its order, `rank` from 1. It is observed at the dispatch's admission, in
+instance scope, with confidence 1000 and no expiry, after the parameters and before the schedule
+values, in every instance fact snapshot the host takes for the run (the select steps' and the
+designated effects' cap read), and the select step's `input_sha256` covers it. A policy reads a
+`choice` as an `enum_string` fact, a `switch` as `boolean`, an `integer` as `integer` (an
+`integer_compare` threshold, or `max_repeats: {fact_key}`, whose cap of 0 to 1000 the root check
+holds the variable to), and an `ordered` variable through `keyed_fact` (key column `key`, column
+`rank`). Within one package a variable and a parameter never share a name (`variable_name_taken`),
+so one overlay holds each key once; a name shared across packages is overlaid only for the run of
+a package that declares it. The kernel reads the dispatched value (`value_json`) under the
+prepared package's own declaration, so a package changed since its dispatch reads the default for
+a value it no longer takes; the dispatch's record still says what was dispatched.
+
+**The record.** The dispatch's `policy_dispatch_parameters` reason (an existing info outcome)
+gains `variable_values`, one record per variable of the package in declaration order:
+`{variable_name, variable_source, value_json?, set_unix_ms?, set_channel?, variable_problem?}`.
+`variable_source` is `set` or `default`; `value_json` is the value the run reads, as compact JSON
+(absent only for a default longer than 256 bytes, which the run reads from its package);
+`set_unix_ms` and `set_channel` are the entry row's whenever the application holds a value,
+applied or not; `variable_problem` says why a set value was not applied. A pair whose remedy plan
+gives it no such reason gets one of these values alone. A package without `variables` gets no
+record: its reason chain is byte for byte as before. No persisted shape changes: SS-6 added values
+to the same reason the same way, and every 0.12 reader keeps an outcome's values as a map without
+a key check, so the ledger, the console and the Lab of 0.12.60 read such a reason as before and
+show the values they know.
+
+**The warning.** `goal_value_not_applied` (warning; runtime-host) is written when a new dispatch
+does not hand its run a value set on the application, once per (application, variable name,
+declaration sha256) after a start, as a Warning `runtime.failed` record of the policy driver
+(`policy_fact_rows_exceeded`'s form): `instance_id`, `task_id`, `package_id`, `variable_name`,
+`declaration_sha256` and the required `variable_problem`. "Once" is kept in memory only: after a
+restart it may be written once more; no state file and no record keeps it. Nothing is refused and
+the run goes on with the default.
+
+**Runs without a dispatch.** A direct run, a run the host starts itself, a Lab run and the
+offline replay read every variable at its default and record nothing, as parameters do
+(`default_run_values`). The Lab's scan replay (`actinglab replay --select <operation> --scan
+<file>`) takes `--variable <name>=<json>`, the counterpart of `--parameter`: the value replaces the
+variable's default when the declaration takes it exactly as given; a name the package does not
+declare, a value it does not take, or a right side that is no JSON is `validation_failed` naming
+`--variable` with `argument_problem` `not_recognised`, a name given twice `repeated`, and
+`--variable` without `--select` `conflicting`. No request gives a live run without a dispatch a
+value (slice V3).
+
 ## Interface
 
 `package` revision 14 ([component-interfaces.md](component-interfaces.md)); revision 13 is
@@ -247,19 +369,19 @@ bundle without them keeps its revision, and the Runtime declares [3, 14].
   that holds a version 2 `goals.json` runs on 0.12.60 as without the file.
 - `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` do not move: nothing persisted
   carries a variable in V1, and no request or answer of the workbench changes.
+- **A build that declares 14 hands the values to a run** (Workflow #463 V2, the same release,
+  register §1.382): the coordinator ships no 0.12.61 without it, so no installation holds a
+  Runtime that admits a pack's `variables` and runs it on its defaults alone. V2 moves no
+  revision: `variable_values` is an optional value of the existing `policy_dispatch_parameters`,
+  `goal_value_not_applied` a new warning in an existing record form, and no request or answer
+  changes.
 
 ## What arrives later
 
-- **V2** (the run): a variable's value is overlaid as `session.dispatch.parameter.<name>`, the key
-  remedy parameters use, with its kind's type (a string, a boolean, an integer, or a record list of
-  rows `{key, rank}`); the value comes from the application's set value or the package default, and
-  the dispatch's reason records each value with its source. A run without a dispatch takes the
-  defaults or the values given to it. A set value that no longer fits the declaration runs on the
-  default and is marked. V2 also enforces in the Runtime what the root check only reports here:
-  a variable that does not apply, for a conflicting name or a package that counts as irreversible
-  by the whole root alike, is handed no value from outside (fix round 1).
 - **V3** (the Lab and the view): reading, setting and clearing a value per application through the
-  Lab's command line and MCP, and the view that lists every variable with its value and source.
+  Lab's command line and MCP, the view that lists every variable with its value and source, and
+  (its `runtime-client` revision) the values a live run without a dispatch is given, listed with
+  whether each is the default or given in the run's answer.
 - **V4** (the recording): a recording's selection generates its variable and the gate that reads
   it; the default, the options and the texts can be edited after `record stop`.
 - **V5** (the console) shows and sets the variables on the goal page; **V6** moves the resource

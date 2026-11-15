@@ -294,7 +294,8 @@ fn simulate(
         frames,
         now_unix_ms,
         task.has_select_steps(),
-        task.default_run_parameters(),
+        // Workflow #463 V2: with every variable at its declared default.
+        task.default_run_values(),
         draw,
     );
     runtime.tables = tables;
@@ -1039,9 +1040,9 @@ where
             } => (snapshot.clone(), *read_at_unix_ms),
         };
         // Workflow #411 B15 R5: a replayed run has no dispatch; it reads the package's declared
-        // parameter defaults.
+        // parameter defaults (Workflow #463 V2: and its variables' defaults).
         self.task
-            .default_run_parameters()
+            .default_run_values()
             .overlay(&mut snapshot, now_unix_ms);
         self.selection_now_unix_ms = Some(now_unix_ms);
         Ok(SelectionState::Snapshot {
