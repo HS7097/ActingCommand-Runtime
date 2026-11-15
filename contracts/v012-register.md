@@ -12354,40 +12354,52 @@ servers, now without the card before it; every other request; the refusal of `cl
 `lab` binding without a word, `via`, and the initiator in the ledger (LAB-6S4b, LAB-6S5).
 
 **At deploy** (the owner's ruling as the work order quotes it: only how this build reaches a
-machine that runs 0.12.61, and that its ledger and state root load).
-- *Production's installer, `actingctl install` of 0.12.61*, `update apply --stop --hold <reason>
-  --start`. Its plan's edges pass: `install-control` I [0, 1] meets Rp [0, 1] and R\* [0, 0]
-  (`installer_meets_previous`, `installer_meets_next`), `runtime-client` [3, 9] on every side,
-  `ledger` [3, 8] on both, the configuration's keys unchanged. It sends none of the five kinds and
-  never passes `--install-held` ([install-cli.md](install-cli.md)): to the old Runtime the N + 9
-  connections Slice LAB-6S2-B2 counts (`Status`, `RuntimeFactSnapshot`, `ScheduleExplanation`;
-  `Status`, one `PauseScheduling` per instance, `Status`; `Status`, `RuntimeFactSnapshot`,
-  `Status`, `RequestShutdown`), each after `Health` and `BindChannel` `lab` with `Lab-CLI`,
-  answered by 0.12.61 as before; then it starts this build with `--config` only, and to the new
-  Runtime the readiness probe (`Health`, `BindChannel`), the post-start check (`Status`,
-  `RuntimeFactSnapshot`, `StartReport`) and the release (`Status`, each `ResumeScheduling`,
-  `ScheduleExplanation`): kinds this build keeps, answered as 0.12.61 answers them. No step
-  changes.
-- *Back.* The automatic rollback of that deployment closes this build's Runtime with
-  `RequestShutdown`, starts 0.12.61 and makes the same reads and the release against it. This build
-  writes no record 0.12.61 cannot read (no shape changes; the invalidation of the transition facts
-  below is the record every start of 0.12.61 writes too). Not run: the owner's ruling leaves the
-  rollback without work.
+machine that runs v0.12.62, the live build when this one ships, and that its ledger and state root
+load).
+- *Production's installer, the rescue module of the live v0.12.62.* Since 0.12.62 production
+  deploys through the module (`actinglab release stage`, `deploy`, `op status`, run from the live
+  build's kept `actinglab`), with `actingctl install` of that build as the way back
+  ([install-cli.md](install-cli.md), "Journals across versions"); both faces are the same code,
+  `crates/lab-rescue`, whose code, like the watchdog's start and the runtime client's, is v0.12.61's
+  unchanged. `deploy` stages the release, plans (`update plan`, `--preview` while a Runtime runs;
+  neither reaches the Runtime) and runs the composite `update apply --stop --hold lab-deploy-<ms>
+  --start`. Its plan's edges pass: `install-control` I [0, 1] (v0.12.62's own declaration) meets
+  Rp [0, 1] and R\* [0, 0] (`installer_meets_previous`, `installer_meets_next`), `runtime-client`
+  [3, 9] on every side, `ledger` [3, 8] on both, the configuration's keys unchanged. It sends none
+  of the five kinds and never passes `--install-held` (neither is in its code): to the old Runtime
+  the module's own `Status` (whether a Runtime runs) and the N + 9 connections Slice LAB-6S2-B2
+  counts for the composite (`Status`, `RuntimeFactSnapshot`, `ScheduleExplanation`; `Status`, one
+  `PauseScheduling` per instance, `Status`; `Status`, `RuntimeFactSnapshot`, `Status`,
+  `RequestShutdown`), each after `Health` and `BindChannel` `lab` with the module's word
+  ([lab-two-entries.md](lab-two-entries.md) §4.2), answered by v0.12.62 as before; then it starts
+  this build with `--config` only (the watchdog's start), and to the new Runtime the readiness
+  probe (`Health`, `BindChannel`), the post-start check (`Status`, `RuntimeFactSnapshot`,
+  `StartReport`), the release (`Status`, each `ResumeScheduling`, `ScheduleExplanation`) and the
+  module's `alive` (the watchdog's probe, `Health` and `BindChannel`): kinds this build keeps,
+  answered as v0.12.62 answers them. No step changes.
+- *Back.* The composite's automatic rollback (the new start not ready, or a fail-class post-start
+  check failed) closes this build's Runtime with `RequestShutdown`, puts v0.12.62 back, starts it
+  with `--config` only and makes the same reads and the release against it; after the deployment
+  the way back is `actingctl install` of v0.12.62 (`install undo`, `install resume`,
+  `install release-hold`), whose rollback edges pass the same way (I [0, 1] meets [0, 0] and
+  [0, 1]). This build writes no record v0.12.62 cannot read (no shape changes; the invalidation of
+  the transition facts below is the record every start of v0.12.62 writes too, by v0.12.61's
+  code). Not run: the owner's ruling leaves the rollback without work.
 - *The console's installer* negotiates `install-control` per step (component-interfaces.md: I ∩ Rp
   to close, I ∩ R\* to start), so it starts this build at revision 0, without `--install-held`,
-  and closes a Runtime of 0.12.61 through that slot's own `actingctl` as before. What this build's
+  and closes a Runtime of v0.12.62 through that slot's own `actingctl` as before. What this build's
   tools answer it: `actingctl request-shutdown [--wait <seconds>]` as before;
   `actingctl install-transition` `actingctl_usage_invalid` with exit 1 before any connection;
   actingd with `--install-held` `usage_invalid` with exit 1. The console's repository was not read.
-- *A ledger and a state root of 0.12.61* load: the records under "What stays" decode; a retired
+- *A ledger and a state root of v0.12.62* load: the records under "What stays" decode; a retired
   code a record carries is still the catalog's (retired, not removed, so a relayed spelling keeps
   its category); the runtime facts `host.install_transition` and `host.install_transition.pauses`
-  a drained transition left are invalidated at the start as a takeover, as 0.12.61's starts did
+  a drained transition left are invalidated at the start as a takeover, as v0.12.62's starts do
   on a new epoch, and nothing reads them (their tag pattern stays, so the start sees them); an
   owner journal whose close carries `closed_by` `upgrade_state` reads as before; a configuration
   that names `governance.allowed_clients` is accepted.
 - *This build's watchdog, rescue module and MCP servers.* The watchdog's probe (`Health`,
-  `BindChannel`) and its reading of logs and journals are unchanged: in a 0.12.61 log
+  `BindChannel`) and its reading of logs and journals are unchanged: in a log of v0.12.62 or earlier
   `install_startup_stopped`, `held_timeout` and `release_timeout` are errors that consider a start,
   as before. The rescue module's rows never sent one of the five kinds. Each MCP write's
   connection sends `Health`, `BindChannel` (`lab`, `Lab-MCP`), then the write; a capture's client
@@ -12459,8 +12471,8 @@ and `flag_refusals` (`install-transition` is a usage error); the host's approval
 and the client's tests beside the kinds; `gate_idle1p` (another stand-in code for a release's
 failure). Unmapped tests of the drain and the held start left with them.
 
-**LAB-6S4a rollback** (to 0.12.61). Two-way: no persisted shape changes, and nothing this build
-writes is new to 0.12.61.
+**LAB-6S4a rollback** (to v0.12.62). Two-way: no persisted shape changes, and nothing this build
+writes is new to v0.12.62.
 
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
