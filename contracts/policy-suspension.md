@@ -231,7 +231,8 @@ A run that ends on a mapped key whose mapping declares a remedy (Workflow #411 B
 [remedies.md](remedies.md)) is a success: it never accumulates, records no failure identity and
 clears the pair's streak and immediate-rerun round; a block that repeats is bounded by its remedy
 round instead. A linear run that ends on a select step's `on_empty` key (Workflow #463 K1,
-[linear-steps.md](linear-steps.md), "Select steps") is a success in the same way.
+[linear-steps.md](linear-steps.md), "Select steps") or on an ending page (Workflow #463 K2, since
+0.12.61, [linear-steps.md](linear-steps.md), "Endings") is a success in the same way.
 
 ## A failure that pauses at its first occurrence (Workflow #463 U1)
 

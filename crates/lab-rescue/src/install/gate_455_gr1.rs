@@ -21,8 +21,9 @@
 //   the notices directory and declares less than 10 is refused `notice_undeclared`.
 // Workflow #463 V1 fix round 3 (register §1.378; `rd-1115/brief-1723-fix3.md`): the file is
 // version 2 and `GOALS_PACKAGE_REVISION` is 14, the revision that brought it, so the revision 12
-// above reads 14 in these tests: this build's installer declares [3, 14] and the bundle [14, 14];
-// the earlier installer ([3, 11]) and the undeclared bundle ([3, 11]) are as they were. A version
+// above reads 14 in these tests: their installer declares [3, 14] (this build's [3, 15] since
+// Workflow #463 K2, register §1.380, 14 within it) and the bundle [14, 14]; the earlier installer
+// ([3, 11]) and the undeclared bundle ([3, 11]) are as they were. A version
 // 2 file in a bundle that declares [12, 12] is `install::gate_463_v1`'s.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
 // sleep; every root is a temporary folder with neutral files. `place` reads the file's name only;
@@ -45,7 +46,8 @@ const WORD: Initiator = Initiator::LabRescue;
 /// The neutral game and pack of the bundles (made-up ids, no real game).
 const GAME: &str = "neutral-game";
 const PACK: &str = "neutral.pack";
-/// The `package` range of this build's installer: up to the revision a goals bundle declares.
+/// The `package` range of the installer these tests run: up to the revision a goals bundle
+/// declares (this build's reaches 15 since Workflow #463 K2, 14 within it).
 const INSTALLER_PACKAGE: [u64; 2] = [3, GOALS_PACKAGE_REVISION];
 /// The `package` range of an installer before this slice.
 const EARLIER_INSTALLER_PACKAGE: [u64; 2] = [3, 11];
@@ -435,8 +437,9 @@ fn goals_bundle_is_refused_by_an_installer_before_revision_12() {
     );
 }
 
-// Fix round 1, as `notices_refusals_come_before_the_hold` holds `notice_undeclared`: on this
-// build's installer ([3, 12]; [3, 14] since Workflow #463 V1 fix round 3) a bundle that carries
+// Fix round 1, as `notices_refusals_come_before_the_hold` holds `notice_undeclared`: on the tests'
+// installer ([3, 12]; [3, 14] since Workflow #463 V1 fix round 3, while this build's reads [3, 15]
+// since Workflow #463 K2) a bundle that carries
 // `goals.json` and declares [3, 11], within the
 // installer's range, is refused `pack_invalid` caused by `standard_pack_root_invalid` with
 // `goal_undeclared` at its `interfaces.json`, the pointer empty, in the plan: no pause, no journal,
