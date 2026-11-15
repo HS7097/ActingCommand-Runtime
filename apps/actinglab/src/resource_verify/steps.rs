@@ -6,7 +6,9 @@
 //! process, and records every failure its check can go on to find.
 
 use super::git::{Git, nul_fields, text};
-use super::{Counts, StepRun, VerifyRequest, declares, path_value, pointer_value, sha256_hex};
+use super::{
+    Counts, StepRun, StepsFor, StepsRequest, declares, path_value, pointer_value, sha256_hex,
+};
 use crate::codes::{
     ActinglabCode, BaseProblem, CheckoutProblem, DirtyProblem, GitCommand, LayoutProblem,
     ToolsProblem, VerifyStep,
@@ -17,6 +19,11 @@ use crate::resource_runtime_support::resource_declarations::{
 use crate::{CliError, FlagArgs};
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
+use actingcommand_contract::{
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_LOADING_DIRECTORY,
+    STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_TABLES_DIRECTORY, STANDARD_PACK_UI_FILE,
+};
 use serde::Serialize;
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
@@ -46,6 +53,21 @@ const ROOT_INPUTS: [&str; 7] = [
     "declaration-exclusions.json",
     "manifest.yaml",
 ];
+/// Workflow #464 P2: the root files `standard-pack build` reads besides [`ROOT_INPUTS`], and the
+/// root directories it reads: every other input its bundle carries, so that each is the committed
+/// blob and none is an ignored file (fix round 1: `ui.json` too).
+const BUILD_ROOT_INPUTS: [&str; 5] = [
+    STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_LOADING_FILE,
+    STANDARD_PACK_GOALS_FILE,
+    STANDARD_PACK_UI_FILE,
+];
+const BUILD_ROOT_DIRECTORIES: [&str; 3] = [
+    STANDARD_PACK_LOADING_DIRECTORY,
+    STANDARD_PACK_NOTICES_DIRECTORY,
+    STANDARD_PACK_TABLES_DIRECTORY,
+];
 const MANIFEST_FILE: &str = "BUILD-MANIFEST.json";
 const ACTINGLAB_EXE: &str = "actinglab.exe";
 const BYTE_ORDER_MARK: &[u8] = b"\xEF\xBB\xBF";
@@ -59,6 +81,14 @@ pub(super) struct ToolsReport {
     executable: Option<String>,
     executable_sha256: Option<String>,
     build_manifest: Option<BuildManifestReport>,
+}
+
+impl ToolsReport {
+    /// Workflow #464 P2: the SHA-256 of the executable that ran the steps, which `build.json`
+    /// names.
+    pub(super) fn executable_sha256(&self) -> Option<&str> {
+        self.executable_sha256.as_deref()
+    }
 }
 
 #[derive(Serialize)]
@@ -189,14 +219,16 @@ pub(super) struct CheckoutState {
     pub(super) tracked: BTreeSet<String>,
 }
 
-/// `checkout` (R4): the precondition. `None` when it does not hold.
+/// `checkout` (R4): the precondition. `None` when it does not hold. Workflow #464 P2: the files it
+/// checks are those the row `steps_for` reads ([`read_path`]).
 pub(super) fn checkout(
     git: &Git,
-    request: &VerifyRequest,
+    request: &StepsRequest,
+    steps_for: StepsFor,
 ) -> (CheckoutFacts, Option<CheckoutState>, StepRun) {
     let mut run = StepRun::start(VerifyStep::Checkout);
     let mut facts = CheckoutFacts::default();
-    let state = match checkout_state(git, request, &mut facts, &mut run) {
+    let state = match checkout_state(git, request, steps_for, &mut facts, &mut run) {
         Ok(state) => state,
         Err(outcome) => {
             run.fail(outcome);
@@ -208,7 +240,8 @@ pub(super) fn checkout(
 
 fn checkout_state(
     git: &Git,
-    request: &VerifyRequest,
+    request: &StepsRequest,
+    steps_for: StepsFor,
     facts: &mut CheckoutFacts,
     run: &mut StepRun,
 ) -> Result<Option<CheckoutState>, Outcome> {
@@ -289,7 +322,7 @@ fn checkout_state(
         match (field[0], field[1]) {
             (b'?', b'?') => untracked.push(path),
             (b'!', b'!') => {
-                if read_path(path.trim_end_matches('/')) {
+                if read_path(path.trim_end_matches('/'), steps_for) {
                     ignored.push(path);
                 }
             }
@@ -324,7 +357,7 @@ fn checkout_state(
         let meta = meta.split(' ').collect::<Vec<_>>();
         if let [mode, blob, "0"] = meta.as_slice()
             && *mode != "160000"
-            && read_path(path)
+            && read_path(path, steps_for)
             && !changed.contains(path)
         {
             expected.push((path.to_owned(), (*blob).to_owned()));
@@ -385,13 +418,28 @@ fn dirty(count: usize, first: &str, problem: DirtyProblem) -> Outcome {
         .dirty_problem(problem)
 }
 
-/// A file the command reads: under `packs/` or `regression/`, or a root input.
-fn read_path(path: &str) -> bool {
+/// A file the command reads: under `packs/` or `regression/`, or a root input. Workflow #464 P2:
+/// for `standard-pack build` also every other input its bundle carries ([`BUILD_ROOT_INPUTS`],
+/// and the files under [`BUILD_ROOT_DIRECTORIES`]); `resource verify` reads what it read before.
+fn read_path(path: &str, steps_for: StepsFor) -> bool {
     path == "packs"
         || path == "regression"
         || path.starts_with("packs/")
         || path.starts_with("regression/")
         || ROOT_INPUTS.contains(&path)
+        || (steps_for == StepsFor::Build && build_read_path(path))
+}
+
+/// Workflow #464 P2: a root file or a file under a root directory that only `standard-pack build`
+/// reads.
+fn build_read_path(path: &str) -> bool {
+    BUILD_ROOT_INPUTS.contains(&path)
+        || BUILD_ROOT_DIRECTORIES.into_iter().any(|directory| {
+            path == directory
+                || path
+                    .strip_prefix(directory)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
 }
 
 /// `declarations` (R5): the selection built from Git, read by `resource validate`'s reader once

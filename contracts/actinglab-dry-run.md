@@ -182,6 +182,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `package loading` | mixed | | `--check`: no_effect; `--write`: preview, `dry_run`: every check of `--write` runs and nothing is written; `status: "preview"`, `written: false`, a pack `--write` would write with `state: "stale"` (Workflow #407 LOAD-1) |
 | `package edit` | preview | `dry_run` | the edits are applied and the edited package admitted in memory; `validated`, `written: false`, `persisted: false`, no file written (Workflow #390 TOOL-1) |
 | `package variables` | no_effect | | reads one package's control declaration only (Workflow #463 V3) |
+| `standard-pack adopt` | preview | `dry_run` | every check runs, the check tree under the state directory's `adopt-check/` included; `validated`, `written` empty and `would_write` what it would write; nothing is written in the repository and no copy is kept (Workflow #464 P1) |
 | `operation validate` | no_effect | | |
 | `operation inspect` | no_effect | | |
 | `operation explain` | no_effect | | |
@@ -209,6 +210,8 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `resource verify` | refused | `dry_run_unsupported` | flag parsing (Workflow #411 RV-1: it writes its work directory and report); no alternative |
 | `standard-pack check` | no_effect | | reads an installed game root only (Workflow #373 NAV-T) |
 | `standard-pack compose` | refused | `dry_run_unsupported` | flag parsing only (ROUT-L RL-1a: it writes a new directory); alternative `standard-pack check` |
+| `standard-pack build` | refused | `dry_run_unsupported` | flag parsing (Workflow #464 P2: it writes its product and its work into `--out`); no alternative |
+| `standard-pack ready` | no_effect | | reads a game root only (Workflow #464 P3) |
 | `runtime reset` | refused | `dry_run_unsupported` | positional arguments, Runtime flags, `--state-root`, instance; no alternative; no capability entry |
 | `runtime observe` | no_effect | | |
 | `ledger show` | no_effect | | retired |

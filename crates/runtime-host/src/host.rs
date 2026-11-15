@@ -2277,6 +2277,8 @@ impl RuntimeHost {
             failure_outcomes_for_test: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             failure_details_for_test: Mutex::new(BTreeMap::new()),
+            #[cfg(test)]
+            run_parameters_for_test: Mutex::new(Vec::new()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(BTreeMap::new()),
             policy_outcome_gate: Mutex::new(()),
@@ -4421,6 +4423,20 @@ impl RuntimeHost {
         .cloned())
     }
 
+    /// Workflow #463 V2 fix round 1: the parameters each contained run of this host overlaid its
+    /// snapshots with, in the order the runs reached their execution.
+    #[cfg(test)]
+    pub(crate) fn run_parameters_for_test(
+        &self,
+    ) -> RuntimeHostResult<Vec<actingcommand_execution_kernel::RunParameters>> {
+        let shared = self.shared_ref(HostLocation::EvaluatePolicyCycle)?;
+        Ok(shared
+            .run_parameters_for_test
+            .lock()
+            .expect("the run parameters of the gate tests")
+            .clone())
+    }
+
     /// Workflow #428 S168-4: the native detail of a refused request, when it had one.
     #[cfg(test)]
     pub(crate) fn failure_detail_for_test(
@@ -6307,6 +6323,10 @@ struct HostShared {
     /// `<id>:<fact store code>`).
     #[cfg(test)]
     failure_details_for_test: Mutex<BTreeMap<RequestId, Option<String>>>,
+    /// Workflow #463 V2 fix round 1, test only: the parameters each contained run's snapshots are
+    /// overlaid with, in the order the runs reached their execution.
+    #[cfg(test)]
+    run_parameters_for_test: Mutex<Vec<actingcommand_execution_kernel::RunParameters>>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.

@@ -2485,6 +2485,28 @@
       "status": "planned"
     },
     {
+      "name": "standard-pack build",
+      "module": "authoring",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true, "note": "the top of a clean Git work tree of a game's working root; its HEAD is the commit built"},
+        {"name": "source_repository", "form": "option", "type": "string", "required": true, "note": "owner/name"},
+        {"name": "out", "form": "option", "type": "dir", "required": true, "note": "a new directory whose parent exists, or an empty one; never inside repo; made only once the checkout precondition passed"},
+        {"name": "commit", "form": "option", "type": "string", "required": false, "note": "40 hex, must be HEAD"}
+      ],
+      "help": "Builds a game's whole standard pack from one clean commit of its working root: the zip, SHA256SUMS and build.json, ready to be placed.",
+      "output": "build: the build.json document (schema actingcommand.standard-pack-build.v1); out; files: the zip, SHA256SUMS, build.json and the work directory; steps: resource verify's steps",
+      "writes": true,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab standard-pack build"],
+      "new": "#464",
+      "slice": "PACK-BUILD",
+      "status": "planned",
+      "notes": "Workflow #464 P2 (0.12.61; contracts/resource-verify.md, standard-pack build; contracts/package-reference.md, The built standard pack): it runs resource verify's steps on their one function, its work under out/work, and writes the product into out only when every step passed, each file under its .part name first and build.json renamed last; out is made only once the checkout precondition passed; the zip carries the repository's tables/ and ui.json, each checked by its reader; build.json names the source repository, the commit, the tree and the Tools, and, read from the zip, the package range, the root files, the packs and the zip; the package revision is computed from the content, row by row of component-interfaces.md's package table; nothing is written into repo and nothing is deleted. Fix round 1: its slice is its own, PACK-BUILD, in actinglab's built slices and the MCP server's, so that the command line and the MCP server offer it as they offer resource verify"
+    },
+    {
       "name": "resource restore",
       "module": "authoring",
       "params": [
@@ -2581,6 +2603,50 @@
       "source": ["actinglab standard-pack compose"],
       "slice": "LAB-2",
       "status": "planned"
+    },
+    {
+      "name": "standard-pack adopt",
+      "module": "authoring",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true, "note": "the game's working root in a resource repository's checkout: applications.json, maintenance.json, packs/ and the root files"},
+        {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "a stopped recording of the state directory, its package the one its last record stop generated; not with package"},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with record_id"},
+        {"name": "decide", "form": "option", "type": "file", "required": false, "note": "the decision document actingcommand.pack-decision.v1; required on a first adoption"},
+        {"name": "replace", "form": "switch", "type": "boolean", "required": false, "note": "adopt a package adopted before again: its directory is replaced and moved to the state directory, its rule kept but for what the decision names"},
+        {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+      ],
+      "help": "Makes a recorded package a member of its game's standard pack in a resource repository's checkout, with a rule the Runtime's composer accepts.",
+      "output": "the adoption: the package, its class, the rule, held entry or maintenance entry as written, the entries removed or replaced so that the package has one role, the members given and derived (each with where it came from), whether the task waits for its value, every warning of the check, what was written and where the replaced directory was kept",
+      "writes": true,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab standard-pack adopt"],
+      "new": "#464",
+      "slice": "SP-ADOPT",
+      "status": "planned",
+      "notes": "Workflow #464 P1 (0.12.61; contracts/standard-pack-authoring.md): it writes only inside repo and under the state directory, every check before the first write (refusals adopt_refused, adopt_problem naming the check), nothing deleted; the readiness of the package is another slice's"
+    },
+    {
+      "name": "standard-pack ready",
+      "module": "core",
+      "params": [
+        {"name": "root", "form": "option", "type": "dir", "required": true, "note": "a game root, installed or a bundle laid out as one, its directory named as its game; not the installation's"}
+      ],
+      "help": "Judges every pack of a game root by its thirteen readiness items: waiting with every reason, ready_to_place, dispatchable or not_scheduled.",
+      "output": "root, game, installation (not_read: no installation is read), the counts dispatchable, ready_to_place, waiting and not_scheduled, warnings (standard-pack check's), and packs, each {package_id, server, readiness, roles?, items}: the thirteen items S1 to S7 and I1 to I6, each {id, item, state, basis?, models?, outcome?}",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab standard-pack ready"],
+      "new": "#464 P3 (whether a pack goes straight into scheduling, and what it waits for)",
+      "slice": "464-P3",
+      "status": "planned",
+      "notes": "#464 P3 (contracts/standard-pack-schedule.md, Readiness): the resource tooling's one function judge_standard_pack_readiness, which adopt's answer, build.json and the placement plan are to call with what each holds; this row gives it the game root only, so the five installation items I1, I2, I4, I5 and I6 are not_judged (installation_not_read) and I3 is information, and a pack answers ready_to_place (or not_scheduled) at best; fix round 1: it runs standard-pack check on the root first, each refusal carried under S1, S4 or S7; it writes nothing, starts nothing (no child process) and reads no installation, no secret and no Runtime"
     },
     {
       "name": "scheduling compile",

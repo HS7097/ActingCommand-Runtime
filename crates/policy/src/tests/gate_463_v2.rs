@@ -341,25 +341,17 @@ fn v2_a_set_value_beats_the_default_and_rides_the_selected_dispatch_with_remedie
 
 // Requirement 2 and the work order's test "each kind of invalid set value": a set value the
 // declaration no longer takes reads the default, its record says `default` with the word and who
-// set it, and it is the pair's one value not applied, with the declaration's sha256 (what the host
-// warns once per): a choice no longer offered, a value of another type, a number out of range or
-// off its step, an ordered value whose offered keys are fewer than min_count once the others are
-// left out, one too short or too long of offered keys only, one that repeats a key, and one whose
-// text is longer than a reason carries. An ordered value naming a removed key beside offered ones
-// reads the rest in order, as set.
+// set it, and it is the pair's one value not applied, with the declaration's sha256 and (fix round
+// 1) the stored value's (what the host warns once per): a choice no longer offered, a value of
+// another type, a number out of range or off its step, an ordered value whose offered keys are
+// fewer than min_count once the others are left out, one too short or too long of offered keys
+// only, and one that repeats a key. Fix round 1 (item 7, the design's table): an ordered value
+// naming a removed key beside enough offered ones reads the rest in order, as set, its record
+// marked `keys_left_out`, and it is no value not applied.
 #[test]
 fn v2_a_set_value_that_no_longer_fits_reads_the_default_with_its_word() {
     let catalog = catalog(&[(VAR, 100)], None);
-    let long_keys = (0..5)
-        .map(|index| format!("item_{index}_{}", "x".repeat(56)))
-        .collect::<Vec<_>>();
-    let long_names = long_keys.iter().map(String::as_str).collect::<Vec<_>>();
-    let mut declared = declaration();
-    declared.as_array_mut().expect("the variables").push(json!({
-        "name": "long", "type": "ordered", "title": {"en": "Long"},
-        "options": options(&long_names), "min_count": 1, "max_count": 5,
-        "default": [long_names[0]]
-    }));
+    let declared = declaration();
     let declared_variables = variables(&declared);
     let defaults = declared_variables
         .iter()
@@ -389,7 +381,6 @@ fn v2_a_set_value_that_no_longer_fits_reads_the_default_with_its_word() {
             VariableProblem::KeyRepeated,
         ),
         ("order", json!("item_a"), VariableProblem::TypeChanged),
-        ("long", json!(long_names), VariableProblem::ValueTooLong),
     ] {
         let case = format!("{name} = {set}");
         let facts = facts(vec![record(&catalog, &[(name, set.clone())])]);
@@ -420,12 +411,14 @@ fn v2_a_set_value_that_no_longer_fits_reads_the_default_with_its_word() {
                 not_applied[0].package_id.as_str(),
                 not_applied[0].variable_name.as_str(),
                 not_applied[0].declaration_sha256.as_str(),
+                not_applied[0].value_sha256.as_str(),
                 not_applied[0].problem,
             ),
             (
                 PACKAGE,
                 name,
                 variable.declaration_sha256().as_str(),
+                sha256_of(&set).as_str(),
                 problem
             ),
             "{case}"
@@ -473,19 +466,47 @@ fn v2_a_set_value_that_no_longer_fits_reads_the_default_with_its_word() {
             value: json!(["item_c"]),
             source: VariableSource::Set,
             set_by: lab_set(),
-            problem: None,
+            problem: Some(VariableProblem::KeysLeftOut),
         }
     );
     assert!(plan.not_applied(VAR, A).is_empty());
+    let written = RemedyPlan::default()
+        .with_variable_values(&plan)
+        .dispatch_parameters(VAR, A)
+        .expect("t_var's dispatch parameters")
+        .outcome
+        .value("variable_values")
+        .and_then(|records| {
+            records
+                .as_array()?
+                .iter()
+                .find(|written| written["variable_name"] == "order")
+                .cloned()
+        })
+        .expect("order's record");
+    assert_eq!(
+        written,
+        json!({"variable_name": "order", "variable_source": VariableSource::Set.as_str(),
+               "value_json": "[\"item_c\"]", "set_unix_ms": SET_AT, "set_channel": "lab",
+               "variable_problem": VariableProblem::KeysLeftOut.as_str()})
+    );
+}
+
+/// `sha256:<hex>` of `value`'s compact JSON, as the plan hashes a stored value.
+fn sha256_of(value: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    format!("sha256:{:x}", Sha256::digest(value.to_string().as_bytes()))
 }
 
 // Requirement 3 and the work order's test "a variable that does not apply": a variable the root
 // check keeps from applying reads its default whatever is set, with the word: another package of
 // the game declaring `pick` differently (`declaration_conflict`), a package of the game marking
 // irreversible a capability the declaring package provides unmarked (`irreversible_by_root`), a
-// task of the game whose package could not be read (`irreversible_by_root`, the safe side), and an
-// instance of a game the table never judged (`root_unchecked`). Without a set value the default is
-// read with no word.
+// task of the game whose package could not be read (fix round 1: `package_unreadable`, the safe
+// side's own word; `irreversible_by_root` when a declaring package also provides a marked
+// capability), and an instance of a game the table never judged (`root_unchecked`). Without a set
+// value the default is read with no word. This is the table without a composed standard pack;
+// the host's gate test judges a composed root.
 #[test]
 fn v2_a_variable_that_does_not_apply_reads_its_default_whatever_is_set() {
     let catalog = catalog(&[(VAR, 100), (OTHER, 50)], None);
@@ -519,11 +540,24 @@ fn v2_a_variable_that_does_not_apply_reads_its_default_whatever_is_set() {
             ],
             VariableProblem::IrreversibleByRoot,
         ),
+        // Fix round 1 (item 3): one word, one cause.
         (
             "a package of the game that could not be read",
             vec![
                 task(VAR, Some(package(PACKAGE, own.clone(), nothing()))),
                 task(OTHER, None),
+            ],
+            VariableProblem::PackageUnreadable,
+        ),
+        (
+            "irreversible by the root, beside a package that could not be read",
+            vec![
+                task(VAR, Some(package(PACKAGE, own.clone(), provides(false)))),
+                task(
+                    OTHER,
+                    Some(package(OTHER_PACKAGE, Vec::new(), provides(true))),
+                ),
+                task("t_unread", None),
             ],
             VariableProblem::IrreversibleByRoot,
         ),
@@ -598,5 +632,109 @@ fn v2_a_package_without_variables_gives_the_reason_chains_of_before() {
             .iter()
             .all(|reason| reason.outcome.code().as_str() != PARAMETERS),
         "no dispatch parameters"
+    );
+}
+
+// Fix round 1, item 1: the record's capacity does not decide what a run reads. An `ordered` value
+// of twenty keys the declaration takes, whose compact JSON is longer than 256 bytes (and within
+// the 1024 the goal store keeps), is applied as set, and its record carries it whole as
+// `value_json`.
+#[test]
+fn v2_fix1_a_value_longer_than_256_bytes_is_applied_and_recorded_whole() {
+    let catalog = catalog(&[(VAR, 100)], None);
+    let keys = (0..20)
+        .map(|index| format!("item_{index:02}_{}", "x".repeat(12)))
+        .collect::<Vec<_>>();
+    let names = keys.iter().map(String::as_str).collect::<Vec<_>>();
+    let declared = variables(&json!([{
+        "name": "many", "type": "ordered", "title": {"en": "Many"},
+        "options": options(&names), "min_count": 1, "max_count": 20,
+        "default": [names[0]]
+    }]));
+    let table = VariableTable::build(&[task(VAR, Some(package(PACKAGE, declared, nothing())))]);
+    let set = json!(names);
+    let text = set.to_string();
+    assert!(text.len() > 256 && text.len() <= 1024, "{}", text.len());
+    let facts = facts(vec![record(&catalog, &[("many", set.clone())])]);
+    let plan = plan_variable_values(&catalog, &facts, &table);
+    assert_eq!(
+        values_of(&plan),
+        vec![ResolvedVariable {
+            variable_name: "many".to_owned(),
+            value: set,
+            source: VariableSource::Set,
+            set_by: lab_set(),
+            problem: None,
+        }]
+    );
+    assert!(plan.not_applied(VAR, A).is_empty());
+    let reason = RemedyPlan::default()
+        .with_variable_values(&plan)
+        .dispatch_parameters(VAR, A)
+        .expect("t_var's dispatch parameters")
+        .clone();
+    assert_eq!(
+        reason.outcome.value("variable_values"),
+        Some(
+            &json!([{"variable_name": "many", "variable_source": "set", "value_json": text,
+                      "set_unix_ms": SET_AT, "set_channel": "lab"}])
+        )
+    );
+}
+
+// Fix round 1, item 6: a stored entry whose row says nothing readable of who set it (its
+// `set_unix_ms` or its `channel`; the v3 reader holds both to their form, so the rows are given
+// here as the plan would read them) is a stored value that was not applied, never taken as not
+// set: the run reads the default, the record says `default` with `entry_unreadable` and no
+// setter, and it is the pair's one value not applied, with the stored value's sha256.
+#[test]
+fn v2_fix1_a_stored_row_whose_setter_cannot_be_read_is_not_applied_with_its_word() {
+    let catalog = catalog(&[(VAR, 100)], None);
+    let stored = json!("item_a");
+    let plan = crate::variables::plan_with_entries(&catalog, &facts(Vec::new()), &table(), |_| {
+        BTreeMap::from([(
+            "pick".to_owned(),
+            crate::resource_targets::StoredEntry {
+                value: stored.clone(),
+                set_by: None,
+            },
+        )])
+    });
+    assert_eq!(
+        values_of(&plan)[0],
+        ResolvedVariable {
+            variable_name: "pick".to_owned(),
+            value: json!("item_b"),
+            source: VariableSource::Default,
+            set_by: None,
+            problem: Some(VariableProblem::EntryUnreadable),
+        }
+    );
+    let not_applied = plan.not_applied(VAR, A);
+    assert_eq!(not_applied.len(), 1, "{not_applied:?}");
+    assert_eq!(
+        (
+            not_applied[0].variable_name.as_str(),
+            not_applied[0].value_sha256.as_str(),
+            not_applied[0].problem,
+        ),
+        (
+            "pick",
+            sha256_of(&stored).as_str(),
+            VariableProblem::EntryUnreadable
+        )
+    );
+    let written = RemedyPlan::default()
+        .with_variable_values(&plan)
+        .dispatch_parameters(VAR, A)
+        .expect("t_var's dispatch parameters")
+        .outcome
+        .value("variable_values")
+        .and_then(|records| records.as_array()?.first().cloned())
+        .expect("pick's record");
+    assert_eq!(
+        written,
+        json!({"variable_name": "pick", "variable_source": "default", "value_json": "\"item_b\"",
+               "variable_problem": VariableProblem::EntryUnreadable.as_str()})
     );
 }

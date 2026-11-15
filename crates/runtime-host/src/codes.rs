@@ -3401,8 +3401,8 @@ actingcommand_contract::outcome_codes! {
         /// Warning (since 0.12.61). A new dispatch of the task (`task_id`) on the application
         /// (`instance_id`) reads the default of its package's (`package_id`) variable
         /// (`variable_name`, declared as `declaration_sha256`) instead of the value set there, for
-        /// the reason `variable_problem` names. Written once per (application, name, declaration)
-        /// after a start; the run goes on.
+        /// the reason `variable_problem` names. Written once per (application, name, declaration,
+        /// and since fix round 1 the stored value) after a start; the run goes on.
         NotApplied => "goal_value_not_applied": warning / none,
         /// Error (Workflow #463 V3, since 0.12.61). An `EditGoal` was refused before the fact
         /// write gate: the name it names (`goal_name`, when it has an entry name's form) or its

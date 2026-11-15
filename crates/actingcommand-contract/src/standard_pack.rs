@@ -1101,6 +1101,76 @@ pub fn standard_pack_page_id(id: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
+/// Workflow #464 P3 (register §1.375, its second merge of main): the rule of the installer's
+/// `place` at the edge, held here so that `place` and the readiness item I2 call one rule. An
+/// installer whose own `package` range is `own` places a bundle whose `interfaces.json` declares
+/// the range `declared` when the bundle's maximum lies within the installer's range,
+/// `own[0] <= declared[1] <= own[1]` (`place` refuses it `interface_edge` otherwise); then what
+/// the bundle carries asks its revision of that maximum ([`BundleRevisionNeed`]).
+pub const fn package_edge_holds(own: [u64; 2], declared: [u64; 2]) -> bool {
+    own[0] <= declared[1] && declared[1] <= own[1]
+}
+
+/// Workflow #464 P3: what a bundle carries that a `package` revision brought, and so asks of the
+/// `package` maximum (`package[1]`) its `interfaces.json` declares, by the rule of the installer's
+/// `place` at the edge: a bundle zip that carries one and declares less is refused before anything
+/// is held or written (`pack_invalid` caused by `standard_pack_root_invalid` with
+/// [`Self::problem`] at `interfaces.json`, the pointer empty), checked by `place` in this order;
+/// the readiness item I2 judges a game root by the same rule. A select step (`package` 13,
+/// Workflow #463 K1) asks nothing here: a bundle with one that declares less is placed, and the
+/// Runtime refuses every run of that package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleRevisionNeed {
+    /// The notices directory `notices/` (Workflow #444 NOTICES-2): revision 10,
+    /// `notice_undeclared`.
+    Notices,
+    /// `goals.json` (Workflow #455 G-R1; version 2, the version this build reads, since Workflow
+    /// #463 V1 fix round 3): revision 14, `goal_undeclared`.
+    Goals,
+    /// A pack whose control declaration declares variables (Workflow #463 V1 fix round 1;
+    /// [`control_declares_variables`]): revision 14, `variable_undeclared`.
+    Variables,
+}
+
+impl BundleRevisionNeed {
+    /// The `package` revision that brought what it names: [`crate::NOTICES_PACKAGE_REVISION`],
+    /// [`crate::GOALS_PACKAGE_REVISION`] or [`crate::VARIABLES_PACKAGE_REVISION`].
+    pub const fn revision(self) -> u64 {
+        match self {
+            Self::Notices => crate::NOTICES_PACKAGE_REVISION,
+            Self::Goals => crate::GOALS_PACKAGE_REVISION,
+            Self::Variables => crate::VARIABLES_PACKAGE_REVISION,
+        }
+    }
+
+    /// The problem of a bundle that carries it and declares less.
+    pub const fn problem(self) -> StandardPackProblem {
+        match self {
+            Self::Notices => StandardPackProblem::NoticeUndeclared,
+            Self::Goals => StandardPackProblem::GoalUndeclared,
+            Self::Variables => StandardPackProblem::VariableUndeclared,
+        }
+    }
+
+    /// Whether a bundle whose `interfaces.json` declares the `package` range `declared` declares
+    /// it: its maximum is [`Self::revision`] at least.
+    pub const fn declared_by(self, declared: [u64; 2]) -> bool {
+        declared[1] >= self.revision()
+    }
+}
+
+/// Workflow #464 P3 (Workflow #463 V1 fix round 1's reading at the edge): whether a pack's
+/// control declaration, its bytes `control` (a UTF-8 byte order mark allowed), declares variables
+/// as the installer's `place` reads it: a JSON object with the top-level member `variables`. Only
+/// the member's presence is read; what the variables declare, and a control declaration that is no
+/// JSON object, are admission's.
+pub fn control_declares_variables(control: &[u8]) -> bool {
+    let bytes = control.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(control);
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .is_some_and(|document| document.get("variables").is_some())
+}
+
 #[cfg(test)]
 mod tests {
     //! Workflow #373 NAV-6, test row N6-1 (model M-373 v1.1 §3.3, §3.6, §3.9, §3.10): the

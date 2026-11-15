@@ -340,6 +340,11 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// IDLE-3 (#447, register §1.332): the policy's own dispatches as the cycle's inputs were
     /// read ([`PolicyHost::idle_dispatches_read`]), kept with the cycle's not-run explanation.
     pub(crate) dispatches_read: IdleDispatchRead,
+    /// Workflow #463 V2 fix round 1 (register §1.382): with a composed standard pack, the
+    /// variable table the scheduler workbench's last read of each game root judged over the
+    /// whole root (`standard_pack_variables`), read from memory as the cycle starts; `None`
+    /// without one, where the remedy table's is read.
+    pub(crate) standard_pack_variables: Option<&'a actingcommand_policy::VariableTable>,
 }
 
 /// IDLE-3 (#447, register §1.332): the policy's own dispatches as an evaluation read its inputs,
@@ -1510,6 +1515,17 @@ fn instance_arbitration_ranks(
     ranks
 }
 
+/// Workflow #463 V2 fix round 1 (register §1.382): what "once" of `goal_value_not_applied` is
+/// counted by: the application, the variable's name, its declaration's sha256 and the stored
+/// value's sha256, so a person who replaces one value not applied by another is warned again.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct WarnedVariableValue {
+    instance_id: String,
+    variable_name: String,
+    declaration_sha256: String,
+    value_sha256: String,
+}
+
 /// The policy half of the Runtime host.
 ///
 /// Dispatch projection (Workflow #191 U5-F1):
@@ -1607,9 +1623,9 @@ pub(crate) struct PolicyHost {
     /// ended. Memory only; a host starts with none, and no decision reads it.
     held: held::HeldMemory,
     /// Workflow #463 V2 (register §1.382): each (instance, variable name, declaration sha256)
-    /// whose `goal_value_not_applied` this start wrote. Memory only, nothing on disk: a restart
-    /// writes it once more.
-    variable_warned: BTreeSet<(String, String, String)>,
+    /// whose `goal_value_not_applied` this start wrote; fix round 1: with the stored value's
+    /// sha256. Memory only, nothing on disk: a restart writes it once more.
+    variable_warned: BTreeSet<WarnedVariableValue>,
     /// Workflow #463 V2: the `goal_value_not_applied` warnings the last evaluations decided and
     /// the cycle's recorder has not taken yet ([`Self::take_variable_warnings`]).
     variable_warnings: Vec<Outcome>,
@@ -3686,6 +3702,7 @@ impl PolicyHost {
             device_group_holds,
             switch_cooldowns,
             dispatches_read,
+            standard_pack_variables,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -3779,18 +3796,25 @@ impl PolicyHost {
         // variable values of every pair whose bound package declares variables, read from this
         // evaluation's facts (the memory store's projection; no ledger read) and the table's
         // variables, judged by game once per table. They join the plan's
-        // `policy_dispatch_parameters`, whether remedies are on or off.
-        let variable_plan = self
-            .remedies
-            .table()
-            .map(|table| {
-                actingcommand_policy::plan_variable_values(
-                    &active.compiled,
-                    facts,
-                    table.variables(),
-                )
-            })
-            .unwrap_or_default();
+        // `policy_dispatch_parameters`, whether remedies are on or off. Fix round 1: with a
+        // composed standard pack the table is the scheduler workbench's, judged over each whole
+        // game root; without one the remedy table's, as before.
+        let variable_plan = match standard_pack_variables {
+            Some(table) => {
+                actingcommand_policy::plan_variable_values(&active.compiled, facts, table)
+            }
+            None => self
+                .remedies
+                .table()
+                .map(|table| {
+                    actingcommand_policy::plan_variable_values(
+                        &active.compiled,
+                        facts,
+                        table.variables(),
+                    )
+                })
+                .unwrap_or_default(),
+        };
         let remedy_plan = remedy_plan.with_variable_values(&variable_plan);
         // Workflow #427-B: the dispatches admitted or running and the limit of concurrent runs
         // (Workflow #429 R-2: the configuration's value in effect as the cycle starts).
@@ -4082,13 +4106,15 @@ impl PolicyHost {
             .collect();
         // Workflow #463 V2: a value set on an application that a new dispatch does not hand its
         // run is warned once per (instance, name, declaration) since the start, in memory only.
+        // Fix round 1: and per stored value, so another value not applied is warned again.
         for intent in &pending_dispatch_intents {
             for value in variable_plan.not_applied(&intent.task_id, &intent.instance_id) {
-                let key = (
-                    intent.instance_id.clone(),
-                    value.variable_name.clone(),
-                    value.declaration_sha256.clone(),
-                );
+                let key = WarnedVariableValue {
+                    instance_id: intent.instance_id.clone(),
+                    variable_name: value.variable_name.clone(),
+                    declaration_sha256: value.declaration_sha256.clone(),
+                    value_sha256: value.value_sha256.clone(),
+                };
                 if self.variable_warned.insert(key) {
                     self.variable_warnings.push(
                         Outcome::new(crate::codes::GoalValueCode::NotApplied)
@@ -4657,8 +4683,8 @@ impl PolicyHost {
     }
 
     /// Workflow #463 V2: the `goal_value_not_applied` warnings the evaluations since the last call
-    /// decided, each once per (instance, variable name, declaration) since the start, for the
-    /// cycle's recorder.
+    /// decided, each once per (instance, variable name, declaration, stored value) since the
+    /// start, for the cycle's recorder.
     pub(crate) fn take_variable_warnings(&mut self) -> Vec<Outcome> {
         std::mem::take(&mut self.variable_warnings)
     }

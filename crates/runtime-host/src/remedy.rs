@@ -11,7 +11,9 @@
 //!   (or that there was none) and is built again when the manifest in place differs; each table
 //!   taken into effect says in one developer line what it found, and names the catalog tasks
 //!   without a package location. Workflow #463 V2: the same scan keeps the bound packages'
-//!   variables, with each game's root check run once per table (`VariableTable`).
+//!   variables, with each game's root check run once per table (`VariableTable`), which a
+//!   dispatch reads without a composed standard pack (fix round 1: with one, it reads the
+//!   scheduler workbench's table, judged over each whole game root).
 //! - **The state** (§7.8): the outcome key each settled run of a task that declares a remedy
 //!   ended on (read from its terminal's `scheduling_disposition` whether or not the catalog
 //!   references it), the `signal:remedy:` planning signals already recorded and the stops no
@@ -128,7 +130,9 @@ pub(crate) struct BuiltTable {
     built_at_unix_ms: u64,
     /// Workflow #463 V2 (`contracts/package-variables.md`, "The run"): the variables the bound
     /// packages declare, read by the same scan, with each game's root check run once for this
-    /// table ([`VariableTable::build`]). Memory only; dropped with the table.
+    /// table ([`VariableTable::build`]). Memory only; dropped with the table. Fix round 1: what a
+    /// dispatch reads without a composed standard pack only; with one, the scheduler workbench's
+    /// table, judged over each whole game root, is read instead.
     variables: VariableTable,
 }
 

@@ -36,9 +36,10 @@ use actingcommand_contract::{
     StandardPackRoot, StandardPackRootBytes, read_standard_pack_root, validate_instance_alias,
 };
 use actingcommand_policy::{
-    BenefitCoverage, BenefitFollower, BenefitProvenance, ComposedGame, ComposedProcedure,
-    ConsumptionFactRule, StandardPackBinding, StandardPackComposeFailure, StandardPackComposeInput,
-    StandardPackComposition, StandardPackGameFiles, compose_standard_pack_rules,
+    BenefitCoverage, BenefitFollower, BenefitProvenance, CompiledCatalog, ComposedGame,
+    ComposedProcedure, ConsumptionFactRule, StandardPackBinding, StandardPackComposeFailure,
+    StandardPackComposeInput, StandardPackComposition, StandardPackGameFiles,
+    compose_standard_pack_rules,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -137,12 +138,15 @@ pub(crate) fn readable_root(root: &StandardPackRoot) -> IrreversiblePackages {
 /// with its key and fallback, in file order. Workflow #455 G-R2s (register §1.369): composed with
 /// `irreversible`, the root's packages as `root_irreversibility` read them; a package that could
 /// not be read is one `standard_pack_package_unreadable` among the composition's warnings.
+/// Workflow #464 P1 fix round 2: and the catalog the composition compiled, which `standard-pack
+/// adopt` reads as the Runtime does (the outcome keys each task's readers name, a manual request).
 pub(crate) struct ScheduleReport {
     pub(crate) warnings: Vec<Outcome>,
     pub(crate) benefit_coverage: BenefitCoverage,
     pub(crate) benefit_provenance: BenefitProvenance,
     pub(crate) benefit_followers: Vec<BenefitFollower>,
     pub(crate) consumption_facts: Vec<ConsumptionFactRule>,
+    pub(crate) compiled: CompiledCatalog,
 }
 
 /// Checks `schedule` (the bytes of the game root's `schedule.json` at `path`) against the game
@@ -200,6 +204,7 @@ pub(crate) fn report_schedule(
         benefit_provenance,
         benefit_followers,
         consumption_facts,
+        compiled: composition.compiled().clone(),
     })
 }
 
@@ -212,6 +217,25 @@ fn compose_check(
     path: &Path,
     irreversible: &IrreversiblePackages,
 ) -> LabResult<StandardPackComposition> {
+    compose_per_server(game, root, maintenance, schedule, irreversible, None)
+        .map_err(|failure| refused(&failure, game, &|_| path.to_owned()))
+}
+
+/// The composition of `schedule` with one bound instance per server of the registry of `root`
+/// (the alias `standard-pack-check.<server>`), as [`report_schedule`] reads it, or the composer's
+/// refusal as it is. Workflow #464 P3 (`crate::standard_pack_ready`): `subsystems`, when given, are
+/// the subsystems a live build's configuration manifest names, which `requires` must name, as the
+/// Runtime that loads the rules checks them; `None` (the tools) reports `requires` unchecked.
+/// Workflow #455 G-R2s: composed with `irreversible`, the root's packages as
+/// `root_irreversibility` read them.
+pub(crate) fn compose_per_server(
+    game: &str,
+    root: &StandardPackRoot,
+    maintenance: &[BundleMaintenance],
+    schedule: &[u8],
+    irreversible: &IrreversiblePackages,
+    subsystems: Option<&BTreeSet<String>>,
+) -> Result<StandardPackComposition, StandardPackComposeFailure> {
     let servers = root
         .registry
         .listed()
@@ -242,10 +266,9 @@ fn compose_check(
     compose_standard_pack_rules(&StandardPackComposeInput {
         instances: &instances,
         games: &games,
-        subsystems: None,
+        subsystems,
         catalog_version: TOOLS_CATALOG_VERSION,
     })
-    .map_err(|failure| refused(&failure, game, &|_| path.to_owned()))
 }
 
 /// `actinglab standard-pack compose` (module doc).

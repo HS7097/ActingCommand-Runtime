@@ -22,30 +22,30 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3915 |
+| active | 3922 |
 | retired | 28 |
-| all | 3943 |
+| all | 3950 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
 | success | 131 |
-| info | 212 |
-| warning | 150 |
-| error | 3405 |
+| info | 213 |
+| warning | 151 |
+| error | 3410 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 728 |
+| `common_causes` and `handling` both written | 735 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3183 |
 | `settled` | 170 |
-| `pending` | 3745 |
-| all active codes | 3915 |
+| `pending` | 3752 |
+| all active codes | 3922 |
 
 ## By owner
 
@@ -54,7 +54,7 @@ here.
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
 | [actingctl](actingctl.md) | 199 | 198 | 39 | 11 |
 | [actingd](actingd.md) | 155 | 154 | 99 | 86 |
-| [actinglab](actinglab.md) | 40 | 39 | 39 | 0 |
+| [actinglab](actinglab.md) | 43 | 42 | 42 | 0 |
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 3 | 3 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
@@ -73,7 +73,7 @@ here.
 | [policy](policy.md) | 119 | 117 | 56 | 0 |
 | [recognition](recognition.md) | 6 | 6 | 0 | 0 |
 | [recognition-pack](recognition-pack.md) | 22 | 22 | 0 | 0 |
-| [resource-tooling](resource-tooling.md) | 83 | 83 | 7 | 0 |
+| [resource-tooling](resource-tooling.md) | 87 | 87 | 11 | 0 |
 | [runtime-client](runtime-client.md) | 211 | 210 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
@@ -82,4 +82,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3943 | 3915 | 728 | 170 |
+| all | 3950 | 3922 | 735 | 170 |

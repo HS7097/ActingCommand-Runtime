@@ -14,6 +14,7 @@
 // is involved.
 
 use super::*;
+use actingcommand_contract::{FactContent, FactValue, InstanceFactContext, InstanceFactSnapshot};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use std::io::{Cursor, Write};
 use zip::{ZipWriter, write::FileOptions};
@@ -378,4 +379,42 @@ fn v2_replay_refuses_an_undeclared_or_unfit_variable_and_takes_a_fit_one() {
             taken.envelope_json()
         );
     }
+
+    // Fix round 1: the value given replaces the default in what the scan's snapshot is overlaid
+    // with: `opt_1` given, `opt_2` (the default) without it.
+    assert_eq!(
+        overlaid_pick(&declaring, &[("pick".to_owned(), json!("opt_1"))]),
+        Some(FactValue::String("opt_1".to_owned()))
+    );
+    assert_eq!(
+        overlaid_pick(&declaring, &[]),
+        Some(FactValue::String("opt_2".to_owned()))
+    );
+}
+
+/// Fix round 1: the value of `session.dispatch.parameter.pick` in a snapshot overlaid with what
+/// the scan replay of `package` reads when it is given `variables` (`None` when it holds none).
+fn overlaid_pick(package: &str, variables: &[(String, Value)]) -> Option<FactValue> {
+    let parameters =
+        crate::replay_cli::scan_replay_parameters(std::path::Path::new(package), &[], variables)
+            .unwrap_or_else(|_| panic!("the scan replay takes {variables:?}"));
+    let mut snapshot = InstanceFactSnapshot {
+        snapshot_id: "snapshot-replay".to_owned(),
+        ledger_position: 1,
+        context: InstanceFactContext {
+            instance_id: "offline.replay".to_owned(),
+            server_id: "test".to_owned(),
+            game_id: "neutral".to_owned(),
+        },
+        records: Vec::new(),
+    };
+    parameters.overlay(&mut snapshot, 1_000);
+    snapshot
+        .records
+        .iter()
+        .find(|record| record.key == "session.dispatch.parameter.pick")
+        .map(|record| match &record.content {
+            FactContent::Inline { value } => value.clone(),
+            other => panic!("an overlay record is inline: {other:?}"),
+        })
 }

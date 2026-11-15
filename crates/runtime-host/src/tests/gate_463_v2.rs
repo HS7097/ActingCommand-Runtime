@@ -21,17 +21,25 @@ use super::gate_rl1b::{
 };
 use super::*;
 use actingcommand_contract::outcome::Outcome;
-use actingcommand_contract::{DeclaredInitiator, Initiator, RuntimeChannel, RuntimePayload};
+use actingcommand_contract::{
+    DeclaredInitiator, FactContent, FactValue, Initiator, InstanceFactContext,
+    InstanceFactSnapshot, RuntimeChannel, RuntimePayload, VariableProblem,
+};
 use actingcommand_policy::PolicyEvaluation;
 use serde_json::{Value, json};
 use std::fs;
 
 const TASK: &str = "fixture.vars";
+/// Fix round 1: a package of the root that no rule runs.
+const HELD: &str = "fixture.held";
 const INSTANCE: &str = POLICY_INSTANCE_ALIAS;
 const RESULT: [u8; 3] = [255, 255, 255];
 const HOME: [u8; 3] = [255, 0, 0];
 const PARAMETERS: &str = "policy_dispatch_parameters";
 const NOT_APPLIED: &str = "goal_value_not_applied";
+const PICK_KEY: &str = "session.dispatch.parameter.pick";
+/// The default `standard_packs.check_interval_ms`: a check reads the roots again after it.
+const CHECK_INTERVAL_MS: u64 = 60_000;
 
 // ---- The game root.
 
@@ -77,12 +85,29 @@ fn place_game_root(packs: &Path) {
     );
     let package = game.join(TASK);
     write_package(&package, TASK, None, None);
+    patch_control(&package, |control| control["variables"] = variables());
+}
+
+// Fix round 1: changes the control declaration of the package in `package` in place.
+fn patch_control(package: &Path, change: impl FnOnce(&mut Value)) {
     let control_path = package.join("control.json");
     let mut control: Value =
         serde_json::from_slice(&fs::read(&control_path).expect("the control declaration"))
             .expect("control JSON");
-    control["variables"] = variables();
+    change(&mut control);
     write_json(&control_path, &control);
+}
+
+// Fix round 1: the game root of [`place_game_root`] whose registry also lists [`HELD`], placed
+// below `packs` with `provides` (none when `None`): a package no rule runs.
+fn place_with_held(packs: &Path, provides: Option<Value>) {
+    place_game_root(packs);
+    let game = packs.join(GAME_A);
+    write_json(
+        &game.join("bundle.json"),
+        &bundle(GAME_A, SERVER_A, &[TASK, HELD]),
+    );
+    write_package(&game.join(HELD), HELD, None, provides);
 }
 
 // The fixture's facts: the one instance bound to game A on server A, able to run the Runtime's
@@ -133,9 +158,14 @@ fn start_host(
 
 impl Scene {
     fn new() -> Self {
+        Self::with(place_game_root)
+    }
+
+    // Fix round 1: the host over the game root `place` places below its standard-pack root.
+    fn with(place: impl FnOnce(&Path)) -> Self {
         let state_root = TempDir::new().expect("state root");
         let packs = TempDir::new().expect("standard-pack root");
-        place_game_root(packs.path());
+        place(packs.path());
         let device = Arc::new(FakeState::default());
         let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
         let instance = instance_id();
@@ -360,6 +390,40 @@ fn next_eligible(context: &PolicyRunContext) -> u64 {
     context.admission().activity.next_eligible_unix_ms
 }
 
+// Fix round 1 (item 8): the value of `session.dispatch.parameter.pick` in a snapshot overlaid
+// with what the host's last run read (`None` when it holds none): what the run's snapshots hold.
+fn overlaid_pick(scene: &Scene) -> Option<FactValue> {
+    let runs = scene
+        .host
+        .run_parameters_for_test()
+        .expect("the parameters of the host's runs");
+    let parameters = runs.last().expect("a run read its parameters");
+    let mut snapshot = InstanceFactSnapshot {
+        snapshot_id: "snapshot-v2-host".to_owned(),
+        ledger_position: 1,
+        context: InstanceFactContext {
+            instance_id: INSTANCE.to_owned(),
+            server_id: SERVER_A.to_owned(),
+            game_id: GAME_A.to_owned(),
+        },
+        records: Vec::new(),
+    };
+    parameters.overlay(&mut snapshot, POLICY_NOW_UNIX_MS);
+    snapshot
+        .records
+        .iter()
+        .find(|record| record.key == PICK_KEY)
+        .map(|record| match &record.content {
+            FactContent::Inline { value } => value.clone(),
+            other => panic!("an overlay record is inline: {other:?}"),
+        })
+}
+
+// The string fact `text`.
+fn text(text: &str) -> Option<FactValue> {
+    Some(FactValue::String(text.to_owned()))
+}
+
 // Requirements 1, 4, 5 and the work order's tests "set beats default", "restart reloads" and "the
 // warning once": with no value set, the dispatch's reason records the default `item_b` (source
 // `default`) and its run reads it; a value set through the Lab (`item_a`) is the next dispatch's,
@@ -367,7 +431,9 @@ fn next_eligible(context: &PolicyRunContext) -> u64 {
 // reads the stored value again and the dispatch after it hands it to its run unchanged. A value the
 // declaration no longer takes (`item_z`) reads the default with `not_an_option` and who set it, on
 // each of the next two dispatches, while one `goal_value_not_applied` names the instance, the
-// task, the package, the variable, its declaration and the word.
+// task, the package, the variable, its declaration and the word. Fix round 1: the run's
+// snapshots hold each value the record says (item 8), and replacing the value not applied by
+// another one not applied (`item_y`) is warned once more (item 5).
 #[test]
 fn v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again() {
     let scene = Scene::new();
@@ -378,6 +444,7 @@ fn v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again() {
                 "value_json": "\"item_b\""}])
     );
     assert_eq!(run_values(&context), [("pick".to_owned(), json!("item_b"))]);
+    assert_eq!(overlaid_pick(&scene), text("item_b"));
 
     let set_at = next_eligible(&context);
     scene.set_pick(json!("item_a"), set_at);
@@ -386,6 +453,11 @@ fn v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again() {
                       "value_json": "\"item_a\"", "set_unix_ms": set_at, "set_channel": "lab"}]);
     assert_eq!(variable_values(&chain), set);
     assert_eq!(run_values(&context), [("pick".to_owned(), json!("item_a"))]);
+    assert_eq!(
+        overlaid_pick(&scene),
+        text("item_a"),
+        "the set value is overlaid"
+    );
     assert!(scene.failed(NOT_APPLIED).is_empty());
 
     let restart_at = next_eligible(&context);
@@ -397,6 +469,7 @@ fn v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again() {
         "the start reads the stored value"
     );
     assert_eq!(run_values(&context), [("pick".to_owned(), json!("item_a"))]);
+    assert_eq!(overlaid_pick(&scene), text("item_a"));
 
     let gone_at = next_eligible(&context);
     scene.set_pick(json!("item_z"), gone_at);
@@ -411,6 +484,7 @@ fn v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again() {
             "seed {seed}"
         );
         assert_eq!(run_values(&context), [("pick".to_owned(), json!("item_b"))]);
+        assert_eq!(overlaid_pick(&scene), text("item_b"), "seed {seed}");
         at = next_eligible(&context);
     }
     let warnings = scene.failed(NOT_APPLIED);
@@ -436,5 +510,173 @@ fn v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again() {
             .is_some_and(|sha| sha.starts_with("sha256:") && sha.len() == 71),
         "{warning}"
     );
+
+    // Fix round 1 (item 5): another value the declaration does not take is warned once more.
+    scene.set_pick(json!("item_y"), at);
+    let (chain, context) = scene.evaluate_and_run(at, 12);
+    assert_eq!(
+        variable_values(&chain),
+        json!([{"variable_name": "pick", "variable_source": "default",
+                "value_json": "\"item_b\"", "set_unix_ms": at, "set_channel": "lab",
+                "variable_problem": "not_an_option"}])
+    );
+    assert_eq!(overlaid_pick(&scene), text("item_b"));
+    let warnings = scene.failed(NOT_APPLIED);
+    assert_eq!(warnings.len(), 2, "{warnings:#?}");
+    assert_eq!(
+        warnings[1].value("declaration_sha256"),
+        warning.value("declaration_sha256"),
+        "the same declaration, another value"
+    );
+    assert_eq!(
+        warnings[1]
+            .value("variable_problem")
+            .and_then(Value::as_str),
+        Some("not_an_option")
+    );
+    let again_at = next_eligible(&context);
+    scene.evaluate_and_run(again_at, 13);
+    assert_eq!(scene.failed(NOT_APPLIED).len(), 2, "once per value");
+    scene.close();
+}
+
+// Fix round 1, item 2 (the coordinator's ruling: the judgement of "does not apply" is the root
+// check's, over the whole root): with a composed standard pack the host judges every package of
+// the game root's registry, a package no rule runs included, and the root's `goals.json`, read
+// with the contract crate's reader. In each case the dispatch after a value is set through the
+// Lab (`item_a`) hands its run the default `item_b`, its record names who set the value and the
+// word, the run's snapshots hold `item_b`, and one `goal_value_not_applied` says the word: a
+// package no rule runs marks irreversible a capability the dispatched package provides unmarked
+// (`irreversible_by_root`); it declares `pick` differently (`declaration_conflict`); an entry of
+// the accepted `goals.json` uses the name `pick` for a heading (`goal_name_conflict`); its control
+// declaration cannot be read (item 3: `package_unreadable`, not `irreversible_by_root`).
+#[test]
+fn v2_fix1_the_whole_root_keeps_a_variable_from_applying() {
+    fn held_marks_irreversible(packs: &Path) {
+        place_with_held(
+            packs,
+            Some(json!([{"capability": "cap_x", "irreversible": true}])),
+        );
+        patch_control(&packs.join(GAME_A).join(TASK), |control| {
+            control["provides"] = json!([{"capability": "cap_x"}]);
+        });
+    }
+    fn held_declares_otherwise(packs: &Path) {
+        place_with_held(packs, None);
+        patch_control(&packs.join(GAME_A).join(HELD), |control| {
+            let mut differing = variables();
+            differing[0]["default"] = json!("item_a");
+            control["variables"] = differing;
+        });
+    }
+    fn goals_take_the_name(packs: &Path) {
+        place_game_root(packs);
+        write_json(
+            &packs.join(GAME_A).join("goals.json"),
+            &json!({"schema_version": "actingcommand.goals.v2", "game": GAME_A,
+                    "entries": [{"name": "pick", "type": "heading",
+                                 "title": {"en": "Pick"}}]}),
+        );
+    }
+    fn held_unreadable(packs: &Path) {
+        place_with_held(packs, None);
+        write_json(
+            &packs.join(GAME_A).join(HELD).join("control.json"),
+            &json!({"schema_version": "Lab-1y.control.v2"}),
+        );
+    }
+    kept_from_applying(
+        "a package no rule runs marks the capability irreversible",
+        held_marks_irreversible,
+        VariableProblem::IrreversibleByRoot,
+    );
+    kept_from_applying(
+        "a package no rule runs declares the name otherwise",
+        held_declares_otherwise,
+        VariableProblem::DeclarationConflict,
+    );
+    kept_from_applying(
+        "goals.json takes the name",
+        goals_take_the_name,
+        VariableProblem::GoalNameConflict,
+    );
+    kept_from_applying(
+        "a package of the root cannot be read",
+        held_unreadable,
+        VariableProblem::PackageUnreadable,
+    );
+}
+
+// The case `case` of [`v2_fix1_the_whole_root_keeps_a_variable_from_applying`]: the root `place`
+// places keeps `pick` from applying with `problem`.
+fn kept_from_applying(case: &str, place: impl FnOnce(&Path), problem: VariableProblem) {
+    let scene = Scene::with(place);
+    let (chain, context) = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 7);
+    assert_eq!(
+        variable_values(&chain),
+        json!([{"variable_name": "pick", "variable_source": "default",
+                "value_json": "\"item_b\""}]),
+        "{case}: nothing set"
+    );
+    let set_at = next_eligible(&context);
+    scene.set_pick(json!("item_a"), set_at);
+    let (chain, _) = scene.evaluate_and_run(set_at, 8);
+    assert_eq!(
+        variable_values(&chain),
+        json!([{"variable_name": "pick", "variable_source": "default",
+                "value_json": "\"item_b\"", "set_unix_ms": set_at, "set_channel": "lab",
+                "variable_problem": problem.as_str()}]),
+        "{case}"
+    );
+    assert_eq!(overlaid_pick(&scene), text("item_b"), "{case}");
+    let warnings = scene.failed(NOT_APPLIED);
+    assert_eq!(warnings.len(), 1, "{case}: {warnings:#?}");
+    assert_eq!(
+        warnings[0]
+            .value("variable_problem")
+            .and_then(Value::as_str),
+        Some(problem.as_str()),
+        "{case}"
+    );
+    scene.close();
+}
+
+// Fix round 1, item 2: a package replaced in place is judged with its new declaration after the
+// workbench's next read of the root (its control declaration's marks changed). With `item_a` set
+// and applied, the package's declaration is rewritten in place without the option `item_a`; the
+// first dispatch after the next check hands its run the default `item_b` with `not_an_option`.
+#[test]
+fn v2_fix1_a_package_replaced_in_place_is_judged_with_its_new_declaration() {
+    let scene = Scene::new();
+    let (_, context) = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 7);
+    let set_at = next_eligible(&context);
+    scene.set_pick(json!("item_a"), set_at);
+    let (chain, context) = scene.evaluate_and_run(set_at, 8);
+    assert_eq!(
+        variable_values(&chain)[0]["variable_source"],
+        "set",
+        "{chain:?}"
+    );
+    assert_eq!(overlaid_pick(&scene), text("item_a"));
+
+    patch_control(&scene.packs.path().join(GAME_A).join(TASK), |control| {
+        control["variables"] = json!([{
+            "name": "pick", "type": "choice", "title": {"en": "Item"},
+            "options": [{"value": "item_b", "title": {"en": "Item B"}},
+                        {"value": "item_c", "title": {"en": "Item C"}},
+                        {"value": "item_d", "title": {"en": "Item D"}}],
+            "default": "item_b"
+        }]);
+    });
+    let read_at = next_eligible(&context).max(set_at + CHECK_INTERVAL_MS);
+    let (chain, _) = scene.evaluate_and_run(read_at, 9);
+    assert_eq!(
+        variable_values(&chain),
+        json!([{"variable_name": "pick", "variable_source": "default",
+                "value_json": "\"item_b\"", "set_unix_ms": set_at, "set_channel": "lab",
+                "variable_problem": VariableProblem::NotAnOption.as_str()}])
+    );
+    assert_eq!(overlaid_pick(&scene), text("item_b"));
+    assert_eq!(scene.failed(NOT_APPLIED).len(), 1);
     scene.close();
 }

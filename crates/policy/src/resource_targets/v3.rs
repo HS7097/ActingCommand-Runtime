@@ -1122,14 +1122,18 @@ pub(super) fn stored_v3_targets(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredEntry {
     pub(crate) value: serde_json::Value,
-    pub(crate) set_unix_ms: u64,
-    pub(crate) channel: RuntimeChannel,
+    /// Who set it. Fix round 1: `None` when the row's `set_unix_ms` or `channel` cannot be read;
+    /// the value is then not applied (`entry_unreadable`), never taken as not set.
+    pub(crate) set_by: Option<crate::VariableSetBy>,
 }
 
 /// Workflow #463 V2: the entries of `instance_id`'s stored record by name, each with its row's
 /// `set_unix_ms` and `channel`, when that record is a readable v3 record (the record
 /// [`stored_v3_targets`] reads); none for any other record, so every variable reads its default.
 /// Read from the evaluation's facts, which the host projects from its memory store: no ledger.
+/// Fix round 1: an entry whose row's `set_unix_ms` or `channel` cannot be read (the v3 reader
+/// holds both to their form, so no record it accepts gives one) keeps its value without who set
+/// it.
 pub(crate) fn stored_v3_entries(
     facts: &EvaluationFacts,
     instance_id: &str,
@@ -1158,27 +1162,31 @@ pub(crate) fn stored_v3_entries(
     decoded
         .entries
         .into_iter()
-        .filter_map(|entry| {
+        .map(|entry| {
             // The v3 reader took the row's `set_unix_ms` and `channel` already.
-            let row = rows.get(entry.index)?;
-            let set_unix_ms = match row.get(FIELD_SET_AT) {
-                Some(FactScalar::Integer(at)) => u64::try_from(*at).ok()?,
-                _ => return None,
-            };
-            let channel = match row.get(FIELD_CHANNEL) {
-                Some(FactScalar::String(word)) => channels
-                    .into_iter()
-                    .find(|channel| channel.as_str() == word)?,
-                _ => return None,
-            };
-            Some((
+            let set_by = rows.get(entry.index).and_then(|row| {
+                let set_unix_ms = match row.get(FIELD_SET_AT) {
+                    Some(FactScalar::Integer(at)) => u64::try_from(*at).ok()?,
+                    _ => return None,
+                };
+                let channel = match row.get(FIELD_CHANNEL) {
+                    Some(FactScalar::String(word)) => channels
+                        .into_iter()
+                        .find(|channel| channel.as_str() == word)?,
+                    _ => return None,
+                };
+                Some(crate::VariableSetBy {
+                    set_unix_ms,
+                    channel,
+                })
+            });
+            (
                 entry.name,
                 StoredEntry {
                     value: entry.value,
-                    set_unix_ms,
-                    channel,
+                    set_by,
                 },
-            ))
+            )
         })
         .collect()
 }

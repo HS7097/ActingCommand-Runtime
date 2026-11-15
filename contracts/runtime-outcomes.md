@@ -108,7 +108,9 @@ Between Runtime modules outcomes always travel full.
   contract crate.
 - **`keys`**: `{type, description, fields?, relative?}`. Types: `code`, `location`, `vocab:<name>`,
   `token`, `name`, `id`, `path`, `pointer`, `url`, `integer`, `duration_ms`, `unix_ms`,
-  `boolean`, `hash`, `commit`, `version`, `evidence` (`raw_text` only), `list<T>` (T a scalar or
+  `boolean`, `hash`, `commit`, `version`, `json` (Workflow #463 V2 fix round 1, Runtime 0.12.61:
+  the compact JSON text of a value, at most 1024 bytes, no control character; `value_json`),
+  `evidence` (`raw_text` only), `list<T>` (T a scalar or
   vocabulary) and `records` (flat; `fields` maps each field, itself a key, to `required` or
   `optional`). Keys are append-only: a key is never renamed, retyped or reused. Keys named
   `setup_*` or `console_*` belong to the UI's own table.

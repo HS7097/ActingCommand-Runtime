@@ -257,7 +257,16 @@ for that game, and a reader of the declaration says why.
   the policy crate and check-config read named files only. A later slice's scheduler workbench reads
   it with `schedule.json`. Since G-R2s (0.12.60) the workbench reads every package's declaration
   as this check does, with the same reader and the same rule, for the composer's irreversible mark
-  ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark").
+  ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). **Since
+  Workflow #463 V2 fix round 1 (Runtime 0.12.61, register §1.382)** the workbench reads
+  `goals.json` too, where it reads every package's declaration (and so do the offline readers that
+  read a root as it does, check-config and `actingd suspended`): with this reader, once per read of
+  the root, for the variables' judgement alone ([package-variables.md](package-variables.md), "A
+  variable that does not apply"): the names an accepted file takes, the parsed document kept with
+  the root's declarations, a refused one taking none. A refused file is recorded once per sha256
+  (`standard_pack_root_invalid`, its first problem), one that cannot be read once until it reads
+  again (`standard_pack_root_unreadable`); neither stops the root. No other reader of the Runtime
+  opens it, and the programs of 0.12.60 open none.
 
 ## Interface
 

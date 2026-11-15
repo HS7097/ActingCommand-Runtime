@@ -128,7 +128,8 @@ pub fn serves(operation: &Operation) -> bool {
     }
     // `app launch|restart|stop` are actinglab's own `session app` (the engine), and (Workflow #434
     // LAB-5F fix 1, a core row since the coordinator's ruling of 2026-11-11) `standard-pack check`
-    // is actinglab's own `standard-pack check`; Workflow #463 V3: `package variables` likewise.
+    // is actinglab's own `standard-pack check`; Workflow #464 P3: `standard-pack ready` likewise;
+    // Workflow #463 V3: `package variables` likewise.
     operation.module == crate::table::OperationModule::Core
         && !matches!(
             name,
@@ -136,6 +137,7 @@ pub fn serves(operation: &Operation) -> bool {
                 | "app restart"
                 | "app stop"
                 | "standard-pack check"
+                | "standard-pack ready"
                 | "package variables"
         )
 }
@@ -844,8 +846,12 @@ fn goals_view(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> 
         .goal_view(&alias)
         .map_err(|error| client_failed(&error))?;
     if let Some(package_id) = text(params, "package") {
-        view.entries
-            .retain(|entry| entry.packages.iter().any(|declaring| declaring == package_id));
+        view.entries.retain(|entry| {
+            entry
+                .packages
+                .iter()
+                .any(|declaring| declaring == package_id)
+        });
         view.remedy_parameters
             .retain(|parameter| parameter.package_id == package_id);
     }
@@ -869,7 +875,10 @@ fn goals_get(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
         .goal_view(&alias)
         .map_err(|error| client_failed(&error))?;
     let mut members = Map::new();
-    members.insert("instance_alias".to_owned(), Value::from(view.instance_alias.clone()));
+    members.insert(
+        "instance_alias".to_owned(),
+        Value::from(view.instance_alias.clone()),
+    );
     members.insert("version".to_owned(), Value::from(view.version));
     let found = match view.entries.iter().find(|entry| entry.name == name) {
         Some(entry) => serde_json::to_value(entry).map(|entry| ("entry", entry)),
@@ -898,7 +907,11 @@ enum GoalChange {
 /// cleared, compared with the record's version when one is given (`0`: no record yet). The answer
 /// is the edit (the record's version after it, the next `--expected-version`, and its event)
 /// beside the edit's success code; a refusal is the refused receipt beside its outcome.
-fn goals_edit(params: Params<'_>, client: &RuntimeClient, change: GoalChange) -> Result<Exit, Exit> {
+fn goals_edit(
+    params: Params<'_>,
+    client: &RuntimeClient,
+    change: GoalChange,
+) -> Result<Exit, Exit> {
     let alias = alias_of(client, required_text(params, "instance")?)?;
     let name = required_text(params, "name")?.to_owned();
     let op = match change {

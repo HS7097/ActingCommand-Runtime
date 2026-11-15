@@ -168,6 +168,9 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("session stream", Mode::Preview("capture_dry_run")),
     // Workflow #390 TOOL-1: the edits are applied and admitted in memory; no file is written.
     ("package edit", DRY_RUN),
+    // Workflow #464 P1: every check runs, the check tree under the state directory included;
+    // nothing is written in the repository and no copy is kept.
+    ("standard-pack adopt", DRY_RUN),
     // refused
     (
         "resource convert",
@@ -258,6 +261,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("standard-pack compose", UNSUPPORTED),
     // Workflow #411 RV-1: it writes its work directory and report; no read-only alternative.
     ("resource verify", UNSUPPORTED),
+    // Workflow #464 P2: it writes its product and its work; no read-only alternative.
+    ("standard-pack build", UNSUPPORTED),
     ("package run", UNSUPPORTED),
     ("resource restore", UNSUPPORTED),
     ("lab run", Mode::Refused("explicit_offline_entry_required")),
@@ -298,6 +303,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("resource compile-maa", Mode::NoEffect),
     ("resource check-release", Mode::NoEffect),
     ("standard-pack check", Mode::NoEffect),
+    // Workflow #464 P3: it reads a game root only.
+    ("standard-pack ready", Mode::NoEffect),
     ("wait", Mode::NoEffect),
     ("package validate", Mode::NoEffect),
     ("package preflight", Mode::NoEffect),

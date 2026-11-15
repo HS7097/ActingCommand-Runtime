@@ -88,7 +88,10 @@ pub(super) fn run_replay(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
             select,
             &paths,
             (&facts, facts_used),
-            (&args.parameters, &args.variables),
+            GivenValues {
+                parameters: &args.parameters,
+                variables: &args.variables,
+            },
             args.standard_pack_root.as_deref(),
         );
     }
@@ -162,6 +165,13 @@ struct ReplayArgs {
 struct ScanSelect {
     operation: String,
     declaration: PathBuf,
+}
+
+/// Workflow #463 V2 fix round 1: the values a scan replay is given, each list in the order given:
+/// the `--parameter <name>=<value>` and the `--variable <name>=<json>`.
+struct GivenValues<'a> {
+    parameters: &'a [(String, String)],
+    variables: &'a [(String, Value)],
 }
 
 /// How a replayed scan ended (`end.status`).
@@ -374,57 +384,23 @@ fn single_value(flags: &FlagArgs, name: &str) -> CliOutcome<Option<String>> {
 /// result; a scan the evaluator ended before its coverage (its decision in `scan.decision`) or
 /// that failed (its outcome in `end.outcome`) is `replay_scan_refused`, with the whole replay in
 /// the details. #411 Lab RP: the scan's policy reads the package's declared parameter defaults,
-/// each of `parameters` replacing its parameter's default; a parameter the package does not
+/// each of `given.parameters` replacing its parameter's default; a parameter the package does not
 /// declare, or a value that is not one of its options, is refused before any frame is read.
-/// Workflow #463 V2: and its variables' defaults, each of `variables` replacing its variable's
-/// default; a variable the package does not declare, or a value its declaration does not take as
-/// given, is refused before any frame is read.
+/// Workflow #463 V2: and its variables' defaults, each of `given.variables` replacing its
+/// variable's default; a variable the package does not declare, or a value its declaration does
+/// not take as given, is refused before any frame is read.
 fn run_scan_replay(
     package: &Path,
     select: &ScanSelect,
     paths: &[PathBuf],
     (facts, facts_used): (&OfflineReplayFacts, Value),
-    (parameters, variables): (&[(String, String)], &[(String, Value)]),
+    given: GivenValues<'_>,
     standard_pack_root: Option<&Path>,
 ) -> CliOutcome<Value> {
     let declaration = read_scan(&select.declaration)?;
     let task = admit(package)?;
     let tables = crate::lab_tables::run_tables(standard_pack_root, &task, replay_instant(facts))?;
-    let variable_values = task.given_variable_values(variables).map_err(|refusal| {
-        let name = &refusal.name;
-        match refusal.problem {
-            GivenVariableProblem::Undeclared => variable_refusal(
-                "not_recognised",
-                format!("the package declares no variable {name}"),
-            ),
-            GivenVariableProblem::Unfit => variable_refusal(
-                "not_recognised",
-                format!("the value given for {name} is not one its declaration takes as given"),
-            ),
-            GivenVariableProblem::Repeated => {
-                variable_refusal("repeated", format!("replay takes --variable {name} once"))
-            }
-        }
-    })?;
-    let run_parameters = task
-        .given_run_parameters(parameters)
-        .map_err(|refusal| {
-            let name = &refusal.name;
-            match refusal.problem {
-                GivenParameterProblem::Undeclared => parameter_refusal(
-                    "not_recognised",
-                    format!("the package declares no parameter {name}"),
-                ),
-                GivenParameterProblem::NotAnOption => parameter_refusal(
-                    "not_recognised",
-                    format!("the value given for {name} is not one of its declared options"),
-                ),
-                GivenParameterProblem::Repeated => {
-                    parameter_refusal("repeated", format!("replay takes --parameter {name} once"))
-                }
-            }
-        })?
-        .with_variables(variable_values);
+    let run_parameters = given_scan_parameters(&task, &given)?;
     let frames = paths
         .iter()
         .map(|path| crate::package_cli::offline::read_fixture_frame(path.as_path()))
@@ -487,6 +463,71 @@ fn run_scan_replay(
         &[],
     )
     .with_details(payload))
+}
+
+/// Workflow #463 V2 fix round 1, test only: the parameters a scan replay of the package at
+/// `package` overlays its snapshots with when it is given `given`, refused as the replay refuses
+/// them ([`given_scan_parameters`]).
+#[cfg(test)]
+pub(crate) fn scan_replay_parameters(
+    package: &Path,
+    parameters: &[(String, String)],
+    variables: &[(String, Value)],
+) -> CliOutcome<actingcommand_lab::RunParameters> {
+    given_scan_parameters(
+        &admit(package)?,
+        &GivenValues {
+            parameters,
+            variables,
+        },
+    )
+}
+
+/// What the scan's policy of `task` reads (#411 Lab RP, Workflow #463 V2): every parameter and
+/// every variable at its declared default, each value of `given` replacing its own; a variable,
+/// then a parameter, the package does not declare or whose value it does not take is refused
+/// before any frame is read.
+fn given_scan_parameters(
+    task: &PreparedContainedTask,
+    given: &GivenValues<'_>,
+) -> CliOutcome<actingcommand_lab::RunParameters> {
+    let variable_values = task
+        .given_variable_values(given.variables)
+        .map_err(|refusal| {
+            let name = &refusal.name;
+            match refusal.problem {
+                GivenVariableProblem::Undeclared => variable_refusal(
+                    "not_recognised",
+                    format!("the package declares no variable {name}"),
+                ),
+                GivenVariableProblem::Unfit => variable_refusal(
+                    "not_recognised",
+                    format!("the value given for {name} is not one its declaration takes as given"),
+                ),
+                GivenVariableProblem::Repeated => {
+                    variable_refusal("repeated", format!("replay takes --variable {name} once"))
+                }
+            }
+        })?;
+    let run_parameters = task
+        .given_run_parameters(given.parameters)
+        .map_err(|refusal| {
+            let name = &refusal.name;
+            match refusal.problem {
+                GivenParameterProblem::Undeclared => parameter_refusal(
+                    "not_recognised",
+                    format!("the package declares no parameter {name}"),
+                ),
+                GivenParameterProblem::NotAnOption => parameter_refusal(
+                    "not_recognised",
+                    format!("the value given for {name} is not one of its declared options"),
+                ),
+                GivenParameterProblem::Repeated => {
+                    parameter_refusal("repeated", format!("replay takes --parameter {name} once"))
+                }
+            }
+        })?;
+    Ok(run_parameters.with_variables(variable_values))
 }
 
 /// The `--scan` file: one scan declaration of a select step (selector model S0 v2.1 §2.1), as
