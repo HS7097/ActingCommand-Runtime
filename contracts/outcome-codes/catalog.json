@@ -10318,7 +10318,10 @@
       },
       "tokens": {
         "input_not_taken": {
-          "description": "The step's own page was still on screen after the input: the input did not take; check its target and the gap before it."
+          "description": "The step's own page was still on screen after the input and nothing else was seen in between: the input did not take; check its target and the gap before it."
+        },
+        "returned_to_own_page": {
+          "description": "After the input the screen showed something else and was the step's own page again at the end: the input took and the screen came back; open the run's frames to see what was shown in between."
         },
         "awaited_page_late": {
           "description": "The awaited page appeared only after the confirmation wait: raise the step's timeout or check what slows the page."

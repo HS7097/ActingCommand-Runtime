@@ -27502,13 +27502,19 @@ identity's key K and the accumulating list; the streak; the frame pins; the wire
 which leaves its gate as its code alone as before; no interface revision, record shape or
 configuration key.
 
-**Tests.** `crates/execution-kernel/src/contained_task/linear/gate_469_k1.rs` (16 tests, declared
+**Tests.** `crates/execution-kernel/src/contained_task/linear/gate_469_k1.rs` (17 tests, declared
 in `linear.rs`), one per word on U1's fixture: each asserts the word and that the code, the detail
 byte for byte, the timing and the other values are those of the same end before. The host's half,
 `crates/runtime-host/src/tests/gate_469_k1.rs` (2 tests): a scheduled run's policy record carries
 the word, and its failure identity is the one of the code, the scope, the step and the detail
 alone; the same swallowed tap again keeps that identity byte for byte and counts 2. No existing test
 is adapted.
+
+**Fix round 2.** A word of V0's vocabulary added here, `returned_to_own_page`, takes the place of
+`input_not_taken` where the program had already seen another page since the input (the
+intermediate page, a skip target, the late gate), so `confirmation_problem` holds 22 words (21
+before) and the catalog 1933 (1932), and the text of `contained_task_linear_unrecorded_screen`
+says its word is always there ([linear-steps.md](linear-steps.md), "What the program saw").
 
 **At deploy.** Nothing to do. A failed linear run's terminal, receipt, policy record and
 `actingd suspended` row show the word from this build on; `ac_get_run`, `ac_runs` and the overview

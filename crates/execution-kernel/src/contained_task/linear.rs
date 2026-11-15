@@ -573,6 +573,20 @@ struct LinearClosing<'p> {
     pages: Vec<&'p str>,
 }
 
+impl LinearClosing<'_> {
+    /// Workflow #469 K1 fix round 2 (`contracts/linear-steps.md`, "What the program saw"): the
+    /// step's own page the decision saw is `returned_to_own_page` where the program had already
+    /// seen another page since the input (`seen_since_input`: the intermediate page, a skip
+    /// target, or the late gate a retry decision passed), and stays `input_not_taken` where it had
+    /// seen nothing else. Every other verdict stands; nothing is observed or compared for it.
+    fn with_page_seen_since_input(mut self, seen_since_input: bool) -> Self {
+        if seen_since_input && self.problem == ConfirmationProblem::InputNotTaken {
+            self.problem = ConfirmationProblem::ReturnedToOwnPage;
+        }
+        self
+    }
+}
+
 /// Why one attempt did not reach the next step's page.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LinearMissKind {
@@ -1705,14 +1719,19 @@ impl PreparedContainedTask {
                 // `page_confirmation_failed` (the last attempt's arrival, after a seen
                 // intermediate page or skip target), the closing decision classifies it first.
                 // A missed intermediate page makes no closing decision, so its own end below
-                // never meets a screen the package never recorded.
-                let closing = self.linear_closing(
-                    runtime,
-                    (run, &mut loading),
-                    step,
-                    candidates,
-                    (miss.kind, miss.loading_limit.is_some()),
-                )?;
+                // never meets a screen the package never recorded. Workflow #469 K1 fix round 2:
+                // a seen intermediate page or skip target is another page seen since the input.
+                let closing = self
+                    .linear_closing(
+                        runtime,
+                        (run, &mut loading),
+                        step,
+                        candidates,
+                        (miss.kind, miss.loading_limit.is_some()),
+                    )?
+                    .with_page_seen_since_input(
+                        miss.kind == LinearMissKind::AfterIntermediate || miss.skip_target_seen,
+                    );
                 Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
                 return Err(match (miss.kind, &step.transition, miss.loading_limit) {
                     // Workflow #407 LOAD-4 (§5): a wait that ended on the attempt's loading
@@ -1821,14 +1840,17 @@ impl PreparedContainedTask {
                         Err(miss) => {
                             // Workflow #463 U1 (fix round 2, rule 4): the continued wait after a
                             // late gate ends with `page_confirmation_failed`; the closing decision
-                            // classifies that end first.
-                            let closing = self.linear_closing(
-                                runtime,
-                                (run, &mut loading),
-                                step,
-                                candidates,
-                                (miss.kind, miss.loading_limit.is_some()),
-                            )?;
+                            // classifies that end first. Workflow #469 K1 fix round 2: the gate
+                            // the retry decision passed is another page seen since the input.
+                            let closing = self
+                                .linear_closing(
+                                    runtime,
+                                    (run, &mut loading),
+                                    step,
+                                    candidates,
+                                    (miss.kind, miss.loading_limit.is_some()),
+                                )?
+                                .with_page_seen_since_input(true);
                             Self::linear_step_finished(
                                 runtime,
                                 step_index,
@@ -2040,8 +2062,10 @@ impl PreparedContainedTask {
 
     /// The observation of [`Self::linear_closing_decision`]. Workflow #469 K1: each end is the
     /// verdict it already was, now named: `deadline_reached` where the task's deadline cuts it,
-    /// `input_not_taken` where the step's own page (the last of `pages`) passes and
-    /// `awaited_page_late` where an awaited page does, `transition_shown` on a transition frame,
+    /// `input_not_taken` where the step's own page (the last of `pages`) passes (fix round 2: the
+    /// step's end makes it `returned_to_own_page` where another page was seen since the input,
+    /// `LinearClosing::with_page_seen_since_input`) and `awaited_page_late` where an awaited page
+    /// does, `transition_shown` on a transition frame,
     /// `interrupt_shown` on a shared interrupt page, `screen_moving` at its bound when its frames
     /// changed, the word of [`Self::another_page_on`] at its bound when another page of the
     /// package is on the last frame, and `unrecorded_screen` otherwise.

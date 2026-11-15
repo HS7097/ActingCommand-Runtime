@@ -1090,7 +1090,8 @@ whichever word it carries. Where the closing decision ("Retries") is made, the w
 | The closing decision | `confirmation_problem` |
 |---|---|
 | the task's deadline cut it | `deadline_reached` |
-| the step's own page passed on one of its frames | `input_not_taken` |
+| the step's own page passed on one of its frames, and the program had seen no other page since the input | `input_not_taken` |
+| the step's own page passed on one of its frames, after the program had seen another page since the input | `returned_to_own_page` |
 | a page the failed wait awaited passed on one of its frames | `awaited_page_late` |
 | one of its frames was a transition frame (LOAD-4, under `on`) | `transition_shown` |
 | one of its frames showed a shared interrupt page | `interrupt_shown` |
@@ -1099,6 +1100,14 @@ whichever word it carries. Where the closing decision ("Retries") is made, the w
 | at its bound, on its still last frame, another page of the package passes | `other_page_shown` |
 | its own capture, recognition or evaluation failed, the evaluation of the package's other pages on its last frame included | `check_failed` |
 | every rule above held: a screen the package never recorded | `unrecorded_screen`, the run ending with `contained_task_linear_unrecorded_screen`, which always carries this word |
+
+What tells `input_not_taken` and `returned_to_own_page` apart is what the program had already
+recorded at that end, never a further look at the screen: the failed wait passed the step's
+intermediate page (its detail's `intermediate_seen=true`) or a run's skip target, or the retry
+decision passed the late gate before the continued wait. Then the input took and the screen came
+back to the page it was sent from (`returned_to_own_page`); without any of them nothing else was
+seen in between (`input_not_taken`), which is always so after a retry decision that saw neither
+page.
 
 Where it is not made, the word is that of the first of these that holds: the failed wait, or the
 retry decision, ended on the attempt's loading allowance (`loading_limit`, beside the loading

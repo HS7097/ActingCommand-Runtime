@@ -6,7 +6,9 @@
 // `linear_steps` step that the closing decision of Workflow #463 U1 classifies carries
 // `confirmation_problem`, the word of what the program saw there, in its outcome's values and never
 // in its detail. Where the closing decision is made, its verdict: the step's own page on one of its
-// frames (`input_not_taken`), an awaited page (`awaited_page_late`), a transition frame
+// frames (`input_not_taken`, or, fix round 2, `returned_to_own_page` where the program had seen
+// another page since the input: the intermediate page, a skip target, a late gate), an awaited
+// page (`awaited_page_late`), a transition frame
 // (`transition_shown`), a shared interrupt page (`interrupt_shown`), frames that changed at its
 // bound (`screen_moving`), another page of the package on its last frame (`other_page_shown`) or a
 // loading page there (`loading_page_shown`), the task's deadline (`deadline_reached`), an error of
@@ -406,8 +408,8 @@ fn dark_then(page: [u8; 3]) -> Vec<ScriptedFrame> {
 
 // The closing decision sees the step's own page: without a retry, `home` on its eighth frame after
 // the arrival ran out; with a retry, the first tap swallowed and `home` throughout, on the first
-// frame of the second attempt's closing decision. Each keeps the end the failed wait gave, now with
-// `input_not_taken`, and no other value.
+// frame of the second attempt's closing decision. Neither saw another page after its tap. Each
+// keeps the end the failed wait gave, now with `input_not_taken`, and no other value.
 #[test]
 fn k1_the_step_s_own_page_in_the_closing_decision_is_input_not_taken() {
     let (result, runtime) = run_without_retry(dark_then(HOME));
@@ -437,6 +439,41 @@ fn k1_the_step_s_own_page_in_the_closing_decision_is_input_not_taken() {
     );
     assert_eq!(other_values(&error), json!({}));
     assert_eq!(runtime.inputs().len(), 2);
+}
+
+// Fix round 2: the program saw the intermediate page `wait` after the tap, and the closing decision
+// sees the step's own page `home` on its first frame: after `wait` passed on the intermediate
+// page's first frame and the arrival ran out, and after the continued wait that follows a late
+// gate (`wait` seen only by the retry decision). Each is `returned_to_own_page`, with the end the
+// failed wait gave (`intermediate_seen=true`) and no other value.
+#[test]
+fn k1_the_step_s_own_page_after_another_page_was_seen_is_returned_to_own_page() {
+    let mut late_gate = vec![plain(DARK); INTERMEDIATE_FRAMES];
+    late_gate.push(plain(WAIT));
+    late_gate.push(plain(HOME));
+    for (case, after_tap) in [
+        ("the intermediate page seen", vec![plain(WAIT), plain(HOME)]),
+        ("after a late gate", late_gate),
+    ] {
+        let (result, runtime) = run(
+            &with_intermediate_page(),
+            vec![vec![plain(HOME)], after_tap],
+            LoadingMode::Off,
+        );
+        let error = failed(case, result);
+        assert_end(
+            case,
+            &error,
+            (
+                CONFIRMATION_FAILED,
+                INTERMEDIATE_SEEN_DETAIL,
+                CONFIRMATION_MS,
+            ),
+            "returned_to_own_page",
+        );
+        assert_eq!(other_values(&error), json!({}), "{case}");
+        assert_eq!(runtime.inputs().len(), 1, "{case}");
+    }
 }
 
 // The closing decision sees the awaited page `result` on its eighth frame: `awaited_page_late`,
@@ -779,19 +816,27 @@ fn k1_a_run_the_runtime_started_itself_is_unjudged_layer_run() {
 
 // The step plan restarts the application (`start`, from any screen to `wait`, which is not the main
 // interface), then taps `open` from `wait`, without a retry, and the still dark screen follows: the
-// tap is inside the restart segment, so no closing decision, `unjudged_restart_segment`.
+// tap is inside the restart segment, so no closing decision, `unjudged_restart_segment`. Admission
+// wants a step to the main interface after the last restart (R25): `back` from `result` to `home`,
+// the target page, which the run never reaches.
 #[test]
 fn k1_a_step_inside_a_restart_segment_is_unjudged_restart_segment() {
     let start = json!({"id": "start", "from": "any", "to": "wait",
                        "application": {"action": "restart"}});
-    let task = admitted(
-        control(TASK_MS, 2),
-        program(
-            "any",
-            vec![start, open("wait", json!({}), json!({}), Retry::Undeclared)],
-        ),
-        Sampling::SingleFrame,
+    let back = json!({"id": "back", "from": "result",
+                      "click": {"kind": "point", "x": 1, "y": 0},
+                      "unguarded_trusted_coordinate": true,
+                      "expect_after": {"page_id": "home", "timeout_ms": CONFIRMATION_MS}});
+    let mut plan = program(
+        "any",
+        vec![
+            start,
+            open("wait", json!({}), json!({}), Retry::Undeclared),
+            back,
+        ],
     );
+    plan["target_page"] = json!("home");
+    let task = admitted(control(TASK_MS, 3), plan, Sampling::SingleFrame);
     let device = ScriptedRuntime::new(vec![
         vec![plain(HOME)],
         vec![plain(WAIT)],
