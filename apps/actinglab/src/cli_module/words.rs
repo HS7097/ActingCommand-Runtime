@@ -62,10 +62,11 @@ use serde_json::{Map, Value};
 /// (slice SP-ADOPT), since Workflow #464 P2 its row `standard-pack build` (slice `PACK-BUILD`),
 /// since Workflow #464 P3 its row `standard-pack ready` (slice `464-P3`), since Workflow #467
 /// RPT-1 its row `report export`, since Workflow #463 V3 its rows `goals`, `goals get`, `goals
-/// set`, `goals clear` and `package variables`, and since #463 S2-1 its row `record ready`. The
+/// set`, `goals clear` and `package variables`, since Workflow #463 S3-10 its row
+/// `standard-pack trial` (slice `PACK-TRIAL`), and since #463 S2-1 its row `record ready`. The
 /// rescue module's rows are those `crates/lab-rescue` serves (Workflow #434 LAB-3:
 /// [`rescue_served`]); a reserved row comes with the slice that opens it.
-pub(crate) const BUILT_SLICES: [&str; 12] = [
+pub(crate) const BUILT_SLICES: [&str; 13] = [
     "463-S21",
     "463-V3",
     "464-P3",
@@ -73,6 +74,7 @@ pub(crate) const BUILT_SLICES: [&str; 12] = [
     "LAB-1b",
     "LAB-2",
     "PACK-BUILD",
+    "PACK-TRIAL",
     "R-6",
     "R-8",
     "REC-ARCH",

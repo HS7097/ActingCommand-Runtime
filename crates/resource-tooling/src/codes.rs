@@ -152,6 +152,58 @@ actingcommand_contract::outcome_codes! {
         /// readiness was given, or (item `unrecorded_screen_code`) an information line that never
         /// stops a pack (keys `package_id`, `readiness_item`, `readiness_unjudged`).
         PackageReadinessUnjudged => "package_readiness_unjudged": info / none,
+        // Workflow #463 S3-10: `actinglab standard-pack trial`, its plan and its record
+        // (`standard_pack_trial`, contracts/standard-pack-trial.md). Its malformed arguments are
+        // `validation_failed`, as the command line's are (fix round 2).
+        /// Workflow #463 S3-10: the state directory is, or lies inside, a repository or an
+        /// installed root (keys `path`, `trial_state_place`).
+        TrialStateDirRefused => "trial_state_dir_refused": error / none,
+        /// Workflow #463 S3-10 fix round 2: a trial record of that name, or the `.part` of one,
+        /// is there already and is never replaced (key `path`, the file that is there).
+        TrialRecordExists => "trial_record_exists": error / none,
+        /// Workflow #463 S3-10: the operating system refused a step of writing a trial record,
+        /// and no record was written (key `path`; its refusal as the cause; fix round 3: a file
+        /// the write created and could not remove after it, named by a `cleanup` link).
+        TrialRecordWriteFailed => "trial_record_write_failed": error / none,
+        /// Workflow #463 S3-10: a file of a trial record's name does not read as that record (keys
+        /// `path`, `trial_record_problem`; the refusal of the read or of the decoder as its
+        /// cause).
+        TrialRecordUnreadable => "trial_record_unreadable": error / none,
+        /// Warning (Workflow #463 S3-10 fix round 3): a trial record is written and in place, but
+        /// the `.part` its write created is left beside it, its removal refused (key `path`, the
+        /// `.part`; the refusal as its cause). The writer answers success with it in `warnings`.
+        TrialRecordPartLeft => "trial_record_part_left": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-10: where a state directory refused for trial records lies (vocabulary
+    /// `trial_state_place`, the value `trial_state_place` of `trial_state_dir_refused`).
+    pub enum TrialStatePlace: "trial_state_place" {
+        /// It is, or lies inside, a Git work tree: a directory along its path holds `.git`.
+        Repository => "repository",
+        /// It is, or lies inside, an installed root: a directory along its path holds the
+        /// installer's own state file `install\state.json` (fix round 2).
+        InstalledRoot => "installed_root",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-10 fix round 2: why a file of a trial record's name is not read as that
+    /// record (vocabulary `trial_record_problem`, the value `trial_record_problem` of
+    /// `trial_record_unreadable`).
+    pub enum TrialRecordProblem: "trial_record_problem" {
+        /// The operating system refused to open or read the file, or to list its directory (its
+        /// refusal as the cause).
+        ReadFailed => "read_failed",
+        /// The file is larger than a record is read up to (1 MiB).
+        TooLarge => "too_large",
+        /// The file does not decode as `actingcommand.pack-trial.v1` (the decoder's refusal as
+        /// the cause).
+        Undecodable => "undecodable",
+        /// The file decodes, but is not the record of the package, the content and the time its
+        /// name says.
+        NameMismatch => "name_mismatch",
     }
 }
 

@@ -28937,6 +28937,541 @@ round's.
 
 **At deploy.** Nothing to do: the answer gains its members, and nothing on disk changes.
 
+### 1.408 Slice #463 S3-1 (0.12.64): the placement plan lists the packages that enter or leave scheduling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that no package enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-1, with §1.1 rows W10 and W11, §2.5 and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s31-place-plan.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.408: main `44cbab53` holds the sections up to §1.400, and the
+numbers between them and this one belong to slices dispatched with it. The slice ships in 0.12.64.
+The next slice, S3-2, is built on it and makes a placement name the packages of `enters`.
+
+**What it is.** A placement is the act that enables: once a game root is placed, the workbench
+composes it and dispatches every package a rule names and no hold keeps back. Until this slice
+`place --plan` listed the items it would write and said nothing of which packages would enter
+scheduling. Now the plan of the rescue module's `place` (`crates/lab-rescue/src/install/place.rs`,
+the `--plan` answer and the answer's step `plan`) answers `schedule_changes`
+([install-cli.md](install-cli.md), "The Lab's rescue module", "The packages a placement makes
+enter or leave scheduling"). The packages of the bundle's game are classified on the installed
+game root and on the zip's root by the contract crate's own `standard_pack_maintenance_packages`
+and `classify_standard_pack_packages`, called, not copied (the module already depends on the
+contract crate; no dependency is added). The roles are readiness's words, found by that same
+function called on the entries of one use, or on one list of the root files, at a time (fix round
+2, below), and the plan's own `prerequisite`, of a layer of a prerequisite chain (fix round 3,
+below). **`enters` lists the packages that, by the schedule, the root files and the prerequisite
+chains of the two sides, will be dispatched or used after the placement and were not before.**
+The plan does not run the composer: a root the composer would refuse for another reason than the
+reader's and the reference check's (in its `read_game`: a member whose subsystem `requires` does
+not name, a subsystem this Runtime does not name, a member only the composer writes, a `limited`
+that is not `true` or sits on a maintenance rule, a realization, limited or fixed-value mark on a
+rule of a maintenance-role package, a timeline event that invalidates the application update fact;
+after it: a package another game's rules already name or an id two composed items share,
+`rule_id_conflict`, and the compile of the joined catalog) is counted as composed, so the lists
+then say more than will happen; for a game bound to an instance the placement's own post check
+fails in that case (the composer leaves out a game no instance is bound to, and the post check does
+not judge it), and a placement made while a Runtime runs keeps its hold.
+
+```json
+"schedule_changes": {
+  "packages": [
+    {"package_id": "neutral.handler", "before": {"state": "absent"},
+     "after": {"state": "maintenance_role", "roles": ["handler"]}, "content": "new"},
+    {"package_id": "neutral.waiting",
+     "before": {"state": "held", "reason": "not yet run on a device", "reference": "board-reference-1"},
+     "after": {"state": "scheduled"}, "content": "unchanged"}
+  ],
+  "enters": ["neutral.handler", "neutral.waiting"],
+  "leaves": [],
+  "content_only": []
+}
+```
+
+| Member | What it holds |
+|---|---|
+| `packages` | each package whose part or pack content changes, or that a list names, by package id: `before`, `after` (`state` `scheduled`, `held` with `reason` and `reference`, `maintenance_role`, `unclassified`, `absent` or `unread`; `roles`, when there is one, in this order: readiness's words `startup`, `return_home`, `recognition`, `features`, `edge`, `chain`, `handler`, `then_run`, then the plan's own `prerequisite`, which is not one of readiness's) and `content` (its pack item's `new`, `replace` or `unchanged`; absent for a pack the zip no longer carries) |
+| `enters` | sorted package ids that, by the schedule, the root files and the prerequisite chains of the two sides, will be dispatched or used after the placement and were not before: `scheduled` after and not before, or a role word after (`prerequisite` included) it did not hold before; only a composed side counts (its root holds a `schedule.json` the reader and the composer's reference check take), and an installed side that could not be read counts none; a package of a server no instance is bound to is listed too; the composer is not run (see above) |
+| `leaves` | sorted package ids: `scheduled` before and not after; a role word lost; no longer carried by the zip |
+| `content_only` | sorted package ids the scheduler uses before and after in the same way and whose pack is replaced |
+| `unread` | only when a side could not be read: `{root, failure}`, `root` `installed` or `bundle`, the failure as a warning; that side's packages `unread` (without roles when its root files failed, with them when its `schedule.json` did); with the zip's side unread none of `enters`, `leaves` and `content_only` is answered; nothing is refused |
+
+**What it replaces.** The plan's answer had a member `schedule_changes`, a boolean: whether the
+game's `schedule.json` changes. The work order names the new member `schedule_changes` (S3-2
+reads its lists by that name): the object takes the name and the boolean goes; the file's change
+is still its item (`schedule.json`, `new`, `replace` or `retire`), and the check after the
+placement still reads the same fact from the items (`Placement::schedule_changes`, the
+`post_check` intent's member, which a journal on disk keeps), unchanged.
+
+**Words.** No outcome code, no key and no vocabulary word of the catalog is added; the fragments
+and the index are unchanged. The states above are words of the plan's answer only; the failures
+under `unread` are the existing `standard_pack_root_invalid` (at the file, its problem and
+pointer) and `foreign_os_error`, each a warning beside a plan that exits 0.
+
+**Tests.** `crates/lab-rescue/src/install/gate_463_s31.rs`, gate map `apps.toml` "#463 S3-1", on
+the fake host with an installer of `package` [3, 10] and bundles declaring [3, 3], each plan
+leaving the game root byte for byte as it was and pausing nothing: a new pack with a rule enters
+from `absent`; a lifted hold enters, its `before` `held` with the entry's reason and reference; an
+added hold leaves; a pack replaced with its rule unchanged is `content_only`; a new
+`interrupts.json` handler enters by its role (`handler`), the `pages.json` feature not listed; on
+a game's first root every pack a rule names enters, a held one and one in no set are listed and do
+not; a zip that is the installed root has its eight items `unchanged` and lists nothing. Each
+asserts the whole `schedule_changes`. Adapted: `s5_unbound_composition_passes_at_once` of
+`gate_453_cold_place.rs` asserted the boolean `true`; it asserts the plan's item `schedule.json`
+`new`. No golden changes, no test leaves the gate map.
+
+**Fix round 2** (the slice's independent review, its seven items to change and its table against
+the composer; coordinator work order `rd-1115/brief-463-s31-fix2.md`, the coordinator's rulings,
+not the owner's words; main `b7c47129` merged, §1.401 kept before this section). The next slice
+makes a placement name exactly the packages of `enters`, so `enters` must be exactly the packages
+the scheduler dispatches, or uses in a supporting role, after the placement and did not before.
+(1) A side whose root holds no `schedule.json` composes nothing (the workbench leaves such a game
+out, [standard-pack-schedule.md](standard-pack-schedule.md), "Unload"; the composer reads only
+the games of bound instances whose root holds the file): none of its packages counts as scheduled
+or as holding a role for `enters`, `leaves` and `content_only`; `packages` still shows the
+standing and the roles its root files give. So over an installed root without the file every
+package the zip schedules or gives a role enters, and a zip without the file makes nothing enter
+and every package used before leave. No exception was found: the bundle's `recognition` entry is
+read in the Runtime only by the workbench's composition (`host/standard_pack_schedule.rs`,
+`ScheduleGame`), which leaves the game out without the file; the fact refresh runs the
+recognition package each instance's configuration binds (`instances[].recognition_package`),
+which no placement writes. (2) and (4) One notion of an unread side: its root files or its
+`schedule.json` cannot be read or parsed, or the composer's own reference check
+(`validate_standard_pack_schedule_references`, called after the reader, on both sides) refuses
+the file. An unread installed side counts nothing before, so everything scheduled or holding a
+role after enters. (3) With the zip's side unread (only its `schedule.json` can be: the plan
+refuses its other root files) `ScheduleChanges::enters` is `None` and the answer carries
+`packages` and `unread` and none of the three lists. (5) Roles are readiness's words (the
+contract crate's `MaintenanceUse` and `NavigationRole`, the tokens of the vocabulary
+`readiness_role`), found by `standard_pack_maintenance_packages` called on the entries of one use
+at a time and on one list at a time (the features, the edges, the recovery chain, the handlers,
+the `then.run` packages); a package enters when it gains a word it did not hold, whichever file
+gives it. (7) The sentence on a `bundle.json` the index does not take (`foreign_data_error`) is
+gone: the root reader has already parsed the same bytes the same way and refused them as
+`standard_pack_root_invalid`. Also: the installed side's files are read as readiness reads a
+root file, at most 32 MiB (`foreign_os_error` with `io_kind` `file_too_large` beyond it), and a
+package of a server no instance is bound to is listed in `enters` like any other, since binding an
+instance later needs no placement. Tests (6), in the same gate file, a second entry "#463 S3-1"
+of `apps.toml`, each asserting the whole `schedule_changes` (the failure under `unread` by its
+code and values): an installed root without `schedule.json` (the zip's scheduled pack and its
+feature package, role unchanged, both enter); a zip without it (nothing enters, its new handler
+shown with its role; the scheduled pack and the feature package leave); an installed
+`schedule.json` the reader refuses (both enter, `unread` `installed` with `schedule_invalid`); the
+zip's refused (`packages` and `unread` `bundle` only); a rule of the zip naming a package it does
+not carry (the same, `rule_package_unregistered` at `/rules/2/package_id`); a `startup` entry
+gaining `return_home`, an edge package added to the recovery chain and a handler that also
+becomes `then.run` (all three enter with readiness's words); a scheduled pack and a pack in no
+set that the zip no longer carries (both leave, no `content`). Adapted:
+`s31_a_new_interrupt_handler_enters_by_its_role` asserted the role `interrupts.json`; it asserts
+`handler` (the requirement changes the word).
+
+**Fix round 3** (the slice's second independent review; coordinator work order
+`rd-1115/brief-463-s31-fix3.md`, the coordinator's rulings, not the owner's words; no main merged).
+The next slice makes a placement name the packages of `enters` as the ones authorized to start
+running, and the second review found two things the plan did not read. (A) A pack's
+`control.json` may name `prerequisite_package_id`, the package the host runs as a layer of the
+pack's runs, resolved through the game root's registry when each run is prepared
+(`host/prerequisite.rs`; the Lab's recorder writes the member from `requires`). On each side, a
+package that is a layer of the prerequisite chain of a package that is scheduled or holds one of
+readiness's words is used, with the plan's own role word `prerequisite`, which is not one of
+readiness's eight (they still come from the contract crate's function; the new word is kept apart,
+`Role::Prerequisite`). The chain is followed as the host follows it: the member of the
+`control.json` in the package's directory the side's registry gives, the named package looked up
+in the same registry (`StandardPackRegistry::get`, the lookup of the host's
+`GameRegistry::package_path`), at most three layers (the execution kernel's
+`MAX_PREREQUISITE_DEPTH`); a layer the registry does not list, or one already in the chain, ends
+it and counts nothing (the host refuses that run, another check's refusal); in that case, and with
+a fourth layer, the host refuses the whole run while the plan still counts the package that starts
+the chain and the layers before its end as used, so the lists hold more than what runs, as for a
+root the composer would refuse (the train's correction after the re-review). The rescue module
+links neither the host nor the kernel, and the contract crate has no reader of the member, so the
+plan reads it with its own readers: `Archive::read` for the zip's `packs/<directory>/control.json`
+and the bounded `read_root_file` for the installed one (a file it cannot read leaves the
+installed side unread). `enters`, `leaves` and `content_only` follow as for any role: a package
+that gains the role enters, one that loses its last use leaves, one used only as a prerequisite
+whose content is replaced is `content_only`; a package used only as a prerequisite keeps the
+state the classification gives it (`unclassified`) beside the role. (B) The definition of
+`enters` above replaces "exactly", and the plan says it does not run the composer, with the
+reasons it does not read. (C) The roles are listed in the plan's own order, given above. Tests,
+in the same gate file, a third entry "#463 S3-1" of `apps.toml`, each asserting the whole
+`schedule_changes`: a new pack that is only the prerequisite of a new scheduled pack (both
+enter); a pack in no set that becomes the prerequisite of the scheduled pack, whose replaced
+`control.json` names it (it enters, the scheduled pack `content_only`); the prerequisite of a held
+pack (nothing enters); a chain two deep (the scheduled pack and both layers enter); a scheduled
+pack that loses its rule (it and its prerequisite leave); an installed `bundle.json` the root
+reader refuses (every pack `unread` before without roles, the zip's scheduled pack and feature
+package enter, `unread` `installed` with `malformed` at that file). No test is adapted. What S3-2
+reads is unchanged: `Placement.scheduling.enters` stays `Option<Vec<String>>`, `None` when the
+zip's side could not be read; it may now hold packages used only as prerequisites.
+
+**What is not changed.** The items, the plan document and the plan id, every check of the plan and
+after the placement, the hold, the journal and its inputs, `place`'s parameters and refusals, and
+every interface revision. `rescue.rs` is not touched: `place`'s members carry the plan's value as
+before.
+
+**At deploy.** Nothing to do. A reader of the plan's boolean `schedule_changes` reads the item
+`schedule.json` instead.
+
+### 1.409 Slice #463 S3-2 (0.12.64): a placement names its authorization and the packages it enables (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that nothing enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-2, with §2.3's last paragraph and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s32-place-authorization.md`, built on S3-1, §1.408)
+
+The coordinator gave this slice 1.409, after S3-1's §1.408, on whose branch it is built. The
+slice ships in 0.12.64.
+
+**What it is.** The placement is the act that enables (§1.408), and until this slice `place`
+asked for nothing: its journal recorded who started it and what was placed, not under which
+authorization and not which packages began to be scheduled. Now the rescue module's `place`
+(`crates/lab-rescue/src/install/place.rs`, `authorize`; called once by `crates/lab-rescue/src/rescue.rs`,
+`place`) requires, for a plan that changes something, `--authorization <reference>` and
+`--enables <package_id>` repeated, and records both ([install-cli.md](install-cli.md), "The
+Lab's rescue module", "The authorization a placement names"). `--plan` and a plan whose items
+are all `unchanged` need neither and read neither; everything else needs the reference, also a
+placement that only replaces content or only places held packages.
+
+| Check, in this order, after the plan and before the hold | Answer |
+|---|---|
+| no `--authorization`, or a blank one | `install_command_refused` `place_authorization_missing` |
+| a reference over 1024 bytes or holding a control character | `actingctl_usage_invalid` `unusable` (`--authorization`) |
+| the plan answers no `enters` (`None`: the zip's side unread, round 2) | `place_enables_unknown`, the plan's `schedule_changes` beside it (its `unread` names the refusal) |
+| `--enables`, sorted, not exactly the plan's `enters` (a name missing, one too many, one twice, any when nothing enters) | `place_enables_mismatch`, the answer's `expected` and `given`, each sorted |
+
+Each refusal carries `plan_id` and `game` and comes before the hold, any pause, the writer lock
+and any write. The check runs once in `place`, after the early answer of `--plan` and of a plan
+that changes nothing and before the path is chosen, so the placement with a Runtime and the one
+while it is stopped (`place_cold`) pass the same code. The journal's `inputs` gain
+`authorization` (the reference as given) and `enabled` (the sorted list of the packages enabled,
+`[]` when none), on both paths; `op status <op>` shows them with the journal.
+
+**Codes.** No code is new. The three refusals are words of the vocabulary `install_refusal` of
+the existing `install_command_refused` (registered in `crates/lab-ops/src/codes.rs`, the fragment
+`contracts/outcome-codes/catalog.json`), as every refusal of the rescue module is; the index is
+regenerated. Each refuses, exit 1. A malformed reference is the module's existing argument
+refusal.
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `place_authorization_missing` | a placement of a plan that changes something names no authorization | refuses | 1 |
+| `place_enables_mismatch` | `--enables` is not exactly the plan's `enters` | refuses | 1 |
+| `place_enables_unknown` | the plan answers no `enters` (the zip's side unread), so what the placement enables cannot be named | refuses | 1 |
+
+**The zip's side and the installed side.** The plan refuses a zip whose other root files the
+reader refuses (`pack_invalid`, caused by `standard_pack_root_invalid`), before this check; its
+own reading of the zip's `schedule.json` (the reader, then the composer's reference check), which
+no earlier check reads, is the one way the zip's side is `unread`, and then the plan answers no
+`enters` (round 2), which is `place_enables_unknown`. An installed game root that cannot be read
+refuses nothing (a placement is how a broken root is repaired): it counts nothing before, so the
+names required are every package scheduled or holding a role after, as S3-1 gives them.
+
+**What the texts say.** The tool records an authorization and grants none: it does not judge the
+reference and never supplies one; there is no default, no variable and no switch that places
+without it. `--enables` is the caller's statement that it knows what it is enabling. A plan that
+lists `enters` is not an authorization. The row `place` of
+[lab-operations.json](lab-operations.json) gains the parameters `authorization` (an option) and
+`enables` (an option, repeated), which the Lab's MCP tool takes from the row; its notes say the
+same.
+
+**A journal already on disk.** A `pack_place` journal an earlier build began has neither member.
+It loads, and is resumed, undone and shown as before; its authorization reads as not recorded
+(the members absent), never as an empty one. The inputs are free JSON, so nothing else reads
+them.
+
+**Tests.** `crates/lab-rescue/src/install/gate_463_s32.rs`, gate map `apps.toml` "#463 S3-2", on
+the fake host with an installed game root whose one pack a rule names (both roots of every scene
+hold a `schedule.json` and the installed one is read, so no test depends on how S3-1 counts a
+root without one or an installed root that cannot be read): no reference, a blank one, and none
+beside a wrong `--enables` refuse `place_authorization_missing`, with a Runtime and without;
+1025 bytes, a line feed and a tab refuse `unusable`, 1024 bytes pass to the next check; with
+`enters` the two packs the bundle adds, `--enables` absent, only one of the two, the two and a
+third, one of them twice, another name in place of one, and any name where nothing enters refuse
+`place_enables_mismatch` with `expected` and `given`, each stated name by name, on both paths;
+an unreadable zip `schedule.json` refuses `place_enables_unknown` beside the plan's
+`schedule_changes`, on both paths, and without a reference `place_authorization_missing` first;
+each refusal leaves the root's `install` folder and the game root byte for byte, asks the
+Runtime nothing and pauses nothing. A content-only placement with a Runtime records the
+reference and `[]`, `op status` shows both, and the journal without them loads and is answered
+without them; a cold placement naming exactly the two packs (in the other order) records them
+sorted; `--plan` and an unchanged bundle need neither.
+
+Adapted, because every placement that changes something now names its authorization: the
+placements of `gate_434_lab3.rs` (`place_holds_only_the_bundles_idle_instances`),
+`gate_444_notices2.rs`, `gate_451_loadp.rs`, `gate_451_place_pkg.rs`, `gate_453_cold_place.rs`,
+`gate_455_gr1.rs` and `gate_463_v1.rs` pass the reference and, when their plan lists `enters`,
+those names, through one fixture function (`fixture::authorized`, which asks the module's own
+plan; their `--plan` calls are unchanged). In `gate_453_cold_place.rs` the bundles' placeholder
+`schedule.json` bytes, which the reader refuses and which would now be `place_enables_unknown`,
+are a schedule without rules or holds, and the two tests that list the journal's input names
+(`s5_a_hot_placement_with_a_bound_instance_answers_as_before`,
+`s6_cold_place_places_the_items_and_keeps_the_replaced_ones`) list `authorization` and
+`enabled` too. No golden changes, no test leaves the gate map.
+
+**Round 2** (S3-1's fix round 2 merged, its head `053d4bdf`, which holds main `b7c47129`;
+coordinator work order `rd-1115/brief-463-s32-fix2.md`, the coordinator's rulings, not the
+owner's words). S3-1's `ScheduleChanges::enters` is now `Option<Vec<String>>`, `None` when the
+zip's side could not be read (its `schedule.json` refused by the reader or by the composer's
+reference check). `authorize` refuses `place_enables_unknown` on that `None`, after the
+authorization check and before the hold and any write, and no longer looks for the zip's side
+under `unread` itself: the plan is the one place that decides what cannot be stated. The refusal
+carries the plan's `schedule_changes` (its `packages` and `unread`) beside the outcome in place
+of the reader's failure as the cause, so the answer says why without a second reading. The
+first round's own detection caught no case that `None` does not: both were the zip's side
+unread. The placeholder `schedule.json` of `gate_453_cold_place.rs` stays the schedule without
+rules or holds of the first round: S3-1 composes it (an empty rule table composes; a root without
+the file composes nothing), so the plan reads the zip's side and nothing enters, and the gate's
+bundles still change `schedule.json`. Tests: `entering()` adds two packs, so `enters` holds two
+and each mismatch case states `expected` and `given` name by name (only one of the two, the two
+and a third, one twice, another in place of one); the cold placement names exactly the two in
+the other order and its journal records them sorted; the test of an unreadable zip
+`schedule.json` asserts the plan's `packages` and `unread` with none of the three lists, the
+same beside the refusal. New: `s32_a_bundle_schedule_naming_a_package_it_lacks_is_refused_enables_unknown`,
+a zip rule naming a package the zip does not carry (`rule_package_unregistered` at
+`/rules/2/package_id`), on both paths: the plan answers `packages` and `unread` and no list, the
+placement is refused `place_enables_unknown`, nothing written, no pause sent. The seven old gates'
+`fixture::authorized` reads `enters` through the `Option` (none when it is `None`).
+
+**Round 3** (S3-1's fix round 3 merged, its head `5c28a2a4`; coordinator work order
+`rd-1115/brief-463-s32-fix3.md`, after an independent review of round 2, the coordinator's
+rulings, not the owner's words; no main merged). S3-1's `enters` may now hold a package used only
+as a layer of the prerequisite chain of a package scheduled or holding one of readiness's words
+(the plan's role `prerequisite`); its type
+and what `None` means are unchanged, so `authorize` is unchanged and `--enables` names such a
+package too ([install-cli.md](install-cli.md), "The authorization a placement names", "The
+parameters"). The outcome codes entry of `install-cli.md` said that `place_enables_unknown`
+carries the reader's refusal as its cause, round 1's text: the code attaches no cause, and why
+the lists cannot be stated is in the plan's `schedule_changes` beside the outcome, whose `unread`
+names the refusal, as the catalog says. The rule "No confirmation parameters" says that `place`'s
+`--authorization` and `--enables` are statements of the caller that the tool records, not
+confirmations it asks for. The row `place`'s `help`, the description of the Lab's MCP tool, now
+names the authorization (157 bytes, within `MAX_HELP_BYTES`). The sentence on `undo` below is
+written into `install-cli.md` where the `undo` of a placement is described. Tests, two new in the
+same gate file and gate entry: `s32_a_content_only_placement_without_a_reference_is_refused_hot_and_cold`
+(on both paths a bundle that only replaces a pack's content, `enters` empty, placed without
+`--authorization` is `place_authorization_missing`, nothing written, no pause sent: the reference
+does not depend on `enters` being non-empty) and
+`s32_a_new_prerequisite_is_named_with_its_scheduled_package` (a bundle adding a pack named by a
+rule whose `control.json` names a new pack as its prerequisite plans `enters` both; on both
+paths `--enables` naming only the scheduled one is `place_enables_mismatch` with both in
+`expected`, nothing done; with no Runtime naming both places them, the journal's `enabled` the
+two, sorted). No test is adapted.
+
+**What is not changed.** What a placement places, holds and checks; the plan, its id, its items
+and its `schedule_changes` (S3-1's); `release stage`, `deploy` and the other rows; every
+interface revision. **What the slice does not cover: `undo`** (round 3). The `undo` of a placement,
+with a Runtime or without one, restores the content the placement replaced and asks for no
+authorization; if the undone placement had made a package leave scheduling, the undo brings it
+back, and no record says under which authorization. This slice does not change `undo`, `op
+resume` or `rollback`: `undo` is the way back of a rescue operation, and its record is ordered
+separately.
+
+**At deploy.** Nothing to do on the root. A caller of `place` that changes something passes
+`--authorization` and `--enables` from this build on; a placement without them is refused before
+anything happens, so nothing is half done.
+
+### 1.417 Slice #463 S3-10 (0.12.64): `standard-pack trial`: its plan, its refusals and its record (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-10"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s310-trial-plan.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.417; the numbers between §1.400 and this one belong to slices
+dispatched with it. The slice ships in 0.12.64.
+
+**What it is.** A new authoring row, `standard-pack trial` (slice `PACK-TRIAL`; actinglab's own
+command `standard-pack trial`, MCP's `ac_standard_pack_trial` through a `serve` child), the half of
+the trial tool that shows and refuses and keeps the record
+([standard-pack-trial.md](standard-pack-trial.md)). **It sends nothing**: in this release the row
+answers only with `--plan`, and without it the line is refused before anything is read,
+`validation_failed` naming `--plan` `required` (the coordinator's ruling 1); S3-11 builds the run on
+this slice's branch and lifts that refusal. The offline part is one module of the resource tooling,
+`standard_pack_trial`: `plan_standard_pack_trial` (the plan and its refusals),
+`check_trial_state_dir`, `write_trial_record`, `trial_records` and `latest_trial_record`.
+
+**The plan** (ruling 5): the package id; `content_hash_prefix`, the first 12 hex digits of the
+content hash of the directory given, the digits the failure identity keeps and the break-in of
+#1737 takes of the same function's hash (#1737, U1b, §1.389, is on main; the second train of stage
+three read the merged code: the two call two functions, not one, over one digest; the break-in
+measures by containment's `measure_content_hash`, through the host's `measure_package_hash` and the
+lift checks' memory, and cuts the digits by the host's `content_hash_prefix`; the plan reads its own
+snapshot, `snapshot_content_directory`, and calls the contract crate's `content_directory_digest`
+of each file's SHA-256 itself, the directory branch of `measure_content_hash`, keeping
+`CONTENT_PREFIX_DIGITS` (12) digits); the instance as given, never contacted; the declared ends, each `scheduling_outcome` mapping of the entry task
+with its key, its kind and its pages; each declared variable with the value `--variable` gives
+(parsed by the scan replay's own parser, judged offline by the contract crate's
+`PackageVariable::judge`, the rule a dispatch resolves a value by, taken only as given) or its
+default; the irreversible mark; the authorization reference, `null` when none was given;
+`--expect`; `run_requires`, what the run will require that the plan was not given; and
+`record_directory`. It reads the package directory once, `--root`, and whether the state
+directory's path holds the entries below: no Runtime, no device, no installation, and it writes
+nothing (ruling 7).
+
+**A plan asks for nothing** (fix round 2, the coordinator's ruling 1, the review's item 1). The plan
+is "prepare and show" (the design's authorization line): it needs no authorization and refuses
+nothing only the run needs. `--authorization` is optional with `--plan`: given, it is bounded and
+checked and shown back; given without a value or blank, `validation_failed` `value_missing`, the
+command line's refusal of an option without its value; not given, the plan answers `authorization`
+`null` and `run_requires` `["authorization"]`. A package the irreversible mark flags is shown,
+`irreversible_acknowledged` true or false as `--irreversible` was given; nothing is refused for it.
+So `trial_authorization_missing` and `trial_irreversible_unacknowledged` had no path in this slice
+and are removed (enum entries, fragment, index, texts, tests); they arrive with the slice that sends
+the run. The record's writer is called by no command yet. Fix round 3 (the second review) corrects
+what fix round 2 said here: a record without an authorization was held by a `debug_assert`, which
+a release build does not run, and the sentence that no existing code fits was wrong, since the
+writer already refuses another malformed record `validation_failed`. Now it cannot be built: the
+record's plan is a type of its own, `TrialRecordPlan`, whose `authorization` is a text, made from a
+`TrialPlan` only by a conversion (`TryFrom`; outside the crate the type is `non_exhaustive`) that
+refuses a plan without one `validation_failed`, as the writer's other refusals of a malformed
+record; the writer takes it, and the reader decodes into it, so a stored record whose
+`authorization` is absent or `null` is `trial_record_unreadable` `undecodable`.
+
+**Malformed arguments are `validation_failed`** (fix round 2, the coordinator's ruling 2): one code,
+one cause, and one way for the same kind of mistake, as the slice already answered an undeclared
+`--variable` name. A `--package` that is a file is `validation_failed` naming `--package` with
+`unusable`, the vocabulary `argument_problem`'s word for an argument that names something not of its
+kind (no word of the command line names a path of the wrong kind more closely), the message saying
+why a directory is required; an `--expect` the package does not declare is `validation_failed`
+naming `--expect` with `not_recognised`, the word an undeclared `--variable` name gets, the details
+keeping `expected` and `declared_outcome_keys`. `trial_package_not_directory` and
+`trial_expectation_unknown` are removed.
+
+**One reading** (fix round 2, point 5): the plan read the package four times (its description, its
+remedy declarations, its content hash, its entry task) and, over a root, a fifth time for the
+irreversible mark. It now takes one bounded snapshot by the containment crate's
+`snapshot_content_directory` and derives everything from it: the hash is the contract crate's
+`content_directory_digest` of each file's SHA-256 (`Sha256Hash::digest`), exactly the directory
+branch of `measure_content_hash`, which the test compares it with; the kernel admits the same bytes
+(`PreparedContainedTask::load_content_entries`, offline without a vision provider); the package id,
+the entry task, the control declaration's `provides` and `variables` (the contract crate's
+`parse_package_variables`) come from the snapshot. Fix round 3 (the second review's suggestion c):
+fix round 2 also derived from the snapshot what the rule of irreversibility judges of the package,
+by a copy of `RemedyDeclarations::declared_capabilities`, and judged the root by a copy of the loop
+of `root_irreversibility`; copies drift, so both are gone. `declared_capabilities` takes the parsed
+declarations, but the only reader that makes them, the kernel's
+`PreparedContainedTask::read_remedy_declarations`, takes a path, and the kernel is not this
+slice's to change; so the mark is now judged by `root_irreversibility` itself, called with a
+directory map that gives the directory tried in place of the registered directory of its id, and
+over a root the directory tried is read once more, by that reader, for the mark alone.
+
+**The ends** (fix round 2, point 5): the first round listed the keyed ends of a page graph as
+`ending`. Each kind is now named by the declaration that makes it one, as the package's own
+contracts name them, told apart in this order: `target` (a target page of the task, by the kernel's
+`terminal_holds_page`), `on_empty`, `on_max_runs`, `on_guard_refused`, `on_timeout` (the key of an
+operation's select step, keyed cap, keyed guard refusal or wait step), `end_page` (a stage's
+`end_pages`), and for every other mapping `ending` in a `linear_steps` task or `other` in a page
+graph.
+
+**The refusals.**
+
+| Code (resource-tooling) | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `trial_state_dir_refused` (word `trial_state_place`: `installed_root`, `repository`) | the state directory is, or lies inside, an installed root or a repository (ruling 6) | refuses | 1 (envelope 2) |
+| `trial_record_exists` (fix round 2) | a record or its `.part` of that name is already there: it is never replaced; a person looks at that file | refuses | 1 (envelope 2) |
+| `trial_record_write_failed` | the operating system refused a step of the write, and no record was written (fix round 3) | refuses | 1 (envelope 2) |
+| `trial_record_unreadable` (word `trial_record_problem`, fix round 2: `read_failed`, `too_large`, `undecodable`, `name_mismatch`) | a file of a record's name is not that record | refuses | 1 (envelope 2) |
+| `trial_record_part_left` (fix round 3) | the record is written and in place, but the `.part` its write created could not be removed | warns, in the `warnings` of the writer's success | 0 |
+
+The command line's own refusals and the malformed arguments are `validation_failed` naming the
+flag: `--authorization` given blank (`value_missing`), longer than 1024 bytes (`out_of_range`) or
+with a control character (`not_recognised`); `--package` a file (`unusable`); a `--variable` the
+scan replay's parser refuses or the declaration does not take (the details carry `variable_name` and
+the judgement's `variable_problem`); `--expect` undeclared (`not_recognised`). A check of the state
+directory's path that the operating system refuses is `foreign_os_error`. Two new keys and their
+vocabularies, `trial_state_place` and `trial_record_problem`, and the domain `trial_` of the
+resource tooling's fragment. No decision point reads a code: each refusal is built where its
+situation is known.
+
+**Without `--root`** the mark cannot be judged: the plan answers `irreversible` `not_judged`. The
+row's notes and the contract say so; S3-11 decides whether the run requires `--root` (ruling 3).
+
+**The record** `actingcommand.pack-trial.v1` (ruling 6): `schema_version`, `at_unix_ms`, `plan`
+(whose `authorization` always holds a reference), `request_id`, `run_id`, `end` (`outcome`,
+`outcome_key`, `final_page`, `failure_code`, `failure_values`) and `matched`, under
+`<state>/trials/<package_id>/<content12>-<ms>.json`. Fix round 2 (the review's item 3): "never
+replaced" holds without a window between a check and the write. The writer writes the record whole,
+and flushed, under its name with `.part` added (a file created anew, `create_new`), then
+`hard_link`s it to its name, which fails when the name is taken (a rename would replace an existing
+file on Windows); a record or a `.part` of that name already there is `trial_record_exists`, built
+from what was found and from no forged I/O error; once linked, the `.part` it created is removed
+(fix round 3: a refused removal leaves the record written and is a warning, below, no longer
+`trial_record_write_failed`). The reader answers every record of a package and the latest of one
+content and refuses a file of a record's name that is not the record its name says, with the word
+that says why. Nothing writes one outside the tests in this release.
+
+**Fix round 3** (the second review; brief `rd-1115/brief-463-s310-fix3.md`). *A written record is
+never reported as not written*: fix round 2 answered a refused removal of the `.part` after the
+link `trial_record_write_failed`, so a record on disk was reported as not written and the code held
+two causes. Now the writer answers success, `WrittenTrialRecord`: the record's `path`, `part_left`
+naming the `.part` left, and in `warnings` the new warning `trial_record_part_left` (`path` the
+`.part`, the refusal of the removal its cause), in the shape the Lab's answers carry warnings in;
+`trial_record_write_failed` now means only that no record was written. *The failure paths*: after a
+refused write, flush or link (for another reason than the name being taken) the writer removes the
+files it created anew with `create_new`, so that the one retry of the same record is not blocked by
+its own leftovers; one whose removal is refused too is named by a `cleanup` link
+(`foreign_os_error`, `io_op` `remove`) and the answer is still the original failure. A refused
+flush is `io_op` `sync`, no longer `write`. *Without hard links* (FAT32, exFAT, some network
+shares), following main's precedent (`state_root_installation.rs`, `place_once` and
+`create_exclusive`; [install-cli.md](install-cli.md), `install\identity.json`): a link refused for
+another reason than the name being taken falls back to an exclusive create of the record's own
+name, the link's refusal a `note` link when that fails too. It keeps that no file of the name is
+ever written over; it gives up that the name exists before its bytes do, so a reader then, or a
+crash meanwhile, finds an incomplete record, which the reader refuses `undecodable`; a refused
+write or flush removes that file too. *The text*: the contract's order of the refusals names
+`--root`'s own last (a root that is no directory or names no game, a root file that cannot be read
+or is too large: `validation_failed`; a root without `bundle.json` or a root file refused:
+`standard_pack_root_invalid`), where the code has them.
+
+**The state directory's place** (fix round 2, the review's item 2). The work order asked to refuse a
+state directory inside a repository or an installed root "by the test the Lab already has for
+that". The first round recognised an installed root by `runtime\BUILD-MANIFEST.json` or
+`install\active.json` and said that main has no such test; both were wrong. The first file is in
+every unpacked release and every kept build (it marks a member folder, not an installation), the
+second exists only in one layout, and `install\state.json` is the installer's own state file in both
+layouts ([install-cli.md](install-cli.md), "Layout"); main recognises an installation by it for one
+directory (`actingcommand_runtime_host::installation_root_at`, `state_root_installation.rs`). Now one
+function of the resource tooling, `installed_root_containing`, answers the directory a path is or
+lies inside whose `install\state.json` is a file, along the path made absolute and then along its
+nearest existing part with its links resolved, a part whose existence or kind the operating system
+does not tell, or that cannot be resolved, being `foreign_os_error` (`try_exists`), never read as
+"absent". The resource tooling may not reach the host's crate (the architecture guard
+`production_packages_cannot_reach_resource_tooling`), so the function repeats only the file's name
+and none of `installation_root_at`. It sits below the Lab's crate so that both can call it: pull
+request #1736 (R4 and P4, §1.388, on main since 0.12.63) refuses a recording's output directory
+inside an installed root by the same file with its own walk. The second train of stage three
+compared the two and left that walk in place: it reads a check the operating system refuses as
+"absent" and walks on (and walks a path that cannot be made absolute as given), where this
+function answers `foreign_os_error` (`validation_failed` for that path), so the two name the same
+root only while every check is answered ([standard-pack-trial.md](standard-pack-trial.md)). A
+state directory inside a repository (a directory along the path that holds `.git`) keeps its
+refusal (the work order's "never in a repository"); what it costs: a state directory kept inside a
+checkout is refused for the trial's records though recordings accept it there, and `--state-dir`
+names another.
+
+**Where the row is wired.** Beside the module and actinglab's `standard_pack_cli.rs`: the row in
+`lab-operations.json`; `engine::COMMANDS` (68), the strict rows (33) with the command's flag lists
+`TRIAL_FLAGS` and `TRIAL_SWITCHES`, the census's group (a) (66), `BUILT_SLICES` and the MCP
+server's `ACTINGLAB_SLICES` (`PACK-TRIAL`), the capability (`offline`, `read_only`), the help's
+options, the dry-run declaration (`no_effect`, [actinglab-dry-run.md](actinglab-dry-run.md)) and
+the command inventory (106 commands); fix round 2: `--variable` by `replay_cli::given_variables`,
+the scan replay's own parser, which names the command in its messages, and the counts of
+[lab-two-entries.md](lab-two-entries.md) (23 rows take the instance on the command line only as
+`--instance`; 161 offered rows on Windows, 68 of them by children, 122 elsewhere) and the Files list
+of [README.md](README.md). The resource tooling reads the root by the contract crate's
+`read_standard_pack_root` and judges it by `IrreversiblePackages` as its own `root_irreversibility`
+builds it (fix round 3: called, not copied), every package of the root read by the Runtime's
+metadata reader, the directory tried read in place of the registered one of its id.
+
+**Tests.** `crates/resource-tooling/src/gate_463_s310.rs` (eleven) and
+`apps/actinglab/src/tests/gate_463_s310.rs` (two), gate map `exec.toml` "#463 S3-10": the plan of a
+`linear_steps` package with two ending pages lists three keys; a plan writes nothing; a plan without
+an authorization answers `null` and `run_requires`, a given one is bounded; a container, an
+undeclared `--expect` and unfit `--variable` values are `validation_failed`; a marked package is
+shown, not refused; a state directory in a repository or an installed root is refused by the plan
+and by the writer, and an unpacked release or a selection alone is no installed root; the writer
+never replaces a record or a `.part` (`trial_record_exists`) and the reader's three words; the
+command line without `--plan` and with it, with and without `--authorization`. Fix round 2 renames
+`s310_the_authorization_is_required_bounded_and_shown_back` to
+`s310_the_authorization_is_optional_bounded_and_shown_back` (neither is on main, so nothing leaves
+the gate map's merge base). Fix round 3 adds
+`s310_a_record_plan_is_made_only_from_a_plan_with_an_authorization` (the conversion of a plan
+without an authorization is `validation_failed`) and
+`s310_a_stored_record_whose_authorization_is_null_is_unreadable` (`undecodable`), and adapts two of
+this slice's own tests to the writer's new types (a record's plan made by the conversion; the
+writer's answer compared whole, no `.part` left and no warning). No golden changes, no test of
+main is adapted.
+
+**What is not changed.** `run start` and the run path of `crates/lab-ops`, the Runtime, `adopt.rs`,
+readiness, the placement, every interface revision and record shape.
+
+**At deploy.** Nothing to do: the row only reads, and nothing writes a trial record yet.
+
 ### 1.402 Slice #463 S1-1 (0.12.64): a press is recorded by the command that makes it, `tap`, `swipe` and `long-tap --record` (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, A1, A2.1, A3, A5 and A6.1, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s11-press-record.md`, read on main `44cbab53`)
 
 The coordinator gave this slice 1.402: main `44cbab53` holds the sections up to §1.400, and 1.401
@@ -29418,6 +29953,344 @@ independent review of S1-2; the coordinator's rulings, not the owner's words).
   The waits test adds the loop's flags and a bound of more than 120 intervals. No test switches the
   loop off, and none leaves the gate map.
 
+### 1.406 Slice #463 S1-5 (0.12.64): the archive's manifest names each step's screens, the presses of the material and the final screen (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one hands over the recorded material of a business, and the owner's words of the 11-15 evening that stage one hands over, for each press, the frame the click happened on with where it was pressed, and the last result frame; the design `rd-1115/pack-stage12-design.md`, A2.2, the row S1-5 of A6, A3 and A5's row `final_frame_missing`, read on main `44cbab53`; the coordinator's rulings in the work order and in its dispatch, not the owner's words; coordinator work order `rd-1115/brief-463-s15-manifest-v2.md`, built on the branch of #463 S1-3 at `d5b0825e`)
+
+The coordinator gave this slice 1.406. It stands on #463 S1-3 (§1.404), which stands on #463 S1-1
+(§1.402), and ships in 0.12.64 (release 0.12.63 was cut without it).
+
+**Why.** `record archive` is how stage one ends and hands the material over. Its manifest (v1) listed
+a step's frames and its press as a rectangle; it did not say which frame was on the screen when the
+press was made, which frame the screen became or where the business ended, and it could not describe
+a press made at a point. A reader without a Runtime now reconstructs the business from the manifest
+and the files alone ([lab-recording.md](lab-recording.md), "Archiving", "The manifest").
+
+**Established by reading** (the code's facts where the design or the work order's notes said
+otherwise first).
+- *Where the switch and the warning go.* `RecordArchiveOptions` and `RecordArchiveOutcome` are in
+  `crates/lab/src/recording/model.rs`, which the work order keeps closed but for the one member
+  below. So `--all-frames` is a parameter of `record_archive_copy` (`ArchiveCopyFrames`, beside it
+  in `archive.rs`), read by the `record` command (`RECORD_ARCHIVE_READS` gains the switch, the row
+  the parameter `all_frames`), and the answer's `lab.warnings` is `record_archive_warnings`, which
+  reads the manifest the outcome names and which the command adds to `lab`.
+- *The v2 schema's name* is a constant of `archive.rs`, beside its use of
+  `LAB_RECORDING_ARCHIVE_SCHEMA`, which keeps naming v1 (the design's line was model.rs 1738, now
+  1909). `read_manifest` reads the schema a manifest names first and decodes exactly the v1 or the
+  v2 document by it; nothing else reads a manifest's content: `record reopen` reads only the latest
+  manifest's file name (`latest_manifest`), so it takes either.
+- *A press sent on a capture that was not stored* (S1-1's fix round: an open step with marks) is said
+  only by the press's answer (`record.before.sent_on_unstored_capture`); the step table records
+  nothing of it, and the execution's `before_frame` names the stored frame. The manifest cannot know
+  and claims nothing: `material.clicks[].sent_on_unstored_capture` (`Option<bool>`, fix round 2) is
+  `null` on every press, written and not left out ("the step table does not say"), until the step
+  table's own member is read, which the join with S1-1's third round does (that round adds
+  `ClickExecution.sent_on_unstored_capture`; its head is no ancestor of this branch). `false`, as
+  the first round wrote it, said something wrong of two kinds of press (the review of #1763): a
+  press of `do --capture --record`, sent on the Runtime's own capture, which the recording does not
+  hold, and a point press on an open step with marks, whose capture before is not stored.
+- *An application operation had no time.* `ClickExecution` carries `executed_at_unix_ms`;
+  `ApplicationExecution` did not. On the coordinator's word in the dispatch this slice adds
+  `executed_at_unix_ms: Option<u64>` to `ApplicationExecution`
+  (`serde(default, skip_serializing_if)`), stamped by `commit_application` on the clock that stamps
+  a click's execution, named `None` in its initializers (`session_management.rs`'s
+  `performed_execution`, `gate_463_s13.rs`'s `completed`). A row's `at_unix_ms` of an application
+  step is that time; for an operation an earlier build recorded it is `null`, and none is derived.
+- *The design's rule for derived frames.* Its frame after is "the first frame of the next effective
+  step when it was recorded at or after `executed_at_unix_ms`"; an application operation recorded
+  before S1-3 has no time, so the rule finds none there (`null`). The rule's frame before applies
+  also to an application operation without a completed receipt (attempts only), whose step table
+  names no frame; such a row is `derived: true`. The entry step has no frame and names none.
+- *The material's final screen* is `material.final_frame` (the coordinator's ruling (i)), not a
+  member of the header as the design drew it; a member in two places would be one fact twice.
+- *Outcomes.* A click's is its execution's word; an application operation's is `performed` with a
+  completed receipt (attempts may stand beside it), `indeterminate` with attempts and none
+  (the review of S1-3), `null` without either.
+- *Interface revisions.* None moves: no request kind, wire shape, ledger member, configuration key or
+  outcome code is added; `actingcommand.lab-recording.v1` keeps its name (the new member is absent
+  on every operation an earlier build recorded).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The manifest | `ArchiveManifest` is v2: the header's `locale`, `coordinate_space`, `note`, `archive_note`, `material` and `copy`; each row's `dropped`, `converted_to_transition`, frames with `superseded` and `recorded_at_unix_ms`, `before_frame`, `after_frame` (`{step, frame_id}`), `after_capture`, `derived`, `outcome`, `tap` with `source` (`rect` `null` for a point), `long_press`, `application_op`, `note`; `material.clicks` (`frame`, `derived`, `sent_on_unstored_capture`, `entry`, `point`, `to`, `duration_ms`, `action`, `outcome`) and `material.final_frame` (`crates/lab/src/recording/archive.rs`: `manifest_of`, `row_of`, `relation`, `outcome_of`, `click_of`, `final_frame`) |
+| Reading | `ArchiveManifestV1` (the v1 document, read only) and `read_manifest` by the schema named; `ReadManifest` |
+| The copy | `record_archive_copy(…, ArchiveCopyFrames)`: the step table, the manifest and the material's frames, or every listed frame; the copy's manifest is the recording's with `copy: {frames}`, checked against itself as written; a v1 manifest's copy as before |
+| The warning | `record_archive_warnings`: `final_frame_missing` on a v2 manifest whose `material.final_frame` is `null` |
+| The step table | `ApplicationExecution.executed_at_unix_ms` (`model.rs`), stamped in `commit_application` (`steps.rs`) |
+| The command | `record archive --all-frames` (`RECORD_ARCHIVE_READS`), refused without `--copy-to`; `lab.warnings` in the answer (`apps/actinglab/src/commands/session_record.rs`) |
+| The table | the row `record archive`: `all_frames` (switch), `copy_to`'s note, `help` (149 bytes, "Ends a recording as material (stage one) …"), `output`, `notes` |
+| Texts | [lab-recording.md](lab-recording.md): "Files", the `recording.json` members, "Archiving" (the usage, "The manifest" with the material, the rows, the rule for derived frames, what a reader reconstructs, the frames around a press, the manifests written before 0.12.64, "The copy", "Named again", "The answer", the refusals) |
+
+**Codes and words.** No outcome code is added and no fragment changes. New words, none decided on
+by any code:
+
+| word | the one situation | refuses or warns | exit |
+|---|---|---|---|
+| `final_frame_missing` (in `record archive`'s `lab.warnings`) | the manifest the answer names (v2) has `material.final_frame` `null`: the last effective step is not a screen that arrived after an effect on record | warns, the archive stands | 0 |
+| `copy_to_only` (`validation_failed`, `details{argument: "all_frames", reason}`) | `--all-frames` without `--copy-to` | refuses, before the session is read | 1 (2 under `--via`; the train of stage one) |
+
+The manifest's own vocabularies are members, not outcome words: `copy.frames` `material` or `all`,
+`outcome` `performed` or `indeterminate` (a click execution's words).
+
+**Tests.** `crates/lab/src/gate_449_rec_arch.rs` (the existing gate, apps gate map; new tests "#463
+S1-5"; fake Runtime and clock through `RecordFramePorts`, synthetic 16x9 frames):
+- `s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_screen`: a launch on
+  the empty recording, a tap, a long press, a swipe and a restart as stage one records them: each row
+  equals the step table's (the stored frames, `derived` false, `tap.rect` and `long_press.rect`
+  `null`, the superseded frames in order, the launch's and the restart's time); `material` each press
+  with its frame (the entry's `null`, `entry` true) and where it was pressed, and `final_frame` the
+  screen after the restart; no warning.
+- `s15_a_recording_made_with_do_archives_with_derived_frames`: presses of `do --capture --record`:
+  `before_frame` the live primary frame (not the step's first), `after_frame` the next step's first
+  frame or `null`, `derived` true in the rows and the material; `final_frame` `null` and
+  `final_frame_missing`.
+- `s15_a_v1_manifest_on_disk_is_named_again_copied_as_it_is_and_reopened`: a v1 manifest written as
+  0.12.59 to 0.12.63 wrote it: named again read, verified (a changed frame
+  `record_archive_verify_failed`, `checked: "recording"`), no warning, nothing written; copied byte
+  for byte with every file it lists; reopened; the next archive writes `archive-manifest-2.json` as
+  v2, whose tap row's `after_frame` names a frame since superseded, the first manifest as it was.
+- `s15_without_a_screen_after_the_last_press_there_is_no_final_frame`: two taps whose screens after
+  fail: the first's `after_frame` the second's capture before, `after_capture` `null`; the archive
+  stands, `final_frame` `null`, `final_frame_missing`.
+- `s15_the_copy_holds_the_material_unless_every_frame_is_asked_for`: the copy holds the step table,
+  the manifest and the material's frames, not the superseded one, its manifest `copy.frames`
+  `material`; with every frame the superseded one too and `all`; that frame changed fails the
+  archive named again.
+
+Adapted, as the requirement changes what they pin: `rec_arch_steps_of_several_callers_archive_and_the_rows_equal_the_step_table`
+and `rec_arch_a_step_table_written_by_0_12_54_archives` (Lab) assert the v2 rows (their presses'
+frames derived) and the copy's manifest saying `material`;
+`rec_arch_the_copy_goes_only_into_a_new_or_an_empty_directory`,
+`rec_arch_a_copy_that_does_not_verify_names_the_file_and_the_retry_by_id_copies` and
+`rec_arch_a_recording_record_start_force_left_behind_is_archived_by_its_id` (actinglab) compare each
+copy with the recording but for its manifest, which says `copy: {frames: "material"}`, and two of them
+the answer's `lab.warnings` (`[]`; `["final_frame_missing"]`); `gate_463_s13.rs`'s receipt names the
+new member. No golden changes, no test leaves the gate map.
+
+**What is not changed.** The manifest's file series and its writer; `record reopen` but that it takes
+either manifest; the step table's other members and every recording without an application
+operation, byte for byte; `recording_api.rs`, the generator, the kernel and the Runtime; today's MCP
+server (`actingctl mcp-serve`) but the text of one parameter (fix round 2).
+
+**At deploy.** Nothing to configure. v1 manifests on disk are read, verified, copied and reopened as
+before; the next archive of such a recording writes v2. A build before 0.12.64 refuses a v2 manifest
+(`record_state_io_failed`): not owed. Through MCP `ac_record_archive` takes `all_frames` on the Lab's
+MCP server (`actinglab-mcp`).
+
+**Fix round 2** (coordinator work order `rd-1115/brief-463-s15-fix2.md`, after the independent
+review of #1763 at `bebf984e`).
+- *Claims.* `material.clicks[].sent_on_unstored_capture` is `Option<bool>`, `null` on every press
+  ("A press sent on a capture that was not stored" above; contract "The manifest").
+- *The copy's manifest is written last* (`record_archive_copy`, with `copy_failed`): the step table
+  and the frames are copied and hashed first, then the manifest is written and hashed against
+  itself; a copy that fails before it holds no manifest naming files it does not hold.
+- *Texts.* The manual of the Lab's MCP server (`ac_record_archive`: the manifest v2, the warning,
+  what the copy holds, `all_frames` and `copy_to_only`); the first-generation server's `copy_to`
+  says what the copy holds and that every frame is copied with the Lab's `record archive
+  --all-frames` or the Lab's MCP server's `all_frames` (no parameter is added: that server is not
+  extended, the coordinator's ruling); the contract names the server that takes `all_frames`, the
+  order of the copy and two more cases without a final screen (fewer than two effective steps; the
+  effective step before the last without an effect on record); `LAB_RECORDING_ARCHIVE_SCHEMA`'s
+  comment says v1 is only read; every version of this slice is 0.12.64.
+- *Tests* (the slice's gate, registered in its entry): `crates/lab/src/gate_449_rec_arch.rs`
+  `s15_fix2_a_copy_that_fails_after_its_first_frame_leaves_no_manifest` (the copies' seam, a
+  stored frame that no longer holds its sha256, on the second frame the copy takes),
+  `s15_fix2_an_application_operation_recorded_the_old_way_is_derived`,
+  `s15_fix2_an_indeterminate_press_is_in_the_material`,
+  `s15_fix2_dropped_and_converted_steps_are_listed_and_not_in_the_material`,
+  `s15_fix2_a_step_table_without_executed_at_is_written_back_byte_for_byte`;
+  `apps/actinglab/src/tests/gate_449_rec_arch.rs`
+  `s15_fix2_all_frames_needs_copy_to_and_copies_every_frame`. Adapted, as the requirement changes
+  what they pin: the tests that compare `material.clicks` (`material_click`) expect
+  `sent_on_unstored_capture` `null`. No test leaves the gate map; no code or word is added.
+- *Not here:* the fakes' capture scripts for S1-2's stillness loop, which is not on this branch;
+  the join lengthens them.
+
+**Joined in the train of stage one** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1b.md`, which merges this slice at `8031b17f` and #463 S1-7 into the
+branch of S1-1, S1-2 and S1-3 on main `3581a8af`; the coordinator's rulings, not the owner's words).
+- *The step table's own member is read* (a). `material.clicks[].sent_on_unstored_capture` of a press
+  whose execution names its own frame before (`derived: false`) is the execution's
+  `sent_on_unstored_capture` (§1.402, fix round 3; absent there, so `false`, unless the press was
+  sent on a capture that was not stored); a press whose frame the manifest derives (`derived: true`:
+  `do --capture --record`, a press recorded the old way) carries `null`, and so does an application
+  operation, whose receipt records no such member (`click_of`, `archive.rs`).
+- *The screen after* (with §1.403). A row's `after_frame` is the last capture after its effect, the
+  captures before it superseded in the step the first opened; the contract's "frames after press
+  k" are the frames of that row recorded at or after the press's `at_unix_ms`, so the loop's earlier
+  captures are among them.
+- *`--all-frames` without `--copy-to`* (h). The refusal is `validation_failed`, and actinglab's own
+  command line answers every failure with exit 1 (`cli_module::own_line`), the Lab's other refusals
+  of a flag without the flag it needs included; the class's 2 is a `--via` line's. The contract and
+  the codes table above say so; the test pins 1.
+- *Tests.* The gate's fake (`Screens`) has a clock moved by its waits; each point press now takes
+  one capture before it and four after it, each application operation (`Bench::operated`) one and
+  three, and the tests that press or operate expect the loop's frame ids, superseded frames, final
+  frames and the press's default wait of 100 ms; none switches the loop off. New:
+  `s15_train_the_material_says_what_the_step_table_says_of_the_capture_a_press_was_sent_on`
+  (`false` on a stored capture, `true` on a marked step whose capture was not stored, `null` for a
+  `do` press), in this slice's gate entry.
+
+### 1.424 Slice #463 S1-7 (0.12.64): a recording holds its instance (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one asks nothing of the agent but to start recording, play and end recording; the read-only investigation `rd-1115/record-hold-investigation.md`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s17-record-hold.md`, stacked on #463 S1-1, §1.402, cut from its head `24e48b47cd` on main `b7c47129`, its fix round 3 `124e2b4de2` merged; fix round 2 by the coordinator's work order `rd-1115/brief-463-s17-fix2.md` after the independent review `rd-1115/review-1762.md`)
+
+The coordinator gave this slice 1.424. It ships in 0.12.64 (release 0.12.63 was cut without it), after S1-1.
+
+**Why.** An agent's presses are separate commands with seconds or minutes between them, each
+holding the instance's input lease for its press alone, and a recording was only files of the
+Lab's state directory: nothing kept the scheduler from dispatching a scheduled task to the instance
+between two presses, whose screen then became a press's screen after it and opened the next step,
+silently. The contract's "pause the instance first" was a second thing the agent had to remember,
+and no tool checked it. Now `record start` holds the instance and the end of the recording releases
+the hold ([lab-recording.md](lab-recording.md), "A recording holds its instance").
+
+**Established by reading.**
+- *A press under the recording's own pause.* A pause gates only routine claims; client leases,
+  Lab operations and observations are operator claims (`ClaimKind::class`,
+  `crates/scheduler/src/lib.rs`), so a press is admitted under it. An instance outside the
+  multi-Nemu gate closes its device session at the pause's stage (c) (`release_paused_instance`,
+  `crates/runtime-host/src/host/policy_dispatch.rs`), as it closes it at every lease end
+  (`keeps_device_session`, `host/resource_close.rs`); after a confirmed close the kernel starts a
+  new session at the next operation (`ExecutionKernel::session`,
+  `crates/execution-kernel/src/kernel.rs`; only an unconfirmed close refuses), whose input and
+  capture open lazily (`SessionBackends`, `crates/execution-kernel/src/session.rs`). So the press
+  works on every path; the slice builds on it.
+- *What the end costs.* An instance resume reconnects the device and runs its self-check: up to
+  33 000 ms plus the IO timeout ([scheduling-pause.md](scheduling-pause.md), "Resume"). The archive's
+  manifest, the session header and the copy, or the stop's package, are written before it.
+- *A deploy* (fix round 2, as the review found it). The deploy's guard `foreign_pauses` (`guards
+  --for stop`, `crates/lab-rescue/src/install/guards.rs`) reports a recording's pause as another
+  party's (the guard fails on it); the rescue module records that report and goes on without
+  touching the pause ([lab-two-entries.md](lab-two-entries.md) §6: its hold takes only the
+  instances not paused or paused with its own reason, `held_instances`, `install/hold.rs`), so the
+  recording's pause is neither taken again nor resumed; and the restarted Runtime restores it (a
+  new owner epoch, revision 1, stage `released`).
+- *Today's MCP server holds too* (the work order's "keeps starting recordings without a hold" is
+  not what the code does): its `ac_record_start`, `ac_record_stop` and `ac_record_archive` run the
+  installation's `actinglab.exe` with the command's words (`apps/actingctl/src/mcp/lab.rs`,
+  `Program::locate`, `author`), so they take and release the hold as the command line does. Fix
+  round 2 changes their texts to say so (the coordinator's ruling: an author-tier session holding
+  and releasing its own recording's instance is intended); no behaviour of that server changes.
+- *Another party's pause is told by the status, not by a code.* `record start` reads the status
+  first and sends no pause to an instance it shows paused; no decision names
+  `scheduling_already_paused` or any other code. A pause refused for any reason, the rare race
+  with another party's pause included, fails the start.
+- *Fix round 2: a refusal is told by the receipt, nothing listening by a connection, neither by a
+  code.* A pause the Runtime refused is one whose own receipt arrived carrying the failure
+  (`scheduling::pause_refused`, the received receipt the client keeps); by the pause's rules
+  ([scheduling-pause.md](scheduling-pause.md)) a denied pause changes nothing and a failed one
+  lifts the gate it closed, so the header is put back; every other end (no receipt) leaves it. The
+  client's connect reads the runtime-info, opens the connection and shakes hands in one call, and
+  its failures (a refused connection and an owner epoch that `Health` answered differently both
+  at `connect_runtime`) do not tell whether anything listened; so after a failed connect one plain
+  connection to the runtime-info's address, opened and closed at once with nothing sent
+  (`record_hold::listening`; the Runtime's IPC takes a close before the first frame as an
+  ordinary close), tells them apart: accepted, the start fails as the Lab's commands answer the
+  connect's failure (`runtime_slice_cli::map_runtime_error`); refused, or no runtime-info naming an
+  address, `no_runtime_listening`. The only race is a Runtime that starts or stops between the two
+  attempts: one that starts fails the start loudly, one that stops dispatches nothing.
+- *Interface revisions.* None moves: no request kind, wire shape, outcome code, configuration key
+  or record of the Runtime is added; the session header's `hold` is absent on a header without one.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The facts | `RecordingHold {reason, own, kept}` (the session header's `hold`), `RecordingHoldFound` (what `record start` met: `Paused`, `Shown`, `NoRuntime`), `RecordingHold::reason_for` (`lab-record-<ms>`), `at_start` (own, foreign, taken over, carried over with nothing listening), `taken_over`, `ended`; `RecordingHoldView {state, reason}` with `RecordingHoldState` `own`, `foreign`, `none`, `kept`, and `record_hold_status`; the four warning words (fix round 2: `no_runtime_listening` in place of `runtime_not_answering`, and `replaced_header_unread`) (`crates/lab/src/recording/hold.rs`); the header view reads `hold` (`OldRecordView`, `store.rs`) |
+| The Runtime requests | `instance_pause_reason` (one `Status`: the reason of the pause the instance shows), `pause_for_recording` (`PauseScheduling` as the `pause` row, `LAB_PAUSE_DRAIN_TIMEOUT_MS` 300000, which `core_ops`' `pause` default now names), `pause_refused` (fix round 2: the pause's own receipt arrived and carries the failure, so no pause was made), `release_recording_hold` (one `Status`; the pause that shows the reason resumed by `resume_expected` with the status's owner epoch and that pause's revision; the client's failure keeps the hold), `instance_scheduling_paused` (one `Status`: the instance's pause or the global pause) (`crates/lab-ops/src/scheduling.rs`) |
+| The command | `record start` reads the replaced header (with `--force` over one that cannot be read: the warning `replaced_header_unread`, fix round 2) and its bytes; `record_hold::take` connects and reads the status, then writes the header naming the hold (`SessionRecordContext.hold`) before it sends `PauseScheduling` (fix round 2), puts the header back when the Runtime refuses the pause, and leaves it, the hold in the failure's details, on any other end of the pause; `reach` tells nothing listening (`no_runtime_listening`) from a handshake that does not complete (the start fails, `runtime_slice_cli::map_runtime_error`) by one plain connection to the runtime-info's address after a failed connect; a failure after the header names the hold carries it; `record status` adds `hold`; `record stop` (no dry run) and `record archive` write the header with the hold kept, then release (`record_hold::end`) and write it without; a release that fails answers `Kept::answer` with `next.release`, `record stop` again or `record archive --record-id <id>` (`release_again`; fix round 2: never an unconditional `resume`); `record reopen` carries an own pause the replaced header kept (`apps/actinglab/src/commands/record_hold.rs`, `session_record.rs`); `tap`, `swipe` and `long-tap --record` (`send_recorded_press`, `device_commands.rs`), `do --capture --record` (`lab2_cli/operation.rs`, fix round 2) and `session app --record` (`session_management.rs`) read the hold before the press or the operation, each on a connection of its own (`hold_warning_read`; fix round 2 for the presses, whose read shared the press's connection), so that a read that fails cannot make the press `not_submitted` or the operation look indeterminate, the word in `record.warnings` |
+| The table | the rows `record start` (`runtime` `optional`, `requests` `Status`, `PauseScheduling`, its help, output and notes), `record stop` (`optional`, `Status`, `ResumeScheduling`, help, output, notes), `record archive` (`optional`, `Status`, `ResumeScheduling`, output, notes); fix round 2: `tap`, `swipe`, `long-tap` and the three `app` rows list the `Status` read they send with `--record` (`requests`, notes), the `record start`, `record stop` and `record archive` notes name the new words and `next.release` |
+| Texts | [lab-recording.md](lab-recording.md): "A recording holds its instance", the opening paragraphs, `record start`, `record status`, `record stop`, the four sentences that asked the agent to pause first, "Archiving" (what it asks the Runtime, the answer); `README.md`'s recording lines; `apps/actinglab-mcp/MANUAL.md`, "Recordings"; fix round 2: the contract's start (the header before the pause, the two cases of no hold, the wait up to 335 s, `--force` over an unreadable header), `next.release`, the deploy sentence and today's MCP server; the manual's wait; actinglab's capabilities (`record start`, `record stop`, `record archive` and their `session record` aliases need `offline` and `runtime_optional`) and its Lab2 contracts (`hold` in the output fields); today's MCP server's `ac_record_start`, `ac_record_stop` and `ac_record_archive` descriptions (`apps/actingctl/src/mcp/tools.rs`, texts only, the coordinator's ruling: an author-tier session holding and releasing its own recording's instance is intended) and their row in [runtime-interface.md](runtime-interface.md) |
+
+**Codes and words.** No outcome code is added and no fragment changes. New answer words, each in
+an answer or in the details of a failure, never in a text, and none read by a decision:
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `hold.warnings` `no_runtime_listening` (`record start`; fix round 2, in place of `runtime_not_answering`, a word of `install_needs_person` with another meaning) | no connection to the installation's Runtime could be opened at all (no state root located, no runtime-info naming an address, nothing accepting a connection there), so the recording holds nothing of its own | warns | 0 |
+| `hold.warnings` `replaced_header_unread` with `hold.replaced_header {path, error}` (`record start --force`; fix round 2) | the session header `--force` replaced could not be read, so a pause the earlier recording took, if any, is not released by this recording | warns | 0 |
+| `record.warnings` `instance_not_held` (a `--record` press or application operation) | the status read before it showed the instance's scheduling not paused | warns | 0 |
+| `record.warnings` `instance_hold_unread` | that status read got no answer | warns | 0 |
+| `hold.state` `own`, `foreign`, `none`, `kept` (`record start`, `record status`) | the recording runs under its own pause; under another party's; under none; ended with its own pause kept | — | 0 |
+| `hold.release` `resumed`, `already_gone`, `not_own` (`record stop`, `record archive`) | the own pause found by its reason and resumed; no pause showed the reason; another party's pause left alone | — | 0 |
+| `hold.kept: true` with `next.release` (fix round 2, the command that tries the release again) in the details of the release's failure (`runtime_not_running` or `device_error`) | the end's work stands and its own pause stays: the release failed or no Runtime answered | refuses | 1 (the class's 5 or 4 under `--via`) |
+
+**Tests.** `crates/lab/src/gate_463_s17.rs` (exec gate map "#463 S1-7"; temporary state directories,
+no Runtime): the Lab's reading of the header carries the hold, the Lab recording starts on it and
+`record status` shows it; the four states; what `record start` met gives the hold; what keeps a
+header without a hold as it was (`{state: none}` without `reason`, `kept` written only when true).
+`apps/actinglab/src/tests/gate_463_s17.rs` (the runtime client's scripted Runtime, every
+request of every connection in order): the start's `status`, `pause_scheduling` with the
+recording's reason and the drain 300000; another party's pause, `status` only, and an archive that
+makes no connection (`not_own`); nothing listening (`no_runtime_listening`, a header with
+exactly the members it had before the slice); a denied pause starts nothing (fix round 2: the
+header written before the pause does not stay, an earlier one is put back byte for byte); after a
+restart (a second scripted Runtime, the pause at revision 1 in its epoch, another instance paused
+beside it) one `resume_scheduling` expecting that epoch and revision
+1; a denied resume keeps the hold with `next.release`, `record status` `kept`, and named
+again with no Runtime `runtime_not_running`; a refused `record stop` makes no connection and keeps
+the hold; `record start --force` takes the pause over with one pause in all. Fix round 2: a
+connection lost after `pause_scheduling` leaves the header naming the hold, the failure
+carrying it, and the next `record stop` sends `status` and one `resume_scheduling` and
+answers `release: resumed`; `record reopen` carries an own kept hold that its end resumes; a
+start without `--force` after an end that kept its hold takes it over; the status read
+before a press answers `instance_not_held`, nothing, or `instance_hold_unread` (a status
+without an answer, no Runtime).
+`apps/actinglab/tests/runtime_input_proxy.rs` (the fake Runtime host):
+`s17_record_start_and_archive_hold_and_release_the_instance_on_the_runtime`, the host's status
+shows the recording's pause, a tap under it warns nothing, the archive resumes it; and
+`s17_a_press_on_an_instance_that_is_not_held_says_so`, a recording started with no Runtime, then a
+tap on the unpaused instance pressed and recorded with `instance_not_held`, one under another
+party's pause with no warning, and an archive that leaves that pause; fix round 2:
+`s17_an_application_operation_on_an_instance_that_is_not_held_says_so`, `session app launch
+--record` on the unpaused instance recorded with `instance_not_held`. Fix round 2 adapted
+this slice's own tests only (the review's (j)): the library's first and fourth now fail when
+the behaviour is taken away (their assertions that held without it are gone), and the
+scripted-Runtime tests assert that no connection beyond the scripted ones came. No golden
+changes; no test leaves the gate map. The parent's tests that start a recording on the fake host
+now run under the recording's pause, which gates none of their requests.
+
+**What is not changed.** The behaviour of `apps/actingctl` (fix round 2 changed only the texts of
+its three recording tools); the scheduler, the pause's own rules and the Runtime's crates; the
+rescue module; the parent's press path beyond the status read and the warning; `generate.rs`, `crosscheck.rs`, `select.rs`; the step
+table (`recording.json`) and the manifest; `capture --record` and `observe --capture
+--record`, which take no hold and read none; an alias the running Runtime does not know still
+makes the start fail (fix round 2 leaves it as built).
+
+**At deploy.** Nothing to configure. Recordings and session headers already on disk load as
+before and hold nothing; a recording active across the deploy holds nothing until it ends. Through
+MCP the hold is taken by both servers, which run the installation's actinglab; `record start`
+waits as the pause waits, up to 335 s, so a caller must give it that time.
+
+**Joined in the train of stage one** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1b.md`, which merges this slice at `b67eaa7e` after #463 S1-5, §1.406,
+into the branch of S1-1, S1-2 and S1-3 on main `3581a8af`; the coordinator's rulings, not the
+owner's words).
+- *One press path* (c). A `tap`, `swipe` or `long-tap --record` press does, under the recording
+  lock: the planned press's refusals; S1-1's capture before it; this slice's status read on a
+  connection of its own (`hold_warning_read`, in `send_recorded_press`, immediately before each
+  press is sent, so twice when S1-1's retry sends it again on a second capture, the second read's
+  word answered); the press on that capture's frame reference; S1-2's captures until still on the
+  command's clock, its bounds checked first. The word follows `after_not_still` in
+  `record.warnings`, of the answer and of a failure whose details carry `record`. `do --capture
+  --record` reads it before its one Lab operation, as built.
+- *Application operations* (d). `session app <verb> --record` reads the status inside the
+  operation's closure, after the plan and S1-3's capture before it, immediately before the
+  operation's connection; the word joins `record.warnings` beside `after_not_still`, in the answer
+  and in a failure whose details carry `record`. The three `app` rows list `ApplicationLifecycle`,
+  `ObserveReadonly` and `Status`, with the train's parameters.
+- *`record archive`* (e). S1-5's manifest; the session header archived, an own hold written `kept`;
+  S1-5's copy (its manifest written last), an own hold named `kept` in a copy's failure; the
+  answer's `lab.warnings`; then the release, last. Named again by `--record-id`, it reads the
+  manifest S1-5's rules name and tries the release again; `record reopen` carries an own hold as
+  built, and the next archive writes the next manifest, v2.
+- *Tests* (i). In this slice's gate entry:
+  `s17_train_nothing_listening_at_the_runtime_address_starts_holding_nothing` (a runtime-info whose
+  address no longer listens: `no_runtime_listening`, no hold),
+  `s17_train_force_over_a_header_that_cannot_be_read_says_so` (`replaced_header_unread` with the
+  header's path), and on the fake Runtime host
+  `s17_train_do_capture_record_on_an_instance_that_is_not_held_says_so` (`instance_not_held` in
+  `record.warnings` of `do --capture --record`).
+
 ### 1.425 Slice #463 S2-1 (0.12.64): `record ready` lists everything a recording still lacks before `record stop` can make its package (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two turns the recorded material into a package offline; the design `rd-1115/pack-stage12-design.md`, B2.1, B2.2 and the row S2-1 of B5, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s21-record-ready.md`, built on the branch of the stage-one train (#1757) at `5706d568`)
 
 The coordinator gave this slice 1.425. It stands on the train of stage one (§1.402 to §1.404) and
@@ -29514,6 +30387,21 @@ it is.
 **At deploy.** Nothing to configure. Through MCP `ac_record_ready` is on the Lab's MCP server
 (`actinglab-mcp`); a client registered with today's server has no such tool until its registration
 moves, which is the owner's to do.
+
+**Merged with the train** (the coordinator's notice: the parent's branch at `32f71ea6`, which holds
+#463 S1-5 (§1.406), #463 S1-7 (§1.424) and main `a3bf7e28` with §1.408, §1.409 and §1.417). Kept
+whole on both sides: the register (the parent's sections, then this one), the exec gate map (the
+parent's entries, then this slice's), `crates/lab/src/lib.rs` (S1-7's gate, then this slice's), the
+two slice lists (`words::BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`, 13 each with
+`PACK-TRIAL` and `463-S21`), the opening paragraph of [lab-recording.md](lab-recording.md) and
+`session_record.rs`'s imports. `engine::COMMANDS` is 69 (`standard-pack trial` and `record ready`
+each added one). `READ_LIST_ROWS` is 28, unchanged by the parent, so `gate_434_lab5b4`'s 32 holds.
+An item's `frame_id` stays the step table's `before_frame` of the press (`ClickExecution`, or
+`ApplicationExecution`); on a press sent on a capture that was not stored
+(`sent_on_unstored_capture`, S1-1) it is the stored frame, and no frame is derived where the step
+table names none, unlike the manifest's `material` (S1-5). `record ready` takes no lock and opens
+no Runtime connection, so it neither pauses nor releases the instance (S1-7); `record start`,
+`record stop` and `record archive` do, and its tests call the Lab's functions, not those commands.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

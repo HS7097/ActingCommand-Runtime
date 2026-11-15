@@ -222,12 +222,13 @@ fn rescue_line(host: &FakeHost, root: &Path, name: &str, params: Value) -> (Valu
     }
 }
 
-/// `place` of the bundle `zip` on `root`, only its plan when `plan_only`.
+/// `place` of the bundle `zip` on `root`, only its plan when `plan_only`; (Workflow #463 S3-2)
+/// a placement with the authorization it names (`fixture::authorized`).
 fn place(host: &FakeHost, root: &Path, zip: &Path, plan_only: bool) -> (Value, u8) {
     let params = if plan_only {
         json!({"bundle": word(zip), "plan": true})
     } else {
-        json!({"bundle": word(zip)})
+        super::fixture::authorized(host, root, zip, json!({"bundle": word(zip)}))
     };
     rescue_line(host, root, "place", params)
 }

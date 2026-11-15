@@ -1488,3 +1488,29 @@ pub(super) fn word(path: &Path) -> &str {
 pub(super) fn code(answer: &Answer) -> &str {
     answer.outcome.code().as_str()
 }
+
+/// Workflow #463 S3-2: the reference the placements of the gates before it name.
+pub(super) const AUTHORIZATION: &str = "neutral-authorization-reference";
+
+/// Workflow #463 S3-2: the parameters `params` of a `place` of the bundle `zip` on `root` that the
+/// gates before it give, with the authorization a placement that changes something names:
+/// [`AUTHORIZATION`] and, when the plan `place` computes for that bundle and root lists packages
+/// that enter scheduling, those as `enables`, so that such a placement goes on as it did. A plan
+/// that refuses, or that answers no `enters` (the zip's side unread), adds no `enables`: the
+/// placement refuses in that same plan. The plan is the module's own (`place::plan`): it reads
+/// files only, asks the fake Runtime nothing and reads no clock.
+pub(super) fn authorized(host: &dyn Host, root: &Path, zip: &Path, mut params: Value) -> Value {
+    params["authorization"] = json!(AUTHORIZATION);
+    let enters = super::state::Paths::resolve(root)
+        .ok()
+        .and_then(|paths| {
+            let loaded = super::plan::load(&paths, super::place::PLACE).ok()?;
+            super::place::plan(host, &paths, &loaded, zip, None).ok()
+        })
+        .and_then(|placement| placement.scheduling.enters)
+        .unwrap_or_default();
+    if !enters.is_empty() {
+        params["enables"] = json!(enters);
+    }
+    params
+}

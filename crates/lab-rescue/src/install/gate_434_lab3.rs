@@ -1296,7 +1296,9 @@ fn place_holds_only_the_bundles_idle_instances() {
     let other = pause_seen(&host, "neutral.b");
 
     let before = journals(&root);
-    let (placed, exit) = rescue_line(&host, &root, "place", json!({"bundle": word(&zip)}));
+    // Workflow #463 S3-2: the placement names its authorization (`fixture::authorized`).
+    let params = super::fixture::authorized(&host, &root, &zip, json!({"bundle": word(&zip)}));
+    let (placed, exit) = rescue_line(&host, &root, "place", params);
     assert_eq!(exit, 0, "{placed}");
     assert_eq!(top_code(&placed), "install_command_done", "{placed}");
     assert_eq!(top_value(&placed, "operation"), "install_pack_place");

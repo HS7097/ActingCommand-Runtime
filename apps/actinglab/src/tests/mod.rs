@@ -193,6 +193,10 @@ mod gate_463_s12;
 // the screens before and after it; the entry launch is as before.
 #[path = "gate_463_s13.rs"]
 mod gate_463_s13;
+// #463 S1-7: a recording holds its instance: `record start` pauses its scheduling with a reason of
+// its own, and the end of the recording resumes only that pause.
+#[path = "gate_463_s17.rs"]
+mod gate_463_s17;
 // Workflow #464 P2: `standard-pack build` builds a game's standard pack from one commit on the
 // steps of `resource verify`, whose report is as before.
 #[path = "gate_464_p2.rs"]
@@ -209,6 +213,10 @@ mod gate_463_s34;
 // command line of the placement's plan; `build.json` does not change.
 #[path = "gate_463_s37.rs"]
 mod gate_463_s37;
+// Workflow #463 S3-10: `standard-pack trial` answers only with `--plan`, the plan of a trial, and
+// sends nothing.
+#[path = "gate_463_s310.rs"]
+mod gate_463_s310;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

@@ -354,6 +354,10 @@ pub struct ApplicationExecution {
     /// #463 S1-3: how the frame after the operation was taken (#463 S1-2's record of the loop).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_capture: Option<AfterCaptureRecord>,
+    /// #463 S1-5: when the completed receipt was recorded, on the Lab's clock as a click's
+    /// `executed_at_unix_ms` is; absent on every operation an earlier build recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executed_at_unix_ms: Option<u64>,
 }
 
 /// An application operation without a completed receipt (it may have run), or a completed
@@ -1993,8 +1997,10 @@ pub struct CommitApplicationOutcome {
     pub application: StepApplication,
 }
 
-/// Workflow #449 REC-ARCH: the schema of the manifest `record archive` writes into the recording's
-/// own directory (`archive-manifest-<n>.json`).
+/// Workflow #449 REC-ARCH: the schema of the manifest (`archive-manifest-<n>.json`) the builds
+/// before #463 S1-5 wrote into the recording's own directory, v1. Since #463 S1-5 it is only read
+/// (named again, verified, copied as it is, reopened) and never written: `record archive` writes
+/// v2 (`recording/archive.rs`).
 pub const LAB_RECORDING_ARCHIVE_SCHEMA: &str = "actingcommand.lab-recording-archive.v1";
 
 /// Workflow #449 REC-ARCH: `record archive` options.
