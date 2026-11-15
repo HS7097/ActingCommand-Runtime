@@ -29,13 +29,12 @@ use super::gate_434_lab5b4::{Isolated, printed};
 use super::*;
 use crate::cli_module::{authoring, place};
 use actingcommand_contract::{
-    IdentifierIssuer, InstanceId, OwnerEpoch, RuntimeControlPlaneStatus, RuntimeInstanceStatus,
-    RuntimeRequest, RuntimeResult, SchedulingDrainSummary, SchedulingPauseScope,
+    OwnerEpoch, RuntimeControlPlaneStatus, RuntimeInstanceStatus, RuntimeRequest, RuntimeResult,
+    SchedulingDrainSummary, SchedulingPauseScope,
 };
 use actingcommand_runtime_client::test_support::{
     ScriptedAnswer, ScriptedConnection, ScriptedConnectionRecord, ScriptedRuntime,
 };
-use std::ffi::OsString;
 
 /// The made-up instance of the recording.
 const INSTANCE: &str = "neutral.a";
