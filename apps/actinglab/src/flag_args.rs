@@ -257,8 +257,9 @@ impl FlagArgs {
     }
 
     /// Refuses every flag outside `accepted`, the command's flag list (Workflow #434 LAB-5B2: the
-    /// one constant its row is held equal to). Every caller's list is empty: it takes positional
-    /// arguments only.
+    /// one constant its row is held equal to). `key` and `text` take positional arguments only (an
+    /// empty list); #463 S1-1: `tap`, `swipe` and `long-tap` take `--record` and `--after-ms`
+    /// beside theirs. The refusal names what the command takes.
     pub(super) fn reject_flags(&self, command: &str, accepted: &[&str]) -> CliOutcome<()> {
         let names = self
             .flags
@@ -269,8 +270,13 @@ impl FlagArgs {
         if names.is_empty() {
             return Ok(());
         }
+        let takes = if accepted.is_empty() {
+            "positional arguments only".to_owned()
+        } else {
+            format!("its positional arguments and {}", accepted.join(", "))
+        };
         Err(CliError::usage(format!(
-            "{command} takes positional arguments only; unexpected flags: {}",
+            "{command} takes {takes}; unexpected flags: {}",
             names.join(", ")
         )))
     }

@@ -24,9 +24,9 @@ use crate::recording::generate::{
 use crate::recording::marks::{declares_mark, match_metric};
 use crate::recording::model::{
     AfterCapture, AfterCaptureRecord, AfterFrame, ApplicationPlan, AttachFrameOutcome,
-    AttachFrameRequest, BeforeFrame, ClickEffect, ClickGesture, ClickPlan, ClickView,
-    CommitApplicationOutcome, CommitApplicationRequest, CommitClickOutcome, CommitClickRequest,
-    FrameView, LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_MAX_NEXT_FRAME_MS,
+    AttachFrameRequest, BeforeCapture, BeforeFrame, CapturedFrame, ClickEffect, ClickGesture,
+    ClickPlan, ClickView, CommitApplicationOutcome, CommitApplicationRequest, CommitClickOutcome,
+    CommitClickRequest, FrameView, LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_MAX_NEXT_FRAME_MS,
     LAB_RECORDING_MAX_SETTLE_MS, LabRecording, LabRecordingStart, LabStatus, LabStatusView,
     MarkOutcome, MarkRequest, MarkStatusView, MarkView, NextFrameOutcome, OpaqueJson,
     PlanApplicationRequest, PlanClickRequest, RecordPressOutcome, RecordPressRequest,
@@ -39,9 +39,10 @@ use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
     ArrivalMode, FrameMeta, Session, application_action, application_with_click, apply_ending,
     apply_marks, apply_step_action, apply_transition, arrive, check_device_arrival,
-    commit_application, commit_click, default_recording_defaults, effective_indices, live_primary,
-    new_recording, not_active, note_after_capture, open_session, open_session_for_marks, open_step,
-    plan_application, plan_click, plan_press, save, stopped_change, to_json,
+    commit_application, commit_click, default_recording_defaults, effective_indices, has_marks,
+    live_primary, new_recording, not_active, note_after_capture, open_session,
+    open_session_for_marks, open_step, plan_application, plan_click, plan_press, save, step_ref,
+    stopped_change, to_json,
 };
 use crate::recording::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -52,7 +53,9 @@ use crate::recording::{
     RecordingLock,
     frames::{check_frame_size, decode_frame, read_stored_frame},
 };
-use actingcommand_contract::{InputAction, LabError, LabErrorClass, LabResult};
+use actingcommand_contract::{
+    InputAction, InputFrameReference, LabError, LabErrorClass, LabResult,
+};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -1870,25 +1873,60 @@ pub trait RecordFramePorts {
     /// Waits `duration` on the caller's clock.
     fn wait(&mut self, duration: Duration);
 
-    /// Takes one frame through the Runtime, as `capture --record` takes it.
-    fn capture(&mut self) -> LabResult<AttachFrameRequest>;
+    /// Takes one frame through the Runtime, as `capture --record` takes it; fix round 2: with the
+    /// reference of the frame the Runtime committed for it, which a press planned on it names.
+    fn capture(&mut self) -> LabResult<CapturedFrame>;
 }
 
-/// #463 S1-1: the frame on the screen before a press, under the recording lock. When no step is
-/// open (a new recording, or the frame after the previous press could not be taken) one frame is
-/// taken and arrives as `capture --record`'s does, opening the step the press is planned on; its
-/// arrival is answered. When a step is open its live primary frame stands and nothing is taken
-/// (`None`).
+/// #463 S1-1: the frame a press is sent on, under the recording lock. Fix round 2: every press
+/// recorded by the command that makes it is sent on a frame captured immediately before it, so
+/// one frame is always taken here, and what is kept of it depends on the open step:
+/// - no step open (a new recording, or the frame after the previous press could not be taken):
+///   it arrives as `capture --record`'s does and opens the step the press is planned on;
+/// - an open step without marks: it arrives as `capture --record`'s does on that step, so it is
+///   the step's live primary frame and the older one stays, superseded;
+/// - an open step with marks (made on its stored frame): it is not stored, and the stored frame
+///   stands; it must be of the recording's size (`record_frame_size_mismatch`), so that a point
+///   inside the recording's frames is a pixel of it.
+///
+/// A capture whose observation carries no frame id cannot be pressed on: `device_error`, before
+/// anything of it is stored. Answers the Runtime's reference of the frame, which the press is sent
+/// with, and its arrival (`None` when it was not stored).
 pub fn record_before_frame(
     lock: &RecordingLock,
     ports: &mut impl RecordFramePorts,
-) -> LabResult<Option<AttachFrameOutcome>> {
-    let session = open_session(lock)?;
-    if open_step(&session.recording).is_some() {
-        return Ok(None);
+) -> LabResult<BeforeCapture> {
+    let (stores, coordinate_space) = {
+        let session = open_session(lock)?;
+        let recording = &session.recording;
+        let stores = open_step(recording)
+            .is_none_or(|index| !step_ref(recording, index).is_some_and(has_marks));
+        (stores, recording.coordinate_space)
+    };
+    let captured = ports.capture()?;
+    let input_frame = captured.input_frame.ok_or_else(|| {
+        LabError::device(
+            "the Runtime's capture before the press carries no frame id, so no press can name \
+             the frame it is planned on; nothing was pressed or recorded",
+        )
+    })?;
+    if stores {
+        let arrived = record_attach_frame(lock, captured.frame)?;
+        return Ok(BeforeCapture {
+            input_frame,
+            arrived: Some(arrived),
+        });
     }
-    let frame = ports.capture()?;
-    record_attach_frame(lock, frame).map(Some)
+    let label = "the frame before the press";
+    check_frame_size(
+        coordinate_space,
+        &decode_frame(captured.frame.png, label)?,
+        label,
+    )?;
+    Ok(BeforeCapture {
+        input_frame,
+        arrived: None,
+    })
 }
 
 /// #463 S1-1: the frame after a performed press, under the recording lock: the wait `after_ms` on
@@ -1903,7 +1941,7 @@ pub fn record_after_frame(
 ) -> LabResult<(AttachFrameOutcome, AfterCaptureRecord)> {
     ports.wait(Duration::from_millis(after.after_ms));
     record_frame_preflight(lock)?;
-    let frame = ports.capture()?;
+    let frame = ports.capture()?.frame;
     let record = AfterCaptureRecord {
         after_ms: after.after_ms,
         still_max_ms: 0,
@@ -1919,21 +1957,23 @@ pub fn record_after_frame(
 /// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): `tap`, `swipe` or
 /// `long-tap --record`, a press recorded by the command that makes it, under the recording lock.
 /// In order: the wait's bound (`validation_failed`, `details{argument: "after_ms", reason:
-/// "range"}`); the frame before ([`record_before_frame`]); the press planned on the open step
-/// (`plan_press`: a tap or a long press declares a box of one pixel at its point, a swipe is
-/// today's recorded swipe; every refusal before anything is pressed); the press sent once through
-/// `press`, whose `Err` (not performed) is answered as it is and records nothing; its outcome
-/// recorded, the execution naming the frame before; then, only after a press performed without a
-/// failure, the frame after ([`record_after_frame`]). An indeterminate press is
-/// `record_click_indeterminate` and a press performed with a failure
-/// `record_click_performed_with_failure`, each with the press as recorded in `record` and no frame
-/// after. A frame after that cannot be taken answers its own error and the press and its closed
-/// step stand: its details begin with `record` (the press as recorded) and `after: {after_ms,
-/// taken: false}`.
+/// "range"}`); on an open step, the press planned on it as it stands, so that every refusal of
+/// the step or the point comes before anything is captured; the frame the press is sent on
+/// ([`record_before_frame`], fix round 2: always captured, immediately before the press); the
+/// press planned on the open step (`plan_press`: a tap or a long press declares a box of one pixel
+/// at its point, a swipe is today's recorded swipe; every refusal before anything is pressed); the
+/// press sent once through `press` with the Runtime's reference of that frame, whose `Err` (not
+/// performed) is answered as it is and records nothing; its outcome recorded, the execution
+/// naming the frame before; then, only after a press performed without a failure, the frame after
+/// ([`record_after_frame`]). An indeterminate press is `record_click_indeterminate` and a press
+/// performed with a failure `record_click_performed_with_failure`, each with the press as recorded
+/// in `record` and no frame after. A frame after that cannot be taken answers its own error and
+/// the press and its closed step stand: its details begin with `record` (the press as recorded)
+/// and `after: {after_ms, taken: false}`.
 pub fn record_press(
     lock: &RecordingLock,
     request: &RecordPressRequest,
-    press: &mut impl FnMut(&ClickPlan) -> LabResult<CommitClickRequest>,
+    press: &mut impl FnMut(&ClickPlan, InputFrameReference) -> LabResult<CommitClickRequest>,
     ports: &mut impl RecordFramePorts,
 ) -> LabResult<RecordPressOutcome> {
     let after_ms = request.after.after_ms;
@@ -1949,7 +1989,14 @@ pub fn record_press(
             "max_after_ms": LAB_RECORDING_MAX_NEXT_FRAME_MS
         })));
     }
+    {
+        let session = open_session(lock)?;
+        if open_step(&session.recording).is_some() {
+            plan_press(&session.recording, &request.click, request.point_press)?;
+        }
+    }
     let taken = record_before_frame(lock, ports)?;
+    let stored = taken.arrived.is_some();
     let (plan, before) = {
         let session = open_session(lock)?;
         let plan = plan_press(&session.recording, &request.click, request.point_press)?;
@@ -1963,7 +2010,8 @@ pub fn record_press(
                 frame_id: frame.frame_id.clone(),
                 path: frame.path.clone(),
                 sha256: frame.sha256.clone(),
-                refreshed: taken.is_some(),
+                refreshed: stored,
+                sent_on_unstored_capture: !stored,
             })
             .ok_or_else(|| {
                 blocked(
@@ -1977,7 +2025,7 @@ pub fn record_press(
             })?;
         (plan, before)
     };
-    let pressed = press(&plan)?;
+    let pressed = press(&plan, taken.input_frame)?;
     let click = commit_recorded(lock, &plan, &pressed, true)?;
     let mut outcome = RecordPressOutcome {
         click,

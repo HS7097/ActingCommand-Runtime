@@ -2,7 +2,7 @@
 
 use actingcommand_contract::{
     ApplicationLifecycleAction, ArtifactKind, CaptureSequenceSpec, EventAction, EventActor,
-    EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InstanceId,
+    EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InputPayload, InstanceId,
     PackageDebugRequest, ProjectionPayload, ProjectionProfile, RetentionClass, RuntimeErrorCode,
     RuntimeEvidenceExportRequest, TaskOutcome, TaskPayload, TaskSemanticFact,
 };
@@ -53,6 +53,8 @@ struct FakeState {
     // #411 Lab L3: the instance's configured input is `nemu_ipc` (the Runtime then presses only on
     // a frame it captured); its fake backends stay the same.
     nemu_input: AtomicBool,
+    // #463 S1-1 fix round 2: a tap fails in the backend (a device failure of the input).
+    tap_fails: AtomicBool,
 }
 
 // Test plan E-3 G11 (§3.10): a manual Runtime clock. It moves only when a capture (or a wait of
@@ -2013,6 +2015,11 @@ impl InputBackend for FakeBackend {
         _y: i32,
     ) -> DeviceResult<()> {
         self.state.tap_started.store(true, Ordering::Release);
+        if self.state.tap_fails.load(Ordering::Acquire) {
+            return Err(actingcommand_device::DeviceError::transient(
+                "the fake input backend failed the tap",
+            ));
+        }
         let delay_ms = self.state.tap_delay_ms.load(Ordering::Acquire);
         if delay_ms > 0 {
             thread::sleep(Duration::from_millis(delay_ms as u64));
@@ -4041,6 +4048,209 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
     assert_eq!(state.closes.load(Ordering::Acquire), 0);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
+}
+
+/// #463 S1-1 fix round 2 (`contracts/lab-recording.md`, "Recording while playing"): the step table
+/// of the recording `record_s11` under the local application data `local`.
+fn s11_recorded(local: &Path) -> Value {
+    serde_json::from_slice(
+        &fs::read(
+            local
+                .join("ActingCommand")
+                .join("actinglab")
+                .join("session")
+                .join("record-artifacts")
+                .join("record_s11")
+                .join("lab")
+                .join("recording.json"),
+        )
+        .expect("the recording"),
+    )
+    .expect("recording.json")
+}
+
+/// #463 S1-1 fix round 2 (B0): `tap 0 0 --record` on an instance whose input is the emulator's own
+/// (the Runtime presses only on a frame it captured and committed, and refuses an input without
+/// one, `nemu_input_frame_required`): on the wire, in the Runtime's ledger, a capture, then the
+/// input naming the frame of that capture (its intent's `before_frame_id`), then the capture after
+/// it, of another frame; one tap, two captures; the answer's `record` names f0001 before and f0002
+/// after.
+#[test]
+fn s11_tap_record_sends_its_input_on_the_frame_captured_before_it() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-frame");
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "record",
+            "start",
+            "--task-id",
+            "neutral_task",
+            "--record-id",
+            "record_s11",
+        ],
+    );
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+            "--after-ms",
+            "0",
+        ],
+    );
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client");
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events");
+    drop(client);
+    host.close().expect("close host");
+
+    assert_eq!(tapped["record"]["status"], "press_recorded", "{tapped}");
+    assert_eq!(tapped["record"]["before"]["frame_id"], "f0001", "{tapped}");
+    assert_eq!(tapped["record"]["before"]["refreshed"], true, "{tapped}");
+    assert_eq!(tapped["record"]["after"]["frame_id"], "f0002", "{tapped}");
+    assert_eq!(
+        tapped["input_outcome"]["input_stage"], "committed",
+        "{tapped}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 2);
+    // The wire, in the ledger's order: each capture's frame, and the frame the input names.
+    let wire = events
+        .iter()
+        .filter_map(|event| match event.event_type {
+            EventType::CaptureCompleted => Some(("capture", event.links.frame_id().copied())),
+            EventType::InputIntent => Some((
+                "input",
+                match &event.payload {
+                    ProjectionPayload::Full(payload) => match payload.as_ref() {
+                        EventPayload::Input(InputPayload::Intent(intent)) => intent
+                            .provenance()
+                            .and_then(|provenance| provenance.before_frame_id),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let kinds = wire.iter().map(|(kind, _)| *kind).collect::<Vec<_>>();
+    assert_eq!(kinds, ["capture", "input", "capture"], "{wire:?}");
+    assert!(wire[0].1.is_some(), "the capture names its frame: {wire:?}");
+    assert_eq!(wire[1].1, wire[0].1, "the input names the frame before it");
+    assert!(wire[2].1.is_some(), "{wire:?}");
+    assert_ne!(
+        wire[2].1, wire[0].1,
+        "the capture after it is another frame"
+    );
+
+    let recording = s11_recorded(&local);
+    let execution = &recording["steps"][0]["click"]["execution"];
+    assert_eq!(execution["effect"], "performed", "{recording}");
+    assert_eq!(execution["before_frame"], "f0001", "{recording}");
+    assert_eq!(execution["after_frame"], "f0002", "{recording}");
+}
+
+/// #463 S1-1 fix round 2 (B1): the backend fails the tap of `tap 0 0 --record` (a device-class
+/// error; the Runtime records such an input indeterminate on a physical instance): the press is
+/// recorded indeterminate with the request id the error carries, its step stays open, no frame
+/// after it is taken, and the command answers `record_click_indeterminate` with the press as
+/// recorded and the input outcome.
+#[test]
+fn s11_tap_record_records_a_device_failure_of_the_input_as_indeterminate() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.tap_fails.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-device-failure");
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "record",
+            "start",
+            "--task-id",
+            "neutral_task",
+            "--record-id",
+            "record_s11",
+        ],
+    );
+    let (exit_code, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(exit_code, 1, "{failed}");
+    assert_eq!(
+        failed["outcome"]["code"], "record_click_indeterminate",
+        "{failed}"
+    );
+    let record = &failed["details"]["record"];
+    assert_eq!(record["status"], "press_indeterminate", "{failed}");
+    assert_eq!(record["step"], 1, "{failed}");
+    assert_eq!(record["step_closed"], false, "{failed}");
+    assert!(record["after"].is_null(), "{failed}");
+    assert_eq!(
+        failed["details"]["input_outcome"]["input_stage"], "receipt_unavailable",
+        "{failed}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    // The capture before the press only: no frame after an indeterminate press.
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+
+    let recording = s11_recorded(&local);
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 1, "{recording}");
+    assert_eq!(steps[0]["closed"], false, "{recording}");
+    let execution = &steps[0]["click"]["execution"];
+    assert_eq!(execution["effect"], "indeterminate", "{recording}");
+    assert!(execution["req_id"].is_string(), "{recording}");
+    assert_eq!(execution["before_frame"], "f0001", "{recording}");
+    assert!(execution["after_frame"].is_null(), "{recording}");
 }
 
 #[test]
