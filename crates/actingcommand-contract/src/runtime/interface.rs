@@ -451,6 +451,9 @@ runtime_operation_kinds! {
     ReleasePlayerHold,
     // Workflow #432 AGT-1b (register §1.246): a person's test of the delivery to a channel.
     AgentWakeTest,
+    // Workflow #463 V3 (register §1.383): one application's goals, read and set by name.
+    GoalView,
+    EditGoal,
 }
 
 impl RuntimeOperationKind {
@@ -481,7 +484,9 @@ impl RuntimeOperationKind {
             | Self::RoutineSummary
             // Workflow #429 R-0c: the pack schedule's read view, a general read (not through
             // G14).
-            | Self::PackScheduleView => GENERAL_QUERY,
+            | Self::PackScheduleView
+            // Workflow #463 V3: the goal page, a general read that records nothing.
+            | Self::GoalView => GENERAL_QUERY,
             // General reads that record: looking at frames, instance discovery.
             Self::ObserveReadonly | Self::CaptureSequence | Self::DiscoverInstances => {
                 GENERAL_RECORDED_READ
@@ -513,6 +518,8 @@ impl RuntimeOperationKind {
             | Self::StopInstanceRun
             | Self::EditPackSchedule
             | Self::EditResourceTarget
+            // Workflow #463 V3: one value of the goal page, written as a fact the Runtime checks.
+            | Self::EditGoal
             | Self::ControlEmulatorInstance
             | Self::SelfCheckInstance
             | Self::ApplicationLifecycle => GENERAL_INSTRUCTION,
@@ -568,7 +575,8 @@ impl RuntimeOperationKind {
 /// `ConfigureSettings` also needs every change's key within the console's tiers, which the
 /// Runtime's gate checks (§2.3 step 5); every other kind is refused there. Workflow #455 T1-R
 /// (0.12.60): `ApplyResourceTargets` joins the list, the one write of the resource target
-/// document that `ResourceTargetView` reads.
+/// document that `ResourceTargetView` reads. Workflow #463 V3 (0.12.61): `GoalView` and
+/// `EditGoal` join it, the goal page the console's Goals tab reads and writes.
 pub const fn ui_allows(kind: RuntimeOperationKind) -> bool {
     use RuntimeOperationKind as Kind;
     matches!(
@@ -605,6 +613,10 @@ pub const fn ui_allows(kind: RuntimeOperationKind) -> bool {
             // A write on the list before the console sends it (Workflow #455 T1-R): the whole
             // resource target document, with its `expected_version`.
             | Kind::ApplyResourceTargets
+            // Workflow #463 V3: the goal page's read and its one-value write, on the list before
+            // the console sends them.
+            | Kind::GoalView
+            | Kind::EditGoal
             // Writes on the list before they are built.
             | Kind::RunInstanceTask
             | Kind::EditResourceTarget
@@ -734,6 +746,9 @@ impl RuntimeOperationKind {
             Self::ReleasePlayerHold => Some(ReceiptCode::ReleasePlayerHoldCompleted.code()),
             // Workflow #432 AGT-1b.
             Self::AgentWakeTest => Some(ReceiptCode::AgentWakeTestCompleted.code()),
+            // Workflow #463 V3 (register §1.383).
+            Self::GoalView => Some(ReceiptCode::GoalViewCompleted.code()),
+            Self::EditGoal => Some(ReceiptCode::EditGoalCompleted.code()),
         }
     }
 }
@@ -835,6 +850,8 @@ impl RuntimeOperation {
             Self::AcquirePlayerHold { .. } => Kind::AcquirePlayerHold,
             Self::ReleasePlayerHold { .. } => Kind::ReleasePlayerHold,
             Self::AgentWakeTest { .. } => Kind::AgentWakeTest,
+            Self::GoalView { .. } => Kind::GoalView,
+            Self::EditGoal { .. } => Kind::EditGoal,
         }
     }
 
@@ -996,6 +1013,10 @@ mod tests {
             // Workflow #432 AGT-1b (register §1.246): a general instruction recorded through G14
             // (until Workflow #434 LAB-6S1b with the same origin gate as a pause).
             K::AgentWakeTest => (General, Some(Instruction), true),
+            // Workflow #463 V3 (register §1.383): the goal page is a general read that records
+            // nothing; its one-value write a general instruction recorded through G14.
+            K::GoalView => (General, Some(Read), false),
+            K::EditGoal => (General, Some(Instruction), true),
         }
     }
 

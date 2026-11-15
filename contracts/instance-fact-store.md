@@ -484,8 +484,11 @@ canonical text of at most 1024 bytes, the fact string bound. Its `target` and `e
 who set them (`set_unix_ms`, `channel`, `initiator`), which the Runtime writes from the request,
 never from the document. A v3 record is stored without expiry; no key and no file is added.
 
-**Formal entry.** Only `ApplyResourceTargets` writes it, through `publish_facts` with the
-request's origin (source `adapter`, actor `agent`) on the `fact.published` event. An ordinary
+**Formal entry.** Only `ApplyResourceTargets` and, since Workflow #463 V3 (0.12.61), `EditGoal`
+write it, through `publish_facts` with the request's origin on the `fact.published` event (for
+`ApplyResourceTargets`, as before, source `adapter`, actor `agent`; `EditGoal` compares its `expected_version` with the record's own sequence, `0` without a record,
+the version `GoalView` answers; [resource-targets.md](resource-targets.md), "One value by name").
+An ordinary
 `PublishFact` / `PublishFacts` record of this key is refused before the fact write gate as the
 non-fatal `resource_targets_formal_entry_required`. A configured policy input fact or a
 forward projection caller's fact of this key is refused as `resource_targets_key_reserved`:
@@ -1134,6 +1137,12 @@ Written ahead of its code (B15 R0); slice R5 implements it.
   each value given to the scan replay (`--parameter <name>=<value>`) in place of its default
   (#411 Lab RP; [remedies.md](remedies.md), section 4). A reason without `run_parameters` (one
   that carries only Workflow #411 B8's values) leaves the parameters at their declared defaults.
+  Per variable of the package (Workflow #463 L4, slice V2, 0.12.61) the same snapshots hold
+  `session.dispatch.parameter.<name>` with its kind's type: a string, a boolean, an integer, or a
+  `record_list` of rows `{key, rank}` (rank from 1); the value of the dispatch's `variable_values`
+  when the package's declaration takes it, else, and on a run without a dispatch, the declared
+  default, each `--variable <name>=<json>` of the scan replay in place of its default
+  ([package-variables.md](package-variables.md), "The run").
 - Workflow #411 B8: for a policy run whose `policy_dispatch_parameters` carries schedule values
   (a task that opts in with `dispatch_parameters: true`), the same snapshots also hold, per value,
   the record `session.dispatch.schedule.<key>` with its type: `next_occurrence_unix_ms` and

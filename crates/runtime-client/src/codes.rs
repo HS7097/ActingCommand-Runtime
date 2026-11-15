@@ -267,6 +267,9 @@ actingcommand_contract::outcome_locations! {
         RuntimeEditResourceTarget => "runtime_edit_resource_target",
         RuntimeRoutineSummary => "runtime_routine_summary",
         RuntimePackScheduleView => "runtime_pack_schedule_view",
+        // Workflow #463 V3 (register §1.383): the goal page's methods of `runtime-client` 9.
+        RuntimeGoalView => "runtime_goal_view",
+        RuntimeEditGoal => "runtime_edit_goal",
         RuntimeMonitorConfigure => "runtime_monitor_configure",
         RuntimeMonitorClear => "runtime_monitor_clear",
         RuntimeConfigureSettings => "runtime_configure_settings",

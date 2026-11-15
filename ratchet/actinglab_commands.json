@@ -52,7 +52,7 @@
     "session <subcommand>",
     "run <subcommand>"
   ],
-  "command_count": 104,
+  "command_count": 105,
   "commands": [
     "help",
     "version",
@@ -115,6 +115,7 @@
     "package loading",
     "package fmt",
     "package edit",
+    "package variables",
     "operation validate",
     "operation inspect",
     "operation explain",

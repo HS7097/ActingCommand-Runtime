@@ -205,6 +205,9 @@ crate::outcome_codes! {
         // answer completed.
         EditPackScheduleCompleted => "request_edit_pack_schedule_completed": success / none,
         PackScheduleViewCompleted => "request_pack_schedule_view_completed": success / none,
+        // Workflow #463 V3 (register §1.383): the goal page's read and its one-value edit.
+        GoalViewCompleted => "request_goal_view_completed": success / none,
+        EditGoalCompleted => "request_edit_goal_completed": success / none,
     }
 }
 

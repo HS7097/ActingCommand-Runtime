@@ -30,8 +30,9 @@ const FIXTURE_INSTANCE: &str = "inst-fixture";
 const EVIDENCE_AGE: &str = "frame_retention_evidence_max_age_days";
 
 /// The UI list as contracts/lab-two-entries.md §3 writes it, the transitional kind included;
-/// Workflow #455 T1-R (register §1.351, since 0.12.60) adds `ApplyResourceTargets`.
-const UI_LIST: [Kind; 31] = [
+/// Workflow #455 T1-R (register §1.351, since 0.12.60) adds `ApplyResourceTargets`; Workflow #463
+/// V3 (register §1.383, since 0.12.61, adapted) adds `GoalView` and `EditGoal`.
+const UI_LIST: [Kind; 33] = [
     Kind::Status,
     Kind::RuntimeFactSnapshot,
     Kind::ScheduleExplanation,
@@ -58,6 +59,8 @@ const UI_LIST: [Kind; 31] = [
     Kind::StopInstanceRun,
     Kind::EditPackSchedule,
     Kind::ApplyResourceTargets,
+    Kind::GoalView,
+    Kind::EditGoal,
     Kind::RunInstanceTask,
     Kind::EditResourceTarget,
     Kind::AcquirePlayerHold,

@@ -77,6 +77,8 @@ const SCALAR_TYPES: &[&str] = &[
     "hash",
     "commit",
     "version",
+    // Workflow #463 V2 fix round 1: the compact JSON text of a value, at most 1024 bytes.
+    "json",
     "evidence",
 ];
 const HEADER_FIELDS: &[&str] = &[

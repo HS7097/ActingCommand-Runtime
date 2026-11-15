@@ -37,12 +37,16 @@
 //! `goal_version_retired` at `/schema_version` and read no further, and a version this build does
 //! not know yet stays `malformed` there.
 //!
-//! The file stores no value: a value is the installation's, set by a person or an agent in a later
-//! slice. The Runtime interprets no text here: titles, help texts, unit texts, option titles and
-//! locales are opaque, measured in bytes only, and ids and option values are compared for equality
-//! only. No Runtime reader opens the file in this slice (its root reader, its startup and run
-//! preparation, the policy crate and check-config); `actinglab standard-pack check` reports a
-//! refused file without failing the root, and `package bundle --goals` refuses one.
+//! The file stores no value: a value is the installation's, set by a person or an agent (Workflow
+//! #463 V3, `EditGoal`). The Runtime interprets no text here: titles, help texts, unit texts,
+//! option titles and locales are opaque, measured in bytes only, and ids and option values are
+//! compared for equality only. Its root reader, its startup and run preparation and the policy
+//! crate open no `goals.json`; since Workflow #463 V2 fix round 1 (Runtime 0.12.61) the scheduler
+//! workbench opens it with this reader, where it reads every package's declaration
+//! (`read_declarations`), for the variables' judgement alone, and so do the offline readers that
+//! read a root as the workbench does, check-config and `actingd suspended`. `actinglab
+//! standard-pack check` reports a refused file without failing the root, and `package bundle
+//! --goals` refuses one.
 
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
 use crate::standard_pack_ui::{
@@ -446,9 +450,11 @@ pub struct GoalReferences {
 /// no default, so no reader can answer "nothing is irreversible" by omission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IrreversiblePackages {
-    /// The packages whose declaration was read, by id, each `true` when it can do something
-    /// irreversible.
-    packages: BTreeMap<String, bool>,
+    /// The packages whose declaration was read, by id, each with the capabilities it provides or
+    /// its remedies list that a package of the root marks irreversible: it can do something
+    /// irreversible when there is one. Workflow #463 V2 fix round 2: kept, so that a reader can
+    /// name the capability that makes a package irreversible ([`Self::irreversible_capabilities`]).
+    packages: BTreeMap<String, BTreeSet<String>>,
     /// The packages whose declaration could not be read, by id.
     unreadable: BTreeSet<String>,
 }
@@ -488,12 +494,14 @@ impl IrreversiblePackages {
         for (package_id, declaration) in declared {
             match declaration {
                 Some(declaration) => {
-                    let can = declaration
+                    let reached = declaration
                         .provides
                         .keys()
                         .chain(&declaration.remedies)
-                        .any(|capability| irreversible.contains(capability));
-                    packages.insert(package_id, can);
+                        .filter(|capability| irreversible.contains(*capability))
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    packages.insert(package_id, reached);
                 }
                 None => {
                     unreadable.insert(package_id);
@@ -510,7 +518,17 @@ impl IrreversiblePackages {
     /// irreversible; `None` when it is no package of the root or its declaration could not be
     /// read.
     pub fn package(&self, package_id: &str) -> Option<bool> {
-        self.packages.get(package_id).copied()
+        self.packages
+            .get(package_id)
+            .map(|reached| !reached.is_empty())
+    }
+
+    /// Workflow #463 V2 fix round 2: the capabilities the package `package_id`, whose declaration
+    /// was read, provides or its remedies list that a package of the root marks irreversible
+    /// (empty when it can do nothing irreversible); `None` when it is no package of the root or
+    /// its declaration could not be read.
+    pub fn irreversible_capabilities(&self, package_id: &str) -> Option<&BTreeSet<String>> {
+        self.packages.get(package_id)
     }
 
     /// The packages of the root whose declaration could not be read, by id.

@@ -42,30 +42,48 @@
 //!   with the same composer, for check-config and `actingd suspended`; the task package admission
 //!   after start waits for the workbench's first check (`await_first_standard_pack_check`), so it
 //!   admits the composed procedures.
+//! - **Variables** (Workflow #463 V2 fix round 1, register §1.382; the coordinator's ruling: the
+//!   judgement of "does not apply" is the root check's, over the whole root). Where the workbench
+//!   reads every package of a game root's registry ([`read_declarations`]) it also reads the
+//!   root's `goals.json` with the contract crate's reader and runs the contract crate's
+//!   `check_root_variables` over every package, held ones included, against the names an accepted
+//!   `goals.json` takes. A check that reads roots keeps each game's judgement and builds the
+//!   variable table the policy cycle reads from memory (`standard_pack_variables`); `goals.json`
+//!   is marked with the root's files, so a change of it, of a package's declaration files, of
+//!   `schedule.json` or of `bundle.json` is read again at the next check. Fix round 2: the
+//!   judgement is the contract crate's `judge_root_variables`, which takes the goal document as
+//!   its reader read it; each check builds the table again with the games no check judges now
+//!   (`uncomposed`: their root failed its check, or their composition was refused or not
+//!   activated), whose every variable reads its default with `root_unchecked`; each game's parsed
+//!   `goals.json` (or why it is not applied) and judgement stay in the workbench's state from one
+//!   check to the next (`RuntimeHost::standard_pack_goal_roots`); a `goals.json` the reader
+//!   refuses or that cannot be read is `standard_pack_goals_not_applied`.
 
 use super::standard_pack::{RootFailure, read_root_file};
 use super::*;
-use crate::codes::{HostCode, HostLocation};
+use crate::codes::{GoalsFailure, HostCode, HostLocation, StandardPackGoalsCode};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, Record};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, CONFIG_CATALOG_PROVENANCE_FACT_KEY,
     CONFIG_CATALOG_WARNINGS_FACT_KEY, CatalogProvenanceEntry, CatalogValueKind, CatalogValueOrigin,
     ConfigCatalogProvenance, ConfigCatalogWarnings, IrreversiblePackages,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot, StandardPackRootBytes,
-    read_standard_pack_root,
+    MAX_STANDARD_PACK_GOALS_BYTES, RootGoalDocument, RootPackageVariables,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackGoals,
+    StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue, judge_root_variables,
+    parse_standard_pack_goals, read_standard_pack_root,
 };
 use actingcommand_policy::{
-    BenefitProvenance, CompiledCatalog, PolicyCode, STANDARD_PACK_OPERATION_ID,
-    STANDARD_PACKS_CATALOG_ID, StandardPackBinding, StandardPackCompileWarning,
-    StandardPackComposeInput, StandardPackComposition, StandardPackGameFiles,
-    StandardPackRuleIssue, compose_standard_pack_rules,
+    BenefitProvenance, CompiledCatalog, PolicyCode, RootVariableJudgement,
+    STANDARD_PACK_OPERATION_ID, STANDARD_PACKS_CATALOG_ID, StandardPackBinding,
+    StandardPackCompileWarning, StandardPackComposeInput, StandardPackComposition,
+    StandardPackGameFiles, StandardPackRuleIssue, VariableTable, compose_standard_pack_rules,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io;
+use std::io::{self, Read as _};
 use std::time::SystemTime;
 
 /// The composition record's schema, kept in each composed generation's directory.
@@ -114,13 +132,124 @@ enum DeclarationMark {
 }
 
 /// The marks of a game root the workbench compares at each check: `schedule.json`,
-/// `bundle.json` and, G-R2s, the declaration files of each package the root registered when the
-/// workbench last read it, by package id.
+/// `bundle.json`, Workflow #463 V2 fix round 1 `goals.json` (a failed mark never stops the check:
+/// the root's variables are then judged without it), and, G-R2s, the declaration files of each
+/// package the root registered when the workbench last read it, by package id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GameMarks {
     schedule: FileMark,
     bundle: FileMark,
+    goals: DeclarationMark,
     packages: BTreeMap<String, Vec<DeclarationMark>>,
+}
+
+/// Workflow #463 V2 fix round 1: the mark of the game root's `goals.json` in `directory`.
+fn goals_mark(directory: &Path) -> DeclarationMark {
+    match file_mark(&directory.join(STANDARD_PACK_GOALS_FILE)) {
+        Ok(mark) => DeclarationMark::Read(mark),
+        Err(_) => DeclarationMark::Failed,
+    }
+}
+
+/// Workflow #463 V2 fix round 1 (register §1.382; `contracts/package-variables.md`, "A variable
+/// that does not apply"): a game root's `goals.json` as the workbench read it with the contract
+/// crate's reader (`parse_standard_pack_goals`), kept in what [`read_declarations`] answers. Fix
+/// round 2: public, and kept in the workbench's state from one check to the next
+/// ([`StandardPackGoalRoot`]), for a view that must not read the file a second time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootGoals {
+    /// The root holds none.
+    Absent,
+    /// The reader accepted it: its entries, which take the names they use for anything but a
+    /// placement.
+    Accepted(StandardPackGoals),
+    /// The reader refused it, with its problems in file order and the sha256 of the bytes read
+    /// (V1's contract: a refused file applies no entry and takes no name).
+    Refused {
+        sha256: String,
+        issues: Vec<StandardPackRootIssue>,
+    },
+    /// It could not be read (an I/O failure other than its absence): which names it takes is not
+    /// known, so no variable of the root applies (`goals_unreadable`). Fix round 2: the operating
+    /// system's failure (`foreign_os_error`), the cause of its `standard_pack_goals_not_applied`.
+    Unreadable(Outcome),
+}
+
+impl RootGoals {
+    /// The root's `goals.json` in `directory` for `game`, read through its bound plus one byte (a
+    /// file of any size is then the reader's `goal_out_of_limits`).
+    fn read(directory: &Path, game: &str) -> Self {
+        let path = directory.join(STANDARD_PACK_GOALS_FILE);
+        let unreadable =
+            |error: io::Error, op: IoOp| Self::Unreadable(Outcome::from_io_error(&error, op));
+        let file = match fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Self::Absent,
+            Err(error) => return unreadable(error, IoOp::Open),
+        };
+        let mut bytes = Vec::new();
+        if let Err(error) = file
+            .take(MAX_STANDARD_PACK_GOALS_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+        {
+            return unreadable(error, IoOp::Read);
+        }
+        match parse_standard_pack_goals(&bytes, game) {
+            Ok(goals) => Self::Accepted(goals),
+            Err(issues) => Self::Refused {
+                sha256: sha256(&bytes),
+                issues,
+            },
+        }
+    }
+
+    /// Fix round 2: what the contract crate's judgement takes for this document.
+    fn document(&self) -> RootGoalDocument<'_> {
+        match self {
+            Self::Absent => RootGoalDocument::Absent,
+            Self::Accepted(accepted) => RootGoalDocument::Accepted(accepted),
+            Self::Refused { .. } => RootGoalDocument::Refused,
+            Self::Unreadable(_) => RootGoalDocument::Unreadable,
+        }
+    }
+}
+
+/// Workflow #463 V2 fix round 2 (`contracts/package-variables.md`, "What the next slice reads"):
+/// what the scheduler workbench keeps of one game root for its variables, from one check to the
+/// next: its `goals.json` as the contract crate's reader read it (or why it is not applied), and
+/// its variables as judged over the whole root at that read. Memory only; no file is read for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StandardPackGoalRoot {
+    pub goals: RootGoals,
+    pub variables: RootVariableJudgement,
+}
+
+/// Workflow #463 V2 fix round 2: what the scheduler workbench keeps of every game root it read
+/// ([`StandardPackGoalRoot`], by game) and the variable table its last check built from them,
+/// which a dispatch reads: a view answers what a dispatch would read with the table's
+/// `root_word` and the policy crate's `resolve_variable`, the dispatch's own function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StandardPackGoalRoots {
+    pub roots: BTreeMap<String, StandardPackGoalRoot>,
+    pub table: Arc<VariableTable>,
+    /// Workflow #463 V3 fix round 2 (#1731): why the workbench's last check that read the roots
+    /// keeps nothing of a game it used, by game ([`RootUnread`]); a game in use that is neither
+    /// here nor in `roots` has not been checked since the start.
+    pub unread: BTreeMap<String, RootUnread>,
+}
+
+/// Workflow #463 V3 fix round 2 (#1731): why the workbench's last check that read the roots
+/// keeps nothing of a game in use (no [`StandardPackGoalRoot`]): what a goal page answers instead
+/// of `not_checked_yet`, which asking again would not change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootUnread {
+    /// The game's own root failed at that check (the metadata of its root files, or their
+    /// read), and no check since the start read it: the failure the check recorded
+    /// (`standard_pack_root_invalid` or `standard_pack_root_unreadable`, with its values).
+    Failing(Outcome),
+    /// The check found no game root with `schedule.json` for the game (no root directory, no
+    /// game root, or a game root without `schedule.json`): nothing of it is checked.
+    NoSchedule,
 }
 
 /// G-R2s fix round 1, for the gate tests: the declaration files whose metadata reads fail as a
@@ -230,7 +359,28 @@ struct WorkbenchState {
     /// otherwise, [`held_otherwise`]) and cleared by the first composition of every game that
     /// succeeds. Every instance of such a game has no goals in effect.
     uncomposed: BTreeSet<String>,
+    /// Workflow #463 V2 fix round 1: the judgement of the variables of each game in use whose
+    /// root a check last read with its declarations ([`read_declarations`]), by game; a game
+    /// whose root failed at a check keeps the last one (its instances have no goals in effect
+    /// meanwhile, so each of its variables reads its default: fix round 2, the table marks its
+    /// game unjudged). Fix round 2: with the root's `goals.json` as read.
+    roots: BTreeMap<String, StandardPackGoalRoot>,
+    /// Workflow #463 V3 fix round 2 (#1731): each game in use of the last check that read the
+    /// roots of which [`Self::roots`] keeps nothing, and why ([`RootUnread`]).
+    unread_roots: BTreeMap<String, RootUnread>,
+    /// Workflow #463 V2 fix round 1: the variable table of those judgements, which the policy
+    /// cycle reads from memory after the check ([`HostShared::standard_pack_variables`]). Fix
+    /// round 2: built at the end of each check, with the games of [`Self::uncomposed`] unjudged.
+    variable_table: StandardPackVariables,
 }
+
+/// Workflow #463 V2 fix round 1: the key under which a game's `goals.json` that could not be read
+/// is recorded once (`report_once`), cleared when the file reads again.
+const GOALS_UNREADABLE_KEY: &str = "goals:unreadable";
+
+/// Workflow #463 V2 fix round 1: the workbench's variable table as the policy cycle holds it,
+/// shared with the workbench until its next read of a root replaces it.
+pub(super) type StandardPackVariables = Arc<VariableTable>;
 
 /// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
 /// can do something irreversible"): at a check whose composition is refused (as a whole, or no
@@ -381,6 +531,13 @@ struct RootDeclarations {
     /// Each package's directory and the marks of its declaration files, taken just before the
     /// reader read it, by package id: what the workbench's next check compares.
     marks: BTreeMap<String, PackageMarks>,
+    /// Workflow #463 V2 fix round 1: the root's `goals.json` as the contract crate's reader read
+    /// it, the parsed document or its refusal (the one read of the file a reader of the Runtime
+    /// makes).
+    goals: RootGoals,
+    /// Workflow #463 V2 fix round 1: the root's variables as judged over the whole root (every
+    /// package of the registry, `goals.json`, the rule of irreversibility).
+    variables: RootVariableJudgement,
 }
 
 /// G-R2s: one package's directory and the marks of its declaration files.
@@ -397,18 +554,34 @@ struct PackageMarks {
 /// marked first ([`declaration_marks`]), so a file that changes after its mark is seen by the next
 /// check. A package one of whose marked files could not be stat'ed, or that the reader refuses,
 /// could not be read: never "reversible".
-fn read_declarations(directory: &Path, root: &StandardPackRoot) -> RootDeclarations {
+///
+/// Workflow #463 V2 fix round 1 (register §1.382; `contracts/package-variables.md`, "A variable
+/// that does not apply"; the coordinator's ruling): the same read answers the variables each
+/// package declares and the fact keys its designated effects read their caps from, and the root's
+/// `goals.json` of `game`, read once with the contract crate's reader ([`RootGoals::read`]). The
+/// contract crate's judgement of the root's variables (`judge_root_variables`, fix round 2: the
+/// one copy of the rules of "does not apply", which `standard-pack check` calls too) then runs
+/// over every package of the registry, held ones included, with the goal document as the reader
+/// read it (an accepted file's entries take the names they use for anything but a placement, a
+/// refused one takes none, one that could not be read keeps every other name of the root from
+/// applying, `goals_unreadable`) and the rule of irreversibility built here. Fix round 2: each
+/// package that could not be read is kept with the state of its files ([`files_state`]).
+fn read_declarations(directory: &Path, game: &str, root: &StandardPackRoot) -> RootDeclarations {
     let mut declared = BTreeMap::new();
     let mut refusals = BTreeMap::new();
     let mut marks = BTreeMap::new();
+    let mut variables = Vec::new();
+    let mut unreadable = BTreeMap::new();
     for package_id in root.registry.package_ids() {
         let Some(entry) = root.registry.get(package_id) else {
             declared.insert(package_id.to_owned(), None);
+            unreadable.insert(package_id.to_owned(), files_state(&[], None));
             continue;
         };
         let package = directory.join(&entry.directory);
         let package_marks = declaration_marks(&package);
         let capabilities = if package_marks.contains(&DeclarationMark::Failed) {
+            unreadable.insert(package_id.to_owned(), files_state(&package_marks, None));
             None
         } else {
             match PreparedContainedTask::read_remedy_declarations(
@@ -417,9 +590,23 @@ fn read_declarations(directory: &Path, root: &StandardPackRoot) -> RootDeclarati
                 Instant::now() + DECLARATIONS_BUDGET,
             ) {
                 // Fix round 3: what it provides and what its remedies list.
-                Ok(declarations) => Some(declarations.declared_capabilities()),
+                Ok(declarations) => {
+                    let capabilities = declarations.declared_capabilities();
+                    // Workflow #463 V2 fix round 1: and what it declares of variables.
+                    variables.push(RootPackageVariables {
+                        package_id: package_id.to_owned(),
+                        variables: declarations.variables,
+                        cap_fact_keys: declarations.cap_fact_keys,
+                    });
+                    Some(capabilities)
+                }
                 Err(error) => {
-                    refusals.insert(package_id.to_owned(), error.outcome());
+                    let refusal = error.outcome();
+                    unreadable.insert(
+                        package_id.to_owned(),
+                        files_state(&package_marks, Some(&refusal)),
+                    );
+                    refusals.insert(package_id.to_owned(), refusal);
                     None
                 }
             }
@@ -433,10 +620,16 @@ fn read_declarations(directory: &Path, root: &StandardPackRoot) -> RootDeclarati
             },
         );
     }
+    let irreversible = IrreversiblePackages::new(declared);
+    let goals = RootGoals::read(directory, game);
+    let judged = judge_root_variables(&variables, goals.document(), &irreversible);
+    let judgement = RootVariableJudgement::new(&variables, judged, unreadable);
     RootDeclarations {
-        irreversible: IrreversiblePackages::new(declared),
+        irreversible,
         refusals,
         marks,
+        goals,
+        variables: judgement,
     }
 }
 
@@ -455,6 +648,19 @@ fn unreadable_package(game: &str, package_id: &str, files: Option<&ScheduleGame>
         Some(refusal) => outcome.caused_by(refusal.clone()),
         None => outcome,
     }
+}
+
+/// Workflow #463 V2 fix round 2 (`contracts/package-variables.md`, "A variable that does not
+/// apply"): the `standard_pack_goals_not_applied` of `game`'s `goals.json` at `path` for the
+/// reason `failure` (keys `game`, `path`, `goals_failure`): the root runs, and only its goal
+/// document is not applied. The caller links the cause: the reader's refusal or the operating
+/// system's failure.
+fn goals_not_applied(game: &str, path: &Path, failure: GoalsFailure) -> Outcome {
+    Outcome::new(StandardPackGoalsCode::NotApplied)
+        .operation(HostLocation::StandardPackRead)
+        .game(game)
+        .path(path)
+        .goals_failure(failure)
 }
 
 /// ROUT-L RL-1b, pending decision 58 (recommended A): the bound instances whose games are in
@@ -477,6 +683,16 @@ fn games_in_use(identities: &[(String, String, String)]) -> BTreeMap<String, Sta
 
 fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+/// Workflow #463 V2 fix round 2: the state of the files of a package the workbench could not
+/// read, from the marks of its declaration files (`marks`, none for a package without a registry
+/// entry) and the reader's refusal when it refused it: what "once" of
+/// `goal_value_package_unreadable` is counted by, with the instance and the package. An opaque
+/// text, in memory only; it changes when a marked file changes or the refusal does.
+fn files_state(marks: &[DeclarationMark], refusal: Option<&Outcome>) -> String {
+    let refusal = refusal.map_or("", |refusal| refusal.code().as_str());
+    sha256(format!("{marks:?}|{refusal}").as_bytes())
 }
 
 /// The mark of the file at `path`. G-R2s fix round 3: under the gate tests, a file the metadata
@@ -561,7 +777,7 @@ fn read_schedule_game(
     };
     let declarations = schedule
         .as_ref()
-        .map(|_| read_declarations(directory, &root));
+        .map(|_| read_declarations(directory, game, &root));
     Ok(Some(ScheduleGame {
         root,
         maintenance,
@@ -701,6 +917,19 @@ impl HostShared {
             .and_then(|policy| lock(policy, HostLocation::StandardPackRead))
             .and_then(|policy| policy.set_cached_generations(settings.cached_generations))
             .and_then(|()| self.refresh_standard_pack_rules(workbench, &mut state));
+        // Workflow #463 V2 fix round 2 (the coordinator's ruling on the review's point 1): the
+        // table the policy cycle reads, of the judgements kept, and with every game whose root no
+        // check judges now (`uncomposed`: its root failed its check, or its composition was
+        // refused or not activated) unjudged, so each of its variables reads its default with
+        // `root_unchecked`, as its instances have no goals in effect.
+        let table = VariableTable::of_roots(
+            state
+                .roots
+                .iter()
+                .map(|(game, kept)| (game, &kept.variables)),
+            &state.uncomposed,
+        );
+        state.variable_table = Arc::new(table);
         // RL-1c: the admission after start waits for the first check; whatever this check's
         // result, the procedure bindings it leaves are the ones to admit.
         drop(state);
@@ -846,6 +1075,9 @@ impl HostShared {
         // its read. Each is recorded and left out of this check's reading; the others are marked,
         // read and composed as ever.
         let mut failed_roots = BTreeSet::new();
+        // Workflow #463 V3 fix round 2 (#1731): and the failure each recorded, which the goal
+        // page of a game no check since the start read names.
+        let mut root_failures = BTreeMap::new();
         if let Some(root) = &root {
             for game in &games {
                 let directory = root.join(game);
@@ -876,6 +1108,9 @@ impl HostShared {
                             GameMarks {
                                 schedule,
                                 bundle,
+                                // Workflow #463 V2 fix round 1: a change of `goals.json` is read
+                                // again too.
+                                goals: goals_mark(&directory),
                                 packages,
                             },
                         );
@@ -883,12 +1118,9 @@ impl HostShared {
                     Err(failure) => {
                         // Recorded once until the game's root composes again (G-R2s fix round
                         // 3: then the key is cleared, so a later failure is recorded too).
-                        self.report_once(
-                            state,
-                            game,
-                            ROOT_METADATA_KEY,
-                            failure.outcome(Some(game.as_str())),
-                        )?;
+                        let outcome = failure.outcome(Some(game.as_str()));
+                        root_failures.insert(game.clone(), outcome.clone());
+                        self.report_once(state, game, ROOT_METADATA_KEY, outcome)?;
                         // G-R2s fix round 3: this game's root failed; the check goes on for the
                         // games after it, which are marked as ever. The failed game is not read
                         // below and keeps the active generation's rules.
@@ -923,7 +1155,9 @@ impl HostShared {
                         // A broken game root keeps the active generation as it is until it is
                         // fixed: its registry is what every rule of the game is placed by.
                         let key = format!("root:{:?}", marks.get(game));
-                        self.report_once(state, game, &key, failure.outcome(Some(game.as_str())))?;
+                        let outcome = failure.outcome(Some(game.as_str()));
+                        root_failures.insert(game.clone(), outcome.clone());
+                        self.report_once(state, game, &key, outcome)?;
                         // G-R2s fix round 3: as at a metadata failure, the check goes on for the
                         // other games.
                         failed_roots.insert(game.clone());
@@ -931,6 +1165,9 @@ impl HostShared {
                 }
             }
         }
+        // Workflow #463 V2 fix round 1: the variables of every root this check read, judged over
+        // the whole root, for the policy cycle; before any composition, which may not succeed.
+        self.keep_root_variables(state, &games, &root_failures, &read, root.as_deref())?;
         let mut schedules = read
             .iter()
             .filter_map(|(game, files)| {
@@ -1273,6 +1510,125 @@ impl HostShared {
         Ok(lock(&workbench.state, HostLocation::StandardPackRead)?
             .uncomposed
             .clone())
+    }
+
+    /// Workflow #463 V2 fix round 1 (register §1.382; `contracts/package-variables.md`, "A
+    /// variable that does not apply"): the variable table of the game roots the workbench last
+    /// read, judged over each whole root, which the policy cycle reads right after the check, from
+    /// memory; `None` without a composed standard pack (configured mode), where the remedy
+    /// table's is read.
+    pub(super) fn standard_pack_variables(
+        &self,
+    ) -> RuntimeHostResult<Option<StandardPackVariables>> {
+        let Some(workbench) = self.standard_packs.schedule.as_ref() else {
+            return Ok(None);
+        };
+        Ok(Some(Arc::clone(
+            &lock(&workbench.state, HostLocation::StandardPackRead)?.variable_table,
+        )))
+    }
+
+    /// Workflow #463 V2 fix round 2 ([`RuntimeHost::standard_pack_goal_roots`]): what the
+    /// workbench keeps of each game root it read, with the table its last check built; read from
+    /// memory, never from a file. `None` without a composed standard pack (configured mode).
+    pub(super) fn standard_pack_goal_roots(
+        &self,
+    ) -> RuntimeHostResult<Option<StandardPackGoalRoots>> {
+        let Some(workbench) = self.standard_packs.schedule.as_ref() else {
+            return Ok(None);
+        };
+        let state = lock(&workbench.state, HostLocation::StandardPackRead)?;
+        Ok(Some(StandardPackGoalRoots {
+            roots: state.roots.clone(),
+            table: Arc::clone(&state.variable_table),
+            unread: state.unread_roots.clone(),
+        }))
+    }
+
+    /// Workflow #463 V2 fix round 1: keeps the variables' judgement of every root of `read` (this
+    /// check's reads of the games in use `games`) that holds its declarations, with its
+    /// `goals.json` as read (fix round 2), drops it for a game no longer in use or whose root
+    /// holds no `schedule.json` or no game root, and keeps the last one of a game whose root
+    /// failed at this check (`failed`). Fix round 2: a `goals.json` the reader refused, or that
+    /// could not be read, is not applied while the root runs: one `standard_pack_goals_not_applied`
+    /// ([`goals_not_applied`]) says which, recorded once per sha256 of a refused file and once
+    /// until an unreadable one reads again; its variables are judged as [`read_declarations`]
+    /// says. Workflow #463 V3 fix round 2 (#1731): `failed` holds each failed root's recorded
+    /// failure, and every game in use it then keeps nothing of is kept with why
+    /// ([`RootUnread`]): its root failed, or it holds no `schedule.json`.
+    fn keep_root_variables(
+        &self,
+        state: &mut WorkbenchState,
+        games: &BTreeSet<String>,
+        failed: &BTreeMap<String, Outcome>,
+        read: &BTreeMap<String, ScheduleGame>,
+        root: Option<&Path>,
+    ) -> RuntimeHostResult<()> {
+        state.roots.retain(|game, _| {
+            games.contains(game) && (read.contains_key(game) || failed.contains_key(game))
+        });
+        for (game, files) in read {
+            let Some(declarations) = &files.declarations else {
+                state.roots.remove(game);
+                continue;
+            };
+            if !matches!(declarations.goals, RootGoals::Unreadable(_)) {
+                // A file that reads again is recorded again the next time it cannot be read.
+                state
+                    .reported
+                    .remove(&(game.clone(), GOALS_UNREADABLE_KEY.to_owned()));
+            }
+            let goals_path =
+                root.map(|directory| directory.join(game).join(STANDARD_PACK_GOALS_FILE));
+            match (&declarations.goals, &goals_path) {
+                (
+                    RootGoals::Refused {
+                        sha256: digest,
+                        issues,
+                    },
+                    Some(refused_path),
+                ) => {
+                    if let Some(issue) = issues.first() {
+                        let refusal = RootFailure::Invalid {
+                            path: refused_path.clone(),
+                            issue: issue.clone(),
+                        }
+                        .outcome(Some(game.as_str()));
+                        let outcome = goals_not_applied(game, refused_path, GoalsFailure::Refused)
+                            .caused_by(refusal);
+                        self.report_once(state, game, &format!("goals:{digest}"), outcome)?;
+                    }
+                }
+                (RootGoals::Unreadable(failure), Some(unreadable_path)) => {
+                    let outcome =
+                        goals_not_applied(game, unreadable_path, GoalsFailure::Unreadable)
+                            .caused_by(failure.clone());
+                    self.report_once(state, game, GOALS_UNREADABLE_KEY, outcome)?;
+                }
+                (RootGoals::Absent | RootGoals::Accepted(_), _)
+                | (RootGoals::Refused { .. } | RootGoals::Unreadable(_), None) => {}
+            }
+            state.roots.insert(
+                game.clone(),
+                StandardPackGoalRoot {
+                    goals: declarations.goals.clone(),
+                    variables: declarations.variables.clone(),
+                },
+            );
+        }
+        let unread = games
+            .iter()
+            .filter(|game| !state.roots.contains_key(game.as_str()))
+            .map(|game| {
+                let why = match failed.get(game) {
+                    Some(failure) => RootUnread::Failing(failure.clone()),
+                    None => RootUnread::NoSchedule,
+                };
+                (game.clone(), why)
+            })
+            .collect();
+        state.unread_roots = unread;
+        Ok(())
     }
 
     /// Records `outcome` once per (`game`, `key`).
