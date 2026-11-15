@@ -323,7 +323,7 @@ fn s36_a_held_pack_s2_names_its_reason_and_reference() {
             .held
             .as_ref()
             .unwrap_or_else(|| panic!("{package_id} answers its hold: {row:?}"));
-        assert_eq!(hold.reason.as_bytes(), reason.as_bytes(), "{row:?}");
+        assert_eq!(hold.rationale.as_bytes(), reason.as_bytes(), "{row:?}");
         assert_eq!(hold.reference.as_deref(), reference, "{row:?}");
         let answered = serde_json::to_value(row).expect("the row");
         let written = match reference {

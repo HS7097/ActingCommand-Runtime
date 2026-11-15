@@ -254,8 +254,11 @@ pub struct PackReadiness {
 /// `held` entry of `schedule.json` as written: text for a reader, never evaluated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReadinessHold {
-    /// The entry's `reason`.
-    pub reason: String,
+    /// The entry's `reason` (the member's name in the answer; the field takes the name the
+    /// schedule's own reader gives this text, as the outcome guard keeps `reason` for typed
+    /// reasons).
+    #[serde(rename = "reason")]
+    pub rationale: String,
     /// The entry's `reference`; absent where it writes none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
@@ -1042,7 +1045,7 @@ impl Context<'_> {
             .iter()
             .find(|hold| hold.package_id == package_id)
             .map(|hold| ReadinessHold {
-                reason: hold.rationale.clone(),
+                rationale: hold.rationale.clone(),
                 reference: hold.reference.clone(),
             })
     }
