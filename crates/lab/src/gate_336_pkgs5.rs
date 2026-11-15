@@ -2,7 +2,7 @@
 
 // Workflow #336 PKG-S5, model M-PKG v1.1 §3.5, §4.6 S5-T3 and D9: `record stop` writes its
 // package as `<package_id>.<ext>`; a file of that name already there is replaced in place (the
-// new file beside it, the old one set aside and deleted), so a reader sees the old package or
+// new file beside it, the old one set aside; #464 P4: and kept), so a reader sees the old package or
 // the new one, never part of one; the container round trip compares the expanded table with
 // the generated one entry by entry, and a different table fails it. The recording is test plan
 // E-5's synthetic EXEC-I5 recording (`gate_e5_record_stop`): two colour-marked steps, so the
@@ -37,8 +37,8 @@ fn file_name(path: &Value) -> String {
 // S5-T3: the package is `<package_id>.json` in the recording and in `--lab-dir`; an earlier file
 // of that name is replaced (the dry run says `to_replace` and writes nothing); a reader that
 // opened the old file before keeps reading it whole; afterwards the name holds exactly the new
-// package, nothing else is left beside it, and no answer member, binding example or recorded
-// artifact names a digest.
+// package, no .part file is left beside it (#464 P4: the old one is kept as <name>.old-<ms>), and
+// no answer member, binding example or recorded artifact names a digest.
 #[test]
 fn s5_t3_record_stop_writes_its_package_as_its_package_id_and_replaces_one_of_that_name() {
     let recorded = Recorded::new();
@@ -105,7 +105,18 @@ fn s5_t3_record_stop_writes_its_package_as_its_package_id_and_replaces_one_of_th
         })
         .collect::<Vec<_>>();
     beside.sort();
-    assert_eq!(beside, [FILE_NAME], "no .part or set-aside file is left");
+    // #464 P4 (adapted: the requirement keeps the replaced file): no .part file is left, and the
+    // earlier package stays beside the new one, set aside as <name>.old-<ms>.
+    assert_eq!(beside.len(), 2, "{beside:?}");
+    assert_eq!(beside[0], FILE_NAME, "{beside:?}");
+    assert!(
+        beside[1].starts_with(&format!("{FILE_NAME}.old-")),
+        "{beside:?}"
+    );
+    assert_eq!(
+        fs::read(lab_dir.join(&beside[1])).expect("the kept package"),
+        OLD
+    );
 
     for member in ["digest", "sha256", "package_ref"] {
         assert!(generated.get(member).is_none(), "{member}: {generated}");

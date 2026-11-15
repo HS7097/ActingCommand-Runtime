@@ -662,6 +662,10 @@
       "type": "vocab:ending_against",
       "description": "The recorded screen an ending's page passes on that it must not pass on (#463 R2, record stop's self-check item 9)."
     },
+    "optional_after_problem": {
+      "type": "vocab:optional_after_problem",
+      "description": "Why an optional step a stopped Lab recording inserts after the effect of one of its steps, a pop-up after which the path goes on (#463 R4), cannot be inserted or given up."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -5229,6 +5233,42 @@
         },
         "other_ending": {
           "description": "The frames of another ending of the recording."
+        }
+      }
+    },
+    "optional_after_problem": {
+      "description": "Why an optional step a stopped Lab recording inserts after the effect of one of its steps, a pop-up after which the path goes on (#463 R4), cannot be inserted or given up.",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "OptionalAfterProblem"
+      },
+      "tokens": {
+        "recording_active": {
+          "description": "The recording is active: a step is inserted after record stop, which generated the package of the recorded path first."
+        },
+        "with_other_change": {
+          "description": "The request names another change beside optional_after or remove_inserted, or both of these."
+        },
+        "step_unknown": {
+          "description": "optional_after.step names no step of the recording (none, a dropped or a converted one)."
+        },
+        "step_last": {
+          "description": "optional_after.step names the last step: every run ends on its page, after which nothing is pressed."
+        },
+        "step_application": {
+          "description": "optional_after.step names a step whose effect is an application operation."
+        },
+        "no_marks": {
+          "description": "The inserted step adds and reuses no mark, so its page would recognize nothing."
+        },
+        "no_click": {
+          "description": "The inserted step declares no click, so nothing would close its pop-up."
+        },
+        "clears_optional": {
+          "description": "The request clears optional on an inserted step: a step never recorded on the path stays optional."
+        },
+        "not_inserted": {
+          "description": "remove_inserted names no inserted step of the recording that is not given up yet."
         }
       }
     },
