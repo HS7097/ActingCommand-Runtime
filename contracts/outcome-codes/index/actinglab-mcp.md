@@ -6,6 +6,6 @@ hand. The [summary](README.md) says what each column means. 3 codes.
 
 | Code | Category | Ladder class | Since | Status | Review | Text | Description |
 |---|---|---|---|---|---|---|---|
-| `mcp_identity_declaration_refused` | warning | none | 0.12.57 | active | pending | written | The Runtime refused the governance identity card actinglab-mcp declares before a write (client actingctl-mcp, Workflow #434 LAB-5G2b, until LAB-6 removes the… |
+| `mcp_identity_declaration_refused` | warning | none | 0.12.57 | retired | pending | written | Retired (Workflow #434 LAB-6S4a): The identity card actinglab-mcp declared before a write went with DeclareGovernanceIdentity (the coordinator's ruling N8 on… |
 | `mcp_job_started` | info | none | 0.12.57 | active | pending | written | actinglab-mcp serves the call as a job (Workflow #434 LAB-5G3), and the job goes on: the line's handle names it and job_phase says where it is (running, or… |
 | `mcp_operation_unsupported` | error | none | 0.12.57 | active | pending | written | actinglab-mcp lists this tool, the tool of an operation table row, but this build serves no call of it: the call was refused before anything was sent, run or… |

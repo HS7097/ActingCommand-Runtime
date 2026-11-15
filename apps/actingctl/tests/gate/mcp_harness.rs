@@ -6,7 +6,7 @@
 //! end and returns the exit status. Every read returns as soon as its message arrives;
 //! `GATE_WAIT` only bounds a broken run.
 
-use crate::held_runtime::GATE_WAIT;
+use crate::no_instance_runtime::GATE_WAIT;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;

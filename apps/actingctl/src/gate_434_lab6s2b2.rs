@@ -8,11 +8,12 @@
 // that nothing waits; no device, no clock, no sleep.
 // - `lab6s2b2_command_lines_bind_lab_with_lab_cli_and_keep_their_envelope`: actingctl's own
 //   commands (`run`, `client_config`), one command line for each kind its connection sends first:
-//   `status` (Status), `request-shutdown` (RequestShutdown), `install-transition` of a query
-//   (InstallTransition) and of a drain (its identity card, DeclareGovernanceIdentity),
-//   `config set` (ConfigureSettings), `pause` (PauseScheduling), `resume` (ResumeScheduling) and
-//   `task-offset` (its Status read), each with (Cli, Cli), and `agent-apply-resource-targets`
-//   (ApplyResourceTargets) and `agent-publish-facts` (PublishFacts), each with (Agent, Adapter).
+//   `status` (Status), `request-shutdown` (RequestShutdown), `config set` (ConfigureSettings),
+//   `pause` (PauseScheduling), `resume` (ResumeScheduling) and `task-offset` (its Status read),
+//   each with (Cli, Cli), and `agent-apply-resource-targets` (ApplyResourceTargets) and
+//   `agent-publish-facts` (PublishFacts), each with (Agent, Adapter). Workflow #434 LAB-6S4a
+//   (0.12.63): `install-transition`'s two rows (its query, InstallTransition, and its drain's
+//   identity card, DeclareGovernanceIdentity) left with the command.
 // - `lab6s2b2_operation_layer_commands_bind_lab_with_lab_cli`: actingctl never says which program
 //   it is, so the commands of the operation layer connect as `Front::Actingctl`, whose word is
 //   this program's: `routine-summary` (RoutineSummary) with (Cli, Cli).
@@ -44,10 +45,6 @@ use tempfile::TempDir;
 const CLI: (EventActor, EventSource) = (EventActor::Cli, EventSource::Cli);
 /// The envelope of `agent-publish-facts` and `agent-apply-resource-targets` on 0.12.58.
 const AGENT: (EventActor, EventSource) = (EventActor::Agent, EventSource::Adapter);
-/// A transition's query, which declares no identity card.
-const QUERY: &str = r#"{"action":"query","transition_id":"transition-b2"}"#;
-/// A transition's drain, which declares the identity card first.
-const BEGIN_DRAIN: &str = r#"{"action":"begin_drain","transition_id":"transition-b2"}"#;
 
 /// A refusal of the Runtime: denied, `lease_busy`.
 fn denied(request: &RuntimeRequest) -> ScriptedAnswer {
@@ -185,19 +182,6 @@ fn lab6s2b2_command_lines_bind_lab_with_lab_cli_and_keep_their_envelope() {
     let cases: Vec<(Vec<OsString>, &str, (EventActor, EventSource))> = vec![
         (line(&state, &["status"]), "status", CLI),
         (line(&state, &["request-shutdown"]), "request_shutdown", CLI),
-        (
-            line(&state, &["install-transition", "--action-json", QUERY]),
-            "install_transition",
-            CLI,
-        ),
-        (
-            line(
-                &state,
-                &["install-transition", "--action-json", BEGIN_DRAIN],
-            ),
-            "declare_governance_identity",
-            CLI,
-        ),
         (
             line(&state, &["config", "set", "neutral.key=1"]),
             "configure_settings",

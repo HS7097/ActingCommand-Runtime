@@ -3,11 +3,10 @@
 // Workflow #382 A-1 (test plan v2.2 §3.7), in-process.
 // G10 (apps 13): the documented forms of pause / resume (contracts/scheduling-pause.md, "CLI"),
 // emulator (contracts/emulator-control.md: status/start/stop/restart with --instance, discover
-// without), selfcheck (README.md, "actingctl selfcheck <alias>") and install-transition
-// (distribution/windows/INSTALL.md, "Host installation control": the five actions, deadlines
-// defaulting to 60 s and bounded at 600 s, `--wait` on commit_shutdown), and the shape of the
-// README's monitor-set example line, parse to their commands. Their usage errors, reported before
-// any connection, are tests/gate/cli_grammar.rs.
+// without), selfcheck (README.md, "actingctl selfcheck <alias>") and the shape of the README's
+// monitor-set example line, parse to their commands (Workflow #434 LAB-6S4a: install-transition's
+// forms went with the command). Their usage errors, reported before any connection, are
+// tests/gate/cli_grammar.rs.
 // G11 (apps 18): `request-shutdown --wait` with an injected poller and clock (Workflow
 // 191-batch4-models.md s1): every 250 ms the wait reads the owner journal; it is done when the
 // target owner epoch's last record is inactive and the target process is not alive, giving
@@ -18,8 +17,8 @@ use crate::shutdown_wait::{Poller, wait_with};
 use crate::{ActingctlError, Command, Invocation, pause_scope};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    EmulatorInstanceAction, IdentifierIssuer, InstallTransitionAction, InstallTransitionTicket,
-    OWNER_JOURNAL_SCHEMA, OwnerEpoch, RuntimeShutdownTarget, SchedulingPauseScope,
+    EmulatorInstanceAction, IdentifierIssuer, OWNER_JOURNAL_SCHEMA, OwnerEpoch,
+    RuntimeShutdownTarget, SchedulingPauseScope,
 };
 use actingcommand_ledger::owner_journal::RuntimeOwnerRecord;
 use serde_json::json;
@@ -32,7 +31,6 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 const ALIAS: &str = "neutral.instance";
-const TRANSITION_ID: &str = "transition-grammar";
 /// The s1 model's poll interval.
 const POLL: Duration = Duration::from_millis(250);
 
@@ -47,8 +45,6 @@ enum Parsed {
     EmulatorControl(EmulatorInstanceAction),
     EmulatorDiscover,
     SelfCheck(&'static str),
-    /// The action and the `--wait` after it.
-    InstallTransition(InstallTransitionAction, Option<Duration>),
     /// The monitor policy of `ALIAS`: interval, expected page, recovery.
     MonitorSet(u64, &'static str, bool),
 }
@@ -59,10 +55,7 @@ fn words(values: &[&str]) -> Vec<String> {
 
 fn parsed_as(invocation: Invocation, expected: &Parsed) -> bool {
     let Invocation {
-        instance,
-        wait: invocation_wait,
-        command,
-        ..
+        instance, command, ..
     } = invocation;
     match (command, expected) {
         (
@@ -85,9 +78,6 @@ fn parsed_as(invocation: Invocation, expected: &Parsed) -> bool {
         (Command::SelfCheck { instance_alias }, Parsed::SelfCheck(alias)) => {
             instance_alias == *alias && instance.is_none()
         }
-        (Command::InstallTransition { action }, Parsed::InstallTransition(expected, wait)) => {
-            action == *expected && invocation_wait == *wait
-        }
         (Command::MonitorSet { policy }, Parsed::MonitorSet(interval_ms, page, recovery)) => {
             instance.as_deref() == Some(ALIAS)
                 && policy.interval_ms() == *interval_ms
@@ -101,48 +91,8 @@ fn parsed_as(invocation: Invocation, expected: &Parsed) -> bool {
 /// G10: each documented form, as its contract or the README writes it, parses to its command.
 #[test]
 fn gate_the_documented_forms_parse_to_their_commands() {
-    let issuer = IdentifierIssuer::new().expect("identifier issuer");
-    let ticket = InstallTransitionTicket {
-        target: RuntimeShutdownTarget {
-            owner_epoch: *issuer.mint_owner_epoch().expect("owner epoch").transport(),
-            pid: 4_242,
-            started_at_unix_ms: 1_800_000_000_000,
-        },
-        transition_id: TRANSITION_ID.to_owned(),
-        request_id: *issuer.mint_request_id().expect("request id").transport(),
-    };
-    let action_json =
-        |action: &InstallTransitionAction| serde_json::to_string(action).expect("action JSON");
-    let begin_drain = |timeout_ms| InstallTransitionAction::BeginDrain {
-        transition_id: TRANSITION_ID.to_owned(),
-        timeout_ms,
-    };
-    let query = InstallTransitionAction::Query {
-        transition_id: TRANSITION_ID.to_owned(),
-    };
-    let abort = InstallTransitionAction::Abort {
-        ticket: ticket.clone(),
-    };
-    let release = InstallTransitionAction::Release {
-        ticket: ticket.clone(),
-        timeout_ms: 600_000,
-    };
-    let commit = InstallTransitionAction::CommitShutdown { ticket };
     let at_instance = || SchedulingPauseScope::Instance {
         instance_alias: ALIAS.to_owned(),
-    };
-    let install = |json: String, wait: Option<&str>| {
-        let mut arguments = words(&[
-            "install-transition",
-            "--state-root",
-            "state",
-            "--action-json",
-        ]);
-        arguments.push(json);
-        if let Some(seconds) = wait {
-            arguments.extend(words(&["--wait", seconds]));
-        }
-        arguments
     };
     let rows: Vec<(Vec<String>, Parsed)> = vec![
         (
@@ -232,34 +182,6 @@ fn gate_the_documented_forms_parse_to_their_commands() {
         (
             words(&["selfcheck", ALIAS, "--state-root", "state"]),
             Parsed::SelfCheck(ALIAS),
-        ),
-        // begin_drain without timeout_ms: the 60 s default.
-        (
-            install(
-                format!(r#"{{"action":"begin_drain","transition_id":"{TRANSITION_ID}"}}"#),
-                None,
-            ),
-            Parsed::InstallTransition(begin_drain(60_000), None),
-        ),
-        (
-            install(action_json(&begin_drain(600_000)), None),
-            Parsed::InstallTransition(begin_drain(600_000), None),
-        ),
-        (
-            install(action_json(&query), None),
-            Parsed::InstallTransition(query, None),
-        ),
-        (
-            install(action_json(&abort), None),
-            Parsed::InstallTransition(abort, None),
-        ),
-        (
-            install(action_json(&release), None),
-            Parsed::InstallTransition(release, None),
-        ),
-        (
-            install(action_json(&commit), Some("60")),
-            Parsed::InstallTransition(commit, Some(Duration::from_secs(60))),
         ),
         // README.md, the monitor-set example line.
         (
