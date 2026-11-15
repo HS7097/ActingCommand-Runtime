@@ -19,10 +19,16 @@
 //!   last (fix round 1). `build.json` says the source repository, the commit
 //!   and the tree, the Tools head and executable SHA-256, and, read back from the zip, the game,
 //!   the `package` range its `interfaces.json` declares, its root files and root directories,
-//!   its packs and its name, SHA-256 and size. It has no readiness member: another slice judges
-//!   readiness. Steps that did not all pass write no product: `resource_build_failed`, its
-//!   cause the steps' outcome, its details the steps' report (`actinglab.resource-verify.v1`),
-//!   which is no file.
+//!   its packs and its name, SHA-256 and size. It has no readiness member. Steps that did not all
+//!   pass write no product: `resource_build_failed`, its cause the steps' outcome, its details the
+//!   steps' report (`actinglab.resource-verify.v1`), which is no file.
+//! - **The answer** (#463 S3-7): besides `build.json`'s document, where the files are and the
+//!   steps, `readiness`, the readiness of the installed root the steps laid out, checked and kept,
+//!   `<out>/work/installed/<game>/`, judged by the resource tooling's one function as `standard-pack
+//!   ready --root` judges that root, once the product is written; when the function refuses the
+//!   root, `readiness_refused`, its refusal, which is no failure of the build. And `next.place`,
+//!   the command line of the placement's plan of the zip and `SHA256SUMS` written, never the line
+//!   that places. `build.json` carries neither.
 //!
 //! Nothing is written into the repository and nothing is deleted.
 
@@ -34,7 +40,10 @@ use super::{
 use crate::codes::{ActinglabCode, VerifyStep};
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, OutcomeEnvelope};
-use actingcommand_contract::{BundleIndex, STANDARD_PACK_BUNDLE_FILE};
+use actingcommand_contract::{BundleIndex, EnvelopeError, STANDARD_PACK_BUNDLE_FILE};
+use actingcommand_resource_tooling::{
+    StandardPackReadiness, StandardPackReadyRequest, judge_standard_pack_readiness,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,6 +61,9 @@ const BUILD_FILE: &str = "build.json";
 const INTERFACES_FILE: &str = "interfaces.json";
 /// The zip's directory of packs, which is no root directory of `build.json`.
 const PACKS_DIRECTORY: &str = "packs";
+/// #463 S3-7: below the work directory, the directory of the installed root `<game>/` the
+/// `bundle` step lays out and checks (`bundle.rs`).
+const INSTALLED_DIRECTORY: &str = "installed";
 
 pub(crate) fn build_options() -> [&'static str; 4] {
     [
@@ -120,13 +132,30 @@ struct BuildFiles {
     work: String,
 }
 
-/// The answer: `build.json`'s document, where it was written and the steps.
+/// The answer: `build.json`'s document, where it was written and the steps; #463 S3-7: and the
+/// readiness of the installed root and the next command, which `build.json` does not carry.
 #[derive(Serialize)]
 struct BuildAnswer<'a> {
     build: &'a BuildDocument,
     out: String,
     files: BuildFiles,
     steps: &'a [StepReport],
+    /// #463 S3-7: the readiness of `<out>/work/installed/<game>/`, as `standard-pack ready
+    /// --root` answers it for that root; absent when the readiness function refused the root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readiness: Option<&'a StandardPackReadiness>,
+    /// #463 S3-7: that refusal, as `standard-pack ready --root` answers it; absent when the root
+    /// was judged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readiness_refused: Option<&'a EnvelopeError>,
+    next: BuildNext,
+}
+
+/// #463 S3-7: the next command of the answer.
+#[derive(Serialize)]
+struct BuildNext {
+    /// The command line of the placement's plan of the files written (`place_plan_line`).
+    place: String,
 }
 
 /// The details of steps that did not all pass: the refusal's outcome and the steps' report.
@@ -162,11 +191,27 @@ pub(crate) fn run_standard_pack_build(
     }
     let (document, files) =
         write_product(&request, &report).map_err(|outcome| write_refused(&outcome))?;
+    // #463 S3-7: the readiness of the installed root the steps laid out, checked and kept (the
+    // build deletes nothing), judged once the product is written, so that it never changes the
+    // build's success; and the placement's plan of the files written.
+    let readiness = readiness_of(
+        request
+            .steps
+            .work
+            .join(INSTALLED_DIRECTORY)
+            .join(&document.game),
+    );
+    let next = BuildNext {
+        place: place_plan_line(&files),
+    };
     serde_json::to_value(BuildAnswer {
         build: &document,
         out: request.out.display().to_string(),
         files,
         steps: &report.steps,
+        readiness: readiness.as_ref().ok(),
+        readiness_refused: readiness.as_ref().err(),
+        next,
     })
     .map_err(|error| {
         CliError::device(format!(
@@ -341,6 +386,36 @@ fn steps_failed(report: &Report, top: &Outcome, out: &Path) -> CliError {
 fn write_refused(outcome: &Outcome) -> CliError {
     let message = format!("standard-pack build could not write its product ({outcome})");
     outcome_error(outcome, message)
+}
+
+/// #463 S3-7 (contracts/resource-verify.md, "`standard-pack build`", the answer): the readiness of
+/// the game root `root`, judged by the resource tooling's one function, called as `standard-pack
+/// ready --root` calls it: no declared `package` range and no installation handed in. Its refusal
+/// is answered as `standard-pack ready` answers it, with a developer line; it is no failure of the
+/// build.
+fn readiness_of(root: PathBuf) -> Result<StandardPackReadiness, EnvelopeError> {
+    judge_standard_pack_readiness(&StandardPackReadyRequest {
+        root,
+        declared_package: None,
+        installation: None,
+    })
+    .map_err(|error| {
+        eprintln!(
+            "WARN actinglab: standard-pack build readiness: {}: {}",
+            error.code, error.message
+        );
+        EnvelopeError::from(error)
+    })
+}
+
+/// #463 S3-7: the command line of the placement's plan of the zip and `SHA256SUMS` in `files`,
+/// each path in double quotes. The plan only: a placement is an act under the owner's
+/// authorization, and no answer hands out the line that places.
+fn place_plan_line(files: &BuildFiles) -> String {
+    format!(
+        "actinglab place \"{}\" --sums \"{}\" --plan",
+        files.zip, files.sums
+    )
 }
 
 /// The product, once every step passed: the steps' zip copied into `--out`, `SHA256SUMS` and

@@ -27900,6 +27900,80 @@ revision.
 the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
 `device_locked` or the update code shows no group in the errors view either.
 
+### 1.414 Slice #463 S3-7 (0.12.63): `standard-pack build` answers its packs' readiness and names the placement's plan as the next command (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making as a whole, board #463; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-7", with §1.1 rows W6, W7, W10 and §1.2 H10, H13; the coordinator's rulings in the work order, not the owner's words, its ruling 1 changing the design; coordinator work order `rd-1115/brief-463-s37-build-readiness.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.414: main `44cbab53` holds the sections up to §1.400, and the
+numbers between them and this one belong to slices dispatched with it. The slice ships in 0.12.63.
+
+**What it is.** `standard-pack build` (§1.376) turns one clean commit of a resource repository into
+the zip a placement takes and answered the files and the steps. To learn whether the packs it built
+were ready one copied a path out of the answer into `standard-pack ready --root` (§1.375; the
+design's H10), and to plan a placement two more into `place` (H13). The answer now says both
+([resource-verify.md](resource-verify.md), "`standard-pack build`", "The answer"):
+
+- `readiness`, the readiness of `<out>/work/installed/<game>/`, judged by
+  `judge_standard_pack_readiness`, called, not copied, as `standard-pack ready --root` calls it (no
+  installation, no declared range): that row's answer for that root, `installation` `not_read`, the
+  five installation items `not_judged`, each pack `waiting` with every reason, `ready_to_place` or
+  `not_scheduled`;
+- `next.place`, `actinglab place "<zip>" --sums "<SHA256SUMS>" --plan`, the paths of `files`.
+
+**What the code showed** (the design's §6 and the work order's rulings 2 and 3).
+
+- **The installed root is kept.** The `bundle` step makes `work/installed/<game>/`
+  (`apps/actinglab/src/resource_verify/bundle.rs`, after the read-back), lays the root files and the
+  packs into it and checks it with `standard-pack check`. No code of `resource verify` or of the
+  build deletes: there is no removal call in `apps/actinglab/src/resource_verify.rs` or its
+  modules, and its, the step's and the build's module docs say that nothing is deleted. A build
+  whose steps all passed has laid the root
+  out: the step leaves before it only on an error or after a failure it recorded. So after every
+  successful build the root is there. The readiness is judged once the product is written, while
+  the root exists; a root that is not there is never judged but refused by the function.
+- **What `standard-pack ready` hands in.** `declared_package: None` and `installation: None`
+  (`apps/actinglab/src/standard_pack_cli.rs`, its `ready` arm). The design took `declared_package`
+  from the zip's `interfaces.json`; by ruling 2 the build does what the row does and hands in none.
+  Without an installation it changes nothing: I2 answers `not_judged` `installation_not_read` before
+  it reads the declared range.
+
+**Ruling 1, which changes the design.** The design put the readiness into `build.json` too and
+moved its schema to v2. `build.json` does not change: its members, its schema
+`actingcommand.standard-pack-build.v1` and the capability's `build_schema` stay. Readiness is a
+judgement of a root at a moment, which any reader can ask for again; the file records the build.
+The contract says that the answer carries the readiness and the next command and the file does not.
+
+**When the readiness cannot be computed.** The function refuses with its own codes
+(`validation_failed` for a root that is no directory or cannot be read, `standard_pack_root_invalid`
+for a root file the structure check refuses, `package_invalid`). The answer then has no
+`readiness` and has `readiness_refused`, that refusal as `standard-pack ready --root` answers it
+(`code`, `message`, `blocked_by`, `details`), with the developer line `WARN actinglab:
+standard-pack build readiness: <code>: <message>` on stderr; the build still exits 0, its product
+written. No readiness is answered that was not computed. No code and no word is added.
+
+**The next command.** The plan only (ruling 4): a placement is an act under the owner's
+authorization, and no answer hands out the line that places. Each path is in double quotes; the
+`actinglab` is the one of the installation the bundle is to be placed into (`place` acts on the
+root of the `actinglab.exe` that runs it, [install-cli.md](install-cli.md), "The Lab's rescue
+module").
+
+**Tests.** `apps/actinglab/src/tests/gate_463_s37.rs`, gate map `apps.toml` "#463 S3-7", on P2's
+neutral fixture repository with a `schedule.json` of one valued pool: a commit whose pack A is held
+(a held entry, no rule) and whose pack B has a rule with a complete value answers A `waiting`, its
+S2 failing `held`, and B `ready_to_place`, the readiness equal to the answer of `standard-pack
+ready --root` for the kept root, and `build.json` the answer's `build`, v1, its eleven members; a
+commit whose two packs both have such a rule answers both `ready_to_place`, their installation
+items `not_judged` `installation_not_read`; `next` is the plan's line of the zip and `SHA256SUMS`
+written. The tests assert only members of the readiness that exist on main `44cbab53` (ruling 5).
+No test is adapted, no golden changes, no test leaves the gate map.
+
+**What is not changed.** What the build writes (the zip, `SHA256SUMS`, `build.json`, the work
+tree), its steps and their refusals, the readiness function, adopt and the placement. Texts of
+other slices that name `build.json` as a later caller of the readiness are left as they are, this
+slice's work order naming no other file: [standard-pack-schedule.md](standard-pack-schedule.md),
+"Readiness", the doc of `crates/resource-tooling/src/standard_pack_ready.rs`, the notes of the row
+`standard-pack ready` and [package-reference.md](package-reference.md), "The built standard pack".
+
+**At deploy.** Nothing to do: the answer gains two members, and nothing on disk changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
