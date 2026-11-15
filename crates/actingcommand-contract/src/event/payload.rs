@@ -10775,7 +10775,6 @@ enum ClientDraftKind {
     LabRequest(ObservationDraft),
     LabPinRelease(crate::LabPinReleaseTarget, AuditInput),
     OwnerUnlock(OwnerUnlockDraft),
-    GovernanceIdentityDeclared(GovernanceIdentityDeclaredDraft),
 }
 
 pub struct ClientPayloadDraft(ClientDraftKind);
@@ -12516,9 +12515,6 @@ impl EventPayloadDraft {
                 ),
                 ClientDraftKind::OwnerUnlock(draft) => {
                     ClientPayload::OwnerUnlock(draft.sanitize(fingerprinter)?)
-                }
-                ClientDraftKind::GovernanceIdentityDeclared(draft) => {
-                    ClientPayload::GovernanceIdentityDeclared(draft.sanitize(fingerprinter)?)
                 }
             }),
             Self::Ledger(value) => EventPayload::Ledger(match value.0 {

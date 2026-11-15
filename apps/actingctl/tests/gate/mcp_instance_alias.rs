@@ -2,10 +2,13 @@
 
 //! Board #391 item 1: a registered instance alias with upper-case letters is an alias like any
 //! other. Through `actingctl mcp-serve`, `ac_pause` and `ac_resume` on such an instance are
-//! accepted, and the ledger holds the `client.action` record of each with that alias
-//! byte-for-byte. The Runtime is the c4 fake child process (`tests/support/c4_runtime.rs`); the
-//! MCP server is the real binary over pipes. Every wait returns as soon as its message arrives;
-//! `GATE_WAIT` only bounds a broken run.
+//! accepted, the pause's scope naming that alias byte-for-byte. Until Workflow #434 LAB-6S4a the
+//! ledger held the `client.action` record of each with that alias, and the gate was
+//! `gate_mcp_pause_and_resume_record_the_client_action_of_an_upper_case_alias`; since LAB-6S4a
+//! (0.12.63; the coordinator's ruling N8 on board #434) no write of the server records one, which
+//! the gate reads too. The Runtime is the c4 fake child process (`tests/support/c4_runtime.rs`);
+//! the MCP server is the real binary over pipes. Every wait returns as soon as its message
+//! arrives; `GATE_WAIT` only bounds a broken run.
 //!
 //! Workflow #378 A5 (coordinator ruling): a Runtime refusal through MCP carries its receipt's
 //! `receipt_state` and `request_id` on the refusal's top outcome. A second `ac_resume` with the
@@ -15,8 +18,8 @@
 use crate::c4_runtime::{RuntimeChild, write_sealed_frame};
 use crate::mcp_harness::{McpServer, accepted};
 use actingcommand_contract::{
-    ClientActionKind, ClientPayload, EventActor, EventPayload, EventQuery, EventSource, EventType,
-    ProjectionPayload, ProjectionProfile,
+    ClientPayload, EventActor, EventPayload, EventQuery, EventSource, EventType, ProjectionPayload,
+    ProjectionProfile,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::json;
@@ -26,7 +29,7 @@ use tempfile::TempDir;
 const ALIAS: &str = "Neutral.Instance";
 
 #[test]
-fn gate_mcp_pause_and_resume_record_the_client_action_of_an_upper_case_alias() {
+fn gate_mcp_pause_and_resume_take_an_upper_case_alias() {
     let root = TempDir::new().expect("tempdir");
     write_sealed_frame(&root.path().join("sealed.png"));
     let mut runtime =
@@ -90,27 +93,13 @@ fn gate_mcp_pause_and_resume_record_the_client_action_of_an_upper_case_alias() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    for control in ["ac_pause", "ac_resume"] {
-        let recorded = records
-            .iter()
-            .filter(|record| record.surface_id() == "mcp" && record.control_id() == control)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            recorded.len(),
-            1,
-            "client.action records of {control}: {records:?}"
-        );
-        assert_eq!(
-            recorded[0].kind(),
-            ClientActionKind::Command,
-            "client.action record of {control}: {records:?}"
-        );
-        assert_eq!(
-            recorded[0].instance_alias(),
-            Some(ALIAS),
-            "client.action record of {control}: {records:?}"
-        );
-    }
+    // Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8 on board #434): a write of the
+    // MCP server records no `client.action` before it any more (the initiator `Lab-MCP` its
+    // binding carries names where it came from), so none names the alias.
+    assert!(
+        records.iter().all(|record| record.surface_id() != "mcp"),
+        "client.action records of the MCP writes: {records:?}"
+    );
 
     let stale = mcp.call_tool(
         4,

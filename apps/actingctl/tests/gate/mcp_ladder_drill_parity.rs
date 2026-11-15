@@ -17,7 +17,6 @@ use actingcommand_contract::{
     IdentifierIssuer, InstanceId, OwnerEpoch, RUNTIME_INFO_FILE, RecoveryDrillMode,
     RecoveryLadderDrill, RequestId, RuntimeControlPlaneStatus, RuntimeInfo, RuntimeInstanceStatus,
     RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    TerminalEvent,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -187,7 +186,6 @@ struct Script {
     owner_epoch: OwnerEpoch,
     instance_id: InstanceId,
     ladder_request_id: RequestId,
-    issuer: IdentifierIssuer,
     drills: Mutex<Vec<(String, RecoveryDrillMode)>>,
 }
 
@@ -228,7 +226,6 @@ impl ScriptedRuntime {
             owner_epoch,
             instance_id,
             ladder_request_id,
-            issuer,
             drills: Mutex::new(Vec::new()),
         });
         let stopping = Arc::new(AtomicBool::new(false));
@@ -274,7 +271,9 @@ impl Drop for ScriptedRuntime {
 }
 
 // Answers one client's requests until it hangs up: the handshake, Status with the one instance,
-// a write's provenance (the identity card and the client action) and the drill.
+// and the drill. Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8 on board #434): a
+// write's provenance (the identity card and the client action) is no longer sent, so this Runtime
+// answers neither and any other request fails the gate.
 fn serve(mut stream: TcpStream, script: &Script) {
     while let Some(request) = next_request(&mut stream) {
         let (result, terminal) = match request.operation() {
@@ -321,16 +320,6 @@ fn serve(mut stream: TcpStream, script: &Script) {
                     .expect("scripted status"),
                 },
                 None,
-            ),
-            RuntimeOperation::DeclareGovernanceIdentity { .. } => {
-                (RuntimeResult::GovernanceIdentityAccepted, None)
-            }
-            RuntimeOperation::RecordClientAction { .. } => (
-                RuntimeResult::ClientActionRecorded,
-                Some(TerminalEvent {
-                    sequence: 1,
-                    event_id: *script.issuer.mint_event_id().expect("event id").transport(),
-                }),
             ),
             RuntimeOperation::DrillRecoveryLadder {
                 instance_alias,
