@@ -195,8 +195,9 @@ record of severity `warning` or above; a run whose context holds no failure, rea
 completely and within the bound, has no group. #429 RG-STOP (since 0.12.58,
 [v012-register.md](v012-register.md) §1.337): a record whose outcome code is of
 the ladder class `planned_stop` (a stop on request, a pause and the other stops
-the recovery ladder does not answer; eighteen codes today, `contained_task_cancelled`
-and `contained_task_paused` among them) is no failure of the
+the recovery ladder does not answer; twenty codes today, `contained_task_cancelled`
+and `contained_task_paused` among them, and since 0.12.62 (Workflow #469 D4a)
+`device_locked` and `contained_task_application_update_required`) is no failure of the
 grouping unless it is of one of those failure kinds, whatever its severity: it is
 not listed and causes no gap, so a run that was only stopped or paused has no
 group. The rule reads the class the outcome catalog gives the record's code and

@@ -458,3 +458,100 @@ fn rg_stop_t5_a_paused_runs_records_are_not_listed() {
     assert_eq!(page.events().len(), records.len());
     ledger.close().expect("close the writer");
 }
+
+// Workflow #469 D4a (0.12.62; register §1.400; the owner's approval on board #469 of the design's
+// A-2 item 1, rows `device_locked` and `contained_task_application_update_required`): both codes
+// are warnings of the ladder class `planned_stop`, so the grouping counts no record of theirs as a
+// failure of its run. A run ended by one writes it twice, as the run's `task.failed` terminal and
+// as the policy driver's `runtime.failed`: the run has no group, and both records stay warnings and
+// rows of the page in the Errors view. A warning of another class (`none`) appended to the same
+// run is a failure of the grouping as before: the group lists it alone, with its missing relation.
+fn d4a_planned_stop_warnings_are_no_failure_of_their_run(outcome: impl Fn() -> Outcome) {
+    let spelling = outcome().code().as_str().to_owned();
+    let catalog = actingcommand_contract::outcome::catalog_json().expect("the embedded catalog");
+    assert_eq!(
+        catalog["codes"][spelling.as_str()]["ladder_class"],
+        "planned_stop",
+        "{spelling}"
+    );
+    assert_eq!(
+        catalog["codes"][spelling.as_str()]["category"],
+        "warning",
+        "{spelling}"
+    );
+    let root = tempfile::tempdir().expect("root");
+    let (_database, ledger) = formal_root(root.path());
+    let run = Run::new();
+    let records = [
+        run.terminal(&ledger, 1, outcome()),
+        run.runtime_failed(&ledger, 2, run.action_links(), outcome()),
+    ];
+
+    let alone = page(&ledger, &run);
+    assert!(
+        alone.run_recovery().is_empty(),
+        "{spelling}: {:?}",
+        alone.run_recovery()
+    );
+    for record in &records {
+        assert_eq!(record.severity(), EventSeverity::Warning, "{record:?}");
+        let row = alone
+            .events()
+            .iter()
+            .find(|row| row.event_id == *record.event_id())
+            .expect("the record is a row of the page");
+        assert_eq!(row.severity, EventSeverity::Warning, "{spelling}");
+        assert!(
+            row.views.contains(&LedgerView::Errors),
+            "{spelling}: {:?}",
+            row.views
+        );
+    }
+
+    let warning = run.runtime_failed(
+        &ledger,
+        3,
+        run.links.clone(),
+        Outcome::relayed(WARNING_CODE),
+    );
+    assert_eq!(warning.severity(), EventSeverity::Warning);
+    let beside = page(&ledger, &run);
+    let [group] = beside.run_recovery() else {
+        panic!(
+            "{spelling}: one recovery group: {:?}",
+            beside.run_recovery()
+        );
+    };
+    assert_eq!(group.state, LedgerRecoveryState::Unknown, "{spelling}");
+    assert_eq!(
+        group.gaps,
+        vec![LedgerRecoveryGap::MissingRelation],
+        "{spelling}"
+    );
+    assert_eq!(
+        group.evidence,
+        vec![LedgerFailureResolution {
+            failure: position(&warning),
+            success: None,
+        }],
+        "{spelling}"
+    );
+    ledger.close().expect("close the writer");
+}
+
+// D4a item 1: a handset's keyguard waited for a person at the run's start (`device_locked`).
+#[test]
+fn d4a_t1_a_locked_device_s_records_are_no_failure_of_their_run() {
+    d4a_planned_stop_warnings_are_no_failure_of_their_run(|| {
+        Outcome::relayed("device_locked").device_label("neutral-handset")
+    });
+}
+
+// D4a item 2: the game's update dialog ended the run
+// (`contained_task_application_update_required`).
+#[test]
+fn d4a_t2_an_application_update_s_records_are_no_failure_of_their_run() {
+    d4a_planned_stop_warnings_are_no_failure_of_their_run(|| {
+        Outcome::relayed("contained_task_application_update_required").page_id("notice")
+    });
+}

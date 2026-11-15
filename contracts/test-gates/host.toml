@@ -4099,3 +4099,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_backoff_names_the_failure_it_follows",
 ]
 incident = ["#469 H2"]
+
+# Workflow #469 D4a (0.12.62; register §1.400; brief rd-1115/brief-469-d4-owner-four.md; the owner's approval on board #469; contracts/application-lifecycle.md, "The handset start gate", and contracts/emulator-control.md, "The game's update dialog"): device_locked and contained_task_application_update_required are of the ladder class planned_stop and the ladder does with them what it did. device_locked, as device_thermal_hold, device_battery_low and device_in_use: a rung whose entry it holds is skipped device_not_ready (the skip reads the code), no trigger item of the defaults matches it at any stage, and three of its warnings on one instance within the window register no burst. The update dialog met by the application restart's startup package after a pack_logic ladder opened: the rung fails with the code, the ladder ends exhausted at Warning with recovery_ladder_interrupted, no emulator restart rung, no other ladder (UPD-1 A4's run)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d4a_a_locked_device_still_skips_its_rung_device_not_ready_and_starts_no_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::d4a_the_update_dialog_is_a_planned_stop_and_still_ends_the_ladder_at_its_rung",
+]
+incident = ["#469 D4a"]

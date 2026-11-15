@@ -2324,3 +2324,11 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_the_diagnosis_runs_show_the_terminal_values_and_the_groups_keep_the_code",
 ]
 incident = ["#469 F1"]
+
+# Workflow #469 D4a (0.12.62; register §1.400; brief rd-1115/brief-469-d4-owner-four.md; the owner's approval on board #469): call_budget_exhausted is a warning. The overview's two writers of it (a block whose read the call budget left no time to start, performance_incomplete true, and the not-running rows) write it as a warning beside the overview's success line: runtime_overview_reported, exit 0, no developer line (so the Lab's MCP answers isError false), each warning's envelope category warning; a line whose top it were exits 0 with a WARN developer line
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::overview::tests::d4a_a_spent_call_budget_is_a_warning_beside_a_successful_answer",
+]
+incident = ["#469 D4a"]

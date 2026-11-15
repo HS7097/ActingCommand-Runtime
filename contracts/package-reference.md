@@ -858,7 +858,8 @@ data files beside its package directories, one directory per game below the conf
     `"application_update_required"`, declares the page the game's "client out of date" dialog:
     after its handler (which may tap the game's own button that opens the store's page of the
     game) the run ends with `contained_task_application_update_required` (warning, ladder class
-    none, `page_id`) instead of `contained_task_interrupt_escalated`, and before its terminal the
+    `planned_stop` since 0.12.62, Workflow #469 D4a; `page_id`) instead of
+    `contained_task_interrupt_escalated`, and before its terminal the
     Runtime records the instance fact `health.application.update_required` true
     ([instance-fact-store.md](instance-fact-store.md), "Application update facts"), which holds
     every other task of the instance until a store update package's run succeeds there

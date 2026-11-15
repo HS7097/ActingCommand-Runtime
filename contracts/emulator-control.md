@@ -913,9 +913,11 @@ that ends with `contained_task_application_update_required` (a shared interrupt 
 at warning with the same outcome, climbing no further. An old client is cured by no restart, so
 the emulator is not restarted for it; the instance's `health.application.update_required` is
 true and its store update task runs ([scheduling-blackout.md](scheduling-blackout.md), position
-4a). This rule stays in code (as below; no configuration key). The code's ladder class is `none`,
-so no default trigger item opens a ladder for it, and a startup package that ends with it opens
-none either (a startup package never does).
+4a). This rule stays in code (as below; no configuration key): it reads the code, not its class.
+The code's ladder class is `planned_stop` (since 0.12.62, Workflow #469 D4a: the package declares
+the page and the run stops on purpose), which no default trigger item names, so no default
+trigger item opens a ladder for it, and a startup package that ends with it opens none either (a
+startup package never does).
 
 **Busy ends (#411 B37, slice A35-S1; coordinator decisions Q1 to Q3 of 2026-10-21).** A rung's
 package run that completes `success` on a `scheduling_outcome` mapping its package marks `busy`
