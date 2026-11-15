@@ -15,9 +15,13 @@
 //!   there was none) and fails the start; any other failure of the pause leaves the header as
 //!   written, since a pause with that reason may exist, and fails the start with the hold in its
 //!   details, so that `record stop` or `record start --force` releases it by its reason. Nothing
-//!   listening where the installation's Runtime would ([`reach`]): nothing is held and the answer
-//!   says `no_runtime_listening`. Something listening that does not complete the handshake, or a
-//!   status the Runtime refuses or leaves unanswered, fails the start before anything is written.
+//!   listening where the installation's Runtime would ([`reach`]: no runtime-info, or the address
+//!   it names refuses the connection): nothing is held and the answer says `no_runtime_listening`.
+//!   Something listening that does not complete the handshake, or a status the Runtime refuses or
+//!   leaves unanswered, fails the start before anything is written; so (the fix round after the
+//!   train's review) do a state root that cannot be resolved (`validation_failed`, as the Lab's
+//!   other commands answer it), a plain connection that times out and a runtime-info that names no
+//!   address (as a handshake that does not complete): the Lab cannot tell that nothing listens.
 //! - The end, `record stop` and `record archive` ([`end`]): another party's pause is left alone;
 //!   the own pause is found by its reason and resumed by the pause the status shows now
 //!   (`lab_ops::scheduling::release_recording_hold`). A release that fails, or a Runtime that does
@@ -40,9 +44,10 @@ use actingcommand_lab::{
     RecordingHold, RecordingHoldFound, RecordingHoldView,
 };
 use actingcommand_lab_ops::scheduling::{self, RecordingHoldReleased};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde_json::{Map, Value, json};
 use std::fs;
+use std::io;
 use std::net::TcpStream;
 use std::path::Path;
 
@@ -57,11 +62,12 @@ fn connect() -> Result<RuntimeClient, String> {
 enum Reached {
     /// A connection, its handshake done.
     Connected(RuntimeClient),
-    /// Nothing listens: no state root located, no runtime-info that names an address, or nothing
-    /// accepts a connection there. The text of why.
+    /// Nothing listens ([`Probed::NothingListens`]). The text of why.
     NothingListens(String),
-    /// Something listens there, but the connection's handshake (`Health`, `BindChannel`) failed,
-    /// was refused or got no answer: the failure as the Lab's commands answer a Runtime failure
+    /// Something may listen there, but no connection could be made (the connection's handshake,
+    /// `Health` and `BindChannel`, failed, was refused or got no answer; the fix round after the
+    /// train's review: or the plain connection timed out, or the runtime-info names no address):
+    /// the failure as the Lab's commands answer a Runtime failure
     /// (`runtime_slice_cli::map_runtime_error`).
     NotHandshaken(CliError),
 }
@@ -70,35 +76,77 @@ enum Reached {
 /// cases kept it from one. The client's connect reads the runtime-info, opens the connection and
 /// shakes hands in one call, and its failure does not say by itself whether anything listened; so
 /// after a failed connect one plain connection to the address the runtime-info names, opened and
-/// closed at once with nothing sent, within the client's IO timeout ([`listening`]), tells them
-/// apart: accepted, something listens there, a Runtime that may dispatch; refused, or no
-/// runtime-info that names an address, nothing listens.
-fn reach() -> Reached {
-    let state_root = match runtime_state_root() {
-        Ok(state_root) => state_root,
-        Err(error) => return Reached::NothingListens(error.message),
-    };
-    let config = crate::lab_client_config(state_root);
-    match RuntimeClient::connect(config.clone()) {
+/// closed at once with nothing sent, within the client's IO timeout ([`probe`]), tells them apart
+/// ([`not_reached`]). The fix round after the train's review (the coordinator's ruling: a recording
+/// never starts unheld because the Lab could not tell): a state root that cannot be resolved (an
+/// empty variable, neither `LOCALAPPDATA` nor `APPDATA`) is the caller's mistake or a broken
+/// installation, not "no Runtime": the failure the Lab's other commands answer for it
+/// (`runtime_state_root`, `validation_failed`).
+fn reach() -> CliOutcome<Reached> {
+    let config = crate::lab_client_config(runtime_state_root()?);
+    Ok(match RuntimeClient::connect(config.clone()) {
         Ok(client) => Reached::Connected(client),
-        Err(error) if listening(&config) => {
-            Reached::NotHandshaken(crate::runtime_slice_cli::map_runtime_error(error))
+        Err(error) => match not_reached(error, probe(&config)) {
+            Ok(cause) => Reached::NothingListens(cause),
+            Err(error) => Reached::NotHandshaken(error),
+        },
+    })
+}
+
+/// The fix round after the train's review: what one plain connection to the Runtime's address
+/// met after the client's connect failed ([`probe`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Probed {
+    /// Nothing listens: the state root holds no runtime-info (a Runtime publishes one when it
+    /// starts and removes it when it stops), or the address it names refused the connection.
+    NothingListens,
+    /// Something may listen: the connection was accepted (its handshake failed), timed out or
+    /// failed otherwise, or the runtime-info cannot be read or names no address.
+    MayListen,
+}
+
+impl Probed {
+    /// What a plain connection to an address the runtime-info names met: refused, nothing listens
+    /// there; anything else (accepted, timed out, any other failure), something may.
+    pub(crate) fn of_connection(connected: io::Result<()>) -> Self {
+        match connected {
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => Self::NothingListens,
+            _ => Self::MayListen,
         }
-        Err(error) => Reached::NothingListens(error.to_string()),
     }
 }
 
-/// Whether something accepts a connection at the address the runtime-info of `config`'s state
-/// root names, within `config`'s IO timeout.
-fn listening(config: &RuntimeClientConfig) -> bool {
-    let Ok(bytes) = fs::read(config.state_root().join(RUNTIME_INFO_FILE)) else {
-        return false;
+/// The fix round after the train's review: what a failed connect of the client (`error`) means for
+/// `record start`, by what the plain connection met (`probed`): the text of why nothing listens,
+/// or the failure as the Lab's commands answer a Runtime failure, which fails the start as a
+/// handshake that does not complete fails it (one code path, one code).
+pub(crate) fn not_reached(error: RuntimeClientError, probed: Probed) -> Result<String, CliError> {
+    match probed {
+        Probed::NothingListens => Ok(error.to_string()),
+        Probed::MayListen => Err(crate::runtime_slice_cli::map_runtime_error(error)),
+    }
+}
+
+/// One plain connection to the address the runtime-info of `config`'s state root names, opened
+/// and closed at once with nothing sent, within `config`'s IO timeout: what it met. No
+/// runtime-info there (not found) is [`Probed::NothingListens`]; one that cannot be read, decoded
+/// or names no address is [`Probed::MayListen`] (the fix round after the train's review: the Lab
+/// cannot tell that nothing listens).
+fn probe(config: &RuntimeClientConfig) -> Probed {
+    let bytes = match fs::read(config.state_root().join(RUNTIME_INFO_FILE)) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Probed::NothingListens,
+        Err(_) => return Probed::MayListen,
     };
-    let Ok(info) = serde_json::from_slice::<RuntimeInfo>(&bytes) else {
-        return false;
-    };
-    info.socket_addr()
-        .is_ok_and(|address| TcpStream::connect_timeout(&address, config.io_timeout()).is_ok())
+    let address = serde_json::from_slice::<RuntimeInfo>(&bytes)
+        .ok()
+        .and_then(|info| info.socket_addr().ok());
+    match address {
+        Some(address) => Probed::of_connection(
+            TcpStream::connect_timeout(&address, config.io_timeout()).map(drop),
+        ),
+        None => Probed::MayListen,
+    }
 }
 
 /// The recording's own pause reason as the Runtime takes it.
@@ -168,9 +216,11 @@ fn pause_unsettled(instance: &str, hold: Option<&RecordingHold>, mut error: CliE
 /// answers the answer's member `hold` (`{state, reason?, taken_over?, paused?, warnings?,
 /// runtime_error?}`):
 /// - a connection and one status read come first, with nothing written: something that listens
-///   but does not complete the handshake, or a status refused or unanswered, fails the start;
-///   nothing listening: the header holds what it carries over, and the answer warns
-///   `no_runtime_listening`;
+///   but does not complete the handshake, or a status refused or unanswered, fails the start (the
+///   fix round after the train's review: so do a state root that cannot be resolved, a plain
+///   connection that times out and a runtime-info that names no address, [`reach`]); nothing
+///   listening (no runtime-info, or a refused connection): the header holds what it carries over,
+///   and the answer warns `no_runtime_listening`;
 /// - the instance shown paused: the header holds that pause, its own when taken over, another
 ///   party's otherwise; nothing is sent;
 /// - otherwise the header is written naming the own hold, then the pause is sent: a refusal puts
@@ -187,7 +237,10 @@ pub(super) fn take(
     let instance = record.instance.clone();
     let reason = RecordingHold::reason_for(record.started_at_unix_ms);
     let own = pause_reason(&reason)?;
-    let client = match reach() {
+    // The fix round after the train's review: a state root that cannot be resolved fails the
+    // start before anything is written, as a handshake that does not complete fails it.
+    let reached = reach().map_err(|error| started_nothing(&instance, &reason, error))?;
+    let client = match reached {
         Reached::Connected(client) => client,
         Reached::NothingListens(cause) => {
             record.hold = RecordingHold::at_start(&RecordingHoldFound::NoRuntime, replaced);

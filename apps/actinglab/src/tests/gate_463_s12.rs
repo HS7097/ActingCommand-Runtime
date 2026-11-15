@@ -10,9 +10,10 @@
 //   or Runtime connection: the Runtime state root the environment names is never made.
 // - `s12_the_flags_of_the_captures_after_a_press_take_whole_numbers` (fix round 3): the three
 //   commands with `--record` and one of the three flags given `1.5` or `abc` are
-//   `validation_failed` with `details{argument, reason: "range", value}`, the argument the flag's
-//   name and the value as given, before any recording lock or Runtime connection (their ranges are
-//   the recording's, `crates/lab/src/gate_463_s12.rs`).
+//   `validation_failed` with `details{argument, reason, value}` (the fix round after the train's
+//   review: `reason` `wrong_type`, the word the Lab's other flags answer for it; it was `range`),
+//   the argument the flag's name and the value as given, before any recording lock or Runtime
+//   connection (their ranges are the recording's, `crates/lab/src/gate_463_s12.rs`).
 // No Runtime, no device: an isolated environment whose Runtime state root does not exist.
 
 use super::env_lock;
@@ -85,7 +86,13 @@ fn s12_the_flags_of_the_captures_after_a_press_take_whole_numbers() {
                     "{line:?}: {shown}"
                 );
                 assert_eq!(shown["details"]["argument"], argument, "{line:?}: {shown}");
-                assert_eq!(shown["details"]["reason"], "range", "{line:?}: {shown}");
+                // The fix round after the train's review: `wrong_type`, the word the Lab's other
+                // flags answer for a value that is no whole number; `range` is a value outside
+                // the bounds only.
+                assert_eq!(
+                    shown["details"]["reason"], "wrong_type",
+                    "{line:?}: {shown}"
+                );
                 assert_eq!(shown["details"]["value"], value, "{line:?}: {shown}");
             }
         }
