@@ -2332,3 +2332,17 @@ tests = [
     "actingcommand-lab-ops::lib::overview::tests::d4a_a_spent_call_budget_is_a_warning_beside_a_successful_answer",
 ]
 incident = ["#469 D4a"]
+
+# Workflow #463 S3-1 (0.12.63; register §1.408; brief rd-1115/brief-463-s31-place-plan.md; design rd-1115/pack-stage3-design.md §4.2, S3-1; contracts/install-cli.md, "The Lab's rescue module", "The packages a placement makes enter or leave scheduling"): on the fake host with an installer of package [3, 10], bundles declaring [3, 3] and the fake Runtime's one instance bound to the game, the Lab rescue module's place --plan exits 0 with install_command_done, leaves the game root byte for byte as it was and pauses nothing, and its plan's schedule_changes, the installed game root against the zip's root classified by the contract crate's own functions, is exactly: a pack the root does not hold named by a rule of the zip listed absent to scheduled with content new and in enters, the pack both roots schedule not listed; a held pack the zip names by a rule and holds no more listed held (the entry's reason and reference) to scheduled, content unchanged, in enters; a scheduled pack the zip holds listed scheduled to held, in leaves, enters empty; a scheduled pack whose control.json the zip replaces, its rule unchanged, listed scheduled to scheduled with content replace, in content_only alone; a new pack the zip's interrupts.json makes a handler listed absent to maintenance_role with roles [interrupts.json], content new, in enters, the pages.json feature package and the scheduled pack not listed; on an empty game root every pack a rule names in enters (sorted), a held pack and one in no set listed from absent and not in enters; a zip that is the installed root (a scheduled, a held, a feature and a handler pack) with its eight items unchanged lists no package and empty enters, leaves and content_only, and no unread
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_463_s31::s31_a_new_pack_with_a_rule_enters",
+    "actingcommand-lab-rescue::lib::install::gate_463_s31::s31_a_lifted_hold_enters_from_held",
+    "actingcommand-lab-rescue::lib::install::gate_463_s31::s31_an_added_hold_leaves",
+    "actingcommand-lab-rescue::lib::install::gate_463_s31::s31_a_replaced_pack_with_its_rule_unchanged_is_content_only",
+    "actingcommand-lab-rescue::lib::install::gate_463_s31::s31_a_new_interrupt_handler_enters_by_its_role",
+    "actingcommand-lab-rescue::lib::install::gate_463_s31::s31_a_games_first_root_enters_every_scheduled_pack",
+    "actingcommand-lab-rescue::lib::install::gate_463_s31::s31_an_unchanged_bundle_lists_nothing",
+]
+incident = ["#463 S3-1"]

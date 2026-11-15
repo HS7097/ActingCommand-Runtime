@@ -175,6 +175,9 @@ mod gate_453_s4;
 // Test-only: Workflow #453 S9, the rescue row `vision place` on the fake host's actingd.
 #[cfg(test)]
 mod gate_453_s9;
+// Test-only: Workflow #463 S3-1, the packages the plan of `place` says enter or leave scheduling.
+#[cfg(test)]
+mod gate_463_s31;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.

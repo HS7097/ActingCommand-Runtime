@@ -27900,6 +27900,79 @@ revision.
 the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
 `device_locked` or the update code shows no group in the errors view either.
 
+### 1.408 Slice #463 S3-1 (0.12.63): the placement plan lists the packages that enter or leave scheduling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that no package enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-1, with §1.1 rows W10 and W11, §2.5 and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s31-place-plan.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.408: main `44cbab53` holds the sections up to §1.400, and the
+numbers between them and this one belong to slices dispatched with it. The slice ships in 0.12.63.
+The next slice, S3-2, is built on it and makes a placement name the packages of `enters`.
+
+**What it is.** A placement is the act that enables: once a game root is placed, the workbench
+composes it and dispatches every package a rule names and no hold keeps back. Until this slice
+`place --plan` listed the items it would write and said nothing of which packages would enter
+scheduling. Now the plan of the rescue module's `place` (`crates/lab-rescue/src/install/place.rs`,
+the `--plan` answer and the answer's step `plan`) answers `schedule_changes`
+([install-cli.md](install-cli.md), "The Lab's rescue module", "The packages a placement makes
+enter or leave scheduling"). The packages of the bundle's game are classified on the installed
+game root and on the zip's root by the contract crate's own `standard_pack_maintenance_packages`
+and `classify_standard_pack_packages`, called, not copied (the module already depends on the
+contract crate; no dependency is added). The roles by file are that same function called on one
+root file at a time, as `standard-pack adopt` reads them.
+
+```json
+"schedule_changes": {
+  "packages": [
+    {"package_id": "neutral.handler", "before": {"state": "absent"},
+     "after": {"state": "maintenance_role", "roles": ["interrupts.json"]}, "content": "new"},
+    {"package_id": "neutral.waiting",
+     "before": {"state": "held", "reason": "not yet run on a device", "reference": "board-reference-1"},
+     "after": {"state": "scheduled"}, "content": "unchanged"}
+  ],
+  "enters": ["neutral.handler", "neutral.waiting"],
+  "leaves": [],
+  "content_only": []
+}
+```
+
+| Member | What it holds |
+|---|---|
+| `packages` | each package whose part or pack content changes, by package id: `before`, `after` (`state` `scheduled`, `held` with `reason` and `reference`, `maintenance_role`, `unclassified`, `absent` or `unread`; `roles`, the root files that give it a maintenance role, when there is one) and `content` (its pack item's `new`, `replace` or `unchanged`; absent for a pack the zip no longer carries) |
+| `enters` | sorted package ids: `scheduled` after and not before, or a role after it did not have before (from absent, held, unclassified, a role only, or unread) |
+| `leaves` | sorted package ids: `scheduled` before and, read after, not; a role lost; no longer carried by the zip |
+| `content_only` | sorted package ids that take part in scheduling (scheduled, or with a role) before and after in the same way and whose pack is replaced |
+| `unread` | only when a side could not be read: `{root, failure}`, `root` `installed` or `bundle`, the failure as a warning; that side's packages `unread` (without roles when its root files failed, with them when its `schedule.json` did); nothing is refused |
+
+**What it replaces.** The plan's answer had a member `schedule_changes`, a boolean: whether the
+game's `schedule.json` changes. The work order names the new member `schedule_changes` (S3-2
+reads its lists by that name): the object takes the name and the boolean goes; the file's change
+is still its item (`schedule.json`, `new`, `replace` or `retire`), and the check after the
+placement still reads the same fact from the items (`Placement::schedule_changes`, the
+`post_check` intent's member, which a journal on disk keeps), unchanged.
+
+**Words.** No outcome code, no key and no vocabulary word of the catalog is added; the fragments
+and the index are unchanged. The states above are words of the plan's answer only; the failures
+under `unread` are the existing `standard_pack_root_invalid` (at the file, its problem and
+pointer), `foreign_os_error` and `foreign_data_error`, each a warning beside a plan that exits 0.
+
+**Tests.** `crates/lab-rescue/src/install/gate_463_s31.rs`, gate map `apps.toml` "#463 S3-1", on
+the fake host with an installer of `package` [3, 10] and bundles declaring [3, 3], each plan
+leaving the game root byte for byte as it was and pausing nothing: a new pack with a rule enters
+from `absent`; a lifted hold enters, its `before` `held` with the entry's reason and reference; an
+added hold leaves; a pack replaced with its rule unchanged is `content_only`; a new
+`interrupts.json` handler enters by its role, the `pages.json` feature not listed; on a game's
+first root every pack a rule names enters, a held one and one in no set are listed and do not; a
+zip that is the installed root has its eight items `unchanged` and lists nothing. Each asserts the
+whole `schedule_changes`. Adapted: `s5_unbound_composition_passes_at_once` of
+`gate_453_cold_place.rs` asserted the boolean `true`; it asserts the plan's item `schedule.json`
+`new`. No golden changes, no test leaves the gate map.
+
+**What is not changed.** The items, the plan document and the plan id, every check of the plan and
+after the placement, the hold, the journal and its inputs, `place`'s parameters and refusals, and
+every interface revision. `rescue.rs` is not touched: `place`'s members carry the plan's value as
+before.
+
+**At deploy.** Nothing to do. A reader of the plan's boolean `schedule_changes` reads the item
+`schedule.json` instead.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

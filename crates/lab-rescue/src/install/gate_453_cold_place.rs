@@ -401,7 +401,14 @@ fn s5_unbound_composition_passes_at_once() {
     let (placed, exit) = place(&host, &root, &zip);
     assert_eq!(exit, 0, "{placed}");
     assert_eq!(top_code(&placed), "install_command_done", "{placed}");
-    assert_eq!(placed["plan"]["schedule_changes"], json!(true), "{placed}");
+    // Workflow #463 S3-1: the plan's `schedule_changes` lists packages now; the file's change is
+    // its item.
+    assert!(
+        placed["plan"]["items"].as_array().is_some_and(|items| items
+            .iter()
+            .any(|item| item["item"] == "schedule.json" && item["state"] == "new")),
+        "{placed}"
+    );
     assert_eq!(placed["instances"], json!([]), "{placed}");
     let (_, journal) = new_journal(&root, &before);
     assert_eq!(journal["inputs"]["bound"], json!([]), "{journal}");
