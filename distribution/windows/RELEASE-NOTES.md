@@ -9,6 +9,252 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.61
+
+本版在 `1a962a54` 上是 v0.12.60 之后的 10 张 PR：2 个直接合并（#1733、#1734）和 3 趟并车（#1726 带 #1720、#1723；#1730 带 #1722、#1719、#1718；#1732 带 #1725、#1727、#1729；
+车上除了各张的头和合并，每趟只有一个只改契约文字的提交）。按单子分：#463「录制做包」的五张（K1 #1720、V1 #1723、K2 #1727、R1 #1729、R2 #1734），#464「用 Lab 收包、建包、判就绪」的
+四张（P1 #1722、P2 #1719、P2b #1733、P3 #1718），#467 的 RPT-1（#1725）。先说部署：**生产上跑的是 v0.12.60（2026-11-15 起）。** 从 v0.12.60 装本版：**能装，不用任何标志，计划里没有
+`ledger_verify`，`defaults_diff` 一行都没有（默认值文件一个字节没改），文件计划里没有新文件，装上以后能退回 v0.12.60**（见下面「升级与退回」）。接口只升一项，不是单向的：`package`
+[3, 12] → [3, 15]（13 是 K1 的选择一步，14 是 V1 的变量和第 2 版 `goals.json`，15 是 K2 的结局页）；没有新配置键。**在用的安装第一次启动和每天的例行任务都不变**（第一条逐片核过；
+唯一的边角是一种本来每次都失败的线性包，现在准入时就拒）。运行上要知道的是这几处：
+
+- **在用的安装碰到的：今天的例行任务什么都不变**（逐片核过代码）。在用的安装上没有哪个游戏根带目标声明，没有哪个应用存着目标值，没有哪个包声明 `variables`，没有哪个 `linear_steps` 包
+  带选择一步或结局页，没有哪份录制带选择或结局；资源仓也还没有发布这样的包。
+  - **启动**：`crates/runtime-host`、`apps/actingd`、`crates/runtime-config`、`crates/ledger` 的产品代码自 v0.12.60 一行没改（只加了测试），默认值文件和两个配置模板也没改，所以启动写的
+    事实、`config.parameters`、`config.subsystems`、启动日志和账本记录的形状都和 v0.12.60 相同；S11 的身份文件和认领记录是 v0.12.60 第一次启动写的，本版读出来判是自己的，什么都不写。
+    工作台每次检查读的文件不变；组合器只在内存里多记一张「哪些规则算 pending」的表给 Lab 读（`crates/policy/src/compose.rs` 的 `benefit_pending`），组合出的目录、哈希和决定一个不变。
+  - **线性包都走改过的内核路径，算出来的和以前一样**（`crates/execution-kernel/src/contained_task/linear.rs`）：一步的结束换成 `LinearStepEnd`（1487 起），不是扫描选择的一步窗口照旧是
+    步骤时限（1512）；点击的后半段挪进共用的 `linear_send_input`（2366 起），次序不变；没有结局的包候选页表和以前相同（`candidates`，360 起），`run_set` 只在一串可选步的候选多于一页时为真，
+    正是原来走 `linear_wait_set` 的地方（2644）；到达以后照旧确认资源调整（1422）。记录、细节和计时都不变。页图包不变。
+  - **准入多一处判断，碰到的只有一种本来就跑不通的包**：线性包每个终点页先解析到识别器的页（1119 起）。同一个识别器页写成带游戏前缀和不带前缀、分在两条映射里时，原来能准入、每次跑到
+    最后以 `contained_task_outcome_mapping_conflict` 失败，现在准入时就以 `contained_task_linear_invalid`（`reason=terminal_page_duplicate`）拒；写法相同的两条照旧是声明自己的
+    `mapping_overlap`。控制声明多读一个可选成员 `variables`（`crates/execution-kernel/src/contained_task.rs` 8959–8970，源解析器的控制关口），不写它的包读法和运行逐字节不变。
+  - **Tools**：本版的 `standard-pack check` 对今天的根答法和 v0.12.60 相同：没有变量就不出变量警告，回答里不出现 `variable_provenance`（`crates/resource-tooling/src/api.rs` 184–189）；
+    组合照旧（P3 把它改成调 `compose_per_server`，回答逐字节相同）。第 1 版 `goals.json` 现在被拒（`goal_version_retired`），没有哪个根带它。
+  - **今天就在用的命令有两处新的拒绝**：`record mark` 拒以 `select/` 开头的标记编号（`record_mark_id_reserved`，`crates/lab/src/recording/marks.rs` 96–103：这个前缀留给生成的格子目标）；
+    actinglab 的占位命令 `report export --last-error` 去掉了，`--last-error` 现在答 `actingctl_usage_invalid`（部署和热放置工具包都不调它）。`clear_select` 在没有选择的一步上被拒
+    （`no_select`）不算：这个成员是本版才有的。Runtime 的显示适配一行没改；改成 3840×2160 的那台设备的实例照旧暂停着。
+
+- **录制做包**（#463 K1、V1、K2、R1、R2，登记 §1.374、§1.378、§1.380、§1.381、§1.384；`contracts/linear-steps.md`「Select steps」「Endings」，`contracts/package-variables.md`，
+  `contracts/lab-recording.md`「Selecting in a list」「Endings」，`contracts/standard-pack-goals.md`）。智能体开着录制、经 Lab 玩游戏做包，从本版起能从头做到尾：在一串固定格子里按读到的
+  名字挑一个，挑不到时正常结束；包可以声明留给人、智能体或模型填的变量；业务在最后一次按下以后换一种方式结束的画面算正常结局；录完停下以后还能从一帧补一个结局，不用重录。
+  - **选择一步（K1 内核，R1 录制）**：`linear_steps` 的一步可以是页图包已有的选择一步：在这一步的帧上按策略文档决定、在一帧新的上确认、在选中格子的点击框里按一次（绑在那一帧上），然后
+    像点击一步那样往下走（U1 的收尾判断也在内）；声明了 `on_empty` 时，决定为空、没有未知的就不按，这次运行在这一步的页上以 Completed 结束、带 `on_empty` 的键。选择一步不能重试、不能可选、
+    不能从任意画面开始，`on_empty` 的页不能是目标页（新的准入理由 `select_optional`、`select_retry`、`expect_identity`、`select_on_empty_terminal`、`select_on_empty_target`，都是
+    `contained_task_linear_invalid` 的细节值）；记录是页图的（`task.selection_evaluated`，再是这次按下的 `EffectIntent`、`EffectCompleted`）。录制这一侧：`record mark` 的请求多 `select`
+    （`slots[]` 1 到 16 个格子，每格 `rect`、可选的 `click` 和 `name`；`read`、`names[]`、`match`、`wanted {name, default}`、可选的 `pressed`、`on_empty_key`（默认
+    `<task_id>_not_found`）、`confirm`）和 `clear_select`，都只有请求形式；标记时用内核自己的试跑在一个探针包上自测，`record stop` 生成布局、格子目标、操作 `step_ii_select`、
+    `policies/step_ii_select.json` 和 `on_empty` 的映射，再用生成的包把每一帧的决定判一遍。新码 `record_select_invalid`（词表 `select_problem`，21 个词）。**已知的限度**：只看一屏、
+    不滚动（滚动的列表是 R3）；想要的名字是常量（一条 `wanted.<name>` 门，`control.json` 不写 `variables`；改它就重新声明选择再 `record stop`，或改策略文档那一行）；名字多时格子目标只列
+    前 64 个别名；最后一步不能是选择（`on_final_step`）；没有文字识别模型时选择不评估。
+  - **变量（V1）**：`control.json` 可以写顶层成员 `variables`，1 到 16 个，种类 `choice`、`integer`、`switch`、`ordered`，每个有 `name`、`type`、`title`、可选的 `help` 和 `block`、种类自己
+    的成员、`default` 和可选的 `default_origin: "model"`。提供不可逆能力的包不许声明（`variables_on_irreversible`），名字在变量和 `provides` 的参数之间不能重（`variable_name_taken`）；
+    内核准入以 `contained_task_control_invalid` 拒，源解析器以 `resource_declaration_invalid`（`invalid_value`）拒，都在 JSON 指针处。`standard-pack check` 对整个根检查：只有逐字节相同
+    的声明能共用一个名字，不同的、被 `goals.json` 拿去作别用的、第 97 个名字、当上限读又超过 1000 的、整个根算下来不可逆的包的，都是警告（`variable_conflict`、`variable_out_of_limits`、
+    `variable_cap_range`、`variable_irreversible_by_root`），回答在 `models` 后面多 `variable_provenance`（按默认值是谁写的列出，`not_applying` 列不生效的）。`goals.json` 改成第 2 版
+    （`actingcommand.goals.v2`）：五种类型 `heading`、`note`、`resource`、`tier`、`variable`，`variable` 是变量在页上的位置；第 1 版管包的四种类型去掉了，第 1 版文件是 `goal_version_retired`。
+    **本版没有任何东西读变量的值**：运行、覆盖、记录、请求和视图都不读。**已知的限度**：准入只看包自己的不可逆标记；「不生效」只是 `standard-pack check` 的警告（安装工具的 `place`
+    放完包跑这条检查、只看退出码，警告不挡）；上限检查只看同一个包读的键；成员次序不同也算不同的声明。
+  - **结局页（K2 内核，R2 录制）**：`scheduling_outcome` 里一条映射的终点页既不是目标页、也不是选择一步的 `on_empty` 页时，它就是结局页：没有哪一步从它出发或到达它。路径末尾目标页是候选
+    的地方（最后一步，或以目标页为跳过目标的一串可选步），结局页按映射的次序排在目标页前面，过了就立刻过、不等稳定，运行在它上面以 Completed 结束，宿主照这一页唯一的那条映射给键（宿主
+    没改）；到达结局页的那一步不确认资源调整，那个键之前的记录照旧。重试判断和 U1 的收尾判断等同一张表，再等这一步自己的页。准入：结局页不能是哪一步的中间页、确认时加的加载页或等待页
+    （`ending_page`），一个识别器页不能是两条映射的终点（`terminal_page_duplicate`），带结局的包不能当前置包或回主页包（`linear_endings`），声明 `store_update` 的包不能带结局
+    （`store_update_endings`：这种包任何一次成功都会清掉「需要更新」）。录制这一侧：结局只加在**停下的**录制上（开着的以 `recording_active` 拒，归档的先 `record reopen` 再 `record stop`）：
+    `record mark --ending --frame <png> --outcome-key <key>`（可加 `--sample`、`--page`、`--template`、`--scales`、`--color`、`--reuse`）或请求里的 `ending` 从一帧取一个结局，
+    `record mark --remove-ending <key>` 去掉；`record stop` 生成 `ending_kk`（或 `ending_kk_<page>`）页、它的规则和目标、排在选择映射后面的映射和 `lab.endings`，自检第 9 项要结局页在自己
+    的帧上过，在最后一步之前那一步（含它那串可选步）、最后一步和别的结局的帧上都不过（`record_ending_ambiguous`，`against` 为 `previous`、`usual`、`other_ending`）。新码
+    `record_ending_invalid`（词表 `ending_problem`，10 个词）、`record_ending_ambiguous`。**已知的限度**：排程规则的 `consumes`、`produces` 没有按结局分的条件，在池子下一次读数之前，
+    跑到结局的那次照旧按声明的消耗算一次，读数会纠正；结局帧要是录制的尺寸或它的纯缩放（别的尺寸 `record_frame_size_mismatch`）；只靠文字识别标记的结局没有模型时 `record stop` 拒
+    （`ocr_alone_unchecked`）。
+  - **从 `contained_task_linear_unrecorded_screen` 到一个结局，照目录里这个码现在的处理文字**：① 失败里的 `artifact_id` 本身不是素材引用：`actinglab run evidence <request_id>` 把这次
+    运行的帧列成 `<seq>:<event_id>:<artifact_id>`，最后一段是这个 `artifact_id` 的那条就是钉住的帧；② `actinglab material <ref> --out <dir>` 把它写成 `<dir>/<sha256>.png`（MCP 的
+    `ac_material` 用 `mode: export` 写同一个文件）；③ 要趁早：没人确认读过的钉住帧在入库 `frame_retention_evidence_max_age_days`（顶层键，默认 15）天以后被清掉，确认读过的在账本存储下一轮
+    就清；④ 业务在最后一次按下以后结束的画面（余额不够、没东西可领）是这份录制的一个结局：在停下的录制上 `actinglab record mark --ending --frame <png> --outcome-key <key>`，只给这个画面的
+    标记（比如它那句话的 `--template`）；另一种分辨率、但是录制尺寸纯缩放的帧照原样给，Lab 自己换算；⑤ `actinglab record stop` 重新生成包，以后这次运行遇到的画面就以这个键 Completed
+    结束；⑥ 别的情况是新录一份：之后路径还往下走的弹窗（一个可选步），更早一次按下的结果，或者让业务接着走的分支（一步和一页）；慢的画面声明成一页或加载页；⑦ 包的内容变了，这一对在下一次
+    到期的评估时放开（U1 的规矩，没为它另加东西），在那之前 `actingd suspended` 和 `ac_diagnose` 列着它。
+  - **生成的包声明哪个 `package` 修订、哪一版 Runtime 跑它**：`record stop` 只写内容目录，不写 `interfaces.json`，生成的包自己不声明修订；修订是打包时写的：资源仓自己的打包脚本，或者
+    Lab 的 `standard-pack build` 按内容算（带选择一步 13，带变量或 `goals.json` 14，带结局页 15）。带选择一步或结局页的包要 0.12.61 起的 Runtime；更早的 Runtime 每次运行都在准入时拒
+    （选择 `reason=operation_effect`，结局 `reason=terminal_page`）。**没人核 13 和 15**：`place` 只要求带 `notices/` 的包声明 10、带 `goals.json` 或变量的包声明 14，从不为选择要 13、
+    为结局要 15，Runtime 准入时也不看包声明的范围；所以声明少了的包更早的安装工具也会放，之后每次运行都被拒。
+
+- **用 Lab 收包、建包、判就绪**（#464 P1、P2、P2b、P3，登记 §1.377、§1.376、§1.385、§1.375；`contracts/standard-pack-authoring.md`，`contracts/resource-verify.md`「`standard-pack build`」
+  「The `package` revision」，`contracts/standard-pack-schedule.md`「Readiness」）。三行都离线：不连 Runtime、不放任何东西、不读任何安装。
+  - **`standard-pack adopt`**（P1，`crates/resource-tooling/src/adopt.rs`）：`actinglab standard-pack adopt --repo <资源仓检出里的游戏根> (--record-id <录制> | --package <目录、zip 或
+    json>) [--decide <决定文档>] [--replace] [--state-dir <目录>]` 把录好的包收成这个游戏标准包的成员：拷进 `packs/<package_id>/`，按决定文档（`actingcommand.pack-decision.v1`，第一次收
+    必须给）写一条 Runtime 的组合器收得下的规则、一条 `held` 或一条 `maintenance.json`，让这个包只有一个角色。值只能是 `"pending"` 或包自己的数，从不替人写
+    `fixed_value_origin: "model"`；缺的成员按规则推出并说明来源（`feedback_stop` 是「这条规则自己的运行以包声明的键正常结束」，`expected_duration_ms` 不低于 60000）。写之前在检查树里把整个
+    根用 `standard-pack check` 和组合器跑一遍，每个读这条规则结果的键都要是包声明过的。**写在哪**：只写 `--repo` 里和 Lab 的状态目录下（默认是 actinglab 在用户应用数据下的会话目录：
+    `adopt/` 存被替换下来的旧目录，`adopt-check/` 是检查树）；每个文件先写 `.part`、刷盘再改名；检出里什么都不删。actinglab 的全局 `--dry-run` 只跑检查、不写检出。新码 `adopt_refused`
+    （词表 `adopt_problem`，17 个词）、`adopt_write_failed`。
+  - **`standard-pack build`**（P2、P2b，`apps/actinglab/src/resource_verify/build.rs`、`revision.rs`）：`actinglab standard-pack build --repo <检出> --source-repository <owner>/<name>
+    --out <目录> [--commit <40 位>]` 在一个干净的提交上跑 `resource verify` 的那几步（同一个函数），把整个标准包写进新的或空的 `--out`：压缩包、`SHA256SUMS` 和 `build.json`
+    （`actingcommand.standard-pack-build.v1`：源仓、提交、树、Tools 的提交和可执行文件的 SHA-256，从压缩包读回的游戏、范围、根文件、包和压缩包本身），工作目录在 `<out>\work\`。压缩包多带
+    仓里的 `tables/`（`bundle.json` 的 `tables` 列着）和 `ui.json`，各用自己的读取器核过；`interfaces.json` 的 `package` 按内容逐行算（45 行成员、5 行文件；P2b 加的第 15 行照内核
+    `declares_linear_endings` 的读法只看入口任务）。树上有改动就拒；`--out` 是文件、不是空的、在 `--repo` 里面，都在读任何东西之前拒；`--out` 在安装根里面**不拒**（没有哪段代码判得出）。
+    三个文件先写 `.part`、齐了再改名，`build.json` 最后；仓里什么都不写、不删。`resource verify` 照旧按固定的 3（带 `notices/` 是 10）声明、不带 `goals.json` 和 `tables/`，所以同一个
+    提交两行可能声明不同的修订（已知的差别）。新码 `resource_build_output_invalid`、`resource_build_failed`、`resource_build_write_failed`。
+  - **`standard-pack ready`**（P3，`crates/resource-tooling/src/standard_pack_ready.rs`）：`actinglab standard-pack ready --root <游戏根>`（装好的根，或摊开成根的包）逐个包判 13 项：根上的
+    S1 准入、S2 分类、S3 有值、S4 组合、S5 入口走得到（内核自己的前置链和回主页规则）、S6 点名的模型、S7 根检查（先跑一遍 `standard-pack check`），安装上的 I1 实例绑定、I2 `package` 修订
+    （和 `place` 在边上用同一份规则 `package_edge_holds`、`BundleRevisionNeed`）、I3 未录画面的码（只是一行信息）、I4 `requires` 认得、I5 这一对没停住、I6 模型装了；答四种：`waiting`
+    （带每个原因）、`ready_to_place`、`dispatchable`、`not_scheduled`。这一行只读游戏根：什么都不写、不起子进程、不读安装和任何密钥，所以 I1、I2、I4、I5、I6 都是 `not_judged`
+    （`installation_not_read`），一个包最多答 `ready_to_place`；把安装上的读数交给这个函数的调用方是以后的片。新码 `package_dispatch_waiting`（警告）、`package_readiness_unjudged`（信息）。
+
+- **问题报告导出**（#467 RPT-1，登记 §1.379；`contracts/problem-report.md`）：`actinglab report export [<实例>] --out <目录> [--since <时长>] [--until-unix-ms <毫秒>] [--max-runs <n>]
+  [--max-mib <n>] [--no-frames]`，要 Runtime 在跑；Lab 的 MCP 服务器上是 `ac_report_export`（文件写进它的导出目录）；今天的 MCP 服务器还没有这个工具，监控台的按钮是 UI 仓的事。
+  - **收什么**：窗口（默认 24 小时，最多 7 天）里每台实例最新的失败和没结束的运行（默认 5 次，同一个包以同一个码结束的最多 2 次）：状态、每一步、失败那一步的分数（目标的匹配、最近和最好的
+    分、阈值和余量；从诊断流取，没有或大于 8 MiB 就从识别记录取）、几何、失败那一步的诊断流节选、最多三帧；每台实例账本错误视图最新的 200 行；各成员的构建清单和每个游戏根的包来源。第一页
+    `SUMMARY.md`（中英两种标签）写每次运行以什么码结束（带目录里的描述）、停在哪一步哪一页、最后认出的页、目标的分，和一行显示的话（设备和包的尺寸、缩放、在缩小的帧上识别还是没缩放）。
+  - **不收什么**：配置只为 `standard_packs.root` 整份读一次（最多 1 MiB），一个字都不写进去，盐也不写；状态根的密钥文件、设备绑定的私有文件、账本和数据库文件从不打开；路径里 `Users`
+    下面那一段、用户名和这台电脑的几个名字换成 `<user>`、`<computer>`（按名字长短分三档，`crates/lab-ops/src/report/archive.rs`），学不到的名字列在清单的 `names_not_looked_for`；
+    `--no-frames` 连帧上读出来的文字和数也去掉。超过上限（默认 24 MiB，4 到 64）先去帧、再去诊断流节选、再去错误视图，摘要、清单和每次运行的状态、步骤、分数从不去，去完还超就照写并说
+    `still_over`。
+  - **写在哪**：`--out` 里一个 `problem-report-<时间>Z-<8 位哈希>.zip`，先写 `.partial` 再改名，同名的从不覆盖；`--out` 在安装根或状态根里面（解析过链接和大小写）以
+    `report_output_refused` 拒，在连 Runtime 之前。Runtime 和安装什么都不变，什么都不离开这台机器。
+  - **对在跑的 Runtime 花多少**：只发 `Status`、`QueryEvents`、`ReadMaterial`（都在 `ui` 的清单上）；每个选记录的读都带请求号，或带实例和窗口，从不从账本第一条读起；一份报告的所有读共用
+    120 秒的期限，每个读最多 20 秒，错误视图的搜索也算一个读（时间到了就不再发下一页，记成 `report_part_missing`）；每台实例的运行列表最多 20 条，诊断流最多 8 MiB，帧每次运行最多三张、
+    每张最多 32 MiB。从不截图、不按、不钉、不确认读过证据（导出不会让 Runtime 放掉留着的帧）。新码五个：`report_exported`、`report_output_refused`、`report_write_failed`、
+    `report_part_missing`、`report_trimmed`。
+
+- **按名字读、设目标（#463 V2、V3）**：这一节的文字在 #1728（V2）和 #1731（V3）合入以后补上。
+
+- **LAB-3 的运维规矩到 LAB-7 前照旧：生产照旧用 `actingctl install` 部署**，不用 Lab 救急模块的 `deploy`、`rollback`、`place`、`config replace`，也不用后来加的 `new`、`vision place`、
+  `state-root claim` 和 Runtime 停着时的 `instance add`；这些行都不用在生产根上。
+
+- **生产上**：自 2026-11-11 起有一台实例在试跑调度，其余实例暂停着。每个在用的安装都是一台设备一个应用，设备跑在正好 1280×720；只有一台设备为了显示适配的实机验证改成了 3840×2160，那次验证
+  还没做，这台的实例暂停着。在用的安装上没有本版加的任何东西（见第一条），部署本身不改变派单，部署以后也没有哪处行为会变。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，**只升了一项：`package` [3, 12] → [3, 15]**。`component-interfaces.json`（4–10）：
+`package` [3, 15]（9），`actingd-config` [5, 32]（4）、`install-selection` [1, 1]、`install-control` [0, 1]、`ledger` [3, 8]、`runtime-client` [3, 8]、`runtime-outcomes` [1, 1] 没变；
+架构测试 `tools/actinglab-architecture/tests/component_interfaces.rs` 的 `V0120`（165 起，`package` 在 170）跟着钉。
+
+- `package` 13（`contracts/component-interfaces.md` 165，K1：`linear_steps` 的选择一步）、14（166，V1：包的 `variables`，同一修订带来第 2 版 `goals.json`）、15（167，K2：`linear_steps` 的
+  结局页）。**谁声明**：Runtime 声明 [3, 15]；包由打包的一方声明：带选择一步的 [13, 13]，带变量或 `goals.json` 的 [14, 14]（`VARIABLES_PACKAGE_REVISION`、`GOALS_PACKAGE_REVISION`），
+  带结局页的 [15, 15]；写它的是资源仓的打包脚本或 Lab 的 `standard-pack build`，`record stop` 不写（见上）。本版的 `place` 要求带 `goals.json` 或变量的包声明 14（`goal_undeclared`、
+  `variable_undeclared`，`crates/lab-rescue/src/install/place.rs` 的 `check_goals_declared`、`check_variables_declared`），不为 13、15 要求什么。**本版之前的程序**：v0.12.60 的 `place`
+  （范围 [3, 12]）在计划阶段、挂暂停和写任何东西之前以 `interface_edge` 拒声明 13 到 15 的包（v0.12.60 的 `place.rs` 694–696）；v0.12.60 的 Runtime 在准入时拒选择一步
+  （`operation_effect`）和结局页（`terminal_page`），在声明关口拒 `variables`（`resource_declaration_invalid`，`UnknownField` 在 `/variables`），不打开 `goals.json`；更新和退回的
+  `package` 边比的是安装登记里每个根的范围，登记里一律没有，照旧每个游戏一条 `pack_declaration_unknown` 警告；控制台对 `package` 什么都不拒，见下面「配对」。`ledger`、`runtime-client`、
+  `actingd-config`、`runtime-outcomes` 都不动（新码只是目录里的字符串，`runtime-outcomes` 仍是 1；录制、建包和报告的文件都不是接口）。
+- 配置键：**没有新增，也没有去掉**。`actingd.defaults.json`、`actingd.config.example.json`、`actingd.config.first.json` 自 v0.12.60 没改，`crates/runtime-config` 和 `apps/actingd` 也没改，
+  所以默认值文件的哈希、每个根的清单、`config.parameters` 和 `config.subsystems` 都和 v0.12.60 相同。
+- 结果码：目录从 3939 个码、1760 个位置、644 个键、228 个词表变成 3954 个码、1760 个位置、658 个键、242 个词表，仍是 31 个分片；在用的 3911 → 3926，状态为 `retired` 的仍是 28 个，
+  审阅定稿的仍是 172 个（在用的 170 个）；词从 1711 个变成 1851 个。**新码 15 个**（都 pending、`since` 0.12.61、阶梯类别 none）：resource-tooling 的 `adopt_refused`、
+  `adopt_write_failed`（error）、`package_dispatch_waiting`（warning）、`package_readiness_unjudged`（info）；actinglab 的 `resource_build_output_invalid`、`resource_build_failed`、
+  `resource_build_write_failed`（error）；lab 的 `record_select_invalid`、`record_ending_invalid`、`record_ending_ambiguous`（error）；actingctl 的 `report_exported`（success）、
+  `report_output_refused`、`report_write_failed`（error）、`report_part_missing`、`report_trimmed`（warning）。**新键 14 个**：`adopt_problem`、`select_problem`、`ending_problem`、`against`、
+  `readiness_item`、`readiness_problem`、`readiness_unjudged`、`required_revision`（整数）、`blocking_package_id`、`report_part`、`report_part_reason`、`report_write_step`、`report_fit`、
+  `report_output_root`。**新词表 14 个**：上面 12 个带词表的键各自的（`against` 的词表叫 `ending_against`），和两个只用在回答里的 `readiness_state`、`readiness_role`。**改了的**：
+  `standard_pack_problem` 多 7 个词（`goal_variable_unknown`、`goal_version_retired`、`variable_conflict`、`variable_out_of_limits`、`variable_cap_range`、`variable_irreversible_by_root`、
+  `variable_undeclared`），它的说明和 `goal_type_unknown`、`goal_block_mismatch`、`goal_package_unknown`、`goal_governs_irreversible`、`goal_range_invalid`、`goal_default_invalid`、
+  `goal_table_unknown`（现在没有谁给）、`goal_undeclared`、`ui_parameter_undeclared` 九个词的说明改写；`contained_task_linear_unrecorded_screen` 的描述（点击或选择一步之后）和处理（上面那条
+  路）改写，只是文字，签名不变。没有码、位置、键或词去掉，没有码 `retired`。在用码里两段文字都写了的从 724 个变成 739 个（15 个新码都写了）。本版的发布文件
+  `contracts/outcome-codes/released/0.12.61.json` 按 `1a962a54` 的树生成，没有码、没有位置（新码都是 pending，改写的都不是定稿条目）。索引照旧由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表（`contracts/lab-operations.json`）：178 行 → 182 行：核心模块多 `report export`、`standard-pack ready`（54 → 56），编写模块多 `standard-pack adopt`、`standard-pack build`
+  （41 → 43），调试 30 行、救急 53 行没变（救急模块服务的行仍是 39）；`record mark` 多三个参数 `ending`、`outcome_key`、`remove_ending`，`request` 的说明写上 `select`、`clear_select`、
+  `ending`、`remove_ending`。Lab 的 MCP 服务器照表的命名规则多 `ac_report_export`（在它自己的进程里服务，`out` 由它给成导出目录）、`ac_standard_pack_adopt`、`ac_standard_pack_build`、
+  `ac_standard_pack_ready`（经 `serve` 子进程），`ac_record_mark` 多那三个参数。
+- 压缩包：**两个包的文件表都没变**：`.github/` 自 v0.12.60 没改（Runtime 包的 `$runtimeFiles` 仍是八个文件、布局 `distribution-v1`；Tools 包的 `$toolFiles` 没改、布局 `platform-tools-v3`），
+  `INSTALL.md` 没改。
+- 程序文件：`Cargo.toml` 没改；`Cargo.lock` 只多两条内部依赖（`actingcommand-lab-ops` 用上工作区里已有的 `zip` 写报告，`actingcommand-lab` 依赖显示适配库做结局帧的换算），没有新的外部依赖；
+  `crates/host-metrics` 多一个读完整 DNS 名的函数（报告的遮挡用）。`ci/` 一行没改：`ci/retired-gates.toml` 不多条目，不稳定表照旧是 FLK-08 和 FLK-10。actinglab 从 47 个顶层分派臂、
+  102 条命令变成 46 个、104 条（多 `standard-pack adopt`、`standard-pack build`、`standard-pack ready`，去掉占位的 `report export` 和它的 `report` 组；`ratchet/actinglab_commands.json`），
+  `record mark` 多三个开关 `--ending`、`--outcome-key`、`--remove-ending`；`apps/actingctl` 只改了 MCP 一侧一个工具的说明：今天的 MCP 服务器仍是 46 个工具
+  （`apps/actingctl/src/mcp/tools.rs`），README 两种语言的工具表标题改成 v0.12.61。
+
+升级与退回（部署由当时装着的那一版的安装工具做。v0.12.60 的 `install/plan.rs` 和 v0.12.58 的只差一个常量的可见性，下面的行号对两版都对；`crates/lab-rescue` 自 v0.12.60 只改了 `place.rs`
+和测试）：
+
+- **v0.12.60 的安装工具装本版：能装，不用任何标志。** 安装工具的声明是它自己构建里的 `component-interfaces.json`（v0.12.60 的 `install/host.rs` 24–26）：`ledger` [3, 8]、`runtime-client`
+  [3, 8]、`package` [3, 12]、`actingd-config` [5, 32]。计划的边逐条（v0.12.60 的 `plan.rs`）：
+  - `ledger` 两边 [3, 8]，`previous_max_in_next` 过、`one_way` 不触发（298–310），`ledger_verify` 是 false（924：两边的 `ledger` 相同）；`runtime-outcomes` 过（311–323）；`install-control`、
+    `runtime-client` 安装工具和 Rp、R\* 都相交（324–340）。`package` 的 `bundle_max_in_next`（341–364）比的是安装登记里每个包的范围，登记里一律没有，每个游戏一条 `pack_declaration_unknown`
+    警告，不挡；没有哪条边拿安装工具的 [3, 12] 去比目标的 [3, 15]。`runtime_equals_tools`（765–772）过。
+  - `actingd-config` 没有比范围的边：`installer_knows_keys`（368–385）过（没有新键，生产的文件不变）；`next_check_config`（911–923）：本版的 check-config 带 `--install-root` 读 v0.12.60 的
+    文件，`apps/actingd` 和宿主没改，答法和 v0.12.60 的相同。
+  - `defaults_diff`（583–607）**一行都没有**：两份默认值文件字节相同。文件计划（774–858）里没有 `new` 也没有 `extra`，两个包的文件都是替换或不变。
+  - **启动后检查是 v0.12.60 那一版的**（`postcheck.rs`）：`no_seeding`（315–345）有 S0 就要求 `load`，生产的根早过了第一段，过；`packs`（382–411）读启动报告里每个游戏的包数，本版不改它；
+    `new_keys`（550–582）的 `added_keys` 为空，这一行以空的 `keys` 过；别的行读 `StartReport`、`Status` 和配置事实，形状都没变（契约库的线上类型和 `runtime-client` 自 v0.12.60 没改）。
+- **配置文件**：v0.12.60 写的配置文件本版照收，不用改（`actingd-config` 仍是 [5, 32]）。
+- **已装的包**：本版对今天的包不改准入，只有第一条那一种同页两种写法的线性包现在准入就拒（它原来每次都失败）；运行路径变了的是线性包，算出来的一样；本版的 `standard-pack check` 对今天的根
+  答法和 v0.12.60 相同。
+- **退回（按本版安装工具的边和回退门核过；退回由在线的本版安装工具跑，`crates/lab-rescue/src/install/update.rs` 自 v0.12.60 没改）**：
+  - **能退回的只有这次部署替换掉的 v0.12.60**（回退门第 2 部分，`update.rs` 410–447，`live_operation` 181 起）；部署失败时的自动回退由跑部署的 v0.12.60 安装工具做，也退向 v0.12.60。退回时
+    边都过：`ledger` 8 在 [3, 8] 里、`one_way` 不触发；`runtime-client` 相交；`package` 是警告；`installer_knows_keys` 和第 4 部分 `config`（目标的 check-config 读现行的文件）都过，因为
+    文件不变；文件计划里没有 `extra`。
+  - **v0.12.60 对本版在在用的安装上能写下的东西：没有新东西要处理。** 本版的 Runtime 不写新记录、新事实、新文件或新键（宿主、actingd、账本、配置都没改，内核对不带选择和结局的包写的记录和
+    以前一样）；新码都是 Lab 和 Tools 的，不进账本；改写的只是一段文字。
+  - **只有新加的行和新包才写的东西**：
+    - 带选择或结局的录制：v0.12.60 的 actinglab 解不开（`lab_recording_unreadable`），文件原样留着；带 `select`、`clear_select`、`ending`、`remove_ending` 的请求它以 `validation_failed` 拒。
+      一次录制里别换着用不同的构建。
+    - 声明 `package` 13、14 或 15 的包：v0.12.60 的 `place` 在计划阶段拒（见上）。**已经放进游戏根的**：v0.12.60 的 Runtime 每次运行都在准入时拒带选择一步或结局页的包；声明 `variables`
+      的包连元数据都读不了（它的声明关口拒这个成员），所以它的修复表把这个包列成读不了，工作台也把它当成读不了的包：那个游戏的任务全带不可逆标记、目标全不生效，并记
+      `standard_pack_package_unreadable` 警告（v0.12.60 的 `crates/runtime-host/src/host/standard_pack_schedule.rs` 395–448）；v0.12.60 的 `standard-pack check` 逐个准入，以 `package_invalid`
+      拒整个根。所以这样的根退回之前先把这些包拿出去，或者留在本版上。
+    - 第 2 版 `goals.json`：v0.12.60 的 Runtime 不打开它；v0.12.60 的 `standard-pack check` 把它读成 `/schema_version` 的 `malformed`、每个位置 `goal_type_unknown`，作警告、当作没有这个文件
+      检查根；`package bundle --goals` 拒；它的 `place` 拒声明 14 的包，放不带这个文件的包时把它收起来（G-R1 的规矩）。
+    - 问题报告：只在人给的 `--out` 里（不许在安装根和状态根里），根上什么都没有；v0.12.60 的 actinglab 对 `report export` 照旧是占位命令。
+    - `adopt`、`build` 留下的：资源仓检出里收进的包和改过的根文件、Lab 状态目录下的 `adopt/` 和 `adopt-check/`、`build` 的 `--out`，都不在安装上；v0.12.60 的 actinglab 没有这三行、拒这些
+      词；建出的压缩包放在范围收得下它所声明上限的任何安装工具上（v0.12.60 的收 12 以下的）。`ready` 什么都不写。
+
+配对：
+
+- **控制台 UI**（最新发版 UI v0.12.19，是 UI 的 `69e699da`，钉 Runtime v0.12.60 `2eaf9b7e`；UI main `95c145cd` 比它多 13 个提交，只改了 `model/` 下建模用的 Python，监控台和安装向导的
+  代码没动）：
+  - **它对声明到 `package` 15 的 Runtime 做什么：什么都不拒。** v0.12.19 声明 `actingd-config` [5, 32]、`ledger` [3, 8]、`runtime-client` [3, 8]、`package` [1, 2]、`runtime-outcomes`
+    [1, 1]（`crates/acui-setup/component-interfaces.json` 3–11）。安装向导核控制台和 Runtime 的边只有四条：`runtime-client` 和 `actingd-config` 要相交，`ledger` 和 `runtime-outcomes` 要
+    Runtime 的上限落在控制台的范围里（`crates/acui-wizard/src/manifest.rs` 208–213 的 `CONSOLE_EDGES`，判断在 268–271），`package` 不在里面，控制台自己的 [1, 2] 不跟谁比。`package` 只用来
+    核安装集里的标准包：向导从 Runtime 压缩包自己的构建清单读 `package` 范围（`crates/acui-wizard/src/set.rs` 692–701），每个标准包 `interfaces.json` 的上限要落在里面（`package_edge`，
+    `manifest.rs` 192–198，`set.rs` 825–831，不在就是 `Mismatch`）。所以和本版的 Runtime 压缩包配在一起，声明 13 到 15 的包都收；和 v0.12.60 的配在一起，这样的包被拒。下一版控制台为
+    `package` 不用收任何东西。
+  - **它解码的**：本版在 `ui` 上的请求、回答和回执没有新形状（契约库的线上类型和 `runtime-client` 没改），v0.12.19 钉着的 v0.12.60 的类型照读；`runtime-client` [3, 8] 和本版的 [3, 8]
+    相交。新码不出现在 `ui` 的回答里（`report export` 的 `entries` 有 `ui`，但控制台还没有这个按钮）。
+- **部署工具包**（照现在的做法，用在线那一版的 `actingctl install` 跑每一步）：`release stage --root --dir --facts --expect-tag --expect-commit`、`guards --root --for stop --hold
+  --known-pause …`、`status --root [--operation]`、`update plan --root --build [--preview]`、`update apply --root --build --plan --stop --hold --known-pause … --start --detach`、
+  `release-hold --root --reason`；另用目标构建的 actinglab 跑 `--json standard-pack check --root <游戏根>` 预查包根。从 v0.12.60 装本版时，回答这几步的都是在线的 v0.12.60 安装工具自己的
+  代码，**没有一条被拒、没有一条换了答法**；目标构建的 `install status` 只读文件、不连 Runtime；本版的 actinglab 对今天的根答法相同。**会把标准错误有输出、或第一行变了当成失败的：没有。**
+  跑安装工具的那一处把标准错误并进输出、按退出码判；轮询上线和汇总守卫的两处从并起来的输出里取第一行以 `{` 开头的；解析计划、状态、分离日志的辅助脚本取以 `{` 开头的行；预查包根的那一处
+  分开读标准输出、按退出码和 JSON 判；这条路上没有程序多打一行。**工具包要跟着改的**：目标提交和标签、暂停的名字和目录；跑每一步的安装工具指向在线的 v0.12.60；预期改成**只有 `package`
+  一条边动**（[3, 12] → [3, 15]）、`ledger_verify` 为 false、`defaults_diff` **零行**、文件计划**没有** `new`（v0.12.60 那次多一个模板，这次没有）、启动后检查的 `new_keys` 以空的 `keys`
+  过、每个游戏一条 `package` 警告、能退回的是 v0.12.60；给热放置工具包写构建记录的那一步核新包清单的 `actingd-config`、`package`、`ledger` 现在是 [5, 32]、**[3, 15]**、[3, 8]，记成
+  `5,32`、**`3,15`**、`3,8`（`3,12` 会让那一步和后面的重钉不过）；默认值文件的哈希和 v0.12.60 相同；没有新的子系统（`apps/actingd` 没改），重钉时子系统那一处不用改；这次部署没有
+  v0.12.60 那次第一次启动的身份和认领要看。
+- **热放置工具包的命令行，本版都照旧收、答法和 v0.12.60 相同**：actinglab 两行，`--json standard-pack check --root <游戏根>`（没有变量的根不出 `variable_provenance`）和 `--json standard-pack
+  compose --root <包根> --instance <别名>=<游戏>/<区服> … --out <新目录>`（组合出的目录字节和哈希不变）；actingctl 的 `status`、`status --config`、`pause --instance <别名> --reason <理由>
+  --drain-timeout-ms <毫秒>`、`resume --instance <别名>`、`schedule --instance <别名>`、`overview --root <根> --instance <别名> --sections catalog`（都带 `--state-root`；actingctl 的命令行和
+  Runtime 的回答都没改）；actingledger 的 `events --after … --through … --limit …`（`apps/ledger-forensics`、`crates/ledger-forensics` 没改）。**热放置工具包要学的**：重钉时比的构建记录里
+  `package` 是 `3,15`；它读包压缩包的两个脚本钉着 `package` 的上限 [3, 12]，改成 [3, 15]（声明 13 到 15 的包出现时才用得上），接受的 `validated_with` 提交表加本版；资源仓改用
+  `standard-pack build` 发包以后，压缩包会多 `tables/`（`bundle.json` 的 `tables`）和 `ui.json`，工具包读压缩包的地方到时要照这几项核一遍（本次没核它的读法）。
+- **今天的 MCP 服务器（`actingctl mcp-serve`，现在注册着的那个）**：仍是 46 个工具，答法照旧；只有 `ac_record_mark` 的说明写上选择、`clear_select`、结局和 `remove_ending`，这些请求它原样
+  交给 actinglab（R2 的测试钉着）；`ac_outcome_code` 认得 15 个新码和改写的文字。退回 v0.12.60 以后，旧的 actinglab 拒这些请求成员（`validation_failed`）。
+- **Lab 的 MCP 服务器（`actinglab-mcp`，没有注册指向它）**：多四个工具 `ac_report_export`、`ac_standard_pack_adopt`、`ac_standard_pack_build`、`ac_standard_pack_ready`，`ac_record_mark`
+  多 `ending`、`outcome_key`、`remove_ending`；别的工具答法照旧。
+
+运行上的变化：
+
+- 从 v0.12.60 直接部署：不用标志，没有 `ledger_verify`，`defaults_diff` 零行，没有新文件，只有 `package` 升到 [3, 15]；能退回 v0.12.60。
+- 在用的安装上今天的例行任务不变；线性包走改过的内核路径、结果相同；终点页同页两种写法的线性包现在准入就拒（原来每次失败）。
+- 录制做包：选择一步（按读到的名字挑、挑不到正常结束）、结局页（停下以后从一帧补上）、包的变量声明；`contained_task_linear_unrecorded_screen` 的处理文字写着从钉住的帧到结局的整条路。
+- Lab 多三行离线的包工作：`standard-pack adopt` 收进资源仓的检出，`standard-pack build` 建出可以放的整个标准包、按内容算 `package` 修订，`standard-pack ready` 逐个包说还差什么。
+- `actinglab report export` 导出一份问题报告（错误视图），只读、有期限和大小上限、遮掉用户名和机器名；占位的 `report export --last-error` 没了。
+- 接口：`package` [3, 15]；工具包的构建记录记 `3,15`；两个压缩包的文件表不变。
+
+本版合并的 PR：
+
+- #1720 K1（#463，登记 §1.374）：线性任务的选择一步和 `on_empty` 的正常结束，`package` 13；exec 门行 `#463 K1`（`gate_463_k1`）和主机门行 `#463 K1`，架构钉跟着改，没有改 main 上的旧测试。
+- #1723 V1（#463，登记 §1.378）：`control.json` 的 `variables`、根检查、`goals.json` 第 2 版，`package` 14，七个新词；契约、exec、apps 门行 `#463 V1`，改了契约库四条目标测试、资源工具的
+  `gate_455_gr1` 八条和 `gate_455_gr2s` 一条（理由在登记册），机械地改了 `gate_411_b15p_host`、`gate_cov1`、`gate_sched_c1f1`，修正轮 3 把各处夹具换成第 2 版。
+- #1722 P1（#464，登记 §1.377）：`standard-pack adopt`，两个新码；exec 门行 `#464 P1`（`gate_464_p1`）。
+- #1719 P2（#464，登记 §1.376）：`standard-pack build`，三个新码；apps 门行 `#464 P2`（`gate_464_p2`），改了 `gate_434_lab5g2a` 读 `BUILT_SLICES` 的地方。
+- #1718 P3（#464，登记 §1.375）：`standard-pack ready`，两个新码；exec 门行 `#464 P3`（`gate_464_p3`），改了 `gate_434_lab5a` 的路由检查。
+- #1725 RPT-1（#467，登记 §1.379）：`report export`，五个新码、五个键和词表，去掉占位命令；lab-ops 和 apps 的 `gate_467_rpt1`，改了 `gate_434_cli_help`、`gate_434_lab5b5`、`gate_434_lab5g2b`。
+- #1727 K2（#463，登记 §1.380）：线性任务的结局页，`package` 15；exec 和主机门行 `#463 K2`（`gate_463_k2`），改了救急模块的 `v1_the_build_declares_package_through_revision_14`（[3, 15]）
+  和架构钉。
+- #1729 R1（#463，登记 §1.381）：录制里的选择，一个新码、词表 `select_problem`；exec 门行 `#463 R1`（`gate_463_r1`，16 条），没有改 main 上的旧测试。
+- #1733 P2b（#464，登记 §1.385）：`standard-pack build` 算 `package` 15；apps 门行 `#464 P2b revision 15`（五条新测试），没有改旧测试。
+- #1734 R2（#463，登记 §1.384）：停下的录制补结局、`clear_select` 的 `no_select`、结局帧的纯缩放换算，两个新码；exec 门行 `#463 R2`（`gate_463_r2`，15 条），actinglab 和 actingctl 各一条，
+  新的支持模块 `crates/lab/src/scripted_clock.rs`，没有改旧测试。
+
 ## v0.12.60
 
 本版是 v0.12.59 之后的 24 张 PR：5 个直接合并（#1689、#1704、#1706、#1707、#1708）和 5 趟并车（#1697 带 #1690、#1691、#1695；#1699 带 #1692、#1693、#1694；#1705 带 #1698、
