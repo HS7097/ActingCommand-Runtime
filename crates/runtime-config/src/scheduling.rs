@@ -945,7 +945,7 @@ pub(crate) static ROWS: &[KeyRow] = &[
     // occurrence"): read by the host before each scheduled run executes, so an instruction counts
     // from the next run.
     KeyRow {
-        since: "0.12.62",
+        since: "0.12.63",
         ..row(
             SUSPENSION_BREAK_IN_RUNS,
             ValueType::Integer,
@@ -954,7 +954,7 @@ pub(crate) static ROWS: &[KeyRow] = &[
         )
     },
     KeyRow {
-        since: "0.12.62",
+        since: "0.12.63",
         ..row(
             SUSPENSION_BREAK_IN_MS,
             ValueType::DurationMs,

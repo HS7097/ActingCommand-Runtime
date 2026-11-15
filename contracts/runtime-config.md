@@ -455,7 +455,7 @@ instruction over a file that does not name it leaves it unset (Workflow #429 R-1
 does not write"). Workflow #336 PKG-S3 reads
 `suspension.lift_check_min_interval_ms` at each suspension lift check: a package's content
 hash is measured at most once per interval ([policy-suspension.md](policy-suspension.md),
-"Lifting (R19)"). Workflow #463 U1b (since 0.12.62, `actingd-config` revision 33, register
+"Lifting (R19)"). Workflow #463 U1b (since 0.12.63, `actingd-config` revision 33, register
 §1.389) reads `suspension.break_in_runs` and `suspension.break_in_ms` before each scheduled run
 executes, so an instruction counts from the next run: a pair's break-in of one package content
 lasts until at least that many of its runs have settled as a success or a failure and at least
@@ -499,8 +499,8 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.expected_runtime.runs` (SCH-M ED-1) | integer `1..=16` | `5` |
 | `scheduling.expected_runtime.margin_ms` (SCH-M ED-1) | milliseconds `0..=3600000` | `300000` |
 | `scheduling.suspension.lift_check_min_interval_ms` (Workflow #336 PKG-S3) | milliseconds | `60000` |
-| `scheduling.suspension.break_in_runs` (Workflow #463 U1b, since 0.12.62) | integer `1..=4294967295` | `20` |
-| `scheduling.suspension.break_in_ms` (Workflow #463 U1b, since 0.12.62) | milliseconds | `604800000` |
+| `scheduling.suspension.break_in_runs` (Workflow #463 U1b, since 0.12.63) | integer `1..=4294967295` | `20` |
+| `scheduling.suspension.break_in_ms` (Workflow #463 U1b, since 0.12.63) | milliseconds | `604800000` |
 | `scheduling.pack_admission.check_in_check_config`, `.check_after_start` (Workflow #386 SR-3) | boolean | `true`, `true` |
 | `scheduling.pack_admission.suspend_codes` (Workflow #386 SR-3) | list of codes, as `rerun.condition_codes` | `["recognition_sample_budget_invalid"]` |
 | `scheduling.remedy.enabled` (Workflow #411 B15) | boolean | `true` |

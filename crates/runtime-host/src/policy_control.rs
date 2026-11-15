@@ -323,7 +323,10 @@ pub(crate) struct PolicyControlState {
     /// content of its `linear_steps` package: that content, its runs settled as a success or a
     /// failure, and when the first of them settled. Set only by a live settlement that knows the
     /// content its run was prepared with ([`Self::note_break_in_run`]); kept in the pair's value
-    /// record, so a start loads it and a replay of dispatch events keeps it as loaded.
+    /// record, so a loading start loads it and a replay of dispatch events keeps it as loaded. No
+    /// dispatch record holds it (a success does not name the content it ran), so a replay that
+    /// rebuilds the decision memory from the dispatch records alone (a seeding start) takes it
+    /// from the pairs' latest value records ([`Self::restore_break_ins`]).
     break_ins: BTreeMap<(String, String), PolicyBreakInRecord>,
 }
 
@@ -575,6 +578,17 @@ impl PolicyControlState {
                 );
             }
         }
+    }
+
+    /// Workflow #463 U1b fix round 2 (`contracts/ledger-observer.md` §11.5, "Without the
+    /// marker"): the pairs' break-ins as their latest value records hold them (`recorded`, by
+    /// (task, instance)), for a decision memory rebuilt from the dispatch records alone, which
+    /// hold none. Nothing else of the state changes.
+    pub(crate) fn restore_break_ins(
+        &mut self,
+        recorded: BTreeMap<(String, String), PolicyBreakInRecord>,
+    ) {
+        self.break_ins = recorded;
     }
 
     /// Workflow #422 LN-3 (register L7, L14): applies one value record; the record replaces its

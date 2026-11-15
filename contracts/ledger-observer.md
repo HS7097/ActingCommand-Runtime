@@ -733,8 +733,13 @@ CREATE TABLE ledger_index (
   window they count in (the `window_id` of the task's activity profile), failure streak
   (split as the execution record's failure is since Workflow #378 A2-P: `failure_code` and
   `failure_identity` = the failure identity, format v2, Workflow #336 / M-PKG §3.4, and
-  `paused_on` rebuilt from it — no package digest is stored), retry round, dispatch clock, and
-  `condition_reruns` `{failure_code, count, expires_at_unix_ms}`.
+  `paused_on` rebuilt from it — no package digest is stored), retry round, dispatch clock,
+  `condition_reruns` `{failure_code, count, expires_at_unix_ms}`, and (Workflow #463 U1b, since
+  0.12.63, register §1.389) `break_in` `{content_hash, runs, first_settled_at_unix_ms}`, the
+  pair's break-in of its `linear_steps` package's content ([policy-suspension.md](policy-suspension.md),
+  "Only during a package's break-in"), absent until a run that counts in it settles. It is the
+  one member no dispatch record holds (a success does not name the content it ran), so a replay
+  of the dispatch records takes it from the pair's latest record (§11.5, "Without the marker").
 - Every change of an (instance, activity profile)'s activity state emits one
   `policy.activity_state_recorded` through G5 with its complete state: the daily count with its
   day key, the window count and the window's runtime with their `window_id`, and
@@ -882,6 +887,11 @@ time L that D2 needs (D2 A-7) is the end of step 7.
   - Without the marker, the start replays once, as today:
     - the decision memory counts nothing as recorded, so the start's reconciliation writes one
       `policy.control_state_recorded` and one `policy.activity_state_recorded` per key;
+    - Workflow #463 U1b fix round 2 (since 0.12.63): the replay of the dispatch records rebuilds
+      no pair's `break_in` (§11.3), so each pair's is taken from the latest
+      `policy.control_state_recorded` the `decision_memory/` rows name (one index read, as the
+      load's), and the records the seeding writes carry it; a re-alignment before the seeding
+      (`refresh_dispatches` of a start that loaded nothing) does the same;
     - the monitor registry records its import again when no `monitor_import` row names it (a
       replay of the same import changes nothing), then one applied change of every alias whose
       state moved since the import;

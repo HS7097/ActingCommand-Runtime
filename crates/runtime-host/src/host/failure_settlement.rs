@@ -72,6 +72,10 @@ struct ScheduledMain {
     /// measured when the run was prepared, at the path the run read it from; `None` for a
     /// page-graph package and for one that could not be measured.
     content: Option<String>,
+    /// Workflow #463 U1b fix round 2: the run's package began, its kernel run's
+    /// `PackageAdmitted` recorded; false at the preparation. Only such a run counts in its pair's
+    /// break-in.
+    began: bool,
 }
 
 /// A scheduled run's admitted package, its prerequisite chain, its load and (Workflow #373
@@ -172,10 +176,18 @@ impl HostShared {
         };
         let linear = prepared.execution_mode() == "linear_steps";
         // Workflow #463 U1b (`contracts/policy-suspension.md`, "Content hash"): a `linear_steps`
-        // package's content, the one its pair's break-in counts, measured once here, read-only,
-        // at the path the run reads it from; a package that cannot be measured has none.
+        // package's content, the one its pair's break-in counts, read-only, at the path the run
+        // reads it from; a package that cannot be measured has none. Fix round 2 (review item
+        // 1): through the lift checks' memory of each package location's content hash (PKG-S3),
+        // so a location measured within `scheduling.suspension.lift_check_min_interval_ms`, by a
+        // preparation or a lift check, is not measured again.
         let content = if linear {
-            measure_package_hash(task_request.package_path())
+            let time = LiftCheckTime {
+                monotonic_ms: self.monotonic_ms()?,
+                min_interval_ms: self.lift_check_min_interval_ms()?,
+            };
+            self.lift_checks
+                .current(task_request.package_path(), time)?
                 .ok()
                 .map(|hash| content_hash_prefix(&hash))
         } else {
@@ -189,6 +201,7 @@ impl HostShared {
             layers,
             resolved: chain.is_ok(),
             content,
+            began: false,
         };
         lock(
             &self.scheduled_resolutions,
@@ -288,6 +301,43 @@ impl HostShared {
         .and_then(|main| main.content.clone()))
     }
 
+    /// Workflow #463 U1b fix round 2 (review item 3; `contracts/policy-suspension.md`, "Only
+    /// during a package's break-in"): the scheduled run of the dispatch `decision_id` began its
+    /// package (its kernel run's `PackageAdmitted` is recorded), noted when its execution
+    /// returns, before it is settled. A dispatch whose preparation admitted no main package
+    /// notes nothing.
+    pub(super) fn note_scheduled_package_began(&self, decision_id: &str) -> RuntimeHostResult<()> {
+        if let Some(main) = lock(
+            &self.scheduled_resolutions,
+            HostLocation::RecordScheduledResolution,
+        )?
+        .get_mut(decision_id)
+        .and_then(|resolution| resolution.main.as_mut())
+        {
+            main.began = true;
+        }
+        Ok(())
+    }
+
+    /// Workflow #463 U1b fix round 2 (review item 3): the content a settled run counts in its
+    /// pair's break-in: [`Self::scheduled_main_content`] of a run that began its package
+    /// ([`Self::note_scheduled_package_began`]); `None` for a run that never began it (a refused
+    /// preparation or outcome declaration, a failed switch, a refusal of the handset's start
+    /// gate, a stop before the run, an interruption), which is no run of the package.
+    pub(super) fn scheduled_begun_content(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<String>> {
+        Ok(lock(
+            &self.scheduled_resolutions,
+            HostLocation::ReadScheduledResolution,
+        )?
+        .get(decision_id)
+        .and_then(|resolution| resolution.main.as_ref())
+        .filter(|main| main.began)
+        .and_then(|main| main.content.clone()))
+    }
+
     /// Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
     /// occurrence"): whether the scheduled run of the dispatch `decision_id`, about to execute, is
     /// past its pair's break-in: its package content measured, the pair's break-in of that
@@ -307,6 +357,56 @@ impl HostShared {
             settings,
             now_unix_ms,
         ))
+    }
+
+    /// Workflow #463 U1b fix round 2 (review item 2; `contracts/policy-suspension.md`, "Only
+    /// during a package's break-in"): whether the scheduled run of `context`, about to execute,
+    /// ends a closing decision's unrecorded verdict with `page_confirmation_failed`
+    /// ([`Self::scheduled_past_break_in`]). A read of the pair's break-in that fails is no
+    /// failure of the run: the run goes on as one outside its break-in (the ordinary code, no
+    /// pause at its first occurrence), and one Warning `runtime.failed` with the run's links
+    /// records `policy_break_in_unread`, the read's failure its `caused_by` link and, when
+    /// registered, its code `failure_code`. Only a failure to write that record ends the run, as
+    /// any record the run cannot write does.
+    pub(super) fn scheduled_run_past_break_in(
+        &self,
+        context: &PolicyRunContext,
+    ) -> RuntimeHostResult<bool> {
+        let unread = match self.scheduled_past_break_in(context.decision_id()) {
+            Ok(past) => return Ok(past),
+            Err(unread) => unread,
+        };
+        let outcome = Outcome::new(HostCode::PolicyBreakInUnread)
+            .operation(HostLocation::RunScheduledContainedTask)
+            .task_id(context.catalog_task_id())
+            .instance_id(context.instance_alias());
+        let outcome = match actingcommand_contract::outcome::Code::relayed(unread.code()) {
+            Some(code) => outcome.failure_code(code),
+            None => outcome,
+        }
+        .caused_by(unread.record_outcome());
+        let links = self.policy_run_event_links(context)?;
+        self.append_event_raw(
+            EventSeverity::Warning,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            RuntimePayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::NotPerformed,
+                outcome.clone(),
+                DiagnosticDetailDraft::new(
+                    "policy_driver",
+                    RuntimeLifecycleFailureStage::PolicyDriver.location(),
+                    "runtime_host",
+                    HostLocation::RunScheduledContainedTask.as_str(),
+                ),
+                AuditInput::new(),
+            ),
+        )?;
+        self.fatal.report_warning(&outcome);
+        Ok(true)
     }
 
     /// Drops a decision's resolution once its execution record is written.
@@ -825,8 +925,9 @@ mod tests {
                 },
             ],
             resolved: true,
-            // Workflow #463 U1b: the settlement's identity does not read it.
+            // Workflow #463 U1b: the settlement's identity does not read them.
             content: None,
+            began: false,
         };
         let (main_package, layers) = settled_packages(&main);
         assert_eq!(

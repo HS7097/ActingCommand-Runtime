@@ -2202,6 +2202,40 @@ fn load_decision_memory(ledger: &GlobalLedger) -> RuntimeHostResult<LoadedDecisi
     Ok(loaded)
 }
 
+/// Workflow #463 U1b fix round 2 (`contracts/ledger-observer.md` §11.5, "Without the marker"):
+/// each pair's break-in as the latest value record the index names for it holds it, by (task,
+/// instance); a pair whose record holds none is left out. A replay of the dispatch records
+/// rebuilds no break-in (a success does not name the content it ran), so a start that seeds and a
+/// re-alignment before the seeding take it from here, as a loading start loads it.
+fn recorded_break_ins(
+    ledger: &GlobalLedger,
+) -> RuntimeHostResult<BTreeMap<(String, String), actingcommand_contract::PolicyBreakInRecord>> {
+    let rows = crate::tagged_state::index_records(
+        ledger,
+        LedgerIndexRole::State,
+        &[DECISION_MEMORY_PREFIXES[0]],
+    )?;
+    let mut break_ins = BTreeMap::new();
+    for row in rows.records {
+        let EventPayload::Policy(PolicyPayload::ControlStateRecorded(payload)) =
+            row.event.payload()
+        else {
+            return Err(fatal(
+                HostCode::PolicyRecoveryFailed,
+                HostLocation::RecoverPolicyControl,
+            ));
+        };
+        let state = payload.state();
+        if let Some(break_in) = &state.break_in {
+            break_ins.insert(
+                (state.task_id.clone(), state.instance_id.clone()),
+                break_in.clone(),
+            );
+        }
+    }
+    Ok(break_ins)
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct DetectionQuotaState {
     windows: BTreeMap<(String, String), DetectionQuotaUsage>,
@@ -6321,6 +6355,10 @@ impl PolicyHost {
             )?;
         }
         journal.prune(None);
+        // Workflow #463 U1b fix round 2: the pairs' break-ins, which no dispatch record holds,
+        // from their latest value records (a root's second start seeds, so without this its
+        // break-ins were lost there and in every record the seeding wrote).
+        control.restore_break_ins(recorded_break_ins(ledger)?);
         self.pinned_dispatches = self.pinned_of(&journal.seen)?;
         self.seen_dispatches = journal.seen;
         self.dispatch_order = journal.order;

@@ -1276,11 +1276,15 @@ fn reruns(snapshot: &Snapshot<'_>) -> Result<Vec<Value>, SuspensionReportError> 
 /// Workflow #463 U1b (`contracts/policy-suspension.md`, "`actingd suspended`"): `break_ins`, one
 /// row per pair whose latest value record (register L7) carries a break-in, ordered by task, then
 /// instance: the content it counts, its settled runs of `runs_needed`, the first's settlement time
-/// and the time since it at the ledger's latest time (`since_first_ms`, `null` without one) of
-/// `ms_needed`, and `in_break_in`, `false` once both are reached. `runs_needed` and `ms_needed`
-/// are the configuration's the report loaded (`settings`); a value set while the Runtime runs is
-/// not seen here. The report measures no package: a changed package starts a new break-in at its
-/// first settled run, which the row shows from then on.
+/// and the time since it (`since_first_ms`, `null` without a reference) of `ms_needed`, and
+/// `in_break_in`, `false` once both are reached. `runs_needed` and `ms_needed` are the
+/// configuration's the report loaded (`settings`); a value set while the Runtime runs is not seen
+/// here. The report measures no package: a changed package starts a new break-in at its first
+/// settled run, which the row shows from then on. Fix round 2 (review item 4): the report's now
+/// is the ledger's latest event, its authenticated head row, as `remedies` and `held` take it
+/// (RL-1c fix 2, #411 M2); not the ledger's latest time, the maximum over every row, which counts
+/// the rows the ledger stamps by the system clock and not by the Runtime's (SR-2b-2 fix round 2,
+/// `reruns`), while the first settlement is a time of the Runtime's clock.
 fn break_ins(
     snapshot: &Snapshot<'_>,
     (runs_needed, ms_needed): (u32, u64),
@@ -1299,7 +1303,7 @@ fn break_ins(
             );
         }
     }
-    let reference_unix_ms = snapshot.latest_time();
+    let reference_unix_ms = snapshot.selection.head_time_unix_ms();
     Ok(latest
         .into_iter()
         .filter_map(|((task_id, instance_id), break_in)| {

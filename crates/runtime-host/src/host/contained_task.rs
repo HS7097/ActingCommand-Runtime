@@ -699,6 +699,10 @@ pub(super) struct ContainedRunControl {
     /// break-in of the package content it runs: a linear step's closing decision that finds a
     /// screen the package never recorded ends that run with `page_confirmation_failed`.
     past_break_in: std::sync::OnceLock<()>,
+    /// Workflow #463 U1b fix round 2 (review item 3): set once when the run's kernel run of its
+    /// package began, its `PackageAdmitted` recorded (a layer's run records none of its own): a
+    /// scheduled run counts in its pair's break-in only then.
+    package_began: std::sync::OnceLock<()>,
 }
 
 /// Workflow #463 U1, fix round 3 (item 4): what a scheduled run noted, before it executed, of the
@@ -934,6 +938,7 @@ impl ContainedRunControl {
             borrowed_key: std::sync::OnceLock::new(),
             runtime_budget_end: std::sync::OnceLock::new(),
             past_break_in: std::sync::OnceLock::new(),
+            package_began: std::sync::OnceLock::new(),
         }
     }
 
@@ -1112,6 +1117,17 @@ impl ContainedRunControl {
     /// break-in of the package content it runs.
     fn note_past_break_in(&self) {
         let _ = self.past_break_in.set(());
+    }
+
+    /// Workflow #463 U1b fix round 2 (review item 3): notes that the run's kernel run of its
+    /// package began, once its `PackageAdmitted` is recorded.
+    fn note_package_began(&self) {
+        let _ = self.package_began.set(());
+    }
+
+    /// Workflow #463 U1b fix round 2: what [`Self::note_package_began`] noted.
+    fn package_began(&self) -> bool {
+        self.package_began.get().is_some()
     }
 
     /// Workflow #463 U1b: the code an unrecorded verdict of a linear step's closing decision ends
@@ -5662,6 +5678,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         AuditInput::new(),
                     ),
                 )?;
+                // Workflow #463 U1b fix round 2 (review item 3): the run of its package began.
+                self.control.note_package_began();
                 let (game, server) = &self.declared_game_server;
                 for (key, value) in [(TASK_GAME_FACT_KEY, game), (TASK_SERVER_FACT_KEY, server)] {
                     self.host
@@ -8584,9 +8602,12 @@ impl HostShared {
         // Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
         // occurrence"): a pair past the break-in of the package content this run was prepared
         // with ends an unrecorded verdict with `page_confirmation_failed`; the keys are read now,
-        // so a value set while the Runtime runs counts from the next run.
+        // so a value set while the Runtime runs counts from the next run. Fix round 2 (review
+        // item 2): a break-in that cannot be read aborts no run, as the budget's end above does
+        // not: the run goes on as one outside its break-in, and the host records
+        // `policy_break_in_unread` (`HostShared::scheduled_run_past_break_in`).
         if self
-            .scheduled_past_break_in(context.decision_id())
+            .scheduled_run_past_break_in(context)
             .map_err(RequestFailure::poison_without_terminal)?
         {
             active_run.control.note_past_break_in();
@@ -8626,6 +8647,13 @@ impl HostShared {
         );
         // R-0b: the run's execution ended (its lease is released, or handed to its ladder).
         drop(activity);
+        // Workflow #463 U1b fix round 2 (review item 3): a run that began its package counts in
+        // its pair's break-in when it is settled; one that ended before (a refusal of the
+        // handset's start gate, a stop at its entry) does not.
+        if active_run.control.package_began() {
+            self.note_scheduled_package_began(context.decision_id())
+                .map_err(RequestFailure::poison_without_terminal)?;
+        }
         // Workflow #429 R-12 (register §1.264): the routine summary counts the run as it settled.
         self.note_routine_run(instance_alias, &task_label, &executed)
             .map_err(RequestFailure::poison_without_terminal)?;

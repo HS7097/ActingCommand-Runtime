@@ -12254,6 +12254,29 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "policy_break_in_unread": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "failure_code": "optional",
+        "instance_id": "required",
+        "task_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 U1b fix round 2 (contracts/policy-suspension.md, \"Only during a package's break-in\"): before a scheduled run of a linear_steps package executed, the Runtime could not read whether its pair (task_id, the catalog task; instance_id, the instance alias) is past the break-in of the package's content (the configuration's scheduling.suspension keys, the pair's break-in in the decision memory or the Runtime clock could not be read). The run is not ended for it: it goes on as a run outside its break-in, so a linear step's closing decision that finds a screen the package never recorded ends it with page_confirmation_failed (confirmation_problem unrecorded_screen) and the pair is not paused at the first occurrence. Recorded once per such run as a Warning runtime.failed with the run's links (operation run_scheduled_contained_task); failure_code is the read's code when the catalog registers it, and the read's failure is the caused_by link. It refuses nothing and ends no process.",
+      "common_causes": "A defect of the Runtime's own state (a lock another thread left broken, a dispatch the decision memory does not hold) or a clock that could not be read; none of them comes from the package or the device.",
+      "handling": "Report it with the caused_by link and the run: the run itself was judged as outside its break-in. A later run reads the break-in again; if the warning repeats, the Runtime's state is broken and a restart of the Runtime is due."
+    },
     "policy_budget_counter_overflow": {
       "category": "error",
       "ladder_class": "none",

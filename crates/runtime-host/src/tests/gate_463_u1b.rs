@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #463 U1b (register §1.389; contracts/policy-suspension.md, "A failure that pauses at its
-// first occurrence"; contracts/linear-steps.md, "A screen the package never recorded"; coordinator
-// work order `rd-1115/brief-463-u1b-break-in.md`): a scheduled run of a `linear_steps` task raises
+// Workflow #463 U1b (0.12.63; register §1.389; contracts/policy-suspension.md, "A failure that
+// pauses at its first occurrence"; contracts/linear-steps.md, "A screen the package never
+// recorded"; coordinator work orders `rd-1115/brief-463-u1b-break-in.md` and
+// `rd-1115/brief-463-u1b-fix2.md`): a scheduled run of a `linear_steps` task raises
 // `contained_task_linear_unrecorded_screen`, and pauses its pair at once, only while its pair
 // (catalog task, instance) is in the break-in of its package's content: until
 // `scheduling.suspension.break_in_runs` runs of that content have settled as a success or a failure
 // and `scheduling.suspension.break_in_ms` have passed since the first of them. After it the same
 // closing verdict ends the run with `page_confirmation_failed`, settled as that code is (no pause at
-// its first occurrence), the frame of the run's `Failure` pin still named as `artifact_id`. A stop and
-// a condition end count nothing; a new content starts again; a restart keeps the count and the first
-// time (the pair's value record); a direct run raises the dedicated code always; the two keys set
-// while the Runtime runs count from the next run.
+// its first occurrence), the frame of the run's `Failure` pin still named as `artifact_id`. Either
+// end carries Workflow #469 K1's word `confirmation_problem` `unrecorded_screen`, and the pause at
+// once carries Workflow #469 H2's `pause_cause` `unrecorded_screen`. A stop and a condition end
+// count nothing; a new content starts again; a restart keeps the count and the first time (the
+// pair's value record), on the root's seeding start and on a loading start alike; a direct run
+// raises the dedicated code always; the two keys set while the Runtime runs count from the next run.
 //
 // The package is gate_463_u1's: a `linear_steps` source package of game `neutral`, 2 x 1, one tap
 // `open` from `home` (first pixel red, the fake device's) to `list` (first pixel blue), attempted
@@ -25,13 +28,15 @@ use super::instance_workers::{all_events, wait_for_ladder_end};
 use super::*;
 use crate::host::ContainedTaskCheckpointPoint;
 use crate::policy_control::PolicyValueRecord;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, FactScalar, PolicyBreakInRecord,
-    PolicyConditionSettlement, RequestId, RuntimeConfigManifest,
+    PolicyConditionSettlement, RequestId, RuntimeConfigManifest, StartReportTaggedState,
 };
 use actingcommand_runtime_config::scheduling::{
     EXPECTED_RUNTIME_ENABLED, SUSPENSION_BREAK_IN_MS, SUSPENSION_BREAK_IN_RUNS,
 };
+use actingcommand_runtime_config::{DefaultsFile, mechanism_rows, render_parameters};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 
@@ -183,22 +188,37 @@ fn parameter(key: &str, value: FactScalar) -> ConfigParameter {
     }
 }
 
-// The configuration: the expected runtime off and, when given, the break-in's two keys as the file
-// sets them (their defaults otherwise).
+// The break-in's two keys as actingd's assembly renders them for a file that does not name them:
+// from the shipped defaults file, source `default` (fix round 2: a key the manifest does not hold
+// is no setting of the configuration, so `ConfigureSettings` refused it `config_key_unknown`).
+fn rendered_break_in_defaults() -> Vec<ConfigParameter> {
+    let (_, defaults) = DefaultsFile::shipped().expect("the shipped defaults file parses");
+    render_parameters(&mechanism_rows(), &[], &defaults, &json!({}), &|_| None)
+        .expect("every key resolves")
+        .into_iter()
+        .filter(|row| row.key == SUSPENSION_BREAK_IN_RUNS || row.key == SUSPENSION_BREAK_IN_MS)
+        .collect()
+}
+
+// The configuration: the expected runtime off and the break-in's two keys, as the file sets them
+// when given, else at their defaults as the assembly renders them.
 fn settings(break_in: Option<(u32, u64)>) -> RuntimeConfigManifest {
     let mut parameters = vec![parameter(
         EXPECTED_RUNTIME_ENABLED,
         FactScalar::Boolean(false),
     )];
-    if let Some((runs, ms)) = break_in {
-        parameters.push(parameter(
-            SUSPENSION_BREAK_IN_RUNS,
-            FactScalar::Integer(i64::from(runs)),
-        ));
-        parameters.push(parameter(
-            SUSPENSION_BREAK_IN_MS,
-            FactScalar::DurationMs(ms),
-        ));
+    match break_in {
+        Some((runs, ms)) => {
+            parameters.push(parameter(
+                SUSPENSION_BREAK_IN_RUNS,
+                FactScalar::Integer(i64::from(runs)),
+            ));
+            parameters.push(parameter(
+                SUSPENSION_BREAK_IN_MS,
+                FactScalar::DurationMs(ms),
+            ));
+        }
+        None => parameters.extend(rendered_break_in_defaults()),
     }
     actingcommand_runtime_config::annotate_settable(&mut parameters)
         .expect("every key is in the key table");
@@ -404,9 +424,9 @@ fn break_in(host: &RuntimeHost) -> Option<PolicyBreakInRecord> {
     }
 }
 
-// Whether an evaluation at `at` (the Runtime clock moved there first) keeps the task's pair
-// paused.
-fn paused_at(host: &RuntimeHost, clock: &ManualRuntimeClock, at: u64, seed: u64) -> bool {
+// The pause an evaluation at `at` (the Runtime clock moved there first) keeps the task's pair in,
+// as its `policy_task_paused` reason's outcome; `None` when the pair is not paused.
+fn pause_at(host: &RuntimeHost, clock: &ManualRuntimeClock, at: u64, seed: u64) -> Option<Outcome> {
     advance_manual_clock_to(clock, at);
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(
@@ -431,7 +451,8 @@ fn paused_at(host: &RuntimeHost, clock: &ManualRuntimeClock, at: u64, seed: u64)
                 && decision.instance_id.as_deref() == Some(POLICY_INSTANCE_ALIAS)
         })
         .flat_map(|decision| decision.reasons.iter())
-        .any(|reason| reason.outcome.code().as_str() == "policy_task_paused")
+        .find(|reason| reason.outcome.code().as_str() == "policy_task_paused")
+        .map(|reason| reason.outcome.clone())
 }
 
 // The frames of the host's `Failure` pins (a success pins none), as artifact ids.
@@ -501,8 +522,11 @@ fn stop_run(address: SocketAddr, run: RequestId) -> RuntimeReceipt {
 
 // In its break-in (one settled run of two, an hour of an hour and a half) the run on the screen the
 // package never recorded ends with the dedicated code after one tap and pauses its pair at once;
-// it is settled as the break-in's second run. (A new package, whose pair has no break-in yet, is
-// gate_463_u1's `u1_a_scheduled_run_on_an_unrecorded_screen_pauses_its_pair_at_once`, unchanged.)
+// it is settled as the break-in's second run. The recorded failure carries Workflow #469 K1's word
+// `confirmation_problem` `unrecorded_screen`, and the pause Workflow #469 H2's `pause_cause`
+// `unrecorded_screen` with the code as `failure_code`. (A new package, whose pair has no break-in
+// yet, is gate_463_u1's `u1_a_scheduled_run_on_an_unrecorded_screen_pauses_its_pair_at_once`,
+// unchanged.)
 #[test]
 fn u1b_t1_inside_the_break_in_the_code_pauses_its_pair_at_once() {
     let bench = Bench::new();
@@ -516,6 +540,11 @@ fn u1b_t1_inside_the_break_in_the_code_pauses_its_pair_at_once() {
     let failure = recorded_failure(&host, context.run_id());
     assert_eq!(failure.disposition, PolicyFailureDisposition::PausedTask);
     assert_eq!(failure.original_class, PolicyFailureClass::Severe);
+    assert_eq!(
+        failure.outcome.value("confirmation_problem"),
+        Some(&json!("unrecorded_screen")),
+        "{failure:?}"
+    );
     let counted = break_in(&host).expect("the break-in");
     assert_eq!(counted.runs, 2, "the failure is the break-in's second run");
     assert_eq!(counted.content_hash, first.content_hash);
@@ -523,19 +552,27 @@ fn u1b_t1_inside_the_break_in_the_code_pauses_its_pair_at_once() {
         counted.first_settled_at_unix_ms,
         first.first_settled_at_unix_ms
     );
-    assert!(
-        paused_at(&host, &bench.clock, T2, 9),
-        "the pause keeps the pair"
+    let pause = pause_at(&host, &bench.clock, T2, 9).expect("the pause keeps the pair");
+    assert_eq!(
+        pause.value("pause_cause"),
+        Some(&json!("unrecorded_screen")),
+        "{pause:?}"
+    );
+    assert_eq!(
+        pause.value("failure_code"),
+        Some(&json!(UNRECORDED_SCREEN)),
+        "{pause:?}"
     );
     host.close().expect("close runtime host");
 }
 
 // After it (two settled runs, two hours since the first), on a device instance: the same screen
 // ends the run with `page_confirmation_failed` after one tap (its closing decision made, no
-// further input), with none of the dedicated code's values; the run's terminal and its recorded
-// failure name a frame of its `Failure` pin as `artifact_id`; the failure is recoverable and
-// scheduled for a retry by the recommended `on_failure`, and, once the ladder its class admits has
-// ended (as gate_463_u1 waits for it), the pair is not paused.
+// further input), with none of the dedicated code's own values and with Workflow #469 K1's word
+// `confirmation_problem` `unrecorded_screen`; the run's terminal and its recorded failure name a
+// frame of its `Failure` pin as `artifact_id`; the failure is recoverable and scheduled for a
+// retry by the recommended `on_failure`, and, once the ladder its class admits has ended (as
+// gate_463_u1 waits for it), the pair is not paused.
 #[test]
 fn u1b_t2_after_the_break_in_the_same_screen_is_an_ordinary_failure_naming_its_frame() {
     let bench = Bench::new();
@@ -554,6 +591,11 @@ fn u1b_t2_after_the_break_in_the_same_screen_is_an_ordinary_failure_naming_its_f
     assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
     assert_eq!(failure.consecutive_same_error, 1);
     assert_eq!(failure.outcome.value("page_ids"), None, "{failure:?}");
+    assert_eq!(
+        failure.outcome.value("confirmation_problem"),
+        Some(&json!("unrecorded_screen")),
+        "{failure:?}"
+    );
     let named = failure
         .outcome
         .value("artifact_id")
@@ -569,8 +611,14 @@ fn u1b_t2_after_the_break_in_the_same_screen_is_an_ordinary_failure_naming_its_f
         panic!("one failed terminal of the code: {terminals:?}");
     };
     assert_eq!(terminal.value("artifact_id").cloned(), Some(named));
+    assert_eq!(
+        terminal.value("confirmation_problem"),
+        Some(&json!("unrecorded_screen")),
+        "{terminal:?}"
+    );
     wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
-    assert!(!paused_at(&host, &bench.clock, T3, 10), "no pause at once");
+    let pause = pause_at(&host, &bench.clock, T3, 10);
+    assert!(pause.is_none(), "no pause at once: {pause:?}");
     host.close().expect("close runtime host");
 }
 
@@ -684,10 +732,26 @@ fn u1b_t5_a_new_content_starts_a_new_break_in() {
     host.close().expect("close runtime host");
 }
 
-// The host restarted between the first and the second settled run loads the break-in as the first
-// host wrote it, and goes on counting from it: after the second run, two hours after the first,
-// the screen ends the run with `page_confirmation_failed` (a count or a first time lost at the
-// restart would keep the pair inside).
+// How this start of the host restored the decision memory, as its start report says (Workflow
+// #422 LN-4): `Load` from the value records, or `Seed` (no marker: the dispatch records replayed).
+fn tagged_start(host: &RuntimeHost) -> Option<StartReportTaggedState> {
+    let mut client = TestClient::connect(host);
+    let request = client.request(RuntimeOperation::StartReport);
+    let receipt = client.send(&request);
+    let Some(RuntimeResult::StartReport { report }) = receipt.result() else {
+        panic!("expected the start report: {receipt:?}");
+    };
+    report.tagged_state
+}
+
+// The host restarted between the first and the second settled run keeps the break-in as the first
+// host wrote it, on both kinds of start (Workflow #422 LN-4, as gate_469_h2 asserts them): a
+// root's first start writes no marker, so its second start seeds, replaying the dispatch records,
+// which hold no break-in (fix round 2: it takes the pair's from its latest value record); its third
+// start loads the value records, as every restart of an installation does. Each start's kind is
+// asserted from its start report. After the second run, two hours after the first, the screen ends
+// the run with `page_confirmation_failed` (a count or a first time lost at a restart would keep the
+// pair inside).
 #[test]
 fn u1b_t6_a_restart_keeps_the_count_and_the_first_time() {
     let bench = Bench::new();
@@ -697,6 +761,24 @@ fn u1b_t6_a_restart_keeps_the_count_and_the_first_time() {
     host.close().expect("close runtime host");
 
     let host = bench.host(false, settings(Some((RUNS, BREAK_IN_MS))), false);
+    assert_eq!(
+        tagged_start(&host),
+        Some(StartReportTaggedState::Seed),
+        "the root's second start seeds"
+    );
+    assert_eq!(
+        break_in(&host),
+        Some(written.clone()),
+        "kept by the seeding start"
+    );
+    host.close().expect("close the seeding host");
+
+    let host = bench.host(false, settings(Some((RUNS, BREAK_IN_MS))), false);
+    assert_eq!(
+        tagged_start(&host),
+        Some(StartReportTaggedState::Load),
+        "the restart checked loads its decision memory from its value records"
+    );
     assert_eq!(
         break_in(&host),
         Some(written.clone()),
@@ -750,10 +832,36 @@ fn u1b_t7_a_direct_run_after_the_break_in_keeps_the_dedicated_code() {
 }
 
 // The keys set while the Runtime runs count from the next run: with the defaults (20 runs, seven
-// days) the pair is inside after one settled run; `ConfigureSettings` then sets one run and one
-// second, and the next run on the screen ends with `page_confirmation_failed`, not paused at once.
+// days, as the assembly renders them from the shipped defaults file, settable) the pair is inside
+// after one settled run; `ConfigureSettings` then sets one run and one second, and the next run on
+// the screen ends with `page_confirmation_failed`, not paused at once.
 #[test]
 fn u1b_t8_the_keys_set_while_running_count_from_the_next_run() {
+    let defaults = rendered_break_in_defaults()
+        .into_iter()
+        .map(|row| (row.key, (row.value, row.source, row.settable)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        defaults,
+        std::collections::BTreeMap::from([
+            (
+                SUSPENSION_BREAK_IN_RUNS.to_owned(),
+                (
+                    FactScalar::Integer(20),
+                    ConfigParameterSource::Default,
+                    true
+                )
+            ),
+            (
+                SUSPENSION_BREAK_IN_MS.to_owned(),
+                (
+                    FactScalar::DurationMs(604_800_000),
+                    ConfigParameterSource::Default,
+                    true
+                )
+            ),
+        ])
+    );
     let bench = Bench::new();
     let host = bench.host(false, settings(None), true);
     bench.succeed(&host, T0, 7);

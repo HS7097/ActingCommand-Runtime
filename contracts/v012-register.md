@@ -27447,11 +27447,12 @@ revision or record shape is added.
 **At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
 0.12.62 shows the values its terminal outcome recorded.
 
-### 1.389 Slice #463 U1b (0.12.62): the unrecorded-screen code only during a package's break-in (Workflow #463; the owner's ruling on board #463 that the code and its pause at once hold only within a period after a package is first run, the ordinary failure handling otherwise; the numbers and the scope are the coordinator's proposal the owner agreed to; the rest are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-u1b-break-in.md`, read on main `1a962a54`)
+### 1.389 Slice #463 U1b (0.12.63): the unrecorded-screen code only during a package's break-in (Workflow #463; the owner's ruling on board #463 that the code and its pause at once hold only within a period after a package is first run, the ordinary failure handling otherwise; the numbers and the scope are the coordinator's proposal the owner agreed to; the rest are the coordinator's rulings in the work orders, not the owner's words; coordinator work orders `rd-1115/brief-463-u1b-break-in.md`, read on main `1a962a54`, and `rd-1115/brief-463-u1b-fix2.md`, fix round 2 after main `44cbab53`, v0.12.62)
 
 1.389 is the number the coordinator assigned this section; the numbers before it are other slices
-dispatched with this one. The slice ships in 0.12.62 (release 0.12.61 is cut without it): its keys'
-`since`, this section, its rows of the gate map and its contract sentences say 0.12.62.
+dispatched with this one. The slice ships in 0.12.63 (release 0.12.62 is cut without it): its keys'
+`since`, its new code's `since`, this section, its rows of the gate map and its contract sentences
+say 0.12.63.
 
 **What it is.** `contained_task_linear_unrecorded_screen` (§1.372) ends a scheduled run, and pauses
 its pair at once, only while the pair (catalog task, instance) is in the break-in of the content of
@@ -27459,53 +27460,91 @@ the package it runs ([policy-suspension.md](policy-suspension.md), "A failure th
 first occurrence", "Only during a package's break-in"):
 
 - the content is the main package's content hash, 12 hex digits as the failure identity's `m`
-  segment, measured once when a scheduled run of a `linear_steps` main package is prepared
-  (`ScheduledMain::content`, `host/failure_settlement.rs`); a page-graph package or one that cannot
-  be measured has none, and its run is inside and counts nothing;
-- the break-in starts at the first run of that content on the pair settled as a success or a
-  failure, counts each such run (never a stop or a condition end: the live settlement decides it
-  from the record it writes, `host/policy_outcome.rs`), and ends when at least
+  segment, read when a scheduled run of a `linear_steps` main package is prepared
+  (`ScheduledMain::content`, `host/failure_settlement.rs`) through the lift checks' memory of each
+  package location's hash (`LiftChecks::current`, PKG-S3), so a location measured within
+  `scheduling.suspension.lift_check_min_interval_ms` is not measured again; a page-graph package
+  or one that cannot be measured has none, and its run is inside and counts nothing;
+- the break-in starts at the first run of that content on the pair that began its package (its
+  kernel run's `PackageAdmitted` recorded: `ContainedRunControl::package_began`, noted into the
+  run's resolution when its execution returns) and was settled as a success or a failure, counts
+  each such run (never a stop, a condition end or a run that never began its package: the live
+  settlement decides it, `host/policy_outcome.rs`), and ends when at least
   `scheduling.suspension.break_in_runs` (default 20) have settled and at least
   `scheduling.suspension.break_in_ms` (default 604 800 000) have passed since the first; another
   content starts a new one;
 - before a scheduled run executes the host judges it on the Runtime clock
-  (`HostShared::scheduled_past_break_in`) and notes it on the run's control; the kernel asks once at
-  the run's start (`ContainedTaskRuntime::unrecorded_screen_end`, as it asks `host_started_run`) and
-  keeps the answer in `LinearRun::unrecorded_end`. The closing decision, its conditions and its
-  control flow are unchanged; only its "unrecorded" verdict ends with `page_confirmation_failed`
-  (exactly that end's detail, values and timing) past the break-in. Either failure carries the
-  verdict (`ContainedTaskError::closing_found_unrecorded`), and the host names the frame of the
-  run's `Failure` pin as `artifact_id` by that verdict, not by the code (`page_confirmation_failed`
-  gains the optional value `artifact_id`). The pause stays the code's (`pauses_task`, unchanged), so
-  past the break-in the failure follows `on_failure`. Direct and Lab runs keep the dedicated code.
+  (`HostShared::scheduled_run_past_break_in`) and notes it on the run's control; the kernel asks
+  once at the run's start (`ContainedTaskRuntime::unrecorded_screen_end`, as it asks
+  `host_started_run`) and keeps the answer in `LinearRun::unrecorded_end`. The closing decision,
+  its conditions and its control flow are unchanged. Since the merge of main (Workflow #469 K1,
+  §1.395) the decision's verdict becomes a code in one function, `closing_end` (`linear.rs`): the
+  verdict `unrecorded_screen` ends the run with the dedicated code only when the runtime's answer
+  is `Dedicated`; past the break-in it ends with `page_confirmation_failed`, that end's detail and
+  timing, and K1's word `confirmation_problem` `unrecorded_screen`, which every end of the closing
+  decision carries. Either failure carries the verdict
+  (`ContainedTaskError::closing_found_unrecorded`), and the host names the frame of the run's
+  `Failure` pin as `artifact_id` by that verdict, not by the code (`page_confirmation_failed` gains
+  the optional value `artifact_id`). The pause stays the code's (`pauses_task`, unchanged), and its
+  `policy_task_paused` carries Workflow #469 H2's `pause_cause` `unrecorded_screen` (§1.398); past
+  the break-in the failure follows `on_failure` and a pause it reaches says the word of how
+  (`repeated_failure`, `retries_exhausted`, `sensitive_task`). Direct and Lab runs keep the
+  dedicated code.
+- a break-in that cannot be read before a run executes ends no run (fix round 2): the run goes on
+  as one outside its break-in, and the host records the warning `policy_break_in_unread` (a
+  Warning `runtime.failed` with the run's links; the read's failure its `caused_by` link). Only a
+  failure to write that record ends the run.
 
 **Persisted.** One optional member of the pair's value record `policy.control_state_recorded`
 (register L7, `PolicyControlStateRecord::break_in`, `{content_hash, runs,
-first_settled_at_unix_ms}`), written by the settlement that counts a run and loaded with the
-decision memory at a start. What 0.12.60 and 0.12.61 recorded does not name the content a
-successful run ran, so a ledger written before this slice gives every pair no break-in: such a pair
-is inside until its first settled run of this build starts one (what 0.12.61 did, for one break-in).
-No `ledger` revision is declared (the owner's ruling of 11-15 on compatibility).
+first_settled_at_unix_ms}`), written by the settlement that counts a run; a loading start loads it
+with the decision memory. No dispatch record holds it (a success does not name the content it
+ran), so a start that seeds ([ledger-observer.md](ledger-observer.md) §11.5, a root's second
+start) and a re-alignment before the seeding take each pair's from its latest value record
+(`recorded_break_ins`, `policy_host.rs`; `PolicyControlState::restore_break_ins`); before fix round
+2 the seeding start lost it, and so did every record it wrote. What 0.12.62 and earlier recorded
+does not name the content a successful run ran, so a ledger written before this slice gives every
+pair no break-in: such a pair is inside from its first run on this build, until 20 runs that began
+the package have settled and seven days have passed since the first; a screen the package never
+recorded then pauses it at once until its content changes (policy-suspension.md, "A package that
+ran before this build"). No `ledger` revision is declared (the owner's ruling of 11-15 on
+compatibility).
 
 **Keys** (`actingd-config` revision 33, [component-interfaces.md](component-interfaces.md)):
 `scheduling.suspension.break_in_runs` (integer `1..=4294967295`, default `20`) and
-`scheduling.suspension.break_in_ms` (milliseconds, default `604800000`), settable, read before each
-scheduled run executes, no per-instance form.
+`scheduling.suspension.break_in_ms` (milliseconds, default `604800000`), settable (their rows of
+the key table, `Settable::Yes`), read before each scheduled run executes, no per-instance form.
+Every root's manifest holds them, as the assembly renders every key with a default from the
+defaults file; a manifest without them has no such setting, and `ConfigureSettings` of one is
+`config_key_unknown` (what the first CI run of the gate's eighth test met: its manifest did not
+hold them).
 
 **Where a person sees it.** `actingd suspended`'s list `break_ins`: per pair whose latest value
 record carries a break-in, its content, `runs` of `runs_needed`, the first's time, `since_first_ms`
-of `ms_needed` and `in_break_in`, judged by the configuration the report loads.
+of `ms_needed` and `in_break_in`, judged by the configuration the report loads. Fix round 2: the
+report's now is the ledger's latest event, its head row, as `remedies` and `held` take it, not the
+ledger's latest time (the maximum over every row, which counts rows stamped by the system clock).
 
-**Codes.** None added. `page_confirmation_failed` gains the optional value `artifact_id`; the two
-codes' descriptions say when each is raised.
+**Codes.** One added, `policy_break_in_unread` (runtime-host, warning, ladder class `none`, since
+0.12.63): a scheduled run's break-in could not be read before it executed; it refuses nothing and
+ends no process. The outcome code index is regenerated: 3933 active codes of 3961, runtime-host
+1158, warnings 157. `page_confirmation_failed` gains the optional value `artifact_id`; the two
+kernel codes' descriptions say when each is raised.
 
-**Tests.** Gate `host.toml` "#463 U1b", `tests/gate_463_u1b.rs`, eight tests: inside, after, one of
-the two reached, a condition end and a stop, a new content, a restart, a direct run, the keys set
-while running. gate_463_u1's tests stand unchanged (a new package has no break-in, so its pair is
-inside). Adapted only where a struct gained a member: `gate_422_ln3` names `break_in: None`, and
-the `failure_settlement` unit test `content: None`.
+**Tests.** Gate `host.toml` "#463 U1b", `tests/gate_463_u1b.rs`, eight tests: inside (with K1's
+word and H2's `pause_cause`), after (with K1's word), one of the two reached, a condition end and a
+stop, a new content, a restart, a direct run, the keys set while running. Fix round 2 changes two
+of them, whose first CI run failed for a reason of the test or the product: the restart now
+restarts as an installation does and asserts each start's kind from its start report (the root's
+second start seeds, its third loads; the break-in kept on both), and the keys' test starts from a
+manifest that holds the two keys at their defaults as the assembly renders them (and asserts
+those defaults, 20 and 604 800 000, settable). gate_463_u1's tests stand unchanged (a new package
+has no break-in, so its pair is inside). Adapted only where a struct gained a member:
+`gate_422_ln3` names `break_in: None`, and the `failure_settlement` unit test `content: None` and
+`began: false`.
 
-**At deploy.** Nothing to do; a pair that ran before starts its break-in at its first settled run.
+**At deploy.** Nothing to do; a pair that ran before starts its break-in at its first run on this
+build that began its package.
 
 ### 1.395 Slice #469 K1 (0.12.62): a linear step's end says what was seen (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, place 1 of A-1 in its linear parts and the row K1 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after V0, §1.386))
 

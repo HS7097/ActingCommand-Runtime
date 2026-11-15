@@ -1035,6 +1035,10 @@ actingcommand_contract::outcome_codes! {
         PolicyAdmissionContextUntrusted => "policy_admission_context_untrusted": error / none,
         PolicyAdmissionEventInvalid => "policy_admission_event_invalid": error / none,
         PolicyApprovalFactMissing => "policy_approval_fact_missing": error / none,
+        /// Warning (Workflow #463 U1b fix round 2, since 0.12.63). The break-in of a scheduled
+        /// run's pair could not be read before the run executed; the run went on as one outside
+        /// its break-in (`contracts/policy-suspension.md`, "Only during a package's break-in").
+        PolicyBreakInUnread => "policy_break_in_unread": warning / none,
         PolicyBudgetCounterOverflow => "policy_budget_counter_overflow": error / none,
         PolicyBudgetExhausted => "policy_budget_exhausted": error / budget_or_permission,
         PolicyBudgetReceiptInvalid => "policy_budget_receipt_invalid": error / none,
