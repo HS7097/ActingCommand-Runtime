@@ -56,9 +56,10 @@ package not acknowledged) come with the slice that sends it.
 | `--state-dir` | The Lab's state directory, as the recording commands take it (default actinglab's session directory), where trial records are kept ("The record"). |
 | `--plan` | Answer the plan only; required in this release. |
 
-**What the plan reads**: the package directory, once; the game root `--root` names; and whether
-the entries of "The state directory's place" lie along the state directory's path. No Runtime, no
-device, no installation; it writes nothing (the state directory is not made) and sends nothing.
+**What the plan reads**: the package directory, once, and with `--root` once more for the
+irreversible mark ("The irreversible mark"); the game root `--root` names; and whether the entries
+of "The state directory's place" lie along the state directory's path. No Runtime, no device, no
+installation; it writes nothing (the state directory is not made) and sends nothing.
 Under the global `--dry-run` it answers the same ([actinglab-dry-run.md](actinglab-dry-run.md),
 `no_effect`).
 
@@ -78,11 +79,14 @@ adopted from it may hash differently, and what is tried must be what was adopted
 not exist, and a directory the Runtime's loader does not admit, are `package_invalid`.
 
 **One reading.** The directory is read once: one bounded snapshot by the containment crate's own
-reader (`snapshot_content_directory`), and every member of the plan is derived from those bytes,
-so that all of them describe the same content. The kernel admits the same bytes
-(`PreparedContainedTask::load_content_entries`, offline without a vision provider: no model is
-required); the ends, the variables and, over a root, what the rule of irreversibility judges of the
-package are read from the same snapshot.
+reader (`snapshot_content_directory`), and every member of the plan but the irreversible mark is
+derived from those bytes, so that all of them describe the same content. The kernel admits the
+same bytes (`PreparedContainedTask::load_content_entries`, offline without a vision provider: no
+model is required); the ends and the variables are read from the same snapshot. The irreversible
+mark is judged by the functions every other reader of a root calls, never by a copy of them (fix
+round 3), and the reader they call of a package's declarations
+(`PreparedContainedTask::read_remedy_declarations`) takes only a path: over a root the directory
+tried is therefore read once more, by that reader, for the mark alone.
 
 **The content** is the hash of those bytes: the contract crate's `content_directory_digest` of each
 file's SHA-256, exactly what the containment crate's `measure_content_hash` computes for a
@@ -123,10 +127,11 @@ matter.
 ## The irreversible mark
 
 With `--root`, the package is judged by the contract crate's own `IrreversiblePackages` over that
-root ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"): every
-package the root's `bundle.json` registers, each read by the Runtime's metadata reader as the goal
-check and the composer read them, the package of the id tried by what the one reading of the
-directory tried says, in place of its registered directory. The plan answers `irreversible`
+root ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"), as the
+resource tooling's own `root_irreversibility` builds it for the goal check and the composer, called
+and not copied: every package the root's `bundle.json` registers, each read by the Runtime's
+metadata reader at its registered directory, the registered directory of the id tried read at the
+directory tried in its place. The plan answers `irreversible`
 `marked` or `unmarked` and `irreversible_basis`: the `root`, whether it `registered` the package,
 the `capabilities` a package of the root marks irreversible that the package provides or its
 remedies list, and the root's `unreadable_packages`. The type's safe side holds: a package the
@@ -160,7 +165,11 @@ The answer of `--plan`:
 The refusals come in this order: the command line's own (a flag the row does not take, a word
 beyond it, a flag given twice, `--plan`, `--instance` and `--package` absent, an option without its
 value, `--variable`), then the authorization's bounds, the package path, the state directory's
-place, the package's reading and admission, the variables' values, `--expect`.
+place, the package's reading and admission, the variables' values, `--expect`, and last `--root`'s
+own: a root that is no directory, or whose directory name is no game's (`validation_failed`); a
+root file that cannot be read, or is larger than the package input limit (`validation_failed`);
+a root without `bundle.json`, or a root file that breaks its shape, a limit or a reference
+(`standard_pack_root_invalid`).
 
 ## The record
 
@@ -173,7 +182,7 @@ recordings: never in a repository, never in an installed root.
 |---|---|
 | `schema_version` | `actingcommand.pack-trial.v1`. |
 | `at_unix_ms` | When the trial ended; it names the file. |
-| `plan` | The plan the trial ran by, as `--plan` answers it; its `authorization` always holds the reference the run was sent under. |
+| `plan` | The plan the trial ran by, as `--plan` answers it, but its `authorization` is the reference the run was sent under, never `null` (fix round 3): the record's plan is a type of its own whose `authorization` is a text, made from a plan only by a conversion that refuses a plan without one (`validation_failed`, as the writer refuses another malformed record), and the reader decodes into it, so a stored record whose `authorization` is absent or `null` is `trial_record_unreadable` `undecodable`. |
 | `request_id`, `run_id` | The run's request id, and its run id when it has one. |
 | `end` | How the run ended, as its terminal says it: `outcome` (`success`, `failure`, `cancelled`), `outcome_key` (the business end), `final_page`, `failure_code`, `failure_values`, each when it has one. |
 | `matched` | Whether `end.outcome_key` is `plan.expect`; absent without `--expect`. |
@@ -202,35 +211,63 @@ repository's, for one) is refused for the trial's records, though the recordings
 with `.part` added, a file created anew, then hard-linked to its name, which adds that name in one
 operation and fails when the name is taken (a rename would replace an existing file on Windows).
 A record of that name, or a `.part` of it, that is there already is `trial_record_exists` naming
-that file, and is never replaced; nothing is built from a forged error. A refusal of the operating
-system (making the directory, creating, writing or flushing the `.part`, the link, or removing the
-`.part` once the record is linked) is `trial_record_write_failed` with it as the cause. Once linked,
-the `.part` the writer created itself is removed; nothing else is. The run is sent only under an
-authorization, so a record without one breaks the writer's contract with its caller; no code says
-that, and the writer holds it as a debug assertion. In this release nothing writes a record
-outside the tests.
+that file, and is never replaced; nothing is built from a forged error. When the link (or the
+exclusive create below) finds the record there, the `.part` this call wrote, holding the record it
+was given, is left beside it. It takes only a record whose plan holds an authorization (the
+record's plan type, above), and refuses another malformed record (a `schema_version` other than
+this one, a `package_id` that names no directory, a `content_hash_prefix` that is not 12 hex
+digits) `validation_failed`.
+
+**Where no hard link can be made** (fix round 3; FAT32, exFAT, some network shares): a link the
+operating system refuses for another reason than the name being taken falls back to an exclusive
+create of the record's own name, which fails when the name is taken, the bytes written whole and
+flushed, as the Runtime host places its installation identity ([install-cli.md](install-cli.md),
+"Layout", `install\identity.json`). What it keeps of "never replaced": no file of that name is
+ever written over, and a record there is `trial_record_exists` as above. What it gives up against
+the link: the name is there before its bytes are, so a reader at that moment, or a crash while they
+are written, finds an incomplete record, which the reader refuses (`undecodable`) until the write
+under way completes or a person moves a crash's leftover away.
+
+**A failed step** (fix round 3): a step the operating system refuses (making the directory,
+creating the `.part`, writing it, flushing it, which is `io_op` `sync`; where it stands in for the
+link, the exclusive create, writing or flushing that file, with the link's refusal as a `note`
+link) is `trial_record_write_failed`, its refusal the cause, and no record is written. The files
+this call created anew, made with `create_new` and nothing else's (its `.part`, and the record's
+file of an exclusive create), are then removed, so that writing the same record again is not
+blocked by this call's own leftovers and the answer names the real failure. One whose removal the
+operating system refuses too is left: the answer is still the failure, naming the file left by a
+`cleanup` link (`foreign_os_error`, `io_op` `remove`, `path` that file) and in its message.
+
+**Once the record is in place** the writer removes its `.part`. A removal the operating system
+refuses then does not make the write a failure, since the record is written: the writer answers
+success, the record's `path` with `part_left` naming the `.part` left and, in `warnings`, the
+warning `trial_record_part_left` (`path` the `.part`, the refusal its cause), in the shape every
+Lab answer carries warnings in. In this release nothing writes a record outside the tests.
 
 **The reader** answers every record of a package (`trial_records`), in the order of their times
 (then by content), and the latest record of one content of a package (`latest_trial_record`); none
 when there is none. A file of a record's name that is not read as the record its name says is
 `trial_record_unreadable` (`path`) with the required word `trial_record_problem`: `read_failed`
 (the operating system refused to open, read or list it; its refusal as the cause), `too_large`
-(larger than 1 MiB), `undecodable` (no such document; the decoder's refusal as the cause) or
-`name_mismatch` (a record, but not of the package, the content and the time its name says): the
-reader answers no record of that package rather than pass over one. A file of another name, a
-`.part` among them, is no record. The status read (S3-14) and adopt's review (S3-12) are to call
-it.
+(larger than 1 MiB), `undecodable` (no such document, a plan without an authorization among them;
+the decoder's refusal as the cause) or `name_mismatch` (a record, but not of the package, the
+content and the time its name says): the reader answers no record of that package rather than pass
+over one. A file of another name, a `.part` among them, is no record. The status read (S3-14) and
+adopt's review (S3-12) are to call it.
 
 ## Outcome codes
 
-Each refuses (category `error`, class `none`): exit 1 on actinglab's command line, which prints
-the CLI module's line, and exit 2 in the envelope a `--via` line prints; none warns. The command
-line's own refusals and the malformed arguments are `validation_failed`, as above; a check of the
-state directory's path the operating system refuses is `foreign_os_error`.
+Each refuses (category `error`, class `none`) but `trial_record_part_left`: exit 1 on actinglab's
+command line, which prints the CLI module's line, and exit 2 in the envelope a `--via` line
+prints. `trial_record_part_left` warns (category `warning`, class `none`, fix round 3): it rides in
+the `warnings` of a successful write and leaves its exit at 0. The command line's own refusals and
+the malformed arguments are `validation_failed`, as above; a check of the state directory's path
+the operating system refuses is `foreign_os_error`.
 
-| Code | The one situation |
-|---|---|
-| `trial_state_dir_refused` | The state directory is, or lies inside, an installed root or a repository (`trial_state_place`). |
-| `trial_record_exists` | A record or its `.part` of that name is already there: it is never replaced; a person looks at that file. |
-| `trial_record_write_failed` | The operating system refused a step of the write. |
-| `trial_record_unreadable` | A file of a record's name is not that record (`trial_record_problem`). |
+| Code | The one situation | Refuses / warns |
+|---|---|---|
+| `trial_state_dir_refused` | The state directory is, or lies inside, an installed root or a repository (`trial_state_place`). | refuses |
+| `trial_record_exists` | A record or its `.part` of that name is already there: it is never replaced; a person looks at that file. | refuses |
+| `trial_record_write_failed` | The operating system refused a step of the write, and no record was written. | refuses |
+| `trial_record_unreadable` | A file of a record's name is not that record (`trial_record_problem`). | refuses |
+| `trial_record_part_left` | The record is written and in place, but the `.part` its write created could not be removed. | warns |

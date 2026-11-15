@@ -44,7 +44,13 @@
 //   replaced (fix round 2); the reader answers every record of a package in the order of their
 //   times, as written, and the latest of one content; a `.part` is no record; a file of a
 //   record's name that is no record, one larger than 1 MiB and one that is not the record its name
-//   says are `trial_record_unreadable` with `undecodable`, `too_large` and `name_mismatch`.
+//   says are `trial_record_unreadable` with `undecodable`, `too_large` and `name_mismatch`;
+// - `s310_a_record_plan_is_made_only_from_a_plan_with_an_authorization` (fix round 3): the
+//   conversion of a plan without an authorization into a record's plan is `validation_failed`;
+//   with one, the record's plan keeps it as given;
+// - `s310_a_stored_record_whose_authorization_is_null_is_unreadable` (fix round 3): a file of a
+//   record's name whose plan's `authorization` is `null` is `trial_record_unreadable`
+//   `undecodable`.
 // No device, no Runtime, no clock read, no sleep: temporary directories and made-up packages.
 
 use crate::codes::ResourceToolingCode;
@@ -52,9 +58,10 @@ use crate::package_directory::admission_deadline;
 use crate::{
     CONTENT_PREFIX_DIGITS, MAX_AUTHORIZATION_BYTES, PACK_TRIAL_SCHEMA, PackTrialRecord,
     StandardPackTrialAnswer, StandardPackTrialRequest, TrialDeclaredEnd, TrialEndKind,
-    TrialIrreversible, TrialIrreversibleBasis, TrialRunEnd, TrialRunRequirement, TrialValueSource,
-    TrialVariable, installed_root_containing, latest_trial_record, plan_standard_pack_trial,
-    trial_record_path, trial_records, write_trial_record,
+    TrialIrreversible, TrialIrreversibleBasis, TrialRecordPlan, TrialRunEnd, TrialRunRequirement,
+    TrialValueSource, TrialVariable, WrittenTrialRecord, installed_root_containing,
+    latest_trial_record, plan_standard_pack_trial, trial_record_path, trial_records,
+    write_trial_record,
 };
 use actingcommand_contract::{LabError, TaskOutcome};
 use actingcommand_pack_containment::Containment;
@@ -650,7 +657,7 @@ fn s310_a_state_directory_in_a_repository_or_an_installed_root_is_refused() {
     let record = PackTrialRecord {
         schema_version: PACK_TRIAL_SCHEMA.to_owned(),
         at_unix_ms: 1_000,
-        plan: accepted.plan,
+        plan: TrialRecordPlan::try_from(accepted.plan).expect("a plan with an authorization"),
         request_id: "req-1".to_owned(),
         run_id: None,
         end: TrialRunEnd {
@@ -718,11 +725,12 @@ fn s310_a_record_is_written_once_and_read_back_by_content_and_by_package() {
         expect: Some(SHORT_KEY.to_owned()),
         ..request(&package, &state)
     });
-    let content = accepted.plan.content_hash_prefix.clone();
+    let kept = TrialRecordPlan::try_from(accepted.plan).expect("a plan with an authorization");
+    let content = kept.content_hash_prefix.clone();
     let other_content = "0123456789ab".to_owned();
     assert_ne!(content, other_content);
     let record = |at_unix_ms: u64, prefix: &str, outcome: TaskOutcome| {
-        let mut plan = accepted.plan.clone();
+        let mut plan = kept.clone();
         plan.content_hash_prefix = prefix.to_owned();
         let succeeded = outcome == TaskOutcome::Success;
         PackTrialRecord {
@@ -754,7 +762,14 @@ fn s310_a_record_is_written_once_and_read_back_by_content_and_by_package() {
 
     let written = write_trial_record(&state, &first).expect("the first record");
     let place = trial_record_path(&absolute(&state), TRIED, &content, 1_000);
-    assert_eq!(written, place);
+    assert_eq!(
+        written,
+        WrittenTrialRecord {
+            path: place.clone(),
+            part_left: None,
+            warnings: Vec::new(),
+        }
+    );
     assert_eq!(
         place.file_name().and_then(|name| name.to_str()),
         Some(format!("{content}-1000.json").as_str())
@@ -855,4 +870,69 @@ fn s310_a_record_is_written_once_and_read_back_by_content_and_by_package() {
             latest_trial_record(&unread, TRIED, &content).expect_err("the latest refuses too");
         refused_with(&error, ResourceToolingCode::TrialRecordUnreadable);
     }
+}
+
+#[test]
+fn s310_a_record_plan_is_made_only_from_a_plan_with_an_authorization() {
+    let temp = TempDir::new().expect("a temporary directory");
+    let package = temp.path().join("packs").join(TRIED);
+    write_trial_package(&package);
+    let state = temp.path().join("state");
+    let without = plan(&StandardPackTrialRequest {
+        authorization: None,
+        ..request(&package, &state)
+    })
+    .plan;
+    let error = TrialRecordPlan::try_from(without)
+        .expect_err("a plan without an authorization makes no record plan");
+    assert_eq!(error.code, VALIDATION_FAILED, "{}", error.message);
+
+    let with = plan(&request(&package, &state)).plan;
+    let kept = TrialRecordPlan::try_from(with.clone()).expect("a plan with an authorization");
+    assert_eq!(kept.authorization, AUTHORIZATION);
+    assert_eq!(kept.package_id, with.package_id);
+    assert_eq!(kept.content_hash_prefix, with.content_hash_prefix);
+}
+
+#[test]
+fn s310_a_stored_record_whose_authorization_is_null_is_unreadable() {
+    let temp = TempDir::new().expect("a temporary directory");
+    let package = temp.path().join("packs").join(TRIED);
+    write_trial_package(&package);
+    let state = temp.path().join("state");
+    let kept = TrialRecordPlan::try_from(plan(&request(&package, &state)).plan)
+        .expect("a plan with an authorization");
+    let content = kept.content_hash_prefix.clone();
+    let record = PackTrialRecord {
+        schema_version: PACK_TRIAL_SCHEMA.to_owned(),
+        at_unix_ms: 1_000,
+        plan: kept,
+        request_id: "req-1000".to_owned(),
+        run_id: None,
+        end: TrialRunEnd {
+            outcome: TaskOutcome::Success,
+            outcome_key: Some(DONE_KEY.to_owned()),
+            final_page: Some("done".to_owned()),
+            failure_code: None,
+            failure_values: Map::new(),
+        },
+        matched: None,
+    };
+    let mut document = serde_json::to_value(&record).expect("the record as JSON");
+    document["plan"]["authorization"] = Value::Null;
+    let path = state
+        .join("trials")
+        .join(TRIED)
+        .join(format!("{content}-1000.json"));
+    write_json(&path, &document);
+
+    let error = trial_records(&state, TRIED).expect_err("the reader refuses");
+    let values = refused_with(&error, ResourceToolingCode::TrialRecordUnreadable);
+    assert_eq!(
+        values,
+        json!({
+            "path": absolute(&path).display().to_string(),
+            "trial_record_problem": "undecodable"
+        })
+    );
 }

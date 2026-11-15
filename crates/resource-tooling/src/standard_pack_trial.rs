@@ -4,20 +4,27 @@
 //! `rd-1115/pack-stage3-design.md` §2.4 and §4.2 "S3-10", with the coordinator's rulings): the
 //! offline half of `actinglab standard-pack trial`, a trial of one package on a real application.
 //! [`plan_standard_pack_trial`] answers the plan of the one run the trial would send and every
-//! refusal before it; it reads the package directory once, the game root `--root` names and the
-//! place of the state directory, and nothing else: no Runtime, no device, no installation, and it
-//! writes nothing. A plan prepares and shows (fix round 2, the coordinator's ruling 1): it needs no
-//! authorization and refuses nothing only the run needs; what the run will require that the plan
-//! was not given, it says. [`write_trial_record`] writes the record of a trial,
+//! refusal before it; it reads the package directory once (and, over a root, once more for the
+//! irreversible mark), the game root `--root` names and the place of the state directory, and
+//! nothing else: no Runtime, no device, no installation, and it writes nothing. A plan prepares
+//! and shows (fix round 2, the coordinator's ruling 1): it needs no authorization and refuses
+//! nothing only the run needs; what the run will require that the plan was not given, it says.
+//! [`write_trial_record`] writes the record of a trial,
 //! `actingcommand.pack-trial.v1` under `<state>/trials/<package_id>/<content12>-<ms>.json`, and
 //! [`trial_records`] and [`latest_trial_record`] read them back. In this release nothing writes a
 //! record outside the tests: the run, and the record it leaves, are the next slice's.
 //!
 //! - **One reading** (fix round 2). The package directory is read once, one bounded snapshot by
-//!   the containment crate's `snapshot_content_directory`, and every member of the plan comes from
-//!   those bytes: the content hash, the kernel's admission of them
-//!   (`PreparedContainedTask::load_content_entries`), the declared ends, the declared variables
-//!   and, over a root, what the rule of irreversibility judges of the package.
+//!   the containment crate's `snapshot_content_directory`, and every member of the plan but the
+//!   irreversible mark comes from those bytes: the content hash, the kernel's admission of them
+//!   (`PreparedContainedTask::load_content_entries`), the declared ends and the declared
+//!   variables. Fix round 3: over a root the mark is judged by the resource tooling's own
+//!   `root_irreversibility`, called, not copied; the reader it calls of a package's declarations
+//!   (`PreparedContainedTask::read_remedy_declarations`) takes only a path, so it reads the
+//!   directory tried once more, given in place of the registered directory of its id.
+//! - **A record holds an authorization** (fix round 3). Its plan is a [`TrialRecordPlan`], whose
+//!   `authorization` is a text, made from a [`TrialPlan`] only by a conversion that refuses a plan
+//!   without one; the reader decodes into it, so a stored record without one does not decode.
 //! - **The content.** The hash of the directory given: the contract crate's
 //!   `content_directory_digest` of each file's SHA-256, what containment's `measure_content_hash`
 //!   computes for a directory (the hash a scheduled run's break-in and its failure identity
@@ -38,16 +45,16 @@
 use crate::codes::{ResourceToolingCode, TrialRecordProblem, TrialStatePlace};
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{read_bounded, root_invalid};
+use crate::standard_pack_goals::root_irreversibility;
 use actingcommand_contract::codes::ContractCode;
-use actingcommand_contract::outcome::{CodeStr, Detail, IoOp, Outcome, RawSource};
+use actingcommand_contract::outcome::{CauseRelation, CodeStr, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    DeclaredCapabilities, IrreversiblePackages, LabError, LabErrorClass, LabResult,
-    PackageVariable, ProvidedCapability, RemedyDeclaration, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, SchedulingOutcomeDeclaration,
-    SchedulingOutcomeMapping, StandardPackProblem, StandardPackRootBytes, StandardPackRootIssue,
-    TaskOutcome, VariableProblem, content_directory_digest, package_id_names_one_path_segment,
-    parse_package_variables, read_standard_pack_root,
+    LabError, LabErrorClass, LabResult, PackageVariable, ProvidedCapability,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, StandardPackProblem,
+    StandardPackRootBytes, StandardPackRootIssue, TaskOutcome, VariableProblem,
+    content_directory_digest, package_id_names_one_path_segment, parse_package_variables,
+    read_standard_pack_root,
 };
 use actingcommand_execution_kernel::{PreparedContainedTask, canonical_page_anchor};
 use actingcommand_pack_containment::{Containment, Sha256Hash};
@@ -143,9 +150,8 @@ pub enum TrialRunRequirement {
     Authorization,
 }
 
-/// The plan of one trial run, as `--plan` answers it and as the record keeps it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The plan of one trial run, as `--plan` answers it; a record keeps it as a [`TrialRecordPlan`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TrialPlan {
     pub package_id: String,
     /// The first [`CONTENT_PREFIX_DIGITS`] hex digits of the content hash of [`Self::package`].
@@ -155,8 +161,43 @@ pub struct TrialPlan {
     /// The instance, as given.
     pub instance: String,
     /// The reference of the owner's authorization, as given and never interpreted; `null` in a
-    /// plan made without one. A record always holds one.
+    /// plan made without one. A record's plan always holds one ([`TrialRecordPlan`]).
     pub authorization: Option<String>,
+    /// The ends the entry task declares, in mapping order.
+    pub ends: Vec<TrialDeclaredEnd>,
+    /// Every variable the package declares, in declaration order.
+    pub variables: Vec<TrialVariable>,
+    pub irreversible: TrialIrreversible,
+    /// What the mark was judged over; absent when it was not judged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub irreversible_basis: Option<TrialIrreversibleBasis>,
+    /// Whether `--irreversible` was given.
+    pub irreversible_acknowledged: bool,
+    /// The outcome key the trial is expected to end with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expect: Option<String>,
+}
+
+/// Workflow #463 S3-10 fix round 3: the plan a trial record keeps, the [`TrialPlan`] the trial ran
+/// by with its `authorization` as a text: a record without an authorization cannot be built, and
+/// one stored without it (the member absent or `null`) does not decode, so the reader refuses it
+/// (`trial_record_unreadable` `undecodable`). Outside this crate it is made only from a plan by
+/// its conversion (`TrialRecordPlan::try_from`), which refuses a plan without an authorization,
+/// and read back by the reader.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct TrialRecordPlan {
+    pub package_id: String,
+    /// The first [`CONTENT_PREFIX_DIGITS`] hex digits of the content hash of [`Self::package`].
+    pub content_hash_prefix: String,
+    /// The package directory tried, absolute.
+    pub package: String,
+    /// The instance, as given.
+    pub instance: String,
+    /// The reference of the owner's authorization the run was sent under, as given and never
+    /// interpreted.
+    pub authorization: String,
     /// The ends the entry task declares, in mapping order.
     pub ends: Vec<TrialDeclaredEnd>,
     /// Every variable the package declares, in declaration order.
@@ -170,6 +211,35 @@ pub struct TrialPlan {
     /// The outcome key the trial is expected to end with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect: Option<String>,
+}
+
+impl TryFrom<TrialPlan> for TrialRecordPlan {
+    type Error = LabError;
+
+    /// The plan `plan` as a record keeps it. A plan without an authorization makes no record
+    /// plan: `validation_failed`, as [`write_trial_record`] refuses another malformed record.
+    fn try_from(plan: TrialPlan) -> Result<Self, Self::Error> {
+        let Some(authorization) = plan.authorization else {
+            return Err(LabError::usage(format!(
+                "the plan of the package {} names no authorization; a trial record keeps the \
+                 authorization its run was sent under",
+                plan.package_id
+            )));
+        };
+        Ok(Self {
+            package_id: plan.package_id,
+            content_hash_prefix: plan.content_hash_prefix,
+            package: plan.package,
+            instance: plan.instance,
+            authorization,
+            ends: plan.ends,
+            variables: plan.variables,
+            irreversible: plan.irreversible,
+            irreversible_basis: plan.irreversible_basis,
+            irreversible_acknowledged: plan.irreversible_acknowledged,
+            expect: plan.expect,
+        })
+    }
 }
 
 /// One end the entry task declares: a `scheduling_outcome` mapping.
@@ -261,8 +331,8 @@ pub struct PackTrialRecord {
     pub schema_version: String,
     /// When the trial ended; it names the record's file.
     pub at_unix_ms: u64,
-    /// The plan the trial ran by.
-    pub plan: TrialPlan,
+    /// The plan the trial ran by, with the authorization its run was sent under.
+    pub plan: TrialRecordPlan,
     /// The run's request id.
     pub request_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -288,21 +358,37 @@ pub struct TrialRunEnd {
     pub failure_values: Map<String, Value>,
 }
 
-/// The package directory tried, read once ([`read_tried_package`]): everything a plan says of it.
+/// What [`write_trial_record`] answers (fix round 3): the record, in place, and what the write left
+/// beside it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WrittenTrialRecord {
+    /// The record's file, `<state>/trials/<package_id>/<content12>-<ms>.json`.
+    pub path: PathBuf,
+    /// The `.part` the write created that is left beside the record because the operating system
+    /// refused its removal once the record was in place; absent when none is left.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part_left: Option<PathBuf>,
+    /// One `trial_record_part_left` naming [`Self::part_left`] when there is one, in the shape the
+    /// Lab's answers carry warnings in; empty otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<Outcome>,
+}
+
+/// The package directory tried, read once ([`read_tried_package`]): everything a plan says of it
+/// but the irreversible mark.
 struct TriedPackage {
     package_id: String,
     content_hash_prefix: String,
     ends: Vec<TrialDeclaredEnd>,
     variables: Vec<PackageVariable>,
-    /// What the rule of irreversibility judges of it.
-    capabilities: DeclaredCapabilities,
 }
 
 /// Workflow #463 S3-10 (module doc): the plan of the trial `request` asks for, or its refusal, in
 /// this order: the authorization's bounds, the package path, the state directory's place, the
-/// package's reading and admission, its variables, `--expect`. Fix round 2: nothing is refused for
-/// an authorization not given or for the irreversible mark; the plan shows both. It writes
-/// nothing.
+/// package's reading and admission, its variables, `--expect`, then `--root`'s own (a root that
+/// is no directory or names no game, a root file that cannot be read or is too large, a root file
+/// missing or refused). Fix round 2: nothing is refused for an authorization not given or for the
+/// irreversible mark; the plan shows both. It writes nothing.
 pub fn plan_standard_pack_trial(
     request: &StandardPackTrialRequest,
 ) -> LabResult<StandardPackTrialAnswer> {
@@ -360,7 +446,7 @@ pub fn plan_standard_pack_trial(
     let (irreversible, irreversible_basis) = match &request.root {
         None => (TrialIrreversible::NotJudged, None),
         Some(root) => {
-            let (mark, basis) = judge_irreversible(root, &tried.package_id, &tried.capabilities)?;
+            let (mark, basis) = judge_irreversible(root, &tried.package_id, &package)?;
             (mark, Some(basis))
         }
     };
@@ -431,11 +517,12 @@ fn authorization(given: Option<&str>) -> LabResult<Option<String>> {
 }
 
 /// Fix round 2: the package directory `package`, read once, and everything a plan says of it from
-/// those bytes. The snapshot is the containment crate's bounded read; its hash is what
-/// `measure_content_hash` computes for a directory; the kernel admits the same bytes
-/// (`PreparedContainedTask::load_content_entries`, offline without a vision provider); the control
-/// declaration's `provides` and `variables` and the entry task are read from the snapshot after
-/// that admission. A refusal of any of these is `package_invalid`.
+/// those bytes but the irreversible mark ([`judge_irreversible`]). The snapshot is the containment
+/// crate's bounded read; its hash is what `measure_content_hash` computes for a directory; the
+/// kernel admits the same bytes (`PreparedContainedTask::load_content_entries`, offline without a
+/// vision provider); the control declaration's `provides` (which the variables are parsed with)
+/// and `variables` and the entry task are read from the snapshot after that admission. A refusal
+/// of any of these is `package_invalid`.
 fn read_tried_package(package: &Path) -> LabResult<TriedPackage> {
     let deadline = Instant::now() + PACK_DEADLINE;
     let invalid = |error: &dyn std::fmt::Display| {
@@ -479,32 +566,11 @@ fn read_tried_package(package: &Path) -> LabResult<TriedPackage> {
         &entries,
         &format!("resources/operations/{}/task.json", prepared.task_label()),
     )?;
-    let ends = declared_ends(&prepared, &task);
-    let mut provided = BTreeMap::new();
-    for capability in &provides {
-        *provided
-            .entry(capability.capability().to_owned())
-            .or_insert(false) |= capability.irreversible();
-    }
-    // What `RemedyDeclarations::declared_capabilities` reads of a package, from the one reading.
-    let capabilities = DeclaredCapabilities {
-        provides: provided,
-        remedies: prepared
-            .scheduling_outcome()
-            .map(SchedulingOutcomeDeclaration::mappings)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(SchedulingOutcomeMapping::remedy)
-            .flat_map(RemedyDeclaration::capabilities)
-            .cloned()
-            .collect(),
-    };
     Ok(TriedPackage {
         package_id,
         content_hash_prefix: content_hash.chars().take(CONTENT_PREFIX_DIGITS).collect(),
-        ends,
+        ends: declared_ends(&prepared, &task),
         variables,
-        capabilities,
     })
 }
 
@@ -710,16 +776,19 @@ fn keyed_ends(task: &Value) -> BTreeMap<&str, TrialEndKind> {
     keyed
 }
 
-/// The irreversible mark of the package `package_id`, whose declarations read `tried`, over the
-/// game root `root`: its root files read as every reader reads them (a refused or missing root
-/// file is `standard_pack_root_invalid`), then the contract crate's `IrreversiblePackages` over
-/// every package its `bundle.json` registers, each read by the Runtime's metadata reader as
-/// `root_irreversibility` reads them, the package of `package_id` by what `tried` says (the one
-/// reading of the directory tried) in place of its registered directory.
+/// The irreversible mark of the package `package_id`, the directory `package`, over the game root
+/// `root`: its root files read as every reader reads them (a root that is no directory or names no
+/// game, and a root file that cannot be read or is too large, are `validation_failed`; a refused
+/// or missing root file is `standard_pack_root_invalid`), then the resource tooling's
+/// `root_irreversibility` over it (fix round 3: called, not copied), the contract crate's
+/// `IrreversiblePackages` over every package its `bundle.json` registers, each read by the
+/// Runtime's metadata reader at its registered directory, the registered directory of
+/// `package_id` read at `package` in its place. That reader takes only a path: `package` is read
+/// here once more, beside the plan's one snapshot of it.
 fn judge_irreversible(
     root: &Path,
     package_id: &str,
-    tried: &DeclaredCapabilities,
+    package: &Path,
 ) -> LabResult<(TrialIrreversible, TrialIrreversibleBasis)> {
     let root = absolute(root)?;
     if !fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
@@ -768,25 +837,18 @@ fn judge_irreversible(
         };
         root_invalid(&game, &root.join(STANDARD_PACK_BUNDLE_FILE), &issue)
     })?;
-    let registered = checked.registry.get(package_id).is_some();
-    let mut declared = BTreeMap::new();
-    for listed in checked.registry.package_ids() {
-        let capabilities = if listed == package_id {
-            Some(tried.clone())
+    let tried = checked
+        .registry
+        .get(package_id)
+        .map(|entry| entry.directory.clone());
+    let packages = root_irreversibility(&checked, &|directory: &str| {
+        if tried.as_deref() == Some(directory) {
+            package.to_path_buf()
         } else {
-            checked.registry.get(listed).and_then(|entry| {
-                PreparedContainedTask::read_remedy_declarations(
-                    TRIAL_LABEL,
-                    &root.join(&entry.directory),
-                    Instant::now() + PACK_DEADLINE,
-                )
-                .ok()
-                .map(|declarations| declarations.declared_capabilities())
-            })
-        };
-        declared.insert(listed.to_owned(), capabilities);
-    }
-    let packages = IrreversiblePackages::new(declared);
+            root.join(directory)
+        }
+    })
+    .packages;
     let mark = if packages.counts_irreversible(package_id) {
         TrialIrreversible::Marked
     } else {
@@ -794,7 +856,7 @@ fn judge_irreversible(
     };
     let basis = TrialIrreversibleBasis {
         root: root.display().to_string(),
-        registered,
+        registered: tried.is_some(),
         capabilities: packages
             .irreversible_capabilities(package_id)
             .map(|capabilities| capabilities.iter().cloned().collect())
@@ -916,21 +978,27 @@ pub fn trial_record_path(
 }
 
 /// Workflow #463 S3-10: writes `record` once at its place ([`trial_record_path`]) under the state
-/// directory `state_dir`, which [`check_trial_state_dir`] must accept, and answers that path. Fix
-/// round 2 (the review's item 3): the record is written whole, and flushed, under its name with
-/// `.part` added, a file created anew, and then hard-linked to its name, which adds that name in
-/// one operation and fails when the name is taken, so a record is never replaced. A record of that
-/// name, or a `.part` of it, that is there already is `trial_record_exists` naming that file (the
-/// `.part` this call wrote stays beside a record a link found there); every refusal of the
-/// operating system is `trial_record_write_failed` with it as the cause. Once linked, the `.part`
-/// this call created is removed. A record without an authorization breaks this function's
-/// contract (its caller is the run, which is sent only under one): no code says so, so it is a
-/// debug assertion.
-pub fn write_trial_record(state_dir: &Path, record: &PackTrialRecord) -> LabResult<PathBuf> {
-    debug_assert!(
-        record.plan.authorization.is_some(),
-        "a trial record names the authorization its run was sent under"
-    );
+/// directory `state_dir`, which [`check_trial_state_dir`] must accept. Fix round 2 (the review's
+/// item 3): the record is written whole, and flushed, under its name with `.part` added, a file
+/// created anew, and then hard-linked to its name, which adds that name in one operation and fails
+/// when the name is taken, so a record is never replaced. A record of that name, or a `.part` of
+/// it, that is there already is `trial_record_exists` naming that file (the `.part` this call
+/// wrote stays beside a record the link or the exclusive create found there).
+///
+/// Fix round 3: a link that fails for another reason than the name being taken (a file system
+/// without hard links: FAT32, exFAT, some network shares) falls back to an exclusive create of the
+/// record's own name (`place_exclusive`). A step the operating system refuses is
+/// `trial_record_write_failed` with its refusal as the cause, and no record is written: the files
+/// this call created anew (its `.part`, and the record's file of an exclusive create) are removed,
+/// so that writing the record again is not blocked by them, and one whose removal is refused too
+/// is named in the failure (`failed_removing`). Once the record is in place its `.part` is
+/// removed; a removal the operating system refuses then leaves the record written: the answer is
+/// its path, with the `.part` as [`WrittenTrialRecord::part_left`] and the warning
+/// `trial_record_part_left`. A record holds an authorization by its type ([`TrialRecordPlan`]).
+pub fn write_trial_record(
+    state_dir: &Path,
+    record: &PackTrialRecord,
+) -> LabResult<WrittenTrialRecord> {
     check_trial_state_dir(state_dir)?;
     let state = absolute(state_dir)?;
     if record.schema_version != PACK_TRIAL_SCHEMA
@@ -959,34 +1027,130 @@ pub fn write_trial_record(state_dir: &Path, record: &PackTrialRecord) -> LabResu
     let bytes = serde_json::to_vec_pretty(record)
         .map_err(|error| LabError::usage(format!("the trial record does not encode: {error}")))?;
     let part = path.with_extension("json.part");
-    let mut file = match OpenOptions::new().write(true).create_new(true).open(&part) {
+    let file = match OpenOptions::new().write(true).create_new(true).open(&part) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
             return Err(record_exists(&part));
         }
         Err(error) => return Err(write_failed(&path, &part, &error, IoOp::Create)),
     };
-    file.write_all(&bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|error| write_failed(&path, &part, &error, IoOp::Write))?;
-    drop(file);
+    if let Err((error, op)) = write_whole(file, &bytes) {
+        return Err(failed_removing(
+            write_failure(&path, &part, &error, op),
+            &[part.as_path()],
+        ));
+    }
     match fs::hard_link(&part, &path) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return Err(record_exists(&path));
+            return Err(record_exists_beside(&path, &part));
         }
-        Err(error) => return Err(write_failed(&path, &path, &error, IoOp::Create)),
+        Err(unlinked) => place_exclusive(&path, &part, &bytes, &unlinked)?,
     }
-    fs::remove_file(&part).map_err(|error| {
-        let mut failed = write_failed(&path, &part, &error, IoOp::Remove);
-        failed.message = format!(
-            "the trial record {} is in place, but its {} could not be removed: {error}",
-            path.display(),
-            part.display()
-        );
-        failed
-    })?;
-    Ok(path)
+    match fs::remove_file(&part) {
+        Ok(()) => Ok(WrittenTrialRecord {
+            path,
+            part_left: None,
+            warnings: Vec::new(),
+        }),
+        Err(error) => {
+            let warning = Outcome::new(ResourceToolingCode::TrialRecordPartLeft)
+                .path(&part)
+                .caused_by(Outcome::from_io_error(&error, IoOp::Remove).path(&part));
+            Ok(WrittenTrialRecord {
+                path,
+                part_left: Some(part),
+                warnings: vec![warning],
+            })
+        }
+    }
+}
+
+/// Fix round 3: writes `bytes` whole to `file`, a file created anew, flushes them to disk and
+/// closes it; the refusal of the step that failed, `write` or (the flush) `sync`.
+fn write_whole(mut file: fs::File, bytes: &[u8]) -> Result<(), (io::Error, IoOp)> {
+    file.write_all(bytes)
+        .map_err(|error| (error, IoOp::Write))?;
+    file.sync_all().map_err(|error| (error, IoOp::Sync))
+}
+
+/// Fix round 3: the record `bytes` placed at `path` where the hard link of its `.part` `part` was
+/// refused (`unlinked`) for another reason than the name being taken, as the Runtime host places a
+/// file once where no hard link can be made (`state_root_installation.rs`, `create_exclusive`;
+/// `contracts/install-cli.md`, `install\identity.json`): an exclusive create of `path` itself,
+/// which fails when the name is taken (`trial_record_exists`, the `.part` left beside it), then
+/// the bytes written whole and flushed. What it keeps of "never replaced": no file of that name is
+/// ever written over. What it gives up against the link: the name is there before the bytes are,
+/// so a reader at that moment, or a crash while they are written, finds an incomplete record,
+/// which the reader refuses (`undecodable`). A step the operating system refuses is
+/// `trial_record_write_failed` with the link's refusal as a `note` link; after a refused create
+/// the `.part` is removed, after a refused write or flush the file this call created and the
+/// `.part` ([`failed_removing`]).
+fn place_exclusive(path: &Path, part: &Path, bytes: &[u8], unlinked: &io::Error) -> LabResult<()> {
+    let file = match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(record_exists_beside(path, part));
+        }
+        Err(error) => {
+            return Err(unlinked_failed(
+                path,
+                part,
+                unlinked,
+                &error,
+                IoOp::Create,
+                &[part],
+            ));
+        }
+    };
+    write_whole(file, bytes)
+        .map_err(|(error, op)| unlinked_failed(path, part, unlinked, &error, op, &[path, part]))
+}
+
+/// Fix round 3: the step `op` of [`place_exclusive`] at the record `path` that the operating
+/// system refused (`error`), the hard link of `part` it stood in for refused before (`unlinked`,
+/// a `note` link), after the files `created` are removed ([`failed_removing`]).
+fn unlinked_failed(
+    path: &Path,
+    part: &Path,
+    unlinked: &io::Error,
+    error: &io::Error,
+    op: IoOp,
+    created: &[&Path],
+) -> LabError {
+    let (outcome, message) = write_failure(path, path, error, op);
+    let note = Outcome::from_io_error(unlinked, IoOp::Create).path(path);
+    failed_removing(
+        (
+            outcome.link(CauseRelation::Note, note),
+            format!(
+                "{message} (it stood in for the hard link of {}, refused: {unlinked})",
+                part.display()
+            ),
+        ),
+        created,
+    )
+}
+
+/// Fix round 3: the failed step of a write (its outcome and its message) after the files
+/// `created`, which this call created anew, are removed, so that writing the record again is not
+/// blocked by this call's own files. One the operating system refuses to remove is left and
+/// named, by a `cleanup` link (`foreign_os_error`, `io_op` `remove`, `path` the file left) and in
+/// the message; the answer is still the failed step.
+fn failed_removing((mut outcome, mut message): (Outcome, String), created: &[&Path]) -> LabError {
+    for file in created {
+        if let Err(error) = fs::remove_file(file) {
+            outcome = outcome.link(
+                CauseRelation::Cleanup,
+                Outcome::from_io_error(&error, IoOp::Remove).path(file),
+            );
+            message = format!(
+                "{message}; {} that this call created is left, its removal refused: {error}",
+                file.display()
+            );
+        }
+    }
+    refused(outcome, message)
 }
 
 /// Workflow #463 S3-10: every trial record of the package `package_id` under the state directory
@@ -1181,21 +1345,37 @@ fn record_exists(path: &Path) -> LabError {
     )
 }
 
+/// [`record_exists`] of the record `path` a link or an exclusive create found there; the `.part`
+/// `part` this call wrote, holding the record it was given, is left beside it.
+fn record_exists_beside(path: &Path, part: &Path) -> LabError {
+    let mut exists = record_exists(path);
+    exists.message = format!(
+        "{}; the {} this call wrote, holding the record it was given, is left beside it",
+        exists.message,
+        part.display()
+    );
+    exists
+}
+
 /// `trial_record_write_failed` of the record `record` at `path`, the operating system's refusal
-/// `error` of `op` there its cause.
-fn write_failed(record: &Path, path: &Path, error: &io::Error, op: IoOp) -> LabError {
+/// `error` of `op` there its cause, and its message.
+fn write_failure(record: &Path, path: &Path, error: &io::Error, op: IoOp) -> (Outcome, String) {
     let outcome = Outcome::new(ResourceToolingCode::TrialRecordWriteFailed)
         .path(path)
         .caused_by(Outcome::from_io_error(error, op).path(path));
-    refused(
-        outcome,
-        format!(
-            "the trial record {} could not be written: {} {} refused: {error}",
-            record.display(),
-            path.display(),
-            op.as_str()
-        ),
-    )
+    let message = format!(
+        "the trial record {} could not be written: {} {} refused: {error}",
+        record.display(),
+        path.display(),
+        op.as_str()
+    );
+    (outcome, message)
+}
+
+/// [`write_failure`] as its Lab error, for a step before this call created a file.
+fn write_failed(record: &Path, path: &Path, error: &io::Error, op: IoOp) -> LabError {
+    let (outcome, message) = write_failure(record, path, error, op);
+    refused(outcome, message)
 }
 
 /// `trial_record_unreadable` at `path` with the word `problem`, the operating system's refusal

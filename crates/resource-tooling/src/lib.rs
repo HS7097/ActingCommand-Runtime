@@ -210,13 +210,14 @@ pub use standard_pack_schedule::{
     StandardPackComposeRequest, StandardPackComposeResponse, compose_standard_packs,
 };
 // Workflow #463 S3-10: the trial's plan and refusals, and the record's writer and reader; fix
-// round 2: the one test of an installed root along a path, `installed_root_containing`.
+// round 2: the one test of an installed root along a path, `installed_root_containing`; fix round
+// 3: the record's own plan type and the writer's answer.
 pub use codes::{TrialRecordProblem, TrialStatePlace};
 pub use standard_pack_trial::{
     CONTENT_PREFIX_DIGITS, MAX_AUTHORIZATION_BYTES, PACK_TRIAL_SCHEMA, PackTrialRecord,
     StandardPackTrialAnswer, StandardPackTrialRequest, TRIALS_DIRECTORY, TrialDeclaredEnd,
-    TrialEndKind, TrialIrreversible, TrialIrreversibleBasis, TrialPlan, TrialRunEnd,
-    TrialRunRequirement, TrialValueSource, TrialVariable, check_trial_state_dir,
-    installed_root_containing, latest_trial_record, plan_standard_pack_trial, trial_record_path,
-    trial_records, write_trial_record,
+    TrialEndKind, TrialIrreversible, TrialIrreversibleBasis, TrialPlan, TrialRecordPlan,
+    TrialRunEnd, TrialRunRequirement, TrialValueSource, TrialVariable, WrittenTrialRecord,
+    check_trial_state_dir, installed_root_containing, latest_trial_record,
+    plan_standard_pack_trial, trial_record_path, trial_records, write_trial_record,
 };

@@ -161,13 +161,18 @@ actingcommand_contract::outcome_codes! {
         /// Workflow #463 S3-10 fix round 2: a trial record of that name, or the `.part` of one,
         /// is there already and is never replaced (key `path`, the file that is there).
         TrialRecordExists => "trial_record_exists": error / none,
-        /// Workflow #463 S3-10: the operating system refused a write of a trial record (key
-        /// `path`; its refusal as the cause).
+        /// Workflow #463 S3-10: the operating system refused a step of writing a trial record,
+        /// and no record was written (key `path`; its refusal as the cause; fix round 3: a file
+        /// the write created and could not remove after it, named by a `cleanup` link).
         TrialRecordWriteFailed => "trial_record_write_failed": error / none,
         /// Workflow #463 S3-10: a file of a trial record's name does not read as that record (keys
         /// `path`, `trial_record_problem`; the refusal of the read or of the decoder as its
         /// cause).
         TrialRecordUnreadable => "trial_record_unreadable": error / none,
+        /// Warning (Workflow #463 S3-10 fix round 3): a trial record is written and in place, but
+        /// the `.part` its write created is left beside it, its removal refused (key `path`, the
+        /// `.part`; the refusal as its cause). The writer answers success with it in `warnings`.
+        TrialRecordPartLeft => "trial_record_part_left": warning / none,
     }
 }
 
