@@ -28263,8 +28263,18 @@ game root and on the zip's root by the contract crate's own `standard_pack_maint
 and `classify_standard_pack_packages`, called, not copied (the module already depends on the
 contract crate; no dependency is added). The roles are readiness's words, found by that same
 function called on the entries of one use, or on one list of the root files, at a time (fix round
-2, below). **`enters` is exactly the packages the scheduler will dispatch, or use in a supporting
-role, after the placement and did not before.**
+2, below), and the plan's own `prerequisite`, of a layer of a prerequisite chain (fix round 3,
+below). **`enters` lists the packages that, by the schedule, the root files and the prerequisite
+chains of the two sides, will be dispatched or used after the placement and were not before.**
+The plan does not run the composer: a root the composer would refuse for another reason than the
+reader's and the reference check's (in its `read_game`: a member whose subsystem `requires` does
+not name, a subsystem this Runtime does not name, a member only the composer writes, a `limited`
+that is not `true` or sits on a maintenance rule, a realization, limited or fixed-value mark on a
+rule of a maintenance-role package, a timeline event that invalidates the application update fact;
+after it: a package another game's rules already name or an id two composed items share,
+`rule_id_conflict`, and the compile of the joined catalog) is counted as composed, so the lists
+then say more than will happen; the placement's own post check fails in that case, and a placement
+made while a Runtime runs keeps its hold.
 
 ```json
 "schedule_changes": {
@@ -28283,8 +28293,8 @@ role, after the placement and did not before.**
 
 | Member | What it holds |
 |---|---|
-| `packages` | each package whose part or pack content changes, or that a list names, by package id: `before`, `after` (`state` `scheduled`, `held` with `reason` and `reference`, `maintenance_role`, `unclassified`, `absent` or `unread`; `roles`, readiness's words `startup`, `return_home`, `recognition`, `features`, `edge`, `chain`, `handler`, `then_run`, when there is one) and `content` (its pack item's `new`, `replace` or `unchanged`; absent for a pack the zip no longer carries) |
-| `enters` | sorted package ids the scheduler dispatches, or uses in a role, after and did not before: `scheduled` after and not before, or a role word after it did not hold before; only a composed side counts (its root holds a `schedule.json` the reader and the composer's reference check take), and an installed side that could not be read counts none; a package of a server no instance is bound to is listed too |
+| `packages` | each package whose part or pack content changes, or that a list names, by package id: `before`, `after` (`state` `scheduled`, `held` with `reason` and `reference`, `maintenance_role`, `unclassified`, `absent` or `unread`; `roles`, when there is one, in this order: readiness's words `startup`, `return_home`, `recognition`, `features`, `edge`, `chain`, `handler`, `then_run`, then the plan's own `prerequisite`, which is not one of readiness's) and `content` (its pack item's `new`, `replace` or `unchanged`; absent for a pack the zip no longer carries) |
+| `enters` | sorted package ids that, by the schedule, the root files and the prerequisite chains of the two sides, will be dispatched or used after the placement and were not before: `scheduled` after and not before, or a role word after (`prerequisite` included) it did not hold before; only a composed side counts (its root holds a `schedule.json` the reader and the composer's reference check take), and an installed side that could not be read counts none; a package of a server no instance is bound to is listed too; the composer is not run (see above) |
 | `leaves` | sorted package ids: `scheduled` before and not after; a role word lost; no longer carried by the zip |
 | `content_only` | sorted package ids the scheduler uses before and after in the same way and whose pack is replaced |
 | `unread` | only when a side could not be read: `{root, failure}`, `root` `installed` or `bundle`, the failure as a warning; that side's packages `unread` (without roles when its root files failed, with them when its `schedule.json` did); with the zip's side unread none of `enters`, `leaves` and `content_only` is answered; nothing is refused |
@@ -28357,6 +28367,42 @@ becomes `then.run` (all three enter with readiness's words); a scheduled pack an
 set that the zip no longer carries (both leave, no `content`). Adapted:
 `s31_a_new_interrupt_handler_enters_by_its_role` asserted the role `interrupts.json`; it asserts
 `handler` (the requirement changes the word).
+
+**Fix round 3** (the slice's second independent review; coordinator work order
+`rd-1115/brief-463-s31-fix3.md`, the coordinator's rulings, not the owner's words; no main merged).
+The next slice makes a placement name the packages of `enters` as the ones authorized to start
+running, and the second review found two things the plan did not read. (A) A pack's
+`control.json` may name `prerequisite_package_id`, the package the host runs as a layer of the
+pack's runs, resolved through the game root's registry when each run is prepared
+(`host/prerequisite.rs`; the Lab's recorder writes the member from `requires`). On each side, a
+package that is a layer of the prerequisite chain of a package that is scheduled or holds one of
+readiness's words is used, with the plan's own role word `prerequisite`, which is not one of
+readiness's eight (they still come from the contract crate's function; the new word is kept apart,
+`Role::Prerequisite`). The chain is followed as the host follows it: the member of the
+`control.json` in the package's directory the side's registry gives, the named package looked up
+in the same registry (`StandardPackRegistry::get`, the lookup of the host's
+`GameRegistry::package_path`), at most three layers (the execution kernel's
+`MAX_PREREQUISITE_DEPTH`); a layer the registry does not list, or one already in the chain, ends
+it and counts nothing (the host refuses that run, another check's refusal). The rescue module
+links neither the host nor the kernel, and the contract crate has no reader of the member, so the
+plan reads it with its own readers: `Archive::read` for the zip's `packs/<directory>/control.json`
+and the bounded `read_root_file` for the installed one (a file it cannot read leaves the
+installed side unread). `enters`, `leaves` and `content_only` follow as for any role: a package
+that gains the role enters, one that loses its last use leaves, one used only as a prerequisite
+whose content is replaced is `content_only`; a package used only as a prerequisite keeps the
+state the classification gives it (`unclassified`) beside the role. (B) The definition of
+`enters` above replaces "exactly", and the plan says it does not run the composer, with the
+reasons it does not read. (C) The roles are listed in the plan's own order, given above. Tests,
+in the same gate file, a third entry "#463 S3-1" of `apps.toml`, each asserting the whole
+`schedule_changes`: a new pack that is only the prerequisite of a new scheduled pack (both
+enter); a pack in no set that becomes the prerequisite of the scheduled pack, whose replaced
+`control.json` names it (it enters, the scheduled pack `content_only`); the prerequisite of a held
+pack (nothing enters); a chain two deep (the scheduled pack and both layers enter); a scheduled
+pack that loses its rule (it and its prerequisite leave); an installed `bundle.json` the root
+reader refuses (every pack `unread` before without roles, the zip's scheduled pack and feature
+package enter, `unread` `installed` with `malformed` at that file). No test is adapted. What S3-2
+reads is unchanged: `Placement.scheduling.enters` stays `Option<Vec<String>>`, `None` when the
+zip's side could not be read; it may now hold packages used only as prerequisites.
 
 **What is not changed.** The items, the plan document and the plan id, every check of the plan and
 after the placement, the hold, the journal and its inputs, `place`'s parameters and refusals, and

@@ -1370,38 +1370,74 @@ the rescue face:
     longer carries) or `unread` (below); on a root without `schedule.json` it is what the root
     files say (`maintenance_role` or `unclassified`). `roles`, present only when there is one,
     names the supporting parts the root files give it, in readiness's words (the vocabulary
-    `readiness_role`, [standard-pack-schedule.md](standard-pack-schedule.md), "Readiness") and
-    readiness's order: `startup`, `return_home`, `recognition` (the uses of its `bundle.json`
-    `maintenance` entry), `features` (`pages.json`), `edge`, `chain` (the edges and the recovery
-    chain of `navigation.json`), `handler`, `then_run` (the handlers and the `then.run` packages
-    of `interrupts.json`), each found by calling `standard_pack_maintenance_packages` on the
-    entries of one use, or on one list, alone. A package held or scheduled that has a role is
-    `held` or `scheduled` with its `roles`.
+    `readiness_role`, [standard-pack-schedule.md](standard-pack-schedule.md), "Readiness"), each
+    found by calling `standard_pack_maintenance_packages` on the entries of one use, or on one
+    list, alone, and (since fix round 3) the plan's own word `prerequisite`, which is not one of
+    readiness's words: a layer of a prerequisite chain (below). The plan lists them in this
+    order: `startup`, `return_home`, `recognition` (the uses of its `bundle.json` `maintenance`
+    entry), `features` (`pages.json`), `edge`, `chain` (the edges and the recovery chain of
+    `navigation.json`), `handler`, `then_run` (the handlers and the `then.run` packages of
+    `interrupts.json`), `prerequisite`. A package held or scheduled that has a role is `held` or
+    `scheduled` with its `roles`; a package used only as a prerequisite keeps the state the
+    classification gives it (`unclassified`, say) with the role `prerequisite`.
+  - **The prerequisite chains** (since fix round 3). A pack's `control.json` may name, in
+    `prerequisite_package_id`, the package the host runs as a layer of the pack's runs
+    ([linear-steps.md](linear-steps.md), "Prerequisite packages"; the Lab's recorder writes it
+    from `requires`). On each side, from each package that is scheduled or holds one of
+    readiness's words, the plan follows that member as the host resolves it when a run is
+    prepared: the member of the `control.json` in the package's directory that the side's
+    registry (its `bundle.json`) gives, the package it names looked up in the same registry,
+    then that package's own, at most three layers (the execution kernel's
+    `MAX_PREREQUISITE_DEPTH`; the host refuses a fourth). Each layer reached holds the role
+    `prerequisite`; a package that holds only that role starts no chain of its own. A layer the
+    side's registry does not list, or one already in the chain, ends the chain and counts
+    nothing: the host refuses that run at preparation, which is another check's refusal, and the
+    plan says nothing of it; so does a `control.json` that is no JSON object or whose member is no
+    string (the package's admission refuses it). The installed side's `control.json` is read as
+    its root files are (at most 32 MiB), the zip's from its member
+    `packs/<directory>/control.json`. The rescue module does not link the host or the execution
+    kernel, and the contract crate has no reader of the member, so the plan reads it itself, with
+    the zip reader and the bounded file read it uses for the root files.
   - **`packages`**: each package whose part or pack content changes, or that one of the lists
     names, by package id, `{package_id, before, after, content?}`; `content` is the state of its
     pack item (`new`, `replace`, `unchanged`), absent for a pack the zip no longer carries (its
     folder stays in place; only `bundle.json` stops listing it).
-  - **`enters`** is exactly the packages the scheduler will dispatch, or use in a supporting
-    role, after the placement and did not before: the sorted package ids `scheduled` after and
-    not before, or holding a role after that they did not hold before, whichever root file the
-    role comes from. Only a composed side counts: on a side that is not composed, and on an
-    installed side that could not be read, no package counts as scheduled or as holding a role,
-    for `enters`, `leaves` and `content_only` alike. So a lifted hold enters; on a game's first
-    root, and over an installed root without `schedule.json`, every package the zip schedules or
-    gives a role enters; a zip without `schedule.json` makes nothing enter. A package of a server
-    to which no instance is bound is listed like any other: binding an instance later needs no
-    placement, so the authorization covers it now. **`leaves`**: `scheduled` before and not
-    after, a role it held before and does not after (so every package used before leaves when the
-    zip carries no `schedule.json`), or no longer carried by the zip (also one never scheduled).
+  - **`enters`** lists the packages that, by the schedule, the root files and the prerequisite
+    chains of the two sides, will be dispatched or used after the placement and were not before:
+    the sorted package ids `scheduled` after and not before, or holding a role after that they
+    did not hold before (`prerequisite` included), whichever root file or chain the role comes
+    from. Only a composed side counts: on a side that is not composed, and on an installed side
+    that could not be read, no package counts as scheduled or as holding a role, for `enters`,
+    `leaves` and `content_only` alike. So a lifted hold enters; a package that becomes the
+    prerequisite of a scheduled one enters, and the prerequisite of a held one does not; on a
+    game's first root, and over an installed root without `schedule.json`, every package the zip
+    schedules or gives a role enters; a zip without `schedule.json` makes nothing enter. A
+    package of a server to which no instance is bound is listed like any other: binding an
+    instance later needs no placement, so the authorization covers it now. The plan does not run
+    the composer: a root the composer would refuse for another reason than the reader's and the
+    reference check's (in its `read_game`: a member whose subsystem `requires` does not name, a
+    subsystem this Runtime does not name, a member only the composer writes, a `limited` that is
+    not `true` or sits on a maintenance rule, a realization, limited or fixed-value mark on a
+    rule of a maintenance-role package, a timeline event that invalidates the application update
+    fact; after it: a package another game's rules already name or an id two composed items
+    share, `rule_id_conflict`, and the compile of the joined catalog) is counted as composed, so
+    the lists then say more than will happen; the placement's own post check fails in that case,
+    and a placement made while a Runtime runs keeps its hold. **`leaves`**: `scheduled` before
+    and not after, a role it held before and does not after (so every package used before leaves
+    when the zip carries no `schedule.json`, and a prerequisite leaves with the last package
+    whose chain reached it), or no longer carried by the zip (also one never scheduled).
     **`content_only`**: a package the scheduler uses before and after in the same way and whose
-    pack is replaced. A package may enter and leave at once (it loses its rule and gains a role).
-    The plan of a bundle that changes nothing lists nothing in any of the four.
+    pack is replaced (one used only as a prerequisite too). A package may enter and leave at once
+    (it loses its rule and gains a role). The plan of a bundle that changes nothing lists nothing
+    in any of the four.
   - **`unread`**, present only when a side could not be read: `[{root, failure}]`, `root`
     `installed` or `bundle`, the failure as a warning (`{outcome}`). A file of the installed root
     that cannot be read, or one larger than the bound (`foreign_os_error`; `io_kind`
-    `file_too_large` for the bound), or root files the reader refuses (`standard_pack_root_invalid`
-    at the file, its problem and pointer) leave every package of that side `unread` without roles;
-    a `schedule.json` that the reader or the composer's reference check refuses
+    `file_too_large` for the bound; since fix round 3 a pack's `control.json` too, one the pack's
+    directory does not hold naming no prerequisite), or root files the reader refuses
+    (`standard_pack_root_invalid` at the file, its problem and pointer) leave every package of
+    that side `unread` without roles; a `schedule.json` that the reader or the composer's
+    reference check refuses
     (`standard_pack_root_invalid` at that file, its problem and pointer; the plan itself checks
     neither side's) leaves each package of that side `unread` with its roles. The zip's side is
     unread only through its `schedule.json`: the plan refuses a zip whose other root files the

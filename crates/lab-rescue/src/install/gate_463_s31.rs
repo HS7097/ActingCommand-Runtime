@@ -42,6 +42,20 @@
 //   `then.run` enter, each with readiness's words;
 // - `s31_fix2_a_pack_the_zip_no_longer_carries_leaves` (item 6): a scheduled pack and a pack in no
 //   set that the zip no longer carries leave, with no `content`.
+// Fix round 3 (coordinator work order `rd-1115/brief-463-s31-fix3.md`, the second review): a
+// package that is a layer of the prerequisite chain (`control.json`'s `prerequisite_package_id`)
+// of a package that is scheduled or holds a role is used, with the plan's own role word
+// `prerequisite`:
+// - `s31_fix3_a_new_prerequisite_of_a_new_scheduled_pack_enters_with_it`: both new packs enter;
+// - `s31_fix3_an_unclassified_pack_that_becomes_a_prerequisite_enters`: the scheduled pack whose
+//   `control.json` now names it is `content_only`, the prerequisite enters;
+// - `s31_fix3_the_prerequisite_of_a_held_pack_is_not_used`: nothing enters;
+// - `s31_fix3_a_chain_two_deep_enters_whole`: the scheduled pack and both layers enter;
+// - `s31_fix3_a_prerequisite_whose_owner_leaves_leaves`: the pack that loses its rule and its
+//   prerequisite both leave;
+// - `s31_fix3_an_installed_root_the_reader_refuses_counts_nothing_before` (the second review's
+//   point C): an installed `bundle.json` the root reader refuses leaves the installed side unread
+//   as a whole, and every pack the zip schedules or gives a role enters.
 // Each plan leaves the game root as it was and pauses nothing. The machine is the fake host of
 // `fixture.rs` with its fake Runtime: no device, no sleep, no clock read; every root is a
 // temporary folder with neutral files (made-up ids, no real game).
@@ -76,11 +90,20 @@ const HANDLER: &str = "neutral.handler";
 const LOOSE: &str = "neutral.loose";
 const STARTER: &str = "neutral.starter";
 const EDGE: &str = "neutral.edge";
+/// Fix round 3: the first and the second layer of a prerequisite chain.
+const FIRST: &str = "neutral.first";
+const SECOND: &str = "neutral.second";
 /// A package no bundle carries.
 const GHOST: &str = "neutral.ghost";
 /// Two contents of a pack's `control.json`.
 const CONTROL: &[u8] = br#"{"neutral": 1}"#;
 const CONTROL_REPLACED: &[u8] = br#"{"neutral": 2}"#;
+/// Fix round 3: a pack's `control.json` that names [`FIRST`], and one that names [`SECOND`], as
+/// its prerequisite package.
+const NEEDS_FIRST: &[u8] = br#"{"prerequisite_package_id": "neutral.first"}"#;
+const NEEDS_SECOND: &[u8] = br#"{"prerequisite_package_id": "neutral.second"}"#;
+/// Fix round 3: a `bundle.json` that is no JSON document.
+const BUNDLE_BROKEN: &[u8] = b"{";
 /// A held entry's reason and reference.
 const REASON: &str = "not yet run on a device";
 const REFERENCE: &str = "board-reference-1";
@@ -994,5 +1017,267 @@ fn s31_fix2_a_pack_the_zip_no_longer_carries_leaves() {
             "leaves": [ADDED, LOOSE],
             "content_only": [],
         })
+    );
+}
+
+// Fix round 3: a new pack that a rule of the zip names and whose `control.json` names a new pack
+// as its prerequisite: both enter, the prerequisite in no set of the classification
+// (`unclassified`) with the plan's role `prerequisite`; the pack both roots schedule is not listed.
+#[test]
+fn s31_fix3_a_new_prerequisite_of_a_new_scheduled_pack_enters_with_it() {
+    let before = Layout::default()
+        .pack(KEPT, CONTROL)
+        .rule("rule.kept", KEPT);
+    let after = Layout::default()
+        .pack(KEPT, CONTROL)
+        .pack(ADDED, NEEDS_FIRST)
+        .pack(FIRST, CONTROL)
+        .rule("rule.kept", KEPT)
+        .rule("rule.added", ADDED);
+    assert_eq!(
+        schedule_changes(Some(&before), &after),
+        json!({
+            "packages": [
+                {
+                    "package_id": ADDED,
+                    "before": {"state": "absent"},
+                    "after": {"state": "scheduled"},
+                    "content": "new",
+                },
+                {
+                    "package_id": FIRST,
+                    "before": {"state": "absent"},
+                    "after": {"state": "unclassified", "roles": ["prerequisite"]},
+                    "content": "new",
+                },
+            ],
+            "enters": [ADDED, FIRST],
+            "leaves": [],
+            "content_only": [],
+        })
+    );
+}
+
+// Fix round 3: a pack in no set on both roots becomes the prerequisite of the scheduled pack, whose
+// replaced `control.json` now names it: the prerequisite enters by the role `prerequisite`, and the
+// scheduled pack, used in the same way before and after, is `content_only`.
+#[test]
+fn s31_fix3_an_unclassified_pack_that_becomes_a_prerequisite_enters() {
+    let before = Layout::default()
+        .pack(KEPT, CONTROL)
+        .pack(FIRST, CONTROL)
+        .rule("rule.kept", KEPT);
+    let after = Layout::default()
+        .pack(KEPT, NEEDS_FIRST)
+        .pack(FIRST, CONTROL)
+        .rule("rule.kept", KEPT);
+    assert_eq!(
+        schedule_changes(Some(&before), &after),
+        json!({
+            "packages": [
+                {
+                    "package_id": FIRST,
+                    "before": {"state": "unclassified"},
+                    "after": {"state": "unclassified", "roles": ["prerequisite"]},
+                    "content": "unchanged",
+                },
+                {
+                    "package_id": KEPT,
+                    "before": {"state": "scheduled"},
+                    "after": {"state": "scheduled"},
+                    "content": "replace",
+                },
+            ],
+            "enters": [FIRST],
+            "leaves": [],
+            "content_only": [KEPT],
+        })
+    );
+}
+
+// Fix round 3: the zip's new pack is named by a rule and held, and its `control.json` names a new
+// pack as its prerequisite: the held pack is not dispatched, so its prerequisite is not used;
+// both are listed from `absent` and nothing enters.
+#[test]
+fn s31_fix3_the_prerequisite_of_a_held_pack_is_not_used() {
+    let before = Layout::default()
+        .pack(KEPT, CONTROL)
+        .rule("rule.kept", KEPT);
+    let after = Layout::default()
+        .pack(KEPT, CONTROL)
+        .pack(WAITING, NEEDS_FIRST)
+        .pack(FIRST, CONTROL)
+        .rule("rule.kept", KEPT)
+        .rule("rule.waiting", WAITING)
+        .held(WAITING);
+    assert_eq!(
+        schedule_changes(Some(&before), &after),
+        json!({
+            "packages": [
+                {
+                    "package_id": FIRST,
+                    "before": {"state": "absent"},
+                    "after": {"state": "unclassified"},
+                    "content": "new",
+                },
+                {
+                    "package_id": WAITING,
+                    "before": {"state": "absent"},
+                    "after": {"state": "held", "reason": REASON, "reference": REFERENCE},
+                    "content": "new",
+                },
+            ],
+            "enters": [],
+            "leaves": [],
+            "content_only": [],
+        })
+    );
+}
+
+// Fix round 3: a chain two deep, the zip's new scheduled pack naming the first layer and the first
+// layer naming the second: the scheduled pack and both layers enter, each layer with the role
+// `prerequisite` (the first holds no other role, so the chain is followed through it).
+#[test]
+fn s31_fix3_a_chain_two_deep_enters_whole() {
+    let before = Layout::default()
+        .pack(KEPT, CONTROL)
+        .rule("rule.kept", KEPT);
+    let after = Layout::default()
+        .pack(KEPT, CONTROL)
+        .pack(ADDED, NEEDS_FIRST)
+        .pack(FIRST, NEEDS_SECOND)
+        .pack(SECOND, CONTROL)
+        .rule("rule.kept", KEPT)
+        .rule("rule.added", ADDED);
+    assert_eq!(
+        schedule_changes(Some(&before), &after),
+        json!({
+            "packages": [
+                {
+                    "package_id": ADDED,
+                    "before": {"state": "absent"},
+                    "after": {"state": "scheduled"},
+                    "content": "new",
+                },
+                {
+                    "package_id": FIRST,
+                    "before": {"state": "absent"},
+                    "after": {"state": "unclassified", "roles": ["prerequisite"]},
+                    "content": "new",
+                },
+                {
+                    "package_id": SECOND,
+                    "before": {"state": "absent"},
+                    "after": {"state": "unclassified", "roles": ["prerequisite"]},
+                    "content": "new",
+                },
+            ],
+            "enters": [ADDED, FIRST, SECOND],
+            "leaves": [],
+            "content_only": [],
+        })
+    );
+}
+
+// Fix round 3: the installed scheduled pack whose `control.json` names a prerequisite loses its
+// rule in the zip: it leaves, and its prerequisite, used before only as that, leaves too.
+#[test]
+fn s31_fix3_a_prerequisite_whose_owner_leaves_leaves() {
+    let before = Layout::default()
+        .pack(KEPT, CONTROL)
+        .pack(ADDED, NEEDS_FIRST)
+        .pack(FIRST, CONTROL)
+        .rule("rule.kept", KEPT)
+        .rule("rule.added", ADDED);
+    let after = Layout::default()
+        .pack(KEPT, CONTROL)
+        .pack(ADDED, NEEDS_FIRST)
+        .pack(FIRST, CONTROL)
+        .rule("rule.kept", KEPT);
+    assert_eq!(
+        schedule_changes(Some(&before), &after),
+        json!({
+            "packages": [
+                {
+                    "package_id": ADDED,
+                    "before": {"state": "scheduled"},
+                    "after": {"state": "unclassified"},
+                    "content": "unchanged",
+                },
+                {
+                    "package_id": FIRST,
+                    "before": {"state": "unclassified", "roles": ["prerequisite"]},
+                    "after": {"state": "unclassified"},
+                    "content": "unchanged",
+                },
+            ],
+            "enters": [],
+            "leaves": [ADDED, FIRST],
+            "content_only": [],
+        })
+    );
+}
+
+// Fix round 3 (the second review's point C, `Side::unreadable`): the installed `bundle.json` is no
+// JSON document, which the root reader refuses, so the installed side cannot be read at all: each
+// pack is `unread` before without roles, the zip's scheduled pack and its feature package enter,
+// the pack in no set is listed and does not, `leaves` and `content_only` are empty, and the side is
+// named under `unread` with the reader's refusal at the installed file.
+#[test]
+fn s31_fix3_an_installed_root_the_reader_refuses_counts_nothing_before() {
+    let layout = || {
+        Layout::default()
+            .pack(KEPT, CONTROL)
+            .pack(FEATURE, CONTROL)
+            .pack(LOOSE, CONTROL)
+            .rule("rule.kept", KEPT)
+            .feature(FEATURE)
+    };
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, game_root) = prepared(temp.path(), &host);
+    layout().lay_out(&game_root);
+    fs::write(game_root.join("bundle.json"), BUNDLE_BROKEN).expect("the installed bundle.json");
+    let zip = temp.path().join("neutral-bundle.zip");
+    layout().write_zip(&zip);
+    let line = plan(&host, &root, &game_root, &zip);
+    let (listed, unread) = without_unread(line["plan"]["schedule_changes"].clone());
+    assert_eq!(
+        listed,
+        json!({
+            "packages": [
+                {
+                    "package_id": FEATURE,
+                    "before": {"state": "unread"},
+                    "after": {"state": "maintenance_role", "roles": ["features"]},
+                    "content": "unchanged",
+                },
+                {
+                    "package_id": KEPT,
+                    "before": {"state": "unread"},
+                    "after": {"state": "scheduled"},
+                    "content": "unchanged",
+                },
+                {
+                    "package_id": LOOSE,
+                    "before": {"state": "unread"},
+                    "after": {"state": "unclassified"},
+                    "content": "unchanged",
+                },
+            ],
+            "enters": [FEATURE, KEPT],
+            "leaves": [],
+            "content_only": [],
+        }),
+        "{line}"
+    );
+    assert_eq!(
+        unread,
+        json!([{
+            "root": "installed",
+            "code": "standard_pack_root_invalid",
+            "values": root_invalid(&game_root.join("bundle.json"), "malformed", ""),
+        }]),
+        "{line}"
     );
 }
