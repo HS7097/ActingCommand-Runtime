@@ -1083,7 +1083,12 @@ fn idle1p_n3_both_failures_of_an_abandoned_action_are_reported() {
     let x = instance_id();
     let host = start(&root, &clock, x, &x_state(), false).expect("the start");
     let before = head(&host);
-    let (release, record) = (HostCode::ReleaseTimeout, HostCode::RuntimeFactStale);
+    // Any request failure of X stands for the release's (Workflow #434 LAB-6S4a: its stand-in
+    // until then, `release_timeout`, is retired).
+    let (release, record) = (
+        HostCode::LeaseTerminalEventMissing,
+        HostCode::RuntimeFactStale,
+    );
     host.contain_abandoned_idle_ends_for_test(X_ALIAS, Some(release), Some(record))
         .expect("both are failures of X's action alone");
     let failures = all_events(&host)
@@ -1391,7 +1396,11 @@ fn idle1p_n5_both_failures_of_a_finished_action_are_reported() {
     let clock = Arc::new(ManualRuntimeClock::new(NOW_UNIX_MS, 0));
     let x = instance_id();
     let host = start(&root, &clock, x, &x_state(), false).expect("the start");
-    let (release, record) = (HostCode::ReleaseTimeout, HostCode::RuntimeFactStale);
+    // As in `idle1p_n3_both_failures_of_an_abandoned_action_are_reported`.
+    let (release, record) = (
+        HostCode::LeaseTerminalEventMissing,
+        HostCode::RuntimeFactStale,
+    );
     let (causation, stopped) = host
         .contain_finished_idle_ends_for_test(X_ALIAS, Some(release), Some(record))
         .expect("both are failures of X's action alone");

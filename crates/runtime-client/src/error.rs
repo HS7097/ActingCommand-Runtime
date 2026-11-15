@@ -59,7 +59,6 @@ const UNCERTAIN_AFTER_SEND_CODES: &[ClientCode] = &[
     ClientCode::RuntimeResultMissing,
     ClientCode::RuntimeResultUnexpected,
     ClientCode::RuntimeShutdownReceiptUnconfirmed,
-    ClientCode::InstallTransitionReceiptUnconfirmed,
     ClientCode::MaterialReadReceiptSelectionMismatch,
     ClientCode::RuntimeSchedulingResumeUnconfirmed,
     // Workflow #429 R-7a: a player hold request whose effect `Status` could not confirm.

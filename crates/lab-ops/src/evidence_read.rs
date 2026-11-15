@@ -8,8 +8,10 @@
 //! `evidence_read_run`, the artifact id or the run id as its path-safe value, surface `cli` here and
 //! `mcp` there; there is no other record and no new record type.
 //!
-//! The Runtime records it with the connection's origin: the CLI's (Cli, Cli), with the identity
-//! card `actingctl` declared in the same correlation first, or MCP's (Agent, Adapter). It refuses a
+//! The Runtime records it with the connection's origin: the CLI's (Cli, Cli), or MCP's (Agent,
+//! Adapter); until Workflow #434 LAB-6S4a the CLI declared the identity card `actingctl` in the
+//! same correlation first, since LAB-6S4a (0.12.63) the confirmation is the interaction's only
+//! request, the binding's initiator naming where it came from. It refuses a
 //! target the ledger does not hold (`client_action_invalid`) and records nothing then. The
 //! ledger's frame index links the record to its target (`read_confirmed`); nothing is removed in
 //! this slice. Opening or reading a frame (`ac_run_evidence`, `ac_observe`) is no confirmation.
@@ -33,9 +35,8 @@ use actingcommand_contract::codes::ReceiptCode;
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     ArtifactId, CONFIG_TOP_LEVEL_SECTION, ClientActionKind, ClientActionRecord, ClientActionValue,
-    EVIDENCE_READ_FRAME_CONTROL, EVIDENCE_READ_RUN_CONTROL, FactScalar, FactValue,
-    GovernanceIdentityCard, RunId, RuntimeFactRecord, SanitizationError,
-    config_parameters_fact_key,
+    EVIDENCE_READ_FRAME_CONTROL, EVIDENCE_READ_RUN_CONTROL, FactScalar, FactValue, RunId,
+    RuntimeFactRecord, SanitizationError, config_parameters_fact_key,
 };
 use actingcommand_ledger::{EvidenceTarget, FrameRetentionSwitches, evidence_covers};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
@@ -49,8 +50,6 @@ pub const CONFIRM_READ: &str = "confirm-read";
 const USAGE: &str = "usage: actinglab evidence read (--artifact <artifact_id> | --run <run_id>)";
 /// The `surface_id` of the confirmations the CLI records.
 const CLI_SURFACE: &str = "cli";
-/// The identity card the CLI declares before it records a confirmation.
-const CLI_CLIENT: &str = "actingctl";
 
 /// What a confirmation names: one capture frame by its artifact id, or a run.
 #[derive(Clone, Copy)]
@@ -359,9 +358,10 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, Target), Outcome> {
     Ok((state_root, target))
 }
 
-/// Connects with the CLI's (Cli, Cli) origin, begins an interaction, declares the identity card
-/// `actingctl` in it (a refused card fails the command, with the Runtime's receipt) and records
-/// the confirmation, its `covers` counted on `state_root`.
+/// Connects with the CLI's (Cli, Cli) origin, begins an interaction and records the confirmation,
+/// its `covers` counted on `state_root`. Workflow #434 LAB-6S4a (0.12.63): the identity card
+/// `actingctl` it declared in the interaction first is gone; the initiator its connection's
+/// binding carries names where it came from.
 fn run(
     state_root: &Path,
     target: Target,
@@ -374,13 +374,6 @@ fn run(
             Detail::Full => config,
         })
         .and_then(|connection| connection.begin_interaction())
-        .map_err(Failure::Runtime)?;
-    client
-        .declare_governance_identity(&GovernanceIdentityCard {
-            client: CLI_CLIENT.to_owned(),
-            client_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
-            instance: None,
-        })
         .map_err(Failure::Runtime)?;
     confirm(&client, CLI_SURFACE, target, Ok(state_root))
 }

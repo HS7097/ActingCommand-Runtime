@@ -225,9 +225,11 @@ outcome leaves the journal rows to decide. Row 6′ (R5b) covers an installer th
 after such a stop, closed a maintenance owner without a log of its own: that later
 record would otherwise hide the terminal outcome as a formal close. An owner that
 closed formally ends in `runtime_stopped` (info), so it stays `watchdog_formal_close`.
-A held start whose shutdown was accepted ends in `runtime_stopped` too, with
-`install_startup_shut_down` (info, Workflow #378 A7-R) as its link, and actingd exits
-0: a formal close (row 6) that the watchdog never restarts. A process probe that fails
+A held start whose shutdown was accepted ended in `runtime_stopped` too, with
+`install_startup_shut_down` (info, Workflow #378 A7-R) as its link, and actingd exited
+0: a formal close (row 6) that the watchdog never restarts. Since Workflow #434 LAB-6S4a
+(0.12.63) no start is held and a starting Runtime refuses a shutdown request as busy, so
+nothing raises that code any more (retired); a log of 0.12.61 that carries it reads as before. A process probe that fails
 is `watchdog_start_failed` caused by `process_probe_failed`.
 
 ### Upgrade-state close (Workflow #389 U-4; not before v0.12.x)

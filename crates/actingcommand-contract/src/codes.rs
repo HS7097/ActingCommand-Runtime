@@ -124,7 +124,9 @@ crate::outcome_codes! {
         RequestQueued => "request_queued": info / none,
         RequestCancelled => "request_cancelled": info / none,
         HealthCompleted => "request_health_completed": success / none,
-        InstallTransitionCompleted => "request_install_transition_completed": success / none,
+        // Workflow #434 LAB-6S4a: `request_install_transition_completed`,
+        // `request_declare_governance_identity_completed` and
+        // `request_record_approval_decision_completed` are retired in 0.12.63 with their kinds.
         StatusCompleted => "request_status_completed": success / none,
         ProjectInterfaceCompleted => "request_project_interface_completed": success / none,
         ProjectPolicyInputIdentityCompleted => "request_project_policy_input_identity_completed": success / none,
@@ -162,8 +164,6 @@ crate::outcome_codes! {
         RecordDebugEventCompleted => "request_record_debug_event_completed": success / none,
         ReleaseLabPinCompleted => "request_release_lab_pin_completed": success / none,
         RecordClientActionCompleted => "request_record_client_action_completed": success / none,
-        DeclareGovernanceIdentityCompleted => "request_declare_governance_identity_completed": success / none,
-        RecordApprovalDecisionCompleted => "request_record_approval_decision_completed": success / none,
         StartAgentSessionCompleted => "request_start_agent_session_completed": success / none,
         ResumeAgentSessionCompleted => "request_resume_agent_session_completed": success / none,
         AgentSessionStatusCompleted => "request_agent_session_status_completed": success / none,
@@ -213,7 +213,9 @@ crate::outcome_codes! {
 
 crate::outcome_codes! {
     /// Why the Runtime refused a governance identity card (Workflow #318 cfg4): the
-    /// `governance.identity_declared` verdict and the Denied receipt's host code carry it.
+    /// `governance.identity_declared` verdict carries it. Workflow #434 LAB-6S4a (0.12.63): no
+    /// card is declared any more, so nothing raises these; they stay for the records written
+    /// before.
     #[derive(serde::Serialize, serde::Deserialize)]
     pub enum GovernanceIdentityRefusal {
         #[serde(rename = "governance_client_not_allowed")]
@@ -351,7 +353,8 @@ crate::outcome_codes! {
         InvalidCapacityThresholds => "invalid_capacity_thresholds": error / none,
         InvalidCapturePolicy => "invalid_capture_policy": error / none,
         InvalidGovernanceIdentityCard => "invalid_governance_identity_card": error / none,
-        InvalidGovernanceOrigin => "invalid_governance_origin": error / none,
+        // Workflow #434 LAB-6S4a: `invalid_governance_origin` is retired in 0.12.63 with the
+        // host's check of the identity card, which alone emitted it.
         InvalidInstanceAlias => "invalid_instance_alias": error / none,
         InvalidJson => "invalid_json": error / none,
         InvalidLabPinReleaseTarget => "invalid_lab_pin_release_target": error / none,
@@ -599,7 +602,8 @@ crate::outcome_codes! {
         InvalidSignatureMatchRequest => "invalid_signature_match_request": error / none,
         InvalidSignatureRegistration => "invalid_signature_registration": error / none,
         InvalidClientAction => "invalid_client_action": error / none,
-        InvalidApprovalDecision => "invalid_approval_decision": error / none,
+        // Workflow #434 LAB-6S4a: `invalid_approval_decision` is retired in 0.12.63 with
+        // `RecordApprovalDecision`, whose shape check alone emitted it.
         InvalidAgentResponse => "invalid_agent_response": error / none,
         InvalidCatalogProposal => "invalid_catalog_proposal": error / none,
         InvalidRuntimeMonitorPolicy => "invalid_runtime_monitor_policy": error / none,
@@ -627,7 +631,7 @@ crate::outcome_codes! {
         InvalidMaterialReadReceipt => "invalid_material_read_receipt": error / none,
         InvalidSignatureReceipt => "invalid_signature_receipt": error / none,
         InvalidShutdownReceipt => "invalid_shutdown_receipt": error / none,
-        InvalidInstallTransitionReceipt => "invalid_install_transition_receipt": error / none,
+        // Workflow #434 LAB-6S4a: `invalid_install_transition_receipt` is retired in 0.12.63.
         InvalidSchedulingPauseReceipt => "invalid_scheduling_pause_receipt": error / none,
         InvalidInstanceSelfcheckReceipt => "invalid_instance_selfcheck_receipt": error / none,
         InvalidProjectInterfaceResponse => "invalid_project_interface_response": error / none,
@@ -766,10 +770,10 @@ crate::outcome_codes! {
         InstallMemberIdentityInvalid => "install_member_identity_invalid": error / none,
         InstallMemberPairingMismatch => "install_member_pairing_mismatch": error / none,
         InstallSlotDocumentInvalid => "install_slot_document_invalid": error / none,
-        InstallPreviousTransitionMismatch => "install_previous_transition_mismatch": error / none,
-        InvalidInstallTransitionStatus => "invalid_install_transition_status": error / none,
-        InvalidInstallTimeout => "invalid_install_timeout": error / none,
-        InvalidInstallTransitionId => "invalid_install_transition_id": error / none,
+        // Workflow #434 LAB-6S4a: `install_previous_transition_mismatch`,
+        // `invalid_install_transition_status`, `invalid_install_timeout` and
+        // `invalid_install_transition_id` are retired in 0.12.63 with the installer's transition
+        // and the held start.
         InstallSlotLockMissing => "install_slot_lock_missing": error / none,
         InstallSlotLockOpenFailed => "install_slot_lock_open_failed": error / none,
         InstallSlotInUse => "install_slot_in_use": error / none,

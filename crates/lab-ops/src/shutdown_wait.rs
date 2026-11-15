@@ -7,9 +7,10 @@
 //! `shutdown_wait_journal_unreadable`, with what it observed as values and the OS and decoder
 //! failures as `foreign_*` links; it carries no prose.
 //!
-//! Workflow #434 LAB-1b: moved from actingctl, where `request-shutdown`, `install-transition`,
-//! `start`, `restart` and `install` wait with it; `shutdown --wait` ([`crate::shutdown`]) is
-//! served here. A failed wait is its outcome itself, which actingctl wraps as before.
+//! Workflow #434 LAB-1b: moved from actingctl, where `request-shutdown`, `start`, `restart` and
+//! `install` wait with it (and `install-transition` until Workflow #434 LAB-6S4a); `shutdown
+//! --wait` ([`crate::shutdown`]) is served here. A failed wait is its outcome itself, which
+//! actingctl wraps as before.
 
 use crate::codes::ActingctlCode;
 use crate::process_probe::pid_alive;

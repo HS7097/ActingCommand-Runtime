@@ -98,11 +98,11 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 ![一次运行时请求的完整生命周期](docs/assets/readme/request-lifecycle.zh.png)
 
 1. **组装**（`runtime-client`）：调用方从 79 个类型化 `RuntimeOperation` 变体中选一个（其中升级态与包加载 / 卸载四种、玩家工作台六种里的五种和玩家持有两种，共十一种回答 `not_implemented`），客户端生成 request_id 与 correlation_id，写入 actor、source 与提交时间，构成 `actingcommand.runtime.request.v4` 请求，可选的 `detail`（`codes` 或 `full`）表示客户端要回执结果的多少细节。
-2. **发现**（`runtime-client`）：客户端读取 `<state_root>/runtime-info.json`，校验其 host 必须是环回地址、pid/port/启动时间非零，连上 TCP 后先发 Health；若 owner epoch 与发现时不一致，会话以 `runtime_owner_epoch_changed` 拒绝。随后客户端为这条连接绑定通道（`cli`、`mcp`、`ui` 或 `lab`；自 v0.12.58 起 `lab` 绑定还可以声明发起者，五个 Lab 词之一）；Runtime 在每个请求上记下通道。自 v0.12.58 起，绑在 `ui` 上的连接发控制台清单以外的请求、或改控制台档位以外的设置，以 `channel_request_refused` 拒；别的都不按通道拒。也是自 v0.12.58 起，请求检查不再按信封拒任何一种请求（信封不在客户端那几种之内的照旧拒，主机照旧核谁在声明身份卡）。
+2. **发现**（`runtime-client`）：客户端读取 `<state_root>/runtime-info.json`，校验其 host 必须是环回地址、pid/port/启动时间非零，连上 TCP 后先发 Health；若 owner epoch 与发现时不一致，会话以 `runtime_owner_epoch_changed` 拒绝。随后客户端为这条连接绑定通道（`cli`、`mcp`、`ui` 或 `lab`；自 v0.12.58 起 `lab` 绑定还可以声明发起者，五个 Lab 词之一）；Runtime 在每个请求上记下通道。自 v0.12.58 起，绑在 `ui` 上的连接发控制台清单以外的请求、或改控制台档位以外的设置，以 `channel_request_refused` 拒；别的都不按通道拒。也是自 v0.12.58 起，请求检查不再按信封拒任何一种请求（信封不在客户端那几种之内的照旧拒；0.12.63 起没有请求再声明身份卡）。
 3. **成帧**（`runtime-client`）：请求以 4 字节大端长度前缀加 JSON 发出，两端默认上限 1 MiB，并按操作类别装载回执读取期限。
 4. **受理**（`runtime-host`）：接受循环为每个连接分配递增的 ConnectionId，并在独立命名线程上服务；连接被 catch_unwind 包裹，退出时按 Disconnect 或 HostShutdown 释放该连接的租约。
-5. **校验**（`actingcommand-contract`）：`RuntimeRequest::validate()` 依次拒绝错误 schema、零时间戳、不在允许表内的 actor/source 组合，以及内容规则里混了两族键的事实发布。0.12.58 起不再施加按族的来源门：原来把关机、模拟器控制、实例发现、自检、调度暂停/恢复、Lab 与调试、事实与规划限定在某些 actor/source 组合上的那些门都删了（谁声明治理身份牌、谁做审批决定，主机仍然核；安装切换仍然要身份牌被接受过）。失败产出 Denied + InvalidRequest 回执。
-6. **授权**（`runtime-host`）：审批决定还要求该连接此前以 `DeclareGovernanceIdentity` 声明的治理身份牌已被接受（客户端名、可选版本与实例，无共享密钥）。宿主按允许的客户端与已注册实例核验身份牌，每次声明无论接受或拒绝都记为账本事件 `governance.identity_declared`，接受后按 ConnectionId 记录。
+5. **校验**（`actingcommand-contract`）：`RuntimeRequest::validate()` 依次拒绝错误 schema、零时间戳、不在允许表内的 actor/source 组合，以及内容规则里混了两族键的事实发布。0.12.58 起不再施加按族的来源门：原来把关机、模拟器控制、实例发现、自检、调度暂停/恢复、Lab 与调试、事实与规划限定在某些 actor/source 组合上的那些门都删了（0.12.63 起治理身份牌、审批请求和安装切换随各自的请求种类一起删掉了）。失败产出 Denied + InvalidRequest 回执。
+6. **授权**（`runtime-host`）：审批决定只来自 actingd 的配置，由 Runtime 在进程内誊录；0.12.63 起没有请求再声明治理身份牌或记录审批决定（`DeclareGovernanceIdentity` 与 `RecordApprovalDecision` 已删），早先版本写下的 `governance.identity_declared` 记录照旧可读。
 7. **分派**（`runtime-host`）：`process_validated` 是从操作族到处理器的唯一穷尽匹配；带租约的族先断言目标别名/ID 是物理实例。
 8. **容量准入**（`runtime-host`）：授权新业务前先查容量投影。该投影读取进程内缓存的最后一条已提交容量样本（缓存项带有指回账本事件的引用），遇到无样本、owner epoch 变化、卷绑定变化、卷不可读或硬阈值压力时拒绝；样本超出新鲜度窗口时，先补采一次再判。拒绝会追加一条 Scheduler `denied` 事件并随回执返回。五个业务入口受此保护（同一投影另有其他调用点：策略派发、监视探针、租约转移与性能监视的预检）：授予租约、采集观测、运行受限任务、运行已调度的受限任务，以及模拟器启动后运行实例的启动包。
 9. **租约**（`scheduler`）：每个实例只有一个队列，持有者与等待者都在其中；在按实例的准入锁下两阶段准备并提交租约，准入的工作在该实例自己的工作线程（`actingd-instance-<alias>`）上运行。受限任务的 TTL 由请求自身的期限推导，任务期限再被夹到「租约到期减心跳预留」。
@@ -236,7 +236,7 @@ Windows 准确 SHA 工件包含两份 Runtime exe、待填写配置模板、默�
 
 `apps/actinglab` 的 `build.rs` 会读取 Git 元数据确定 HEAD。当 Git 元数据可用时，若同时设置了 `ACTINGCOMMAND_RUNTIME_HEAD`，它必须是 40 位十六进制且与仓库 HEAD 一致，否则构建 panic；当 Git 元数据不可用（例如无 `.git` 的源码树）时，该变量为必填。
 
-`actingd` 的正常调用接受 `--config <path>`，安装事务时可再加 `--install-held <json>`（见[宿主安装控制](distribution/windows/INSTALL.md#ab-installation-inputs-and-host-control)）；第一个参数也可以改为 `ledger-maintenance`、`check-config`、`unlock-owner` 或 `suspended` 子命令，其余一律 `usage_invalid`。配置 schema 为 `actingcommand.actingd.config.v1`，上限 1 MiB，拒绝未知字段；`bind_host` 必须能解析为 IP **且**必须是环回地址，`secret_fingerprint_salt` 必须是 16..=1024 字节。`actingd` 启动时会把驻内存的运行配置清单（所运行的子系统，以及每个生效参数及其来源；盐只记字节长度）记为程序事实 `config.subsystems`、`config.selection` 与每节一条 `config.parameters.<section>`，可用 Lab 的 `facts --program` 读取，`check-config` 也会打印。`actingledger` 的 `--state-root` 指运行时状态根，而不是 `ledger` 目录。
+`actingd` 的正常调用接受 `--config <path>`（0.12.63 起没有 `--install-held`：安装工具发停机请求停下 Runtime，再普通启动，见[宿主安装控制](distribution/windows/INSTALL.md#ab-installation-inputs-and-host-control)）；第一个参数也可以改为 `ledger-maintenance`、`check-config`、`unlock-owner` 或 `suspended` 子命令，其余一律 `usage_invalid`。配置 schema 为 `actingcommand.actingd.config.v1`，上限 1 MiB，拒绝未知字段；`bind_host` 必须能解析为 IP **且**必须是环回地址，`secret_fingerprint_salt` 必须是 16..=1024 字节。`actingd` 启动时会把驻内存的运行配置清单（所运行的子系统，以及每个生效参数及其来源；盐只记字节长度）记为程序事实 `config.subsystems`、`config.selection` 与每节一条 `config.parameters.<section>`，可用 Lab 的 `facts --program` 读取，`check-config` 也会打印。`actingledger` 的 `--state-root` 指运行时状态根，而不是 `ledger` 目录。
 
 输出与退出码（`ACTINGCOMMAND_DETAIL=codes` 时 outcome 只保留登记过的名称；不设则为完整 outcome）：
 

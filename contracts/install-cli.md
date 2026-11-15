@@ -922,8 +922,8 @@ policy|lab-options|commit|discard`, `instance remove`, `pack remove` and `pack r
     leaves no live configuration: `undo` (which then reads the file the swap kept, the input
     `backup`) puts it back, while `resume` cannot load the root (`config_unreadable`), a known
     limit of every `config_replace` that a later slice lifts. With a Runtime answering, the
-    candidate, its commit and its answer are as before: no entry gains the member. Not on the
-    production root before LAB-7 ("Journals across versions").
+    candidate, its commit and its answer are as before: no entry gains the member. Kept off the
+    production root until 0.12.62 ("Journals across versions").
   - **Taking it back**: `config restore <backup>` puts the kept file back by the same path. Its
     post-start checks judge the pauses from before the restore, so the instance it removes shows
     as a `pauses` failure (the hold's pause on it is not restored): it ends `post_check_failed`
@@ -1144,7 +1144,9 @@ The rescue face:
   that is not installer-held (the installer's and the module's starts, which run the watchdog's
   manual start, the watchdog's own, a reboot's) restores each persisted pause at revision 1 with
   its reason (`crates/runtime-host/src/host/scheduling_pause.rs`, `restore_scheduling_pauses`);
-  only an installer-held start (actingd's `--install-held`, which the module does not pass) keeps the pauses its transition restored. So the module matches the reason
+  only an installer-held start (actingd's `--install-held`, which neither `actingctl install` nor
+  the module passed, and which Workflow #434 LAB-6S4a deleted in 0.12.63) kept the pauses its
+  transition restored; since 0.12.63 every start restores them so. So the module matches the reason
   and the alias across epochs, and resumes by the epoch and revision the running Runtime shows. A
   start of the module whose readiness was never seen (it timed out and was left running) or whose
   status could not be read therefore leaves no dead end.
@@ -1491,8 +1493,8 @@ The rescue face:
     `.abandoned-<ms2>`. Nothing is deleted, and no file the manifest does not name and no other
     folder under `models\` is touched. `leftovers` lists no item of a vision root, as it lists
     none of a game root.
-  - It falls under the operating rule until LAB-7 ("Journals across versions" below): not used on
-    the production root.
+  - Until 0.12.62 it fell under the operating rule that kept the module's rows off the production
+    root ("Journals across versions" below).
 - **`state-root claim [--new-identity]`** (Workflow #453 S12, since 0.12.60; register §1.368;
   [state-root-installation.md](state-root-installation.md), "Handing a state root over"; the
   coordinator's rulings on board #453, not the owner's words). `writes`, `irreversible`, `runtime`
@@ -1543,6 +1545,17 @@ The rescue face:
   `vision_place` and its step `vision_file`, which a build before 0.12.60 does not read either):
   the testing phase keeps no old-version compatibility
   (the owner, 2026-10-11). This build reads the journals `actingctl install` wrote.
+  **Operational rule until LAB-7** (a record; lifted in 0.12.62): until 0.12.62 production
+  deployed through `actingctl install` (the coordinator's deploy kit) and kept the module's
+  `deploy`, `rollback`, `place`, `config replace`, (Workflow #453 S9) `vision place` and
+  (Workflow #453 S12) `state-root claim` off the production root, so that no journal an older
+  installer cannot read appeared there. The owner's ruling of 2026-11-15 keeps nothing compatible
+  with earlier builds, so that reason went: only the build a deploy replaces must read the
+  module's journals, and that build (v0.12.61 for 0.12.62) read every kind above, its
+  `actingctl install` being the module's own code (`crates/lab-rescue`). From 0.12.62 until
+  LAB-7 production deployed through the module (`release stage`, `deploy`, `op status`, run from
+  the live build's kept `actinglab`), with `actingctl install` of the build it replaced as the
+  way back; the rule kept no row of the module off the production root any more.
 - **A deploy since LAB-7** (Workflow #434 LAB-7, since 0.12.62; register §1.287, "Slice LAB-7";
   the owner's ruling of 11-15 that nothing is kept compatible with earlier builds). `actingctl`
   is deleted, and production deploys through the Lab's own rows, run from the root's

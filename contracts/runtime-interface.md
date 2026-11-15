@@ -138,7 +138,7 @@ commands and tools on the command line and through the Lab's MCP server.
    records the word, and no status read reports it.
 
 The Runtime keeps a connection-to-channel (and `via`, and from LAB-6S1a the initiator) table in
-memory only; an entry leaves when its connection closes. It replaces today's `governance_connections` set.
+memory only; an entry leaves when its connection closes. It replaced the `governance_connections` set, which Workflow #434 LAB-6S4a (0.12.63) deleted with the identity card.
 The table is not part of any status read and no connection count is reported:
 `RuntimeControlPlaneStatus` denies unknown fields, and which channel sent a request is
 visible in its receipt and its G14 record.
@@ -216,6 +216,11 @@ External requests then come only through the three counters and the Lab channel.
 `BindChannel`, `UpgradeState` and `UpgradeStateStatus` are lifecycle control, like
 `Health` and `InstallTransition` today: the Runtime takes them while draining, while
 held and while preparing. Otherwise a held new Runtime could not even bind a channel.
+Workflow #434 LAB-6S4a (0.12.63) deletes `InstallTransition`, `UpgradeState` and `UpgradeStateStatus` (the last two
+never answered more than `not_implemented`), and with them the drain and the held start; a
+Runtime that stops still takes the lifecycle control kinds that remain (`Health`,
+`BindChannel`, `RequestShutdown`, and the reads `RuntimeFactSnapshot`, `QueryEvents` and
+`ReadMaterial`).
 
 ## Blocks
 
@@ -269,7 +274,7 @@ one would be (section Records).
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
 | Health | handshake | — | every connection; the watchdog connects and sends only this | no |
-| DeclareGovernanceIdentity | handshake, retired at U-6 | — | replaced by `BindChannel`; accepted from old clients until U-6 | no (today it writes `governance.identity_declared`; not after U-6) |
+| DeclareGovernanceIdentity | handshake, retired at U-6; deleted by Workflow #434 LAB-6S4a (0.12.63) | — | replaced by `BindChannel`; accepted from old clients until U-6 | no (today it writes `governance.identity_declared`; not after U-6) |
 
 **General reads (11)**
 
@@ -356,18 +361,21 @@ stood until Workflow #434 LAB-6S1b (0.12.58) deleted them with every origin gate
 
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
-| RecordApprovalDecision | retired (external approval) | instruction | today only actingd itself, transcribing its configuration's approvals; U-2 makes that in-process. From U-6 it is refused on every channel with `channel_request_refused` | no; the in-process transcription is recorded through G15 with provenance `(Governance, User, Ui)` |
+| RecordApprovalDecision | retired (external approval); deleted by Workflow #434 LAB-6S4a (0.12.63) | instruction | today only actingd itself, transcribing its configuration's approvals; U-2 makes that in-process. From U-6 it is refused on every channel with `channel_request_refused` | no; the in-process transcription is recorded through G15 with provenance `(Governance, User, Ui)` |
 
 **Compat (1)**
 
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
-| InstallTransition | compat: general on `cli`, only for an old acsetup speaking install-control revision 1; superseded by the upgrade state from U-4; retires when the install-control minimum becomes 2 | instruction | an old acsetup through the installed slot's `actingctl install-transition` | yes |
+| InstallTransition | compat: general on `cli`, only for an old acsetup speaking install-control revision 1; superseded by the upgrade state from U-4; retires when the install-control minimum becomes 2; deleted by Workflow #434 LAB-6S4a (0.12.63) with install-control [0, 0] | instruction | an old acsetup through the installed slot's `actingctl install-transition` | yes |
 
 Counts: handshake 2, general reads 11, general instructions 12, general by key family 2,
 option one 16, option two 15, retired 1, compat 1; 60 in total (Workflow #429 R-0 moved
 three kinds from option two to the general instructions; Workflow #429 R-7a added the two
-player hold kinds). Tests assert each kind, never a total.
+player hold kinds). Tests assert each kind, never a total. Workflow #434 LAB-6S4a (0.12.63) deletes DeclareGovernanceIdentity, RecordApprovalDecision and InstallTransition (and
+the new kinds UpgradeState and UpgradeStateStatus below): the groups retired and compat are
+empty, and the handshake is `Health` and `BindChannel`; a request of a deleted kind does not
+decode (section "Old Runtimes": the connection is dropped without a receipt).
 
 Two consequences of §14.2 for U-3 (the model's body predates it): `actingctl
 agent-apply-resource-targets` and `agent-publish-facts` stay in actingctl and do not
@@ -382,8 +390,8 @@ envelope sends them, the Lab's `targets set` and `facts publish` included.
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
 | `BindChannel{channel, via?, initiator?}` (`initiator` Workflow #434 LAB-6S1a, `runtime-client` 8: one of the five Lab words, on `lab` only, never with `via`; answered `ChannelBound{channel, via?, initiator?}`) | handshake | — | the runtime client's handshake, once on every new TCP connection | no |
-| `UpgradeState{target, action}` (`enter`, `cancel`, `leave`) | general | instruction (upgrades only) | cli: `actingctl upgrade-state`, used by acsetup. The gate takes it from mcp and ui too, but neither frontend maps it | yes |
-| `UpgradeStateStatus{transition_id}` | general | read | cli | no |
+| `UpgradeState{target, action}` (`enter`, `cancel`, `leave`; never built past `not_implemented`, deleted by Workflow #434 LAB-6S4a (0.12.63)) | general | instruction (upgrades only) | cli: `actingctl upgrade-state`, used by acsetup. The gate takes it from mcp and ui too, but neither frontend maps it | yes |
+| `UpgradeStateStatus{transition_id}` (never built past `not_implemented`, deleted by Workflow #434 LAB-6S4a (0.12.63)) | general | read | cli | no |
 | `InstanceFactSnapshot{instance, key_prefix?}` (#389 MCP-4; `key_prefix` and the answer's `records_total` #428 S168-LB1a, since 0.12.55, `runtime-client` 7: the prefix's records kept before the view is built and measured against the frame, `records_total` the instance's records before the filter, both absent unless a prefix is sent) | general | read (one instance's facts, from memory) | cli `facts --instance [--key-prefix]`; mcp `ac_facts` (scope instance, `key_prefix`) | no |
 | `DrillRecoveryLadder{instance_alias, mode}` (#390 DRILL-1; `mode` `plan` or `device`) | option two | operation (a drill of one physical instance's stuck-recovery ladder, recorded like a real one and tagged `drill`; [emulator-control.md](emulator-control.md), "Drills") | cli `ladder-drill`; mcp `ac_ladder_drill` (operator before U-3); the emulator control origin gate (User+Ui, Cli+Cli) until Workflow #434 LAB-6S1b deleted it | yes |
 | `LoadPack`, `UnloadPack` | option two | operation (pack load and unload) | actinglab `pack load`, `pack unload` (new) | yes |
@@ -745,7 +753,8 @@ In order; the first match decides.
 1. Handshake (`Health`, `BindChannel`) → take.
 2. Connection not bound → `channel_binding_missing` (receipt only).
 3. Retired kind (external approval; from U-6 also the identity card) →
-   `channel_request_refused`.
+   `channel_request_refused`. (Workflow #434 LAB-6S4a (0.12.63) deletes both kinds: a request of either does not
+   decode.)
 4. Channel is a counter (`cli`, `mcp`, `ui`):
    - general (reads, instructions, PublishFact and PublishFacts) → take;
    - option one or option two → `channel_request_refused`.
@@ -830,7 +839,9 @@ LAB-6S3 (0.12.58) one channel is refused what its list does not hold: `ui`
   gain no member.
 - Before #383 AO-4: from v0.12.0 (U-2), the `command.received` that the C4 path already
   writes carries the channel; other writes show their channel in the receipt only.
-- After U-6 the identity card's `governance.identity_declared` is no longer written.
+- After U-6 the identity card's `governance.identity_declared` is no longer written. Since
+  Workflow #434 LAB-6S4a (0.12.63) no Runtime writes it: the kind is deleted; the records earlier releases
+  wrote stay readable.
 
 A request that MCP forwards to actinglab is a `lab` request with `via = mcp`: the Lab
 handles it, and `via` keeps what the ledger already shows today (the `client.action`
@@ -861,7 +872,7 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
    (`status`, `monitor-status` and `emulator status` by `ac_overview`). Two exceptions:
    the upgrade state (only the installer uses it; an agent that entered it without
    holding `install\writer.lock` would hand the watchdog a restart, which is exactly the
-   shutdown use Alice ruled out) and the compat `install-transition`.
+   shutdown use Alice ruled out) and the compat `install-transition` (both gone since Workflow #434 LAB-6S4a (0.12.63)).
 7. Lab commands live in the Lab module, and actinglab is its command line. An MCP
    option tool maps 1:1 to one actinglab command and runs
    `<root>\tools\actinglab.exe --json` as a child process. MCP and actinglab judge by
@@ -893,14 +904,14 @@ opening of this document).
 | new: `routine-summary (--hour \| --day) [--instance <alias\|instance_id\|ADB port>] [--since <revision>]` (Workflow #429 R-12, since 0.12.38; register §1.264) | RoutineSummary (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_routine_summary` (observer until U-3) answers the same page; the line is the page's members `{owner_epoch, granularity, revision, instances}` with the completed receipt's code `request_routine_summary_completed`, as `perf-preset` prints its own; `--since` is a page's `revision` of the same `owner_epoch`; refusals `actingctl_usage_invalid` naming the flag (no width: `--hour\|--day` `required`; both: `conflicting`; one twice: `repeated`; `--since` not a whole number: `wrong_type`), `instance_unknown`, the Runtime's refusal with its receipt; actingd absent: the client's failure, exit 1 |
 | `agent-publish-facts` | PublishFacts | general instruction (§14.2) | stays |
 | `agent-apply-resource-targets` | ApplyResourceTargets | general instruction (§14.2) | stays (whole `--policy-file` form) |
-| `install-transition` | InstallTransition | compat | stays until the install-control minimum is 2; not mapped |
+| `install-transition` | InstallTransition | compat | stayed until Workflow #434 LAB-6S4a (0.12.63) deleted it with the kind (install-control [0, 0]); actingctl refuses the word as any word no subcommand is, `actingctl_usage_invalid`; not mapped |
 | `reset` | SafeReset | option two | retires → actinglab `runtime reset` |
 | `task-run` | RunContainedTask | option two | retires → actinglab `run start` (not `lab run`, which takes no recovery package or time limit, must write a zip and answers only at the end) |
 | `emulator start`, `stop`, `restart` | ControlEmulatorInstance | general (Workflow #429 R-0; option two before) | stay |
 | `selfcheck` | SelfCheckInstance | general (Workflow #429 R-0; option two before) | stays |
 | new: `ladder-drill --instance <alias\|instance_id\|ADB port> [--device]` (#390 DRILL-1, before U-3) | DrillRecoveryLadder | option two | actingctl until U-3 moves the option-two commands; `ac_ladder_drill`; without `--device` a plan drill (`mode` `plan`) that never acts on the device; answers the admitted drill `{instance_alias, mode, ladder_request_id}`; success `recovery_ladder_drill_queued`; refusals `recovery_ladder_drill_disabled`, `recovery_ladder_drill_already_running`, `recovery_ladder_drill_cooling_down`, `recovery_admission_denied`, `instance_unknown`, `instance_ambiguous` |
 | new: `agent-wake-test --to <channel> [--instance <alias>] [--wait-s <seconds>]` (#432 AGT-1b) | AgentWakeTest | general | stays; not an MCP tool |
-| new: `upgrade-state enter`, `cancel`, `leave`, `status` | UpgradeState, UpgradeStateStatus | general | actingctl only; not mapped to MCP or the console |
+| new: `upgrade-state enter`, `cancel`, `leave`, `status` | UpgradeState, UpgradeStateStatus | general | actingctl only; not mapped to MCP or the console; never built, the kinds deleted by Workflow #434 LAB-6S4a (0.12.63) |
 | new: `overview`, `events`, `run get`, `material`, `diagnose`, `targets list`, `targets get` | as their MCP tools | general read | added so that every general MCP read has a CLI original |
 | new: `overview [--instance <alias\|instance_id\|ADB port>] [--sections <block>[,<block>…]] [--root <install root>]` (#389 MCP-8, before U-3) | Status + MonitorStatus + QueryEvents (none records anything); #385 P-m: + PerformanceStatus for the block `performance`; #384 D2-S5: + FactRefreshStatus for the block `fact_refresh`; #386 SR-6b, MCP-19b: + ScheduleExplanation with `candidates: false` for each instance row's `not_running`; #411 A42, #422 IDLE-OV: each row's newest run is read from a forward listing of the run window (QueryEvents on the instance with `from_timestamp_unix_ms`, each first page normally starting at the window's first record): its main admissions and terminals over the window, then its entry facts only from the first listing fact of its newest run found (or from the window's start when none was), so a busy instance does not read the entry facts of its whole window; runs on one instance do not overlap (one lease per instance). A first page whose window lookup the read budget cut (the budget was spent waiting for the shared connection) starts at the query's first sequence instead, sequence 1 without `from_sequence`, and pages through the history before the window, its rows still filtered to it. A row whose read finished without a run carries `run_none_in_window {since_unix_ms, until_unix_ms}`; #429 R-0b2 (register §1.243, since 0.12.36): each row's `activity` is the one Status read's member, with no further request | general read | actingctl; `ac_overview`; the answer is `ac_overview`'s, with every block whole; success `runtime_overview_reported` |
 | new: `perf-status [--instance <alias\|instance_id\|ADB port>]` (#385 P-m) | PerformanceStatus (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_overview` answers the same object as its block `performance`; the status' `instances` narrowed to the one instance; actingd absent: the client's failure, exit 1; success `runtime_performance_reported` (retired in 0.12.62 with the command, Workflow #434 LAB-7: the Lab's `status` answers the block) |
@@ -910,7 +921,7 @@ opening of this document).
 | new: `codes <code>`, `codes [--prefix <text>] [--owner <owner>] [--limit <1-100>] [--cursor <next_cursor>]` (#389 MCP-14, before U-3) | not a request: reads the outcome catalog the build embeds | general read (offline, no `--state-root`) | actingctl; `ac_outcome_code` (new); one code answers its catalog entry as the catalog holds it with its `code`, the list `{codes: [{code, category, ladder_class, status}], next_cursor?}` in name order; success `outcome_codes_reported`; refusals `outcome_code_unknown`, `cursor_invalid`, `outcome_catalog_unreadable` |
 | new: `capability-gap --capability <text> --why <text>` (#410 item 6) | not a request: appends one line to the user's local log `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl` | general instruction (local only, no `--state-root`, no Runtime, no ledger record) | actingctl; `ac_capability_gap` (new); each text one line, `capability` 1–120 and `why` 1–500 characters; answers `{path, gap: {schema_version, recorded_at_unix_ms, via, capability, why}}`, `via` `cli` or `mcp`; success `actingctl_capability_gap_recorded`; refusals `actingctl_usage_invalid`, `actingctl_capability_gap_write_failed`; nothing reads the log back and nothing sends it anywhere |
 | new: `run evidence (--request-id <id> \| --run-id <id>) [--from-step <n>] [--limit <1-100>] [--detail full\|summary]` (#389 MCP-6, before U-3; `--detail` #411 A42) | QueryEvents (Forensic) by the run's request_id, after the run is found as `ac_get_run` finds it; #411 A42: only the record types the evidence folds, page by page, none kept; the frames and the overlay are material refs read with ReadMaterial (`ac_material`) | general read | actingctl; `ac_run_evidence` (new); `{request_id, run_id?, task_id?, steps: [{step_index, page, targets: [{target, matched, box?}], action?: {kind, point?, rect?}, frames: [{ref}]}], final: {page?, frame_ref?}, next_step?, overlay?: {ref}}`; #411 A42: with `--detail summary` each step is `{step_index, page, kind?, started_unix_ms, duration_ms?, frames_total, frame_sequence?, finished?, failure_code?}` and the page holds up to 100 steps by default; the output shape is the client's only; success `run_evidence_reported`; refusals `run_unknown`, `actingctl_usage_invalid` |
-| new: `evidence confirm-read (--artifact <artifact_id> \| --run <run_id>)` (#422 LN-7c C, `rd-1026/ln7c/final-query.md` §4; Alice's ruling 70) | RecordClientAction: one `client.action` of kind `Command`, `surface_id` `cli`, `control_id` `evidence_read_frame` (value: the frame's artifact id) or `evidence_read_run` (value: the run id), each a path-safe string; on a (Cli, Cli) connection, after the identity card `actingctl` declared in the same correlation (a refused card fails the command). No other record and no new record type; no G14 value. The Runtime checks these two controls only: a `Command` with a path-safe artifact or run id, from (agent, adapter), (cli, cli) or (user, ui), naming a capture frame the ledger holds (its `artifact.verified` record, by the `artifact_id` index) or a run with at least one (by the run's link index); anything else is refused `client_action_invalid` (receipt `denied`) and nothing is recorded. The ledger's frame index links the record to its target ([ledger-observer.md](ledger-observer.md) §11.7, `read_confirmed`); a run's confirmation counts for the frames captured before it. Opening or reading a frame (`ac_run_evidence`, `ac_observe`, `ac_material`) writes no confirmation | general instruction | actingctl; `ac_evidence_confirm_read` (new); `{target: {artifact_id} \| {run_id}, event_id, sequence, covers: {evidence_frames, in_kept}}`, the recorded `client.action` and (#422 LN-7c Q) the evidence frames it covers, counted by the frame cleaner's classification and the kept listing (`actingcommand_ledger::evidence_covers`: its statements on a read-only connection of actingctl's own to `--state-root`, with the switches of the Runtime's `config.parameters.top_level` at the Runtime's clock): of the frame, or of the run's frames captured at or before the confirmation, `in_kept` those in `kept\`, `evidence_frames` those and the live ones classed Lab or error; a count that cannot be made (a frame index that does not cover the ledger: `ledger_index_mismatch`; an unreadable state root) leaves `covers` out with that outcome in `warnings`, the confirmation recorded all the same; success `request_record_client_action_completed`; refusals `client_action_invalid` (with the receipt), `actingctl_usage_invalid` (exactly one of `--artifact` and `--run`; an id that is none, `not_recognised`) |
+| new: `evidence confirm-read (--artifact <artifact_id> \| --run <run_id>)` (#422 LN-7c C, `rd-1026/ln7c/final-query.md` §4; Alice's ruling 70) | RecordClientAction: one `client.action` of kind `Command`, `surface_id` `cli`, `control_id` `evidence_read_frame` (value: the frame's artifact id) or `evidence_read_run` (value: the run id), each a path-safe string; on a (Cli, Cli) connection (until Workflow #434 LAB-6S4a (0.12.63) after the identity card `actingctl` declared in the same correlation, a refused card failing the command; since then the confirmation is the interaction's only request). No other record and no new record type; no G14 value. The Runtime checks these two controls only: a `Command` with a path-safe artifact or run id, from (agent, adapter), (cli, cli) or (user, ui), naming a capture frame the ledger holds (its `artifact.verified` record, by the `artifact_id` index) or a run with at least one (by the run's link index); anything else is refused `client_action_invalid` (receipt `denied`) and nothing is recorded. The ledger's frame index links the record to its target ([ledger-observer.md](ledger-observer.md) §11.7, `read_confirmed`); a run's confirmation counts for the frames captured before it. Opening or reading a frame (`ac_run_evidence`, `ac_observe`, `ac_material`) writes no confirmation | general instruction | actingctl; `ac_evidence_confirm_read` (new); `{target: {artifact_id} \| {run_id}, event_id, sequence, covers: {evidence_frames, in_kept}}`, the recorded `client.action` and (#422 LN-7c Q) the evidence frames it covers, counted by the frame cleaner's classification and the kept listing (`actingcommand_ledger::evidence_covers`: its statements on a read-only connection of actingctl's own to `--state-root`, with the switches of the Runtime's `config.parameters.top_level` at the Runtime's clock): of the frame, or of the run's frames captured at or before the confirmation, `in_kept` those in `kept\`, `evidence_frames` those and the live ones classed Lab or error; a count that cannot be made (a frame index that does not cover the ledger: `ledger_index_mismatch`; an unreadable state root) leaves `covers` out with that outcome in `warnings`, the confirmation recorded all the same; success `request_record_client_action_completed`; refusals `client_action_invalid` (with the receipt), `actingctl_usage_invalid` (exactly one of `--artifact` and `--run`; an id that is none, `not_recognised`) |
 | new: `--wait <s>` on `emulator start`, `stop`, `restart` and `task-run` (#389 MCP-21, before U-3) | as the command | as the command | `--wait` 1–3600 s; without it the command waits for its receipt as before; a wait that ends first prints `{request_id?, correlation_id, state: "in_progress"}` with `command_wait_expired` (`operation`, `request_id` when the command knows it, `waited_ms`) and exits 1, and the request goes on in the Runtime (it is served on its connection's thread whether the client still waits or not); no MCP argument (`ac_emulator`, `ac_run_pack` answer within their call budget or with a handle); moves with the commands to actinglab at U-3 |
 | planned: `pack-schedule set`, `pack-schedule get` (SR-11), the SR-5a entry (`perf-status` is built, #385 P-m, and the D2 S5 query `fact-refresh`, #384 D2-S5, above) | PublishFacts, reads | general | actingctl; MCP and console as their slices define |
 | planned: `clear-kept` (#375 R5e) | ClearKeptFolder | option two | actinglab `clear-kept` instead |
@@ -1064,6 +1075,9 @@ family's rows that had none (`ac_record_candidates`, `ac_record_amend`, `ac_reco
   removes the argument.
 - U-6 stops MCP's identity card, its per-write `client.action` record and the record
   after a Lab tool; G14's `mcp` and `via` replace them. MCP writes are `(Cli, Cli)`.
+  Workflow #434 LAB-6S4a (0.12.63) (the coordinator's ruling N8 on board #434) stops the first two: a write
+  is the first request after the handshake, the binding's initiator `Lab-MCP` naming where
+  it came from; the `client.action` after a Lab tool's capture stays.
 - Instructions text: no tiers; "queries and the instructions operation needs are always
   there; authoring and debugging tools appear only when the installer ticked their
   option, from the next session"; "approvals and configuration file edits belong to
@@ -1136,6 +1150,12 @@ releases and closes itself. `enter` closes the old Runtime; `cancel` undoes it; 
 reads; `leave` releases the new Runtime and stays with the installer, which first proves
 that the held Runtime is the process it started (#381 A). It works with or without the
 Lab. Shapes are install-control revision 2 (`component-interfaces.md`), from U-4.
+
+Workflow #434 LAB-6S4a (0.12.63): never built (`UpgradeState` and `UpgradeStateStatus` answered
+`not_implemented`). The two kinds, `InstallTransition`, the transition machine and actingd's
+`--install-held` start are deleted, install-control is [0, 0], and an installer closes a
+Runtime with `request-shutdown` (revision 0); the codes below that only these paths emitted
+are retired in 0.12.63. What follows is the design as U-0 wrote it.
 
 ### Shapes
 
@@ -1243,7 +1263,8 @@ contract, runtime-client and runtime-host), so runtime-client's
   still closes the old one with revision 1.
 - To a Runtime that declares at most 0, acsetup uses `request-shutdown --wait`.
 - A later release declares [2, 2]: InstallTransition and `actingctl install-transition`
-  retire (Alice decides when).
+  retire (Alice decides when). Workflow #434 LAB-6S4a (0.12.63) retires them without revision 2: the Runtime
+  declares [0, 0], so every installer takes revision 0.
 
 ## Pack load and unload
 
@@ -1433,6 +1454,8 @@ them.
 | `mcp_tier_retired` | warning | actingctl (`mcp_tier_`) | mcp-serve got the retired `--tier`; it starts as usual | `operation` | U-3 |
 | `lab_command_option_disabled` | error | actinglab (`lab_command_`) | an actinglab offline package tool without option one | `operation`, `lab_option` | U-3 |
 
+- Workflow #434 LAB-6S4a (0.12.63) retires the five `upgrade_state_` codes, never emitted (U-4
+  was not built).
 - `pack_registry_loaded` carries `package_id` only (M-PKG). Its result is
   `PackLoaded{key, named_by_catalog?}` (U-1).
 - U-0 registers the keys `channel` and `lab_option` and their vocabularies of the
@@ -1468,12 +1491,12 @@ hold yet are registered as retired then):
 | `invalid_resource_authoring_origin`, `invalid_signature_origin`, `invalid_runtime_debug_origin` | retired by LAB-6S1b (0.12.58) | none, as above |
 | `invalid_emulator_control_origin` | retired by LAB-6S1b (0.12.58) | none, as above (discovery, the self-check and the drill had the same gate) |
 | `invalid_scheduling_pause_origin` | retired by LAB-6S1b (0.12.58) | none |
-| `invalid_install_transition_origin` | retired by LAB-6S1b (0.12.58), before its kind | none; the host's `install_identity_required` stays with the kind |
+| `invalid_install_transition_origin` | retired by LAB-6S1b (0.12.58), before its kind | none; the host's `install_identity_required` stayed with the kind until LAB-6S4a |
 | `invalid_agent_wake_test_origin` (Workflow #432 AGT-1b), `invalid_player_hold_origin` (Workflow #429 R-7a) | retired by LAB-6S1b (0.12.58) | none |
-| `invalid_governance_origin` | with `DeclareGovernanceIdentity` (LAB-6S4a): since LAB-6S1b only the host's own check of the card emits it | none |
+| `invalid_governance_origin` | retired with `DeclareGovernanceIdentity` by LAB-6S4a (`retired_in` 0.12.63); between LAB-6S1b and LAB-6S4a only the host's own check of the card emitted it | none |
 | `invalid_agent_dispatcher_origin` | retired by LAB-6S1b (0.12.58) | none, as above |
-| `governance_authority_required` | with `RecordApprovalDecision` (LAB-6S4a) | none |
-| `install_identity_required` | U-4 | none |
+| `governance_authority_required` | retired with `RecordApprovalDecision` by LAB-6S4a (`retired_in` 0.12.63) | none |
+| `install_identity_required` | retired with `InstallTransition` by LAB-6S4a (`retired_in` 0.12.63; U-4 planned it) | none |
 | `runtime_debug_origin_invalid`, `runtime_authoring_origin_invalid` | U-6 | `client_channel_refused` |
 | `tier_not_enabled` | retired by Workflow #434 LAB-7 (`retired_in` 0.12.62; U-3 planned it) with the first MCP server and its tiers | none: the Lab's MCP server has no tiers (U-3 planned `lab_tool_option_disabled`) |
 | `invalid_governance_identity_card` and the identity card's refusals | U-6 | none |
@@ -1496,7 +1519,8 @@ AO-0 registers every v0.12.0 persisted shape at once. From this model:
 1. G14's two members: `channel` (vocabulary `channel`: `cli`, `mcp`, `ui`, `lab`) and
    the optional `via` (`mcp`, `ui`).
 2. G14 action values: none new. `UpgradeState`, `LoadPack` and `UnloadPack` reuse the
-   value AO-0 gives InstallTransition (suggested: the existing `runtime.action`);
+   value AO-0 gives InstallTransition (suggested: the existing `runtime.action`; LAB-6S4a
+   deletes `UpgradeState` and InstallTransition);
    `ClearKeptFolder` reuses `artifact.retention`.
 3. The pack table's workbench record: key `host.pack_registry.<package_id>` (startup
    and prerequisite packages by configuration item, shape AO-0's); one record per load

@@ -8,32 +8,32 @@
 // and the next dispatch follows the ladder's own release (model-369 v3.1 §6 steps 2, 5 and 6;
 // H-1, W-1, S-1). Steps 1, 3 and 4 are the incident replay in `instance_workers`.
 //
-// G9 (inventory-host key 22; req-basis-ha H-4 G9): an install drain or a shutdown during rung 3's
-// readiness wait (R4) ends the wait at its holding check. Rung 3 fails with the interruption, the
-// climb ends exhausted at Warning (`recovery_ladder_interrupted` caused by the interruption) and
-// the ladder releases its key once (model-369 H-3 holding checks, ruling Q8, §5.2, §5.5). The
-// pause row is `instance_workers::`
-// `a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release`.
+// G9 (inventory-host key 22; req-basis-ha H-4 G9): a shutdown during rung 3's readiness wait (R4)
+// ends the wait at its holding check. Rung 3 fails with the interruption, the climb ends
+// exhausted at Warning (`recovery_ladder_interrupted` caused by the interruption) and the ladder
+// releases its key once (model-369 H-3 holding checks, ruling Q8, §5.2, §5.5). The pause row is
+// `instance_workers::`
+// `a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release`. Workflow #434
+// LAB-6S4a (0.12.63): the install drain rows left with the install transition.
 //
-// G9's manual-clock rows (test plan v2.2 §3.10 H-1-rest; host key 22): since HOST-I2 the
+// G9's manual-clock row (test plan v2.2 §3.10 H-1-rest; host key 22): since HOST-I2 the
 // readiness window, its backoff and every poll's verdict read the Runtime clock. On a manual
-// clock that stays inside the window, a drain or a shutdown still ends rung 3 at the wait's next
-// poll, before a second boot check, with the interruption and not the window's end as the reason.
+// clock that stays inside the window, a shutdown still ends rung 3 at the wait's next poll,
+// before a second boot check, with the interruption and not the window's end as the reason.
 //
 // Every wait returns as soon as the awaited emulator call or ledger record arrives; `GATE_WAIT`
 // only bounds a broken run.
 
 use super::emulator_controller::EmulatorCall;
-use super::gate_382_h1::ManualMonotonicClock;
 use super::instance_workers::{
     LadderRun, admit_ladder_run, admit_ladder_run_at, all_events, closed_ledger_events,
     emulator_ladder_fixture, ladder_end_code, ladder_finished, ladder_releases, ladder_setup,
-    rung_outcomes, wait_for_ladder_end, wait_until,
+    rung_outcomes, wait_until,
 };
 use super::*;
 use actingcommand_contract::{
-    EmulatorInstanceAction, FactPayload, InstallTransitionAction, RecoveryLadderOutcome,
-    RecoveryRung, RecoveryRungOutcome, RuntimePayload,
+    EmulatorInstanceAction, FactPayload, RecoveryLadderOutcome, RecoveryRung, RecoveryRungOutcome,
+    RuntimePayload,
 };
 use actingcommand_policy::SchedulingDecisionState;
 use std::sync::{Mutex, OnceLock};
@@ -207,68 +207,47 @@ fn lease_status(host: &RuntimeHost, connection: u64) -> (bool, u32) {
     (instance.lease_active(), instance.queued_request_count())
 }
 
-/// Declares the governance identity on `connection` and begins an install drain, as the
-/// installer does; the drain is accepted.
-fn begin_install_drain(host: &RuntimeHost, connection: u64) {
-    let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let connection = ConnectionId::new(connection).expect("connection");
-    let governance = |operation| {
-        RuntimeRequest::new(
-            ids.mint_request_id().expect("request id"),
-            ids.mint_correlation_id().expect("correlation id"),
-            None,
-            EventActor::User,
-            EventSource::Ui,
-            unix_ms_now().expect("wall clock"),
-            operation,
-        )
-        .expect("governance request")
-    };
-    // Workflow #434 LAB-6S3: the connection binds `cli`, as actingctl's does; bound from the
-    // (User, Ui) envelope it would be `ui`, which the UI list refuses an installation transition.
-    let bound = host
-        .process_request_for_test(
-            &governance(RuntimeOperation::BindChannel {
-                channel: actingcommand_contract::RuntimeChannel::Cli,
-                via: None,
-                initiator: None,
-            }),
-            connection,
-        )
-        .expect("binding");
-    assert_eq!(bound.state(), RuntimeReceiptState::Completed, "{bound:?}");
-    let declared = host
-        .process_request_for_test(
-            &governance(RuntimeOperation::DeclareGovernanceIdentity {
-                card: test_governance_card(),
-            }),
-            connection,
-        )
-        .expect("declaration");
-    assert_eq!(
-        declared.state(),
-        RuntimeReceiptState::Completed,
-        "{declared:?}"
-    );
-    let begin = host
-        .process_request_for_test(
-            &governance(RuntimeOperation::InstallTransition {
-                target: host.runtime_info().shutdown_target(),
-                action: InstallTransitionAction::BeginDrain {
-                    transition_id: "h4-drain-during-readiness-wait".to_owned(),
-                    timeout_ms: 120_000,
-                },
-            }),
-            connection,
-        )
-        .expect("begin drain");
-    assert!(
-        !matches!(
-            begin.state(),
-            RuntimeReceiptState::Denied | RuntimeReceiptState::Failed
-        ),
-        "{begin:?}"
-    );
+// The manual Runtime clock of the ladder rows (HOST-I2; moved here from `gate_382_h1` when the
+// install transition's rows went, Workflow #434 LAB-6S4a): its monotonic time, the one the
+// ladder's readiness wait reads, moves only when the test moves it or a wait of the
+// contained-task kernel spends it (test plan E-3, EXEC-I3: the kernel's timers read this clock
+// and its waits are this clock's `pause`). Its wall time moves 1 ms at every reading, so records
+// keep strictly increasing times as on a real clock (a fact observed at the same instant as the
+// one before it, from another source, is refused).
+struct ManualMonotonicClock {
+    unix_ms: AtomicU64,
+    monotonic_ms: AtomicU64,
+}
+
+impl ManualMonotonicClock {
+    fn new(unix_ms: u64) -> Self {
+        Self {
+            unix_ms: AtomicU64::new(unix_ms),
+            monotonic_ms: AtomicU64::new(0),
+        }
+    }
+
+    // Moves the monotonic time on by `duration_ms`.
+    fn advance(&self, duration_ms: u64) {
+        self.monotonic_ms.fetch_add(duration_ms, Ordering::SeqCst);
+    }
+}
+
+impl RuntimeClock for ManualMonotonicClock {
+    fn sample(&self) -> RuntimeHostResult<RuntimeClockSample> {
+        Ok(RuntimeClockSample {
+            unix_ms: self.unix_ms.fetch_add(1, Ordering::SeqCst) + 1,
+            monotonic_ms: self.monotonic_ms.load(Ordering::SeqCst),
+        })
+    }
+
+    // Test plan E-3 (§3.10): a wait of the contained-task kernel moves the monotonic time forward
+    // by its duration, in whole milliseconds rounded up, and returns at once, as
+    // `ManualRuntimeClock` does; a kernel wait therefore ends at its budget on this clock too.
+    fn pause(&self, duration: Duration) {
+        let duration_ms = duration.as_nanos().div_ceil(1_000_000);
+        self.advance(u64::try_from(duration_ms).unwrap_or(u64::MAX));
+    }
 }
 
 /// Ledger revision 3 (#378 A3): the code of the first cause of the ladder end's outcome. An
@@ -529,29 +508,6 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
     host.close().expect("close host");
 }
 
-/// G9, drain row (model-369 H-3 holding checks, ruling Q8, §5.2): an install drain begun while
-/// rung 3 waits for readiness (R4) ends the wait. Rung 3 fails with
-/// `recovery_ladder_drain_requested`, the climb ends exhausted at Warning, the ladder releases
-/// its key once and the Runtime is not fatal. The reason, not `recovery_android_not_booted`,
-/// shows that the drain and not the end of the readiness window ended the wait.
-#[test]
-fn gate_an_install_drain_during_the_readiness_wait_fails_rung_three_and_releases_once() {
-    let run = emulator_ladder_fixture(0, true);
-    let calls = run.state.emulator.listen();
-    run.fail_scheduled_run();
-    await_readiness_wait(&calls);
-    begin_install_drain(&run.host, 223);
-    wait_for_ladder_end(&run.host, POLICY_INSTANCE_ALIAS);
-    let events = all_events(&run.host);
-    assert_wait_interrupted(
-        &events,
-        run.context.lease_token().lease_id(),
-        "recovery_ladder_drain_requested",
-    );
-    assert!(run.host.fatal_error().expect("runtime health").is_none());
-    run.host.close().expect("close host");
-}
-
 /// G9, shutdown row (model-369 H-3, review L3, W-2 shutdown order, ruling Q8): a host close while
 /// rung 3 waits for readiness (R4) ends the wait. Rung 3 fails with
 /// `recovery_ladder_shutdown_requested`, the climb ends exhausted at Warning, the ladder releases
@@ -696,22 +652,6 @@ fn later_boot_checks(calls: &mpsc::Receiver<EmulatorCall>) -> usize {
         .try_iter()
         .filter(|call| *call == EmulatorCall::ObserveForeground)
         .count()
-}
-
-// G9 on the manual clock, drain row (host key 22): the clock stays inside the readiness window;
-// an install drain ends rung 3 at the wait's next poll with `recovery_ladder_drain_requested`,
-// before a second boot check; the climb ends exhausted at Warning and the ladder releases its
-// key once.
-#[test]
-fn gate_on_the_manual_clock_an_install_drain_ends_the_readiness_wait_at_its_next_poll() {
-    let run = manual_clock_ladder_in_readiness_wait();
-    begin_install_drain(&run.host, 224);
-    wait_for_ladder_end(&run.host, POLICY_INSTANCE_ALIAS);
-    let events = all_events(&run.host);
-    assert_wait_interrupted(&events, run.run_lease, "recovery_ladder_drain_requested");
-    assert_eq!(later_boot_checks(&run.calls), 0, "a second boot check");
-    assert!(run.host.fatal_error().expect("runtime health").is_none());
-    run.host.close().expect("close host");
 }
 
 // G9 on the manual clock, shutdown row (host key 22): the clock stays inside the readiness

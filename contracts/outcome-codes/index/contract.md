@@ -125,9 +125,9 @@ column means. 918 codes.
 | `frame_memory_owner_missing_or_mismatched` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): frame memory owner missing or mismatched. |
 | `frame_workspace_unavailable` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): frame workspace unavailable. |
 | `gesture_not_projectable` | error | none | 0.12.3 | active | pending | written | A page-projection element whose click is a gesture the projection cannot describe as a tap or a plain drag (a segmented drag); the element is listed but not… |
-| `governance_client_not_allowed` | error | none | 0.12.0 | active | pending | TBD | The Runtime refused a governance identity card: governance client not allowed. |
-| `governance_identity_already_declared` | error | none | 0.12.0 | active | pending | TBD | The Runtime refused a governance identity card: governance identity already declared. |
-| `governance_instance_unknown` | error | none | 0.12.0 | active | pending | TBD | The Runtime refused a governance identity card: governance instance unknown. |
+| `governance_client_not_allowed` | error | none | 0.12.0 | active | pending | TBD | Kept for records written before 0.12.63, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a… |
+| `governance_identity_already_declared` | error | none | 0.12.0 | active | pending | TBD | Kept for records written before 0.12.63, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a… |
+| `governance_instance_unknown` | error | none | 0.12.0 | active | pending | TBD | Kept for records written before 0.12.63, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a… |
 | `holder_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime's wire error code (receipt projection `code`): holder mismatch. |
 | `identifier_clock_invalid` | error | none | 0.12.0 | active | pending | TBD | Identifier issuance failed: identifier clock invalid. |
 | `identifier_contract_invalid` | error | none | 0.12.0 | active | pending | TBD | Identifier issuance failed: identifier contract invalid. |
@@ -158,7 +158,7 @@ column means. 918 codes.
 | `install_member_identity_invalid` | error | none | 0.12.35 | active | pending | written | A member identity of an install selection v2 or a slot document breaks its form: a repository that is not owner/name, a commit that is not 40 lowercase hex… |
 | `install_member_pairing_mismatch` | error | none | 0.12.35 | active | pending | written | An install selection v2's runtime and tools members name different repositories or commits: a Runtime is selected only with the Tools of its own build (Workflow… |
 | `install_members_slot_mismatch` | error | none | 0.12.0 | active | settled | written | The selection's members reference is not \<slot>/MEMBERS.json of the slot it selects. |
-| `install_previous_transition_mismatch` | error | none | 0.12.0 | active | settled | written | A held start's previous ticket names another transition than the held start itself; the previous Runtime's drained transition and the new start must share one… |
+| `install_previous_transition_mismatch` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its status are gone, so no previous transition is compared. |
 | `install_process_slot_mismatch` | error | none | 0.12.0 | active | settled | written | The program runs from another slot (or another folder) than the one the active selection names, so it refuses to run with that selection's inputs. |
 | `install_provider_generation_mismatch` | error | none | 0.12.0 | active | settled | written | The selection names a provider file that does not lie under install/generations/\<generation>/ of its generation, or that is the configuration file itself. |
 | `install_root_unavailable` | error | none | 0.12.0 | active | settled | written | An installation step cannot resolve the install root's canonical path: the slot lock, the active selection or a selection check names a root the OS cannot open. |
@@ -197,7 +197,7 @@ column means. 918 codes.
 | `invalid_agent_wake` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid agent wake. |
 | `invalid_agent_wake_test_origin` | error | none | 0.12.37 | retired | pending | written | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code. |
 | `invalid_agent_wake_trigger` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid agent wake trigger. |
-| `invalid_approval_decision` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid approval decision. |
+| `invalid_approval_decision` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The request kind RecordApprovalDecision is gone, so no approval decision of a request is validated. |
 | `invalid_approval_id` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid approval id. |
 | `invalid_approval_payload` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid approval payload. |
 | `invalid_approval_target` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid approval target. |
@@ -300,7 +300,7 @@ column means. 918 codes.
 | `invalid_governance_client_version` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid governance client version. |
 | `invalid_governance_identity_card` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): invalid governance identity card. |
 | `invalid_governance_instance` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid governance instance. |
-| `invalid_governance_origin` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): invalid governance origin. |
+| `invalid_governance_origin` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): DeclareGovernanceIdentity and RecordApprovalDecision went, and with them the host's check of a card's origin. |
 | `invalid_host_failure` | error | none | 0.12.0 | retired | pending | TBD | Runtime contract validation refused a value: invalid host failure. |
 | `invalid_input_coordinate` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid input coordinate. |
 | `invalid_input_duration` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid input duration. |
@@ -312,11 +312,11 @@ column means. 918 codes.
 | `invalid_input_text` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: invalid input text. |
 | `invalid_install_file_reference` | error | none | 0.12.0 | active | settled | written | A file reference of the selection (members, config or provider) is not a portable path relative to the install root (empty, over 1024 bytes, or with a… |
 | `invalid_install_selection` | error | none | 0.12.0 | active | settled | written | The selection parses but is not one this build reads: its schema_version is not actingcommand.install-selection.v1, or its generation is 0. |
-| `invalid_install_timeout` | error | none | 0.12.0 | active | settled | written | An install transition timeout is 0 or above 600000 ms. |
-| `invalid_install_transition_id` | error | none | 0.12.0 | active | settled | written | An install transition id is empty, longer than 128 bytes, or holds a character other than ASCII letters, digits, '-' and '_'. |
+| `invalid_install_timeout` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its actions are gone, so no timeout of one is read. |
+| `invalid_install_transition_id` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its actions are gone, so no transition id is read. |
 | `invalid_install_transition_origin` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S1b): RuntimeRequest::validate judges no request by its origin, so nothing emits this code; the host still refuses an install… |
-| `invalid_install_transition_receipt` | error | none | 0.12.0 | active | settled | written | A receipt that carries an install transition status is not in state completed, so it breaks the receipt contract. |
-| `invalid_install_transition_status` | error | none | 0.12.0 | active | settled | written | An install transition status breaks its rules: admission_closed disagrees with the phase, or the failure code is empty, longer than 128 bytes or not a code… |
+| `invalid_install_transition_receipt` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition is gone, so no transition receipt is validated. |
+| `invalid_install_transition_status` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its status are gone. |
 | `invalid_instance_alias` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): invalid instance alias. |
 | `invalid_instance_binding_device` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: a runtime.instance_bound record whose ADB target or device does not fit (Workflow #398 RD-1b): an instance… |
 | `invalid_instance_binding_discovery` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: invalid instance binding discovery. |
@@ -720,7 +720,7 @@ column means. 918 codes.
 | `request_configure_settings_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a ConfigureSettings request: the Runtime did what the request asked. |
 | `request_control_emulator_instance_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a ControlEmulatorInstance request: the Runtime did what the request asked. |
 | `request_debug_package_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a DebugPackage request: the Runtime did what the request asked. |
-| `request_declare_governance_identity_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a DeclareGovernanceIdentity request: the Runtime did what the request asked. |
+| `request_declare_governance_identity_completed` | success | none | 0.12.0 | retired | pending | written | Retired (Workflow #434 LAB-6S4a): The request kind DeclareGovernanceIdentity is gone, so no receipt carries this code. |
 | `request_discover_instances_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a DiscoverInstances request: the Runtime did what the request asked. |
 | `request_drill_recovery_ladder_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a DrillRecoveryLadder request: the Runtime admitted the drill and queued its claim. |
 | `request_edit_goal_completed` | success | none | 0.12.61 | active | pending | written | A completed receipt of an EditGoal request (Workflow #463 V3, runtime-client 9): one value of an application's goal page was set or cleared by its name and the… |
@@ -730,7 +730,7 @@ column means. 918 codes.
 | `request_goal_view_completed` | success | none | 0.12.61 | active | pending | written | A completed receipt of a GoalView request (Workflow #463 V3, runtime-client 9): one application's goal page, every entry of its game's goals.json and every… |
 | `request_health_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a Health request: the Runtime did what the request asked. |
 | `request_input_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a Input request: the Runtime did what the request asked. |
-| `request_install_transition_completed` | success | none | 0.12.0 | active | settled | written | The receipt of an InstallTransition request completed: the Runtime performed the action and reports the transition's status (one success code per request kind). |
+| `request_install_transition_completed` | success | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition is gone, so no receipt carries this code. |
 | `request_instance_fact_snapshot_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of an InstanceFactSnapshot request: the Runtime did what the request asked. |
 | `request_match_diagnostic_signatures_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a MatchDiagnosticSignatures request: the Runtime did what the request asked. |
 | `request_monitor_status_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a MonitorStatus request: the Runtime did what the request asked. |
@@ -751,7 +751,7 @@ column means. 918 codes.
 | `request_read_material_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a ReadMaterial request: the Runtime did what the request asked. |
 | `request_recognize_artifact_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a RecognizeArtifact request: the Runtime did what the request asked. |
 | `request_record_agent_response_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a RecordAgentResponse request: the Runtime did what the request asked. |
-| `request_record_approval_decision_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a RecordApprovalDecision request: the Runtime did what the request asked. |
+| `request_record_approval_decision_completed` | success | none | 0.12.0 | retired | pending | written | Retired (Workflow #434 LAB-6S4a): The request kind RecordApprovalDecision is gone, so no receipt carries this code. |
 | `request_record_authoring_event_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a RecordAuthoringEvent request: the Runtime did what the request asked. |
 | `request_record_client_action_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a RecordClientAction request: the Runtime did what the request asked. |
 | `request_record_debug_event_completed` | success | none | 0.12.0 | active | pending | written | A completed receipt of a RecordDebugEvent request: the Runtime did what the request asked. |

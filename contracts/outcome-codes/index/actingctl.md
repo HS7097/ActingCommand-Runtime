@@ -19,7 +19,7 @@ column means. 204 codes.
 | `answer_exported` | warning | none | 0.12.0 | active | pending | written | An answer larger than the output budget was written whole to an export file. |
 | `arguments_invalid` | error | none | 0.12.0 | active | pending | TBD | An MCP tool was called with arguments its input schema refuses. |
 | `binding_requires_unavailable` | warning | none | 0.12.0 | active | pending | written | record draft and ac_binding_draft: the answer carries no binding_requires. |
-| `call_budget_exhausted` | error | none | 0.12.0 | active | pending | TBD | An MCP call reached the end of its time budget. |
+| `call_budget_exhausted` | warning | none | 0.12.0 | active | pending | TBD | An MCP call reached the end of its time budget. |
 | `check_config_failed` | error | none | 0.12.0 | active | pending | TBD | actingd check-config could not run or printed no JSON report. |
 | `check_config_unavailable` | warning | none | 0.12.0 | active | pending | written | record draft and ac_binding_draft: actingd check-config gave no report. |
 | `client_action_not_recorded` | warning | none | 0.12.0 | active | pending | written | Recording the call's client.action in the Runtime failed after actinglab answered. |
@@ -50,9 +50,9 @@ column means. 204 codes.
 | `install_process_state_root_mismatch` | error | none | 0.12.0 | active | pending | TBD | mcp-serve --state-root names another state root than the install's configuration. |
 | `install_root_unresolved` | error | none | 0.12.0 | active | pending | TBD | actinglab does not run from an install root. |
 | `install_state_root_unresolved` | error | none | 0.12.0 | active | pending | TBD | The MCP server cannot tell the Runtime state root. |
-| `install_transition_aborted` | error | none | 0.12.0 | active | settled | written | actingctl install-transition: the Runtime reports the transition in phase aborted: the drain ended and admission reopened on the old owner. |
-| `install_transition_failed` | error | none | 0.12.0 | active | settled | written | actingctl install-transition: the Runtime reports the transition in phase failed, with admission closed. |
-| `install_transition_reported` | success | none | 0.12.0 | active | settled | written | actingctl install-transition: the Runtime answered the transition action. |
+| `install_transition_aborted` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): Actingctl install-transition went with InstallTransition. |
+| `install_transition_failed` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): Actingctl install-transition went with InstallTransition. |
+| `install_transition_reported` | success | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): Actingctl install-transition went with InstallTransition. |
 | `instance_ambiguous` | error | none | 0.12.0 | active | pending | TBD | An instance selector names more than one configured instance. |
 | `instance_emulator_controlled` | success | none | 0.12.0 | active | pending | TBD | actinglab emu start\|stop\|restart: the Runtime completed the emulator control. |
 | `instance_facts_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab facts: one instance's facts (InstanceFactSnapshot) were printed, as ac_facts with scope instance answers them (Workflow #389 MCP-4). |
@@ -85,7 +85,7 @@ column means. 204 codes.
 | `mcp_config_program_unresolved` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl mcp-config is deleted; the Lab's mcp config prints the second generation's snippet, so nothing emits this… |
 | `mcp_config_program_unsupported` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl mcp-config is deleted; the Lab's mcp config prints the second generation's snippet, so nothing emits this… |
 | `mcp_file_too_large` | error | none | 0.12.0 | active | pending | TBD | mcp-serve, or actinglab status reading the build manifest, read a file (a configuration, a manifest, an export) larger than its bound limit_bytes. |
-| `mcp_identity_card_refused` | warning | none | 0.12.0 | active | pending | written | The Runtime refused mcp-serve's governance identity card (governance.allowed_clients); the write went ahead without it and the refusal is the caused_by link. |
+| `mcp_identity_card_refused` | warning | none | 0.12.0 | retired | pending | written | Retired (Workflow #434 LAB-6S4a): The identity card actingctl mcp-serve declared before a write went with DeclareGovernanceIdentity (the coordinator's ruling N8… |
 | `mcp_input_failed` | error | none | 0.12.0 | active | pending | TBD | mcp-serve could not read stdin and ended; the OS error is the caused_by link. |
 | `mcp_message_malformed` | error | none | 0.12.0 | active | pending | TBD | JSON-RPC -32700: an MCP message line is not JSON; the parser's error is the caused_by link. |
 | `mcp_message_too_large` | error | none | 0.12.0 | active | pending | TBD | JSON-RPC -32700: an MCP message line is longer than limit_bytes and was skipped. |
@@ -134,7 +134,7 @@ column means. 204 codes.
 | `runtime_shutdown_requested` | success | none | 0.12.0 | active | settled | written | actinglab shutdown: the Runtime accepted the shutdown request; the result carries its receipt. |
 | `runtime_status_reported` | success | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-7, 0.12.62): actingctl status is deleted; the Lab's status answers runtime_overview_reported, so nothing emits this code. |
 | `shutdown_wait_journal_unreadable` | error | none | 0.12.0 | active | settled | written | The Lab's shutdown wait could not read the owner journal under the state root: path names the file, line the record that does not decode, and the decoder's or… |
-| `shutdown_wait_timeout` | error | none | 0.12.0 | active | settled | written | actinglab shutdown --wait or install-transition --wait: the accepted owner did not close and exit within timeout_ms. |
+| `shutdown_wait_timeout` | error | none | 0.12.0 | active | settled | written | actinglab shutdown --wait: the accepted owner did not close and exit within timeout_ms. |
 | `since_out_of_range` | error | none | 0.12.0 | active | pending | TBD | ac_diagnose: since_unix_ms is further back than the window allows. |
 | `spawn_failed` | error | none | 0.12.0 | active | pending | TBD | The watchdog's start could not spawn the Runtime. |
 | `start_runtime_already_running` | error | none | 0.12.0 | active | pending | TBD | actinglab up or restart: a live process holds the owner lock of the state root (path), so nothing was started and nothing was changed. |

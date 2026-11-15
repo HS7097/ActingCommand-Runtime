@@ -28,7 +28,7 @@ use super::observe::{self, HostProbe, Installation, Layout};
 use super::start::{Attempt, StartedProcess, StartedState, Target, TickSeams};
 use super::state::WatchdogState;
 use super::{Report, Tick, install, run_once_with};
-use crate::held_runtime::{HELD_SALT, NoInstances};
+use crate::no_instance_runtime::{NoInstances, TEST_SALT};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_runtime_host::{RuntimeHost, RuntimeHostConfig};
 use serde_json::{Value, json};
@@ -158,7 +158,7 @@ fn wd1_a_formally_closed_single_location_runtime_is_not_started() {
 fn wd1_a_live_single_location_runtime_is_left_alone() {
     let single = SingleRoot::new();
     let host = RuntimeHost::start(
-        RuntimeHostConfig::new(single.state.clone(), HELD_SALT),
+        RuntimeHostConfig::new(single.state.clone(), TEST_SALT),
         Arc::new(NoInstances),
     )
     .expect("a Runtime starts on the root's state root");

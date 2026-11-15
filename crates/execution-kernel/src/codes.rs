@@ -438,8 +438,13 @@ actingcommand_contract::outcome_vocabulary! {
     /// there; it goes into the outcome's values, never into the detail text, so the failure
     /// identity and the streak stay as they are. The kernel slices set it.
     pub enum ConfirmationProblem: "confirmation_problem" {
-        /// The step's own page was still on screen after the input.
+        /// The program saw the step's own page at the end of the confirmation after the input and
+        /// had seen no other page since the input (a linear step judges the frames in between, a
+        /// page-graph step only the last frame).
         InputNotTaken => "input_not_taken",
+        /// After the input the screen showed something else and was the step's own page (the
+        /// page the input was sent from) again at the end (Workflow #469 K1 fix round 2).
+        ReturnedToOwnPage => "returned_to_own_page",
         /// The awaited page appeared only after the confirmation wait.
         AwaitedPageLate => "awaited_page_late",
         /// The screen settled on another page the package declares.
@@ -458,6 +463,12 @@ actingcommand_contract::outcome_vocabulary! {
         NothingRecognised => "nothing_recognised",
         /// The screen stayed unchanged until the still limit (page graph).
         ScreenStill => "screen_still",
+        /// The awaited page was on screen at the end, but the state the step declares for it did
+        /// not hold (page graph, Workflow #469 K2 fix round 2).
+        FinalStateUnmet => "final_state_unmet",
+        /// A wait step's own page stayed on screen until its `max_ms` ran out (page graph,
+        /// Workflow #469 K2 fix round 2).
+        WaitMaxReached => "wait_max_reached",
         /// The wait ended on its loading allowance.
         LoadingLimit => "loading_limit",
         /// The step reached a page the package declares as an error page.

@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #378 A2a, part 2 (brief-a2a.md, tests T1 and T4): every refusal of actingd's
-//! `ledger-maintenance` arguments and of its `--install-held` input carries an active registered
-//! code of category `error` (test plan A-1, the registry half), and an ignored environment
-//! override is warned about as the fixed code `env_override_ignored` with the variable as a value
-//! (decision D6).
+//! `ledger-maintenance` arguments carries an active registered code of category `error` (test
+//! plan A-1, the registry half), and an ignored environment override is warned about as the fixed
+//! code `env_override_ignored` with the variable as a value (decision D6). Workflow #434 LAB-6S4a
+//! (0.12.63): the `--install-held` input is gone, and with it its half of T1.
 
-use super::{ActingdError, config, ledger_maintenance, parse_install_held_arguments};
+use super::{ActingdError, config, ledger_maintenance};
 use actingcommand_contract::outcome::Category;
-use actingcommand_contract::{
-    IdentifierIssuer, InstallHeldStartup, InstallTransitionTicket, RuntimeShutdownTarget,
-};
 use actingcommand_device::EnvOverrides;
 use std::ffi::{OsStr, OsString};
 
@@ -38,29 +35,9 @@ fn assert_registered_error(input: &str, code: &str) {
     );
 }
 
-/// `--install-held` input as the installer passes it: the held startup's JSON.
-fn held(transition_id: &str, timeout_ms: u64, previous: Option<&str>) -> String {
-    let issuer = IdentifierIssuer::new().expect("identifier issuer");
-    let held = InstallHeldStartup {
-        transition_id: transition_id.to_owned(),
-        request_id: *issuer.mint_request_id().expect("request id").transport(),
-        timeout_ms,
-        previous: previous.map(|previous| InstallTransitionTicket {
-            target: RuntimeShutdownTarget {
-                owner_epoch: *issuer.mint_owner_epoch().expect("owner epoch").transport(),
-                pid: 4_242,
-                started_at_unix_ms: 1_800_000_000_000,
-            },
-            transition_id: previous.to_owned(),
-            request_id: *issuer.mint_request_id().expect("request id").transport(),
-        }),
-    };
-    serde_json::to_string(&held).expect("held startup JSON")
-}
-
 /// #378 A2a T1 (brief-a2a.md; test plan A-1 `apps` 12, the registry half; ruling c-items:14).
 #[test]
-fn gate_ledger_maintenance_and_install_held_refusals_carry_registered_error_codes() {
+fn gate_ledger_maintenance_refusals_carry_registered_error_codes() {
     for (input, values) in [
         ("too few arguments", vec!["ledger-maintenance", "verify"]),
         (
@@ -80,28 +57,6 @@ fn gate_ledger_maintenance_and_install_held_refusals_carry_registered_error_code
             .expect_err("ledger-maintenance refuses the arguments");
         assert_registered_error(
             &format!("ledger-maintenance with {input}"),
-            &refusal_code(&refused),
-        );
-    }
-
-    for (input, value) in [
-        ("a value that is not JSON", "not json".to_owned()),
-        ("an empty transition id", held("", 60_000, None)),
-        ("timeout 0", held("transition-a2a", 0, None)),
-        (
-            "a previous ticket of another transition",
-            held("transition-a2a", 60_000, Some("transition-other")),
-        ),
-    ] {
-        let refused = parse_install_held_arguments(arguments(&[
-            "--config",
-            "actingd.json",
-            "--install-held",
-            value.as_str(),
-        ]))
-        .expect_err("--install-held refuses the input");
-        assert_registered_error(
-            &format!("--install-held with {input}"),
             &refusal_code(&refused),
         );
     }

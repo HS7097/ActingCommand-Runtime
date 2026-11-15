@@ -658,12 +658,16 @@ const CLOCK_IMPORTS: &[&str] = &["sleep", "now"];
 /// Bounded waits; their duration is the last argument and must be `GATE_WAIT`.
 const BOUNDED_WAITS: &[&str] = &["recv_timeout", "wait_timeout"];
 const GATE_WAIT: &str = "GATE_WAIT";
-/// `(file, enclosing function, token)`: each entry allows exactly one finding. The first is the
-/// form of the CD-27 D2 (a) answer (Workflow #382 MCP-T1) for Workflow #411 A5 (coordinator 10-19
-/// 00:2x): the 60 s admission budget that `describe_path` takes and no test reaches. The second
-/// is the same form for Workflow #434 LAB-5G3 (the coordinator's ruling of 2026-11-13): the
-/// deadline that `Job::wait_until` of the Lab's MCP server takes and no test reaches. Workflow
-/// #434 LAB-7 removed the two entries of actingctl's gate files (#672's and MCP-T1's) with them.
+/// `(file, enclosing function, token)`: each entry allows exactly one finding, of the form the
+/// #672 acceptance ruled (Workflow #381 comment 6084712633, point 2): this `Instant::now` only
+/// anchors a deadline and measures nothing. The first is the CD-27 D2 (a) form (Workflow #382
+/// MCP-T1) for Workflow #411 A5 (coordinator 10-19 00:2x): the 60 s admission budget that
+/// `describe_path` takes and no test reaches. The second is the same form for Workflow #434
+/// LAB-5G3 (the coordinator's ruling of 2026-11-13): the deadline that `Job::wait_until` of the
+/// Lab's MCP server takes and no test reaches. Workflow #434 LAB-6S4a (0.12.63) removed the entry
+/// of the #672 ruling itself, the run client's deadline of `actingctl install-transition`
+/// (`apps/actingctl/src/gate_381a.rs`), with that subcommand; Workflow #434 LAB-7 removed MCP-T1's
+/// (`apps/actingctl/src/mcp/tests/gate_mcpt1.rs`) with actingctl.
 const DETERMINISM_ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "apps/actinglab/src/tests/gate_0121_pkgcheck.rs",

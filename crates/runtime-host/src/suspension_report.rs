@@ -1090,6 +1090,10 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
                 "run_failure": Outcome::relayed(failure_spelling),
                 "consecutive_same_error": failure.consecutive_same_error,
                 "effective_class": wire(&failure.effective_class),
+                // Workflow #469 H2 (register §1.398): why the settlement paused the pair, by the
+                // function the live pause takes it from, on the same execution record.
+                "pause_cause": crate::policy_control::pause_cause(failure)
+                    .map(crate::codes::PauseCause::as_str),
                 "severity": wire(&severity),
                 "paused": paused,
                 "previous": previous_json,

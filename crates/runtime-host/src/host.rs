@@ -384,11 +384,11 @@ use requests::{
 };
 use state_control::reconcile_runtime_state;
 
+/// Workflow #434 LAB-6S4a (0.12.63): the stages of the installer's transition and the held start
+/// (`install_drain`, `install_held`, `install_release`) went with them; the records that name
+/// them stay readable, since the ledger keeps the stage as its location's spelling.
 #[derive(Clone, Copy)]
 pub enum RuntimeLifecycleFailureStage {
-    InstallDrain,
-    InstallHeld,
-    InstallRelease,
     PolicyInitialization,
     PolicyMonitor,
     PolicyForward,
@@ -509,76 +509,12 @@ fn fail_policy_execution_append_for_test() -> RuntimeHostResult<()> {
     ))
 }
 
-/// Workflow #381 A (HOST-I3): the checkpoints of a held start that a test hook sees, in the
-/// order the start passes them. Test builds and the `test-hooks` feature only.
-#[cfg(any(test, feature = "test-hooks"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PreparationCheckpoint {
-    /// The held owner published its runtime info and answers installation control.
-    Held,
-    /// The release was accepted (`preparing`); provider assembly has not begun.
-    Preparing,
-}
-
-/// What a test hook asks of the held start when it returns from a checkpoint.
-#[cfg(any(test, feature = "test-hooks"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PreparationTestAction {
-    Continue,
-    /// Latches the Runtime's fatal state with `ledger_failure` during `operation`, as a request
-    /// whose ledger write failed would, then continues.
-    LatchLedgerFailure {
-        operation: Location,
-    },
-}
-
-/// Read-only views a test hook may take while the start waits in it.
-#[cfg(any(test, feature = "test-hooks"))]
-pub struct PreparationProbe<'a> {
-    ledger: &'a GlobalLedger,
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-impl PreparationProbe<'_> {
-    /// The sequence of the ledger's last committed event.
-    pub fn ledger_head(&self) -> RuntimeHostResult<u64> {
-        self.ledger
-            .latest_sequence()
-            .map_err(|_| ledger_error(HostLocation::ReadTestLedgerHead))
-    }
-}
-
-/// Called on the starting thread at each checkpoint of a held start; it may block there.
-#[cfg(any(test, feature = "test-hooks"))]
-pub type PreparationTestHook = Arc<
-    dyn Fn(PreparationCheckpoint, &PreparationProbe<'_>) -> PreparationTestAction + Send + Sync,
->;
-
-#[cfg(any(test, feature = "test-hooks"))]
-fn run_preparation_test_hook(
-    shared: &HostShared,
-    hook: Option<&PreparationTestHook>,
-    checkpoint: PreparationCheckpoint,
-) -> RuntimeHostResult<()> {
-    let Some(hook) = hook else {
-        return Ok(());
-    };
-    match hook(
-        checkpoint,
-        &PreparationProbe {
-            ledger: &shared.ledger,
-        },
-    ) {
-        PreparationTestAction::Continue => Ok(()),
-        PreparationTestAction::LatchLedgerFailure { operation } => {
-            shared.fatal.mark(ledger_error(operation))
-        }
-    }
-}
-
-/// Workflow #318 cfg4: which governance identity cards the host accepts. `None` accepts any
-/// well-formed card; a set accepts only a card whose `client` it contains. Nothing here is a
-/// secret: a card is a declaration the host verifies and records, not a credential.
+/// Workflow #318 cfg4: which governance identity cards the host accepted. `None` accepted any
+/// well-formed card; a set accepted only a card whose `client` it contains. Nothing here is a
+/// secret: a card was a declaration the host verified and recorded, not a credential. Workflow
+/// #434 LAB-6S4a (0.12.63): the identity card is gone, so the host checks nothing against the
+/// policy any more; the configuration still reads, checks and reports it (`actingd-config` does
+/// not move in this slice).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GovernancePolicy {
     pub allowed_clients: Option<BTreeSet<String>>,
@@ -586,7 +522,6 @@ pub struct GovernancePolicy {
 
 #[derive(Clone)]
 pub struct RuntimeHostConfig {
-    install_held: Option<actingcommand_contract::InstallHeldStartup>,
     state_root: PathBuf,
     /// Workflow #453 S11 (`contracts/state-root-installation.md`): the installation root the
     /// Runtime runs from; `None` for a Runtime not started from one, which reads, mints and
@@ -674,8 +609,6 @@ pub struct RuntimeHostConfig {
     /// #411 A51: how long a caller waits for one ledger writer reply, when not the ledger's
     /// default; only a test sets it.
     ledger_reply_timeout: Option<Duration>,
-    #[cfg(any(test, feature = "test-hooks"))]
-    preparation_test_hook: Option<PreparationTestHook>,
     /// Workflow #369 E3 (#670 safety net), test only: the run whose settlement the start
     /// refuses as the ledger would.
     #[cfg(test)]
@@ -756,7 +689,6 @@ impl RuntimeHostConfig {
         Self {
             state_root: state_root.into(),
             installation_root: None,
-            install_held: None,
             device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode::default(),
             bind_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             scheduler: SchedulerConfig::default(),
@@ -795,8 +727,6 @@ impl RuntimeHostConfig {
             runtime_commit: None,
             daemon_reporter: None,
             ledger_reply_timeout: None,
-            #[cfg(any(test, feature = "test-hooks"))]
-            preparation_test_hook: None,
             #[cfg(test)]
             settlement_refusal_for_test: None,
             #[cfg(test)]
@@ -1003,20 +933,8 @@ impl RuntimeHostConfig {
         self
     }
 
-    /// Workflow #381 A (HOST-I3): a hook a held start calls at each `PreparationCheckpoint`.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn with_preparation_test_hook(mut self, hook: PreparationTestHook) -> Self {
-        self.preparation_test_hook = Some(hook);
-        self
-    }
-
     pub fn with_bind_address(mut self, bind_address: SocketAddr) -> Self {
         self.bind_address = bind_address;
-        self
-    }
-
-    pub fn with_install_held(mut self, held: actingcommand_contract::InstallHeldStartup) -> Self {
-        self.install_held = Some(held);
         self
     }
 
@@ -1092,14 +1010,15 @@ impl RuntimeHostConfig {
         self
     }
 
-    /// Installs the governance identity policy (Workflow #318 cfg4); without one the host
-    /// accepts any well-formed governance identity card.
+    /// Installs the governance identity policy (Workflow #318 cfg4). Since Workflow #434
+    /// LAB-6S4a no card is declared, so the host checks it and reports it, and decides nothing by
+    /// it.
     pub fn with_governance_policy(mut self, governance_policy: GovernancePolicy) -> Self {
         self.governance_policy = governance_policy;
         self
     }
 
-    /// The governance identity policy the host verifies cards against.
+    /// The governance identity policy of the configuration, as the manifest reports it.
     pub const fn governance_policy(&self) -> &GovernancePolicy {
         &self.governance_policy
     }
@@ -1679,13 +1598,7 @@ impl RuntimeHost {
         ) -> RuntimeHostResult<Arc<dyn ExecutionBackendProvider>>,
     ) -> RuntimeHostResult<Self> {
         config.validate()?;
-        let held_startup = config.install_held.is_some();
-        #[cfg(any(test, feature = "test-hooks"))]
-        let preparation_test_hook = config.preparation_test_hook.clone();
-        let lifecycle_admission = installation::LifecycleAdmission::new(
-            config.install_held.clone(),
-            config.clock.as_ref(),
-        )?;
+        let lifecycle_admission = installation::LifecycleAdmission::starting();
         // Workflow #453 S11 (`contracts/state-root-installation.md`): beside the format refusal,
         // before anything is written (the state root's folder included) and so before the owner
         // journal, a Runtime started from an installation root reads the state root's
@@ -2224,8 +2137,6 @@ impl RuntimeHost {
             #[cfg(test)]
             capture_memory_sample_for_test: config.capture_memory_sample_for_test,
             governance_write_gate: Mutex::new(()),
-            governance_policy: config.governance_policy.clone(),
-            governance_connections: Mutex::new(BTreeSet::new()),
             connection_channels: Mutex::new(BTreeMap::new()),
             fact_write_gate: Mutex::new(()),
             backend_selfcheck_availability_gate: Mutex::new(()),
@@ -2472,7 +2383,7 @@ impl RuntimeHost {
             lock(&shared.performance, HostLocation::StartRuntimeHost)?
                 .install_capacity_resampler(HostShared::capacity_resampler(&shared))?;
             shared.synchronize_fact_store()?;
-            shared.initialize_installation()?;
+            shared.invalidate_install_transition_facts()?;
             // Workflow #453 S11: the fact follows the record. The claim this start placed is
             // mirrored once into the ledger as the tagged runtime fact
             // `host.state_root_installation` (its time and who claimed); a record of this
@@ -2498,9 +2409,6 @@ impl RuntimeHost {
                 {
                     shared.record_runtime_fact(record)?;
                 }
-            }
-            if held_startup {
-                publish_runtime_info(&host.info_path, &host.info)?;
             }
             if let Some(released) = released_by_exit {
                 shared.append_lifecycle_observed(released.phase(), EventLinksDraft::default())?;
@@ -2528,23 +2436,6 @@ impl RuntimeHost {
                         )
                     })?,
             );
-            #[cfg(any(test, feature = "test-hooks"))]
-            if held_startup {
-                run_preparation_test_hook(
-                    &shared,
-                    preparation_test_hook.as_ref(),
-                    PreparationCheckpoint::Held,
-                )?;
-            }
-            shared.wait_install_release()?;
-            #[cfg(any(test, feature = "test-hooks"))]
-            if held_startup {
-                run_preparation_test_hook(
-                    &shared,
-                    preparation_test_hook.as_ref(),
-                    PreparationCheckpoint::Preparing,
-                )?;
-            }
             shared.check_install_preparation()?;
             let preparation_boundary = || shared.check_install_preparation();
             let provider = assemble(&mut crate::ProviderStartup {
@@ -2897,9 +2788,8 @@ impl RuntimeHost {
             let start_anchors = shared.settle_previous_epoch_contained_runs()?;
             shared.expire_agent_sessions()?;
             shared.check_install_preparation()?;
-            shared.restore_install_pauses()?;
             host.scheduling_pause_restore =
-                shared.restore_scheduling_pauses(held_startup, previous_owner_epoch)?;
+                shared.restore_scheduling_pauses(previous_owner_epoch)?;
             shared.note_start_pauses(&host.scheduling_pause_restore)?;
             // IDLE-1P (#405): the instances the idle action closed and their wakes, as the pauses
             // are restored and before any instance is prepared; after an earlier start that kept
@@ -3036,13 +2926,11 @@ impl RuntimeHost {
             // Workflow #421 INST-2: the start is ready from here on, for `StartReport`.
             shared.note_start_ready(shared.clock.sample()?.unix_ms)?;
             shared.finish_install_preparation()?;
-            if !held_startup {
-                publish_runtime_info(&host.info_path, &host.info)?;
-            }
+            publish_runtime_info(&host.info_path, &host.info)?;
             Ok::<_, RuntimeHostError>(())
         })();
         if let Err(mut original) = prepared {
-            if let Err(recording) = shared.fail_install_preparation(&original) {
+            if let Err(recording) = shared.fail_install_preparation() {
                 original = original
                     .into_fatal()
                     .with_related_failure("install_failure_recording", &recording);
@@ -3240,14 +3128,6 @@ impl RuntimeHost {
             .shared_ref(HostLocation::ReadRuntimeShutdown)?
             .fatal
             .is_shutdown_requested())
-    }
-
-    /// Workflow #376: whether an install drain holds root admission (`draining`/`drained`) or
-    /// the host is stopping. An in-process reader only; the daemon's policy monitor waits while
-    /// this is true instead of sending a subscription the drain would refuse.
-    pub fn is_lifecycle_draining(&self) -> RuntimeHostResult<bool> {
-        self.shared_ref(HostLocation::ReadLifecycleDraining)?
-            .lifecycle_draining()
     }
 
     /// Workflow #383 AO-7: the host's business notifications for the daemon's policy monitor.
@@ -3702,6 +3582,42 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::HostLocation::RecordFactRefreshTransitions)?
             .replace_fact_refresh_recorder_for_test(recorder)
+    }
+
+    /// Workflow #469 H1, test only: withdraws `instance_alias`'s policy availability through the
+    /// backend self-check gate's own publisher (`backend_selfcheck:<cause>`), at the host clock.
+    #[cfg(test)]
+    pub(crate) fn publish_backend_selfcheck_unavailable_for_test(
+        &self,
+        instance_alias: &str,
+        cause: &str,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::HostLocation::ReadPolicyInstanceAvailability)?
+            .publish_backend_selfcheck_unavailable(instance_alias, cause)
+    }
+
+    /// Workflow #469 H1, test only: withdraws `instance_alias`'s policy availability through the
+    /// device link's own publisher (`device_link:<state>`), at the host clock.
+    #[cfg(test)]
+    pub(crate) fn publish_device_link_unavailable_for_test(
+        &self,
+        instance_alias: &str,
+        state: actingcommand_contract::DeviceLinkState,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::HostLocation::ReadPolicyInstanceAvailability)?
+            .publish_device_link_unavailable(instance_alias, state.as_str())
+    }
+
+    /// Workflow #469 H1, test only: withdraws `instance_alias`'s policy availability through the
+    /// device state's own publisher (`device_state:<hold>`), at the host clock.
+    #[cfg(test)]
+    pub(crate) fn publish_device_state_unavailable_for_test(
+        &self,
+        instance_alias: &str,
+        hold: crate::codes::DeviceHold,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::HostLocation::ReadPolicyInstanceAvailability)?
+            .publish_device_state_unavailable(instance_alias, hold.as_str())
     }
 
     /// ROUT-L RL-1b, test only (acceptance A4): how many times the scheduler workbench opened
@@ -4499,17 +4415,6 @@ impl RuntimeHost {
             snapshot_reached,
             resume,
         })
-    }
-
-    /// SHUT-FU (Workflow #378), test only: `observer` is called each time a shutdown request or
-    /// an install CommitShutdown starts to wait for lifecycle work in flight on other threads.
-    #[cfg(test)]
-    pub(crate) fn observe_shutdown_settle_for_test(
-        &self,
-        observer: Box<dyn Fn() + Send>,
-    ) -> RuntimeHostResult<()> {
-        self.shared_ref(crate::codes::test_spellings::TestLocation::ObserveShutdownSettleForTest)?
-            .observe_shutdown_settle_for_test(observer)
     }
 
     #[cfg(test)]
@@ -6258,8 +6163,6 @@ struct HostShared {
     capture_memory_sample_for_test: Option<actingcommand_artifact_store::MemorySample>,
     // Client facts and approval authority are projected and appended as one ordered transition.
     governance_write_gate: Mutex<()>,
-    governance_policy: GovernancePolicy,
-    governance_connections: Mutex<BTreeSet<ConnectionId>>,
     // Workflow #389 U-2 (model section 3.2): the channel (and `via`) each open connection bound,
     // in memory only; an entry leaves when its connection closes. It is not part of any status
     // read. The identity card's set above stays until U-6 retires the card.
@@ -7030,11 +6933,6 @@ fn accept_loop(
     let mut connections = Vec::new();
     let mut failure = None;
     while !shared.fatal.is_shutdown_requested() {
-        if let Err(error) = shared.tick_install() {
-            record_failure(&mut failure, shared.fatal.mark(error.clone()));
-            record_failure(&mut failure, Err(error));
-            break;
-        }
         reap_finished_connections(&mut connections, &shared, &mut failure);
         if shared.fatal.is_shutdown_requested() {
             break;
@@ -7213,22 +7111,9 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         let Some(_work) = work else {
             continue;
         };
-        let draining = match shared.lifecycle_draining() {
-            Ok(draining) => draining,
-            Err(error) => {
-                shared.fatal.mark(error.clone().into_fatal())?;
-                return Err(error);
-            }
-        };
-        // Workflow #369 §5.2: while an install drains, every waiting entry except a holding
-        // ladder's continuation is cancelled; holders finish or stop at their next check.
-        if draining
-            && !shared.fatal.is_shutdown_requested()
-            && let Err(error) = shared.cancel_queues_for_drain()
-        {
-            shared.fatal.mark(error.clone().into_fatal())?;
-            return Err(error);
-        }
+        // Workflow #434 LAB-6S4a (0.12.63): the install drain's cancellation of the waiting
+        // entries (Workflow #369 §5.2) went with the install transition; a stop cancels them at
+        // the close (`cancel_all_queues_for_shutdown`).
         // Workflow #403: every new resource fence goes to a recovery ladder or a person before
         // the sweep's pump grants anything.
         if let Err(error) = shared.hand_resource_fences_to_ladders() {
