@@ -904,8 +904,9 @@ fn run_recorded_touch(
 /// The fix round after the train's review: the word of a flag of the screen after a recorded
 /// effect whose value is no whole number, the word the Lab's other flags answer for it
 /// (`argument_problem` `wrong_type`); `range` stays the word of a value outside its bounds, which
-/// the recording checks (`record_after_capture_check`).
-const NOT_A_WHOLE_NUMBER: &str = "wrong_type";
+/// the recording checks (`record_after_capture_check`). #463 stage two, train 1, fix round:
+/// `record frames` answers its numbers' so too (`session_record.rs`).
+pub(crate) const NOT_A_WHOLE_NUMBER: &str = "wrong_type";
 
 /// #463 S1-1: `--after-ms <ms>`, a whole number of milliseconds (the recording checks its bound,
 /// 0 to 60000, `range`); anything else is `validation_failed` with `details{argument: "after_ms",

@@ -2381,9 +2381,10 @@ on a capture that was not stored (`sent_on_unstored_capture`) answers the stored
 names and the warning `press_frame_not_stored`, its `after` being the frames after that one
 recorded after the press's time (one recorded between them, a mark's sample or a transition's
 frame, is `before`); `--before` or `--after` outside 0..=100 (`details{argument, reason:
-"range", value, min, max}`), not a whole number or given twice (`details{argument, reason: "range",
-value}`) is `validation_failed`, and a step that does not exist, is dropped or was converted is
-`record_step_not_found`. A frame a box admits as a step's sample on a draft (#463 S2-5, `source:
+"range", value, min, max}`), or `--step`, `--before` or `--after` not a whole number
+(`details{argument, reason: "wrong_type", value}`, as the waits of a recorded press answer it) is
+`validation_failed`; a flag given more than once is its last value, as those waits read theirs;
+and a step that does not exist, is dropped or was converted is `record_step_not_found`. A frame a box admits as a step's sample on a draft (#463 S2-5, `source:
 recording_frame`, the file and sha256 of the capture it was taken from, which keeps its own place)
 is a frame of the step table like any other and enters the sequence when the mark admits it, after
 every frame stored before that mark: on a recording marked after its presses it stands among the
@@ -3059,7 +3060,7 @@ The answer:
 
 | state | means | entered by | left by |
 |---|---|---|---|
-| `material` | nothing of stage two is written: no step carries a page name, a mark (own, reused or forbidden, an anchor, a click guard), a press region (a click other than a press `tap`, `swipe` or `long-tap --record` recorded, or one that follows a mark or declares a retry), a choice (a select), an optional flag or a transition, and the recording took no ending | stage one: the presses with `--record`, `record archive` | the first such write (`record mark` on the reopened recording) |
+| `material` | nothing of stage two is written: no step carries a page name, a mark (own, reused or forbidden, an anchor, a click guard), a press region (a click other than a press `tap`, `swipe` or `long-tap --record` recorded, or one that follows a mark or declares a retry, or a press box: a press recorded by its point whose rectangle is no longer that one pixel, #463 S2-5), a choice (a select), an optional flag or a transition, and the recording took no ending | stage one: the presses with `--record`, `record archive` | the first such write (`record mark` on the reopened recording) |
 | `draft` | something of stage two is written, and `missing` is not empty | a stage-two write that leaves something missing | the last missing item done (`ready`) |
 | `ready` | `missing` is empty: every pre-check passes and every self-check: `record stop` would write the package | the last missing item done | `record stop` (`packaged`), or a write that leaves something missing (`draft`) |
 | `packaged` | stopped, its package written (`artifact`), and nothing changed since (no `amended_at_unix_ms`); nothing is checked again, `missing` and `checks_after` are empty | `record stop` | `record mark` after the stop ("Marking after stop"): then `ready` or `draft` by the rows above, until `record stop` generates the package again |

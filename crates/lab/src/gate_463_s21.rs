@@ -44,7 +44,8 @@
 // #463 stage two, train 1 (`record ready` meets S2-5's boxes), on the recording S2-5's test of the
 // whole of stage two makes, with its bench (`gate_463_s25_draft`: 160x90 screens of gray noise):
 // - `s21_train_a_press_box_ends_the_press_point_only_of_its_step`: the three recorded taps are
-//   `press_point_only`; a press box on step 2 ends step 2's alone.
+//   `press_point_only`; a press box on step 2 ends step 2's alone, and (the train's fix round) it
+//   is a stage-two write: `material` before it, `draft` after it.
 // - `s21_train_the_draft_boxed_on_every_step_is_ready_and_material_before`: archived and reopened,
 //   `material`; boxed on every step as that test boxes it, `ready` with nothing missing, every
 //   self-check run and no `press_point_only`.
@@ -802,11 +803,13 @@ fn draft_recording() -> draft::Bench {
 
 // #463 stage two, train 1: `record ready` meets S2-5's boxes. Each recorded tap is
 // `press_point_only`; a press box drawn on the middle step (S2-5: the click's rectangle becomes the
-// box, the press stays as recorded) ends that step's warning, and only that one.
+// box, the press stays as recorded) ends that step's warning, and only that one. The train's fix
+// round: the press box is a stage-two write, so the recording, `material` before it, is a `draft`.
 #[test]
 fn s21_train_a_press_box_ends_the_press_point_only_of_its_step() {
     let bench = draft_recording();
     let pressed = read_ready(&bench.state(), draft::INSTANCE, &bench.ocr);
+    assert_eq!(pressed["status"], "material", "{pressed}");
     assert_eq!(
         pressed["warnings"],
         json!([
@@ -819,6 +822,8 @@ fn s21_train_a_press_box_ends_the_press_point_only_of_its_step() {
 
     bench.marked(json!({"step": 2, "boxes": [draft::button_box("press", 1)]}));
     let boxed = read_ready(&bench.state(), draft::INSTANCE, &bench.ocr);
+    // The press box is a stage-two write: the recording is a draft now.
+    assert_eq!(boxed["status"], "draft", "{boxed}");
     assert_eq!(
         boxed["warnings"],
         json!([point_only(1, "f0001"), point_only(3, "f0005")]),

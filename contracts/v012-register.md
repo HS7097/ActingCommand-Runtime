@@ -30656,7 +30656,10 @@ recording S2-5's test of the whole of stage two makes, with that gate's bench:
 `press_point_only`; a press box on step 2 ends step 2's alone) and
 `s21_train_the_draft_boxed_on_every_step_is_ready_and_material_before` (archived and reopened,
 `material`; boxed on every step as that test boxes it, `ready` with nothing missing and every
-self-check run). No code, word or key added.
+self-check run). The train's fix round: a press box is a stage-two write (`stage_two_written`
+counts a press recorded by its point whose rectangle is no longer that one pixel, the test
+`press_point_only` makes), so a recording on which only a press box was drawn is `draft`, not
+`material`, and the first test asserts both states. No code, word or key added.
 
 ### 1.426 Slice #463 S2-13 (0.12.65): `record frames` lists the stored frames just before and just after one press (Workflow #463; the owner's words of 11-15 on board #463 that in the second stage of recording the Lab may need to accept an agent's request to hand back the several, or several dozen, frames before and after a press, and that after a press the screen may change quickly; the rules are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s213-record-frames.md`, read on the head `5706d568` of the train of stage one, #1757)
 
@@ -30775,10 +30778,17 @@ before that mark; the contract's section says so in one sentence, and S2-5's
 of step 2 lists the sample `f0007` after step 2's press, after step 3's `f0006`). The check of the
 parent's waits this section names, `check_after_capture`, is `record_after_capture_check` since the
 stage-one train's last fix round (§1.403), which answers `after_ms` too with `details{argument,
-reason: "range", value, min, max}`, as `record frames` answers its sides; that round also made the
-parent's flags answer a value that is no whole number `wrong_type` (it was `range`), while `record
-frames` answers such a value, and a flag given twice, `range` as it was built: left as it is, since
-this train adds no behaviour. No behaviour changes.
+reason: "range", value, min, max}`, as `record frames` answers its sides out of 0..=100. That round
+also made the parent's flags answer a value that is no whole number `wrong_type` (it was `range`).
+The train's fix round (the coordinator's ruling: one convention for the command line, one cause
+per word): `record frames` reads its numbers as the parent's flags do (`after_capture_ms`): a value
+of `--step`, `--before` or `--after` that is no whole number is `validation_failed` with
+`details{argument, reason: "wrong_type", value}` (the parent's `NOT_A_WHOLE_NUMBER`, now
+`pub(crate)`), a flag given more than once is its last value and no longer refused, and `range`
+stays for a side outside 0..=100 alone. The contract's sentence says so; actinglab's
+`s213_the_command_line_refuses_a_number_it_cannot_read` asserts `wrong_type`, and for a flag given
+twice that the last value is the one read (`--after 3 --after abc` refused for `abc`, `--step x
+--step 1 --after abc --after 3` going on to the read). No code or word is added.
 
 ### 1.427 Slice #463 S2-5 (0.12.65): boxes on a draft: the recognition region and the press region of any recorded step (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two hands the agent the frame and where the press went and lets the agent set the recognition region and the press region; the owner's words of 11-15 on the design of board #471: a box is drawn on one state of one screen, its base images are the frames of the action whose similarity reaches 0.95, a picture with boxes is only a preview; the design `rd-1115/471-box-design.md`, its English part, and its first implementation, slices B1 to B3, paused before stage one and ported here by hand; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s25-record-boxes.md`, stacked on the stage-one train #1757 at `32f71ea6291c`)
 

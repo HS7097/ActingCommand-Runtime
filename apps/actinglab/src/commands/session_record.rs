@@ -1,3 +1,4 @@
+use super::device_commands::NOT_A_WHOLE_NUMBER;
 use super::record_hold::{self, Ended};
 use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::{
@@ -3321,10 +3322,11 @@ fn run_record_reopen(
 /// frames --step <k> [--before <n>] [--after <n>] [--record-id <id>]`, offline and without the
 /// recording lock: the stored frames just before and just after the press of step `k` of the
 /// recording `record status` reads, or of the one `--record-id` names (`record_frames`). `--step`
-/// is required; it and `--before` and `--after` are whole numbers given once (the Lab checks the
-/// two sides' range, 0 to 100), anything else `validation_failed` with `details{argument, reason:
-/// "range", value}`, as the waits of a recorded press are refused (`after_capture_ms`). The answer
-/// is the Lab's.
+/// is required; it and `--before` and `--after` are whole numbers (the Lab checks the two sides'
+/// range, 0 to 100, `range`). #463 stage two, train 1, fix round: read as the waits of a recorded
+/// press are read (`after_capture_ms`): a flag given more than once is its last value, and a value
+/// that is no whole number is `validation_failed` with `details{argument, reason: "wrong_type",
+/// value}`. The answer is the Lab's.
 fn run_record_frames(flags: &FlagArgs, state_dir: &Path, instance_id: &str) -> CliOutcome<Value> {
     let step = frames_number::<u32>(flags, "--step", "step")?.ok_or_else(|| {
         CliError::usage("record frames needs --step <k>, the step's serial number")
@@ -3341,27 +3343,29 @@ fn run_record_frames(flags: &FlagArgs, state_dir: &Path, instance_id: &str) -> C
 }
 
 /// #463 S2-13: the whole number `flag` gives (`argument` its MCP name), `None` when it is not
-/// given; a value that is no such number, or the flag given more than once, is `validation_failed`
-/// with `details{argument, reason: "range", value}` (`value` the text, or the texts given).
+/// given. #463 stage two, train 1, fix round: as the parent's flags (`after_capture_ms`), the last
+/// value when the flag is given more than once, and a value that is no such number
+/// `validation_failed` with `details{argument, reason: "wrong_type", value}`.
 fn frames_number<T: std::str::FromStr>(
     flags: &FlagArgs,
     flag: &str,
     argument: &str,
 ) -> CliOutcome<Option<T>> {
-    match flags.values(flag).as_slice() {
-        [] => Ok(None),
-        [value] => value.parse::<T>().map(Some).map_err(|_| {
-            CliError::usage(format!(
-                "{flag} (MCP {argument}) takes a whole number, got {value}"
-            ))
-            .with_details(json!({"argument": argument, "reason": "range", "value": value}))
-        }),
-        values => Err(CliError::usage(format!(
-            "{flag} (MCP {argument}) may be given once, got {}",
-            values.join(", ")
-        ))
-        .with_details(json!({"argument": argument, "reason": "range", "value": values}))),
-    }
+    flags
+        .optional(flag)
+        .map(|value| {
+            value.parse::<T>().map_err(|_| {
+                CliError::usage(format!(
+                    "{flag} (MCP {argument}) takes a whole number, got {value}"
+                ))
+                .with_details(json!({
+                    "argument": argument,
+                    "reason": NOT_A_WHOLE_NUMBER,
+                    "value": value
+                }))
+            })
+        })
+        .transpose()
 }
 
 fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {

@@ -14,7 +14,7 @@
 //! warnings are typed ([`ReadyWarningItem`]), with the JSON they had.
 
 use super::generate::{Lack, effective_steps};
-use super::model::{LabRecording, OpaqueJson, RecordingStep};
+use super::model::{LabRecording, OpaqueJson, RecordRect, RecordingStep};
 use super::steps::{POINT_SOURCE, SWIPE_SOURCE};
 use super::store::invalid;
 use crate::codes::{ReadyCheck, ReadyMissing, ReadyWarning};
@@ -185,7 +185,9 @@ pub(crate) fn packaged(recording: &LabRecording) -> bool {
 /// Whether stage two wrote anything on `recording`: a step carries a page name, a mark (own,
 /// reused or forbidden, an anchor, a click guard), a press region (a click that is no press stage
 /// one recorded: a tap or a long press by its point, a swipe; or one that follows a mark or
-/// declares a retry), a choice, an optional flag or a transition; or the recording took an ending.
+/// declares a retry; #463 stage two, train 1: or a press box, a press recorded by its point whose
+/// rectangle is no longer that one pixel, the test [`point_press_warnings`] makes), a choice, an
+/// optional flag or a transition; or the recording took an ending.
 fn stage_two_written(recording: &LabRecording) -> bool {
     !recording.endings.is_empty()
         || recording.steps.iter().any(|step| {
@@ -200,6 +202,7 @@ fn stage_two_written(recording: &LabRecording) -> bool {
                 || step.transition.is_some()
                 || step.click.as_ref().is_some_and(|click| {
                     (click.source != POINT_SOURCE && click.source != SWIPE_SOURCE)
+                        || (click.source == POINT_SOURCE && !one_pixel(click.rect))
                         || click.follow.is_some()
                         || click.retry.is_some()
                 })
@@ -328,6 +331,12 @@ pub(crate) fn check_item(
     }
 }
 
+/// #463 stage two, train 1: whether `rect` is one pixel, the rectangle of a press recorded by its
+/// point until a press box (#463 S2-5) gives it a region.
+const fn one_pixel(rect: RecordRect) -> bool {
+    rect.width == 1 && rect.height == 1
+}
+
 /// `press_point_only` for each effective step, in the order a run meets them, whose press is a
 /// single recorded point (a tap or a long press `tap`, `long-tap --record` declared by its point,
 /// a box of one pixel) with no press region set and no mark it follows: the package would press
@@ -338,10 +347,7 @@ pub(crate) fn point_press_warnings(recording: &LabRecording) -> Vec<ReadyWarning
         .enumerate()
         .filter(|(_, step)| {
             step.click.as_ref().is_some_and(|click| {
-                click.source == POINT_SOURCE
-                    && click.rect.width == 1
-                    && click.rect.height == 1
-                    && click.follow.is_none()
+                click.source == POINT_SOURCE && one_pixel(click.rect) && click.follow.is_none()
             })
         })
         .map(|(position, step)| {
