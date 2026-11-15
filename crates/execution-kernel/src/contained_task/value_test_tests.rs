@@ -484,3 +484,96 @@ fn a_guard_check_on_a_value_test_that_does_not_hold_refuses_the_input() {
     assert!(runtime.inputs.is_empty(), "zero inputs");
     assert_eq!(provider.calls(), 2);
 }
+
+// Workflow #469 K2 (register §1.396; the design's place 6): the same refusal says why the guard
+// refused, the target that did not pass on its page (`guard_problem` `target_not_passed`), and
+// names the target's own registered reason as `failure_code`, beside the page the guard judged
+// on; the detail is the one above, its reason still the `cause=` token.
+#[test]
+fn k2_a_guard_whose_value_test_does_not_hold_names_its_reason_as_failure_code() {
+    let provider = CountingOcr::new(vec![(COUNT_REGION, "3"), (STOCK_REGION, "3")]);
+    let evaluator = evaluator(
+        vec![
+            ocr("text/count", COUNT_REGION, "unused"),
+            ocr("text/stock", STOCK_REGION, "unused"),
+            json!({
+                "type": "value_test", "id": "check/quantity",
+                "left": {"target_id": "text/count", "trim": "whitespace_v1",
+                         "value": {"type": "unsigned_integer", "min": 0, "max": 99}},
+                "op": "eq",
+                "right": {"target_id": "text/stock", "trim": "whitespace_v1",
+                          "value": {"type": "unsigned_integer", "min": 0, "max": 99},
+                          "mul": 2, "add": 0}
+            }),
+        ],
+        provider,
+    );
+    let control = control(PHASED_CONTROL_SCHEMA);
+    let program = TaskProgram {
+        schema_version: "0.9".to_string(),
+        task_id: "task".to_string(),
+        game: "neutral".to_string(),
+        server_scope: vec!["test".to_string()],
+        coordinate_space: control.resolution,
+        entry_page: None,
+        phases: None,
+        timeout_ms: None,
+        max_steps: None,
+        target_page: Some(PageDeclaration::Singleton("terminal".to_string())),
+        error_pages: Vec::new(),
+        scheduling_outcome: None,
+        post_admission_ocr: None,
+        resource_readings: None,
+        resource_adjustments: None,
+        field_lists: Default::default(),
+        stability_termination: None,
+        recovery: None,
+        defaults: TaskOperationDefaults::default(),
+        operations: vec![
+            serde_json::from_value(json!({
+                "id": "confirm", "from": "operator", "to": "terminal",
+                "click": {"kind": "rect", "x": 50, "y": 4, "width": 8, "height": 8},
+                "guard": {"page_id": "operator", "target_id": "check/quantity",
+                          "expected_rect": {"x": 50, "y": 4, "width": 8, "height": 8},
+                          "check": "check/quantity"}
+            }))
+            .expect("task operation"),
+        ],
+    };
+    let task = PreparedContainedTask {
+        control,
+        program,
+        evaluator,
+        detector: PageDetector::new(page_set(json!([
+            {"id": "neutral/operator", "required": ["page/operator"]},
+            {"id": "neutral/terminal", "required": ["page/terminal"]}
+        ])))
+        .expect("page detector"),
+        entry_page: None,
+        scheduling_outcome: None,
+        post_admission_ocr: None,
+        post_admission_fields: None,
+        entry_count: 3,
+        task_count: 1,
+    };
+    let mut runtime = ShowRuntime::new(marked_frame([255, 0, 0]));
+
+    let Err(ContainedTaskRunError::Task(error)) = task.run(&mut runtime) else {
+        panic!("the value test refuses the input");
+    };
+
+    assert_eq!(error.code().as_str(), "contained_task_guard_refused");
+    assert_eq!(
+        Value::Object(error.outcome().values().clone()),
+        json!({
+            "page_id": "neutral/operator",
+            "guard_problem": "target_not_passed",
+            "failure_code": "value_test_not_met"
+        })
+    );
+    assert_eq!(
+        error.detail(),
+        Some("operation=confirm target=check/quantity cause=value_test_not_met")
+    );
+    assert!(runtime.inputs.is_empty(), "zero inputs");
+}

@@ -44,9 +44,10 @@ use super::{
     ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
     ERROR_PAGE_REACHED, PageObservation, PostAdmissionOcrCollector, PostconditionResolution,
     PreparedContainedTask, STEP_UNCONFIRMED, StepPacing, TaskControl, TaskOperation, TaskProgram,
-    confirmation_failure_detail, linear, program_refusal, resolve_page_reference,
+    confirmation_failure_detail, confirmation_word, linear, program_refusal,
+    resolve_page_reference, with_confirmation_word,
 };
-use crate::codes::{ExecutionKernelCode, ProgramProblem};
+use crate::codes::{ConfirmationProblem, ExecutionKernelCode, ProgramProblem};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     SchedulingOutcomeDeclaration, TaskSchema, TaskTimingFailure, TaskTimingScope, TaskTimingStage,
@@ -601,7 +602,7 @@ impl PreparedContainedTask {
             timing,
             (pacing, &mut loading),
         )?;
-        let (observation, last_frame_page, timing_failure, (still_limit, loading_limit)) =
+        let (observation, last_frame_page, timing_failure, (still_limit, loading_limit), word) =
             match resolution {
                 PostconditionResolution::Reached(reached) => {
                     return Ok(WaitStepEnd::Reached(Box::new(reached)));
@@ -622,6 +623,7 @@ impl PreparedContainedTask {
                         Some(page),
                         Some(timing_failure),
                         (None, None),
+                        None,
                     )
                 }
                 PostconditionResolution::Failed {
@@ -635,15 +637,20 @@ impl PreparedContainedTask {
                         &operation.id,
                         observation.as_ref(),
                     )?;
-                    return Err(ContainedTaskError::with_detail(
-                        ERROR_PAGE_REACHED,
-                        confirmation_failure_detail(
-                            &operation.id,
-                            1,
-                            observation.as_ref(),
-                            true,
-                            None,
+                    // Workflow #469 K2 (register §1.396): the wait's end is the confirmation's
+                    // judgement of a declared error page, as after an input.
+                    return Err(with_confirmation_word(
+                        ContainedTaskError::with_detail(
+                            ERROR_PAGE_REACHED,
+                            confirmation_failure_detail(
+                                &operation.id,
+                                1,
+                                observation.as_ref(),
+                                true,
+                                None,
+                            ),
                         ),
+                        ConfirmationProblem::ErrorPage,
                     )
                     .into());
                 }
@@ -654,20 +661,36 @@ impl PreparedContainedTask {
                     still_limit,
                     loading_limit,
                     ..
-                } => (
-                    observation,
-                    last_frame_page,
-                    timing_failure,
-                    (still_limit, loading_limit),
-                ),
+                } => {
+                    // Workflow #469 K2: what the away clock's wait saw where it ended. A frame of
+                    // the step's own page never ends it there (it restarts the away clock).
+                    let away_word = confirmation_word(
+                        &self.control.game,
+                        &operation.from,
+                        last_frame_page.as_deref(),
+                        false,
+                        (still_limit.is_some(), loading_limit.is_some()),
+                    );
+                    (
+                        observation,
+                        last_frame_page,
+                        timing_failure,
+                        (still_limit, loading_limit),
+                        Some(away_word),
+                    )
+                }
             };
         Self::finish_effect_attempt(runtime, step_index, &operation.id, observation.as_ref())?;
         // #411 A15: the operation, its destination pages, its one attempt and the page of the
-        // wait's last frame (none when that frame matched no page).
+        // wait's last frame (none when that frame matched no page). Workflow #469 K2: and what the
+        // wait saw where it ended; `max_ms` reached on the step's own page has no word.
         let mut values = Outcome::new(STEP_UNCONFIRMED)
             .pack_operation_id(operation.id.as_str())
             .page_ids(operation.destination_pages()?)
             .attempts(1_u32);
+        if let Some(word) = word {
+            values = values.confirmation_problem(word);
+        }
         if let Some(page) = last_frame_page {
             values = values.page_id(page);
         }

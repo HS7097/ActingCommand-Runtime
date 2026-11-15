@@ -982,6 +982,30 @@ it) ends with `contained_task_step_budget_exhausted` (#411 A28; it was
 state machine hands to a successor or pauses when its recovery ran out. None of these codes
 starts the stuck-recovery ladder.
 
+Workflow #469 K2 (since 0.12.62; register §1.396): each of these page-graph ends says what the
+program saw there, as the outcome value `confirmation_problem` (vocabulary
+`confirmation_problem`), never in the detail, so the failure identity and the streak stay as they
+are. A failed confirmation (`page_confirmation_failed`, `contained_task_step_unconfirmed`,
+`contained_task_error_page_reached`, a wait step's included) is judged from how its wait ended
+and the page its last frame matched, compared with the page the step was dispatched from:
+`error_page` on a declared error page, `loading_limit` when the loading allowance ended the wait,
+`screen_still` when the still limit did, otherwise `nothing_recognised` when the last frame
+matched no page (the page graph compares no frames, so a moving and a still screen are one
+word), `input_not_taken` when it matched the step's own page and `other_page_shown` when it
+matched another page of the package; the package's loading pages are no pages of its page set,
+so `loading_page_shown` is not given here. A run that stands on an error page no operation leaves
+gets `error_page_no_exit`. A wait step whose `max_ms` runs out on its own page carries no word:
+no situation of the vocabulary is that. `contained_task_requires_scheduler` names the failure
+whose decision asked for the recovery, the one its terminal holds, as `failure_code`, and that
+failure's `confirmation_problem` when it was a confirmation's (none after a guard's refusal). A
+guard's refusal (`contained_task_guard_refused`, in either execution mode) says why as
+`guard_problem` (vocabulary `guard_problem`): `page_mismatch` when the frame's page is not the
+guard's page, a later attempt's frame on another page included; `target_not_passed` when the
+guard's target was evaluated on its page and did not pass, with `failure_code` the target's
+registered reason when it has one (the detail's `cause=` token); `page_moved` when a
+trusted-coordinate step's frame after its action gap shows another page than the one it was
+dispatched from. A `fresh_frame` recheck's refusal is the guard's own and carries its word.
+
 ## Failure codes
 
 | Situation | `failure_code` | Timing (existing values) |
@@ -993,7 +1017,7 @@ starts the stuck-recovery ladder.
 | After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page; or (LOAD-4) its wait ended on its loading allowance, with the loading values | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
-| A guard refusal | `contained_task_guard_refused`, its outcome naming `page_id` (the page of the frame the guard judged on) and `artifact_id` (that frame, the run's `GuardRejection` pin) on the terminal and the receipt (#411 A30) | none |
+| A guard refusal | `contained_task_guard_refused`, its outcome naming `page_id` (the page of the frame the guard judged on) and `artifact_id` (that frame, the run's `GuardRejection` pin) on the terminal and the receipt (#411 A30), and (Workflow #469 K2) why, `guard_problem` `page_mismatch` or `target_not_passed` with the target's reason as `failure_code` (above) | none |
 | A select step's attempt fails (Workflow #463 K1, "Select steps") | the select step's codes ([selection-graph.md](selection-graph.md), "Execution", "Record per path"), with their own ladder classes | as there |
 | A declared input recheck that did not hold before the step timeout (Workflow #411 B12) | `contained_task_input_stability_unconfirmed` (`stable_frames`) or `contained_task_input_still_unconfirmed` (`still_frames`), with `pack_operation_id` and `timeout_ms` | none |
 | The task deadline | `contained_task_timeout` | `task` / the stage it expired in |

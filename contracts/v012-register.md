@@ -27358,6 +27358,72 @@ category but D3's two; no interface revision, record shape or configuration key.
 changes reach no trigger under the defaults, and the removed list entry names a code no build
 since 0.12.39 raises.
 
+### 1.396 Slice #469 K2 (0.12.62): a page-graph step's end and a guard's refusal say why (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, the places 1 ("Page graph"), 2 and 6 of A-1 and the row K2 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after #1738, V0))
+
+The coordinator gave this slice 1.396: 1.387 to 1.395 belong to slices dispatched with or before
+this one (K1 is 1.395). The slice ships in 0.12.62, as V0 (§1.386) does.
+
+**What it is.** The kernel sets the words V0 wrote down for the page graph and the guard, each from
+what it already decides where it raises the code, as a value of the outcome and never in its
+detail. Nothing the program does next changes: the code raised, its class, the control flow that
+leads to it, the detail, the pins, the wire code and every value it had are as before.
+
+| Code (where) | Value | Taken from |
+|---|---|---|
+| `page_confirmation_failed` (a page-graph step without a retry policy; a retry's confirmation that matched no page), `contained_task_step_unconfirmed` (an operation that decides Fail; a wait step's away clock) | `confirmation_problem`: `error_page`, `loading_limit`, `screen_still`, `nothing_recognised`, `input_not_taken`, `other_page_shown` | the wait's `PostconditionResolution::Failed`: `hit_error_page`, then `loading_limit`, then `still_limit`, otherwise `last_frame_page` (none, or `page_anchor_matches` with the page the step was dispatched from, a wait step's `from`, or another page); one helper, `confirmation_word` in `crates/execution-kernel/src/contained_task.rs` |
+| `contained_task_error_page_reached` (an operation that decides Fail; a retry's confirmation; a wait step) | `confirmation_problem` `error_page` | `hit_error_page` of the same `Failed` |
+| `contained_task_error_page_reached` (#411 A45, `candidate_directive` in `contained_task/candidates.rs`) | `confirmation_problem` `error_page_no_exit` | the transition's `run_decision_invalid` on a declared error page |
+| `contained_task_requires_scheduler` | `failure_code`, and `confirmation_problem` | the terminal's `failure_reason` (`RunSuccessorSuggestion`, `RunPause`), until now dropped with `{ .. }`; the word the decision that asked for the recovery was taken with, kept beside `recovery_timing` (none after a guard's refusal) |
+| `contained_task_guard_refused` | `guard_problem` `page_mismatch` | `judged_guard_outcome`'s page check (a later attempt's frame on another page included) |
+| `contained_task_guard_refused` | `guard_problem` `target_not_passed`, with `failure_code` | the evaluated guard target that did not pass; `failure_code` is its registered reason (`TargetEvaluation::failure`, the detail's `cause=` token) when it has one |
+| `contained_task_guard_refused` | `guard_problem` `page_moved` | the trusted-coordinate step's frame after its action gap on another page (DP06) |
+
+**What the design offers and the page graph cannot give.** `loading_page_shown`: the page the
+wait's last frame matched is a page of the package's page set, and its loading pages are kept
+outside that set (`PageDetector::with_loading_pages`), so `last_frame_page` never names one; a
+loading frame under `on` ends with `loading_limit`, and under `off` and `shadow` it is recognised
+as the page set's page or none. No moving-or-still word for an unrecognised screen (the design's
+own exclusion): `nothing_recognised` stands for both.
+
+**The design's open point, decided here.** A wait step that meets a declared error page ends, as
+before, with `contained_task_error_page_reached` after the confirmation's own judgement of the
+frame (`PostconditionResolution::Failed` with `hit_error_page`, `wait_step.rs`), as a step's
+confirmation after its input does: it carries `error_page`. `error_page_no_exit` stays the run
+standing on an error page that no operation leaves. A wait step whose `max_ms` runs out on its own
+page (`PostconditionResolution::Held`) is no situation of the vocabulary (no input was made and
+nothing else showed): it carries no word, so `confirmation_problem` cannot become required on
+`contained_task_step_unconfirmed` without a word for it.
+
+**Required stays optional.** Every value stays optional in the catalog (the work order, item 5).
+
+**Tests.** `crates/execution-kernel/src/contained_task/gate_469_k2.rs`: one test per word, each
+over the fixtures that reach it, asserting the code and the outcome's values whole (the values the
+code had, with the word): `input_not_taken`, `other_page_shown` (a wait step's away clock
+included), `nothing_recognised` (a retry's confirmation included), `screen_still`,
+`loading_limit`, `error_page` (no retry policy, a decided Fail, a retry's confirmation, a wait
+step), `error_page_no_exit`, `contained_task_requires_scheduler` (after a confirmation, after a
+retry's error page, after a guard's refusal), `page_mismatch`, `target_not_passed` and
+`page_moved`; a wait step held on its own page carries no word; and the design's test rule for
+every fixture: the code, the detail byte for byte as before and the values without the word as
+before. `value_test_tests.rs`: a guard whose value test does not hold names `value_test_not_met`
+as `failure_code`. The identity string and the streak count are the host's: in
+`crates/runtime-host/src/tests/gate_390_exec3.rs`, two identical scheduled page-graph failures
+carry `input_not_taken` on their settled outcomes, their identity's key is the one of the code, the
+scope `main`, the step and the native detail's fragments (none of which holds the word), and the
+second keeps the first's identity and counts 2. Adapted: the four tests of `gate_rc2_a15.rs`
+(kernel), which pin the whole values of `contained_task_step_unconfirmed`, take its word; and
+`gate_still1.rs` `still_limit_off_keeps_todays_wait`, which pinned that a confirmation without a
+still limit carries no values, now pins that it carries no still values, only its word.
+
+**Texts.** The catalog texts of `page_confirmation_failed`, `contained_task_step_unconfirmed`,
+`contained_task_error_page_reached` and `contained_task_guard_refused` say when each word is set;
+[linear-steps.md](linear-steps.md) (the page-graph failures and the guard's row) and
+[resource-declarations.md](resource-declarations.md) ("Wait steps and wait pages") say it in the
+contracts.
+
+**At deploy.** Nothing to do: a run that ends so carries the word on its terminal, its receipt and
+its policy record; no record shape, key, interface revision or configuration changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -357,6 +357,70 @@ fn exec3_a_page_graph_entry_recovery_failure_is_in_its_package_layer_scope() {
     host.close().expect("close runtime host");
 }
 
+// Workflow #469 K2 (register §1.396; the design's test rule, brief
+// `rd-1115/brief-469-word-slices.md`, item 2): a page-graph step's reason word leaves its failure
+// identity and its streak as they are without it. The two identical failures of ruling 4 above,
+// the screen staying on the step's own page after every tap: each settled outcome carries
+// `confirmation_problem` `input_not_taken`, and its native detail does not; each identity's base
+// is the code and its key the one of the scope `main`, the step `open_terminal` and the native
+// detail's fragments, none of which reads the word; the second writes the first's identity again
+// and counts it twice, as two failures without the word do.
+#[test]
+fn k2_a_page_graph_step_s_word_leaves_its_identity_and_its_streak_as_they_were() {
+    let root = TempDir::new().expect("tempdir");
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(
+        &package_path,
+        neutral_region_retrying_contained_task_package_paced(CAPTURE_INTERVAL_MS),
+    )
+    .expect("write package");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let host = start_bound(&root, &clock, &package_path);
+    host.activate_policy_catalog(&escalating_policy_sources())
+        .expect("activate policy catalog");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("contained task request");
+
+    let (first_context, first_error) =
+        failed_scheduled_run(&host, &clock, &request, POLICY_NOW_UNIX_MS, 7);
+    let first = recorded_failure(&host, first_context.run_id());
+    let rerun_at = rerun_time(&first, &first_context);
+    let (second_context, second_error) = failed_scheduled_run(&host, &clock, &request, rerun_at, 8);
+    let second = recorded_failure(&host, second_context.run_id());
+    for (case, failure, error) in [
+        ("the first failure", &first, &first_error),
+        ("the second failure", &second, &second_error),
+    ] {
+        assert_eq!(error.code(), "contained_task_step_unconfirmed", "{case}");
+        assert_eq!(
+            failure.outcome.value("confirmation_problem"),
+            Some(&serde_json::json!("input_not_taken")),
+            "{case}: the word reaches the settled outcome"
+        );
+        let detail = error.native_detail().unwrap_or_default();
+        assert!(
+            !detail.contains("confirmation_problem") && !detail.contains("input_not_taken"),
+            "{case}: the word is not in the native detail: {detail}"
+        );
+        let identity = failure
+            .failure_identity
+            .as_deref()
+            .and_then(FailureIdentity::parse)
+            .unwrap_or_else(|| panic!("{case}: a format v2 identity: {failure:?}"));
+        assert_eq!(identity.base, "contained_task_step_unconfirmed", "{case}");
+        assert_failure_key(failure, error, "main", "open_terminal");
+    }
+    assert_eq!(
+        second.failure_identity, first.failure_identity,
+        "the same problem keeps the first identity"
+    );
+    assert_eq!(
+        (first.consecutive_same_error, second.consecutive_same_error),
+        (1, 2)
+    );
+    host.close().expect("close runtime host");
+}
+
 // The fixture catalog, its task paused by its second identical failure (escalation threshold 2).
 fn escalating_policy_sources() -> CatalogSources {
     let mut sources = policy_sources(1);

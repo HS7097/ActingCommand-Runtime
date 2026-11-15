@@ -4066,3 +4066,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix3_a_dispatched_package_of_a_root_not_read_since_the_start_is_warned",
 ]
 incident = ["#463 V2"]
+
+# Workflow #469 K2 (0.12.62; register §1.396; brief rd-1115/brief-469-word-slices.md, item 2; design rd-1115/status-codes-a-design.md, Part 2, the three facts), the host's half: two identical scheduled page-graph step failures, the screen on the step's own page after every tap, carry confirmation_problem input_not_taken on their settled outcomes and not in their native detail; each identity's base is the code and its key the one of the scope main, the step and the native detail's fragments; the second keeps the first's identity and counts 2 (1)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_exec3::k2_a_page_graph_step_s_word_leaves_its_identity_and_its_streak_as_they_were",
+]
+incident = ["#469 K2"]

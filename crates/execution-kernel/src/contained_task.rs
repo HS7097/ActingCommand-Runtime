@@ -2,7 +2,9 @@
 
 //! Runtime-owned admission and execution for contained semantic task packages.
 
-use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation, ProgramProblem};
+use crate::codes::{
+    ConfirmationProblem, ExecutionKernelCode, ExecutionKernelLocation, GuardProblem, ProgramProblem,
+};
 use crate::{
     ExecutionBundleError, ExternallyVerifiedBundle, InputFrameContext, ObservedFrame,
     RunDecisionError, RunDecisionKind, RunDirective, RunFailureObservation, RunFailureStage,
@@ -117,6 +119,9 @@ mod gate_463_v1;
 // Workflow #463 V2: a run reads its package's variables with their kinds' types.
 #[cfg(test)]
 mod gate_463_v2;
+// Workflow #469 K2: a page-graph step's end and a guard's refusal say why.
+#[cfg(test)]
+mod gate_469_k2;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.
@@ -5332,6 +5337,9 @@ impl PreparedContainedTask {
             ..StabilityTracker::default()
         };
         let mut recovery_timing = None;
+        // Workflow #469 K2: what the confirmation failure whose decision asked for recovery saw,
+        // for the run's `contained_task_requires_scheduler`; none for a guard's refusal.
+        let mut recovery_word = None;
         // Workflow #308 SEL-L4b (S0 §1.3): the business ID each select step chose in this run,
         // which an `expect_identity` reads back.
         let mut chosen_identities: BTreeMap<String, String> = BTreeMap::new();
@@ -5680,7 +5688,10 @@ impl PreparedContainedTask {
                                                 operation.id, frame.page_label
                                             ),
                                         )
-                                        .with_values(guard_refusal_values(&frame));
+                                        .with_values(guard_refusal_values(
+                                            &frame,
+                                            GuardProblem::PageMoved,
+                                        ));
                                         let after_page = frame.page_label.clone();
                                         observation = Some(frame);
                                         Self::refuse_before_input::<R::Error>(
@@ -6241,6 +6252,14 @@ impl PreparedContainedTask {
                         let after_page = failed_observation
                             .as_ref()
                             .map(|observation| observation.page_label.clone());
+                        // Workflow #469 K2: what the failed wait saw where it ended.
+                        let word = confirmation_word(
+                            &self.control.game,
+                            &from_page,
+                            last_frame_page.as_deref(),
+                            hit_error_page,
+                            (still_limit.is_some(), loading_limit.is_some()),
+                        );
                         let Some(policy) = retry_policy.as_ref() else {
                             Self::finish_effect_attempt(
                                 runtime,
@@ -6248,16 +6267,19 @@ impl PreparedContainedTask {
                                 &operation_id,
                                 failed_observation.as_ref(),
                             )?;
-                            return Err(ContainedTaskError::with_detail(
-                                ExecutionKernelCode::PageConfirmationFailed.code(),
-                                format!(
-                                    "operation={operation_id} attempts={attempt} after_page={} hit_error_page={hit_error_page}",
-                                    after_page.as_deref().unwrap_or("<unrecognized>")
-                                ),
+                            return Err(with_confirmation_word(
+                                ContainedTaskError::with_detail(
+                                    ExecutionKernelCode::PageConfirmationFailed.code(),
+                                    format!(
+                                        "operation={operation_id} attempts={attempt} after_page={} hit_error_page={hit_error_page}",
+                                        after_page.as_deref().unwrap_or("<unrecognized>")
+                                    ),
+                                )
+                                .with_timing(timing_failure)
+                                .with_still_limit(still_limit)
+                                .with_loading_limit(loading_limit),
+                                word,
                             )
-                            .with_timing(timing_failure)
-                            .with_still_limit(still_limit)
-                            .with_loading_limit(loading_limit)
                             .into());
                         };
                         match operation.failure_decision(
@@ -6369,6 +6391,10 @@ impl PreparedContainedTask {
                                             RunOperationFailureDecision::RequestRecovery(
                                                 trigger,
                                             ) => {
+                                                // Workflow #469 K2: the word of a declared error
+                                                // page, the helper's first rule.
+                                                recovery_word =
+                                                    Some(ConfirmationProblem::ErrorPage);
                                                 machine.operation_needs_recovery(trigger).map_err(
                                                     |error| {
                                                         machine_refusal(
@@ -6381,15 +6407,18 @@ impl PreparedContainedTask {
                                                 break;
                                             }
                                             RunOperationFailureDecision::Fail(_) => {
-                                                return Err(ContainedTaskError::with_detail(
-                                                    ERROR_PAGE_REACHED,
-                                                    confirmation_failure_detail(
-                                                        &operation_id,
-                                                        attempt,
-                                                        fresh.as_ref(),
-                                                        true,
-                                                        None,
+                                                return Err(with_confirmation_word(
+                                                    ContainedTaskError::with_detail(
+                                                        ERROR_PAGE_REACHED,
+                                                        confirmation_failure_detail(
+                                                            &operation_id,
+                                                            attempt,
+                                                            fresh.as_ref(),
+                                                            true,
+                                                            None,
+                                                        ),
                                                     ),
+                                                    ConfirmationProblem::ErrorPage,
                                                 )
                                                 .into());
                                             }
@@ -6416,11 +6445,11 @@ impl PreparedContainedTask {
                                     }
                                     PostconditionResolution::Failed {
                                         observation: None,
+                                        last_frame_page,
                                         hit_error_page: false,
                                         timing_failure,
                                         still_limit,
                                         loading_limit,
-                                        ..
                                     } => {
                                         Self::finish_effect_attempt(
                                             runtime,
@@ -6428,15 +6457,27 @@ impl PreparedContainedTask {
                                             &operation_id,
                                             None,
                                         )?;
-                                        return Err(ContainedTaskError::with_detail(
-                                            ExecutionKernelCode::PageConfirmationFailed.code(),
-                                            format!(
-                                                "operation={operation_id} attempts={attempt} after_page=<unrecognized> hit_error_page=false"
-                                            ),
+                                        // Workflow #469 K2: what the retry's wait saw where it
+                                        // ended.
+                                        let retry_word = confirmation_word(
+                                            &self.control.game,
+                                            &from_page,
+                                            last_frame_page.as_deref(),
+                                            false,
+                                            (still_limit.is_some(), loading_limit.is_some()),
+                                        );
+                                        return Err(with_confirmation_word(
+                                            ContainedTaskError::with_detail(
+                                                ExecutionKernelCode::PageConfirmationFailed.code(),
+                                                format!(
+                                                    "operation={operation_id} attempts={attempt} after_page=<unrecognized> hit_error_page=false"
+                                                ),
+                                            )
+                                            .with_timing(timing_failure)
+                                            .with_still_limit(still_limit)
+                                            .with_loading_limit(loading_limit),
+                                            retry_word,
                                         )
-                                        .with_timing(timing_failure)
-                                        .with_still_limit(still_limit)
-                                        .with_loading_limit(loading_limit)
                                         .into());
                                     }
                                     // #411 B36/B19 (A35-S3): only a wait step holds on its own
@@ -6458,6 +6499,9 @@ impl PreparedContainedTask {
                                     failed_observation.as_ref(),
                                 )?;
                                 recovery_timing = timing_failure;
+                                // Workflow #469 K2: the run's `contained_task_requires_scheduler`
+                                // carries it.
+                                recovery_word = Some(word);
                                 machine.operation_needs_recovery(trigger).map_err(|error| {
                                     machine_refusal(&error, &machine, Some(operation_id.as_str()))
                                 })?;
@@ -6479,22 +6523,24 @@ impl PreparedContainedTask {
                                     timing_failure.as_ref(),
                                 );
                                 if hit_error_page {
-                                    return Err(ContainedTaskError::with_detail(
-                                        ERROR_PAGE_REACHED,
-                                        detail,
+                                    return Err(with_confirmation_word(
+                                        ContainedTaskError::with_detail(ERROR_PAGE_REACHED, detail)
+                                            .with_timing(timing_failure)
+                                            .with_still_limit(still_limit),
+                                        word,
                                     )
-                                    .with_timing(timing_failure)
-                                    .with_still_limit(still_limit)
                                     .into());
                                 }
                                 // #411 A15: an unconfirmed step names its operation, its
                                 // destination pages, its attempts and the page the last frame of
                                 // its wait matched (none when that frame matched no page); the
                                 // detail keeps `after_page`, which the failure identity reads.
+                                // Workflow #469 K2: and what the wait saw where it ended.
                                 let mut values = Outcome::new(STEP_UNCONFIRMED)
                                     .pack_operation_id(operation_id.as_str())
                                     .page_ids(destination_pages.iter().cloned())
-                                    .attempts(attempt);
+                                    .attempts(attempt)
+                                    .confirmation_problem(word);
                                 if let Some(page) = last_frame_page {
                                     values = values.page_id(page);
                                 }
@@ -6553,13 +6599,12 @@ impl PreparedContainedTask {
                     .into());
                 }
                 RunDirective::Terminal(
-                    RunTerminal::SuccessorSuggested { .. } | RunTerminal::PausedNeedsHuman { .. },
+                    terminal @ (RunTerminal::SuccessorSuggested { .. }
+                    | RunTerminal::PausedNeedsHuman { .. }),
                 ) => {
-                    return Err(ContainedTaskError::new(
-                        ExecutionKernelCode::ContainedTaskRequiresScheduler.code(),
-                    )
-                    .with_timing(recovery_timing)
-                    .into());
+                    return Err(requires_scheduler(&terminal, recovery_word)
+                        .with_timing(recovery_timing)
+                        .into());
                 }
             }
         }
@@ -8724,6 +8769,74 @@ fn confirmation_failure_detail(
     format!(
         "operation={operation_id} attempts={attempts} after_page={after_page} hit_error_page={hit_error_page}{timing}"
     )
+}
+
+/// Workflow #469 K2 (register §1.396; the design's place 1, "Page graph"): what a page-graph
+/// wait that did not confirm its step saw where it ended, from its `Failed` resolution and the
+/// page the step started from (`from_page`, compared as the step's own frame is): a declared error
+/// page (`hit_error_page`); the loading allowance or the still limit that ended the wait
+/// (`ended_on`: whether `loading_limit`, whether `still_limit`); otherwise the page its last frame
+/// matched (`last_frame_page`): none, the step's own page, or another page of the package. The
+/// page graph compares no frames, so an unrecognised screen is one word whether it moved or not;
+/// and a frame names no loading page, which the page set leaves out.
+fn confirmation_word(
+    game: &str,
+    from_page: &str,
+    last_frame_page: Option<&str>,
+    hit_error_page: bool,
+    ended_on: (bool, bool),
+) -> ConfirmationProblem {
+    match (hit_error_page, ended_on, last_frame_page) {
+        (true, _, _) => ConfirmationProblem::ErrorPage,
+        (false, (_, true), _) => ConfirmationProblem::LoadingLimit,
+        (false, (true, false), _) => ConfirmationProblem::ScreenStill,
+        (false, (false, false), None) => ConfirmationProblem::NothingRecognised,
+        (false, (false, false), Some(page))
+            if crate::page_anchor_matches(game, page, from_page) =>
+        {
+            ConfirmationProblem::InputNotTaken
+        }
+        (false, (false, false), Some(_)) => ConfirmationProblem::OtherPageShown,
+    }
+}
+
+/// Workflow #469 K2: `error` with `word` as its `confirmation_problem`, beside the values it
+/// already has. The word goes into the outcome's values only: the detail, whose fragments the
+/// failure identity reads, stays as it is.
+fn with_confirmation_word(
+    error: ContainedTaskError,
+    word: ConfirmationProblem,
+) -> ContainedTaskError {
+    let outcome = error.outcome().confirmation_problem(word);
+    error.with_values(outcome)
+}
+
+/// The failure of a run that only a scheduler can go on with, ended by `terminal` (a successor
+/// suggested, or a pause that needs a person). Workflow #469 K2 (the design's place 2): it names
+/// the failure whose decision asked for the recovery, the one the terminal holds, as
+/// `failure_code`, and `word` when that failure was a confirmation failure.
+fn requires_scheduler(
+    terminal: &RunTerminal,
+    word: Option<ConfirmationProblem>,
+) -> ContainedTaskError {
+    let code = ExecutionKernelCode::ContainedTaskRequiresScheduler.code();
+    let reason = match terminal {
+        RunTerminal::SuccessorSuggested { suggestion } => Some(suggestion.failure_reason),
+        RunTerminal::PausedNeedsHuman { pause } => pause.failure_reason,
+        RunTerminal::Completed { .. } => None,
+    };
+    let failed = reason.and_then(|reason| reason.outcome().code().registered());
+    if failed.is_none() && word.is_none() {
+        return ContainedTaskError::new(code);
+    }
+    let mut values = Outcome::new(code);
+    if let Some(failed) = failed {
+        values = values.failure_code(failed);
+    }
+    if let Some(word) = word {
+        values = values.confirmation_problem(word);
+    }
+    ContainedTaskError::new(code).with_values(values)
 }
 
 enum PostconditionResolution {
@@ -11751,7 +11864,10 @@ impl TaskOperation {
                     self.id, guard.page_id, observation.page_label
                 ),
             )
-            .with_values(guard_refusal_values(observation))
+            .with_values(guard_refusal_values(
+                observation,
+                GuardProblem::PageMismatch,
+            ))
             .into());
         }
         let sampling = observation.sampling.map(|original| {
@@ -11872,12 +11988,22 @@ impl TaskOperation {
                 ),
                 None => format!("operation={} target={}", self.id, guard.target_id),
             };
+            // Workflow #469 K2: the target's own registered reason, when it has one, is the
+            // refusal's `failure_code`.
+            let mut values = guard_refusal_values(observation, GuardProblem::TargetNotPassed);
+            if let Some(reason) = target
+                .failure
+                .as_ref()
+                .and_then(|failure| failure.code().registered())
+            {
+                values = values.failure_code(reason);
+            }
             *refused_on = Some(target);
             return Err(ContainedTaskError::with_detail(
                 ExecutionKernelCode::ContainedTaskGuardRefused.code(),
                 detail,
             )
-            .with_values(guard_refusal_values(observation))
+            .with_values(values)
             .into());
         }
         let outcome = ContainedTaskGuardOutcome::Passed {
@@ -11891,9 +12017,13 @@ impl TaskOperation {
 
 /// #411 A30: a guard refusal's outcome names the page of the frame the guard judged on
 /// (`page_id`); the host adds that frame (`artifact_id`, the run's `GuardRejection` pin).
-fn guard_refusal_values(observation: &PageObservation) -> Outcome {
+/// Workflow #469 K2 (register §1.396): and why the guard refused (`guard_problem`), the branch
+/// that refused: the frame's page is not the guard's, the guard's target did not pass on its page,
+/// or a trusted-coordinate step's gap frame left the page the step was dispatched from.
+fn guard_refusal_values(observation: &PageObservation, problem: GuardProblem) -> Outcome {
     Outcome::new(ExecutionKernelCode::ContainedTaskGuardRefused.code())
         .page_id(observation.page_label.as_str())
+        .guard_problem(problem)
 }
 
 #[derive(Debug, Deserialize)]
