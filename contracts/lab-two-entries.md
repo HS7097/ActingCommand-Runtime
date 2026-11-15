@@ -259,7 +259,7 @@ holds `ui` to it (section 2.3 step 5); `lab_ops_ui_allows_is_the_tables_ui_kinds
 | `EditPackSchedule` | write | built by #429 R-8 (0.12.55), with the read `PackScheduleView`: it replaces one task package's rows in one scope's pack schedule list, a compare-and-swap with `expected_version`; a run in progress is not stopped (instance-fact-store.md, "Pack schedule facts") |
 | `ApplyResourceTargets` | write | on the list since Workflow #455 T1-R (0.12.60; `v012-register.md` §1.351), before the console sends it: the whole resource target document of one instance, the one `ResourceTargetView` reads ([resource-targets.md](resource-targets.md), "Entry and receipts"), a compare-and-swap with `expected_version` (the view's `active.version`, `0` without `active`; another version is `fact_observation_version_conflict` with `current_version`, nothing written). The owner asked that the console set an application's goals as the Lab does (board #455, step 1); the coordinator's ruling on board #455, not the owner's words, reverses LAB-6S3's decision that refused the kind here |
 | `GoalView` | read | on the list since Workflow #463 V3 (0.12.61; `v012-register.md` §1.383), before the console reads it: one application's goal page, every entry with its value, its default and whether it is in effect, from the Runtime's memory ([runtime-interface.md](runtime-interface.md), "Goal request kinds") |
-| `EditGoal` | write | on the list since Workflow #463 V3 (0.12.61), before the console sends it: one value of the goal page set or cleared by its name, checked before the fact write gate (`goal_value_invalid`), a compare-and-swap with `expected_version` |
+| `EditGoal` | write | on the list since Workflow #463 V3 (0.12.61), before the console sends it: one value of the goal page set or cleared by its name, a compare-and-swap with `expected_version`, then checked under the fact write gate against the record it changes (`goal_value_invalid`) |
 | `RunInstanceTask`, `EditResourceTarget`, `AcquirePlayerHold`, `ReleasePlayerHold` | write | on the list before they are built (#429 R-5, R-13c, R-7b); until then the Runtime answers them `not_implemented` |
 | `RecordClientAction` | write | transitional: the console's button trace, until UI-L1 ships; LAB-7 takes it off the list, since the G14 record's initiator replaces it |
 
@@ -1302,7 +1302,9 @@ when a member's meaning changes.
 
 In force from LAB-6S1a (Runtime 0.12.58): `runtime-client` [3, 8], revision 8 being the
 initiator of section 2.2 on `BindChannel`, `ChannelBound` and the receipt
-([component-interfaces.md](component-interfaces.md), the revision table). Planned, not in force:
+([component-interfaces.md](component-interfaces.md), the revision table); from Workflow #463 V3
+(Runtime 0.12.61) [3, 9], revision 9 being the goal page's two request kinds, `GoalView` and
+`EditGoal`, with their results. Planned, not in force:
 the same file, "Planned: Workflow #434". The numbers this contract first planned for LAB-6
 (`runtime-client` 7, `ledger` 8, `actingd-config` 28) were taken by other slices: LAB-6S4a
 declares `install-control` [0, 0], LAB-6S4b raises `runtime-client`'s `min` to 8 and

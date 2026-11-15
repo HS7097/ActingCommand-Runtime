@@ -1307,14 +1307,7 @@ fn row_setter(row: &BTreeMap<String, ContractFactScalar>) -> Option<TargetSetter
         _ => return None,
     };
     let channel = match row.get(FIELD_CHANNEL) {
-        Some(ContractFactScalar::String(word)) => [
-            RuntimeChannel::Cli,
-            RuntimeChannel::Mcp,
-            RuntimeChannel::Ui,
-            RuntimeChannel::Lab,
-        ]
-        .into_iter()
-        .find(|channel| channel.as_str() == word)?,
+        Some(ContractFactScalar::String(word)) => set_channel(word)?,
         _ => return None,
     };
     let initiator = match row.get(FIELD_INITIATOR) {
@@ -1529,8 +1522,8 @@ pub fn edit_goal_record(
             };
             let row =
                 entry_row(&entry, Some(setter)).map_err(|_| GoalRecordRefusal::ValueInvalid)?;
-            match entries.iter_mut().find(|kept| kept.name == *name) {
-                Some(kept) => *kept = row,
+            match entries.iter().position(|kept| kept.name == *name) {
+                Some(index) => entries[index] = row,
                 None if entries.len() >= MAX_RESOURCE_TARGET_ENTRIES => {
                     return Err(GoalRecordRefusal::EntriesFull);
                 }
@@ -1563,14 +1556,14 @@ pub fn edit_goal_record(
             targets.retain(|kept| kept.target.id != *id || kept.target.resource == *resource);
             let row = Some(target_row(&target, Some(setter)));
             match targets
-                .iter_mut()
-                .find(|kept| kept.target.resource == *resource)
+                .iter()
+                .position(|kept| kept.target.resource == *resource)
             {
-                Some(kept) => {
-                    if kept.target.id != *id {
-                        replaced_target_id = Some(kept.target.id.clone());
+                Some(index) => {
+                    if targets[index].target.id != *id {
+                        replaced_target_id = Some(targets[index].target.id.clone());
                     }
-                    *kept = KeptTarget { target, row };
+                    targets[index] = KeptTarget { target, row };
                 }
                 None if targets.len() >= MAX_RESOURCE_TARGETS => {
                     return Err(GoalRecordRefusal::TargetsFull);
@@ -1620,7 +1613,8 @@ pub fn edit_goal_record(
 /// Workflow #463 V3: whether an entry row keeps `value`: its canonical text is at most
 /// [`MAX_RESOURCE_TARGET_ENTRY_VALUE_BYTES`] bytes (else `ValueTooLarge`) and the canonical writer
 /// takes it without a control character in its text (else `ValueInvalid`). The rule of the v3
-/// reader and of [`edit_goal_record`], for the checks before the fact write gate.
+/// reader and of [`edit_goal_record`], for the checks an `EditGoal` makes under the fact write
+/// gate.
 pub fn goal_entry_value_fits(value: &serde_json::Value) -> Result<(), GoalRecordRefusal> {
     match entry_value_text(value) {
         Ok(_) => Ok(()),

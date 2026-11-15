@@ -622,7 +622,9 @@ another request wrote with who set them:
 
 - **A variable or another entry** (`set`): the entry row of the name is replaced where it stands,
   or added after the others; `clear` removes it. The row names the Runtime's clock at the request,
-  the request's channel and, for the Lab, the initiator its connection declared.
+  the request's channel and, for the Lab, the initiator its connection declared. Fix round 1: a
+  `clear` removes the stored row of its name whatever the name's entry is (a heading's or a note's
+  included), so no stored value is left that nobody can remove.
 - **A resource entry** of `goals.json` (`set` with `{at_least}`) and **an other target** (a name
   no entry has, `set` with `{resource, at_least}`): one target row, mode `adjust`, weight
   `score_stage`, its step and importance the pool's valuation's (a pool whose valuation lacks
@@ -634,7 +636,8 @@ another request wrote with who set them:
   `record_unreadable`; a record left with no target and no entry is the withdrawal.
 - **The version** compared is the sequence of the `fact.published` that holds the record (`0`
   without one), the one `GoalView` answers; a stored record of entries alone has that version too,
-  where `ResourceTargetView`'s `active.version` reads `0`.
+  where `ResourceTargetView`'s `active.version` reads `0`. It is compared under the fact write
+  gate first; only then are the name and the value checked against the record about to change.
 
 The whole record is read back by the v3 reader before it is published, as one `fact.published`
 keeping the request's origin, under the fact write gate.

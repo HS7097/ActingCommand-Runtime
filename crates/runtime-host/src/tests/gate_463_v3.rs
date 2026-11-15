@@ -5,12 +5,12 @@
 // rd-1115/brief-463-v3-goals-view-edit.md): one application's goals read (`GoalView`) and set
 // (`EditGoal`) by name.
 //
-// Two parts. The checks before the gate and the view's list are pure functions of a page
-// (`crate::goals`), tested here on a made-up page: an accepted `goals.json` of each type, two bound
-// packages that share a variable, three pools and a remedy parameter. The host's half runs, as
-// `gate_463_v2` does, in composer mode over one game root on disk, a manual Runtime clock and one
-// fake instance: the root's one rule is due at every evaluation and its package declares the
-// variables of each scene. Every name, pool and value is made up.
+// Two parts. The checks and the view's list are pure functions of a page (`crate::goals`), tested
+// here on a made-up page: an accepted `goals.json` of each type, two bound packages that share a
+// variable, a package of the root no catalog task binds, three pools and a remedy parameter. The
+// host's half runs, as `gate_463_v2` does, in composer mode over one game root on disk, a manual
+// Runtime clock and one fake instance: the root's one rule is due at every evaluation and its
+// package declares the variables of each scene. Every name, pool and value is made up.
 
 use super::gate_442_rem1::write_package;
 use super::gate_rl1b::{
@@ -22,8 +22,9 @@ use crate::goals::{
 };
 use actingcommand_contract::{
     DeclaredInitiator, GoalDeclarationRead, GoalEdit, GoalEdited, GoalEntryState, GoalEntryType,
-    GoalProblem, GoalSetBy, GoalValueSource, GoalView, GoalViewEntry, Initiator, PackageVariable,
-    ResourceTargetObservation, RuntimeChannel, StandardPackGoals, TargetableResource,
+    GoalProblem, GoalSetBy, GoalValueSource, GoalVariableCause, GoalView, GoalViewEntry, Initiator,
+    NotApplyingCause, PackageVariable, ResourceTargetObservation, RootVariableVerdict,
+    RuntimeChannel, StandardPackGoals, StandardPackProblem, TargetableResource, VariableCause,
     VariableProblem, VariableSource, parse_package_variables, parse_standard_pack_goals,
 };
 use actingcommand_policy::{
@@ -41,6 +42,8 @@ const OTHER_POOL: &str = "pool.neutral.other";
 const UNVALUED: &str = "pool.neutral.unvalued";
 const PACKAGE_A: &str = "neutral.pkg_a";
 const PACKAGE_B: &str = "neutral.pkg_b";
+/// Fix round 1: a package of the game root no catalog task binds on the application.
+const PACKAGE_C: &str = "neutral.pkg_c";
 const TASK_A: &str = "neutral.task_a";
 const TASK_B: &str = "neutral.task_b";
 
@@ -115,13 +118,44 @@ fn targetable(resource: &str, valued: bool) -> TargetableResource {
     }
 }
 
+/// The game root's verdict of `name` (declared as `declaration` by `packages`), with `cause` when
+/// it does not apply.
+fn verdict(
+    name: &str,
+    packages: &[&str],
+    declaration: &PackageVariable,
+    cause: Option<NotApplyingCause>,
+) -> RootVariableVerdict {
+    RootVariableVerdict {
+        name: name.to_owned(),
+        packages: packages
+            .iter()
+            .map(|package| (*package).to_owned())
+            .collect(),
+        declaration: declaration.clone(),
+        not_applying: cause,
+    }
+}
+
 /// The page: `declaration`; package A with the four variables and one remedy parameter, package
 /// B sharing `floor`; the points pool (capacity 120) and the other pool valued, a third unvalued;
-/// `extra` does not apply in the game root.
+/// `extra` does not apply in the game root (`declaration_conflict`). Fix round 1: the root's
+/// judgement: package C, which no catalog task binds, declares `floor` as package A does, `extra`
+/// otherwise (so `extra` does not apply) and alone `hidden`.
 fn page(declaration: Option<StandardPackGoals>) -> GoalPage {
     let shared = json!([package_a_variables()[1].clone()]);
+    let declared = parsed(&package_a_variables());
+    let hidden = parsed(&json!([{"name": "hidden", "type": "switch",
+                                 "title": {"en": "Hidden"}, "default": false}]));
+    let conflict = NotApplyingCause {
+        problem: VariableProblem::DeclarationConflict,
+        cause: VariableCause::DeclarationConflict {
+            packages: vec![PACKAGE_C.to_owned()],
+        },
+    };
     GoalPage {
         game_id: GAME.to_owned(),
+        checked: true,
         declaration,
         packages: vec![
             BoundPackage {
@@ -148,9 +182,40 @@ fn page(declaration: Option<StandardPackGoals>) -> GoalPage {
             targetable(OTHER_POOL, true),
             targetable(UNVALUED, false),
         ],
-        not_targetable: Vec::new(),
         capacities: BTreeMap::from([(POINTS.to_owned(), 120)]),
-        not_applying: BTreeMap::from([("extra".to_owned(), VariableProblem::RootUnchecked)]),
+        not_applying: BTreeMap::from([("extra".to_owned(), VariableProblem::DeclarationConflict)]),
+        root: BTreeMap::from([
+            (
+                "floor".to_owned(),
+                verdict(
+                    "floor",
+                    &[PACKAGE_A, PACKAGE_B, PACKAGE_C],
+                    &declared[1],
+                    None,
+                ),
+            ),
+            (
+                "extra".to_owned(),
+                verdict(
+                    "extra",
+                    &[PACKAGE_A, PACKAGE_C],
+                    &declared[3],
+                    Some(conflict),
+                ),
+            ),
+            (
+                "hidden".to_owned(),
+                verdict("hidden", &[PACKAGE_C], &hidden[0], None),
+            ),
+        ]),
+    }
+}
+
+/// Who sets a value in the pure tests: the Lab at 5000.
+fn writer() -> VariableSetBy {
+    VariableSetBy {
+        set_unix_ms: 5_000,
+        channel: RuntimeChannel::Lab,
     }
 }
 
@@ -163,8 +228,9 @@ fn setter(at: u64, channel: RuntimeChannel, initiator: Option<Initiator>) -> Tar
 }
 
 /// A stored v3 record: `pick` = item_a (Lab, 1000), the orphan `stray` = 5 (console, 2000), the
-/// target `points` on the points pool at least 50 (Lab, 3000) and the other target `other` on
-/// the other pool at least 7 (Lab, 4000).
+/// target `points` on the points pool at least 50 (Lab, 3000), the other target `other` on the
+/// other pool at least 7 (Lab, 4000) and (fix round 1) a value under the heading's name
+/// `group_a` = 1 (console, 4500), which another writer of the record could leave.
 fn stored() -> StoredGoalRecord {
     let lab = |at| setter(at, RuntimeChannel::Lab, Some(Initiator::LabCli));
     let edits = [
@@ -198,6 +264,13 @@ fn stored() -> StoredGoalRecord {
             },
             lab(4_000),
         ),
+        (
+            GoalRecordEdit::SetEntry {
+                name: "group_a".to_owned(),
+                value: json!(1),
+            },
+            setter(4_500, RuntimeChannel::Ui, None),
+        ),
     ];
     let mut rows: Option<Vec<BTreeMap<String, actingcommand_contract::FactScalar>>> = None;
     for (edit, set) in edits {
@@ -223,35 +296,53 @@ fn refused(
     stored: &StoredGoalRecord,
     request: EditRequest<'_>,
 ) -> (GoalProblem, Option<String>, Option<(i64, i64)>) {
-    let refusal = check_edit(page, stored, request).expect_err("the request is refused");
+    let refusal = check_edit(page, stored, request, writer()).expect_err("the request is refused");
     (refusal.problem, refusal.pointer, refusal.range)
 }
 
-// Each situation of the checks before the gate is its own word: a name outside the form, a value
-// that is no JSON, a heading or a note, a tier, a placement no bound package declares, a remedy
-// parameter, a variable that does not apply (with its word), each type's checks, a resource
-// entry's and an other target's checks (a deadline, the capacity, an unvalued and an untargetable
-// pool), and a clear of a name that holds nothing. What passes is the one row it writes.
+/// The one row `request` writes on the page with the stored record.
+#[track_caller]
+fn passes(page: &GoalPage, stored: &StoredGoalRecord, request: EditRequest<'_>) -> GoalRecordEdit {
+    check_edit(page, stored, request, writer()).expect("the request passes")
+}
+
+// Each situation of the checks is its own word: a name outside the form, a value that is no JSON,
+// a heading or a note, a tier, a remedy parameter, a variable that does not apply (with its word),
+// each type's checks as the dispatch's own judgement gives them, a resource entry's and an other
+// target's checks (a deadline, the capacity, an unvalued and an untargetable pool), and a clear of
+// a name that holds nothing. Fix round 1: a placement no bound package declares and a variable
+// only an unbound package of the root declares are `not_offered`, for a set and a clear; a value
+// stored under a heading's name is cleared like any other; a page not in memory yet refuses every
+// request `not_checked_yet`, after the name's form and the value's JSON. What passes is the one row
+// it writes.
 #[test]
 fn v3_host_each_situation_of_the_checks_is_its_own_word() {
     use GoalProblem as P;
     let page = page(Some(goals()));
     let stored = stored();
     let empty = StoredGoalRecord::Empty;
-    let word = |request| refused(&page, &stored, request).0;
+    let word = |request: EditRequest<'_>| refused(&page, &stored, request).0;
+    let spare_unvalued = format!("{{\"resource\":\"{UNVALUED}\",\"at_least\":5}}");
+    let spare_other = format!("{{\"resource\":\"{OTHER_POOL}\",\"at_least\":9}}");
 
     assert_eq!(word(set("Not A Name", "1")), P::NameUnknown);
     assert_eq!(word(set("pick", "{")), P::ValueNotJson);
     assert_eq!(word(set("group_a", "1")), P::HoldsNoValue);
     assert_eq!(word(set("about", "1")), P::HoldsNoValue);
     assert_eq!(word(set("weight", "\"less\"")), P::TierNotBuilt);
-    assert_eq!(word(set("missing", "\"x\"")), P::NameUnknown);
     assert_eq!(word(set("route_param", "\"far\"")), P::RemedyParameter);
-    let not_applying = check_edit(&page, &stored, set("extra", "true")).expect_err("extra");
+    let not_applying = check_edit(&page, &stored, set("extra", "true"), writer())
+        .expect_err("extra does not apply");
     assert_eq!(
         (not_applying.problem, not_applying.variable_problem),
-        (P::VariableNotApplying, Some(VariableProblem::RootUnchecked))
+        (
+            P::VariableNotApplying,
+            Some(VariableProblem::DeclarationConflict)
+        )
     );
+    // Fix round 1: declared in the root, by no package bound on the application.
+    assert_eq!(word(set("missing", "\"x\"")), P::NotOffered);
+    assert_eq!(word(set("hidden", "true")), P::NotOffered);
 
     // choice
     assert_eq!(word(set("pick", "\"item_c\"")), P::NotAnOption);
@@ -274,6 +365,12 @@ fn v3_host_each_situation_of_the_checks_is_its_own_word() {
     assert_eq!(
         refused(&page, &stored, set("order", "[\"item_z\"]")),
         (P::NotAnOption, Some("/0".to_owned()), None)
+    );
+    // Fix round 1: a key the dispatch would leave out is refused, so what is set is what a
+    // dispatch applies whole.
+    assert_eq!(
+        refused(&page, &stored, set("order", "[\"item_a\",\"item_z\"]")),
+        (P::NotAnOption, Some("/1".to_owned()), None)
     );
     assert_eq!(
         refused(&page, &stored, set("order", "[1]")),
@@ -311,15 +408,8 @@ fn v3_host_each_situation_of_the_checks_is_its_own_word() {
         P::OutOfRange,
         "a target is at least 1"
     );
-    let unvalued = check_edit(
-        &page,
-        &stored,
-        set(
-            "spare",
-            &format!("{{\"resource\":\"{UNVALUED}\",\"at_least\":5}}"),
-        ),
-    )
-    .expect_err("an unvalued pool");
+    let unvalued = check_edit(&page, &stored, set("spare", &spare_unvalued), writer())
+        .expect_err("an unvalued pool");
     assert_eq!(
         (unvalued.problem, unvalued.pool_id.as_deref()),
         (P::PoolUnvalued, Some(UNVALUED))
@@ -333,45 +423,44 @@ fn v3_host_each_situation_of_the_checks_is_its_own_word() {
     );
     assert_eq!(word(set("spare", "5")), P::NameUnknown);
 
-    // clears of a name that holds nothing
-    assert_eq!(
-        refused(&page, &empty, EditRequest::Clear { name: "pick" }).0,
-        P::ValueNotSet
-    );
-    assert_eq!(
-        refused(&page, &empty, EditRequest::Clear { name: "points" }).0,
-        P::ValueNotSet
-    );
+    // clears of a name that holds nothing: the name's own word
+    let cleared = |name: &str| refused(&page, &empty, EditRequest::Clear { name }).0;
+    assert_eq!(cleared("pick"), P::ValueNotSet);
+    assert_eq!(cleared("points"), P::ValueNotSet);
+    assert_eq!(cleared("about"), P::HoldsNoValue);
+    assert_eq!(cleared("weight"), P::TierNotBuilt);
+    assert_eq!(cleared("route_param"), P::RemedyParameter);
+    assert_eq!(cleared("missing"), P::NotOffered);
+    assert_eq!(cleared("hidden"), P::NotOffered);
     assert_eq!(
         refused(&page, &stored, EditRequest::Clear { name: "nothing" }).0,
         P::NameUnknown
     );
 
     // what passes
-    let passes = |request| check_edit(&page, &stored, request).expect("the request passes");
     assert_eq!(
-        passes(set("pick", "\"item_b\"")),
+        passes(&page, &stored, set("pick", "\"item_b\"")),
         GoalRecordEdit::SetEntry {
             name: "pick".to_owned(),
             value: json!("item_b")
         }
     );
     assert_eq!(
-        passes(set("floor", "40")),
+        passes(&page, &stored, set("floor", "40")),
         GoalRecordEdit::SetEntry {
             name: "floor".to_owned(),
             value: json!(40)
         }
     );
     assert_eq!(
-        passes(set("order", "[\"item_c\",\"item_a\"]")),
+        passes(&page, &stored, set("order", "[\"item_c\",\"item_a\"]")),
         GoalRecordEdit::SetEntry {
             name: "order".to_owned(),
             value: json!(["item_c", "item_a"])
         }
     );
     assert_eq!(
-        passes(set("points", "{\"at_least\":120}")),
+        passes(&page, &stored, set("points", "{\"at_least\":120}")),
         GoalRecordEdit::SetTarget {
             id: "points".to_owned(),
             resource: POINTS.to_owned(),
@@ -379,10 +468,7 @@ fn v3_host_each_situation_of_the_checks_is_its_own_word() {
         }
     );
     assert_eq!(
-        passes(set(
-            "spare",
-            &format!("{{\"resource\":\"{OTHER_POOL}\",\"at_least\":9}}")
-        )),
+        passes(&page, &stored, set("spare", &spare_other)),
         GoalRecordEdit::SetTarget {
             id: "spare".to_owned(),
             resource: OTHER_POOL.to_owned(),
@@ -390,27 +476,55 @@ fn v3_host_each_situation_of_the_checks_is_its_own_word() {
         }
     );
     assert_eq!(
-        passes(EditRequest::Clear { name: "points" }),
+        passes(&page, &stored, EditRequest::Clear { name: "points" }),
         GoalRecordEdit::ClearTarget {
             id: "points".to_owned()
         }
     );
     assert_eq!(
-        passes(EditRequest::Clear { name: "stray" }),
+        passes(&page, &stored, EditRequest::Clear { name: "stray" }),
         GoalRecordEdit::ClearEntry {
             name: "stray".to_owned()
         }
     );
     assert_eq!(
-        passes(EditRequest::Clear { name: "other" }),
+        passes(&page, &stored, EditRequest::Clear { name: "other" }),
         GoalRecordEdit::ClearTarget {
             id: "other".to_owned()
+        }
+    );
+    // Fix round 1: a value nobody could remove must not exist: the one under a heading's name is
+    // cleared as any other.
+    assert_eq!(
+        passes(&page, &stored, EditRequest::Clear { name: "group_a" }),
+        GoalRecordEdit::ClearEntry {
+            name: "group_a".to_owned()
         }
     );
     // Without a file a declared entry's name is no name at all.
     assert_eq!(
         refused(&page_without_file(), &stored, set("group_a", "1")).0,
         P::NameUnknown
+    );
+
+    // Fix round 1: a page not in memory yet refuses every request with a word of its own, after
+    // the name's form and the value's JSON.
+    let unchecked = GoalPage::not_checked(GAME.to_owned());
+    assert_eq!(
+        refused(&unchecked, &stored, set("pick", "\"item_a\"")).0,
+        P::NotCheckedYet
+    );
+    assert_eq!(
+        refused(&unchecked, &stored, EditRequest::Clear { name: "stray" }).0,
+        P::NotCheckedYet
+    );
+    assert_eq!(
+        refused(&unchecked, &stored, set("Not A Name", "1")).0,
+        P::NameUnknown
+    );
+    assert_eq!(
+        refused(&unchecked, &stored, set("pick", "{")).0,
+        P::ValueNotJson
     );
 }
 
@@ -427,11 +541,14 @@ fn listed<'a>(entries: &'a [GoalViewEntry], name: &str) -> &'a GoalViewEntry {
 
 // The view lists the accepted file's entries in their order (a heading and a note as written, a
 // resource entry with the target on its pool, a tier not built with its default, a placement with
-// its variable, a placement no package declares alone), then the variables no entry places in the
-// order the packages declare them, a shared variable once with both packages; a variable that does
-// not apply is listed `not_applied` with its word; the run's resolution gives what is in effect;
-// the stored values no entry offers are the orphans and the targets on no declared pool the other
-// targets. Without the file (or with a refused one) only the variables are listed.
+// its variable, and, fix round 1, a placement no bound package declares `not_offered`), then the
+// variables no entry places in the order the packages declare them, a shared variable once with
+// both packages and (fix round 1) the root's package that declares it unbound; a variable that does
+// not apply is listed `not_applied` with its word and, fix round 1, the root's detail of the cause
+// when the word is the root's; the run's resolution gives what is in effect; the stored values no
+// entry shows (a value under a heading's name included) are the orphans and the targets on no
+// declared pool the other targets. Without the file (or with a refused one) only the variables
+// are listed.
 #[test]
 fn v3_host_the_view_lists_the_file_then_the_unplaced_variables_and_the_orphans() {
     let page = page(Some(goals()));
@@ -535,8 +652,15 @@ fn v3_host_the_view_lists_the_file_then_the_unplaced_variables_and_the_orphans()
         Some(BTreeMap::from([("en".to_owned(), "item a".to_owned())]))
     );
 
+    // Fix round 1: a placement no bound package declares is not offered, as `set` says.
     let missing = listed(entries, "missing");
-    assert!(missing.variable.is_none() && missing.value_json.is_none() && missing.state.is_none());
+    assert_eq!(missing.state, Some(GoalEntryState::NotOffered));
+    assert!(
+        missing.variable.is_none()
+            && missing.value_json.is_none()
+            && missing.unbound_packages.is_empty(),
+        "{missing:?}"
+    );
 
     let floor = listed(entries, "floor");
     assert_eq!(
@@ -544,6 +668,12 @@ fn v3_host_the_view_lists_the_file_then_the_unplaced_variables_and_the_orphans()
         [PACKAGE_A, PACKAGE_B],
         "one row, both packages"
     );
+    assert_eq!(
+        floor.unbound_packages,
+        [PACKAGE_C],
+        "the root's package no catalog task binds, marked as such"
+    );
+    assert_eq!(floor.variable_cause, None);
     assert_eq!(
         (
             floor.default_origin.as_deref(),
@@ -561,10 +691,41 @@ fn v3_host_the_view_lists_the_file_then_the_unplaced_variables_and_the_orphans()
         )
     );
 
+    // Fix round 1: the word with the root's detail of the cause and every package of the root
+    // that declares the name.
     let extra = listed(entries, "extra");
     assert_eq!(
         (extra.state, extra.variable_problem.as_deref()),
-        (Some(GoalEntryState::NotApplied), Some("root_unchecked"))
+        (
+            Some(GoalEntryState::NotApplied),
+            Some(VariableProblem::DeclarationConflict.as_str())
+        )
+    );
+    assert_eq!(
+        extra.variable_cause,
+        Some(GoalVariableCause::DeclarationConflict {
+            packages: vec![PACKAGE_C.to_owned()]
+        })
+    );
+    assert_eq!(
+        (extra.packages.as_slice(), extra.unbound_packages.as_slice()),
+        (
+            [PACKAGE_A.to_owned()].as_slice(),
+            [PACKAGE_C.to_owned()].as_slice()
+        )
+    );
+    // A word that is not the root's own (`root_unchecked`, while no check judges the root) has
+    // no detail.
+    let mut unjudged = page.clone();
+    unjudged
+        .not_applying
+        .insert("extra".to_owned(), VariableProblem::RootUnchecked);
+    let unjudged_variables = page_variables(&unjudged, &resolved);
+    let unjudged_view = view_entries(&unjudged, &stored, &unjudged_variables, &[]);
+    let extra = listed(&unjudged_view.entries, "extra");
+    assert_eq!(
+        (extra.variable_problem.as_deref(), &extra.variable_cause),
+        (Some(VariableProblem::RootUnchecked.as_str()), &None)
     );
 
     assert_eq!(
@@ -572,7 +733,8 @@ fn v3_host_the_view_lists_the_file_then_the_unplaced_variables_and_the_orphans()
             .iter()
             .map(|orphan| (orphan.name.as_str(), orphan.value_json.as_str()))
             .collect::<Vec<_>>(),
-        [("stray", "5")]
+        [("stray", "5"), ("group_a", "1")],
+        "a value under a heading's name is shown as an orphan"
     );
     assert_eq!(
         view.orphans[0].set,
@@ -585,7 +747,7 @@ fn v3_host_the_view_lists_the_file_then_the_unplaced_variables_and_the_orphans()
     assert_eq!(view.other_targets, ["other"]);
 
     // Without the file: the variables only, `pick` unplaced, and the values no variable offers
-    // (`stray`) the orphans; every target is an other target.
+    // (`stray`, `group_a`) the orphans; every target is an other target.
     let bare = page_without_file();
     let variables = page_variables(&bare, &resolved);
     let view = view_entries(&bare, &stored, &variables, &[]);
@@ -601,7 +763,7 @@ fn v3_host_the_view_lists_the_file_then_the_unplaced_variables_and_the_orphans()
             ("extra", false)
         ]
     );
-    assert_eq!(view.orphans.len(), 1);
+    assert_eq!(view.orphans.len(), 2);
     assert_eq!(view.other_targets, ["points", "other"]);
 }
 
@@ -664,12 +826,45 @@ fn place_game_root(packs: &Path, variables: &Value) {
 
 /// Writes `variables` as the package's declared variables.
 fn declare(packs: &Path, variables: &Value) {
-    let control_path = packs.join(GAME_A).join(TASK).join("control.json");
+    patch_control(packs, TASK, |control| {
+        control["variables"] = variables.clone()
+    });
+}
+
+/// Fix round 1: changes the control declaration of the package `package` of the game root in
+/// place.
+fn patch_control(packs: &Path, package: &str, change: impl FnOnce(&mut Value)) {
+    let control_path = packs.join(GAME_A).join(package).join("control.json");
     let mut control: Value =
         serde_json::from_slice(&fs::read(&control_path).expect("the control declaration"))
             .expect("control JSON");
-    control["variables"] = variables.clone();
+    change(&mut control);
     write_json(&control_path, &control);
+}
+
+/// Fix round 1: a package of the root that no rule runs, so no catalog task binds it.
+const HELD: &str = "fixture.held";
+/// The default `standard_packs.check_interval_ms`: a check reads the roots again after it.
+const CHECK_INTERVAL_MS: u64 = 60_000;
+
+/// Fix round 1: the game root of [`place_game_root`] with `variables`, whose registry also lists
+/// [`HELD`], which declares `held_variables`.
+fn place_with_held(packs: &Path, variables: &Value, held_variables: &Value) {
+    place_game_root(packs, variables);
+    let game = packs.join(GAME_A);
+    write_json(
+        &game.join("bundle.json"),
+        &bundle(GAME_A, SERVER_A, &[TASK, HELD]),
+    );
+    write_package(&game.join(HELD), HELD, None, None);
+    patch_control(packs, HELD, |control| {
+        control["variables"] = held_variables.clone();
+    });
+}
+
+/// Fix round 1: writes the game root's `goals.json` as `document`.
+fn write_goals(packs: &Path, document: &Value) {
+    write_json(&packs.join(GAME_A).join("goals.json"), document);
 }
 
 fn facts() -> EvaluationFacts {
@@ -743,9 +938,14 @@ fn start_host(
 
 impl Scene {
     fn new(variables: &Value) -> Self {
+        Self::with(|packs| place_game_root(packs, variables))
+    }
+
+    /// Fix round 1: the host over the game root `place` places below its standard-pack root.
+    fn with(place: impl FnOnce(&Path)) -> Self {
         let state_root = TempDir::new().expect("state root");
         let packs = TempDir::new().expect("standard-pack root");
-        place_game_root(packs.path(), variables);
+        place(packs.path());
         let device = Arc::new(FakeState::default());
         let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
         let instance = instance_id();
@@ -1009,9 +1209,9 @@ fn next_eligible(context: &PolicyRunContext) -> u64 {
 // version conflict", "not newer", "the console's gate takes both kinds", "a restart reloads the
 // values" and "a value the view shows in effect is the value the next dispatch's overlay holds",
 // on the variable `pick`. After the workbench's first check (the first policy cycle) the variable
-// is listed unplaced. The declaration is `not_read`: the marked gap of `goal_declaration` (the
-// workbench keeps no parsed `goals.json` on #1728's head `020a5681`), which "the view with the
-// file and with a refused file" waits for; the pure tests below hold the view of an accepted file.
+// is listed unplaced. Fix round 1: the root holds no `goals.json`, which the workbench's check
+// keeps (`absent`); `v3_fix1_the_view_lists_the_root_s_goals_json_and_not_one_it_refuses` holds
+// the view of an accepted file and of a refused one.
 #[test]
 fn v3_host_a_value_set_by_name_is_the_next_dispatch_s_and_a_restart_reloads_it() {
     let scene = Scene::new(&pick_only());
@@ -1023,7 +1223,7 @@ fn v3_host_a_value_set_by_name_is_the_next_dispatch_s_and_a_restart_reloads_it()
         (view.instance_alias.as_str(), view.game_id.as_str()),
         (INSTANCE, GAME_A)
     );
-    assert_eq!(view.declaration.state, GoalDeclarationRead::NotRead);
+    assert_eq!(view.declaration.state, GoalDeclarationRead::Absent);
     assert_eq!(view.version, 0);
     assert!(view.orphans.is_empty() && view.other_targets.is_empty());
     let names = |view: &GoalView| {
@@ -1416,5 +1616,256 @@ fn v3_host_a_pack_update_leaves_each_stored_value_as_the_design_says() {
             .map(|(_, value)| value),
         Some(&json!(["item_a"]))
     );
+    scene.close();
+}
+
+// ---- Fix round 1 (coordinator brief rd-1115/brief-1731-fix1.md, items 5, 6, 8 and 9).
+
+/// The accepted `goals.json` of the fix round's scene: a heading, a resource entry on pool A, the
+/// placement of `pick` and the placement of `missing`, which no package declares.
+fn accepted_goals() -> Value {
+    json!({"schema_version": "actingcommand.goals.v2", "game": GAME_A, "entries": [
+        {"name": "group_a", "type": "heading", "title": {"en": "Group A"}},
+        {"name": "stock", "type": "resource", "governs": {"pool": POOL_A},
+         "title": {"en": "Stock"}},
+        {"name": "pick", "type": "variable"},
+        {"name": "missing", "type": "variable"}
+    ]})
+}
+
+// Fix round 1, items 5, 8 and 9: the page is read from what the scheduler workbench keeps of the
+// game root, from memory. Before the first check nothing of it is in memory: the page answers
+// `not_checked_yet` and lists nothing, and an edit is refused `not_checked_yet`. After it, with an
+// accepted `goals.json`, the page lists the file's entries in their order (the heading, the
+// resource entry, the placement of `pick` with its variable, the placement of `missing`, which no
+// package declares, `not_offered`, which a `set` of it says too) and the package's remedy
+// parameter read-only; a target set on the resource entry is shown on it and cleared by its name;
+// a value set on the placement is what the next dispatch hands its run. Then the file is replaced
+// by one the reader refuses (version 1): after the next check the page names the refusal (its
+// sha256, its first problem and pointer) and lists no entry of it, `pick` unplaced and still in
+// effect.
+#[test]
+fn v3_fix1_the_view_lists_the_root_s_goals_json_and_not_one_it_refuses() {
+    let scene = Scene::with(|packs| {
+        place_game_root(packs, &pick_only());
+        patch_control(packs, TASK, |control| {
+            control["provides"] = json!([{"capability": "cap_x", "parameters": [
+                {"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_1"}
+            ]}]);
+        });
+        write_goals(packs, &accepted_goals());
+    });
+    let before = scene.view();
+    assert_eq!(
+        before.declaration.state,
+        GoalDeclarationRead::NotCheckedYet,
+        "{before:?}"
+    );
+    assert!(
+        before.entries.is_empty()
+            && before.orphans.is_empty()
+            && before.remedy_parameters.is_empty(),
+        "{before:?}"
+    );
+    let early = denied(
+        &scene.edit(set_op("pick", &json!("item_a")), None, POLICY_NOW_UNIX_MS),
+        INVALID,
+    );
+    assert_eq!(
+        early.value("goal_problem"),
+        Some(&json!(GoalProblem::NotCheckedYet.as_str()))
+    );
+
+    let (chain, context) = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 6);
+    let view = scene.view();
+    assert_eq!(
+        (view.declaration.state, view.declaration.sha256.as_deref()),
+        (GoalDeclarationRead::Accepted, None)
+    );
+    assert_eq!(
+        view.entries
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.entry_type, entry.placed))
+            .collect::<Vec<_>>(),
+        [
+            ("group_a", GoalEntryType::Heading, true),
+            ("stock", GoalEntryType::Resource, true),
+            ("pick", GoalEntryType::Variable, true),
+            ("missing", GoalEntryType::Variable, true),
+        ]
+    );
+    let pick = listed(&view.entries, "pick");
+    assert_eq!(pick.packages, [TASK]);
+    assert_eq!(pick.state, Some(GoalEntryState::InEffect));
+    agrees(&view, &chain, "pick");
+    assert_eq!(
+        listed(&view.entries, "missing").state,
+        Some(GoalEntryState::NotOffered)
+    );
+    assert_eq!(
+        view.remedy_parameters
+            .iter()
+            .map(|parameter| (
+                parameter.package_id.as_str(),
+                parameter.task_id.as_str(),
+                parameter.capability.as_str(),
+                parameter.irreversible,
+                parameter.parameter_name.as_str(),
+                parameter.options.clone(),
+                parameter.default_option.as_str(),
+            ))
+            .collect::<Vec<_>>(),
+        [(
+            TASK,
+            TASK,
+            "cap_x",
+            false,
+            "param_p",
+            vec!["opt_1".to_owned(), "opt_2".to_owned()],
+            "opt_1",
+        )],
+        "the remedy parameter, read-only"
+    );
+
+    let start = next_eligible(&context);
+    let missing = denied(
+        &scene.edit(set_op("missing", &json!(true)), None, start),
+        INVALID,
+    );
+    assert_eq!(
+        missing.value("goal_problem"),
+        Some(&json!(GoalProblem::NotOffered.as_str()))
+    );
+    let stocked = taken(&scene.edit(set_op("stock", &json!({"at_least": 50})), None, start));
+    let view = scene.view();
+    assert_eq!(view.version, stocked.version);
+    let stock = listed(&view.entries, "stock");
+    assert_eq!(stock.value_json.as_deref(), Some("{\"at_least\":50}"));
+    assert_eq!(
+        stock
+            .resource
+            .as_ref()
+            .and_then(|state| state.target_id.as_deref()),
+        Some("stock")
+    );
+    assert!(view.other_targets.is_empty(), "{view:?}");
+    taken(&scene.edit(clear_op("stock"), None, start + 1));
+    assert_eq!(
+        listed(&scene.view().entries, "stock").source,
+        Some(GoalValueSource::Default),
+        "the clear removed the target on its pool"
+    );
+
+    taken(&scene.edit(set_op("pick", &json!("item_a")), None, start + 2));
+    let view = scene.view();
+    let (chain, context) = scene.evaluate_and_run(start + 2, 7);
+    agrees(&view, &chain, "pick");
+    assert_eq!(run_values(&context), [("pick".to_owned(), json!("item_a"))]);
+
+    // A file the reader refuses: no entry of it is listed, and `pick` stays in effect.
+    write_goals(
+        scene.packs.path(),
+        &json!({"schema_version": "actingcommand.goals.v1", "game": GAME_A, "entries": []}),
+    );
+    let read_at = next_eligible(&context).max(start + 2 + CHECK_INTERVAL_MS);
+    let (chain, _) = scene.evaluate_and_run(read_at, 8);
+    let view = scene.view();
+    assert_eq!(
+        (
+            view.declaration.state,
+            view.declaration.standard_pack_problem.as_deref(),
+            view.declaration.json_pointer.as_deref(),
+        ),
+        (
+            GoalDeclarationRead::Refused,
+            Some(StandardPackProblem::GoalVersionRetired.as_str()),
+            Some("/schema_version"),
+        )
+    );
+    assert!(
+        view.declaration
+            .sha256
+            .as_deref()
+            .is_some_and(|digest| digest.starts_with("sha256:")),
+        "{:?}",
+        view.declaration
+    );
+    assert_eq!(
+        view.entries
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.placed))
+            .collect::<Vec<_>>(),
+        [("pick", false)]
+    );
+    assert_eq!(
+        listed(&view.entries, "pick").value_json.as_deref(),
+        Some("\"item_a\"")
+    );
+    agrees(&view, &chain, "pick");
+    scene.close();
+}
+
+// Fix round 1, items 6 and 9: a variable the whole root keeps from applying. A package of the
+// root that no rule runs declares `pick` with another default (`declaration_conflict`): the view
+// lists `pick` not applied with the word, the detail of the cause (the package that declares it
+// otherwise) and that package among the root's packages the catalog does not bind on the
+// application; a `set` is refused `variable_not_applying` with the word and nothing is written;
+// the next dispatch hands its run the default.
+#[test]
+fn v3_fix1_a_variable_the_root_keeps_from_applying_is_listed_with_its_cause_and_refused() {
+    let mut differing = pick_only();
+    differing[0]["default"] = json!("item_a");
+    let scene = Scene::with(|packs| place_with_held(packs, &pick_only(), &differing));
+    let (_, context) = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 6);
+    let view = scene.view();
+    let pick = listed(&view.entries, "pick");
+    assert_eq!(
+        (
+            pick.state,
+            pick.variable_problem.as_deref(),
+            pick.source,
+            pick.effective_json.as_deref(),
+        ),
+        (
+            Some(GoalEntryState::NotApplied),
+            Some(VariableProblem::DeclarationConflict.as_str()),
+            Some(GoalValueSource::Default),
+            Some("\"item_b\""),
+        )
+    );
+    assert_eq!(
+        pick.variable_cause,
+        Some(GoalVariableCause::DeclarationConflict {
+            packages: vec![HELD.to_owned()]
+        })
+    );
+    assert_eq!(
+        (pick.packages.as_slice(), pick.unbound_packages.as_slice()),
+        ([TASK.to_owned()].as_slice(), [HELD.to_owned()].as_slice())
+    );
+
+    let start = next_eligible(&context);
+    let refused = denied(
+        &scene.edit(set_op("pick", &json!("item_a")), None, start),
+        INVALID,
+    );
+    assert_eq!(
+        (
+            refused.value("goal_problem"),
+            refused.value("variable_problem")
+        ),
+        (
+            Some(&json!(GoalProblem::VariableNotApplying.as_str())),
+            Some(&json!(VariableProblem::DeclarationConflict.as_str()))
+        )
+    );
+    assert_eq!(scene.view().version, 0, "nothing was written");
+    let (chain, context) = scene.evaluate_and_run(start, 7);
+    assert_eq!(
+        dispatched(&chain, "pick"),
+        json!({"variable_name": "pick", "variable_source": "default",
+               "value_json": "\"item_b\""})
+    );
+    assert_eq!(run_values(&context), [("pick".to_owned(), json!("item_b"))]);
     scene.close();
 }

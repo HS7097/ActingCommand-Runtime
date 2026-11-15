@@ -13,8 +13,9 @@
 //!   and the resource target view. It records nothing.
 //! - `EditGoal {instance_alias, expected_version?, op}` sets or clears one value by its name
 //!   ([`GoalEdit`]) under the fact write gate, and answers the record's version after the edit
-//!   ([`GoalEdited`]). A value the checks before the gate refuse is `goal_value_invalid` with the
-//!   word [`GoalProblem`] gives the situation.
+//!   ([`GoalEdited`]). The Runtime checks the name and the value under the gate, after it compares
+//!   the version (a request of another version is a version conflict whatever its value); a
+//!   refusal is `goal_value_invalid` with the word [`GoalProblem`] gives the situation.
 
 use crate::{EventId, Initiator, ResourceTargetObservation, ResourceTargetView, RuntimeChannel};
 use serde::{Deserialize, Serialize};
@@ -22,13 +23,15 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 crate::outcome_vocabulary! {
-    /// Workflow #463 V3 (vocabulary `goal_problem`): why an `EditGoal` was refused before the fact
-    /// write gate (`goal_value_invalid`), one word per situation a reader can tell apart.
+    /// Workflow #463 V3 (vocabulary `goal_problem`): why an `EditGoal` was refused under the fact
+    /// write gate, after the version comparison (`goal_value_invalid`), one word per situation a
+    /// reader can tell apart.
     pub enum GoalProblem: "goal_problem" {
         /// The name is no entry of the application's page (no entry of `goals.json`, no variable
         /// of a package the active catalog binds on the application, no remedy parameter of such
-        /// a package) and, for a `set`, the value is no other resource target
-        /// `{resource, at_least}`; for a `clear`, no stored value and no target has the name.
+        /// a package) and no variable of its game root, and, for a `set`, the value is no other
+        /// resource target `{resource, at_least}`; for a `clear`, no stored value and no target
+        /// has the name.
         NameUnknown => "name_unknown",
         /// The name is a `heading` or a `note` entry of `goals.json`, which holds no value.
         HoldsNoValue => "holds_no_value",
@@ -41,6 +44,11 @@ crate::outcome_vocabulary! {
         /// The name is a variable that does not apply in the application's game root; the value
         /// `variable_problem` says why. No value is stored for it.
         VariableNotApplying => "variable_not_applying",
+        /// Fix round 1: the name is declared in the application's game root (a placement of
+        /// `goals.json`, or a variable a package of the root declares), but by no package the
+        /// active catalog binds on the application: it is not offered there, and the page lists
+        /// a placement of it `not_offered`. No value is stored for it.
+        NotOffered => "not_offered",
         /// `value_json` is no JSON text.
         ValueNotJson => "value_not_json",
         /// The value is not of the entry's type, or an object of other members than its own
@@ -78,6 +86,12 @@ crate::outcome_vocabulary! {
         /// The edited record would hold more targets (16) or entries (96) than a record keeps
         /// (`range_max`).
         RecordOutOfLimits => "record_out_of_limits",
+        /// Fix round 1: what the page is judged by is not in the Runtime's memory yet (the
+        /// scheduler workbench has not checked the game root since the start, or no evaluation
+        /// has read the bound packages for the active catalog and procedure manifest), so nothing
+        /// is known of the name; the page answers `not_checked_yet` meanwhile. Nothing is stored:
+        /// send the same request again after the Runtime's next check.
+        NotCheckedYet => "not_checked_yet",
     }
 }
 
@@ -152,12 +166,15 @@ pub struct GoalDeclarationState {
     pub json_pointer: Option<String>,
 }
 
-/// Whether the game's `goals.json` is in effect, as the scheduler workbench's last read of the
+/// Whether the game's `goals.json` is in effect, as the scheduler workbench's last check of the
 /// game root holds it: none in the root (`absent`), read and taken (`accepted`), refused by its
 /// reader (`refused`: no entry applies for that game; its variables and resource targets still
 /// do), there but not readable (`unreadable`: no variable of the root applies, `goals_unreadable`),
-/// or not read by this Runtime (`not_read`: no workbench reads the game root, in configured mode,
-/// or no check has read it since the start).
+/// or not read by this Runtime (`not_read`: no workbench reads game roots, in configured mode).
+/// Fix round 1: `not_checked_yet` when what the page is judged by is not in memory yet (the
+/// workbench has not checked the game root since the start, or no evaluation has read the bound
+/// packages for the active catalog and procedure manifest): the page then lists nothing, every
+/// `EditGoal` is refused `not_checked_yet`, and the caller asks again after the next check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalDeclarationRead {
@@ -166,6 +183,7 @@ pub enum GoalDeclarationRead {
     Refused,
     Unreadable,
     NotRead,
+    NotCheckedYet,
 }
 
 /// The type of an entry of the page: the five types of `goals.json` version 2, a variable no
@@ -191,13 +209,17 @@ pub enum GoalValueSource {
 
 /// Whether an entry's value is in effect: the next run reads it (`in_effect`), the next run reads
 /// the default instead (`not_applied`, with the `variable_problem` word that says why), or no
-/// reader of this build reads it (`not_built`: a `tier` entry before Workflow #455 G-R5).
+/// reader of this build reads it (`not_built`: a `tier` entry before Workflow #455 G-R5). Fix
+/// round 1: `not_offered`, a placement of `goals.json` whose variable no package the active
+/// catalog binds on the application declares: no run of the application reads it, and an
+/// `EditGoal` that sets it is refused with the word of the same name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalEntryState {
     InEffect,
     NotApplied,
     NotBuilt,
+    NotOffered,
 }
 
 /// Who set a stored value, and when: the Runtime's clock at the request and the channel of its
@@ -221,7 +243,11 @@ pub struct GoalSetBy {
 /// the default instead of a stored value, or the variable does not apply; `keys_left_out` with
 /// `in_effect` for a value applied in part), and the value in the declaration's own texts
 /// (`display`: an option's title, a number with its unit's text). A resource entry shows its pool,
-/// the target that holds its value and the pool's reading.
+/// the target that holds its value and the pool's reading. Fix round 1: beside `packages` (the
+/// bound packages that declare a variable), `unbound_packages`, the other packages of the game
+/// root that declare it, which the active catalog does not bind on the application; and, for a
+/// variable that does not apply in the root, the detail of the root's judgement
+/// (`variable_cause`). A placement whose variable no bound package declares is `not_offered`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoalViewEntry {
@@ -236,6 +262,8 @@ pub struct GoalViewEntry {
     pub default_origin: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub packages: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unbound_packages: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_json: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -253,6 +281,8 @@ pub struct GoalViewEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variable_problem: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variable_cause: Option<GoalVariableCause>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<GoalResourceState>,
@@ -269,6 +299,7 @@ impl GoalViewEntry {
             variable: None,
             default_origin: None,
             packages: Vec::new(),
+            unbound_packages: Vec::new(),
             default_json: None,
             value_json: None,
             effective_json: None,
@@ -277,10 +308,47 @@ impl GoalViewEntry {
             set: None,
             state: None,
             variable_problem: None,
+            variable_cause: None,
             display: None,
             resource: None,
         }
     }
+}
+
+/// Fix round 1 (`contracts/runtime-interface.md`, "Goal request kinds"): why a variable does not
+/// apply in the game root, beside its `variable_problem` word: the detail of the root's judgement
+/// as the scheduler workbench's last check of the root holds it (the contract crate's
+/// `judge_root_variables`, the judgement a dispatch reads). One member per word: the packages
+/// whose declaration of the name differs from the first (`declaration_conflict`); the type of the
+/// `goals.json` entry that takes the name (`goal_name_conflict`); per declaring package, the
+/// capabilities that make it irreversible (`irreversible_by_root`); the packages of the root that
+/// could not be read (`package_unreadable`); the name's place in the root's order, from 1
+/// (`name_out_of_limits`); the packages that read the variable as a designated effect's cap and
+/// the member of the declaration at fault (`cap_range`). A word without a detail
+/// (`goals_unreadable`, `root_unchecked`) has none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "cause", rename_all = "snake_case", deny_unknown_fields)]
+pub enum GoalVariableCause {
+    DeclarationConflict {
+        packages: Vec<String>,
+    },
+    GoalEntry {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        goal_type: Option<String>,
+    },
+    IrreversibleCapabilities {
+        packages: BTreeMap<String, Vec<String>>,
+    },
+    UnreadablePackages {
+        packages: Vec<String>,
+    },
+    NameOutOfLimits {
+        position: u64,
+    },
+    CapRange {
+        packages: Vec<String>,
+        member: String,
+    },
 }
 
 /// A resource entry's pool, the target that holds its value (absent: no goal), the pool's reading

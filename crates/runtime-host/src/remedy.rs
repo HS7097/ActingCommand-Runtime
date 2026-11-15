@@ -204,6 +204,13 @@ impl BuiltTable {
         &self.catalog_hash
     }
 
+    /// Workflow #463 V3 fix round 1: the digest of the procedure manifest this table was built
+    /// from (`None`: built without one), which the goal page compares with the manifest in place
+    /// as the next evaluation's own check of the table does ([`RemedyState::table_due`]).
+    pub(crate) fn manifest_digest(&self) -> Option<&str> {
+        self.manifest_digest.as_deref()
+    }
+
     /// UPD-1: the catalog tasks whose bound package declares `store_update`; position 4a lets
     /// only these run on an instance that waits for its client update.
     pub(crate) fn store_tasks(&self) -> BTreeSet<String> {

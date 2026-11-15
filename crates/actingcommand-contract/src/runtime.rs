@@ -4220,9 +4220,10 @@ pub enum RuntimeOperation {
         instance_alias: String,
     },
     /// Sets or clears one value of one application's goal page by its name (`EditGoal`), with
-    /// `expected_version` only while the goal record's version is that one (`0`: no record). The
-    /// Runtime checks the name and the value before the fact write gate (`goal_value_invalid`),
-    /// then replaces or removes the one row of the record under the gate.
+    /// `expected_version` only while the goal record's version is that one (`0`: no record). Under
+    /// the fact write gate the Runtime compares the version, then checks the name and the value
+    /// against the record it is about to change (`goal_value_invalid`), then replaces or removes
+    /// the one row of the record.
     EditGoal {
         instance_alias: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]

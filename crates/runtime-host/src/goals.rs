@@ -5,17 +5,23 @@
 //! "Reading and setting a value by name"): what the goal page's two requests decide, as pure
 //! functions of what the host read.
 //!
-//! - **The page** ([`GoalPage`]): the application's game, what the workbench holds of its
-//!   `goals.json` (an accepted file only; a refused file applies no entry), the packages the
-//!   active catalog binds on the application (a catalog task whose scope covers it, and the
-//!   package the remedy table read for that task) with their variables and remedy parameters, the
-//!   pools it can target with their capacities, and which variables do not apply in its game root.
-//! - **The checks before the gate** ([`check_edit`]): the name and the value of an `EditGoal`
-//!   against the page and the stored record, each refusal one [`GoalRefusal`] with the word of
-//!   [`GoalProblem`]; a change that passes is one [`GoalRecordEdit`], which the host writes under the
-//!   fact write gate.
+//! - **The page** ([`GoalPage`]): the application's game, whether what the page is judged by is
+//!   in memory (fix round 1: until it is, every edit is `not_checked_yet` and the view lists
+//!   nothing), what the scheduler workbench holds of its `goals.json` (an accepted file only; a
+//!   refused file applies no entry), the packages the active catalog binds on the application (a
+//!   catalog task whose scope covers it, and the package the dispatch's table or the remedy table
+//!   holds for that task) with their variables and remedy parameters, the pools it can target
+//!   with their capacities, which variables do not apply in its game root (the word a dispatch
+//!   reads) and, fix round 1, the root's judgement of each of its names (its packages and the
+//!   detail of why it does not apply).
+//! - **The checks** ([`check_edit`]), which the host runs under the fact write gate after it
+//!   compares the version: the name and the value of an `EditGoal` against the page and the stored
+//!   record, each refusal one [`GoalRefusal`] with the word of [`GoalProblem`]; a change that
+//!   passes is one [`GoalRecordEdit`]. Fix round 1: a variable's value is judged by the dispatch's
+//!   own function (`resolve_variable`), so what `set` takes is what a dispatch applies whole; a
+//!   `clear` removes a stored row whatever its name's entry is.
 //! - **The view** ([`view_entries`]): every entry of the page in its order, the stored values no
-//!   entry offers any more, and the stored targets that are no declared resource entry's.
+//!   entry shows, and the stored targets that are no declared resource entry's.
 //!
 //! Nothing here reads a clock, a file, a lock or the ledger.
 
@@ -23,14 +29,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::{
     DeclaredGoal, DeclaredGoalKind, DefaultOrigin, GoalEntryState, GoalEntryType, GoalOrphan,
-    GoalProblem, GoalResourceState, GoalSetBy, GoalText, GoalUnit, GoalValueSource, GoalViewEntry,
-    MAX_GOAL_SAFE_INTEGER, NotTargetableResource, PackageVariable, ResourceTargetCondition,
-    ResourceTargetConditionState, StandardPackGoals, TargetableResource, VariableKind,
-    VariableProblem, VariableSource, goal_name, variable_value_json,
+    GoalProblem, GoalResourceState, GoalSetBy, GoalText, GoalUnit, GoalValueSource,
+    GoalVariableCause, GoalViewEntry, MAX_GOAL_SAFE_INTEGER, PackageVariable,
+    ResourceTargetCondition, ResourceTargetConditionState, RootVariableVerdict, StandardPackGoals,
+    TargetableResource, VariableCause, VariableKind, VariableProblem, VariableSource, goal_name,
+    variable_value_json,
 };
 use actingcommand_policy::{
-    GoalRecordEdit, GoalRecordRefusal, ResolvedVariable, StoredGoalEntry, StoredGoalRecord,
-    StoredGoalTarget, TargetCondition, TargetSetter, goal_entry_value_fits,
+    GoalRecordEdit, GoalRecordRefusal, ResolvedVariable, StoredEntry, StoredGoalEntry,
+    StoredGoalRecord, StoredGoalTarget, TargetCondition, TargetSetter, VariableSetBy,
+    goal_entry_value_fits, resolve_variable,
 };
 use serde_json::Value;
 
@@ -58,21 +66,44 @@ pub(crate) struct BoundPackage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoalPage {
     pub(crate) game_id: String,
+    /// Fix round 1: whether what the page is judged by is in the Runtime's memory (with a
+    /// composed standard pack the scheduler workbench's check of the game root, and the remedy
+    /// table the last evaluation built for the active catalog and procedure manifest). When it is
+    /// not, the page holds nothing else, the view lists nothing and every edit is refused
+    /// `not_checked_yet`.
+    pub(crate) checked: bool,
     /// The game's `goals.json` when the workbench holds it accepted.
     pub(crate) declaration: Option<StandardPackGoals>,
     /// The bound packages, each once, in the order of the catalog task that first runs it.
     pub(crate) packages: Vec<BoundPackage>,
     /// The pools the application can target, as `ResourceTargetView` judges them.
     pub(crate) targetable: Vec<TargetableResource>,
-    pub(crate) not_targetable: Vec<NotTargetableResource>,
     /// The capacity of each targetable pool whose capacity reads one, by pool id.
     pub(crate) capacities: BTreeMap<String, u64>,
     /// Each variable name of the bound packages that does not apply in the game root, with the
-    /// word that says why (the table's root check).
+    /// word that says why (the word a dispatch reads from its table, `root_word`).
     pub(crate) not_applying: BTreeMap<String, VariableProblem>,
+    /// Fix round 1: the game root's judgement of each of its variable names, by name (every
+    /// package of the root that declares it, its first declaration and why it does not apply),
+    /// as the workbench's last check of the root holds it; empty without a composed standard pack.
+    pub(crate) root: BTreeMap<String, RootVariableVerdict>,
 }
 
 impl GoalPage {
+    /// Fix round 1: the page of `game_id` while what it is judged by is not in memory yet.
+    pub(crate) fn not_checked(game_id: String) -> Self {
+        Self {
+            game_id,
+            checked: false,
+            declaration: None,
+            packages: Vec::new(),
+            targetable: Vec::new(),
+            capacities: BTreeMap::new(),
+            not_applying: BTreeMap::new(),
+            root: BTreeMap::new(),
+        }
+    }
+
     /// The first declaration of the variable `name` among the bound packages.
     fn variable(&self, name: &str) -> Option<&PackageVariable> {
         self.packages
@@ -88,11 +119,22 @@ impl GoalPage {
             .flat_map(|package| &package.parameters)
             .any(|parameter| parameter.name == name)
     }
+
+    /// Fix round 1: whether `name` is declared in the game root (a placement of the accepted
+    /// `goals.json`, or a variable a package of the root declares) but by no bound package, so
+    /// it is not offered on this application (`not_offered`).
+    fn not_offered(&self, name: &str) -> bool {
+        let placed = self
+            .declaration
+            .as_ref()
+            .and_then(|declaration| declaration.entry(name))
+            .is_some_and(|declared| declared.kind == DeclaredGoalKind::Variable);
+        self.variable(name).is_none() && (placed || self.root.contains_key(name))
+    }
 }
 
-/// Why an `EditGoal` was refused before the fact write gate: the word, and the values that
-/// locate it (`json_pointer` within the value, `range_min` and `range_max`, `pool_id`,
-/// `variable_problem`).
+/// Why an `EditGoal` was refused: the word, and the values that locate it (`json_pointer` within
+/// the value, `range_min` and `range_max`, `pool_id`, `variable_problem`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoalRefusal {
     pub(crate) problem: GoalProblem,
@@ -184,29 +226,18 @@ pub(crate) enum EditRequest<'a> {
     Clear { name: &'a str },
 }
 
-/// Workflow #463 V3 (`contracts/runtime-interface.md`, "Goal request kinds", the checks before the
-/// gate): the change `request` makes to the record `stored` of the application whose page is
-/// `page`, or why it is refused. A name outside an entry name's form is `name_unknown`. Then, in
-/// this order, the name is:
-///
-/// 1. an entry of the accepted `goals.json`: a `heading` or a `note` holds no value
-///    (`holds_no_value`); a `tier` is `tier_not_built`; a `resource` entry takes `{at_least}` on
-///    its pool, as an other target does (below); a `variable` placement is the variable of its name
-///    (2), or `name_unknown` when no bound package declares it;
-/// 2. a variable of a bound package: one that does not apply is `variable_not_applying` with its
-///    `variable_problem`; else its value is judged against its declaration ([`check_variable`])
-///    and the store's bound;
-/// 3. a remedy parameter of a bound package: `remedy_parameter`;
-/// 4. for a `set`, an other target: the value `{resource, at_least}` on a targetable pool, as
-///    [`check_target`] judges it; for a `clear`, a stored value or a stored target of the name;
-/// 5. else `name_unknown`.
-///
-/// A `clear` of a known name that holds nothing is `value_not_set`; a `clear` of a resource entry
-/// removes the target on its pool whatever its id.
+/// Workflow #463 V3 (`contracts/runtime-interface.md`, "Goal request kinds", the checks): the
+/// change `request` makes to the record `stored` of the application whose page is `page`, the row
+/// set by `set_by`, or why it is refused. The host runs it under the fact write gate, after it
+/// compared the version, on the record it is about to change. A name outside an entry name's form
+/// is `name_unknown`, a `set` whose value is no JSON `value_not_json`; then (fix round 1) a page
+/// not in memory yet refuses every request `not_checked_yet`. A `set` is judged by [`check_set`],
+/// a `clear` by [`check_clear`].
 pub(crate) fn check_edit(
     page: &GoalPage,
     stored: &StoredGoalRecord,
     request: EditRequest<'_>,
+    set_by: VariableSetBy,
 ) -> Result<GoalRecordEdit, GoalRefusal> {
     let name = match request {
         EditRequest::Set { name, .. } | EditRequest::Clear { name } => name,
@@ -221,94 +252,139 @@ pub(crate) fn check_edit(
         ),
         EditRequest::Clear { .. } => None,
     };
-    let targets = stored.targets();
+    if !page.checked {
+        return Err(GoalRefusal::new(GoalProblem::NotCheckedYet));
+    }
     let declared = page
         .declaration
         .as_ref()
-        .and_then(|declaration| declaration.entry(name));
-    if let Some(declared) = declared {
-        match &declared.kind {
-            DeclaredGoalKind::Heading | DeclaredGoalKind::Note => {
-                return Err(GoalRefusal::new(GoalProblem::HoldsNoValue));
-            }
-            DeclaredGoalKind::Tier { .. } => {
-                return Err(GoalRefusal::new(GoalProblem::TierNotBuilt));
-            }
-            DeclaredGoalKind::Resource { pool, .. } => {
-                return match &value {
-                    Some(value) => {
-                        let at_least = check_target(page, value, Some(pool))?;
-                        Ok(GoalRecordEdit::SetTarget {
-                            id: name.to_owned(),
-                            resource: pool.clone(),
-                            at_least,
-                        })
-                    }
-                    None => targets
-                        .iter()
-                        .find(|stored| stored.target.resource == *pool)
-                        .map(|stored| GoalRecordEdit::ClearTarget {
-                            id: stored.target.id.clone(),
-                        })
-                        .ok_or_else(|| GoalRefusal::new(GoalProblem::ValueNotSet)),
-                };
-            }
-            DeclaredGoalKind::Variable if page.variable(name).is_none() => {
-                return Err(GoalRefusal::new(GoalProblem::NameUnknown));
-            }
-            DeclaredGoalKind::Variable => {}
-        }
+        .and_then(|declaration| declaration.entry(name))
+        .map(|declared| &declared.kind);
+    match &value {
+        Some(value) => check_set(page, name, declared, value, set_by),
+        None => check_clear(page, stored, name, declared),
     }
-    let stored_entry = stored.entries().iter().any(|entry| entry.name == name);
+}
+
+/// A `set` of `name` (whose entry of the accepted `goals.json` is `declared`) to `value`, in this
+/// order:
+///
+/// 1. an entry of the accepted `goals.json`: a `heading` or a `note` holds no value
+///    (`holds_no_value`); a `tier` is `tier_not_built`; a `resource` entry takes `{at_least}` on
+///    its pool, as an other target does (below); a `variable` placement is the variable of its
+///    name (2);
+/// 2. a variable of a bound package: one that does not apply is `variable_not_applying` with its
+///    `variable_problem`; else its value is judged by the dispatch's own function
+///    ([`judge_value`]) and held to the store's bound;
+/// 3. a remedy parameter of a bound package: `remedy_parameter`;
+/// 4. fix round 1: a name the game root declares (a placement, or a variable of a package of the
+///    root) that no bound package declares: `not_offered`, the word the view lists it with;
+/// 5. an other target: the value `{resource, at_least}` on a targetable pool, as [`check_target`]
+///    judges it;
+/// 6. else `name_unknown`.
+fn check_set(
+    page: &GoalPage,
+    name: &str,
+    declared: Option<&DeclaredGoalKind>,
+    value: &Value,
+    set_by: VariableSetBy,
+) -> Result<GoalRecordEdit, GoalRefusal> {
+    match declared {
+        Some(DeclaredGoalKind::Heading | DeclaredGoalKind::Note) => {
+            return Err(GoalRefusal::new(GoalProblem::HoldsNoValue));
+        }
+        Some(DeclaredGoalKind::Tier { .. }) => {
+            return Err(GoalRefusal::new(GoalProblem::TierNotBuilt));
+        }
+        Some(DeclaredGoalKind::Resource { pool, .. }) => {
+            let at_least = check_target(page, value, Some(pool))?;
+            return Ok(GoalRecordEdit::SetTarget {
+                id: name.to_owned(),
+                resource: pool.clone(),
+                at_least,
+            });
+        }
+        Some(DeclaredGoalKind::Variable) | None => {}
+    }
     if let Some(variable) = page.variable(name) {
-        return match &value {
-            Some(value) => {
-                if let Some(problem) = page.not_applying.get(name) {
-                    let mut refusal = GoalRefusal::new(GoalProblem::VariableNotApplying);
-                    refusal.variable_problem = Some(*problem);
-                    return Err(refusal);
-                }
-                check_variable(variable, value)?;
-                fits_the_store(value)?;
-                Ok(GoalRecordEdit::SetEntry {
-                    name: name.to_owned(),
-                    value: value.clone(),
-                })
-            }
-            None if stored_entry => Ok(GoalRecordEdit::ClearEntry {
-                name: name.to_owned(),
-            }),
-            None => Err(GoalRefusal::new(GoalProblem::ValueNotSet)),
-        };
+        if let Some(problem) = page.not_applying.get(name) {
+            let mut refusal = GoalRefusal::new(GoalProblem::VariableNotApplying);
+            refusal.variable_problem = Some(*problem);
+            return Err(refusal);
+        }
+        judge_value(variable, value, set_by)?;
+        fits_the_store(value)?;
+        return Ok(GoalRecordEdit::SetEntry {
+            name: name.to_owned(),
+            value: value.clone(),
+        });
     }
     if page.parameter(name) {
         return Err(GoalRefusal::new(GoalProblem::RemedyParameter));
     }
-    match &value {
-        Some(value) if value.get("resource").is_some() => {
-            let at_least = check_target(page, value, None)?;
-            let resource = value
-                .get("resource")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            Ok(GoalRecordEdit::SetTarget {
-                id: name.to_owned(),
-                resource,
-                at_least,
-            })
-        }
-        Some(_) => Err(GoalRefusal::new(GoalProblem::NameUnknown)),
-        None if stored_entry => Ok(GoalRecordEdit::ClearEntry {
-            name: name.to_owned(),
-        }),
-        None if targets.iter().any(|stored| stored.target.id == name) => {
-            Ok(GoalRecordEdit::ClearTarget {
-                id: name.to_owned(),
-            })
-        }
-        None => Err(GoalRefusal::new(GoalProblem::NameUnknown)),
+    if page.not_offered(name) {
+        return Err(GoalRefusal::new(GoalProblem::NotOffered));
     }
+    let Some(resource) = value.get("resource") else {
+        return Err(GoalRefusal::new(GoalProblem::NameUnknown));
+    };
+    let resource = resource.as_str().unwrap_or_default().to_owned();
+    let at_least = check_target(page, value, None)?;
+    Ok(GoalRecordEdit::SetTarget {
+        id: name.to_owned(),
+        resource,
+        at_least,
+    })
+}
+
+/// A `clear` of `name` (whose entry of the accepted `goals.json` is `declared`). Fix round 1: a
+/// value nobody can remove must not exist, so what is stored under the name is removed whatever
+/// the name's entry is: a resource entry's target on its pool (whatever its id), else the stored
+/// entry row of the name, else the stored target of that id. With nothing stored under it the
+/// name's own word answers: `holds_no_value` for a heading or a note, `tier_not_built` for a tier,
+/// `value_not_set` for a resource entry or a variable of a bound package, `remedy_parameter`,
+/// `not_offered` for a name the root declares that no bound package declares, else
+/// `name_unknown`.
+fn check_clear(
+    page: &GoalPage,
+    stored: &StoredGoalRecord,
+    name: &str,
+    declared: Option<&DeclaredGoalKind>,
+) -> Result<GoalRecordEdit, GoalRefusal> {
+    let targets = stored.targets();
+    if let Some(DeclaredGoalKind::Resource { pool, .. }) = declared
+        && let Some(target) = targets.iter().find(|kept| kept.target.resource == *pool)
+    {
+        return Ok(GoalRecordEdit::ClearTarget {
+            id: target.target.id.clone(),
+        });
+    }
+    if stored.entries().iter().any(|entry| entry.name == name) {
+        return Ok(GoalRecordEdit::ClearEntry {
+            name: name.to_owned(),
+        });
+    }
+    if targets.iter().any(|kept| kept.target.id == name) {
+        return Ok(GoalRecordEdit::ClearTarget {
+            id: name.to_owned(),
+        });
+    }
+    let problem = match declared {
+        Some(DeclaredGoalKind::Heading | DeclaredGoalKind::Note) => GoalProblem::HoldsNoValue,
+        Some(DeclaredGoalKind::Tier { .. }) => GoalProblem::TierNotBuilt,
+        Some(DeclaredGoalKind::Resource { .. }) => GoalProblem::ValueNotSet,
+        Some(DeclaredGoalKind::Variable) | None if page.variable(name).is_some() => {
+            GoalProblem::ValueNotSet
+        }
+        Some(DeclaredGoalKind::Variable) | None if page.parameter(name) => {
+            GoalProblem::RemedyParameter
+        }
+        Some(DeclaredGoalKind::Variable) | None if page.not_offered(name) => {
+            GoalProblem::NotOffered
+        }
+        Some(DeclaredGoalKind::Variable) | None => GoalProblem::NameUnknown,
+    };
+    Err(GoalRefusal::new(problem))
 }
 
 /// Whether the store keeps `value` (its canonical text at most 1024 bytes).
@@ -318,75 +394,97 @@ fn fits_the_store(value: &Value) -> Result<(), GoalRefusal> {
     })
 }
 
-/// Workflow #463 V3: `value`, set on an application, against the declaration of `variable` (the
-/// strict rules of a write, where a run's judgement of a stored value leaves keys out):
-///
-/// - `choice`: a string (else `wrong_type`) that is one of the options (else `not_an_option`);
-/// - `integer`: a whole number (else `wrong_type`) from `min` to `max` (else `out_of_range`,
-///   with the range) on a step from `min` (else `off_step`, `range_min` the variable's `min`);
-/// - `switch`: a boolean (else `wrong_type`);
-/// - `ordered`: a list (else `wrong_type`) whose items, at their pointer, are strings (else
-///   `wrong_type`), each once (else `key_repeated`), each an option (else `not_an_option`), and
-///   whose count is from `min_count` to `max_count` (else `count_out_of_range`).
-pub(crate) fn check_variable(variable: &PackageVariable, value: &Value) -> Result<(), GoalRefusal> {
-    match &variable.kind {
-        VariableKind::Choice { options, .. } => {
-            let Value::String(chosen) = value else {
-                return Err(GoalRefusal::new(GoalProblem::WrongType));
-            };
-            if options.iter().any(|option| option.value == *chosen) {
-                Ok(())
-            } else {
-                Err(GoalRefusal::new(GoalProblem::NotAnOption))
-            }
+/// Fix round 1 (the coordinator's ruling: what `set` takes is exactly what a dispatch applies):
+/// `value`, set on the application by `set_by`, judged by the dispatch's own function
+/// (`resolve_variable`, the policy crate's), as the application's stored entry of the variable
+/// with no word of the root (the caller has found that the variable applies). It is taken when
+/// the run would read it as it is set; any other answer refuses it with [`write_refusal`] of the
+/// judgement's word, an `ordered` value whose keys the run would leave out included.
+fn judge_value(
+    variable: &PackageVariable,
+    value: &Value,
+    set_by: VariableSetBy,
+) -> Result<(), GoalRefusal> {
+    let entry = StoredEntry {
+        value: value.clone(),
+        set_by: Some(set_by),
+    };
+    let resolved = resolve_variable(variable, Some(&entry), None);
+    match (resolved.source, resolved.problem) {
+        (VariableSource::Set, None) => Ok(()),
+        (_, problem) => Err(write_refusal(variable, value, problem)),
+    }
+}
+
+/// The refusal of a write whose value the dispatch's judgement answers with `problem`, in the
+/// words of a write: `not_an_option` for `not_an_option`, `keys_removed` and `keys_left_out` (a
+/// key that is none of the options), `out_of_range` and `off_step` with the variable's `min` and
+/// `max`, `key_repeated`, `count_out_of_range` with `min_count` and `max_count`, and `wrong_type`
+/// for `type_changed` (no other word comes of a value whose setter is known and whose variable
+/// applies). An `ordered` value's item the word is about is named by its pointer
+/// ([`item_at`]).
+fn write_refusal(
+    variable: &PackageVariable,
+    value: &Value,
+    problem: Option<VariableProblem>,
+) -> GoalRefusal {
+    use VariableProblem as Judged;
+    let word = match problem {
+        Some(Judged::NotAnOption | Judged::KeysRemoved | Judged::KeysLeftOut) => {
+            GoalProblem::NotAnOption
         }
-        VariableKind::Integer { min, max, step, .. } => {
-            let Some(number) = value.as_i64() else {
-                return Err(GoalRefusal::new(GoalProblem::WrongType));
-            };
-            if !(*min..=*max).contains(&number) {
-                return Err(GoalRefusal::new(GoalProblem::OutOfRange).within(*min, *max));
-            }
-            if (i128::from(number) - i128::from(*min)) % i128::from(*step) != 0 {
-                return Err(GoalRefusal::new(GoalProblem::OffStep).within(*min, *max));
-            }
-            Ok(())
+        Some(Judged::OutOfRange) => GoalProblem::OutOfRange,
+        Some(Judged::OffStep) => GoalProblem::OffStep,
+        Some(Judged::KeyRepeated) => GoalProblem::KeyRepeated,
+        Some(Judged::CountOutOfRange) => GoalProblem::CountOutOfRange,
+        _ => GoalProblem::WrongType,
+    };
+    let mut refusal = GoalRefusal::new(word);
+    match (&variable.kind, word) {
+        (
+            VariableKind::Integer { min, max, .. },
+            GoalProblem::OutOfRange | GoalProblem::OffStep,
+        ) => refusal = refusal.within(*min, *max),
+        (
+            VariableKind::Ordered {
+                min_count,
+                max_count,
+                ..
+            },
+            GoalProblem::CountOutOfRange,
+        ) => {
+            refusal = refusal.within(
+                i64::try_from(*min_count).unwrap_or(i64::MAX),
+                i64::try_from(*max_count).unwrap_or(i64::MAX),
+            );
         }
-        VariableKind::Switch { .. } => match value {
-            Value::Bool(_) => Ok(()),
-            _ => Err(GoalRefusal::new(GoalProblem::WrongType)),
-        },
-        VariableKind::Ordered {
-            options,
-            min_count,
-            max_count,
-            ..
-        } => {
-            let Value::Array(items) = value else {
-                return Err(GoalRefusal::new(GoalProblem::WrongType));
-            };
-            let mut seen = BTreeSet::new();
-            for (index, item) in items.iter().enumerate() {
-                let pointer = format!("/{index}");
-                let Value::String(key) = item else {
-                    return Err(GoalRefusal::new(GoalProblem::WrongType).at(pointer));
-                };
-                if !seen.insert(key.as_str()) {
-                    return Err(GoalRefusal::new(GoalProblem::KeyRepeated).at(pointer));
-                }
-                if !options.iter().any(|option| option.value == *key) {
-                    return Err(GoalRefusal::new(GoalProblem::NotAnOption).at(pointer));
-                }
-            }
-            let count = u64::try_from(items.len()).unwrap_or(u64::MAX);
-            if !(*min_count..=*max_count).contains(&count) {
-                return Err(GoalRefusal::new(GoalProblem::CountOutOfRange).within(
-                    i64::try_from(*min_count).unwrap_or(i64::MAX),
-                    i64::try_from(*max_count).unwrap_or(i64::MAX),
-                ));
-            }
-            Ok(())
+        _ => {}
+    }
+    if let Some(index) = item_at(variable, value, word) {
+        refusal = refusal.at(format!("/{index}"));
+    }
+    refusal
+}
+
+/// Where in an `ordered` variable's `value` the refusal `word` is: the first item that is no
+/// string (`wrong_type`), the first key named a second time (`key_repeated`), or the first key that
+/// is none of the options (`not_an_option`); `None` for another kind or word. It only says where:
+/// the word is the dispatch's judgement's.
+fn item_at(variable: &PackageVariable, value: &Value, word: GoalProblem) -> Option<usize> {
+    let (VariableKind::Ordered { options, .. }, Value::Array(items)) = (&variable.kind, value)
+    else {
+        return None;
+    };
+    match word {
+        GoalProblem::WrongType => items.iter().position(|item| !item.is_string()),
+        GoalProblem::KeyRepeated => {
+            (0..items.len()).find(|index| items[..*index].contains(&items[*index]))
         }
+        GoalProblem::NotAnOption => items.iter().position(|item| {
+            item.as_str()
+                .is_none_or(|key| !options.iter().any(|option| option.value == key))
+        }),
+        _ => None,
     }
 }
 
@@ -489,12 +587,12 @@ pub(crate) fn page_variables<'a>(
         let values = resolved(&package.task_id);
         for variable in &package.variables {
             match rows
-                .iter_mut()
-                .find(|row| row.variable.name == variable.name)
+                .iter()
+                .position(|row| row.variable.name == variable.name)
             {
-                Some(row) => {
-                    if !row.packages.contains(&package.package_id) {
-                        row.packages.push(package.package_id.clone());
+                Some(index) => {
+                    if !rows[index].packages.contains(&package.package_id) {
+                        rows[index].packages.push(package.package_id.clone());
                     }
                 }
                 None => rows.push(PageVariable {
@@ -512,9 +610,9 @@ pub(crate) fn page_variables<'a>(
     rows
 }
 
-/// What the view lists: the entries in their order, the stored values no entry offers any more,
-/// and the ids of the stored targets that are no declared resource entry's.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What the view lists: the entries in their order, the stored values no entry shows, and the ids
+/// of the stored targets that are no declared resource entry's.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ViewEntries {
     pub(crate) entries: Vec<GoalViewEntry>,
     pub(crate) orphans: Vec<GoalOrphan>,
@@ -529,11 +627,13 @@ pub(crate) struct ViewEntries {
 ///   ([`declared_entry`]): a `heading` and a `note` as they are; a `resource` entry with the
 ///   target on its pool (its `{at_least}` the value, set, who set it) or no goal (the default),
 ///   the pool's reading and the target's gap; a `tier` with its default and any stored value,
-///   `not_built`; a placement with its variable ([`variable_entry`]), or, when no bound package
-///   declares it, alone;
+///   `not_built`; a placement with its variable ([`variable_entry`]), or, fix round 1, when no
+///   bound package declares it, `not_offered` with what the root declares of it
+///   ([`not_offered_entry`]);
 /// - then each variable no entry places, in the order the bound packages declare them;
-/// - the orphans: each stored value whose name is no variable of the page and no entry of the
-///   accepted file;
+/// - the orphans: each stored value that no `tier`, no placement and no listed variable shows (a
+///   value stored under a heading's, a note's or a resource entry's name is one, so the view
+///   shows every stored value and a `clear` of its name removes it);
 /// - the other targets: each stored target that is not on a declared resource entry's pool.
 pub(crate) fn view_entries(
     page: &GoalPage,
@@ -544,7 +644,7 @@ pub(crate) fn view_entries(
     let targets = stored.targets();
     let entries_stored = stored.entries();
     let stored_entry = |name: &str| stored_entry_of(entries_stored, name);
-    let mut placed = BTreeSet::new();
+    let mut shown = BTreeSet::new();
     let mut declared_pools = BTreeSet::new();
     let mut entries = Vec::new();
     for declared in page
@@ -586,11 +686,12 @@ pub(crate) fn view_entries(
                     entry.value_json = Some(stored.value_json.clone());
                     entry.set = Some(set_by(stored.set));
                 }
-                placed.insert(declared.name.as_str());
+                shown.insert(declared.name.as_str());
                 entry
             }
             DeclaredGoalKind::Variable => {
-                placed.insert(declared.name.as_str());
+                shown.insert(declared.name.as_str());
+                let verdict = page.root.get(&declared.name);
                 match variables
                     .iter()
                     .find(|row| row.variable.name == declared.name)
@@ -599,46 +700,39 @@ pub(crate) fn view_entries(
                         row,
                         stored_entry(declared.name.as_str()),
                         page.not_applying.get(&declared.name).copied(),
+                        verdict,
                         true,
                         raw_entry,
                     ),
-                    None => {
-                        let mut entry = GoalViewEntry::new(
-                            declared.name.as_str(),
-                            GoalEntryType::Variable,
-                            true,
-                        );
-                        entry.entry = raw_entry;
-                        if let Some(stored) = stored_entry(declared.name.as_str()) {
-                            entry.value_json = Some(stored.value_json.clone());
-                            entry.set = Some(set_by(stored.set));
-                        }
-                        entry
-                    }
+                    None => not_offered_entry(
+                        declared.name.as_str(),
+                        stored_entry(declared.name.as_str()),
+                        verdict,
+                        raw_entry,
+                    ),
                 }
             }
         };
         entries.push(entry);
     }
     for row in variables {
-        if placed.contains(row.variable.name.as_str()) {
+        let name = row.variable.name.as_str();
+        if shown.contains(name) {
             continue;
         }
+        shown.insert(name);
         entries.push(variable_entry(
             row,
-            stored_entry(row.variable.name.as_str()),
-            page.not_applying.get(&row.variable.name).copied(),
+            stored_entry(name),
+            page.not_applying.get(name).copied(),
+            page.root.get(name),
             false,
             None,
         ));
     }
-    let offered = entries
-        .iter()
-        .map(|entry| entry.name.as_str())
-        .collect::<BTreeSet<_>>();
     let orphans = entries_stored
         .iter()
-        .filter(|stored| !offered.contains(stored.name.as_str()))
+        .filter(|stored| !shown.contains(stored.name.as_str()))
         .map(|stored| GoalOrphan {
             name: stored.name.clone(),
             value_json: stored.value_json.clone(),
@@ -710,17 +804,21 @@ fn resource_entry(
     entry
 }
 
-/// A variable's entry: its declaration (with `default_origin` `model` when it says so), the
-/// packages that declare it, its default, the stored value and who set it, the value the next run
+/// A variable's entry: its declaration (with `default_origin` `model` when it says so), the bound
+/// packages that declare it and (fix round 1) the root's other packages that declare it
+/// (`unbound_packages`), its default, the stored value and who set it, the value the next run
 /// reads with its source and its word (the run's own resolution, `row.resolved`; a variable that
-/// does not apply in the game root, `not_applying`, says so even with no stored value), the stored
-/// keys of an `ordered` value the run leaves out, and whether it is in effect: `not_applied` when
-/// the run reads the default with a word (a stored value not applied, or a variable that does not
-/// apply), `in_effect` otherwise (`keys_left_out`, a value applied in part, included).
+/// does not apply in the game root, `not_applying`, says so even with no stored value) and, fix
+/// round 1, the detail of the root's judgement when the word is the root's (`variable_cause`), the
+/// stored keys of an `ordered` value the run leaves out, and whether it is in effect:
+/// `not_applied` when the run reads the default with a word (a stored value not applied, or a
+/// variable that does not apply), `in_effect` otherwise (`keys_left_out`, a value applied in part,
+/// included).
 fn variable_entry(
     row: &PageVariable<'_>,
     stored: Option<&StoredGoalEntry>,
     not_applying: Option<VariableProblem>,
+    verdict: Option<&RootVariableVerdict>,
     placed: bool,
     raw_entry: Option<Value>,
 ) -> GoalViewEntry {
@@ -732,6 +830,14 @@ fn variable_entry(
         entry.default_origin = Some(DefaultOrigin::Model.as_str().to_owned());
     }
     entry.packages.clone_from(&row.packages);
+    if let Some(verdict) = verdict {
+        entry.unbound_packages = verdict
+            .packages
+            .iter()
+            .filter(|package| !row.packages.contains(package))
+            .cloned()
+            .collect();
+    }
     let default = variable.default_value();
     entry.default_json = Some(variable_value_json(&default));
     if let Some(stored) = stored {
@@ -768,11 +874,71 @@ fn variable_entry(
     entry.display = display(variable, &effective);
     entry.effective_json = Some(variable_value_json(&effective));
     entry.variable_problem = problem.map(|problem| problem.as_str().to_owned());
+    // The root's detail, when the word the run gives is the root's own (not `root_unchecked`,
+    // which a root that fails its check gives every name, nor a stored value's own word).
+    entry.variable_cause = verdict
+        .and_then(|verdict| verdict.not_applying.as_ref())
+        .filter(|cause| Some(cause.problem) == problem)
+        .and_then(|cause| goal_cause(&cause.cause));
     entry.state = Some(match (source, problem) {
         (VariableSource::Default, Some(_)) => GoalEntryState::NotApplied,
         _ => GoalEntryState::InEffect,
     });
     entry
+}
+
+/// Fix round 1: a placement of `goals.json` whose variable no bound package declares, `not_offered`
+/// (an `EditGoal` that sets it is refused with the word of the same name): the entry as its reader
+/// read it, what the root declares of it (its first declaration and the root's packages that
+/// declare it, none of them bound on the application) and any value stored under its name, which a
+/// `clear` removes.
+fn not_offered_entry(
+    name: &str,
+    stored: Option<&StoredGoalEntry>,
+    verdict: Option<&RootVariableVerdict>,
+    raw_entry: Option<Value>,
+) -> GoalViewEntry {
+    let mut entry = GoalViewEntry::new(name, GoalEntryType::Variable, true);
+    entry.entry = raw_entry;
+    entry.state = Some(GoalEntryState::NotOffered);
+    if let Some(verdict) = verdict {
+        entry.variable = Some(verdict.declaration.declaration.clone());
+        entry.unbound_packages.clone_from(&verdict.packages);
+    }
+    if let Some(stored) = stored {
+        entry.value_json = Some(stored.value_json.clone());
+        entry.set = Some(set_by(stored.set));
+    }
+    entry
+}
+
+/// Fix round 1: the detail of why a variable does not apply in the root, as the view shows it; none
+/// for a word without a detail.
+fn goal_cause(cause: &VariableCause) -> Option<GoalVariableCause> {
+    Some(match cause {
+        VariableCause::DeclarationConflict { packages } => GoalVariableCause::DeclarationConflict {
+            packages: packages.clone(),
+        },
+        VariableCause::GoalEntry { goal_type } => GoalVariableCause::GoalEntry {
+            goal_type: goal_type.map(|goal_type| goal_type.as_str().to_owned()),
+        },
+        VariableCause::IrreversibleCapabilities { packages } => {
+            GoalVariableCause::IrreversibleCapabilities {
+                packages: packages.clone(),
+            }
+        }
+        VariableCause::UnreadablePackages { packages } => GoalVariableCause::UnreadablePackages {
+            packages: packages.clone(),
+        },
+        VariableCause::NameOutOfLimits { position } => GoalVariableCause::NameOutOfLimits {
+            position: u64::try_from(*position).unwrap_or(u64::MAX),
+        },
+        VariableCause::CapRange { packages, member } => GoalVariableCause::CapRange {
+            packages: packages.clone(),
+            member: (*member).to_owned(),
+        },
+        VariableCause::WordOnly => return None,
+    })
 }
 
 /// An entry of an accepted `goals.json` as its reader read it: its name, type, block, texts, and
