@@ -349,8 +349,8 @@ A second one in a row is lifted by a package update only. The count is rebuilt f
 execution records, so nothing persisted changes. The next dispatch is admitted as usual;
 a task that fails again starts a new streak, since a recorded hash changed. The first
 interrupted settlement in a row is lifted at the next start of this Runtime. There is
-no manual lift; `actingctl task-run` is not gated by the policy and does not lift a
-suspension.
+no manual lift; the Lab's `run start` (a manual run) is not gated by the policy and does not
+lift a suspension.
 
 ## `actingd suspended`
 
@@ -374,8 +374,8 @@ dispatch intent and through its execution record. `--deadline-ms` is the caller'
 counted from the command's start: the read stops there, and the report then answers with what it
 read and the warning `ledger_read_incomplete` (before the selected records are read: no rows and
 `through_sequence` `null`; a run left unread: its `step` is `null` and its `frames` comparison is
-`unavailable` with `ledger_read_budget_exceeded`). `actingctl diagnose` and `ac_diagnose` pass
-their call's deadline less 2 s and end the child still running at the deadline
+`unavailable` with `ledger_read_budget_exceeded`). The Lab's `diagnose` (`actinglab diagnose`,
+MCP `ac_diagnose`) passes its call's deadline less 2 s and ends the child still running at the deadline
 (`suspended_report_timeout`). RL-1c follow-ups (#411 L1, L2 and review 2 L1; since 0.12.25):
 - without `--deadline-ms` (a run by hand) the read's deadline is 60 s from the command's start;
 - each run shown is read once, by one range read that is itself checked against the deadline
@@ -427,7 +427,7 @@ only its registered names (`"detail":"codes"`).
      "comparison":{"source":"recomputed","status":"similar","outcome":null,
        "changed_cells_milli":0,"digest_mean_milli":0,"ccoeff":1.0,"ccoeff_failure":null}},
    "lifts_when":"content_hash_changes",
-   "takeover":"actingctl task-run --state-root <root> --instance <instance> --package <package>"}],
+   "takeover":"actinglab run start <instance> <package>"}],
  "lifted":[{"task_id":"...","instance_id":"...","lifted_by":"main_hash|layer:<n>|restart",
    "effective":"next_evaluation|active","paused":{},"package":{}}],
  "repeating":[{"task_id":"...","instance_id":"...","failure":{},"failure_identity":"...",
@@ -686,7 +686,7 @@ lift.
   package with `package_id`, `failure_code`,
   `runtime_commit`, `paused_hash_prefix`, `current_hash_prefix` and `instances` (see
   "`actingd suspended`");
-- MCP `ac_diagnose` (and `actingctl diagnose`) carries the `packs` rows whose `instances` name
+- The Lab's `diagnose` (MCP `ac_diagnose`) carries the `packs` rows whose `instances` name
   the diagnosed instance (every row without one); the not-running row of `ac_overview` and
   `ac_schedule` (MCP-19) shows `pack_admission_suspended` when it is the instance's reason; the
   instance status keeps no such member;
@@ -734,8 +734,8 @@ A sampling timeout ends a run only after its observe-only retries ran out: an ob
 times out is repeated without repeating any input, `scheduling.recognition.sample_timeout_retries`
 times (default 2; slice SR-1) plus the pacing curve's extra retries of the step's stage (Workflow
 #385 P-k). `contained_task_paused` is in the default list since 0.12.28, by Alice's decision 92
-of 2026-10-29: a scheduled run that an operator's scheduling pause (`ac_pause`, `actingctl
-pause`) or a deploy's drain cut off at its drain timeout ([scheduling-pause.md](scheduling-pause.md))
+of 2026-10-29: a scheduled run that an operator's scheduling pause (the Lab's `pause`, MCP
+`ac_pause`) or a deploy's drain cut off at its drain timeout ([scheduling-pause.md](scheduling-pause.md))
 ends by a condition: it adds to no streak, its counts are given back (with the default
 `refund_counts`) and its rerun is owed after the resume. A sensitive task's paused run stays an
 ordinary failure, as every sensitive task's failure does (below).
