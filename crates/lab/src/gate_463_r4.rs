@@ -12,10 +12,12 @@
 // `state/list` (2, 50, 4, 4) recognizes it and guards its click (8, 8, 32, 32). The next screen
 // (step 2, the usual ending) carries a noise patch at (40, 46, 12, 12), its template `ui/next`. The
 // pop-up carries a square of gray 120 at (20, 50, 4, 4), its color mark `popup/notice`, and is
-// closed at (16, 20, 24, 16). There is no OCR model and no device. The tests sleep nowhere and read
-// no clock; the kernel run's clock is the scripted clock of `scripted_clock.rs`, which moves only by
-// the run's pauses. Every expected value comes from the brief's and the contract's lines and the
-// values above.
+// closed at (16, 20, 24, 16). Fix round 2: a second pop-up carries a square of gray 180 at
+// (70, 10, 4, 4), its color mark `popup/reward`, its page `reward`, and is closed at
+// (56, 24, 24, 16). There is no OCR model and no device. The tests sleep nowhere and read no clock;
+// the kernel run's clock is the scripted clock of `scripted_clock.rs`, which moves only by the
+// run's pauses. Every expected value comes from the brief's and the contract's lines and the values
+// above.
 
 use crate::codes::{LabCode, OptionalAfterProblem};
 use crate::recording::crosscheck::admit;
@@ -50,6 +52,9 @@ const NEXT_SEED: u64 = 0x0463_0004;
 const POPUP_GRAY: u8 = 120;
 const POPUP_MARK: &str = "popup/notice";
 const POPUP_PAGE: &str = "step_02_notice";
+// Fix round 2: the second pop-up's gray and mark.
+const REWARD_GRAY: u8 = 180;
+const REWARD_MARK: &str = "popup/reward";
 
 const fn rect(x: i32, y: i32, width: i32, height: i32) -> RecordRect {
     RecordRect {
@@ -67,6 +72,9 @@ const CLICK: RecordRect = rect(8, 8, 32, 32);
 const PATCH: RecordRect = rect(40, 46, 12, 12);
 const POPUP_AREA: RecordRect = rect(20, 50, 4, 4);
 const POPUP_CLICK: RecordRect = rect(16, 20, 24, 16);
+// Fix round 2: the second pop-up's square and its close click.
+const REWARD_AREA: RecordRect = rect(70, 10, 4, 4);
+const REWARD_CLICK: RecordRect = rect(56, 24, 24, 16);
 
 // A deterministic generator of neutral gray noise.
 struct Noise(u64);
@@ -131,6 +139,17 @@ fn next() -> Vec<u8> {
 
 fn popup() -> Vec<u8> {
     screen(false, &[(POPUP_AREA, POPUP_GRAY)])
+}
+
+// Fix round 2: the second pop-up, over the flat screen.
+fn reward() -> Vec<u8> {
+    screen(false, &[(REWARD_AREA, REWARD_GRAY)])
+}
+
+// Whether `action` is a tap inside `area`.
+fn tapped_inside(action: &InputAction, area: RecordRect) -> bool {
+    matches!(action, InputAction::Tap { x, y }
+        if (area.x..area.x + area.width).contains(x) && (area.y..area.y + area.height).contains(y))
 }
 
 fn color(id: &str, area: RecordRect) -> Value {
@@ -308,6 +327,18 @@ impl Recording {
         .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details))
     }
 
+    // Fix round 2: the second pop-up of the fixture, inserted after `step` with its own mark, page
+    // and close click.
+    fn insert_reward(&self, step: u32) -> MarkOutcome {
+        self.mark(json!({"optional_after": {"step": step,
+                                            "frame": self.frame("caller_reward", &reward()),
+                                            "page": "reward",
+                                            "add": [color(REWARD_MARK, REWARD_AREA)],
+                                            "click": {"region": REWARD_CLICK},
+                                            "settle_ms": 1000}}))
+            .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details))
+    }
+
     // The files of the package `record stop` wrote.
     fn package(&self, lab: &Value) -> BTreeMap<String, Vec<u8>> {
         let bytes = fs::read(lab["path"].as_str().expect("package path")).expect("package");
@@ -347,6 +378,28 @@ fn task(entries: &BTreeMap<String, Vec<u8>>) -> Value {
         .get(&format!("resources/operations/{TASK_ID}/task.json"))
         .expect("task.json");
     serde_json::from_slice(bytes).expect("task JSON")
+}
+
+// Fix round 2: each operation of a task, its id and the page it starts from, in the package's
+// order.
+fn operation_starts(task: &Value) -> Vec<(Value, Value)> {
+    task["operations"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no operations in {task}"))
+        .iter()
+        .map(|operation| (operation["id"].clone(), operation["from"].clone()))
+        .collect()
+}
+
+// Fix round 2: the serial number of each step of a package, in the package's order, as its
+// provenance names them.
+fn record_indices(task: &Value) -> Vec<Value> {
+    task["provenance"]["steps"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no step provenance in {task}"))
+        .iter()
+        .map(|step| step["record_index"].clone())
+        .collect()
 }
 
 // The files of a package, the task's provenance without its generation time (the time the
@@ -585,16 +638,22 @@ fn r4_an_optional_step_inserted_after_stop_is_generated_in_its_place_and_admitte
 // R4, the brief's run tests: the kernel's interpreter on the admitted package, over the list, the
 // pop-up and the next screen, presses step 1 and then the pop-up's click and finishes Completed on
 // the next screen; over the list and the next screen alone it presses step 1 only, waits out the
-// settle and finishes Completed on the next screen, as the package without the pop-up does.
+// settle and finishes Completed on the next screen, as the package without the pop-up does. Fix
+// round 2 (item 7): the first press lies inside step 1's click box and the second inside the
+// inserted step's.
 #[test]
 fn r4_a_run_presses_the_inserted_pop_up_when_it_shows_and_goes_on_without_it() {
     let (recording, lab) = with_popup();
     let prepared = admit(&recording.package(&lab), &recording.ocr)
         .unwrap_or_else(|error| panic!("admission: {} {:?}", error.code, error.details));
 
-    for (screens, steps, presses) in [
-        (vec![list(), popup(), next()], 2_u32, 2_usize),
-        (vec![list(), next()], 1, 1),
+    for (screens, steps, boxes) in [
+        (
+            vec![list(), popup(), next()],
+            2_u32,
+            vec![CLICK, POPUP_CLICK],
+        ),
+        (vec![list(), next()], 1, vec![CLICK]),
     ] {
         let mut device = Device::showing(screens);
 
@@ -609,7 +668,10 @@ fn r4_a_run_presses_the_inserted_pop_up_when_it_shows_and_goes_on_without_it() {
             "{outcome:?}"
         );
         assert_eq!(outcome.executed_steps, steps, "{outcome:?}");
-        assert_eq!(device.inputs.len(), presses, "{:?}", device.inputs);
+        assert_eq!(device.inputs.len(), boxes.len(), "{:?}", device.inputs);
+        for (input, area) in device.inputs.iter().zip(boxes) {
+            assert!(tapped_inside(input, area), "{input:?} outside {area:?}");
+        }
     }
 }
 
@@ -746,7 +808,10 @@ fn r4_each_optional_after_problem_is_refused_with_its_word() {
 // is absent (its color mark on the background the list shows too: record_optional_step_ambiguous
 // against previous, the list's frame f0001), and a next page that passes under the pop-up (the
 // pop-up's frame shows the next screen's patch: record_optional_skip_target_insensitive, the next
-// screen as package step 3, the pop-up as step 2 and its frame f0003).
+// screen as package step 3, the pop-up as step 2 and its frame f0003). Fix round 2 (item 1): on
+// this recording the two numbers differ, and each refusal names both: the pop-up, package step 2,
+// is serial number 3 (record_index, optional_record_index), the next screen, package step 3, is
+// serial number 2.
 #[test]
 fn r4_item_7_refuses_an_inserted_step_that_fails_its_checks() {
     let recording = Recording::new();
@@ -773,6 +838,7 @@ fn r4_item_7_refuses_an_inserted_step_that_fails_its_checks() {
     let details = error.details.expect("details");
     assert_eq!(details["against"], "previous", "{details}");
     assert_eq!(details["step"], 2, "{details}");
+    assert_eq!(details["record_index"], 3, "{details}");
     assert_eq!(details["page"], POPUP_PAGE, "{details}");
     assert_eq!(details["frames"], json!(["f0001"]), "{details}");
     assert_eq!(recording.recording_bytes(), marked, "nothing written");
@@ -800,7 +866,9 @@ fn r4_item_7_refuses_an_inserted_step_that_fails_its_checks() {
     );
     let details = error.details.expect("details");
     assert_eq!(details["step"], 3, "{details}");
+    assert_eq!(details["record_index"], 2, "{details}");
     assert_eq!(details["optional_step"], 2, "{details}");
+    assert_eq!(details["optional_record_index"], 3, "{details}");
     assert_eq!(details["frames"], json!(["f0003"]), "{details}");
     assert_eq!(recording.recording_bytes(), marked, "nothing written");
 }
@@ -925,6 +993,202 @@ fn r4_a_pop_up_frame_of_a_pure_scale_is_converted_to_the_recordings_size() {
     assert_eq!(lab["lab_status"], "regenerated", "{lab}");
 }
 
+// Fix round 2, item 2: from a failed run to the step to insert after. On the recording with the
+// fixture's pop-up inserted after step 1 (serial number 3, package step 2), a run that stops on an
+// unrecorded screen after the pop-up's press names it by pack_operation_id, the package's operation
+// that starts on the pop-up's page: step_02_click. In record status the row whose artifact_step is
+// that number, 2, has the index 3, another number. The second pop-up inserted after that index
+// joins the run of step 1 (inserted_after 1) right after the first: record status lists 1, 3, 4, 2
+// numbered 1 to 4; the regenerated package starts step_02_click on the first pop-up's page and the
+// new step_03_click on the second's (step_03_reward), before the next screen; and the kernel's
+// interpreter over the list, both pop-ups and the next screen presses three times, the second press
+// inside the first pop-up's click box and the third inside the second's, and ends Completed on
+// neutral/step_04.
+#[test]
+fn r4_a_runs_package_number_leads_to_the_serial_number_to_insert_after() {
+    let (recording, lab) = with_popup();
+    let task_ran = task(&recording.package(&lab));
+    let stopped_at = task_ran["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .find(|operation| operation["from"] == POPUP_PAGE)
+        .and_then(|operation| operation["id"].as_str())
+        .expect("the pop-up's operation")
+        .to_owned();
+    assert_eq!(stopped_at, "step_02_click");
+    let number: u32 = stopped_at
+        .strip_prefix("step_")
+        .and_then(|rest| rest.strip_suffix("_click"))
+        .and_then(|digits| digits.parse().ok())
+        .expect("the number inside the package");
+
+    let index = recording
+        .status_steps()
+        .into_iter()
+        .find(|(_, artifact_step)| *artifact_step == json!(number))
+        .map(|(index, _)| index)
+        .expect("the row with that artifact_step");
+
+    assert_eq!(index, json!(3));
+    assert_ne!(index, json!(number));
+    let serial = index
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .expect("a serial number");
+    let inserted = outcome_json(&recording.insert_reward(serial));
+    assert_eq!(inserted["status"], "optional_step_inserted", "{inserted}");
+    assert_eq!(inserted["step"], 4, "{inserted}");
+    assert_eq!(inserted["step_state"]["inserted_after"], 1, "{inserted}");
+    assert_eq!(
+        recording.status_steps(),
+        [
+            (json!(1), json!(1)),
+            (json!(3), json!(2)),
+            (json!(4), json!(3)),
+            (json!(2), json!(4))
+        ]
+    );
+    let regenerated = recording
+        .stop()
+        .unwrap_or_else(|error| panic!("record stop: {} {:?}", error.code, error.details));
+    assert_eq!(regenerated["lab_status"], "regenerated", "{regenerated}");
+    let entries = recording.package(&regenerated);
+    let task = task(&entries);
+    assert_eq!(
+        operation_starts(&task),
+        [
+            (json!("step_01_click"), json!("step_01")),
+            (json!("step_02_click"), json!(POPUP_PAGE)),
+            (json!("step_03_click"), json!("step_03_reward"))
+        ]
+    );
+    assert_eq!(
+        record_indices(&task),
+        [json!(1), json!(3), json!(4), json!(2)]
+    );
+    let prepared = admit(&entries, &recording.ocr)
+        .unwrap_or_else(|error| panic!("admission: {} {:?}", error.code, error.details));
+    let mut device = Device::showing(vec![list(), popup(), reward(), next()]);
+    let outcome = prepared
+        .run(&mut device)
+        .unwrap_or_else(|error| panic!("the run: {error:?}"));
+    assert_eq!(outcome.outcome, TaskOutcome::Success, "{outcome:?}");
+    assert_eq!(
+        outcome.final_page.as_deref(),
+        Some("neutral/step_04"),
+        "{outcome:?}"
+    );
+    assert_eq!(outcome.executed_steps, 3, "{outcome:?}");
+    assert_eq!(device.inputs.len(), 3, "{:?}", device.inputs);
+    for (input, area) in device.inputs.iter().zip([CLICK, POPUP_CLICK, REWARD_CLICK]) {
+        assert!(tapped_inside(input, area), "{input:?} outside {area:?}");
+    }
+}
+
+// Fix round 2, item 7: two pop-ups inserted after the same step 1 (the fixture's, serial number 3,
+// then the second, serial number 4): record status lists them after step 1 in the order they were
+// inserted (1, 3, 4, 2, numbered 1 to 4), and record stop generates both in that order (pages
+// step_02_notice and step_03_reward before the next screen step_04, the provenance naming their
+// serial numbers). Giving up the first leaves the other: record status lists 3 without a package
+// number, and record stop generates the second pop-up alone after step 1 (step_02_reward before
+// step_03).
+#[test]
+fn r4_two_steps_inserted_after_the_same_step_run_in_the_order_inserted() {
+    let recording = Recording::new();
+    recording.stopped();
+    recording.insert_popup();
+    let second = outcome_json(&recording.insert_reward(1));
+    assert_eq!(second["step"], 4, "{second}");
+    assert_eq!(second["step_state"]["inserted_after"], 1, "{second}");
+    assert_eq!(
+        recording.status_steps(),
+        [
+            (json!(1), json!(1)),
+            (json!(3), json!(2)),
+            (json!(4), json!(3)),
+            (json!(2), json!(4))
+        ]
+    );
+
+    let both = recording
+        .stop()
+        .unwrap_or_else(|error| panic!("record stop: {} {:?}", error.code, error.details));
+
+    assert_eq!(
+        both["pages"],
+        json!(["step_01", POPUP_PAGE, "step_03_reward", "step_04"]),
+        "{both}"
+    );
+    let task_both = task(&recording.package(&both));
+    assert_eq!(
+        operation_starts(&task_both),
+        [
+            (json!("step_01_click"), json!("step_01")),
+            (json!("step_02_click"), json!(POPUP_PAGE)),
+            (json!("step_03_click"), json!("step_03_reward"))
+        ]
+    );
+    assert_eq!(
+        record_indices(&task_both),
+        [json!(1), json!(3), json!(4), json!(2)]
+    );
+
+    recording
+        .mark(json!({"remove_inserted": 3}))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    assert_eq!(
+        recording.status_steps(),
+        [
+            (json!(1), json!(1)),
+            (json!(3), Value::Null),
+            (json!(4), json!(2)),
+            (json!(2), json!(3))
+        ]
+    );
+    let one = recording
+        .stop()
+        .unwrap_or_else(|error| panic!("record stop: {} {:?}", error.code, error.details));
+    assert_eq!(
+        one["pages"],
+        json!(["step_01", "step_02_reward", "step_03"]),
+        "{one}"
+    );
+    let task_one = task(&recording.package(&one));
+    assert_eq!(
+        operation_starts(&task_one),
+        [
+            (json!("step_01_click"), json!("step_01")),
+            (json!("step_02_click"), json!("step_02_reward"))
+        ]
+    );
+    assert_eq!(record_indices(&task_one), [json!(1), json!(4), json!(2)]);
+}
+
+// Fix round 2, item 7: giving up an inserted step one of whose marks another page forbids (the next
+// screen, step 2, forbids the pop-up's popup/notice) is refused as --drop-step refuses it:
+// record_mark_in_use naming the step and the mark, and nothing is written.
+#[test]
+fn r4_giving_up_an_inserted_step_whose_mark_another_page_forbids_is_refused() {
+    let recording = Recording::new();
+    recording.stopped();
+    recording.insert_popup();
+    recording
+        .mark(json!({"step": 2, "forbid": [POPUP_MARK]}))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    let forbidden = recording.recording_bytes();
+
+    let error = recording
+        .mark(json!({"remove_inserted": 3}))
+        .expect_err("a mark the next page forbids");
+
+    assert_eq!(error.code, "record_mark_in_use", "{}", error.message);
+    let details = error.details.expect("details");
+    assert_eq!(details["step"], 3, "{details}");
+    assert_eq!(details["marks"], json!([POPUP_MARK]), "{details}");
+    assert_eq!(recording.recording_bytes(), forbidden, "nothing written");
+}
+
 // P4, the design's first test: a second record stop of the same recording keeps the output the
 // first one wrote, set aside as <name>.old-<ms> beside the new one and named in lab.kept: its bytes
 // are the first package's, nothing else is left beside them, and the new package is another.
@@ -971,16 +1235,20 @@ fn p4_a_second_stop_keeps_the_output_the_first_wrote() {
     );
 }
 
-// P4, the design's second test: a --lab-dir inside an installed root (a directory holding
-// install\), or the root itself, is refused record_lab_dir_invalid with inside_installed_root and
-// the root, under --dry-run too, before anything is written: the recording stays active, no
-// package is written and the directory is not created.
+// P4, the design's second test: a --lab-dir inside an installed root, or the root itself, is
+// refused record_lab_dir_invalid with inside_installed_root and the root, under --dry-run too,
+// before anything is written: the recording stays active, no package is written and the directory
+// is not created. Fix round 2 (item 3): an installed root is a directory holding the installer's
+// state file install\state.json (contracts/install-cli.md, "Layout"); a plain folder named Install
+// beside the target (a folder of installers) is none, and a --dry-run stop into that target
+// validates.
 #[test]
 fn p4_a_lab_dir_inside_an_installed_root_is_refused() {
     let recording = Recording::new();
     recording.record_path();
     let root = recording.temp.path().join("installed");
     fs::create_dir_all(root.join("install")).expect("install directory");
+    fs::write(root.join("install").join("state.json"), b"{}").expect("install state");
     fs::create_dir_all(root.join("packages")).expect("packages directory");
     let inside = root.join("packages").join("neutral");
     let before = recording.recording_bytes();
@@ -1009,14 +1277,29 @@ fn p4_a_lab_dir_inside_an_installed_root_is_refused() {
         assert_eq!(recording.recording()["status"], "active");
         assert!(!inside.exists(), "the directory is not created");
     }
+
+    let downloads = recording.temp.path().join("downloads");
+    fs::create_dir_all(downloads.join("Install")).expect("a folder of installers");
+    let beside = downloads.join("packages");
+    let lab = recording
+        .stop_with(&RecordStopOptions {
+            lab_dir: Some(beside.display().to_string()),
+            dry_run: true,
+            ..RecordStopOptions::default()
+        })
+        .unwrap_or_else(|error| panic!("record stop: {} {:?}", error.code, error.details));
+    assert_eq!(lab["lab_status"], "validated", "{lab}");
+    assert_eq!(recording.recording_bytes(), before, "nothing written");
+    assert!(!beside.exists(), "the directory is not created");
 }
 
 // P4, the design's third test: a recording that meets none of these cases (a first stop, a
 // --lab-dir outside every installed root) writes its package as before: one file in the
 // recording's out directory and one, the same bytes, in --lab-dir, nothing set aside and no kept;
 // the answer keeps binding_example and adds adoption_example, the adopt line with the recording's
-// id and state directory and the decision's skeleton, every member the recording cannot know
-// pending.
+// id and state directory and the decision's skeleton. Fix round 2 (item 4, the owner's rule that a
+// package not yet run through on a real device is registered and stays held): the skeleton is a
+// decision of the class held with its reason blank and nothing else.
 #[test]
 fn p4_a_first_stop_writes_as_before_and_answers_the_adoption_skeleton() {
     let recording = Recording::new();
@@ -1062,9 +1345,8 @@ fn p4_a_first_stop_writes_as_before_and_answers_the_adoption_skeleton() {
             ),
             "decision": {
                 "schema_version": "actingcommand.pack-decision.v1",
-                "class": "pending",
-                "trigger": "pending",
-                "value": "pending"
+                "class": "held",
+                "held": {"reason": ""}
             }
         }),
         "{lab}"

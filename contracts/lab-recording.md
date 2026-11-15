@@ -1748,7 +1748,13 @@ step k's effect and before the step that follows it:
 ```
 
 - **The members.** `step`, the step k after whose effect the run met the pop-up (its serial number,
-  as `record status` shows it); `frame`, the pop-up's screen, a PNG file on the caller's machine;
+  as `record status` shows it). A run that stopped on the pop-up
+  (`contained_task_linear_unrecorded_screen`) names that step by `pack_operation_id`,
+  `step_<nn>_click` or `step_<nn>_select`, where `nn` is its number inside the package, which
+  differs from its serial number once a step was inserted after the stop or dropped (fix round 2).
+  The one way from the first to the second: in `record status`, find the row whose
+  `artifact_step` is the number `nn` (`02` is 2) and take its `index`. `frame`, the pop-up's screen, a PNG file on the
+  caller's machine;
   `samples`, more frames of it; `page`, its page's name (a step's grammar); `add` and `reuse`, its
   marks, as a step's; `click`, the click that closes it, as a step's `click` (declared, never
   executed: it is the click the package presses); `settle_ms`, its settle (0..60000, default 2000).
@@ -2387,12 +2393,18 @@ guard execution still requires the corresponding frames, provider and Runtime ev
    - a. An optional page must not pass on a screen a run may show when it is absent: the
      frames of step k (of its page transition when k has one; nothing for an application
      entry step), the frames of N, and the frames of another optional step of the run.
-     Otherwise `record_optional_step_ambiguous` (3, `details{step, page, against, frames}`,
-     `against`: `previous`, `skip_target` or `other_optional`): the run would click the pop-up
+     Otherwise `record_optional_step_ambiguous` (3, `details{step, record_index, page, against,
+     frames}`, `step` the optional step's number in the package, `record_index` its serial number,
+     the one `record mark --step` takes (#463 R4 fix round 2: the two differ once a step is
+     inserted after the stop or dropped); `against`: `previous`, `skip_target` or
+     `other_optional`): the run would click the pop-up
      on that screen. Give the optional page a mark that does not hold there, such as the
      pop-up's title template or a button.
    - b. N must not pass on a frame of an optional step:
-     `record_optional_skip_target_insensitive` (3, `details{step, optional_step, frames}`).
+     `record_optional_skip_target_insensitive` (3, `details{step, record_index, optional_step,
+     optional_record_index, frames}`, `step` and `optional_step` the package's numbers of N and of
+     the optional step, `record_index` and `optional_record_index` their serial numbers, the ones
+     `record mark --step` takes).
      Under the pop-up the run would take the screen for N, so a close click that did not
      register, a changed pop-up or a pop-up never recorded would pass silently. Templates do
      not see an overall darkening: add a `--color` or color digest mark on a bright area of N
@@ -2474,8 +2486,10 @@ D9: an output of the same name is replaced in place, never refused):
    `record_lab_dir_invalid` (2); an existing `<lab-dir>/<package_id>.<ext>` must be a file (a
    directory or a link there is `record_lab_dir_invalid`, reason `target_not_a_file`), and is
    replaced. #464 P4 (since 0.12.63; the coordinator's ruling 5 on board #464): a directory that is,
-   or lies inside, an installed root (a directory holding `install\`; looked for on the directory
-   made absolute and on its nearest existing part with its links resolved) is refused
+   or lies inside, an installed root (a directory holding the file `install\state.json`, the
+   installer's state, [install-cli.md](install-cli.md), "Layout"; a folder named `install` alone,
+   such as a folder of installers, is none; looked for on the directory made absolute and on its
+   nearest existing part with its links resolved) is refused
    `record_lab_dir_invalid` with the reason `inside_installed_root` and `details.installed_root`,
    also under `--dry-run` and when an `already_generated` package is copied again: a recording's
    output never lands where an installation reads its packages, and a file there is no member of a
@@ -2532,11 +2546,13 @@ equal value is accepted.
   `command` the line `actinglab standard-pack adopt --repo <checkout> --record-id <record_id>
   --state-dir "<state>" --decide <decision.json>` with the recording's own id and state directory
   (the checkout and the decision file are placeholders), `decision` the skeleton of the decision it
-  takes, filled with what the recording knows and nothing invented: `{"schema_version":
-  "actingcommand.pack-decision.v1", "class": "pending", "trigger": "pending", "value":
-  "pending"}`. Its class, trigger and value are the caller's to give (a `value` of `"pending"` may
-  stay, "A pending value" there); `already_generated` answers it too. `binding_example` stays for
-  `record draft`, which reads the package path from it.
+  takes. Fix round 2 (the owner's rule: a package that has not run through on a real device is
+  registered and stays held): `{"schema_version": "actingcommand.pack-decision.v1", "class":
+  "held", "held": {"reason": ""}}`, a decision of the class `held` with its reason left blank and
+  nothing else (no trigger, no value). Fill in the reason, why the package is held (for example
+  that it has not run on a real device yet); adopt refuses a blank reason (`/held/reason`), and
+  accepts the decision once it is filled. `already_generated` answers it too. `binding_example`
+  stays for `record draft`, which reads the package path from it.
 
 - `status` is `generated`, `validated` (`--dry-run`), `already_generated` or (Workflow #390
   LAB-2) `regenerated`, the package of a stopped recording marked again.
@@ -2545,9 +2561,12 @@ equal value is accepted.
   package reference (Workflow #336 PKG-S5).
 - `binding_example` is a complete `policy.procedure_manifest[]` entry: `procedure_ref` (the
   package id), `operation_id: "operation.contained_task"`, `yield_points: []` and
-  `scheduled_execution{mode: "device_registry", package_path}` with the absolute path (a
-  configuration in the install root may use `packages/<game>/<package_id>.<ext>`). Whether it
-  is scheduled still depends on the catalog task and its approval.
+  `scheduled_execution{mode: "device_registry", package_path}` with the absolute path of the
+  package `record stop` wrote. It stays for `record draft`, the reader that takes the package path
+  from it. #464 P4, fix round 2: the package is not placed under an installed root's packages (a
+  `--lab-dir` there is refused, "Writing"); it goes into its game's resource repository through
+  adoption (`adoption_example`). Whether it is scheduled still depends on the catalog task and its
+  approval.
 - `prerequisite_entry_example` says where the package goes so that another package can name
   it with `--requires`: the standard-pack registry of its game (Workflow #373 NAV-3a,
   `package-reference.md`, "Standard package root"), the one place a prerequisite package is

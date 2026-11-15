@@ -27524,6 +27524,43 @@ before with `adoption_example`. Adapted: `gate_336_pkgs5::s5_t3_…` pinned that
 is left beside a replaced `--lab-dir` package; the requirement keeps it, so the test now asserts it
 is there with the earlier bytes. No golden changes, no test leaves the gate map.
 
+**Fix round 2** (after the full review; coordinator work order `rd-1115/brief-463-r4p4-fix2.md`,
+the coordinator's rulings, not the owner's words, but for the owner's rule in item 4). A step has a
+serial number (`index`, what `record mark --step`, `--optional-after` and `--remove-inserted` take)
+and a number inside the package (`artifact_step`, what `step_<nn>_click` is made of); they differ
+once a step is inserted after the stop or dropped.
+- Self-check item 7's refusals name both: `record_optional_step_ambiguous` adds `record_index`,
+  `record_optional_skip_target_insensitive` adds `record_index` and `optional_record_index`, as
+  `record_step_self_mismatch` does (members of a refusal's `details`, not outcome keys).
+- From a run that stopped on an unrecorded screen to the step to insert after: `record status` prints
+  `artifact_step` on every effective step (`step_view` numbers them by `effective_indices`, the
+  order `record stop` numbers them in), so the one way is written down where an agent reads it at
+  that moment (the catalog's `handling` of `contained_task_linear_unrecorded_screen`, its text
+  only; the contract's "The members"; the note of `optional_after` in `lab-operations.json`): find
+  the row whose `artifact_step` equals the number in `pack_operation_id` and take its `index`.
+- An installed root is a directory holding the installer's state file `install\state.json`
+  ([install-cli.md](install-cli.md), "Layout"); a child named `install` alone (a folder of
+  installers, matched without case on Windows) refused before and is none now.
+- `adoption_example.decision` is `{"schema_version": "actingcommand.pack-decision.v1", "class":
+  "held", "held": {"reason": ""}}` (the owner's rule: a package that has not run through on a real
+  device is registered and stays held): adopt refuses its blank reason (`decided_held`,
+  `bounded_text` in `crates/resource-tooling/src/adopt.rs`) and accepts it once filled; before, the
+  class and trigger `pending` were refused.
+- "Output" no longer advises placing the package under an installed root's `packages/<game>/`
+  (P4 refuses that); the Lab's MCP server keeps `adoption_example` beside the binding parts when it
+  shortens an exported `record stop` answer.
+
+Tests: in `gate_463_r4.rs`, item 7's test asserts both numbers of each refusal; the run test asserts
+each press inside its step's click box; the installed-root test holds `install\state.json` and adds
+a plain folder `Install` beside a target that validates; the first-stop test pins the held
+skeleton; new: the way from a run's operation to the serial number and an insertion there that runs
+after the step the run stopped at, two steps inserted after one step (in the order inserted, giving
+up one leaving the other), and `--remove-inserted` refused `record_mark_in_use`; in
+`session_record.rs`, the command line's `--optional-after` and `--remove-inserted` against the
+request form (beside R2's test of `--ending`). Adapted: `apps/actinglab-mcp/tests/serve_calls.rs`
+`mcp_lab_overflow_rule`, whose kept binding parts now include `adoption_example`. No code, key or
+word is added; no test leaves the gate map.
+
 **At deploy.** A second `record stop` of a recording leaves `<name>.old-<ms>` beside its package,
 in the recording's `lab/out/` and in `--lab-dir`; nothing deletes them. A `--lab-dir` under an
 installed root (for example `<install root>\packages\<game>\`) is refused: a recording reaches the

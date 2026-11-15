@@ -117,9 +117,12 @@ fn lab_dir_invalid(dir: &Path, reason: &str) -> LabError {
     )
 }
 
-/// #464 P4: the directory holding `install\` that `dir` is or lies inside, the root of an
-/// installation, whose packages a running Runtime reads; looked for on `dir` made absolute and on
-/// its nearest existing part with its links resolved. `None` outside every installed root.
+/// #464 P4: the directory that `dir` is or lies inside whose `install\state.json` is a file, the
+/// root of an installation (`contracts/install-cli.md`, "Layout": the installer's state file),
+/// whose packages a running Runtime reads; looked for on `dir` made absolute and on its nearest
+/// existing part with its links resolved. `None` outside every installed root. #464 P4, fix round
+/// 2: a child named `install` alone (a folder of installers, matched without case on Windows) is
+/// no installation.
 fn installed_root(dir: &Path) -> Option<PathBuf> {
     let absolute = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
     let resolved = absolute
@@ -129,15 +132,15 @@ fn installed_root(dir: &Path) -> Option<PathBuf> {
     absolute
         .ancestors()
         .chain(resolved.iter().flat_map(|path| path.ancestors()))
-        .find(|ancestor| ancestor.join("install").is_dir())
+        .find(|ancestor| ancestor.join("install").join("state.json").is_file())
         .map(Path::to_path_buf)
 }
 
 /// Section 4.7 step 2: the directory (or its parent) exists; an existing
 /// `<lab-dir>/<package_id>.<ext>` is a file, which is replaced. Reads only. #464 P4: a directory
-/// that is or lies inside an installed root (one holding `install\`) is refused, reason
-/// `inside_installed_root`: a recording's output never lands where an installation reads its
-/// packages.
+/// that is or lies inside an installed root (one holding the file `install\state.json`) is
+/// refused, reason `inside_installed_root`: a recording's output never lands where an
+/// installation reads its packages.
 pub(crate) fn preflight_lab_dir(dir: &Path, file_name: &str) -> LabResult<LabDirPlan> {
     if let Some(root) = installed_root(dir) {
         return Err(with_details(

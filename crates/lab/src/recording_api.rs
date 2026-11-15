@@ -733,7 +733,10 @@ fn insert_binding(
 /// decision document"): how the package becomes a member of its game's standard pack: the
 /// `standard-pack adopt` line for this recording (its record id and its state directory, what the
 /// recording knows; the checkout and the decision file are the caller's) and the skeleton of the
-/// decision it takes, every member the recording cannot know `pending`.
+/// decision it takes. Fix round 2 (the owner's rule: a package not yet run through on a real device
+/// is registered and stays held): a decision of the class `held` whose `held.reason` is left
+/// blank, and nothing else; adopt accepts it once the caller fills in the reason, and refuses a
+/// blank one.
 fn adoption_example(record_id: &str, state_dir: &Path) -> Value {
     json!({
         "command": format!(
@@ -743,9 +746,8 @@ fn adoption_example(record_id: &str, state_dir: &Path) -> Value {
         ),
         "decision": {
             "schema_version": "actingcommand.pack-decision.v1",
-            "class": "pending",
-            "trigger": "pending",
-            "value": "pending"
+            "class": "held",
+            "held": {"reason": ""}
         }
     })
 }

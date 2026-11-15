@@ -56,10 +56,12 @@ const PATH: &str = "path";
 const SHA256: &str = "sha256";
 const SIZE: &str = "size";
 /// `record stop`'s member that holds its binding parts, and the parts (today's `BINDING_PARTS`;
-/// Workflow #336 PKG-S5: record stop answers no package reference).
+/// Workflow #336 PKG-S5: record stop answers no package reference; #464 P4, fix round 2: beside
+/// them the adoption's skeleton, `adoption_example`, the way the package reaches the schedule).
 const LAB: &str = "lab";
-const BINDING_PARTS: [&str; 4] = [
+const BINDING_PARTS: [&str; 5] = [
     "binding_example",
+    "adoption_example",
     "binding_requires",
     "prerequisite_entry_example",
     "catalog_on_failure_example",

@@ -3653,4 +3653,75 @@ mod lab2_tests {
         assert!(beside.ending.is_some());
         assert!(beside.click.is_some(), "the click stays in the request");
     }
+
+    // #463 R4 fix round 2 (contracts/lab-recording.md, "Inserting an optional step after stop"):
+    // `record mark --optional-after <k>` makes the frame, the samples, the page, the marks, the
+    // reused marks, the click and the settle the inserted step's, as the request form's
+    // `optional_after` holds them, and `--remove-inserted <n>` is the request form's
+    // `remove_inserted`, so the command line and the MCP tool (which hands the request form to this
+    // command unchanged) give the Lab the same request. `--optional-after` without `--frame` is
+    // refused, and a step's flag beside it stays in the request, which the Lab refuses
+    // (`with_other_change`): nothing is dropped.
+    #[test]
+    fn r4_the_optional_after_flags_declare_the_request_forms_optional_after() {
+        let shortcut = record_mark_request_from_flags(&flags(&[
+            "--optional-after",
+            "3",
+            "--frame",
+            "notice.png",
+            "--sample",
+            "notice_2.png",
+            "--page",
+            "notice",
+            "--color",
+            "popup/notice=20,50,4,4",
+            "--reuse",
+            "state/list",
+            "--click",
+            "16,20,24,16",
+            "--settle-ms",
+            "1000",
+        ]))
+        .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "optional_after": {
+                "step": 3,
+                "frame": "notice.png",
+                "samples": ["notice_2.png"],
+                "page": "notice",
+                "add": [{"id": "popup/notice", "family": "color",
+                         "region": {"x": 20, "y": 50, "width": 4, "height": 4}}],
+                "reuse": ["state/list"],
+                "click": {"region": {"x": 16, "y": 20, "width": 24, "height": 16}},
+                "settle_ms": 1000
+            }
+        }))
+        .expect("the request form");
+        assert_eq!(shortcut, request);
+
+        let removing =
+            record_mark_request_from_flags(&flags(&["--remove-inserted", "3"])).expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "remove_inserted": 3
+        }))
+        .expect("the request form");
+        assert_eq!(removing, request);
+
+        let error = record_mark_request_from_flags(&flags(&["--optional-after", "3"]))
+            .expect_err("--optional-after needs --frame");
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+        let beside = record_mark_request_from_flags(&flags(&[
+            "--optional-after",
+            "3",
+            "--frame",
+            "notice.png",
+            "--step",
+            "2",
+        ]))
+        .expect("request");
+        assert!(beside.optional_after.is_some());
+        assert_eq!(beside.step, Some(2), "the step stays in the request");
+    }
 }

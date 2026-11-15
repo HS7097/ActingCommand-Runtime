@@ -2321,9 +2321,11 @@ fn mcp_lab_overflow_rule() {
     let (program, log) = beside_a_made_up_child(base.path());
     let completed = completed();
     let own_warning = json!({"code": "neutral_child_warning", "values": {}});
-    // `record stop`: its four binding parts under `lab`, beside far more.
+    // `record stop`: its five binding parts under `lab` (#464 P4, fix round 2: the adoption's
+    // skeleton among them), beside far more.
     let binding = json!({
         "binding_example": {"procedure_ref": "neutral.package"},
+        "adoption_example": {"decision": {"class": "held", "held": {"reason": ""}}},
         "binding_requires": ["neutral.prerequisite"],
         "prerequisite_entry_example": {"directory": "neutral"},
         "catalog_on_failure_example": {"action": "pause"},
