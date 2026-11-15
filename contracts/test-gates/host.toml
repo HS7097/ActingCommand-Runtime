@@ -4067,7 +4067,7 @@ tests = [
 ]
 incident = ["#463 V2"]
 
-# Workflow #469 H1 (0.12.62; register §1.397; brief rd-1115/brief-469-word-slices.md; contracts/instance-fact-store.md, "Who withdrew it"), on the fixture instance with one task due at 10:00 UTC, the production evaluation path on a manual clock: the task's instance_unavailable reason on the cycle's decision carries exactly the word, its detail text the evaluator's, and the not-run explanation's candidate and not-running rows the same why, for availability_source configured (the configured seed false), self_check (the self-check gate's withdrawal), device_link with device_link_state absent, device_state with device_hold thermal (each through its publisher), other_publisher (another detector's false) and facts_missing (a record holding a string; policy_instance_fact_missing still on the decision) (1-6); after a restart the same seed record gives the same word (7); a word that changes while the code stays keeps the row's since_unix_ms, and the held record past the threshold starts at the first unavailable evaluation under gate_code instance_unavailable (8)
+# Workflow #469 H1 (0.12.62; register §1.397; brief rd-1115/brief-469-word-slices.md; contracts/instance-fact-store.md, "Who withdrew it"), on the fixture instance with one task due at 10:00 UTC, the production evaluation path on a manual clock: the task's instance_unavailable reason on the cycle's decision carries exactly the word, its detail text the evaluator's, and the not-run explanation's candidate and not-running rows the same why, for availability_source configured (the configured seed false), self_check (the self-check gate's withdrawal), device_link with device_link_state absent, device_state with device_hold thermal (each through its publisher), other_publisher (another detector's false) and facts_missing (a record holding a string; policy_instance_fact_missing still on the decision) (1-6); after a restart the same seed record gives the same word (7); a word that changes while the code stays keeps the row's since_unix_ms, and the held record past the threshold starts at the first unavailable evaluation under gate_code instance_unavailable, its caused_by the row's why with the word (8); fix round 2: an instance the self-check gates (a bound device endpoint) configured unavailable, its availability withdrawn under backend_selfcheck:unchecked, reads configured at the evaluation and after a restart, from the same record (9)
 [[gate]]
 coverage = "Y"
 tests = [
@@ -4079,5 +4079,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_an_application_whose_availability_cannot_be_read_says_facts_missing",
     "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_after_a_restart_the_same_record_gives_the_same_word",
     "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_a_changed_word_keeps_the_row_s_since_and_its_held_record",
+    "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_fix2_a_gated_application_its_configuration_marks_unavailable_says_configured",
 ]
 incident = ["#469 H1"]

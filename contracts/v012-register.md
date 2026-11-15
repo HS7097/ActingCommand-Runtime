@@ -27460,11 +27460,25 @@ active `session.instance.available` record the projection resolves for the insta
 (`project_policy_instances`, `crates/runtime-host/src/host/policy_dispatch.rs`), by its own members
 `source_detector` and `source_snapshot_id` (`HostShared::availability_withdrawal`,
 `crates/runtime-host/src/host/facts.rs`, beside the publishers whose detectors and prefixes it
-reads): the configured seed `configured`; the backend self-check gate's `backend_selfcheck:`
-`self_check`, which a fenced instance and a gated one configured unavailable share (the split is
-the design's later H1b); `device_link:<state>` `device_link` with the state; `device_state:<hold>`
-`device_state` with the hold; another publisher's `false` `other_publisher`; no record holding
-`false` `facts_missing`. A state or hold token the vocabulary does not know leaves its detail out.
+reads), and from the instance's configured seed, which the projection's inputs already hold
+(`PolicyInputSnapshot::instance_seeds`; no new read, no new record): a record holding `false`
+over a configured seed `false` `configured`, whichever publisher wrote it; otherwise the
+configured seed `configured`; the backend self-check gate's `backend_selfcheck:` `self_check`,
+which a failed self-check, one not recorded yet or invalidated (`unchecked`, also after a failed
+preparation step) and a resource fence share (the fence's split is the design's later H1b);
+`device_link:<state>` `device_link` with the state; `device_state:<hold>` `device_state` with
+the hold; another publisher's `false` `other_publisher`; no record holding `false`
+`facts_missing`. A state or hold token the vocabulary does not know leaves its detail out.
+
+**Fix round 2 (the review of the pull request).** The first build read the record alone, so an
+instance the backend self-check gates and the configuration marks unavailable read `self_check`:
+its start publishes no configured seed (`seed_policy_instance_facts` skips `available` for a
+device self-checked instance) and the gate withdraws it under `backend_selfcheck:unchecked`, which
+a passing self-check never replaces while the seed is `false`. A reader could not tell "the
+configuration says so" from "the self-check did not pass", which ask for different actions. The
+projection now passes the instance's configured seed beside the record; with the seed `false` the
+word is `configured`. Every other classification is as before, and every deciding step still runs
+before the word is set.
 
 **Where it is set, and the design's one wrong turn.** The design placed the attach after the
 evaluation, beside `attach_missing_instance_fact_reasons`, and expected the word in the schedule
@@ -27478,12 +27492,14 @@ the evaluation (signals, eligibility staging, arbitration) and right before the 
 explanation's rows, the held records built from them, the cycle's decisions and the fact refresh
 recorder's reading see the word; nothing before it does. The policy crate does not change.
 
-**A restart.** The reason row is built from the active record alone, which the ledger keeps whole
+**A restart.** The reason row is built from the active record, which the ledger keeps whole
 (`fact.published` carries the record with its detector and snapshot id) and the fact store
-reloads at a start; nothing of it is in memory. The same record gives the same word after a
-restart (test 7, on the configured seed, which the start does not publish again). A gated
-instance's availability is decided again by its start (the withdrawal before its preparation,
-then its self-check), and the word follows the record that leaves.
+reloads at a start, and from the configured seed, which the configuration gives again; nothing of
+it is in memory. The same record gives the same word after a restart (test 7, on the configured
+seed, which the start does not publish again; test 9, on the gate's withdrawal of a gated instance
+configured unavailable, which its start does not publish again). A gated instance's availability
+is decided again by its start (the withdrawal before its preparation, then its self-check), and
+the word follows the record that leaves.
 
 **What does not change.** The reason's code, its detail text and its other values (none); which
 decisions are blocked, their eligibility, wake and order; the explanation's `since_unix_ms`
@@ -27507,10 +27523,14 @@ publisher's own function, by three test hooks of `RuntimeHost`), `other_publishe
 cycle's decision still carries `policy_instance_fact_missing`); after a restart the same seed
 record and the same word (7); a word that changes from `other_publisher` to `facts_missing` keeps
 the row's `since_unix_ms`, and the one held record written past the 30-minute default has the
-first unavailable evaluation's start, its signal id and `gate_code` `instance_unavailable` (8).
-No existing test changes, no golden changes, no test leaves the gate map.
+first unavailable evaluation's start, its signal id and `gate_code` `instance_unavailable`, and
+its one `caused_by` link is `instance_unavailable` with `facts_missing` (8); fix round 2: the same
+instance on a bound device endpoint (so the self-check gates it) configured unavailable, whose
+active record is the gate's `backend_selfcheck:unchecked`, reads `configured` at the evaluation
+and, from the same record, after a restart (9). No existing test changes, no golden changes, no
+test leaves the gate map.
 
-**Counts.** One gate file of 8 tests and one gate map row; one member of `PolicyEvaluationContext`;
+**Counts.** One gate file of 9 tests and one gate map row; one member of `PolicyEvaluationContext`;
 one more member of the projection's tuple. No code, key, word, configuration key, record shape or
 interface revision is added.
 

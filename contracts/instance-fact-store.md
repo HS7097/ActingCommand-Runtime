@@ -304,11 +304,15 @@ reason; the other projections use the same instance set without it.
 **Who withdrew it (Workflow #469 H1, since 0.12.62; [v012-register.md](v012-register.md)
 §1.397).** For every instance an evaluated cycle's projection found unavailable, the host reads
 who withdrew the availability from the active `session.instance.available` record it resolved
-for the instance, and sets the word on the evaluator's own `instance_unavailable` reasons of that
-instance's decisions, before the not-run explanation reads them: `availability_source`
-`configured` when the record is the configured seed holding `false`; `self_check` when it is the
-backend self-check gate's withdrawal (`backend_selfcheck:`), which also withdraws a fenced
-instance and a gated instance configured unavailable, so the three read the same word;
+for the instance and from the instance's configured seed, and sets the word on the evaluator's
+own `instance_unavailable` reasons of that instance's decisions, before the not-run explanation
+reads them: `availability_source` `configured` when the record holds `false` and the configured
+seed is `false`, whichever publisher wrote the record (the start publishes no seed for an
+instance the backend self-check gates, and the gate withdraws it under its own source), and when
+the record is the configured seed holding `false`; otherwise `self_check` when it is the backend
+self-check gate's withdrawal (`backend_selfcheck:`): a self-check that failed, one not recorded
+yet or invalidated, a preparation step that failed, and a resource fence, which the gate
+withdraws under the same source, so these read the same word;
 `device_link` with the state the record's `device_link:<state>` names as `device_link_state`;
 `device_state` with the hold its `device_state:<hold>` names as `device_hold`; `other_publisher`
 for a record holding `false` from any other publisher; and `facts_missing` when no record holds
@@ -316,8 +320,9 @@ for a record holding `false` from any other publisher; and `facts_missing` when 
 `policy_instance_fact_missing` reasons above name). The word is a value of the reason only: no
 reason is added or removed, the detail text and every other value stay, and nothing decides by
 it; the explanation's `since_unix_ms` and the held records keep comparing the code. The words
-come from the record alone, which the ledger keeps whole and the store reloads at a start, so the
-same record gives the same word after a restart. The cycle's decisions, the explanation's rows
+come from the record and the configured seed alone (the ledger keeps the record whole and the
+store reloads it at a start; the configuration gives the seed again), so the same record gives
+the same word after a restart. The cycle's decisions, the explanation's rows
 (the read of `ac_schedule`, the diagnosis's not-run rows) and a held record's `caused_by` carry
 it; the explanation is built before the host adds its notes, so its rows show
 `instance_unavailable` with the word and not the `policy_instance_fact_missing` notes.

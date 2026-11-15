@@ -898,15 +898,21 @@ impl HostShared {
 
     /// Workflow #469 H1 (register §1.397; the design's place 3): who withdrew the availability of
     /// an instance the policy projection found unavailable, read from `record`, the active
-    /// `session.instance.available` record the projection resolved for it. A record holding
-    /// `false` names its publisher: the configured seed (`configured`), the backend self-check
-    /// gate (`self_check`, which also withdraws a fenced instance and a gated one configured
-    /// unavailable under the same source), the device link (`device_link`, with the state its
-    /// snapshot names) or the device state (`device_state`, with the hold its snapshot names),
-    /// and any other publisher `other_publisher`. Without such a record the instance is
-    /// unavailable because a policy instance fact is missing or unreadable (`facts_missing`).
+    /// `session.instance.available` record the projection resolved for it, and from
+    /// `seed_available`, the instance's configured seed in the projection's inputs. A record
+    /// holding `false` withdrew it. When the configured seed is `false` the word is `configured`,
+    /// whichever publisher wrote that record (the start publishes no seed for an instance the
+    /// backend self-check gates, and the gate withdraws it under its own source). Otherwise the
+    /// record names its publisher: the configured seed (`configured`), the backend self-check
+    /// gate (`self_check`: a self-check that failed, one not recorded yet or invalidated, a
+    /// preparation step that failed, and a resource fence, which the gate withdraws under the
+    /// same source), the device link (`device_link`, with the state its snapshot names) or the
+    /// device state (`device_state`, with the hold its snapshot names), and any other publisher
+    /// `other_publisher`. Without such a record the instance is unavailable because a policy
+    /// instance fact is missing or unreadable (`facts_missing`).
     pub(super) fn availability_withdrawal(
         record: Option<&FactRecord>,
+        seed_available: bool,
     ) -> crate::policy_host::AvailabilityWithdrawal {
         use crate::codes::{AvailabilitySource, DeviceHold};
         use actingcommand_contract::DeviceLinkState;
@@ -927,7 +933,7 @@ impl HostShared {
         };
         let detector = record.source_detector.as_str();
         let snapshot = record.source_snapshot_id.as_str();
-        if detector == POLICY_INSTANCE_SEED_DETECTOR {
+        if !seed_available || detector == POLICY_INSTANCE_SEED_DETECTOR {
             return withdrawal(AvailabilitySource::Configured);
         }
         if detector == BACKEND_SELFCHECK_AVAILABILITY_DETECTOR

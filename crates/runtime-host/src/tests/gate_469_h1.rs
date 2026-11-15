@@ -12,12 +12,18 @@
 // two evaluations; the evaluations take the production path on a manual Runtime clock, which seeds
 // nothing. A withdrawal the backend self-check gate, the device link or the device state owns is
 // published through that publisher's own function; any other through the fact store's write.
+// Fix round 2 (test 9): the same instance on a bound device endpoint, which the backend self-check
+// gates (`with_device_endpoints`), configured unavailable: its start publishes no configured seed
+// and the gate withdraws it under its own source; a passing self-check does not publish over a
+// withdrawal while the seed is `false`, so nothing publishes it again between two evaluations
+// either.
 
 use super::gate_372k2::{SLOT_TASK, at, slot_sources, slot_task};
 use super::*;
 use crate::codes::{AvailabilitySource, DeviceHold, HostCode};
 use crate::fact_store::POLICY_INSTANCE_AVAILABLE_KEY;
 use crate::policy_host::held::{HELD_SIGNAL_PREFIX, held_signal_id};
+use actingcommand_contract::outcome::{CauseRelation, Link};
 use actingcommand_contract::{DeviceLinkState, ScheduleExplanationInstance};
 use actingcommand_policy::PolicyCode;
 use serde_json::{Value, json};
@@ -28,28 +34,32 @@ const START: u64 = at(0, 9, 0);
 const OTHER_DETECTOR: &str = "neutral.availability-publisher";
 
 /// The fixture host on `root`, whose configuration seeds the instance's `available` with
-/// `configured_available`, on `clock`.
+/// `configured_available`, on `clock`. A `gated` instance is on a bound device endpoint, so the
+/// backend self-check gates its availability, and its opens pass, so the start's preparation and
+/// its self-check pass; any other is a fixture simulation, which nothing gates.
 fn open_host(
     root: &TempDir,
     registered: InstanceId,
     clock: &Arc<ManualRuntimeClock>,
     configured_available: bool,
+    gated: bool,
 ) -> RuntimeHost {
     let mut facts = policy_facts();
     facts.outcomes.clear();
     facts.instances[0].available = configured_available;
+    let state = Arc::new(FakeState::default());
+    state.observed_open.store(gated, Ordering::Release);
+    let provider = FakeProvider::one(POLICY_INSTANCE_ALIAS, registered, state);
+    let provider = if gated {
+        provider.with_device_endpoints()
+    } else {
+        provider.fixture_simulation()
+    };
     RuntimeHost::start(
         config(root)
             .with_policy_inputs(PolicyInputSnapshot::new(facts, policy_resources()))
             .with_runtime_clock(clock.clone()),
-        Arc::new(
-            FakeProvider::one(
-                POLICY_INSTANCE_ALIAS,
-                registered,
-                Arc::new(FakeState::default()),
-            )
-            .fixture_simulation(),
-        ),
+        Arc::new(provider),
     )
     .expect("start the fixture host")
 }
@@ -61,14 +71,24 @@ struct Bench {
     root: TempDir,
     registered: InstanceId,
     configured_available: bool,
+    gated: bool,
 }
 
 impl Bench {
     fn start(configured_available: bool) -> Self {
+        Self::open(configured_available, false)
+    }
+
+    /// The host of a gated instance (see [`open_host`]).
+    fn start_gated(configured_available: bool) -> Self {
+        Self::open(configured_available, true)
+    }
+
+    fn open(configured_available: bool, gated: bool) -> Self {
         let root = TempDir::new().expect("tempdir");
         let registered = instance_id();
         let clock = Arc::new(ManualRuntimeClock::new(START, 0));
-        let host = open_host(&root, registered, &clock, configured_available);
+        let host = open_host(&root, registered, &clock, configured_available, gated);
         host.activate_policy_catalog(&slot_sources(1, &[slot_task(&[600], 1)], None))
             .expect("activate the catalog");
         Self {
@@ -77,6 +97,7 @@ impl Bench {
             root,
             registered,
             configured_available,
+            gated,
         }
     }
 
@@ -87,17 +108,19 @@ impl Bench {
             root,
             registered,
             configured_available,
+            gated,
             ..
         } = self;
         host.close().expect("close the fixture host");
         let clock = Arc::new(ManualRuntimeClock::new(unix_ms, unix_ms - START));
-        let host = open_host(&root, registered, &clock, configured_available);
+        let host = open_host(&root, registered, &clock, configured_available, gated);
         Self {
             host,
             clock,
             root,
             registered,
             configured_available,
+            gated,
         }
     }
 
@@ -217,6 +240,28 @@ impl Bench {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The links of every held record of the ledger, in ledger order: its `caused_by`, the row's
+    /// why.
+    fn held_causes(&self) -> Vec<Link> {
+        let mut causes = Vec::new();
+        for event in self
+            .host
+            .query_persisted_events_for_test(EventQuery {
+                event_type: Some(EventType::PolicyPlanningSignalObserved),
+                ..EventQuery::default()
+            })
+            .expect("planning signals")
+        {
+            if let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) =
+                event.payload()
+                && payload.signal_id().starts_with(HELD_SIGNAL_PREFIX)
+            {
+                causes.extend_from_slice(payload.outcome().causes());
+            }
+        }
+        causes
     }
 
     fn close(self) {
@@ -421,7 +466,9 @@ fn h1_after_a_restart_the_same_record_gives_the_same_word() {
 // The clocks the word must not touch: a row whose word changes while its code stays keeps its
 // since (the held clock compares the code), and the held record written past the threshold
 // (`scheduling.task_held.*` at its defaults, 30 minutes) starts where the first unavailable
-// evaluation started it, under the code: what a run without the word would write.
+// evaluation started it, under the code: what a run without the word would write. Fix round 2:
+// its one `caused_by` link is the row's why of the evaluation that wrote it, with that
+// evaluation's word (`facts_missing`, the record still unreadable at 10:32).
 #[test]
 fn h1_a_changed_word_keeps_the_row_s_since_and_its_held_record() {
     let bench = Bench::start(true);
@@ -478,5 +525,43 @@ fn h1_a_changed_word_keeps_the_row_s_since_and_its_held_record() {
         )],
         "one held record, from the first unavailable evaluation"
     );
+    let causes = bench.held_causes();
+    let [cause] = causes.as_slice() else {
+        panic!("one link on the held record: {causes:#?}");
+    };
+    assert_eq!(cause.relation(), &CauseRelation::CausedBy, "{cause:?}");
+    assert!(
+        cause.outcome().is(PolicyCode::InstanceUnavailable),
+        "{cause:?}"
+    );
+    assert_eq!(
+        Value::Object(cause.outcome().values().clone()),
+        json!({ "availability_source": AvailabilitySource::FactsMissing.as_str() }),
+        "the held record's caused_by carries the word: {cause:?}"
+    );
+    bench.close();
+}
+
+// Fix round 2, `configured` on a gated application: the configuration marks the instance
+// unavailable and the backend self-check gates it, so its start publishes no configured seed and
+// the gate withdraws its availability before the preparation (`backend_selfcheck:unchecked`); the
+// passing self-check publishes nothing over it. The record's source is the gate's, the word is
+// `configured`, at the evaluation and after a restart, which publishes nothing either.
+#[test]
+fn h1_fix2_a_gated_application_its_configuration_marks_unavailable_says_configured() {
+    let bench = Bench::start_gated(false);
+    let record = bench.availability_record();
+    assert_eq!(
+        record.0, "backend_selfcheck:unchecked",
+        "the self-check gate's withdrawal at the start"
+    );
+    let expected = json!({ "availability_source": AvailabilitySource::Configured.as_str() });
+    let before = bench.evaluate(at(0, 10, 1));
+    assert_words(&bench, &before, &expected);
+
+    let bench = bench.restart(at(0, 10, 2));
+    assert_eq!(bench.availability_record(), record, "the same record");
+    let after = bench.evaluate(at(0, 10, 3));
+    assert_words(&bench, &after, &expected);
     bench.close();
 }

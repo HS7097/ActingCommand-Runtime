@@ -3831,7 +3831,8 @@ pub(super) type MissingPolicyInstanceFacts = BTreeMap<String, Vec<&'static str>>
 /// inline value of the expected shape, is projected unavailable and reported under its alias
 /// with the keys it lacks; it is never silently available. Workflow #469 H1 (register §1.397):
 /// every instance projected unavailable is also returned with who withdrew it, read from the
-/// `session.instance.available` record resolved here ([`HostShared::availability_withdrawal`]).
+/// `session.instance.available` record resolved here and the instance's configured seed in
+/// `inputs` ([`HostShared::availability_withdrawal`]).
 fn project_policy_instances(
     inputs: &PolicyInputSnapshot,
     store: &InstanceFactStore,
@@ -3876,9 +3877,15 @@ fn project_policy_instances(
             missing_instance_facts.insert(identity.instance_id.to_owned(), missing);
         }
         if !available {
+            // Workflow #469 H1 fix 2: the instance's configured seed, which these inputs hold;
+            // with it `false`, the configuration is who withdrew the availability.
+            let seed_available = inputs
+                .instance_seeds()
+                .find(|seed| seed.instance_id == identity.instance_id)
+                .is_none_or(|seed| seed.available);
             withdrawals.insert(
                 identity.instance_id.to_owned(),
-                HostShared::availability_withdrawal(available_record),
+                HostShared::availability_withdrawal(available_record, seed_available),
             );
         }
         instances.push(InstanceSnapshot {
