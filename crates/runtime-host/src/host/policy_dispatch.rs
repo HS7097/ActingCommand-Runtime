@@ -1336,6 +1336,9 @@ impl HostShared {
         // Workflow #455 G-R2s round 2: the games whose root the workbench could not compose,
         // read right after its check; their instances' resource targets are left out below.
         let uncomposed = self.uncomposed_standard_pack_games()?;
+        // Workflow #463 V2 fix round 1: the variable table the workbench's last read of each
+        // game root judged over the whole root, read from memory; none in configured mode.
+        let standard_pack_variables = self.standard_pack_variables()?;
         #[cfg(test)]
         self.before_policy_inputs_read_for_test()?;
         let _detection_gate = lock(
@@ -1574,6 +1577,7 @@ impl HostShared {
                     device_group_holds: &device_group_holds,
                     switch_cooldowns: &switch_cooldowns,
                     dispatches_read,
+                    standard_pack_variables: standard_pack_variables.as_deref(),
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -1625,6 +1629,12 @@ impl HostShared {
         for signal in remedy_signals {
             self.record_policy_planning_signal(signal)?;
         }
+        // Workflow #463 V2 (register §1.382): each value set on an application that this cycle's
+        // new dispatches do not hand their runs, once per (instance, name, declaration, stored
+        // value) since the start.
+        let variable_warnings =
+            lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?.take_variable_warnings();
+        self.report_variable_warnings(variable_warnings)?;
         // Workflow #386 SR-2b-1: the `policy_rerun_exhausted` records of runs an online
         // reconciliation settled (this cycle's), not yet recorded; the start records its own
         // before it completes.
@@ -4006,11 +4016,8 @@ fn policy_event_data(
         operation_id: intent.operation_id.clone(),
         procedure_binding_digest,
         reason_chain_id: reason_chain.id.clone(),
-        reasons: reason_chain
-            .reasons
-            .iter()
-            .map(|reason| PolicyReasonRecord(reason.outcome.clone()))
-            .collect(),
+        // Workflow #463 V2 fix round 2: each reason in its recorded form, as a replay compares it.
+        reasons: crate::policy_host::recorded_reasons(reason_chain),
         catalog_hash: intent.catalog_hash.clone(),
         catalog_version: intent.catalog_version,
         input_ledger_position: intent.input_ledger_position,
@@ -4091,6 +4098,35 @@ impl HostShared {
                         RuntimeLifecycleFailureStage::PolicyDriver.location(),
                         "runtime_host",
                         HostLocation::ProjectPolicyFacts.as_str(),
+                    ),
+                    AuditInput::new(),
+                ),
+            )?;
+            self.fatal.report_warning(&outcome);
+        }
+        Ok(())
+    }
+
+    /// Workflow #463 V2 (`contracts/package-variables.md`, "The run"): each
+    /// `goal_value_not_applied` as a Warning `runtime.failed` record of the policy driver, as
+    /// `policy_fact_rows_exceeded` is written; the run goes on with the variable's default.
+    fn report_variable_warnings(&self, warnings: Vec<Outcome>) -> RuntimeHostResult<()> {
+        for outcome in warnings {
+            self.append_event_raw(
+                EventSeverity::Warning,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                self.events.system_links()?,
+                RuntimePayloadDraft::failed(
+                    DiagnosticCode::RuntimeDiagnostic,
+                    EffectDisposition::NotPerformed,
+                    outcome.clone(),
+                    DiagnosticDetailDraft::new(
+                        "policy_variable_values",
+                        RuntimeLifecycleFailureStage::PolicyDriver.location(),
+                        "runtime_host",
+                        HostLocation::EvaluatePolicyCycle.as_str(),
                     ),
                     AuditInput::new(),
                 ),

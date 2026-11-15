@@ -340,6 +340,11 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// IDLE-3 (#447, register §1.332): the policy's own dispatches as the cycle's inputs were
     /// read ([`PolicyHost::idle_dispatches_read`]), kept with the cycle's not-run explanation.
     pub(crate) dispatches_read: IdleDispatchRead,
+    /// Workflow #463 V2 fix round 1 (register §1.382): with a composed standard pack, the
+    /// variable table the scheduler workbench's last read of each game root judged over the
+    /// whole root (`standard_pack_variables`), read from memory as the cycle starts; `None`
+    /// without one, where the remedy table's is read.
+    pub(crate) standard_pack_variables: Option<&'a actingcommand_policy::VariableTable>,
 }
 
 /// IDLE-3 (#447, register §1.332): the policy's own dispatches as an evaluation read its inputs,
@@ -1510,6 +1515,17 @@ fn instance_arbitration_ranks(
     ranks
 }
 
+/// Workflow #463 V2 fix round 1 (register §1.382): what "once" of `goal_value_not_applied` is
+/// counted by: the application, the variable's name, its declaration's sha256 and the stored
+/// value's sha256, so a person who replaces one value not applied by another is warned again.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct WarnedVariableValue {
+    instance_id: String,
+    variable_name: String,
+    declaration_sha256: String,
+    value_sha256: String,
+}
+
 /// The policy half of the Runtime host.
 ///
 /// Dispatch projection (Workflow #191 U5-F1):
@@ -1606,6 +1622,22 @@ pub(crate) struct PolicyHost {
     /// Workflow #438 HELD-1 (register §1.322 HELD-R6): the holds this start reported and has not
     /// ended. Memory only; a host starts with none, and no decision reads it.
     held: held::HeldMemory,
+    /// Workflow #463 V2 (register §1.382): each (instance, variable name, declaration sha256)
+    /// whose `goal_value_not_applied` this start wrote; fix round 1: with the stored value's
+    /// sha256. Memory only, nothing on disk: a restart writes it once more.
+    variable_warned: BTreeSet<WarnedVariableValue>,
+    /// Workflow #463 V2 fix round 2: each (instance, package, state of the package's files) whose
+    /// `goal_value_package_unreadable` this start wrote. Memory only: a restart writes it once
+    /// more.
+    unread_variables_warned: BTreeSet<(String, String, String)>,
+    /// Workflow #463 V2: the `goal_value_not_applied` warnings (fix round 2: and the
+    /// `goal_value_package_unreadable` ones) the last evaluations decided and the cycle's recorder
+    /// has not taken yet ([`Self::take_variable_warnings`]).
+    variable_warnings: Vec<Outcome>,
+    /// Workflow #463 V3 (register §1.383): the remedy parameters the last evaluation's remedy plan
+    /// resolved, its `policy_dispatch_parameters` per (task, instance) before the variable values
+    /// joined it, which the goal page shows read-only. Memory only; none before an evaluation.
+    resolved_parameters: BTreeMap<(String, String), DecisionReason>,
 }
 
 /// SCHED-C1d (register §1.299 SC1-11): what the host recorded of the capped episodes as
@@ -2158,6 +2190,10 @@ impl PolicyHost {
             capped_kept: CappedKept::default(),
             rows_exceeded_warned: BTreeMap::new(),
             held: held::HeldMemory::default(),
+            variable_warned: BTreeSet::new(),
+            unread_variables_warned: BTreeSet::new(),
+            variable_warnings: Vec::new(),
+            resolved_parameters: BTreeMap::new(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -3715,6 +3751,7 @@ impl PolicyHost {
             device_group_holds,
             switch_cooldowns,
             dispatches_read,
+            standard_pack_variables,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -3801,6 +3838,33 @@ impl PolicyHost {
         // bound package declares a remedy or remedies are off.
         let (remedy_plan, remedy_decisions) =
             self.remedy_plan(&active.compiled, facts, time, remedy)?;
+        // Workflow #463 V3: the remedy parameters it resolved, for the goal page's read-only list.
+        self.resolved_parameters
+            .clone_from(&remedy_plan.run_parameters);
+        // Workflow #463 V2 (register §1.382; `contracts/package-variables.md`, "The run"): the
+        // variable values of every pair whose bound package declares variables, read from this
+        // evaluation's facts (the memory store's projection; no ledger read) and the table's
+        // variables, judged by game once per table. They join the plan's
+        // `policy_dispatch_parameters`, whether remedies are on or off. Fix round 1: with a
+        // composed standard pack the table is the scheduler workbench's, judged over each whole
+        // game root; without one the remedy table's, as before.
+        let variable_plan = match standard_pack_variables {
+            Some(table) => {
+                actingcommand_policy::plan_variable_values(&active.compiled, facts, table)
+            }
+            None => self
+                .remedies
+                .table()
+                .map(|table| {
+                    actingcommand_policy::plan_variable_values(
+                        &active.compiled,
+                        facts,
+                        table.variables(),
+                    )
+                })
+                .unwrap_or_default(),
+        };
+        let remedy_plan = remedy_plan.with_variable_values(&variable_plan);
         // Workflow #427-B: the dispatches admitted or running and the limit of concurrent runs
         // (Workflow #429 R-2: the configuration's value in effect as the cycle starts).
         let run_slots = self.run_slots(max_concurrent_runs)?;
@@ -4089,6 +4153,49 @@ impl PolicyHost {
             .filter(|intent| !self.seen_dispatches.contains_key(&intent.decision_id))
             .cloned()
             .collect();
+        // Workflow #463 V2: a value set on an application that a new dispatch does not hand its
+        // run is warned once per (instance, name, declaration) since the start, in memory only.
+        // Fix round 1: and per stored value, so another value not applied is warned again.
+        for intent in &pending_dispatch_intents {
+            for value in variable_plan.not_applied(&intent.task_id, &intent.instance_id) {
+                let key = WarnedVariableValue {
+                    instance_id: intent.instance_id.clone(),
+                    variable_name: value.variable_name.clone(),
+                    declaration_sha256: value.declaration_sha256.clone(),
+                    value_sha256: value.value_sha256.clone(),
+                };
+                if self.variable_warned.insert(key) {
+                    self.variable_warnings.push(
+                        Outcome::new(crate::codes::GoalValueCode::NotApplied)
+                            .operation(HostLocation::EvaluatePolicyCycle)
+                            .instance_id(intent.instance_id.as_str())
+                            .task_id(intent.task_id.as_str())
+                            .package_id(value.package_id.as_str())
+                            .variable_name(value.variable_name.as_str())
+                            .declaration_sha256(value.declaration_sha256.as_str())
+                            .variable_problem(value.problem),
+                    );
+                }
+            }
+            // Fix round 2: a dispatched package the workbench could not read hands its run no
+            // value and the run reads the package's defaults; nothing is skipped silently, so it
+            // is warned once per (instance, package, state of its files) since the start.
+            if let Some(unread) = variable_plan.unread(&intent.task_id, &intent.instance_id)
+                && self.unread_variables_warned.insert((
+                    intent.instance_id.clone(),
+                    unread.package_id.clone(),
+                    unread.files_state.clone(),
+                ))
+            {
+                self.variable_warnings.push(
+                    Outcome::new(crate::codes::GoalValueCode::PackageUnreadable)
+                        .operation(HostLocation::EvaluatePolicyCycle)
+                        .instance_id(intent.instance_id.as_str())
+                        .task_id(intent.task_id.as_str())
+                        .package_id(unread.package_id.as_str()),
+                );
+            }
+        }
         // SS-4: the basis of each new intent, as this evaluation read its facts; its admission
         // arms the pair's guard (`commit_admission`).
         self.no_progress.capture(
@@ -4642,6 +4749,13 @@ impl PolicyHost {
         self.remedies.take_pending()
     }
 
+    /// Workflow #463 V2: the `goal_value_not_applied` warnings the evaluations since the last call
+    /// decided, each once per (instance, variable name, declaration, stored value) since the
+    /// start, for the cycle's recorder.
+    pub(crate) fn take_variable_warnings(&mut self) -> Vec<Outcome> {
+        std::mem::take(&mut self.variable_warnings)
+    }
+
     /// Workflow #411 B15 R4 (model-b15 §7.8, at start): per pair of a task that declares a
     /// remedy, its admitted runs newest first, at most [`REMEDY_JOURNAL_MAX_RUNS`], each with
     /// whether its terminal is read (a completed success) and whether its chain names a round.
@@ -4739,6 +4853,26 @@ impl PolicyHost {
             ));
         };
         completed_policy_run_identity(event, &dispatch.data, execution, BTreeSet::new())
+    }
+
+    /// Workflow #463 V3: the remedy table in effect (the bound packages with their variables and
+    /// what they provide), for the goal page; `None` before the first evaluation under the active
+    /// catalog built one.
+    pub(crate) fn built_table(&self) -> Option<crate::remedy::BuiltTable> {
+        self.remedies.table().cloned()
+    }
+
+    /// Workflow #463 V3: the `policy_dispatch_parameters` the last evaluation's remedy plan gave
+    /// the pairs of `instance_id`, by task, before the variable values joined it.
+    pub(crate) fn resolved_parameters(
+        &self,
+        instance_id: &str,
+    ) -> BTreeMap<String, DecisionReason> {
+        self.resolved_parameters
+            .iter()
+            .filter(|((_, instance), _)| instance == instance_id)
+            .map(|((task_id, _), reason)| (task_id.clone(), reason.clone()))
+            .collect()
     }
 
     /// Workflow #411 B15 R4, test only: the remedy table in effect.
@@ -7115,6 +7249,24 @@ fn event_data(
     })
 }
 
+/// Workflow #463 V2 fix round 2 (`contracts/package-variables.md`, "The record"): the reasons of
+/// `reason_chain` as a policy dispatch event records them, each in its recorded form
+/// (`recorded_dispatch_parameters`: a `policy_dispatch_parameters` whose record would pass an
+/// outcome record's bound carries, for a value whose text does not fit, its sha256 and length).
+/// The one builder of both event data, the one written and the one a replay compares with it.
+/// The chain itself is not changed: the run reads its values from it, whole.
+pub(crate) fn recorded_reasons(reason_chain: &DecisionReasonChain) -> Vec<PolicyReasonRecord> {
+    reason_chain
+        .reasons
+        .iter()
+        .map(|reason| {
+            PolicyReasonRecord(actingcommand_policy::recorded_dispatch_parameters(
+                &reason.outcome,
+            ))
+        })
+        .collect()
+}
+
 fn dispatch_event_data(
     intent: &DispatchIntent,
     reason_chain: &DecisionReasonChain,
@@ -7132,11 +7284,7 @@ fn dispatch_event_data(
         operation_id: intent.operation_id.clone(),
         procedure_binding_digest,
         reason_chain_id: reason_chain.id.clone(),
-        reasons: reason_chain
-            .reasons
-            .iter()
-            .map(|reason| PolicyReasonRecord(reason.outcome.clone()))
-            .collect(),
+        reasons: recorded_reasons(reason_chain),
         catalog_hash: intent.catalog_hash.clone(),
         catalog_version: intent.catalog_version,
         input_ledger_position: intent.input_ledger_position,

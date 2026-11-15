@@ -45,13 +45,18 @@ pub const CAUSES_MAX_DEPTH: usize = 8;
 /// The largest serialised envelope.
 pub const ENVELOPE_MAX_BYTES: usize = 32 * 1024;
 
-/// Room the envelope's own members (`schema_version`, `detail`) take beside the body.
-const ENVELOPE_BODY_BUDGET: usize = ENVELOPE_MAX_BYTES - 128;
+/// Room the envelope's own members (`schema_version`, `detail`) take beside the body. Workflow
+/// #463 V2 fix round 2: public, the bound of an outcome's record form (a ledger record's reason),
+/// which a writer that must keep a record within it measures against.
+pub const ENVELOPE_BODY_BUDGET: usize = ENVELOPE_MAX_BYTES - 128;
 const NAME_MAX_BYTES: usize = 256;
 const PATH_MAX_BYTES: usize = 1024;
 const POINTER_MAX_BYTES: usize = 512;
 const URL_MAX_BYTES: usize = 2048;
 const VERSION_MAX_BYTES: usize = 64;
+/// Workflow #463 V2 fix round 1: the longest text of a `json` key, the longest value text the
+/// goal store keeps for an entry (`contracts/resource-targets.md`, `entries[i].value`).
+pub const JSON_MAX_BYTES: usize = 1024;
 const RAW_TEXT_KEY: &str = "raw_text";
 const RAW_TEXT_TRUNCATED_KEY: &str = "raw_text_truncated";
 
@@ -294,6 +299,7 @@ macro_rules! outcome_keys {
     (@kind hash) => { $crate::outcome::KeyKind::Hash };
     (@kind commit) => { $crate::outcome::KeyKind::Commit };
     (@kind version) => { $crate::outcome::KeyKind::Version };
+    (@kind json) => { $crate::outcome::KeyKind::Json };
     (@kind evidence) => { $crate::outcome::KeyKind::Evidence };
     (@kind list($($item:tt)*)) => {
         $crate::outcome::KeyKind::List(&outcome_keys!(@kind $($item)*))
@@ -909,6 +915,9 @@ pub enum KeyKind {
     Hash,
     Commit,
     Version,
+    /// Workflow #463 V2 fix round 1: the compact JSON text of a value, at most
+    /// [`JSON_MAX_BYTES`] bytes, without a control character (`value_json`).
+    Json,
     /// `raw_text` only.
     Evidence,
     List(&'static KeyKind),
@@ -1433,6 +1442,7 @@ fn text_rule_broken(kind: KeyKind, text: &str) -> Option<&'static str> {
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'-'))
         }
+        KeyKind::Json => text.len() > JSON_MAX_BYTES || text.chars().any(char::is_control),
         _ => false,
     };
     broken.then_some(kind_name(kind))
@@ -1449,6 +1459,7 @@ fn kind_name(kind: KeyKind) -> &'static str {
         KeyKind::Hash => "hash",
         KeyKind::Commit => "commit",
         KeyKind::Version => "version",
+        KeyKind::Json => "json",
         _ => "value",
     }
 }

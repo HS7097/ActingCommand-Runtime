@@ -17,6 +17,8 @@ mod schema;
 mod source;
 mod strategy;
 mod validation;
+// Workflow #463 V2: the values a selected dispatch hands its run for its package's variables.
+mod variables;
 
 pub use codes::{
     BenefitGap, DeviceGroupWait, PolicyCode, PolicyInput, PolicyInputProblem, RefreshLimit,
@@ -31,6 +33,7 @@ pub use resource_targets::*;
 pub use schema::*;
 pub use source::{CatalogDocumentSource, CatalogSources, validate_catalog_declaration};
 pub use strategy::*;
+pub use variables::*;
 
 /// Gate tests that need the crate's private items (test plan §2.1), and their shared fixtures.
 #[cfg(test)]
@@ -169,6 +172,12 @@ mod tests {
     // Workflow #455 G-R2s (0.12.60; register §1.369): a goal never raises the weight of a task
     // whose package can do something irreversible.
     mod gate_455_gr2s;
+    // Workflow #463 V2 (0.12.61; register §1.382): the values a selected dispatch hands its run
+    // for its package's variables.
+    mod gate_463_v2;
+    // Workflow #463 V3 (0.12.61; register §1.383): the record one `EditGoal` writes, and the goal
+    // page's reading of a stored record.
+    mod gate_463_v3;
 
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is marked: the gate tests' roots hold

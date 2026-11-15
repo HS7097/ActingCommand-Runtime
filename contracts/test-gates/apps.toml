@@ -2297,3 +2297,19 @@ tests = [
     "actingcommand-lab-ops::lib::gate_467_rpt1::rpt1_fix3_a_name_of_one_or_two_characters_is_replaced_in_a_path_only",
 ]
 incident = ["#467 RPT-1"]
+
+# Workflow #463 V3 (0.12.61; register §1.383; brief rd-1115/brief-463-v3-goals-view-edit.md; contracts/lab-two-entries.md), the MCP server on a scripted Runtime that refuses every goal request (denied, lease_busy): ac_goals, ac_goals_get, ac_goals_set (expected_version 0, value "item_a") and ac_goals_clear answer the line and exit the command line's code answers for goals, goals get, goals set and goals clear; the two reads run on the kept connection (status, goal_view; then health, status, goal_view), each write on a connection of its own after today's provenance (declare_governance_identity, record_client_action, status, edit_goal), the set sending op {kind: set, name, value_json "\"item_a\""} with expected_version 0; ac_package_variables of a package directory that is not there, through a serve child of the real actinglab, answers the line actinglab --json package variables prints, isError its non-zero exit
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-mcp::serve_calls::mcp_goals_rows_are_the_command_lines",
+]
+incident = ["#463 V3"]
+
+# Workflow #463 V3 fix round 1 (0.12.61; register §1.383; brief rd-1115/brief-1731-fix1.md, item 9), the MCP server on a scripted Runtime that takes every goal request (a made-up page with the variable pick; an edit taken as version 1 in one event): ac_goals, ac_goals_get, ac_goals_set and ac_goals_clear answer the line and the exit 0 the command line's code answers for goals, goals get, goals set and goals clear, on seven connections (the kept one, one per write, one per command line) and none beyond; ac_package_variables of a made-up package the metadata reader reads (the variable pick and one remedy parameter), through a serve child of the real actinglab, answers the line actinglab --json package variables prints, no error
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-mcp::serve_calls::mcp_goals_rows_accepted_are_the_command_lines",
+]
+incident = ["#463 V3"]

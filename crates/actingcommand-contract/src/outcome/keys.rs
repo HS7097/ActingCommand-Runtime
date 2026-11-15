@@ -836,4 +836,28 @@ outcome_keys! {
     report_write_step: vocab(report_write_step),
     report_fit: vocab(report_fit),
     report_output_root: vocab(report_output_root),
+    // ---- Workflow #463 V2 (a run reads its package's variables, contracts/package-variables.md
+    // "The run"): begin ----
+    variable_name: token,
+    // Fix round 1: a `json` key, which holds what the goal store keeps (1024 bytes).
+    value_json: json,
+    variable_source: vocab(variable_source),
+    set_unix_ms: unix_ms,
+    set_channel: vocab(channel),
+    variable_problem: vocab(variable_problem),
+    // Fix round 2: a record whose value's text does not fit the ledger record's bound carries the
+    // text's sha256 and length in its place, and says so.
+    value_sha256: hash,
+    value_bytes: integer,
+    value_json_left_out: boolean,
+    variable_values: records(variable_name, variable_source; value_json, set_unix_ms, set_channel, variable_problem, value_sha256, value_bytes, value_json_left_out),
+    declaration_sha256: hash,
+    // Fix round 2: why a game root's goals.json is not applied (`standard_pack_goals_not_applied`).
+    goals_failure: vocab(goals_failure),
+    // ---- Workflow #463 V2: end ----
+    // ---- Workflow #463 V3 (an application's goals read and set by name,
+    // contracts/runtime-interface.md "Goal request kinds"): the name an `EditGoal` named and why it
+    // was refused; kept in codes mode. ----
+    goal_name: token,
+    goal_problem: vocab(goal_problem),
 }

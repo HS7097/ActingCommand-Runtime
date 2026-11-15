@@ -114,6 +114,9 @@ mod gate_463_k2;
 // Workflow #463 V1: a package's declared variables at kernel admission.
 #[cfg(test)]
 mod gate_463_v1;
+// Workflow #463 V2: a run reads its package's variables with their kinds' types.
+#[cfg(test)]
+mod gate_463_v2;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.
@@ -355,8 +358,8 @@ pub use readings::{
     ResourceReadingProblem, judge_resource_adjustment_amount, judge_resource_reading,
 };
 pub use remedies::{
-    GivenParameterProblem, GivenParameterRefusal, RUN_PARAMETERS_KEY_PREFIX, RemedyDeclarations,
-    RunParameters,
+    GivenParameterProblem, GivenParameterRefusal, GivenVariableProblem, GivenVariableRefusal,
+    RUN_PARAMETERS_KEY_PREFIX, RemedyDeclarations, RunParameters,
 };
 pub use run_tables::{RunTableFailure, RunTableRead, RunTables};
 pub use scan::{
@@ -9084,7 +9087,8 @@ struct TaskControl {
     store_update: Option<actingcommand_contract::StoreUpdateDeclaration>,
     /// Workflow #463 V1 (contracts/package-variables.md): the variables the package declares, in
     /// declaration order; empty when it declares none. Read and checked apart from the other
-    /// members ([`parse_task_control_declaration`]); nothing resolves or overlays them yet.
+    /// members ([`parse_task_control_declaration`]). Workflow #463 V2: a run reads each as
+    /// `session.dispatch.parameter.<name>` ([`RunParameters`]).
     #[serde(skip)]
     variables: Vec<actingcommand_contract::PackageVariable>,
 }

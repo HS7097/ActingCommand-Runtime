@@ -228,5 +228,8 @@ pub(crate) const fn kind_location(kind: RuntimeOperationKind) -> &'static str {
         Kind::AcquirePlayerHold => "acquire_player_hold",
         Kind::ReleasePlayerHold => "release_player_hold",
         Kind::AgentWakeTest => "agent_wake_test",
+        // Workflow #463 V3: the host's own locations of the two kinds.
+        Kind::GoalView => "goal_view",
+        Kind::EditGoal => "edit_goal",
     }
 }

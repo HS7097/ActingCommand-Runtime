@@ -71,9 +71,9 @@ use actingcommand_contract::{
     OwnerResourceDisposition, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary,
     PerformanceContext, PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData,
     PolicyExecutionOutcome, PolicyFailureClass, PolicyPayload, PolicyPayloadDraft,
-    PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectDecisionPageRequest,
-    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProposalClass,
-    ProposalPromotion, RUNTIME_FACT_SNAPSHOT_INTERVAL_MS, RUNTIME_INFO_FILE, ReadonlyObservation,
+    PolicyPlanningSignalEventData, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectedArtifactReference, ProjectionPayload, ProposalClass, ProposalPromotion,
+    RUNTIME_FACT_SNAPSHOT_INTERVAL_MS, RUNTIME_INFO_FILE, ReadonlyObservation,
     RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload, ReleasePayloadDraft,
     ReleaseTransitionKind, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
     ResourceAuthoringPhase, ResourceQuiescence, RetentionClass, RunId, RuntimeCaptureBackend,
@@ -231,6 +231,8 @@ mod online_observation;
 mod package_debug;
 // Workflow #429 R-8: `EditPackSchedule` and `PackScheduleView`.
 mod pack_schedule;
+// Workflow #463 V3: `GoalView` and `EditGoal`.
+mod goals;
 mod performance;
 mod planning;
 mod policy_catalog;
@@ -295,7 +297,8 @@ pub use standard_pack::{StandardPackGameReport, StandardPacksReport, inspect_sta
 // ROUT-L RL-1b: the scheduler workbench, which composes the standard packs' schedule rules.
 mod standard_pack_schedule;
 pub use standard_pack_schedule::{
-    ConfiguredStandardPackSchedule, StandardPackSchedulePreview, compose_configured_standard_packs,
+    ConfiguredStandardPackSchedule, RootGoals, RootUnread, StandardPackGoalRoot,
+    StandardPackGoalRoots, StandardPackSchedulePreview, compose_configured_standard_packs,
     preview_standard_pack_schedule,
 };
 #[cfg(test)]
@@ -2290,6 +2293,8 @@ impl RuntimeHost {
             failure_outcomes_for_test: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             failure_details_for_test: Mutex::new(BTreeMap::new()),
+            #[cfg(test)]
+            run_parameters_for_test: Mutex::new(Vec::new()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(BTreeMap::new()),
             policy_outcome_gate: Mutex::new(()),
@@ -3375,6 +3380,18 @@ impl RuntimeHost {
             .standard_pack_request(procedure_ref)
     }
 
+    /// Workflow #463 V2 fix round 2 (register §1.382; `contracts/package-variables.md`, "What
+    /// the next slice reads"): what the scheduler workbench keeps of each game root it read, from
+    /// one check to the next, read from memory and never from a file: the root's parsed
+    /// `goals.json` or why it is not applied, the judgement of its variables over the whole root
+    /// (per name its packages, its declaration, whether it applies, and the word and detail of
+    /// the cause), and the variable table a dispatch reads. `None` without a composed standard
+    /// pack.
+    pub fn standard_pack_goal_roots(&self) -> RuntimeHostResult<Option<StandardPackGoalRoots>> {
+        self.shared_ref(HostLocation::StandardPackRead)?
+            .standard_pack_goal_roots()
+    }
+
     /// Workflow #361 C2: records a planned transition; the first catalog write of startup.
     pub fn apply_policy_catalog_transition(
         &self,
@@ -4432,6 +4449,20 @@ impl RuntimeHost {
         )?
         .get(&request_id)
         .cloned())
+    }
+
+    /// Workflow #463 V2 fix round 1: the parameters each contained run of this host overlaid its
+    /// snapshots with, in the order the runs reached their execution.
+    #[cfg(test)]
+    pub(crate) fn run_parameters_for_test(
+        &self,
+    ) -> RuntimeHostResult<Vec<actingcommand_execution_kernel::RunParameters>> {
+        let shared = self.shared_ref(HostLocation::EvaluatePolicyCycle)?;
+        Ok(shared
+            .run_parameters_for_test
+            .lock()
+            .expect("the run parameters of the gate tests")
+            .clone())
     }
 
     /// Workflow #428 S168-4: the native detail of a refused request, when it had one.
@@ -6320,6 +6351,10 @@ struct HostShared {
     /// `<id>:<fact store code>`).
     #[cfg(test)]
     failure_details_for_test: Mutex<BTreeMap<RequestId, Option<String>>>,
+    /// Workflow #463 V2 fix round 1, test only: the parameters each contained run's snapshots are
+    /// overlaid with, in the order the runs reached their execution.
+    #[cfg(test)]
+    run_parameters_for_test: Mutex<Vec<actingcommand_execution_kernel::RunParameters>>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.

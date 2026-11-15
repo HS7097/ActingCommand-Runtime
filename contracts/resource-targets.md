@@ -281,10 +281,13 @@ scheduling.
 Workflow #455 G-R2a (0.12.60; register §1.361; the design `rd-1114/455-goals-design-final.md`
 §3.4): the goal document's value store. The console and the Lab will read and write an
 application's goals in one document; this version holds them in the record that already
-exists, `session.resource_targets`, with no new fact key and no new file. Nothing reads the
-entries yet, and nothing writes them one at a time yet: the goal view and the edit of one entry
-(G-R2b), the pack's declaration (G-R1), deadlines (G-R4) and tiers (G-R5) are later slices. The
-same entry, parser, 64 KiB bound and general reasons as v1 and v2.
+exists, `session.resource_targets`, with no new fact key and no new file. Since Workflow #463 V2
+(0.12.61; [package-variables.md](package-variables.md), "The run") a policy dispatch reads an
+entry whose name is a variable of the dispatched package as that variable's value, judged at
+use against the package's declaration; no other entry is read. Nothing writes the entries one at
+a time yet: the goal view and the edit of one entry (G-R2b, Workflow #463 V3), deadlines (G-R4)
+and tiers (G-R5) are later slices. The same entry, parser, 64 KiB bound and general reasons as v1
+and v2.
 
 ```json
 {
@@ -316,7 +319,9 @@ same entry, parser, 64 KiB bound and general reasons as v1 and v2.
 
 The reader is as strict as v2's: an unknown member anywhere is `unknown_field`, and every
 refusal names its field. The closed reason set is unchanged: no word is added. This slice
-checks an entry's form only: it does not know the pack's declaration (G-R1, G-R2b).
+checks an entry's form only: it does not know the pack's declaration (G-R1, G-R2b). Workflow #463
+V2: a value a package's variable does not take is stored as written and judged when a run is to
+read it, which then reads the default (`goal_value_not_applied`, [package-variables.md](package-variables.md)).
 
 **Version probe.** Exactly when the top-level `schema_version` is the string
 `actingcommand.resource-targets.v3` the Runtime takes the v3 checks; the v2 probe and the v1
@@ -594,7 +599,9 @@ also after a Runtime restart. A different policy replaces the active one
 expiry. An expired policy stays stored until replaced; applying the same document again is
 refused because its lifetime has passed (`validity_out_of_range`).
 
-**The formal entry only.** `PublishFact` / `PublishFacts` refuse any record of this key as
+**The formal entries only.** `ApplyResourceTargets` and, since Workflow #463 V3 (0.12.61),
+`EditGoal` ("One value by name", below) are the two formal entries of this key.
+`PublishFact` / `PublishFacts` refuse any record of this key as
 the non-fatal `resource_targets_formal_entry_required`, before the fact write gate. A
 configured policy input fact of this key fails every authoritative projection, so the daemon's
 first evaluation fails and the configuration must be corrected; a forward projection caller
@@ -605,6 +612,35 @@ supplying it is refused; both as `resource_targets_key_reserved`.
 (`policy_facts_stale`), the `FactsChanged` trigger and forward projections like every overlaid
 fact. Each instance's policy takes one of the store's 256 active fact identities; each
 inventory key it reads takes its own.
+
+### One value by name
+
+Workflow #463 V3, which is Workflow #455 G-R2b with the variables in it (0.12.61, register
+§1.383; [runtime-interface.md](runtime-interface.md), "Goal request kinds"). `EditGoal` changes
+one row of the instance's stored record and keeps every other row as it is stored, the rows
+another request wrote with who set them:
+
+- **A variable or another entry** (`set`): the entry row of the name is replaced where it stands,
+  or added after the others; `clear` removes it. The row names the Runtime's clock at the request,
+  the request's channel and, for the Lab, the initiator its connection declared. Fix round 1: a
+  `clear` removes the stored row of its name whatever the name's entry is (a heading's or a note's
+  included), so no stored value is left that nobody can remove.
+- **A resource entry** of `goals.json` (`set` with `{at_least}`) and **an other target** (a name
+  no entry has, `set` with `{resource, at_least}`): one target row, mode `adjust`, weight
+  `score_stage`, its step and importance the pool's valuation's (a pool whose valuation lacks
+  either is refused `pool_unvalued`), no tasks and no lifetime; it replaces the target on that pool
+  whatever its id (the answer's `replaced_target_id`) and a target of the same id on another pool.
+  `clear` removes the target and its task rows.
+- **Over a v2 policy** its targets become v3 targets with the policy's lifetime and no setter, as
+  under a v2 document applied over a v3 record; a v1 policy or rows no reader reads are refused
+  `record_unreadable`; a record left with no target and no entry is the withdrawal.
+- **The version** compared is the sequence of the `fact.published` that holds the record (`0`
+  without one), the one `GoalView` answers; a stored record of entries alone has that version too,
+  where `ResourceTargetView`'s `active.version` reads `0`. It is compared under the fact write
+  gate first; only then are the name and the value checked against the record about to change.
+
+The whole record is read back by the v3 reader before it is published, as one `fact.published`
+keeping the request's origin, under the fact write gate.
 
 ## Evaluation
 

@@ -26620,6 +26620,414 @@ an earlier Runtime refuses it at admission).
 (`validation_failed`); a generated package with a select step is refused by an earlier Runtime at
 admission.
 
+### 1.382 Slice V2 (0.12.61): a run reads its package's variables (Workflow #463 L4; the owner's words on board #463 of 11-14, that a variable's number may come from a mathematical model, from a person or an agent, or from elsewhere, are the requirement; the design `rd-1114/463-l4-design.md`, "Readings: what holds", sections B and C (but for C's part on `record mark` and `record stop`, slice V4's), section E's "One mechanism" and "Installed packages", the row V2 of section G, section H items 3, 4, 6 and 8, "Not verified" points 1 and 3 and "The coordinator's rulings on I" 1 and 4, read on main `60c28e64`; the coordinator's rulings of 11-15 in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-v2-variables-run.md`, read on main `60c28e64`)
+
+The coordinator gave this slice 1.382 (1.375 to 1.377 and 1.379 are open pull requests', 1.380
+and 1.381 slices dispatched with this one's). It ships in 0.12.61 with V1 (§1.378): the coordinator
+releases no 0.12.61 without it, so a build that declares `package` 14 hands the values to a run.
+[package-variables.md](package-variables.md), "The run", is the contract;
+[remedies.md](remedies.md) §4 ("Overlay", "Runs without a dispatch", "Lab single-step
+evaluations"), [instance-fact-store.md](instance-fact-store.md) ("Run parameters"),
+[selection-policy.md](selection-policy.md) ("In-task consumer"),
+[resource-targets.md](resource-targets.md) (who reads the entries) and the `package` row 14 of
+[component-interfaces.md](component-interfaces.md) change with it.
+
+**What it builds.**
+
+- *Resolution* (the policy crate's `plan_variable_values`, new module `variables.rs`): per
+  (task, instance) pair whose bound package declares variables, per variable in declaration order,
+  the application's entry row of its name in its `session.resource_targets` v3 record (read from
+  the evaluation's facts, which the host projects from its memory store; no ledger read is added),
+  judged at use by the contract crate's `PackageVariable::judge`, else the package default. No
+  third source; nothing computes or rewrites a value. Resolution does not read
+  `scheduling.remedy.enabled`: the host adds the values to the remedy plan
+  (`RemedyPlan::with_variable_values`) whether remedies are on (the plan of `plan_remedies`) or
+  off (an empty plan).
+- *What does not apply*: the host's remedy table (`build_table`, once per catalog generation, per
+  procedure manifest and at the table's interval) runs the contract crate's `check_root_variables`
+  with `IrreversiblePackages` per game over the packages it reads (`VariableTable::build`, each
+  package once in catalog order, no `goals.json`, a task whose package location is unreadable
+  counting as an unreadable package of its game) and keeps, per game, each name that does not
+  apply with its word (`variables_not_applying`); such a variable is handed its default whatever
+  is set. No second copy of a rule. Fix round 1 (below): with a composed standard pack the
+  scheduler workbench judges each game root whole instead, `goals.json` included; the remedy
+  table's judgement is what a configured catalog reads.
+- *The overlay* (the kernel's `RunParameters`, which gains typed variable values): each variable as
+  `session.dispatch.parameter.<name>`, a `choice` a string, a `switch` a boolean, an `integer` an
+  integer, an `ordered` variable a record list of rows `{key, rank}` from 1
+  (`PackageVariable::fact_value`), after the parameters, at the parameters' instant. A policy run
+  reads the dispatched values (`dispatched_variable_values`, judged again under the prepared
+  package's declaration); a run without a dispatch the defaults (`default_run_values`; the host,
+  the offline replay); the Lab's scan replay a given value (`given_variable_values`,
+  `--variable <name>=<json>`). `default_run_parameters` keeps answering the parameters of
+  `provides` alone.
+- *The record*: `policy_dispatch_parameters` gains `variable_values`, one record per variable,
+  `{variable_name, variable_source, value_json?, set_unix_ms?, set_channel?, variable_problem?}`;
+  the host reads `value_json` back from the run's own reason chain
+  (`fact_refresh::dispatch_variable_values`).
+- *The warning*: `goal_value_not_applied` (runtime-host), once per (application, name, declaration
+  sha256) after a start, kept in memory (`PolicyHost::variable_warned`), written by the cycle's
+  recorder as a Warning `runtime.failed` record as `policy_fact_rows_exceeded` is.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| V2-1 | `policy_dispatch_parameters`'s optional value `variable_values` (records) and the keys `variable_name`, `value_json`, `variable_source`, `set_unix_ms`, `set_channel`, `variable_problem` | outcome values of an existing info code (persisted in the dispatch's reason chain) | V2 | the policy crate | absent for a package without variables; fix round 1: `value_json` a `json` key (V2-6), at most 1024 bytes, absent only for a longer default |
+| V2-2 | `goal_value_not_applied` (warning / none; `instance_id`, `task_id`, `package_id`, `variable_name`, `declaration_sha256`, `variable_problem`, all required) and the key `declaration_sha256`; the domain `goal_value_` (runtime-host) | new code in an existing record form (`runtime.failed`, Warning) | V2 | the host's policy cycle | once per (application, name, declaration, and since fix round 1 the stored value's sha256) per start; nothing refused |
+| V2-3 | the vocabularies `variable_source` (`set`, `default`) and `variable_problem` (fix round 1: `not_an_option`, `out_of_range`, `off_step`, `type_changed`, `keys_removed`, `count_out_of_range`, `key_repeated`, `keys_left_out`, `entry_unreadable`, `irreversible_by_root`, `package_unreadable`, `goals_unreadable`, `declaration_conflict`, `goal_name_conflict`, `name_out_of_limits`, `cap_range`, `root_unchecked`; `value_too_long` removed) | vocabularies (2 + 17 words) | V2 | the contract crate | one word per situation; `goal_name_conflict` and `goals_unreadable` arise only where a `goals.json` is read (with a composed standard pack, since fix round 1); `keys_left_out` marks a value applied in part and is never warned |
+| V2-4 | the overlay `session.dispatch.parameter.<name>` of a variable, typed | run overlay (never stored) | V2 | the host, the offline replay, the Lab | a package without variables overlays exactly its parameters |
+| V2-5 | `actinglab replay --variable <name>=<json>` (the row `replay` of `lab-operations.json` gains `variable`) | Lab option | V2 | the Lab | refusals as `--parameter`'s |
+| V2-6 | (fix round 1) the key type `json` of the key table: the compact JSON text of a value, at most 1024 bytes, no control character (`KeyKind::Json`; the outcome guard's scalar types) | key table type | V2 fix round 1 | the contract crate | one key, `value_json`; on the wire a string as before |
+| V2-7 | (fix round 2) `goal_value_package_unreadable` (warning / none; `instance_id`, `task_id`, `package_id`, all required), in the domain `goal_value_` | new code in an existing record form (`runtime.failed`, Warning) | V2 fix round 2 | the host's policy cycle | once per (application, package, state of the package's files) per start, memory only; the dispatch carries no value and its run reads the defaults; composer mode only |
+| V2-8 | (fix round 2) `standard_pack_goals_not_applied` (warning / none; `game`, `path`, `goals_failure`, all required; its cause the reader's first problem, a `standard_pack_root_invalid`, or the operating system's failure), the key `goals_failure` and its vocabulary (`refused`, `unreadable`, `crates/runtime-host/src/codes.rs` `GoalsFailure`) | new code, key and vocabulary (2 words), recorded as the workbench's other root records | V2 fix round 2 | the scheduler workbench | replaces fix round 1's `standard_pack_root_invalid` and `standard_pack_root_unreadable` for `goals.json`; once per sha256 of a refused file, once until an unreadable one reads again |
+| V2-9 | (fix round 2) the optional fields `value_sha256` (hash), `value_bytes` (integer) and `value_json_left_out` (boolean) of a `variable_values` record, three new keys | outcome values, in the ledger record of a dispatch's reason only | V2 fix round 2 | the host's dispatch event builders (`recorded_reasons`, the policy crate's `recorded_dispatch_parameters`) | only a reason whose record form would pass `ENVELOPE_BODY_BUDGET` (32 640 bytes) carries them, for the longest values until it fits; the run reads the whole values from memory |
+
+**What earlier readers do with such a reason.** No persisted shape changes, as SS-6 (§1.218) added
+values to the same reason: the ledger of 0.12.60 decodes a `policy_dispatch_parameters` with
+`variable_values` as an `Outcome`, whose values every 0.12 reader keeps as a map without a key
+check; the console and the Lab of 0.12.60 show the values they know. `goal_value_not_applied` is a
+code a released reader does not know, read as an unknown spelling (`CodeStr`), as every new code.
+
+**Not moved.** `ledger`, `runtime-client`, `actingd-config`, `runtime-outcomes` and `package` do
+not move: an optional value of an existing outcome, a new warning in an existing record form, no
+request or answer changes, no configuration key. Giving a live run without a dispatch a value
+needs a member on a request, which is slice V3's with its `runtime-client` revision; in this slice
+such a run reads the defaults.
+
+**At deploy.** Nothing changes for an installation in use: no released pack declares `variables`,
+so no dispatch carries `variable_values`, no overlay changes and no warning is written. A pack that
+declares variables runs on its defaults until an entry of a variable's name is written with
+`targets set` and `entries`; the next dispatch reads it.
+
+**Limits.** (V2 as first written; fix round 1 below replaces this for a composed standard pack.)
+The Runtime judges the root over the packages its catalog binds, grouped by the instances' games;
+a package of the root no catalog task binds is not read (`standard-pack check` reads the whole
+root), and the Runtime reads no `goals.json`. The table is the remedy table's, so a package
+changed in place without a new catalog or manifest is judged by its earlier declaration until the
+table is built again; the kernel then judges the dispatched value under the package as prepared
+and reads the default for a value it no longer takes, while the record says what was dispatched.
+A default longer than 256 bytes is recorded without `value_json`, and a set value longer than
+that is `value_too_long` (fix round 1: 1024 bytes, and the word is gone).
+
+Tests (policy, exec, host and apps gate rows "#463 V2"): the policy crate's
+`gate_463_v2::v2_a_set_value_beats_the_default_and_rides_the_selected_dispatch_with_remedies_off`,
+`v2_a_set_value_that_no_longer_fits_reads_the_default_with_its_word`,
+`v2_a_variable_that_does_not_apply_reads_its_default_whatever_is_set` and
+`v2_a_package_without_variables_gives_the_reason_chains_of_before`; the execution kernel's
+`contained_task::gate_463_v2::v2_each_kind_is_overlaid_with_its_type_and_passes_the_up_front_check`,
+`v2_a_choice_variable_gates_an_enum_string_field`,
+`v2_an_integer_variable_is_the_threshold_of_an_integer_compare`,
+`v2_a_switch_variable_reads_as_a_boolean`,
+`v2_an_ordered_variable_ranks_the_candidates_through_keyed_fact` and
+`contained_task::gate_390_out2::v2_a_fact_cap_reads_an_integer_variable_under_the_parameter_prefix`;
+the host's `gate_463_v2::v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again`;
+actinglab's `gate_463_v2_replay::v2_replay_refuses_an_undeclared_or_unfit_variable_and_takes_a_fit_one`.
+No existing test is adapted, no golden changes and no test leaves the gate map.
+
+**Fix round 1** (after the independent review; coordinator brief `rd-1115/brief-1728-fix1.md`).
+
+- *The record's capacity no longer decides what a run reads.* `value_json` is a key of the new
+  type `json` (V2-6), whose bound is the goal store's, 1024 bytes (`JSON_MAX_BYTES`,
+  `MAX_VARIABLE_VALUE_JSON_BYTES`); `value_too_long` is gone, since every value a run is to read of
+  a set value fits. An earlier reader is not refused: an outcome's values travel and are stored
+  untyped, every 0.12 reader keeps them as a map, and a build before 0.12.61 does not know the key
+  `value_json` at all, whatever its type (its codes-only projection drops a key its table lacks).
+- *The judgement of "does not apply" is the root check's, over the whole root* (the
+  coordinator's ruling). With a composed standard pack the scheduler workbench runs
+  `check_root_variables` and `variables_not_applying` where it already reads every package of a
+  game root's registry (`read_declarations`), held packages included, against the names the root's
+  `goals.json` takes, read with the contract crate's reader (`RootGoals`, kept in what
+  `read_declarations` answers); `goals.json` is marked with the root files, so it, `schedule.json`,
+  `bundle.json` and a package's declaration files changing are read again at the next check (at
+  most once per `standard_packs.check_interval_ms`). The workbench keeps each game's judgement
+  (`RootVariableJudgement`) and the table built from them (`VariableTable::of_roots`); the policy
+  cycle reads it from memory right after the check (`standard_pack_variables`,
+  `PolicyEvaluationContext::standard_pack_variables`). A refused `goals.json` is recorded once per
+  sha256 (`standard_pack_root_invalid`, its first problem), one that cannot be read once until it
+  reads again (`standard_pack_root_unreadable`) and keeps every name of the root from applying
+  (`goals_unreadable`). Without a composed standard pack the remedy table's judgement stays what a
+  dispatch reads, as V2 built it.
+- *One word, one cause.* `variable_irreversible_by_root` that only an unreadable package of the
+  root causes is `package_unreadable`; `irreversible_by_root` names a declaring package that
+  provides, or lists, a capability marked irreversible (`variables_not_applying` takes the rule's
+  `IrreversiblePackages`).
+- *Also.* The warning's "once" counts the stored value's sha256 too (`WarnedVariableValue`,
+  memory only). A stored row whose setter cannot be read is not applied (`entry_unreadable`). An
+  `ordered` value applied in part is marked `keys_left_out`, source `set`, and not warned. Each
+  declaration's sha256 is computed when the table is built. Known limit: a package replaced
+  between a dispatch and its run's start may read the default while the dispatch's record says
+  `set`. The scan replay's two given lists travel as a named value (`GivenValues`).
+
+**Rollback below 0.12.61.** A build of 0.12.60 reads a `session.resource_targets` v3 record that
+holds entry rows for variables as G-R2a made it read one: its targets as before, the entry rows
+kept and read by nothing (a build before 0.12.60 reads a v3 record as unreadable,
+`unsupported_schema_version`, and runs that instance on base scheduling,
+[resource-targets.md](resource-targets.md), "An older Runtime"); a forward deploy reads the entries
+again. It refuses a package that declares `variables` at every admission path
+(`resource_declaration_invalid`, `UnknownField` at `/variables`, before the kernel's reader,
+[package-variables.md](package-variables.md), "Interface"), so such a package does not run; its
+installer refuses a bundle that declares `package` [14, 14] at its `package` edge. Its ledger
+readers decode a `policy_dispatch_parameters` that carries
+`variable_values`, and a `goal_value_not_applied` record, as received outcomes: values kept as a
+map without a key or catalog check, codes-only projections dropping the keys they do not know, the
+code an unknown spelling; its start reads a dispatch's `run_parameters` and schedule values from
+such a reason and ignores `variable_values`. Nothing is refused and nothing is rewritten.
+
+Fix round 1 tests: the policy crate's
+`gate_463_v2::v2_fix1_a_value_longer_than_256_bytes_is_applied_and_recorded_whole` and
+`v2_fix1_a_stored_row_whose_setter_cannot_be_read_is_not_applied_with_its_word`; the host's
+`gate_463_v2::v2_fix1_the_whole_root_keeps_a_variable_from_applying` and
+`v2_fix1_a_package_replaced_in_place_is_judged_with_its_new_declaration`. The slice's own tests
+are adapted where the round changes what they pin: `value_too_long` leaves the policy test of the
+invalid values, whose ordered value applied in part is now `keys_left_out` and which checks the
+stored value's sha256; the test of what does not apply says `package_unreadable` for an unreadable
+package and keeps `irreversible_by_root` beside one; the host's first test asserts what the run's
+snapshots are overlaid with (the gate seam `run_parameters_for_test`) and that another value not
+applied is warned again; actinglab's test asserts the given value replaces the default in what
+the scan replay overlays (`scan_replay_parameters`). No test of main changes; no golden; no test
+leaves the gate map.
+
+**Fix round 2** (after the review of fix round 1; coordinator brief `rd-1115/brief-1728-fix2.md`).
+
+- *A root that fails its check reads every variable at its default* (the coordinator's ruling:
+  the texts are right). Each check of the workbench builds the table again with the games it notes
+  as uncomposed (their root failed its check, or their composition was refused or not activated:
+  the games whose instances' target records the cycle leaves out) unjudged
+  (`VariableTable::of_roots(roots, unjudged)`, `VariableTable::root_word`), so each variable of
+  their instances reads its default with `root_unchecked` (V2-3, its meaning widened to "no check
+  judges the game's root now"), the record says so and `goal_value_not_applied` is written once.
+- *One copy of the rules of "does not apply"*: the contract crate's `judge_root_variables`, which
+  takes the goal document as its reader read it (`RootGoalDocument`: absent, accepted, refused,
+  unreadable) and gives per name a `RootVariableVerdict` (its packages, its declaration, and a
+  `NotApplyingCause`, the word with its `VariableCause`). The workbench, the table without a
+  composed standard pack and `standard-pack check` call it; `standard-pack check` answers a
+  `goals.json` it cannot read with its usage error naming the file, as before, and so judges no
+  root otherwise than the Runtime. `IrreversiblePackages` keeps per package the capabilities that
+  make it irreversible (`irreversible_capabilities`); its rule is unchanged.
+- *A `goals.json` that is not applied has its own code* (V2-8): `standard_pack_goals_not_applied`
+  with `goals_failure` `refused` or `unreadable`, in place of `standard_pack_root_invalid` and
+  `standard_pack_root_unreadable`, which say of every other root file that the root is not
+  composed. `RootGoals::Unreadable` keeps the operating system's failure.
+- *A dispatched package the workbench cannot read* (V2-7) is warned, `goal_value_package_unreadable`;
+  the table keeps each unreadable package of a root with the state of its files
+  (`RootVariableJudgement::unreadable_packages`, `VariablePlan::unread`), and a composed task of a
+  game the workbench never read is one too (`ROOT_NEVER_READ`).
+- *The record's size* (V2-9): a dispatch's reason is one outcome record of at most 32 640 bytes
+  (`ENVELOPE_BODY_BUDGET`, now public), in an event of at most 128 reasons and no byte bound of
+  its own. Sixteen values of 1024 bytes alone take about 20 KB; beside 64 run parameters of 64-byte
+  names and values they pass the bound by about 600 bytes. The host's two builders of a dispatch's
+  event data (`recorded_reasons`) record such a reason with `value_sha256`, `value_bytes` and
+  `value_json_left_out` in place of the longest values' text until it fits; the chain in memory,
+  which the run reads, is unchanged.
+- *What the next slice reads*: `RuntimeHost::standard_pack_goal_roots` (each root's
+  `StandardPackGoalRoot`, `goals: RootGoals` and `variables: RootVariableJudgement`, kept in the
+  workbench's state from one check to the next, with the table), `RootVariableJudgement::verdicts`
+  and `unreadable_packages`, `VariableTable::root_word` and the policy crate's public
+  `resolve_variable` (the dispatch's own function), `StoredEntry` and `stored_v3_entries` (public).
+- *Small*: the v3 reader and the entries a run's variables read take the channels from one table
+  (`SET_CHANNELS`, `set_channel`), so `entry_unreadable` cannot drift from the reader; the three
+  sentences that said no reader of the Runtime opens `goals.json` now say which release
+  (`contracts/README.md`, `component-interfaces.md` row 12, the architecture test's comment), and
+  the marks the workbench compares name `goals.json` ([standard-pack-schedule.md](standard-pack-schedule.md)).
+- *The host's fix round 1 test* `v2_fix1_the_whole_root_keeps_a_variable_from_applying` failed on
+  CI at its first case: the fixture's held package marked `cap_x` irreversible without the
+  `parameters` the package reader requires of an irreversible capability, so the reader refused it
+  and the root counted it unreadable (`package_unreadable`); a real root's package in that state is
+  unreadable too (standard-pack-schedule.md, "Limits at deploy"). The fixture declares the
+  parameter now; the assertion is unchanged.
+
+**Rollback below 0.12.61** is as fix round 1 says; a build of 0.12.60 reads the two new codes as
+unknown spellings and a record's three new fields as values it keeps in its map.
+
+Fix round 2 tests: the policy crate's
+`gate_463_v2::v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause` and
+`v2_fix2_a_reason_past_the_record_bound_is_recorded_with_hashes_and_kept_whole`; the host's
+`gate_463_v2::v2_fix2_a_root_that_fails_its_check_reads_each_variable_at_its_default` and
+`v2_fix2_a_dispatched_package_the_workbench_cannot_read_is_warned_once`. Adapted: the fixture of
+the host's `v2_fix1_the_whole_root_keeps_a_variable_from_applying` (above). No golden; no test
+leaves the gate map.
+
+**Completed in #1731** (the review of fix round 2 found `0eb82c5a` mergeable with no must-change
+and left five things, tests and texts, which go in with V3, the two pull requests merging
+together; coordinator brief `rd-1115/brief-1731-fix1.md`, items 10 to 14). No code of V2 changes.
+
+- *Tests* (the host's `gate_463_v2`): `v2_fix3_a_reason_past_the_record_bound_is_whole_for_the_run_and_shortened_in_the_ledger`
+  (a dispatch whose reason passes the bound: sixteen 1024-byte values and 64 run parameters; the
+  run's values whole; the intent's and the admission's records in the recorded form, so neither
+  builder of a dispatch's event data can go back to the reasons as they are without a test
+  failing); `v2_fix3_a_goals_json_not_applied_is_recorded_once_per_content_with_its_cause`
+  (`standard_pack_goals_not_applied` for each `goals_failure` with its cause, once per content);
+  `v2_fix3_a_package_whose_files_change_state_is_warned_once_more` and
+  `v2_fix3_a_dispatched_package_of_a_root_not_read_since_the_start_is_warned`
+  (`goal_value_package_unreadable`'s two cases the fix round's test left out).
+- *Texts*: the contract crate's `standard_pack_goals.rs` says the workbench, check-config and
+  `actingd suspended` open `goals.json` (through `read_declarations`); the texts of `root_unchecked`
+  (the catalog's word, `goal_value_not_applied`'s description, the contract's `VariableProblem`,
+  package-variables.md's table) say what `note_uncomposed` does: a check adds to the note, and only
+  a check whose composition of every game succeeds lifts it, so a sound root that was judged reads
+  `root_unchecked` too while the generation in force does not hold its present files.
+- *Two states the coordinator confirms as they are*, written into package-variables.md: such a
+  sound root's set values read their defaults with `root_unchecked` and the warning once, and apply
+  again when a composition succeeds; a game whose `schedule.json` is refused and that falls back to
+  its earlier fragment counts as composed, its set values applying.
+
+### 1.383 Slice V3 (0.12.61): an application's goals are read and set by name; `runtime-client` revision 9 (Workflow #463 V3, which is Workflow #455 G-R2b with the variables in it; the owner asked that a person in the console and an agent through the Lab set an application's goals, board #455, and that a variable's number may come from a person or an agent, board #463; the designs `rd-1114/455-goals-design-final.md` §3.5, §3.6, §3.9 and the row G-R2b of §4 and §5, and `rd-1114/463-l4-design.md` section D, section E's table, the row V3 of section G and "The coordinator's rulings on I"; the coordinator's rulings in the work order and its two messages during the slice (the join of the parsed `goals.json` and of "does this variable apply" is #1728's fix round's; a declaration's `default_origin` is shown as declared), not the owner's words; coordinator work order `rd-1115/brief-463-v3-goals-view-edit.md`, on the head `29a0cbe4` of #1728, then #1728's fix round `020a5681` merged)
+
+**Interface** ([runtime-interface.md](runtime-interface.md), "Goal request kinds";
+[component-interfaces.md](component-interfaces.md), `runtime-client` 9). The read
+`GoalView {instance_alias}` answers `GoalViewed {view}`; the instruction
+`EditGoal {instance_alias, expected_version?, op}`, `op` `{kind: set, name, value_json}` or
+`{kind: clear, name}`, answers `GoalEdited {version, event_id, replayed, replaced_target_id?}`.
+Both are general (any channel), both on the console's list (`ui_allows`, the Lab table's
+`ui_kinds`). `runtime-client` [3, 9]; `ledger`, `package` and `actingd-config` do not move.
+
+**The page.** Every value is read from memory; no package and no file is read for it (the owner's
+ruling; fix round 1, item 8). Its sources: what the scheduler workbench keeps of the game root
+from one check to the next (`RuntimeHost::standard_pack_goal_roots`, #1728's fix round 2: the
+root's `goals.json` as its reader read it, the judgement of its variables over the whole root and
+the variable table a dispatch reads), the remedy table the last evaluation built (the bound
+packages and what they provide; only when it is the one of the active catalog and of the procedure
+manifest in place, as the next evaluation keeps it: catalog hash and manifest digest), the
+projection, the resource target view and the record. Until they are all in memory (after a start,
+before the workbench's first check of the root and the first evaluation; with a composed standard
+pack also while the workbench holds no check of the game root) the declaration state is
+`not_checked_yet` and the page lists nothing. Without a composed standard pack the variable table
+is the remedy table's and the state is `not_read`; with one the state is `absent`, `accepted`,
+`refused` (its sha256, its first `standard_pack_problem` and pointer) or `unreadable`. The entries:
+each entry of an accepted file in its order, as its reader read it; a resource entry with the
+target on its pool, its reading and its gap; a tier `not_built` with its default; a placement with
+its variable, or `not_offered` when no package the active catalog binds on the application declares
+it (with what the root declares of it); then each variable of the bound packages no entry places,
+in the order the packages declare them, a variable two packages declare once with both. A
+variable shows its declaration (with `default_origin` as declared), the bound packages that declare
+it (`packages`) and the root's other packages that declare it (`unbound_packages`), its default,
+the stored value and who set it, and the value the next dispatch hands its run through the run's
+own resolution (`plan_variable_values` over the same projection and table): its source, its
+`variable_problem` word as the run gives it, and, when that word is the root's judgement's, its
+detail (`variable_cause`, from the root's `RootVariableVerdict`), `not_applied` when the run reads
+the default with a word or the variable does not apply (`VariableTable::root_word`, the word a
+dispatch reads), `in_effect` otherwise (`keys_left_out` included), and the stored keys the run
+leaves out. Then the orphans (stored values no tier, placement or listed variable shows, a value
+under a heading's name included), the remedy parameters read-only with what the last evaluation
+resolved, the targets on no declared pool, the resource target view and the version (the sequence
+of the record's `fact.published`, `0` without one).
+
+**The edit.** The page read the same way; then, in one hold of the fact write gate: the version
+compared (`fact_observation_version_conflict` with `current_version`), and only then the checks
+(`crate::goals::check_edit`), against the page and the record read there, which they are about to
+change, so a request of another version is a version conflict whatever its value (the
+coordinator's ruling: the checks read the state they change); a refusal is `goal_value_invalid`,
+Denied, nothing appended. A variable's value is judged by the dispatch's own function
+(`resolve_variable`, the application's stored entry with the setter of the request and no word of
+the root), so `set` takes exactly what a dispatch applies whole; its word is said as a write
+(`type_changed` is `wrong_type`; `not_an_option`, `keys_removed` and `keys_left_out` are
+`not_an_option` with the item's pointer). A `clear` removes what is stored under the name whatever
+its entry is. Then one row replaced or removed (`edit_goal_record`: every other row as stored; a v2
+policy's targets become v3 targets with its lifetime; a record left empty is the withdrawal; the
+whole record read back by the v3 reader), one `fact.published` keeping the request's origin. The
+row names the Runtime's clock at the request, the request's channel and, for the Lab, the initiator
+its connection declared. A resource entry's `set` replaces the target on its pool whatever its id
+and names it; its `clear` removes it. `fact_observation_not_newer` as for every observation. A
+value's canonical text holds at most 1024 bytes; no 256-byte bound is added.
+
+**Codes.** `goal_value_invalid` (error, runtime-host, prefix `goal_value_`): values `goal_problem`
+(required), `goal_name`, `json_pointer`, `range_min`, `range_max`, `pool_id`, `variable_problem`.
+`request_goal_view_completed` and `request_edit_goal_completed` (success, contract). Keys
+`goal_name` (token) and `goal_problem`. The closed vocabulary `goal_problem`, one word per
+situation, 23 words (21 until fix round 2): `name_unknown` (no entry of the accepted file, no variable of a bound package,
+no remedy parameter, no stored value or target of the name, no variable of the game root, or a
+name outside the form; `entry_unknown` was the same situation and is not a word), `holds_no_value`
+(a heading or a note), `tier_not_built`, `remedy_parameter` (read-only: never written, an
+irreversible one included), `variable_not_applying` (with its `variable_problem`), `not_offered`
+(fix round 1: declared in the game root, by a placement or a package of it, but by no package the
+active catalog binds on the application), `value_not_json`, `wrong_type`, `out_of_range`,
+`off_step`, `not_an_option`, `key_repeated`, `count_out_of_range`, `value_too_large`,
+`pool_not_targetable`, `pool_unvalued` (the pool's valuation lacks the step or the importance a
+goal by name does not carry), `deadline_unsupported` (`by_unix_ms`, a later slice's),
+`value_not_set` (a clear of a known name that holds nothing), `record_unreadable` (a v1 policy or
+rows no reader reads), `record_out_of_limits` (a 17th target, a 97th entry), `not_checked_yet`
+(fix round 1: what the page is judged by is not in memory yet; send the request again after the
+next check), `root_failing` and `no_schedule` (fix round 2: a game root no check since the start
+could read; a game without a standard pack root with `schedule.json`). The view's own states (no
+outcome words): the declaration's `not_checked_yet`, `root_failing` and `no_schedule` (fix round 2)
+and the entry state `not_offered`, named as the refusals are.
+
+**The Lab.** Rows `goals` (option `package`), `goals get`, `goals set`, `goals clear` (core,
+served in the process, `lab_ops::core_ops`) and `package variables` (core, actinglab's own
+command: one package directory's control declaration, no Runtime); MCP tools `ac_goals`,
+`ac_goals_get`, `ac_goals_set`, `ac_goals_clear`, `ac_package_variables`; slice `463-V3`. Command
+inventory 105 (46 arms; on main at `d0bce861` 104 and 46, since #467 RPT-1 took `report export`'s
+placeholder for a core row), the strict lists, the capability table, the help options, the dry-run
+preview, the core reads (35 with RPT-1's), the served rows of `lab-two-entries.md` (on Windows 160:
+54 by `core_ops`, 39 by the rescue module, 67 by children; elsewhere 121) and both READMEs moved
+with them.
+
+**Tests.** Policy `gate_463_v3` (the record an edit writes and the page's reading of it, the
+bounds); host `gate_463_v3` (each situation's word, the view's list of an accepted file, and
+five host scenes: a value set by name is the next dispatch's with a conflict, a refusal, not
+newer, the console's gate and a restart; an other target; a pack update's rows of §3.6, each line
+what the next dispatch hands its run; fix round 1: the root's `goals.json` accepted and then
+refused, with the page not checked yet before the first check and the remedy parameter; a
+variable the root keeps from applying, listed with its cause and refused); the MCP server's
+`mcp_goals_rows_are_the_command_lines` (the four rows and `package variables` answer the command
+line's lines, each call refused) and, fix round 1, `mcp_goals_rows_accepted_are_the_command_lines`
+(the same, each call taken, on seven connections). Adapted, as the work order
+allows: the console list of `gate_434_lab6s3` (two kinds more), `gate_434_lab5a`'s core rows (one
+more), the interface table's expected rows, the interface pins (`runtime-client` [3, 9], fix round
+1: `gate_429_r0b_pairing` too). No golden; no test leaves the gate map.
+
+**Fix round 1** (after the review; coordinator brief `rd-1115/brief-1731-fix1.md`, on #1728's
+fix round 2 `0eb82c5a`).
+
+- *The build*: the policy crate's two borrows of a list held across a guard that read its length
+  (`edit_goal_record`), the host test's closures over temporaries, and the `runtime-client` pin of
+  `gate_429_r0b_pairing` ([3, 9]) and of `lab-two-entries.md` §10.
+- *The goal document* (item 5): taken from the workbench's state; a placement no bound package
+  declares is `not_offered` in the view and for `set`; a `clear` removes a stored row whatever its
+  name's entry is.
+- *The cause* (item 6): `variable_cause` and `unbound_packages`, from the root's verdict.
+- *One judgement* (item 7): the write's own copy of the type rules (`check_variable`) is gone;
+  `resolve_variable` judges a written value. `VariableTable::declared_variables` stays, rewritten
+  on the dispatch's own lookup: without a composed standard pack it is the only memory that holds
+  a task's variables (`RootVariableJudgement::package_variables` covers a composed root only), and
+  V3's `VariableTable::not_applying` is gone for #1728's `root_word`.
+- *Memory only* (item 8): no table is built from the packages for a view; `not_checked_yet`.
+- *Texts*: the checks run under the gate, after the version comparison (here, in
+  runtime-interface.md and in the catalog's text of `goal_value_invalid`); package-variables.md
+  says V3 is built and that giving values to a run without a dispatch is the next slice.
+
+**Fix round 2** (after the review; coordinator brief `rd-1115/brief-1731-fix2.md`).
+
+- *The build*: the two reads of the instance fact store in `host/goals.rs` bind the store's lock
+  in a block of their own and pass it as `&store`, held only for the read (the edit's publication
+  takes the lock again); the location `goal_view` gets its prefix's domain, `goal_` (runtime-host),
+  which CI's G8 asked for.
+- *A count*: `mcp_goals_rows_accepted_are_the_command_lines` asserts seven connections, the
+  script's.
+- *One word per cause* (item 3): `not_checked_yet` only while what the page is judged by is not in
+  memory yet; `root_failing` (the workbench's checks since the start could not read the game root;
+  the declaration names the file, the reader's first problem and pointer or the `io_kind`) and
+  `no_schedule` (no standard pack root with `schedule.json`), in the declaration state and in the
+  refusal of `set` and `clear`, a resource goal that needs no declaration included. The workbench
+  keeps, from its last check that read the roots, why it keeps nothing of a game in use
+  (`StandardPackGoalRoots::unread`, `RootUnread`): memory only, as the rest of the page.
+- *`goals get`* answers the page's `declaration` beside the entry; a page not checked answers
+  its state with its word and no entry, on both faces, never `not_recognised`.
+- *Small*: the catalog's indentation after `report_output_root`; the test of a `goals.json` not
+  applied once per content rewrites the control declaration one byte longer, so the root is read
+  again for certain.
+- *Tests*: host `gate_463_v3`'s pure checks hold the three words; `v3_fix2_a_root_no_check_since_the_start_read_answers_root_failing`.
+
+**Fix round 3** (coordinator brief `rd-1115/brief-1731-fix3.md`): the MCP test's made-up page gains `path` and `io_kind`; actinglab's words hold a positional word its type refuses on a line read with `--instance` until the words are counted, so `goals set <inst> <name> <value> --instance <x>` is refused `repeated` as `lab-two-entries.md` §9.3 says (it was `wrong_type`); `gate_434_cli_in` writes a number for a `json` positional; new host test `v3_fix3_a_game_root_without_schedule_json_answers_no_schedule`.
+
+**At deploy.** Nothing to do beyond the build: no configuration key, no store shape change. A
+console that sends either kind needs a Runtime of `runtime-client` 9; an older Runtime drops the
+connection. After a start the goal page answers `not_checked_yet` until the workbench's first
+check and the first evaluation; a caller asks again. Fix round 2: a page answering `root_failing` or
+`no_schedule` waits for the game root to be repaired or given its `schedule.json`.
+
+**Rollback below 0.12.61.** A build before 0.12.61 cannot decode either kind and drops the
+connection; the record an edit writes is a v3 record G-R2a's builds read.
+
 ### 1.384 Slice #463 R2 (0.12.61): a stopped recording takes an ending from a frame, and `record stop` generates it (Workflow #463; the owner's requirement on board #463 that the business is done with its last press, that every declared ending is a normal end and that a rare ending can be added later without recording again; the design note `rd-1114/463-l3l5-design.md`, its summary, sections B, C.3, E "R2 (L5b)" and F items 15 to 17 and 20, with "The coordinator's rulings on G" 4 and 5 and the owner's second default, read on main `d0bce861` (the train 0.12.61c, K2 and R1 merged); the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-r2-record-ending.md`)
 
 1.384 is the number the coordinator assigned this section (1.382 and 1.383 are open pull requests',
@@ -26953,6 +27361,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W21 | the player workbench's request kinds, results and members (§1.213 R0-1 to R0-4, R0-8, R0-10; §1.216 R0C-3, `PackScheduleView`), and the read `StartReport` (§1.216 R0C-4) | runtime-client 3 | #429 R-0, R-0c | declared [2, 3] in 0.12.30; each kind answers `not_implemented` until its slice; `RuntimeInstanceStatus.activity` is the status member W13 warned about: it and R0-8's answer members stay absent until a release raises `min` to 3 with the console that reads them; R-0b fills `activity` for all kinds and raises `min` to 3 in 0.12.36 (§1.238) |
 | W22 | the player hold's request kinds `AcquirePlayerHold`, `ReleasePlayerHold`, their results, the status members `player_hold`, `player_hold_operation`, `control` and the start report members `player_holds_restored`, `player_holds_dropped`, `player_hold_not_durable` (§1.233 R7A-1 to R7A-3) | runtime-client 4 | #429 R-7a | declared [2, 4] in 0.12.35; both kinds answer `not_implemented` until R-7b; every new member is absent until R-7b, which raises `min` to 4 ([player-hold.md](player-hold.md), "Interfaces and rollout") |
 | W23 | `RuntimePerformanceStatus.memory` and `.vision` (§1.280 PR-1, PR-2; `since` 0.12.41) | runtime-client 6 | #407 PERF-READ | two optional members of W15's status (`deny_unknown_fields`), read from memory: the process's counters and the parts its owners hold, and each vision model's lock waits and inference times; declared [3, 6] in 0.12.41 with `min` unchanged; a reader whose `max` is below 6 refuses an answer that carries them (`runtime_receipt_decode_failed`), and this build fills `memory` on every answer; on PerformanceStatus, not on Status, as W20 |
+| W24 | `RuntimeOperation::GoalView { instance_alias }` → `RuntimeResult::GoalViewed { view }`; `RuntimeOperation::EditGoal { instance_alias, expected_version?, op }` → `RuntimeResult::GoalEdited { edited }` | runtime-client 9 | #463 V3 | §1.383; both on the console's list |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).

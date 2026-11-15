@@ -86,6 +86,9 @@ fn word_of(param: &Param) -> String {
         ParamType::Integer | ParamType::Unsigned => "5".to_owned(),
         ParamType::RequestId | ParamType::RunRef => REQUEST.to_owned(),
         ParamType::Enum(words) => words[0].clone(),
+        // Workflow #463 V3 fix round 3 (#1731): a value as JSON, a number as a person writes one
+        // (`goals set`'s `<value>`, the first required positional of this type).
+        ParamType::Json => "7".to_owned(),
         _ => format!("neutral-{}", param.name.replace('_', "-")),
     }
 }
