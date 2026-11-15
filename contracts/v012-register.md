@@ -30641,11 +30641,14 @@ now show `details.missing`). No code, word or key added.
 
 **Stage two, train 1** (0.12.65; coordinator work order `rd-1115/brief-463-train-s2.md`). Pull
 request #1766 carries this slice, #463 S2-13 (§1.426) and #463 S2-5 (§1.427), merged on main (the
-stage-one train with its last fix round) in that order. Release 0.12.64 was cut without the three,
-so their labels say 0.12.65. Kept whole on every side: the register (main's sections, then §1.425,
-§1.426 and §1.427), the exec gate map, the operation table's rows `record ready` and `record
-frames`, the capability table, the dry-run declarations and their contract row, the Lab's MCP
-manual, and the lists the three append to: `engine::COMMANDS` is 70, `own_flags::READ_LIST_ROWS`
+stage-one train with its last fix round) in that order, and then #463 S3-11 (§1.418, pull request
+#1767, with the unstable host tests FLK-15 and FLK-16 in `ci/flaky-tests.toml` and the workflow's
+two lines as it has them). Release 0.12.64 was cut without the four, so their labels say 0.12.65.
+Kept whole on every side: the register (main's sections, then §1.418, §1.425, §1.426 and §1.427),
+the exec gate map, the operation table's rows `record ready` and `record frames`, the capability
+table, the dry-run declarations and their contract row, the Lab's MCP manual, the catalog (the
+outcome-code index regenerated with S3-11's codes: 3977 codes, 3889 active), and the lists the
+three stage-two slices append to: `engine::COMMANDS` is 70, `own_flags::READ_LIST_ROWS`
 29 (so `gate_434_lab5b4`'s commands are 33), `words::BUILT_SLICES` and the MCP server's
 `ACTINGLAB_SLICES` 14 each. `record ready` meets S2-5's boxes in two tests of this gate, on the
 recording S2-5's test of the whole of stage two makes, with that gate's bench:
