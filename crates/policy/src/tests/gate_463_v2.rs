@@ -14,9 +14,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use actingcommand_contract::outcome::{ENVELOPE_BODY_BUDGET, Outcome, Record, RemedySource};
 use actingcommand_contract::{
-    DeclaredCapabilities, PackageVariable, RuntimeChannel, VariableProblem, VariableSource,
-    parse_package_variables,
+    DeclaredCapabilities, GoalType, IrreversiblePackages, NotApplyingCause, PackageVariable,
+    RootGoalDocument, RootPackageVariables, RootVariablesJudged, RuntimeChannel, VariableCause,
+    VariableProblem, VariableSource, judge_root_variables, parse_package_variables,
+    parse_standard_pack_goals,
 };
 use serde_json::{Value, json};
 
@@ -24,10 +27,11 @@ use super::selection_catalog::{NOW, catalog, instance};
 use crate::{
     CandidateEligibility, CompiledCatalog, DecisionReason, EvaluationFacts, EvaluationResources,
     EvaluationTime, FactRefreshInputs, FactRefreshSettings, FactValue, HostResourceSnapshot,
-    ObservedFact, PolicyEvaluation, PolicyEvaluationError, RemedyInputs, RemedyPlan, RemedyTable,
-    ResolvedVariable, ScopeSelector, TargetSetter, VariablePackage, VariablePlan, VariableSetBy,
-    VariableTable, VariableTableTask, check_resource_targets, evaluate_with_remedies,
-    parse_resource_targets, plan_remedies, plan_variable_values,
+    ObservedFact, PolicyCode, PolicyEvaluation, PolicyEvaluationError, RemedyInputs, RemedyPlan,
+    RemedyTable, ResolvedVariable, ScopeSelector, TargetSetter, VariablePackage, VariablePlan,
+    VariableSetBy, VariableTable, VariableTableTask, check_resource_targets,
+    evaluate_with_remedies, parse_resource_targets, plan_remedies, plan_variable_values,
+    recorded_dispatch_parameters,
 };
 
 const A: &str = "instance-a";
@@ -737,4 +741,275 @@ fn v2_fix1_a_stored_row_whose_setter_cannot_be_read_is_not_applied_with_its_word
         json!({"variable_name": "pick", "variable_source": "default", "value_json": "\"item_b\"",
                "variable_problem": VariableProblem::EntryUnreadable.as_str()})
     );
+}
+
+// Fix round 2, items 4, 5 and 9: the contract crate's one judgement of a root's variables
+// (`judge_root_variables`, which the workbench, `standard-pack check` and the table without a
+// composed standard pack call) gives each name its word and the detail of its cause. When one
+// declaring package can do something irreversible by itself (it provides `cap_x`, which another
+// package marks irreversible) beside a package of the root that cannot be read, the word is
+// `irreversible_by_root`, with the capability; an unreadable package alone is
+// `package_unreadable`, naming it. A declaration another package writes otherwise is
+// `declaration_conflict`, naming that package; a name an entry of an accepted `goals.json` takes
+// is `goal_name_conflict`, with the entry's type; the others apply, each verdict listing its
+// packages and its declaration. A `goals.json` that cannot be read keeps every other name from
+// applying (`goals_unreadable`, no detail), and a refused one takes no name.
+#[test]
+fn v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause() {
+    let root_package = |package_id: &str, declared: Value| RootPackageVariables {
+        package_id: package_id.to_owned(),
+        variables: variables(&declared),
+        cap_fact_keys: Vec::new(),
+    };
+    let read = |provides: &[(&str, bool)]| {
+        Some(DeclaredCapabilities {
+            provides: provides
+                .iter()
+                .map(|(capability, marked)| ((*capability).to_owned(), *marked))
+                .collect(),
+            remedies: BTreeSet::new(),
+        })
+    };
+    let cause = |judged: &RootVariablesJudged, name: &str| {
+        judged
+            .verdicts
+            .iter()
+            .find(|verdict| verdict.name == name)
+            .unwrap_or_else(|| panic!("the verdict of {name}"))
+            .not_applying
+            .clone()
+    };
+    const UNREAD: &str = "neutral.unread";
+
+    let pick = [root_package(PACKAGE, json!([declaration()[0].clone()]))];
+    let both = IrreversiblePackages::new(BTreeMap::from([
+        (PACKAGE.to_owned(), read(&[("cap_x", false)])),
+        (OTHER_PACKAGE.to_owned(), read(&[("cap_x", true)])),
+        (UNREAD.to_owned(), None),
+    ]));
+    let judged = judge_root_variables(&pick, RootGoalDocument::Absent, &both);
+    assert_eq!(
+        cause(&judged, "pick"),
+        Some(NotApplyingCause {
+            problem: VariableProblem::IrreversibleByRoot,
+            cause: VariableCause::IrreversibleCapabilities {
+                packages: BTreeMap::from([(PACKAGE.to_owned(), vec!["cap_x".to_owned()])]),
+            },
+        }),
+        "irreversible by the root, beside a package that cannot be read"
+    );
+    let unread_only = IrreversiblePackages::new(BTreeMap::from([
+        (PACKAGE.to_owned(), read(&[])),
+        (UNREAD.to_owned(), None),
+    ]));
+    let judged = judge_root_variables(&pick, RootGoalDocument::Absent, &unread_only);
+    assert_eq!(
+        cause(&judged, "pick"),
+        Some(NotApplyingCause {
+            problem: VariableProblem::PackageUnreadable,
+            cause: VariableCause::UnreadablePackages {
+                packages: vec![UNREAD.to_owned()],
+            },
+        })
+    );
+
+    let mut differing = declaration();
+    differing[0]["default"] = json!("item_a");
+    let packages = [
+        root_package(PACKAGE, declaration()),
+        root_package(OTHER_PACKAGE, json!([differing[0].clone()])),
+    ];
+    let all_read = IrreversiblePackages::new(BTreeMap::from([
+        (PACKAGE.to_owned(), read(&[])),
+        (OTHER_PACKAGE.to_owned(), read(&[])),
+    ]));
+    let goals = parse_standard_pack_goals(
+        &serde_json::to_vec(&json!({
+            "schema_version": "actingcommand.goals.v2",
+            "game": "neutral",
+            "entries": [{"name": "floor", "type": "heading", "title": {"en": "Floor"}}]
+        }))
+        .expect("goals bytes"),
+        "neutral",
+    )
+    .unwrap_or_else(|issues| panic!("the goal document reads: {issues:?}"));
+    let judged = judge_root_variables(&packages, RootGoalDocument::Accepted(&goals), &all_read);
+    let names = judged
+        .verdicts
+        .iter()
+        .map(|verdict| (verdict.name.as_str(), verdict.applies()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            ("pick", false),
+            ("floor", false),
+            ("order", true),
+            ("extra", true)
+        ]
+    );
+    assert_eq!(
+        judged.verdicts[0].packages,
+        [PACKAGE.to_owned(), OTHER_PACKAGE.to_owned()]
+    );
+    assert_eq!(judged.verdicts[0].declaration, variables(&declaration())[0]);
+    assert_eq!(
+        cause(&judged, "pick"),
+        Some(NotApplyingCause {
+            problem: VariableProblem::DeclarationConflict,
+            cause: VariableCause::DeclarationConflict {
+                packages: vec![OTHER_PACKAGE.to_owned()],
+            },
+        })
+    );
+    assert_eq!(
+        cause(&judged, "floor"),
+        Some(NotApplyingCause {
+            problem: VariableProblem::GoalNameConflict,
+            cause: VariableCause::GoalEntry {
+                goal_type: Some(GoalType::Heading),
+            },
+        })
+    );
+    assert_eq!(judged.verdicts[2].packages, [PACKAGE.to_owned()]);
+
+    let judged = judge_root_variables(&packages, RootGoalDocument::Unreadable, &all_read);
+    assert_eq!(
+        judged.not_applying(),
+        BTreeMap::from([
+            ("extra".to_owned(), VariableProblem::GoalsUnreadable),
+            ("floor".to_owned(), VariableProblem::GoalsUnreadable),
+            ("order".to_owned(), VariableProblem::GoalsUnreadable),
+            ("pick".to_owned(), VariableProblem::DeclarationConflict),
+        ])
+    );
+    assert_eq!(
+        cause(&judged, "floor").map(|found| found.cause),
+        Some(VariableCause::WordOnly)
+    );
+    let judged = judge_root_variables(&packages, RootGoalDocument::Refused, &all_read);
+    assert_eq!(
+        judged.not_applying(),
+        BTreeMap::from([("pick".to_owned(), VariableProblem::DeclarationConflict)])
+    );
+}
+
+// Fix round 2, item 7: the record's size. A package declares sixteen `ordered` variables (the most
+// a package declares), each set to a value of 1024 bytes (the most the goal store keeps; 32 keys,
+// so the most quotes to escape), with 64-byte names, and its dispatch's
+// `policy_dispatch_parameters` also carries 64 run parameters of 64-byte names and values (the
+// most `provides` declares). Alone, the sixteen values fit the bound of an outcome record
+// (`ENVELOPE_BODY_BUDGET`) and the record is the reason as it is. With the parameters the reason
+// passes the bound: its recorded form carries, for the first value (the longest first; all are
+// equal), the text's sha256 and length in place of the text and says so, fits the bound, and
+// keeps every other value's text and the parameters; the reason itself, which the run reads,
+// keeps every value whole.
+#[test]
+fn v2_fix2_a_reason_past_the_record_bound_is_recorded_with_hashes_and_kept_whole() {
+    let catalog = catalog(&[(VAR, 100)], None);
+    let keys = (0..32)
+        .map(|index| {
+            let filler = if index < 31 { 25 } else { 24 };
+            format!("k{index:02}_{}", "x".repeat(filler))
+        })
+        .collect::<Vec<_>>();
+    let set = json!(keys);
+    let text = set.to_string();
+    assert_eq!(text.len(), 1024);
+    let names = (0..16)
+        .map(|index| format!("v{index:02}_{}", "n".repeat(60)))
+        .collect::<Vec<_>>();
+    let declared = names
+        .iter()
+        .map(|name| {
+            json!({"name": name, "type": "ordered", "title": {"en": "Many"},
+                   "options": options(&keys.iter().map(String::as_str).collect::<Vec<_>>()),
+                   "min_count": 1, "max_count": 32, "default": [keys[0]]})
+        })
+        .collect::<Vec<_>>();
+    let table = VariableTable::build(&[task(
+        VAR,
+        Some(package(PACKAGE, variables(&json!(declared)), nothing())),
+    )]);
+    let plan = crate::variables::plan_with_entries(&catalog, &facts(Vec::new()), &table, |_| {
+        names
+            .iter()
+            .map(|name| {
+                (
+                    name.clone(),
+                    crate::resource_targets::StoredEntry {
+                        value: set.clone(),
+                        set_by: lab_set(),
+                    },
+                )
+            })
+            .collect()
+    });
+    let size = |outcome: &Outcome| serde_json::to_vec(outcome).expect("the record form").len();
+
+    let alone = RemedyPlan::default()
+        .with_variable_values(&plan)
+        .dispatch_parameters(VAR, A)
+        .expect("t_var's dispatch parameters")
+        .outcome
+        .clone();
+    assert!(size(&alone) <= ENVELOPE_BODY_BUDGET, "{}", size(&alone));
+    assert_eq!(recorded_dispatch_parameters(&alone), alone);
+
+    let parameters = (0..64).map(|index| {
+        Record::new()
+            .parameter_name(format!("p{index:02}_{}", "x".repeat(60)))
+            .parameter_value(format!("o{index:02}_{}", "y".repeat(60)))
+            .remedy_source(RemedySource::Configuration)
+    });
+    let mut remedies = RemedyPlan::default();
+    let parameters_only =
+        Outcome::new(PolicyCode::PolicyDispatchParameters).run_parameters(parameters);
+    remedies.run_parameters.insert(
+        (VAR.to_owned(), A.to_owned()),
+        DecisionReason {
+            detail: parameters_only.to_string(),
+            outcome: parameters_only,
+        },
+    );
+    let whole = remedies
+        .with_variable_values(&plan)
+        .dispatch_parameters(VAR, A)
+        .expect("t_var's dispatch parameters")
+        .outcome
+        .clone();
+    assert!(size(&whole) > ENVELOPE_BODY_BUDGET, "{}", size(&whole));
+    let recorded = recorded_dispatch_parameters(&whole);
+    assert!(
+        size(&recorded) <= ENVELOPE_BODY_BUDGET,
+        "{}",
+        size(&recorded)
+    );
+    assert_eq!(
+        recorded.value("run_parameters"),
+        whole.value("run_parameters")
+    );
+    let records = recorded
+        .value("variable_values")
+        .and_then(Value::as_array)
+        .expect("the recorded values");
+    assert_eq!(records.len(), 16);
+    assert_eq!(
+        records[0],
+        json!({"variable_name": names[0], "variable_source": "set",
+               "value_sha256": sha256_of(&set), "value_bytes": 1024,
+               "value_json_left_out": true, "set_unix_ms": SET_AT, "set_channel": "lab"})
+    );
+    for record in &records[1..] {
+        assert_eq!(record["value_json"], json!(text), "{record}");
+        assert!(record.get("value_sha256").is_none(), "{record}");
+    }
+    let kept_whole = whole
+        .value("variable_values")
+        .and_then(Value::as_array)
+        .expect("the reason's values")
+        .iter()
+        .filter(|record| record["value_json"] == json!(text))
+        .count();
+    assert_eq!(kept_whole, 16, "the reason the run reads keeps every value");
 }

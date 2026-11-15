@@ -71,9 +71,9 @@ use actingcommand_contract::{
     OwnerResourceDisposition, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary,
     PerformanceContext, PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData,
     PolicyExecutionOutcome, PolicyFailureClass, PolicyPayload, PolicyPayloadDraft,
-    PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectDecisionPageRequest,
-    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProposalClass,
-    ProposalPromotion, RUNTIME_FACT_SNAPSHOT_INTERVAL_MS, RUNTIME_INFO_FILE, ReadonlyObservation,
+    PolicyPlanningSignalEventData, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectedArtifactReference, ProjectionPayload, ProposalClass, ProposalPromotion,
+    RUNTIME_FACT_SNAPSHOT_INTERVAL_MS, RUNTIME_INFO_FILE, ReadonlyObservation,
     RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload, ReleasePayloadDraft,
     ReleaseTransitionKind, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
     ResourceAuthoringPhase, ResourceQuiescence, RetentionClass, RunId, RuntimeCaptureBackend,
@@ -297,8 +297,8 @@ pub use standard_pack::{StandardPackGameReport, StandardPacksReport, inspect_sta
 // ROUT-L RL-1b: the scheduler workbench, which composes the standard packs' schedule rules.
 mod standard_pack_schedule;
 pub use standard_pack_schedule::{
-    ConfiguredStandardPackSchedule, StandardPackSchedulePreview, compose_configured_standard_packs,
-    preview_standard_pack_schedule,
+    ConfiguredStandardPackSchedule, RootGoals, StandardPackGoalRoot, StandardPackGoalRoots,
+    StandardPackSchedulePreview, compose_configured_standard_packs, preview_standard_pack_schedule,
 };
 #[cfg(test)]
 pub(crate) use standard_pack_schedule::{
@@ -3362,6 +3362,18 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<Option<ContainedTaskRequest>> {
         self.work_ref(HostLocation::StandardPackRead)?
             .standard_pack_request(procedure_ref)
+    }
+
+    /// Workflow #463 V2 fix round 2 (register §1.382; `contracts/package-variables.md`, "What
+    /// the next slice reads"): what the scheduler workbench keeps of each game root it read, from
+    /// one check to the next, read from memory and never from a file: the root's parsed
+    /// `goals.json` or why it is not applied, the judgement of its variables over the whole root
+    /// (per name its packages, its declaration, whether it applies, and the word and detail of
+    /// the cause), and the variable table a dispatch reads. `None` without a composed standard
+    /// pack.
+    pub fn standard_pack_goal_roots(&self) -> RuntimeHostResult<Option<StandardPackGoalRoots>> {
+        self.shared_ref(HostLocation::StandardPackRead)?
+            .standard_pack_goal_roots()
     }
 
     /// Workflow #361 C2: records a planned transition; the first catalog write of startup.

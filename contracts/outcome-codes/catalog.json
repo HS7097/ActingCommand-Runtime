@@ -2733,6 +2733,18 @@
       "type": "vocab:variable_problem",
       "description": "Why the value set on an application for a variable was not handed to a run, which reads the package's default; or keys_left_out, an ordered value handed to the run in part (Workflow #463 V2, since 0.12.61)."
     },
+    "value_sha256": {
+      "type": "hash",
+      "description": "The sha256 of the text of a variable's value (its compact JSON) whose text the ledger record of a dispatch's reason left out, because the reason would pass an outcome record's bound (Workflow #463 V2 fix round 2, since 0.12.61)."
+    },
+    "value_bytes": {
+      "type": "integer",
+      "description": "The length in bytes of the text of a variable's value whose text the ledger record of a dispatch's reason left out (Workflow #463 V2 fix round 2, since 0.12.61)."
+    },
+    "value_json_left_out": {
+      "type": "boolean",
+      "description": "true: the record carries value_sha256 and value_bytes in place of value_json, because the reason would pass an outcome record's bound; the run read the value whole from the reason chain it was admitted with (Workflow #463 V2 fix round 2, since 0.12.61)."
+    },
     "variable_values": {
       "type": "records",
       "fields": {
@@ -2741,13 +2753,20 @@
         "value_json": "optional",
         "set_unix_ms": "optional",
         "set_channel": "optional",
-        "variable_problem": "optional"
+        "variable_problem": "optional",
+        "value_sha256": "optional",
+        "value_bytes": "optional",
+        "value_json_left_out": "optional"
       },
-      "description": "The values a policy dispatch hands its run for the variables its package declares, one record each in declaration order: the name, where the value comes from, the value (absent only for a default longer than 1024 bytes, which the run reads from its package), when and through which channel the application's value was set when it holds one and both can be read, and why that value was not applied when it was not, or keys_left_out when it was applied in part (Workflow #463 V2, since 0.12.61)."
+      "description": "The values a policy dispatch hands its run for the variables its package declares, one record each in declaration order: the name, where the value comes from, the value (absent only for a default longer than 1024 bytes, which the run reads from its package), when and through which channel the application's value was set when it holds one and both can be read, and why that value was not applied when it was not, or keys_left_out when it was applied in part (Workflow #463 V2, since 0.12.61). Fix round 2: in the ledger record, a value whose text would make the reason pass an outcome record's bound (32 KiB less the envelope's own room) carries value_sha256, value_bytes and value_json_left_out in place of value_json, the longest first until the reason fits; the run reads every value whole from the reason chain it was admitted with."
     },
     "declaration_sha256": {
       "type": "hash",
       "description": "The sha256 of a variable's declaration as its control.json writes it, in compact JSON (Workflow #463 V2, since 0.12.61)."
+    },
+    "goals_failure": {
+      "type": "vocab:goals_failure",
+      "description": "Why a game root's goals.json is not applied while the root runs: the reader refused it, or it could not be read (Workflow #463 V2 fix round 2, since 0.12.61)."
     },
     "goal_name": {
       "type": "token",
@@ -2755,7 +2774,7 @@
     },
     "goal_problem": {
       "type": "vocab:goal_problem",
-      "description": "Why an EditGoal was refused before the fact write gate (Workflow #463 V3, since 0.12.61)."
+      "description": "Why an EditGoal was refused under the fact write gate, after the version comparison (Workflow #463 V3, since 0.12.61)."
     },
     "adopt_problem": {
       "type": "vocab:adopt_problem",
@@ -9607,7 +9626,23 @@
           "description": "A package reads the variable as a designated effect's cap and it is no integer from 0 to 1000 (the root check's variable_cap_range)."
         },
         "root_unchecked": {
-          "description": "No root check judged the variable for the application's game: without a composed standard pack, the Runtime's table of the bound packages was built before an instance of that game was known."
+          "description": "No root check judges the variable for the application's game now: with a composed standard pack (fix round 2), the game's root failed its check, or its composition was refused or not activated, at the scheduler workbench's last check, so nothing says whether the variable applies; without one, the Runtime's table of the bound packages was built before an instance of that game was known."
+        }
+      }
+    },
+    "goals_failure": {
+      "description": "Why a game root's goals.json is not applied while the root runs, the value goals_failure of standard_pack_goals_not_applied (Workflow #463 V2 fix round 2, contracts/package-variables.md \"A variable that does not apply\", since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-host/src/codes.rs",
+        "enum": "GoalsFailure"
+      },
+      "tokens": {
+        "refused": {
+          "description": "The contract crate's reader refused the file: it applies no entry and takes no name."
+        },
+        "unreadable": {
+          "description": "The file could not be read (an I/O failure other than its absence): which names it takes is not known, so no variable of the root applies."
         }
       }
     },
@@ -9888,7 +9923,7 @@
       }
     },
     "goal_problem": {
-      "description": "Why an EditGoal was refused before the fact write gate, the value goal_problem of goal_value_invalid, one word per situation a reader can tell apart (Workflow #463 V3, contracts/runtime-interface.md \"Goal request kinds\", since 0.12.61).",
+      "description": "Why an EditGoal was refused under the fact write gate, after the version comparison, the value goal_problem of goal_value_invalid, one word per situation a reader can tell apart (Workflow #463 V3, contracts/runtime-interface.md \"Goal request kinds\", since 0.12.61).",
       "review": "pending",
       "source": {
         "file": "crates/actingcommand-contract/src/runtime/goals.rs",
@@ -9896,7 +9931,7 @@
       },
       "tokens": {
         "name_unknown": {
-          "description": "The name is no entry of the application's page (no entry of goals.json, no variable of a package the active catalog binds on the application, no remedy parameter of such a package) and, for a set, the value is no other resource target {resource, at_least}; for a clear, no stored value and no target has the name; or the name has no entry name's form."
+          "description": "The name is no entry of the application's page (no entry of goals.json, no variable of a package the active catalog binds on the application, no remedy parameter of such a package) and no variable of its game root, and, for a set, the value is no other resource target {resource, at_least}; for a clear, no stored value and no target has the name; or the name has no entry name's form."
         },
         "holds_no_value": {
           "description": "The name is a heading or a note entry of goals.json, which holds no value."
@@ -9909,6 +9944,9 @@
         },
         "variable_not_applying": {
           "description": "The name is a variable that does not apply in the application's game root; variable_problem says why. No value is stored for it."
+        },
+        "not_offered": {
+          "description": "Fix round 1: the name is declared in the application's game root (a placement of goals.json, or a variable a package of the root declares), but by no package the active catalog binds on the application: it is not offered there, and the page lists a placement of it not_offered. No value is stored for it."
         },
         "value_not_json": {
           "description": "value_json is no JSON text."
@@ -9951,6 +9989,9 @@
         },
         "record_out_of_limits": {
           "description": "The edited record would hold more targets (16) or entries (96) than a record keeps (range_max)."
+        },
+        "not_checked_yet": {
+          "description": "Fix round 1: what the page is judged by is not in the Runtime's memory yet (the scheduler workbench has not checked the game root since the start, or no evaluation has read the bound packages for the active catalog and procedure manifest), so nothing is known of the name; the page answers not_checked_yet meanwhile. Nothing is stored: send the same request again after the Runtime's next check."
         }
       }
     }

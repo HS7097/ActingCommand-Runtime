@@ -4016,11 +4016,8 @@ fn policy_event_data(
         operation_id: intent.operation_id.clone(),
         procedure_binding_digest,
         reason_chain_id: reason_chain.id.clone(),
-        reasons: reason_chain
-            .reasons
-            .iter()
-            .map(|reason| PolicyReasonRecord(reason.outcome.clone()))
-            .collect(),
+        // Workflow #463 V2 fix round 2: each reason in its recorded form, as a replay compares it.
+        reasons: crate::policy_host::recorded_reasons(reason_chain),
         catalog_hash: intent.catalog_hash.clone(),
         catalog_version: intent.catalog_version,
         input_ledger_position: intent.input_ledger_position,

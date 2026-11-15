@@ -30,10 +30,9 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     DeclaredCapabilities, GoalReferences, GoalRule, IrreversiblePackages, LabError, LabResult,
-    MAX_STANDARD_PACK_GOALS_BYTES, PACKAGE_CONTROL_FILE, RootPackageVariables, StandardPackRoot,
-    StandardPackRootIssue, VariableOrigins, check_root_variables,
-    check_standard_pack_goal_references, goal_variables, parse_standard_pack_goals,
-    parse_standard_pack_schedule,
+    MAX_STANDARD_PACK_GOALS_BYTES, PACKAGE_CONTROL_FILE, RootGoalDocument, RootPackageVariables,
+    StandardPackRoot, StandardPackRootIssue, VariableOrigins, check_standard_pack_goal_references,
+    goal_variables, judge_root_variables, parse_standard_pack_goals, parse_standard_pack_schedule,
 };
 use actingcommand_execution_kernel::{ContainedTaskError, PreparedContainedTask};
 use actingcommand_policy::standard_pack_rule_followers;
@@ -295,7 +294,10 @@ pub(crate) fn refuse_goals(
 /// Fix round 1: the packages are judged by the rule of irreversibility over the whole root, from
 /// what the reader read of every package (`IrreversiblePackages::new`, the one copy the goal
 /// check holds a placement to), so a variable of a package that counts as irreversible is
-/// `variable_irreversible_by_root` and the listing marks it as not applying.
+/// `variable_irreversible_by_root` and the listing marks it as not applying. Workflow #463 V2 fix
+/// round 2: through the contract crate's one judgement of a root's variables
+/// (`judge_root_variables`), which the Runtime's scheduler workbench calls too, with the goal
+/// document absent, accepted or refused as read here.
 pub(crate) fn variable_report(
     game: &str,
     root: &StandardPackRoot,
@@ -303,11 +305,15 @@ pub(crate) fn variable_report(
     pack_directory: &dyn Fn(&str) -> PathBuf,
 ) -> LabResult<(Vec<Outcome>, Option<VariableOrigins>)> {
     let declarations = package_declarations(root, pack_directory)?;
-    let accepted = goals.and_then(|goals| parse_standard_pack_goals(goals, game).ok());
-    let goal_names = accepted
-        .as_ref()
-        .map(|goals| goals.names_besides_placements())
-        .unwrap_or_default();
+    let read = goals.map(|bytes| parse_standard_pack_goals(bytes, game));
+    // Workflow #463 V2 fix round 2: the goal document as the contract crate's one judgement
+    // takes it, the Runtime's own. A `goals.json` that cannot be read never reaches here: it is
+    // the check's usage error naming the file (`read_goals_file`).
+    let document = match &read {
+        None => RootGoalDocument::Absent,
+        Some(Ok(accepted)) => RootGoalDocument::Accepted(accepted),
+        Some(Err(_)) => RootGoalDocument::Refused,
+    };
     // Every package of the root was read (one the reader refuses is the check's error).
     let irreversible = IrreversiblePackages::new(
         declarations
@@ -316,7 +322,7 @@ pub(crate) fn variable_report(
             .map(|(package_id, declared)| (package_id, Some(declared)))
             .collect(),
     );
-    let checked = check_root_variables(&declarations.variables, &goal_names, &irreversible);
+    let checked = judge_root_variables(&declarations.variables, document, &irreversible).checked;
     let mut warnings = Vec::with_capacity(checked.issues.len());
     for found in &checked.issues {
         let entry = root

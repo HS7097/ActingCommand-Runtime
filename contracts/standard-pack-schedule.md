@@ -627,7 +627,11 @@ can do something irreversible").
   request flag, [remedies.md](remedies.md) §2.3). This mark uses the whole root's.
 - **The workbench reads the declarations again** when a package's declaration files change (the
   coordinator's ruling 1 of 11-14). The marks it compares at each check ("The scheduler workbench"
-  below) are, per game in use, those of `schedule.json` and `bundle.json` and, for each package
+  below) are, per game in use, those of `schedule.json` and `bundle.json`, since Workflow #463 V2
+  fix round 1 (Runtime 0.12.61) that of the root's `goals.json` (read with the declarations for
+  the variables' judgement alone, [package-variables.md](package-variables.md), "A variable that
+  does not apply"; a metadata failure on it is a mark of its own and never stops the check), and,
+  for each package
   the root registered when the workbench last read it (no extra read of `bundle.json` per check),
   the marks of the files the declaration reader opens by name: the reader reads the package's whole
   content directory, a set that follows the directory's listing and is not fixed, so the two files
@@ -764,12 +768,13 @@ nothing.
   `standard_packs.check_interval_ms` (default 60 000) and at the first cycle. The games in use are
   the games of the configured instances (`policy.facts.instances`). A whole-instance pause does
   not unload a game's rules (pending decision 58, recommended answer A). Each check `stat`s
-  `schedule.json` and `bundle.json` of each game in use and, since Workflow #455 G-R2s (0.12.60),
-  the declaration files of each package the root registered when it was last read ("The
-  irreversible mark" above), and reads the game roots only when one of them, or the bound
-  instances, changed: 「用到的时候再加载」. A game root without a bound instance is never read.
-  A check that reads a root of N packages stats 2 + 2N files; the declarations are read (N package
-  reads) only when one of those marks changed.
+  `schedule.json` and `bundle.json` of each game in use, since Workflow #463 V2 fix round 1
+  (0.12.61) its `goals.json`, and, since Workflow #455 G-R2s (0.12.60), the declaration files of
+  each package the root registered when it was last read ("The irreversible mark" above), and
+  reads the game roots only when one of them, or the bound instances, changed:
+  「用到的时候再加载」. A game root without a bound instance is never read. A check that reads a
+  root of N packages stats 3 + 2N files (2 + 2N before 0.12.61); the declarations and `goals.json`
+  are read (N package reads and one file) only when one of those marks changed.
 - **Compose and activate.** The roots are composed with `compose_standard_pack_rules`, its
   `requires` checked against the configuration manifest's subsystems (this build names
   `standard_pack_schedule`), and the catalog version is the ledger head plus one. A composition

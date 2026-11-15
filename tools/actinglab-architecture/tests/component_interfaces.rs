@@ -132,7 +132,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   11: a task's `field_lists`, OCR fields grouped into one list fact; a pack without it keeps
 ///   its revision, so [3, 11]. Workflow #455 G-R1 (0.12.60, register §1.356) raises it to 12: a
 ///   game root's goal declaration `goals.json`, placed by the installer and opened by no reader of
-///   the Runtime yet; a bundle without it keeps its revision, so [3, 12]. Workflow #463 K1
+///   the Runtime of 0.12.60 (since Workflow #463 V2, 0.12.61, the scheduler workbench reads it for
+///   the variables' judgement alone, no revision moving); a bundle without it keeps its revision,
+///   so [3, 12]. Workflow #463 K1
 ///   (0.12.61, register §1.374) raises it to 13: a `linear_steps` task's select step, which every
 ///   Runtime before it refuses at admission; a pack without one keeps its revision, so [3, 13].
 ///   Workflow #463 V1 (0.12.61, register §1.378) raises it to 14: a package's `variables` in its

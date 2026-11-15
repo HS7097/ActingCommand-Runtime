@@ -37,6 +37,8 @@ const RESULT: [u8; 3] = [255, 255, 255];
 const HOME: [u8; 3] = [255, 0, 0];
 const PARAMETERS: &str = "policy_dispatch_parameters";
 const NOT_APPLIED: &str = "goal_value_not_applied";
+/// Fix round 2 (item 6): a dispatched package the workbench could not read.
+const PACKAGE_UNREAD: &str = "goal_value_package_unreadable";
 const PICK_KEY: &str = "session.dispatch.parameter.pick";
 /// The default `standard_packs.check_interval_ms`: a check reads the roots again after it.
 const CHECK_INTERVAL_MS: u64 = 60_000;
@@ -553,9 +555,16 @@ fn v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again() {
 #[test]
 fn v2_fix1_the_whole_root_keeps_a_variable_from_applying() {
     fn held_marks_irreversible(packs: &Path) {
+        // Fix round 2 (item 9): an irreversible capability declares its parameters, or the
+        // package reader refuses the whole `provides` (`validate_provides`); without them the
+        // held package could not be read and the case read `package_unreadable`.
         place_with_held(
             packs,
-            Some(json!([{"capability": "cap_x", "irreversible": true}])),
+            Some(
+                json!([{"capability": "cap_x", "irreversible": true, "parameters": [
+                    {"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_1"}
+                ]}]),
+            ),
         );
         patch_control(&packs.join(GAME_A).join(TASK), |control| {
             control["provides"] = json!([{"capability": "cap_x"}]);
@@ -678,5 +687,116 @@ fn v2_fix1_a_package_replaced_in_place_is_judged_with_its_new_declaration() {
     );
     assert_eq!(overlaid_pick(&scene), text("item_b"));
     assert_eq!(scene.failed(NOT_APPLIED).len(), 1);
+    scene.close();
+}
+
+// The gate tests' seam that makes the metadata of a file fail as a file the process may not stat
+// (`DECLARATION_METADATA_FAILS_FOR_TEST`); each test names files below its own root.
+fn metadata_seam() -> std::sync::MutexGuard<'static, BTreeSet<std::path::PathBuf>> {
+    crate::host::DECLARATION_METADATA_FAILS_FOR_TEST
+        .lock()
+        .expect("the metadata seam")
+}
+
+// Fix round 2, item 1 (the coordinator's ruling: the texts are right): while a game's root fails
+// its check, nothing says whether a variable applies, so every variable of that game's instances
+// reads its default with `root_unchecked`. With `item_a` set and applied, the metadata of the
+// root's `schedule.json` cannot be read at the next check (the seam): the dispatch after it hands
+// its run the default `item_b`, its record says `default` with `root_unchecked` and who set the
+// value, the run's snapshots hold `item_b`, and one `goal_value_not_applied` says
+// `root_unchecked`. Once the root reads again, the dispatch after the next check hands its run
+// `item_a` again.
+#[test]
+fn v2_fix2_a_root_that_fails_its_check_reads_each_variable_at_its_default() {
+    let scene = Scene::new();
+    let (_, context) = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 7);
+    let set_at = next_eligible(&context);
+    scene.set_pick(json!("item_a"), set_at);
+    let (chain, context) = scene.evaluate_and_run(set_at, 8);
+    assert_eq!(
+        variable_values(&chain)[0]["variable_source"],
+        "set",
+        "{chain:?}"
+    );
+
+    let failing = scene.packs.path().join(GAME_A).join("schedule.json");
+    metadata_seam().insert(failing.clone());
+    let failed_at = next_eligible(&context).max(set_at + CHECK_INTERVAL_MS);
+    let (chain, context) = scene.evaluate_and_run(failed_at, 9);
+    metadata_seam().remove(&failing);
+    assert_eq!(
+        variable_values(&chain),
+        json!([{"variable_name": "pick", "variable_source": "default",
+                "value_json": "\"item_b\"", "set_unix_ms": set_at, "set_channel": "lab",
+                "variable_problem": VariableProblem::RootUnchecked.as_str()}])
+    );
+    assert_eq!(overlaid_pick(&scene), text("item_b"));
+    let warnings = scene.failed(NOT_APPLIED);
+    assert_eq!(warnings.len(), 1, "{warnings:#?}");
+    assert_eq!(
+        warnings[0]
+            .value("variable_problem")
+            .and_then(Value::as_str),
+        Some(VariableProblem::RootUnchecked.as_str())
+    );
+
+    let read_at = next_eligible(&context).max(failed_at + CHECK_INTERVAL_MS);
+    let (chain, _) = scene.evaluate_and_run(read_at, 10);
+    assert_eq!(
+        variable_values(&chain),
+        json!([{"variable_name": "pick", "variable_source": "set",
+                "value_json": "\"item_a\"", "set_unix_ms": set_at, "set_channel": "lab"}]),
+        "the root judged again"
+    );
+    assert_eq!(overlaid_pick(&scene), text("item_a"));
+    scene.close();
+}
+
+// Fix round 2, item 6: a dispatched package the workbench cannot read has no variable in its
+// table, so its dispatch carries no `variable_values` and its run reads the package's defaults;
+// nothing is skipped silently. The metadata of the package's control declaration cannot be read
+// (the seam), while the run itself reads the package: the dispatch carries no
+// `policy_dispatch_parameters`, the run's snapshots hold the default `item_b`, and one
+// `goal_value_package_unreadable` names the instance, the task and the package. The next dispatch,
+// after a check that finds the package's files as they were, writes no second one.
+#[test]
+fn v2_fix2_a_dispatched_package_the_workbench_cannot_read_is_warned_once() {
+    let scene = Scene::new();
+    let control = scene
+        .packs
+        .path()
+        .join(GAME_A)
+        .join(TASK)
+        .join("control.json");
+    metadata_seam().insert(control.clone());
+    let (chain, context) = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 7);
+    assert!(
+        chain
+            .reasons
+            .iter()
+            .all(|reason| reason.outcome.code().as_str() != PARAMETERS),
+        "{chain:?}"
+    );
+    assert_eq!(overlaid_pick(&scene), text("item_b"));
+    let warnings = scene.failed(PACKAGE_UNREAD);
+    assert_eq!(warnings.len(), 1, "{warnings:#?}");
+    for (key, expected) in [
+        ("instance_id", INSTANCE),
+        ("task_id", TASK),
+        ("package_id", TASK),
+    ] {
+        assert_eq!(
+            warnings[0].value(key).and_then(Value::as_str),
+            Some(expected),
+            "{key}: {}",
+            warnings[0]
+        );
+    }
+
+    let again_at = next_eligible(&context).max(POLICY_NOW_UNIX_MS + CHECK_INTERVAL_MS);
+    scene.evaluate_and_run(again_at, 8);
+    metadata_seam().remove(&control);
+    assert_eq!(scene.failed(PACKAGE_UNREAD).len(), 1, "once per state");
+    assert!(scene.failed(NOT_APPLIED).is_empty());
     scene.close();
 }

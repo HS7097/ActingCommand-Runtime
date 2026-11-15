@@ -263,16 +263,21 @@ for that game, and a reader of the declaration says why.
   read a root as it does, check-config and `actingd suspended`): with this reader, once per read of
   the root, for the variables' judgement alone ([package-variables.md](package-variables.md), "A
   variable that does not apply"): the names an accepted file takes, the parsed document kept with
-  the root's declarations, a refused one taking none. A refused file is recorded once per sha256
-  (`standard_pack_root_invalid`, its first problem), one that cannot be read once until it reads
-  again (`standard_pack_root_unreadable`); neither stops the root. No other reader of the Runtime
-  opens it, and the programs of 0.12.60 open none.
+  the root's declarations, a refused one taking none. Fix round 2: a refused file, or one that
+  cannot be read, is `standard_pack_goals_not_applied` (warning; `goals_failure` `refused` with the
+  reader's first problem as its cause, a `standard_pack_root_invalid`, or `unreadable` with the
+  operating system's failure), recorded once per sha256 of a refused file and once until an
+  unreadable one reads again; neither stops the root. No other reader of the Runtime opens it, and
+  the programs of 0.12.60 open none.
 - **The goal page** (Workflow #463 V3, Runtime 0.12.61, register §1.383; `GoalView` and
   `EditGoal`, [runtime-interface.md](runtime-interface.md), "Goal request kinds") opens no file: it
-  takes the parsed document the workbench's read of the root keeps, lists the entries in file
-  order and checks a name set by it against them. In 0.12.61 as built on the V2 fix round's head
-  `020a5681` the workbench keeps the document only during one check, so the page answers the
-  declaration `not_read` and lists no entry (a marked gap, closed when that round keeps it).
+  takes the parsed document the workbench's last check of the root keeps
+  (`RuntimeHost::standard_pack_goal_roots`), lists the entries in file order, each variable at its
+  placement (a placement no package the active catalog binds on the application declares
+  `not_offered`), and checks a name set by it against them. A refused file is named with its
+  sha256 and first problem and lists no entry, as an unreadable or absent one; until the
+  workbench has checked the root after a start the page answers `not_checked_yet` and an edit is
+  refused with that word.
 
 ## Interface
 
