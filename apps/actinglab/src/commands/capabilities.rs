@@ -122,6 +122,12 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
         command_cap("session record archive", ["offline"], "available"),
         command_cap("session record reopen", ["offline"], "available"),
+        // #463 S2-1: what a recording still lacks; it reads under no lock and writes nothing.
+        command_cap(
+            "session record ready",
+            ["offline", "read_only"],
+            "available",
+        ),
         command_cap("record", ["offline"], "available"),
         command_cap("record start", ["offline"], "available"),
         command_cap("record status", ["offline"], "available"),
@@ -135,6 +141,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         // Workflow #449 REC-ARCH.
         command_cap("record archive", ["offline"], "available"),
         command_cap("record reopen", ["offline"], "available"),
+        // #463 S2-1.
+        command_cap("record ready", ["offline", "read_only"], "available"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
         command_cap("session app --record", ["device"], "available"),

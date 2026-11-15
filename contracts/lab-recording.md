@@ -20,7 +20,9 @@ without recording again ("Inserting an optional step after stop"); and #464 P4: 
 the output an earlier stop wrote, refuses a `--lab-dir` inside an installed root and answers the
 skeleton of the adoption ("Writing", "Output"). #463 S1-1: `tap`, `swipe` and `long-tap --record`
 record a press by the command that makes it, with the screen before it and the screen after it, no
-rectangle and no carrier package ("Recording while playing").
+rectangle and no carrier package ("Recording while playing"). #463 S2-1: `record ready` lists at
+once everything a recording still lacks before `record stop` can make its package, and its state
+("What a recording still lacks: `record ready`").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -2339,6 +2341,141 @@ Makes an archived recording of the instance its active recording again:
 | `record stop` | `record_session_not_active`, `details{reason: "recording_archived", record_id}`, nothing read or written: reopen it first |
 | `record candidates` | as before (it reads the session header's own steps) |
 
+## What a recording still lacks: `record ready`
+
+```
+record ready [--record-id <id>] [--state-dir <dir>]
+```
+
+#463 S2-1 (0.12.64; the owner approved the three-stage blueprint of package making on board #463:
+stage two turns the recorded material into a package offline; the rules here are the
+coordinator's). `record stop` refuses at the first pre-check a recording fails ("Pre-checks"), so an
+agent would learn what a recording lacks one refusal at a time; `record ready` lists all of it at
+once. Through the Lab's MCP server (`actinglab-mcp`) it is `ac_record_ready` (`record_id`,
+`state_dir`; [lab-operations.json](lab-operations.json), the row `record ready`); today's server
+(`actingctl mcp-serve`) has no such tool.
+
+- **Which recording.** The one `record status` reads: the recording the instance's session header
+  names, archived or not; or, with `--record-id`, that recording: the header's, or one the header no
+  longer names (a later `record start` replaced it), active, archived or stopped. A recording of
+  another instance is `record_instance_mismatch` (3). No recording is `record_session_not_active`
+  (3); a header whose Lab recording is missing or unreadable, or an id no step table has,
+  `record_lab_unavailable` (3) with its `reason`.
+- **It only reads.** It takes no recording lock (it answers while another command holds the lock),
+  reaches no Runtime and writes no file of the recording: the package of the self-checks is built
+  in memory only. As every `record` action it creates the session state directory when there is
+  none. `--dry-run` changes nothing (`no_effect`).
+- **The options it reads with** are those `record stop` takes when none is given: the recording's
+  game, server and locale, else (game and server) the instance configuration's, and the default
+  arrival timeouts; for a stopped recording marked again, those its package was generated with
+  ("Marking after stop"). Such an option out of its form (an earlier stop's `--package-id` or
+  `--requires`) is no pre-check of the recording: it is the command's own refusal, as `record stop`
+  answers it.
+
+The answer:
+
+```json
+{"status": "draft", "record_id": "…", "session": "active",
+ "missing": [{"order": 1, "step": null, "artifact_step": null, "frame_id": null, "what": "locale",
+              "code": "record_locale_missing", "hint": "record stop --locale <l>"},
+             {"order": 2, "step": 3, "artifact_step": 3, "frame_id": "f0006",
+              "what": "page_recognition", "code": "record_step_without_recognition",
+              "hint": "record mark --step 3 --template <id>=x,y,w,h"}],
+ "missing_total": 2,
+ "warnings": [{"step": 1, "artifact_step": 1, "frame_id": "f0001", "what": "press_point_only"}],
+ "checks_after": ["frames", "admission", "first_decision", "cross_check", "endings", "selects",
+                  "final_package"]}
+```
+
+- **`missing`**: every pre-check of `record stop` the recording fails, at once: the checks the
+  generator makes before it generates anything, each where it fails, the generator going on to
+  the next. A check that needs what a failed one did not give waits for it: the package id needs
+  the game and the server, the two main-interface rules (`application_without_home`,
+  `optional_restart_home`) the game. The checks after the pre-checks (the coordinate space and the
+  arrival timeouts) run only once none fails. Each item: `order` (1..n), `step` (the step's serial
+  number, as `record mark --step` takes it) and `artifact_step` (its number in the package), both
+  `null` for an item of the whole recording; `frame_id`, the frame the step's press happened on as
+  stage one recorded it (its click's or its application operation's `before_frame`, "Recording
+  while playing", "Application steps"), `null` when the step has none; `what`, its word; `code`, the
+  code `record stop` answers for it; and `hint` where one command settles it (`record stop --game
+  <g>`, `--server <s>`, `--locale <l>`; `record mark --step k --template <id>=x,y,w,h` for a step
+  without a mark; `record mark --step k --not-optional` for an optional step in a place it cannot
+  be), absent otherwise. No item carries a suggestion, a candidate box or a ready-made request:
+  what recognizes the page and where the press may land are the agent's to set.
+- **Order**: the recording's own items first (in the order the generator checks them), then by the
+  step's serial number, each step's in the order the generator checks them.
+- **The words** (`what`, the closed vocabulary `ready_missing` of the outcome catalog, one word per
+  pre-check and one cause per word):
+
+| word | the pre-check the recording fails | code `record stop` answers |
+|---|---|---|
+| `too_few_steps` | fewer than two effective steps | `record_no_steps` |
+| `application_entry_not_first` | an application entry step (no frame) after step 1 | `record_application_entry_not_first` |
+| `effect_missing` | a step before the last without an effect | `record_step_click_missing` |
+| `final_has_effect` | the last step has an effect | `record_final_step_has_click` |
+| `page_recognition` | a step but the application entry step without an own or reused mark | `record_step_without_recognition` |
+| `transition_recognition` | a page transition without a mark | `record_step_without_recognition` |
+| `too_many_effects` | more than 1000 steps with an effect | `record_too_many_steps` |
+| `game`, `server`, `locale` | each part of the package's identity that is not known | `record_locale_missing` |
+| `effect_after_stop` | after a `stop` step the next effect is no `launch` or `restart` | `record_step_after_stop_invalid` |
+| `reused_mark_missing` | a step's page or transition reuses a mark of no effective step | `record_mark_rejected` |
+| `forbidden_mark_missing` | a step forbids a mark of no effective step | `record_mark_rejected` |
+| `anchor_not_own_template` | a step's anchor is no own template mark of it | `record_mark_rejected` |
+| `application_without_home` | no main interface after the last `launch` or `restart` (R25) | `record_application_without_home` |
+| `optional_first_step` | step 1 is optional | `record_optional_first_step` |
+| `optional_final_step` | the last step is optional | `record_optional_final_step` |
+| `optional_application` | an application step is optional | `record_optional_application` |
+| `optional_restart_home` | the main interface after the last `launch` or `restart` is optional | `record_optional_restart_segment_end` |
+| `select_optional` | a select step is optional | `record_select_invalid` |
+| `select_retry` | a select step's click declares a retry | `record_select_invalid` |
+| `select_gesture` | a select step's click declares a gesture | `record_select_invalid` |
+| `select_follow` | a select step's click follows a mark | `record_select_invalid` |
+| `select_key_reserved` | a select's `on_empty` key is `<task_id>_done` | `record_select_invalid` |
+| `select_key_taken` | a select's `on_empty` key is another select's | `record_select_invalid` |
+| `select_wanted_taken` | a select's wanted name is another select's | `record_select_invalid` |
+| `ending_key_reserved` | an ending's outcome key is `<task_id>_done` | `record_ending_invalid` |
+| `ending_key_of_select` | an ending's outcome key is a select's `on_empty` key | `record_ending_invalid` |
+| `ending_key_taken` | an ending's outcome key is another ending's | `record_ending_invalid` |
+| `ending_page_taken` | an ending's page name is another ending's | `record_ending_invalid` |
+| `ending_mark_missing` | an ending's page reuses a mark of no effective step | `record_mark_rejected` |
+
+  The select and ending rules are those `record mark` holds when it takes a select or an ending,
+  checked again where the package is generated ("Selecting in a list", "Endings"); the refusal's
+  own word (`select_problem`, `ending_problem`) is the one `record stop` answers.
+- **The self-checks** (`checks_after` and the `what` of a self-check's refusal, the closed vocabulary
+  `ready_check`): when the recording fails no pre-check, `record ready` runs the self-checks
+  `record stop` runs, in the same order, on the package it would generate, written nowhere:
+  `frames` (every live frame and template crop read back with its sha256 and the recording's size,
+  the last row of "Pre-checks"), `admission` (item 2, with the evaluator), `first_decision` (item
+  3), `cross_check` (items 4, 5 and 7), `endings` (item 9), `selects` (item 8), `final_package`
+  (item 1, and items 2 and 3 again on the final package). Each stops at its first refusal, as it
+  does for `record stop`, and that refusal ends them, since a later check reads what an earlier one
+  built; it is the one item of `missing`, its `what` the check's name, its `code` its own, its
+  `step` and `artifact_step` those its details name (`record_index`, `step`) when it names a step,
+  without a `hint`. `checks_after` names the checks that did not run: all of them when a
+  pre-check fails, those after the refusing one when a self-check refuses, none when every one
+  ran. A failure to read the recording's files that is no check's refusal (class
+  `runtime_unavailable`) is the command's own error.
+- **`warnings`** never block: `press_point_only` (`{step, artifact_step, frame_id, what}`) for each
+  effective step, in the order a run meets them, whose press is a single recorded point: a tap or
+  a long press of `tap` or `long-tap --record` (`source: "point"`, a box of one pixel) that follows
+  no mark, so that the package would press that exact pixel; it is gone once the step's click
+  declares a region (on the last step `record mark --reopen-step k`, then `--click x,y,w,h
+  --replace-click`). Then the generator's own warnings as `record stop` prints them: those of its
+  pre-checks when they all pass, with the self-checks' when every one ran.
+- **`status`**, by the recording alone, and `session`, the session's state as `record status` says
+  it (`active`, `archived` or `stopped`):
+
+| state | means | entered by | left by |
+|---|---|---|---|
+| `material` | nothing of stage two is written: no step carries a page name, a mark (own, reused or forbidden, an anchor, a click guard), a press region (a click other than a press `tap`, `swipe` or `long-tap --record` recorded, or one that follows a mark or declares a retry), a choice (a select), an optional flag or a transition, and the recording took no ending | stage one: the presses with `--record`, `record archive` | the first such write (`record mark` on the reopened recording) |
+| `draft` | something of stage two is written, and `missing` is not empty | a stage-two write that leaves something missing | the last missing item done (`ready`) |
+| `ready` | `missing` is empty: every pre-check passes and every self-check: `record stop` would write the package | the last missing item done | `record stop` (`packaged`), or a write that leaves something missing (`draft`) |
+| `packaged` | stopped, its package written (`artifact`), and nothing changed since (no `amended_at_unix_ms`); nothing is checked again, `missing` and `checks_after` are empty | `record stop` | `record mark` after the stop ("Marking after stop"): then `ready` or `draft` by the rows above, until `record stop` generates the package again |
+
+`record archive` keeps a draft as it is (a manifest n+1); nothing done is lost. A recording made
+before this slice is read as it is.
+
 ## Package generation (`record stop`)
 
 ```
@@ -2443,6 +2580,12 @@ order of its serial numbers. The rows below count steps by these numbers; where 
 A `--requires` that does not start with `<game>.<server>.` adds the warning
 `requires_prefix_mismatch`. Steps whose click or application operation is marked
 `needs_review` are not refused; they are listed in `lab.steps_needing_review`.
+
+#463 S2-1: a recording that fails pre-checks is refused with the first of them the generator meets
+(the code and details above, as before), its `details` adding `missing_total`, how many
+pre-checks of the recording it fails, and `hint: "record ready"`, the read that lists every one at
+once with its word ("What a recording still lacks: `record ready`"). The checks of an option's form
+(`--package-id`, `--requires`, the timeouts) answer as before, without these two.
 
 ### Pages and documents
 

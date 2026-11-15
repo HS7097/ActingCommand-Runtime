@@ -214,8 +214,15 @@ naming this file.
   `record_id` it also archives a recording `record start --force` left behind, from its own step
   table, and leaves the session header, another recording's, as it is (`lab.session_header`).
   `ac_record_reopen` makes an archived recording active again, so that `ac_record_mark` and
-  `ac_record_stop` can build its package later. #463 L1 (0.12.60; `contracts/lab-recording.md`,
-  "One call per step"): `ac_do` with `capture` and `record` records a whole step in one call:
+  `ac_record_stop` can build its package later. #463 S2-1 (0.12.64; `contracts/lab-recording.md`,
+  "What a recording still lacks"): `ac_record_ready` (`record_id`, `state_dir`) lists at once
+  everything a recording (the instance's, or the active, archived or stopped one `record_id`
+  names) still lacks before `ac_record_stop` can make its package: every pre-check it fails, each
+  with its word (`what`) and the code `ac_record_stop` would answer, or, once none fails, the
+  refusal of a self-check; and its state, `material`, `draft`, `ready` or `packaged`. It only
+  reads, under no lock, also while another call holds the recording. #463 L1 (0.12.60;
+  `contracts/lab-recording.md`, "One call per step"): `ac_do` with `capture` and `record` records a
+  whole step in one call:
   `mark_request_json` (or `mark_request`, a file) is the `record mark` request of the open step,
   applied and self-tested as `ac_record_mark` applies it before the press (a refusal is its own, and
   nothing is pressed or written; a request for anything but the open step, a step operation, a

@@ -513,8 +513,9 @@ fn named_recording(
     Ok((recording, dir, manifest))
 }
 
-/// The step table of the recording `record_id`, read by its id; `None` when there is none.
-fn read_recording(state_dir: &Path, record_id: &str) -> LabResult<Option<LabRecording>> {
+/// The step table of the recording `record_id`, read by its id; `None` when there is none. #463
+/// S2-1: `record ready --record-id` reads a recording the session header does not name with it.
+pub(crate) fn read_recording(state_dir: &Path, record_id: &str) -> LabResult<Option<LabRecording>> {
     let path = recording_path(state_dir, record_id);
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
@@ -570,7 +571,9 @@ fn manifest_number(name: &str) -> Option<u32> {
 }
 
 /// The highest-numbered manifest in the recording's directory `dir`: its number and file name.
-fn latest_manifest(dir: &Path) -> LabResult<Option<(u32, String)>> {
+/// #463 S2-1: `record ready` reads whether a recording the session header does not name is
+/// archived with it.
+pub(crate) fn latest_manifest(dir: &Path) -> LabResult<Option<(u32, String)>> {
     let listing_failed =
         |error: std::io::Error| state_io(format!("failed to list {}: {error}", dir.display()));
     let entries = match fs::read_dir(dir) {

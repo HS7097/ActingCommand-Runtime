@@ -140,6 +140,8 @@ const RECORD_FORMS: &[(&str, Mode)] = &[
     ("reopen", UNSUPPORTED),
     ("status", Mode::NoEffect),
     ("candidates", Mode::NoEffect),
+    // #463 S2-1: it reads under no lock and writes nothing.
+    ("ready", Mode::NoEffect),
     ("build-task", Mode::Refused("resource_production_retired")),
     ("promote", Mode::Refused("resource_production_retired")),
     ("publish", Mode::Refused("resource_production_retired")),
@@ -342,6 +344,9 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("record candidates", Mode::NoEffect),
     ("session record status", Mode::NoEffect),
     ("session record candidates", Mode::NoEffect),
+    // #463 S2-1: what a recording still lacks; it writes nothing.
+    ("record ready", Mode::NoEffect),
+    ("session record ready", Mode::NoEffect),
     // Workflow #434 LAB-5G4c: it changes nothing (its row's `writes` is false).
     ("record draft", Mode::NoEffect),
     ("current-page", Mode::NoEffect),

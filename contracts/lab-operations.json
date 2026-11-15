@@ -2270,6 +2270,27 @@
       "notes": "Workflow #449 REC-ARCH (0.12.59; contracts/lab-recording.md, Archiving): it changes the session header only; the step table and every manifest stay as files, and a later record archive writes the next manifest; refused while another recording is active on the instance (record_session_active) and for a recording that is not archived (record_not_archived)"
     },
     {
+      "name": "record ready",
+      "module": "authoring",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
+        {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "a recording of the instance named by its record_id, active, archived or stopped; absent: the one its session header names, which record status reads"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+      ],
+      "help": "Lists everything a recording still lacks before record stop can make its package, and the recording's state; it only reads, under no lock.",
+      "output": "status (material, draft, ready or packaged), record_id, session, missing[{order, step, artifact_step, frame_id, what, code, hint?}], missing_total, warnings, checks_after",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab record ready", "actinglab session record ready", "MCP ac_record_ready"],
+      "new": "#463",
+      "slice": "463-S21",
+      "status": "planned",
+      "notes": "#463 S2-1 (0.12.64; contracts/lab-recording.md, What a recording still lacks: record ready): every pre-check of record stop the recording fails, at once, each with its word (what) and the code record stop answers for it; once none fails, the self-checks record stop runs, on the package it would generate, written nowhere, and the refusal of the first that refuses; record stop answers the first failed pre-check as before, with details.missing_total and details.hint record ready. The first-generation MCP server (actingctl mcp-serve) has no such tool"
+    },
+    {
       "name": "package check",
       "module": "authoring",
       "params": [

@@ -3950,11 +3950,13 @@ fn plan_swipe(
     })
 }
 
-/// Workflow #449 REC-ARCH: the `source` of a click a recorded swipe declared.
-const SWIPE_SOURCE: &str = "swipe";
+/// Workflow #449 REC-ARCH: the `source` of a click a recorded swipe declared. #463 S2-1: `record
+/// ready` reads it as a press stage one recorded.
+pub(crate) const SWIPE_SOURCE: &str = "swipe";
 
-/// #463 S1-1: the `source` of a click a tap or a long press declared by its point.
-const POINT_SOURCE: &str = "point";
+/// #463 S1-1: the `source` of a click a tap or a long press declared by its point. #463 S2-1:
+/// `record ready` reads it as a press stage one recorded.
+pub(crate) const POINT_SOURCE: &str = "point";
 
 /// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): the press of `tap`,
 /// `swipe` or `long-tap --record` on the open step, which must declare no effect. A tap or a long

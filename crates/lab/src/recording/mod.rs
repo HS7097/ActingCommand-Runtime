@@ -22,6 +22,8 @@ pub(crate) mod inserted;
 pub(crate) mod lock;
 pub(crate) mod marks;
 pub(crate) mod model;
+// #463 S2-1: everything a recording still lacks before `record stop` can make its package.
+pub(crate) mod ready;
 // #463 R1: a step that chooses in a list of fixed slots by the name read in each slot.
 pub(crate) mod select;
 pub(crate) mod steps;
@@ -30,3 +32,4 @@ pub(crate) mod store;
 pub use archive::{record_archive, record_archive_copy, record_reopen};
 pub use lock::RecordingLock;
 pub use model::*;
+pub use ready::{ReadyItem, RecordReadyOutcome};

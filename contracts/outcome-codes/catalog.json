@@ -5276,6 +5276,150 @@
         }
       }
     },
+    "ready_missing": {
+      "description": "One pre-check of record stop that a Lab recording fails, as record ready lists it in missing[].what (#463 S2-1): one word per pre-check, one cause per word; record stop answers its code.",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadyMissing"
+      },
+      "tokens": {
+        "too_few_steps": {
+          "description": "The recording has fewer than two effective steps (record_no_steps)."
+        },
+        "application_entry_not_first": {
+          "description": "A step after the first is an application entry step, which has no frame (record_application_entry_not_first)."
+        },
+        "effect_missing": {
+          "description": "A step before the last has no effect: no click, select or application operation (record_step_click_missing)."
+        },
+        "final_has_effect": {
+          "description": "The last step has an effect; it only recognizes the screen the package arrives at (record_final_step_has_click)."
+        },
+        "page_recognition": {
+          "description": "A step but the application entry step has no own or reused mark (record_step_without_recognition)."
+        },
+        "transition_recognition": {
+          "description": "A step's page transition has no own or reused mark (record_step_without_recognition with transition page)."
+        },
+        "too_many_effects": {
+          "description": "More steps have an effect than a package holds (record_too_many_steps)."
+        },
+        "game": {
+          "description": "The package's game is known neither from record stop nor from the recording nor from the instance configuration (record_locale_missing)."
+        },
+        "server": {
+          "description": "The package's server is known neither from record stop nor from the recording nor from the instance configuration (record_locale_missing)."
+        },
+        "locale": {
+          "description": "The package's locale is known neither from record stop nor from the recording (record_locale_missing)."
+        },
+        "effect_after_stop": {
+          "description": "After a step that stops the application the next effect is no launch or restart (record_step_after_stop_invalid)."
+        },
+        "reused_mark_missing": {
+          "description": "A step's page or its page transition reuses a mark that is no mark of an effective step (record_mark_rejected, reuse_source_missing)."
+        },
+        "forbidden_mark_missing": {
+          "description": "A step forbids a mark that is no mark of an effective step (record_mark_rejected, forbidden_source_missing)."
+        },
+        "anchor_not_own_template": {
+          "description": "A step's anchor is no own template mark of it (record_mark_rejected, anchor_invalid)."
+        },
+        "application_without_home": {
+          "description": "The last launch or restart is followed by no step that is the main interface (record_application_without_home)."
+        },
+        "optional_first_step": {
+          "description": "The first step is optional (record_optional_first_step)."
+        },
+        "optional_final_step": {
+          "description": "The last step is optional (record_optional_final_step)."
+        },
+        "optional_application": {
+          "description": "An application step is optional (record_optional_application)."
+        },
+        "optional_restart_home": {
+          "description": "The main interface after the last launch or restart is optional (record_optional_restart_segment_end)."
+        },
+        "select_optional": {
+          "description": "A select step is optional (record_select_invalid, on_optional_step)."
+        },
+        "select_retry": {
+          "description": "A select step's click declares a retry (record_select_invalid, with_retry)."
+        },
+        "select_gesture": {
+          "description": "A select step's click declares a gesture (record_select_invalid, with_gesture)."
+        },
+        "select_follow": {
+          "description": "A select step's click follows a mark (record_select_invalid, with_follow)."
+        },
+        "select_key_reserved": {
+          "description": "A select step's on_empty key is the usual ending's (record_select_invalid, on_empty_key_reserved)."
+        },
+        "select_key_taken": {
+          "description": "A select step's on_empty key is another select step's (record_select_invalid, on_empty_key_taken)."
+        },
+        "select_wanted_taken": {
+          "description": "A select step's wanted name is another select step's (record_select_invalid, wanted_name_taken)."
+        },
+        "ending_key_reserved": {
+          "description": "An ending's outcome key is the usual ending's (record_ending_invalid, key_reserved)."
+        },
+        "ending_key_of_select": {
+          "description": "An ending's outcome key is a select step's on_empty key (record_ending_invalid, key_of_select)."
+        },
+        "ending_key_taken": {
+          "description": "An ending's outcome key is another ending's (record_ending_invalid, key_exists)."
+        },
+        "ending_page_taken": {
+          "description": "An ending's page name is another ending's (record_ending_invalid, page_exists)."
+        },
+        "ending_mark_missing": {
+          "description": "An ending's page reuses a mark that is no mark of an effective step (record_mark_rejected, reuse_source_missing)."
+        }
+      }
+    },
+    "ready_check": {
+      "description": "One self-check of record stop, in the order they run, as record ready names it in checks_after and in the what of a self-check's refusal (#463 S2-1).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadyCheck"
+      },
+      "tokens": {
+        "frames": {
+          "description": "Every live frame and template crop is read back with its recorded sha256 and the recording's size."
+        },
+        "admission": {
+          "description": "The generated package is admitted by the kernel and gives its evaluator."
+        },
+        "first_decision": {
+          "description": "The offline simulation of the package's first step on its recorded frames."
+        },
+        "cross_check": {
+          "description": "Every page on its own frames, the guards on located text, the optional steps, the arrival gates and the entry overlay."
+        },
+        "endings": {
+          "description": "Every ending's page on its own frames and on the screens a run may show instead."
+        },
+        "selects": {
+          "description": "Every select step's decisions on its own frames."
+        },
+        "final_package": {
+          "description": "The final package: encoded, expanded again, admitted again, and the same first decision."
+        }
+      }
+    },
+    "ready_warning": {
+      "description": "A warning of record ready, never blocking (#463 S2-1).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadyWarning"
+      },
+      "tokens": {
+        "press_point_only": {
+          "description": "A step's press is a single recorded point with no press region set: the package would press that exact pixel."
+        }
+      }
+    },
     "device_category": {
       "description": "The category of a device failure.",
       "source": {

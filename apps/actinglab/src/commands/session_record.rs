@@ -16,8 +16,8 @@ use actingcommand_lab::{
     MarkRequest, MarkSpec, OptionalAfterSpec, RecordArchiveOptions, RecordRect,
     RecordReopenOptions, RecordStartOptions, RecordStopOptions, RecordingLock, StepAction,
     StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive,
-    record_archive_copy, record_instance_check, record_mark, record_reopen, record_start,
-    record_start_defaults, record_status, record_stop, record_stop_close,
+    record_archive_copy, record_instance_check, record_mark, record_ready, record_reopen,
+    record_start, record_start_defaults, record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -375,6 +375,21 @@ pub(crate) const RECORD_REOPEN_READS: FlagReads = FlagReads {
     positionals: &[],
 };
 
+/// #463 S2-1: the flags `record ready` reads: the recording named by its id (active, archived or
+/// stopped), else the one the instance's session names.
+pub(crate) const RECORD_READY_READS: FlagReads = FlagReads {
+    row: "record ready",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--record-id"],
+            switches: &[],
+            refused: &[],
+        },
+    ],
+    positionals: &[],
+};
+
 /// Workflow #434 LAB-5B3: the flags `record candidates` reads; its step id is also
 /// its first positional.
 pub(crate) const RECORD_CANDIDATES_READS: FlagReads = FlagReads {
@@ -509,6 +524,8 @@ fn record_reads(action: &str) -> Option<&'static FlagReads> {
         // Workflow #449 REC-ARCH.
         "archive" => &RECORD_ARCHIVE_READS,
         "reopen" => &RECORD_REOPEN_READS,
+        // #463 S2-1.
+        "ready" => &RECORD_READY_READS,
         _ => return None,
     })
 }
@@ -575,7 +592,8 @@ fn run_session_record_inner(
 ) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
         CliError::usage(
-            "session record requires start|status|stop|mark|step|candidates|amend|archive|reopen",
+            "session record requires \
+             start|status|stop|mark|step|candidates|amend|archive|reopen|ready",
         )
     })?;
     // Workflow #434 LAB-5B4: before anything is read or written.
@@ -668,6 +686,21 @@ fn run_session_record_inner(
         // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
         "archive" => run_record_archive(&flags, &record_path, held_record_lock(&record_lock)?),
         "reopen" => run_record_reopen(&flags, &record_path, held_record_lock(&record_lock)?),
+        // #463 S2-1: what the recording still lacks before `record stop` can make its package;
+        // offline, under no lock (`record_action_lock` takes none for it), writing nothing.
+        "ready" => {
+            let options = record_ready_options(&config, &instance_id)?;
+            let ready = record_ready(
+                &state_dir,
+                &instance_id,
+                record_flag_value(&flags, "--record-id")?.as_deref(),
+                &options,
+                crate::offline_ocr::lab_ocr(),
+            )?;
+            serde_json::to_value(ready).map_err(|error| {
+                CliError::usage(format!("failed to encode record ready output: {error}"))
+            })
+        }
         "step" => {
             let Some(mut record) = read_json_file::<SessionRecordContext>(&record_path)? else {
                 return Err(CliError::safety_blocked(
@@ -2803,6 +2836,24 @@ fn record_stop_options(
         arrival_timeout_ms: millis("--arrival-timeout-ms")?,
         application_arrival_timeout_ms: millis("--application-arrival-timeout-ms")?,
         dry_run: global.dry_run || record_flag_switch(flags, "--dry-run")?,
+    })
+}
+
+/// #463 S2-1: the options `record ready` reads the recording with, those of `record stop` given
+/// none: the instance configuration's game and server, which `record stop` takes when neither its
+/// flags nor the recording give them.
+fn record_ready_options(config: &UserConfig, instance_id: &str) -> CliOutcome<RecordStopOptions> {
+    let instance = config.instances.get(instance_id);
+    Ok(RecordStopOptions {
+        default_game: instance
+            .and_then(|instance| instance.game.clone())
+            .map(|game| canonical_game(&game))
+            .transpose()?,
+        default_server: instance
+            .and_then(|instance| instance.server.clone())
+            .map(|server| canonical_server(&server))
+            .transpose()?,
+        ..RecordStopOptions::default()
     })
 }
 

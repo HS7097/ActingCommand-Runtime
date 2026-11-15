@@ -29418,6 +29418,103 @@ independent review of S1-2; the coordinator's rulings, not the owner's words).
   The waits test adds the loop's flags and a bound of more than 120 intervals. No test switches the
   loop off, and none leaves the gate map.
 
+### 1.425 Slice #463 S2-1 (0.12.64): `record ready` lists everything a recording still lacks before `record stop` can make its package (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two turns the recorded material into a package offline; the design `rd-1115/pack-stage12-design.md`, B2.1, B2.2 and the row S2-1 of B5, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s21-record-ready.md`, built on the branch of the stage-one train (#1757) at `5706d568`)
+
+The coordinator gave this slice 1.425. It stands on the train of stage one (§1.402 to §1.404) and
+ships in 0.12.64.
+
+**Why.** `record stop` refused at the first pre-check a recording failed, so an agent working a
+recording in stage two learned what it lacked one refusal at a time. `record ready` is the one read
+that lists it all, and the recording's state ([lab-recording.md](lab-recording.md), "What a
+recording still lacks: `record ready`").
+
+**Established by reading** (the code's facts where the design or the work order said otherwise).
+- *The pre-checks* are those of `generate::plan` (`crates/lab/src/recording/generate.rs`), the
+  functions it calls among them (`refuse_optional_positions`, `refuse_select_rules`, `ending.rs`'s
+  `refuse_ending_rules`), each of which returned at its first failure. They are now one
+  implementation that collects (`generate::survey`, with `optional_positions`, `select_rules` and
+  `ending_rule_refusals`); `plan`, `record stop`'s, answers the first failure the generator meets,
+  as before. The design's word list did not match them: `effect_indeterminate` and
+  `final_frame_missing` are made by no pre-check (an indeterminate press leaves its step open with a
+  click, which the generator takes as an effect; a last step with a press is `final_has_effect`)
+  and are not registered; `optional_position` stood for four checks with four codes and is four
+  words; the pre-checks the list did not name each have their own word. `select_unrefined`,
+  `scan_end_not_recorded` and `press_box` belong to slices not built (V4, C6, C3).
+- *A check that needs what a failed one did not give waits for it*: the package id needs the game
+  and the server, `application_without_home` and `optional_restart_home` the game. Nothing after
+  the pre-checks (the coordinate space, the arrival timeouts, the runs of optional steps) runs once
+  one failed, as none ran before. The checks of an option's form (`--timeout-ms`, `--package-id`,
+  `--requires`) are no pre-checks of the recording: they answer where the generator meets them,
+  unless a failed pre-check came first, which is then the answer as before.
+- *The self-checks* (`recording_api::generate_and_write`) are now one function, `self_checks`, that
+  `record stop` and `record ready` call, its failure naming the check that refused. Each check
+  returns at its first refusal (`load_package_inputs` at the first frame it cannot read; admission
+  and the final package give one verdict each; the first decision simulates step 1; the cross-check,
+  the endings and the selects in `crosscheck.rs` return at their first refusal, and their later
+  parts read what the earlier ones matched), and the first refusal ends them, since a later check
+  reads what an earlier one built. Listing every page that does not match its own frames would mean
+  changing `crosscheck.rs`, which this slice leaves as it is: `record ready` lists the first
+  refusal, and `checks_after` names the checks after it.
+- *The frames check* is the last row of the contract's "Pre-checks" table, but the code runs it
+  after the generator, when it reads the package's inputs; `record ready` runs it as the first
+  self-check, `frames`.
+- *The frame of an item* is the press's `before_frame` that stage one records on a click's
+  execution (§1.402) or an application operation's completed receipt (§1.404); the design named the
+  step's `before_frame`, which no step carries.
+- *The four states* follow the work order's definitions, which differ from the design's B2.2 in one
+  place: a stopped recording marked again is `ready` or `draft` by those definitions (whether
+  `record stop` would write), where the design had it `draft` until `record stop`.
+- *The row's runtime.* The work order said `runtime: none`; the table's word for an operation that
+  never needs actingd is `offline` (`RuntimeNeed::Offline`).
+- *Which recording.* `record status` takes no `--record-id`; `record ready` reads the recording the
+  session header names, or with `--record-id` that one or (by its step table, `archive.rs`'s
+  `read_recording`) one the header no longer names, `archived` when it is active and holds a
+  manifest (`latest_manifest`), both now `pub(crate)`.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The pre-checks, collected | `generate::survey` and `Survey`, `Lack`; `plan` answers the first with `details.missing_total` and `details.hint` `record ready`; `optional_positions`, `select_rules` (`generate.rs`) and `ending_rule_refusals`, `ending_key_problem` with the word (`ending.rs`) |
+| The self-checks, one function | `recording_api::self_checks` (`Checked`, `SelfCheckFailure`), which `generate_and_write` calls; `stop_settings`, the options of an active recording, which `record_stop` and `record_ready` read |
+| The read | `recording_api::record_ready` and `ready_recording`; `crates/lab/src/recording/ready.rs`: `RecordReadyOutcome`, `ReadyItem`, the items, the warning, the state |
+| The words | `crates/lab/src/codes.rs`: `ReadyMissing` (`ready_missing`), `ReadyCheck` (`ready_check`), `ReadyWarning` (`ready_warning`); the catalog's three vocabularies (`contracts/outcome-codes/catalog.json`) |
+| The command | `record ready [--record-id] [--state-dir]` (`apps/actinglab/src/commands/session_record.rs`: `RECORD_READY_READS`, the dispatch, `record_ready_options`), under no lock; the capability entries and their dry-run mode `no_effect` (`capabilities.rs`, `dry_run_gate.rs`, [actinglab-dry-run.md](actinglab-dry-run.md)) |
+| The row | `record ready` in [lab-operations.json](lab-operations.json) (authoring, `offline`, `writes` false, slice `463-S21`); `engine::COMMANDS`, `own_flags::READ_LIST_ROWS` and `reads`, `words::BUILT_SLICES`, and the Lab's MCP server's `ACTINGLAB_SLICES`, so that it offers `ac_record_ready` through a `serve` child; the first-generation server gets nothing |
+| Texts | [lab-recording.md](lab-recording.md): the opening paragraph, the new section "What a recording still lacks: `record ready`" and the sentence of "Pre-checks"; `apps/actinglab-mcp/MANUAL.md`, section 8, "Recordings" |
+
+**Codes and words.** No outcome code is added. Three closed vocabularies of the catalog, built
+from the enums of `crates/lab/src/codes.rs`, used by no outcome key: `ready_missing`, the 31 words of
+`record ready`'s `missing[].what`, one per pre-check and one cause each (the table in the contract
+names each word's code); `ready_check`, the 7 self-checks in the order they run (`checks_after` and
+the `what` of a self-check's refusal); `ready_warning`, `press_point_only`. None refuses or warns as
+an outcome: they are members of a read that exits 0. `record stop`'s first refusal keeps its code,
+class and exit status, its `details` adding `missing_total` and `hint`. The outcome code index is
+current (it lists codes only). No decision reads a code: `record ready` answers a self-check's
+failure as the command's own error by its class (`runtime_unavailable`), and every other by the
+check that refused.
+
+**Tests.** `crates/lab/src/gate_463_s21.rs` (exec gate map "#463 S2-1"; fake Runtime and clock,
+synthetic 1280x720 frames): three things missing listed in order, and `record stop` answering the
+first with `missing_total` 3 and the hint; a complete recording `ready` with every self-check run;
+a recording that lacks something running no self-check (its changed frame refused by `record
+stop --dry-run` once the locale is given); `material` against `draft`; `packaged` after `record
+stop` and `draft` after a later mark; `press_point_only` until a press region is set; the read
+writing nothing and answering while the lock is held. Adapted:
+`apps/actinglab/src/tests/gate_434_lab5b4.rs` holds the register's read lists equal to its commands,
+and `READ_LIST_ROWS` gains `record ready` (its 31 commands are 32). No golden changes; no test leaves
+a gate map.
+
+**What is not changed.** What `record stop` decides, writes or refuses, and the code, class and
+details of every refusal but the two members its first pre-check refusal adds; every check's own
+decision; the generator's output; the step table's format; `record status`; the kernel and the
+Runtime; today's MCP server (`actingctl mcp-serve`). A recording made before this slice is read as
+it is.
+
+**At deploy.** Nothing to configure. Through MCP `ac_record_ready` is on the Lab's MCP server
+(`actinglab-mcp`); a client registered with today's server has no such tool until its registration
+moves, which is the owner's to do.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
