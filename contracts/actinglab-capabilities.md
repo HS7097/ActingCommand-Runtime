@@ -15,6 +15,10 @@ is shared by capabilities, help and command listing. `package check` (Workflow #
 is `available` and declares `refused` (`dry_run_unsupported`); its entry carries one more
 member, `report_schema: "actinglab.resource-verify.v1"`, the schema of the report it writes, so a
 repository wrapper reads from `capabilities` whether the Tools it pins can verify.
+`standard-pack build` (Workflow #464 P2, [resource-verify.md](resource-verify.md), "`standard-pack
+build`") needs `offline`, is `available` and declares `refused` (`dry_run_unsupported`); its entry
+carries `build_schema: "actingcommand.standard-pack-build.v1"`, the schema of the `build.json` it
+writes, so a wrapper reads from `capabilities` whether the Tools it pins can build.
 `resource check-release` was `retired`, with `reason_code` `resource_check_release_retired`; since
 0.12.47 (Workflow #434 LAB-2) its entry and its word are gone, and the code is retired.
 `package loading` (Workflow #407 LOAD-1, since 0.12.37; [package-reference.md](package-reference.md),

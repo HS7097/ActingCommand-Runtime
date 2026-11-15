@@ -53,8 +53,9 @@ use crate::{
 };
 
 /// The strict rows: [`accepted`] answers for each of them and, beside them, for the rows of
-/// [`CORE_STRICT_ROWS`] only.
-pub(crate) const STRICT_ROWS: [&str; 30] = [
+/// [`CORE_STRICT_ROWS`] only. Workflow #464 P2: `standard-pack build`, checked against its list
+/// as `resource verify` is.
+pub(crate) const STRICT_ROWS: [&str; 32] = [
     "tap",
     "swipe",
     "long-tap",
@@ -81,6 +82,9 @@ pub(crate) const STRICT_ROWS: [&str; 30] = [
     "resource verify",
     "resource restore",
     "standard-pack compose",
+    "standard-pack build",
+    // Workflow #464 P1.
+    "standard-pack adopt",
     "scheduling compile",
     "scheduling timeline",
     "regression",
@@ -146,8 +150,9 @@ pub(crate) const NO_COMMAND_ROWS: [&str; 0] = [];
 /// `standard-pack check`, a core row since the coordinator's ruling of 2026-11-11 (the rescue
 /// module's `place` runs it as its post-check). Not one of the four kinds, which are the
 /// debugging and authoring modules'. `app launch|restart|stop`, core rows actinglab's own
-/// `session app` serves, are slice B1's ([`DECLARED_ROWS`]).
-pub(crate) const CORE_STRICT_ROWS: [&str; 1] = ["standard-pack check"];
+/// `session app` serves, are slice B1's ([`DECLARED_ROWS`]). Workflow #464 P3: and `standard-pack
+/// ready`, a core row that reads a game root as `standard-pack check` does.
+pub(crate) const CORE_STRICT_ROWS: [&str; 2] = ["standard-pack check", "standard-pack ready"];
 
 /// Workflow #434 LAB-5B1 (register §1.287, "Slice LAB-5B1"): the rows whose command line reaches
 /// actinglab's own command as the row's declared words only (`engine::Line::Declared`), each with
@@ -364,6 +369,15 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
         "resource restore" => from_lists(resource_restore::RESTORE_FLAGS, &[], none),
         "standard-pack check" => from_lists(standard_pack_cli::CHECK_FLAGS, &[], none),
         "standard-pack compose" => from_lists(standard_pack_cli::COMPOSE_FLAGS, &[], none),
+        // Workflow #464 P2.
+        "standard-pack build" => from_lists(resource_verify::BUILD_FLAGS, &[], none),
+        "standard-pack adopt" => from_lists(
+            standard_pack_cli::ADOPT_FLAGS,
+            &standard_pack_cli::ADOPT_SWITCHES,
+            none,
+        ),
+        // Workflow #464 P3.
+        "standard-pack ready" => from_lists(standard_pack_cli::READY_FLAGS, &[], none),
         "scheduling compile" => from_lists(scheduling_cli::COMPILE_FLAGS, &[], none),
         "scheduling timeline" => from_lists(scheduling_cli::TIMELINE_FLAGS, &[], none),
         "regression" => from_lists(recognition_regression::REGRESSION_FLAGS, &[], none),
@@ -456,7 +470,8 @@ pub(crate) const UNROWED_READS: [&FlagReads; 4] = [
 /// CLI-COMP (register §1.318): `completion`, parsed by its read list, and `__complete`, the
 /// completion scripts' callback, which reads every word of its line (its options, the index, the
 /// typed words in their form) and answers a line it cannot read with no candidate, ignoring none.
-pub(crate) const REFUSING_COMMANDS: [&str; 61] = [
+/// Workflow #464 P2: `standard-pack build`, against its strict list.
+pub(crate) const REFUSING_COMMANDS: [&str; 64] = [
     "schema",
     "touch-probe",
     "tap",
@@ -508,6 +523,10 @@ pub(crate) const REFUSING_COMMANDS: [&str; 61] = [
     "resource verify",
     "standard-pack check",
     "standard-pack compose",
+    "standard-pack build",
+    "standard-pack adopt",
+    // Workflow #464 P3: refuses every flag but `--root` and any positional, as `check` does.
+    "standard-pack ready",
     "runtime reset",
     "runtime observe",
     "session backend",

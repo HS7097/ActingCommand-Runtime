@@ -128,11 +128,15 @@ pub fn serves(operation: &Operation) -> bool {
     }
     // `app launch|restart|stop` are actinglab's own `session app` (the engine), and (Workflow #434
     // LAB-5F fix 1, a core row since the coordinator's ruling of 2026-11-11) `standard-pack check`
-    // is actinglab's own `standard-pack check`.
+    // is actinglab's own `standard-pack check`; Workflow #464 P3: `standard-pack ready` likewise.
     operation.module == crate::table::OperationModule::Core
         && !matches!(
             name,
-            "app launch" | "app restart" | "app stop" | "standard-pack check"
+            "app launch"
+                | "app restart"
+                | "app stop"
+                | "standard-pack check"
+                | "standard-pack ready"
         )
 }
 

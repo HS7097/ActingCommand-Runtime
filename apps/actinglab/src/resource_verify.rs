@@ -12,10 +12,21 @@
 //! bundle` and `standard-pack check` (`steps.rs`, `bundle.rs`). The command writes only below
 //! `--work` and the report, deletes nothing, opens no Runtime connection, touches no device,
 //! writes no ledger and runs no repository code.
+//!
+//! Workflow #464 P2 (`contracts/resource-verify.md`, "`standard-pack build`"): the steps run on one
+//! function, [`run_steps`], which both rows call: `resource verify` ([`StepsFor::Verify`]), whose
+//! report is the same for the same input as before, and `standard-pack build`
+//! ([`StepsFor::Build`], `build.rs`), which writes its product from the steps' zip only when every
+//! step passed.
 
+mod build;
 mod bundle;
 mod git;
+// Workflow #464 P2 fix round 1: the gate's tests read the revision table's rows one by one.
+pub(crate) mod revision;
 mod steps;
+
+pub(crate) use build::{BUILD_SCHEMA, build_options, run_standard_pack_build};
 
 use crate::codes::{ActinglabCode, VerifyStep};
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
@@ -39,6 +50,9 @@ pub(crate) const FLAGS: [&str; 6] = [
     "--commit",
     "--base",
 ];
+/// Workflow #464 P2: the four flags `standard-pack build` reads (`build.rs`); every other flag is
+/// refused.
+pub(crate) const BUILD_FLAGS: [&str; 4] = ["--repo", "--source-repository", "--out", "--commit"];
 /// The key table's bounds of a path and of a JSON pointer value.
 const PATH_VALUE_LIMIT: usize = 1024;
 const POINTER_VALUE_LIMIT: usize = 512;
@@ -54,14 +68,33 @@ pub(crate) fn options() -> [&'static str; 6] {
     ]
 }
 
-/// What the command was asked, its paths absolute.
-struct VerifyRequest {
+/// Workflow #464 P2: the row that runs the steps, on their one function ([`run_steps`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepsFor {
+    /// `resource verify`: every step as before #464 P2, so that its report is the same for the
+    /// same input.
+    Verify,
+    /// `standard-pack build`: the same steps; the checkout's read paths are every input its
+    /// bundle carries, the bundle carries `goals.json` and the repository's `tables/` too, and the
+    /// `package` revision is computed from the content (`revision.rs`).
+    Build,
+}
+
+/// What the steps read, their paths absolute (Workflow #464 P2: one request for both rows).
+struct StepsRequest {
     repo: PathBuf,
     source_repository: String,
+    /// Everything the steps write: `resource verify`'s `--work`, `standard-pack build`'s
+    /// `<out>/work`.
     work: PathBuf,
-    report: PathBuf,
     commit: Option<String>,
     base: Option<String>,
+}
+
+/// What the command was asked, its paths absolute.
+struct VerifyRequest {
+    steps: StepsRequest,
+    report: PathBuf,
 }
 
 /// `resource verify` (contracts/resource-verify.md, "The command").
@@ -79,7 +112,7 @@ pub(crate) fn verify_with_executable(
     let request = parse_request(global, flags)?;
     crate::dry_run_gate::refuse(global, "resource verify", None, Value::Null)?;
     check_outputs(&request)?;
-    let (report, top) = verify(&request, executable);
+    let (report, top) = run_steps(&request.steps, executable, StepsFor::Verify);
     let value = match serde_json::to_value(&report) {
         Ok(value) => value,
         Err(error) => {
@@ -209,18 +242,24 @@ fn parse_request(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<VerifyR
         return Err(CliError::usage("--report names no file"));
     }
     Ok(VerifyRequest {
-        repo: absolute("--repo")?,
-        source_repository,
-        work: absolute("--work")?,
+        steps: StepsRequest {
+            repo: absolute("--repo")?,
+            source_repository,
+            work: absolute("--work")?,
+            commit,
+            base,
+        },
         report,
-        commit,
-        base,
     })
 }
 
 /// `--work`, `--report` and `<report>.part` must not exist, and their parents must.
 fn check_outputs(request: &VerifyRequest) -> CliOutcome<()> {
-    for path in [&request.work, &request.report, &part_path(&request.report)] {
+    for path in [
+        &request.steps.work,
+        &request.report,
+        &part_path(&request.report),
+    ] {
         let parent = path
             .parent()
             .is_some_and(|parent| fs::metadata(parent).is_ok_and(|metadata| metadata.is_dir()));
@@ -285,12 +324,17 @@ fn write_report(report: &Path, value: &Value) -> Result<(), Outcome> {
     fs::rename(part, report).map_err(|error| failed(&error, IoOp::Rename))
 }
 
-/// Runs every step in order and assembles the report and its top outcome.
-fn verify(request: &VerifyRequest, executable: io::Result<PathBuf>) -> (Report, Outcome) {
+/// Runs every step in order and assembles the report and its top outcome: the one function of
+/// the steps, for the row `steps_for` (Workflow #464 P2).
+fn run_steps(
+    request: &StepsRequest,
+    executable: io::Result<PathBuf>,
+    steps_for: StepsFor,
+) -> (Report, Outcome) {
     let started_at_unix_ms = unix_ms();
     let git = git::Git::new(&request.repo);
     let (tools, tools_run) = steps::tools(executable);
-    let (checkout_facts, checkout, checkout_run) = steps::checkout(&git, request);
+    let (checkout_facts, checkout, checkout_run) = steps::checkout(&git, request, steps_for);
     let mut runs = vec![tools_run, checkout_run];
     let mut game = None;
     match &checkout {
@@ -325,6 +369,7 @@ fn verify(request: &VerifyRequest, executable: io::Result<PathBuf>) -> (Report, 
                 applications: applications.as_ref(),
                 packs: &layout.directories,
                 identities: &identities,
+                steps_for,
             }));
         }
     }

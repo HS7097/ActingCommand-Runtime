@@ -812,4 +812,16 @@ outcome_keys! {
     // ---- Workflow #437 MAPP-2a (contracts/device-group.md "The switch before a run"): which step
     // of the switch before a member's run failed; kept in codes mode. ----
     application_switch_step: vocab(application_switch_step),
+    // ---- Workflow #464 P1 (`actinglab standard-pack adopt`, contracts/standard-pack-authoring.md):
+    // which check of the adoption refused; kept in codes mode. ----
+    adopt_problem: vocab(adopt_problem),
+    // ---- Workflow #464 P3 (contracts/standard-pack-schedule.md "Readiness"): which readiness item
+    // of a pack waits or was not judged, and why; kept in codes mode. ----
+    readiness_item: vocab(readiness_item),
+    readiness_problem: vocab(readiness_problem),
+    readiness_unjudged: vocab(readiness_unjudged),
+    required_revision: integer,
+    // Workflow #464 P3 fix round 1: the pack whose problem keeps another waiting (a follower's
+    // head, a refused layer of a prerequisite chain, the pack the root check refused at).
+    blocking_package_id: name,
 }

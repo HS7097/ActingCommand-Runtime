@@ -1038,9 +1038,11 @@ same way, before `PackageAdmitted`: `resource_declaration_invalid`, `UnknownFiel
 (`contained_task_linear_invalid`, `reason=operation_effect`); a bundle whose packs declare one
 declares `package` [13, 13], which the `package` edge of an earlier installer refuses before it
 places anything ([component-interfaces.md](component-interfaces.md), the `package` row 13). That
-13 is written by the resource repository's packaging and checked by no component, so an earlier
-installer places such a bundle that declares less, and an earlier Runtime refuses its package at
-every run.
+13 is written by the resource repository's packaging and, since Workflow #464 P2, by the Lab's own
+`standard-pack build` for a bundle it builds (its revision table counts a select step of a
+`linear_steps` pack as 13, [resource-verify.md](resource-verify.md), "The `package` revision"), and
+checked by nothing when a bundle is placed or a package is admitted, so an earlier installer places
+such a bundle that declares less, and an earlier Runtime refuses its package at every run.
 
 ## Tools
 
