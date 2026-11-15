@@ -21,8 +21,10 @@ pub use v3::{
     RESOURCE_TARGETS_SCHEMA_VERSION_V3, ResourceTargetEntry, ResourceTargetSpecV3,
     ResourceTargetsDocumentV3, TargetSetter,
 };
-// Workflow #463 V2: the entry rows a run's variables read.
-pub(crate) use v3::{StoredEntry, stored_v3_entries};
+// Workflow #463 V2: the entry rows a run's variables read. Fix round 2: public, what a view of an
+// application's values reads as a dispatch does; and the one table of the channels a row names.
+pub(crate) use v3::set_channel;
+pub use v3::{StoredEntry, stored_v3_entries};
 
 use std::collections::{BTreeMap, BTreeSet};
 

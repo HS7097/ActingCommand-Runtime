@@ -965,6 +965,23 @@ fn decode_rows_v3(
     })
 }
 
+/// The channels a row's `channel` may name: the one table both the v3 reader ([`set_fields`]) and
+/// the entries a run's variables read ([`stored_v3_entries`]) hold a row to (Workflow #463 V2 fix
+/// round 2), so they cannot drift.
+const SET_CHANNELS: [RuntimeChannel; 4] = [
+    RuntimeChannel::Cli,
+    RuntimeChannel::Mcp,
+    RuntimeChannel::Ui,
+    RuntimeChannel::Lab,
+];
+
+/// The channel of [`SET_CHANNELS`] whose word is `word`.
+pub(crate) fn set_channel(word: &str) -> Option<RuntimeChannel> {
+    SET_CHANNELS
+        .into_iter()
+        .find(|channel| channel.as_str() == word)
+}
+
 /// Whether `set_unix_ms`, `channel` and `initiator` form who set a row: an integer of at least 0,
 /// one of the four channel words and, when present, one of the six initiator words.
 fn set_fields(
@@ -972,15 +989,8 @@ fn set_fields(
     channel: Option<&FactScalar>,
     initiator: Option<&FactScalar>,
 ) -> bool {
-    let channels = [
-        RuntimeChannel::Cli,
-        RuntimeChannel::Mcp,
-        RuntimeChannel::Ui,
-        RuntimeChannel::Lab,
-    ];
     matches!(set_at, Some(FactScalar::Integer(at)) if *at >= 0)
-        && matches!(channel, Some(FactScalar::String(word))
-            if channels.iter().any(|channel| channel.as_str() == word))
+        && matches!(channel, Some(FactScalar::String(word)) if set_channel(word).is_some())
         && match initiator {
             None => true,
             Some(FactScalar::String(word)) => Initiator::from_word(word).is_some(),
@@ -1088,22 +1098,25 @@ pub(super) fn stored_v3_targets(
 
 /// Workflow #463 V2 (`contracts/package-variables.md`, "The run"): one entry of a stored v3
 /// record as a run's variables read it: its value, and when and through which channel it was set.
+/// Fix round 2: public, the stored value [`crate::resolve_variable`] judges for a dispatch and for
+/// a view alike.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StoredEntry {
-    pub(crate) value: serde_json::Value,
+pub struct StoredEntry {
+    pub value: serde_json::Value,
     /// Who set it. Fix round 1: `None` when the row's `set_unix_ms` or `channel` cannot be read;
     /// the value is then not applied (`entry_unreadable`), never taken as not set.
-    pub(crate) set_by: Option<crate::VariableSetBy>,
+    pub set_by: Option<crate::VariableSetBy>,
 }
 
 /// Workflow #463 V2: the entries of `instance_id`'s stored record by name, each with its row's
 /// `set_unix_ms` and `channel`, when that record is a readable v3 record (the record
-/// [`stored_v3_targets`] reads); none for any other record, so every variable reads its default.
+/// `stored_v3_targets` reads); none for any other record, so every variable reads its default.
 /// Read from the evaluation's facts, which the host projects from its memory store: no ledger.
-/// Fix round 1: an entry whose row's `set_unix_ms` or `channel` cannot be read (the v3 reader
-/// holds both to their form, so no record it accepts gives one) keeps its value without who set
-/// it.
-pub(crate) fn stored_v3_entries(
+/// Fix round 1: an entry whose row's `set_unix_ms` or `channel` cannot be read keeps its value
+/// without who set it. Fix round 2: the channels are `SET_CHANNELS`, the v3 reader's own table,
+/// so a record the reader accepts always gives both and `entry_unreadable` stays for a row the
+/// reader would refuse (the gate tests give one); public, what a view reads as a dispatch does.
+pub fn stored_v3_entries(
     facts: &EvaluationFacts,
     instance_id: &str,
 ) -> BTreeMap<String, StoredEntry> {
@@ -1122,12 +1135,6 @@ pub(crate) fn stored_v3_entries(
     let Ok(decoded) = decode_rows_v3(rows, instance_id) else {
         return BTreeMap::new();
     };
-    let channels = [
-        RuntimeChannel::Cli,
-        RuntimeChannel::Mcp,
-        RuntimeChannel::Ui,
-        RuntimeChannel::Lab,
-    ];
     decoded
         .entries
         .into_iter()
@@ -1139,9 +1146,7 @@ pub(crate) fn stored_v3_entries(
                     _ => return None,
                 };
                 let channel = match row.get(FIELD_CHANNEL) {
-                    Some(FactScalar::String(word)) => channels
-                        .into_iter()
-                        .find(|channel| channel.as_str() == word)?,
+                    Some(FactScalar::String(word)) => set_channel(word)?,
                     _ => return None,
                 };
                 Some(crate::VariableSetBy {

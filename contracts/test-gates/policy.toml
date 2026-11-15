@@ -1449,5 +1449,7 @@ tests = [
     "actingcommand-policy::lib::tests::gate_463_v2::v2_a_package_without_variables_gives_the_reason_chains_of_before",
     "actingcommand-policy::lib::tests::gate_463_v2::v2_fix1_a_value_longer_than_256_bytes_is_applied_and_recorded_whole",
     "actingcommand-policy::lib::tests::gate_463_v2::v2_fix1_a_stored_row_whose_setter_cannot_be_read_is_not_applied_with_its_word",
+    "actingcommand-policy::lib::tests::gate_463_v2::v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause",
+    "actingcommand-policy::lib::tests::gate_463_v2::v2_fix2_a_reason_past_the_record_bound_is_recorded_with_hashes_and_kept_whole",
 ]
 incident = ["#463 V2"]

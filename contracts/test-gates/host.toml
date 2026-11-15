@@ -4019,5 +4019,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again",
     "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix1_the_whole_root_keeps_a_variable_from_applying",
     "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix1_a_package_replaced_in_place_is_judged_with_its_new_declaration",
+    "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix2_a_root_that_fails_its_check_reads_each_variable_at_its_default",
+    "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix2_a_dispatched_package_the_workbench_cannot_read_is_warned_once",
 ]
 incident = ["#463 V2"]

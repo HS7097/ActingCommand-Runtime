@@ -1626,8 +1626,13 @@ pub(crate) struct PolicyHost {
     /// whose `goal_value_not_applied` this start wrote; fix round 1: with the stored value's
     /// sha256. Memory only, nothing on disk: a restart writes it once more.
     variable_warned: BTreeSet<WarnedVariableValue>,
-    /// Workflow #463 V2: the `goal_value_not_applied` warnings the last evaluations decided and
-    /// the cycle's recorder has not taken yet ([`Self::take_variable_warnings`]).
+    /// Workflow #463 V2 fix round 2: each (instance, package, state of the package's files) whose
+    /// `goal_value_package_unreadable` this start wrote. Memory only: a restart writes it once
+    /// more.
+    unread_variables_warned: BTreeSet<(String, String, String)>,
+    /// Workflow #463 V2: the `goal_value_not_applied` warnings (fix round 2: and the
+    /// `goal_value_package_unreadable` ones) the last evaluations decided and the cycle's recorder
+    /// has not taken yet ([`Self::take_variable_warnings`]).
     variable_warnings: Vec<Outcome>,
 }
 
@@ -2182,6 +2187,7 @@ impl PolicyHost {
             rows_exceeded_warned: BTreeMap::new(),
             held: held::HeldMemory::default(),
             variable_warned: BTreeSet::new(),
+            unread_variables_warned: BTreeSet::new(),
             variable_warnings: Vec::new(),
         };
         match tagged {
@@ -4119,6 +4125,24 @@ impl PolicyHost {
                             .variable_problem(value.problem),
                     );
                 }
+            }
+            // Fix round 2: a dispatched package the workbench could not read hands its run no
+            // value and the run reads the package's defaults; nothing is skipped silently, so it
+            // is warned once per (instance, package, state of its files) since the start.
+            if let Some(unread) = variable_plan.unread(&intent.task_id, &intent.instance_id)
+                && self.unread_variables_warned.insert((
+                    intent.instance_id.clone(),
+                    unread.package_id.clone(),
+                    unread.files_state.clone(),
+                ))
+            {
+                self.variable_warnings.push(
+                    Outcome::new(crate::codes::GoalValueCode::PackageUnreadable)
+                        .operation(HostLocation::EvaluatePolicyCycle)
+                        .instance_id(intent.instance_id.as_str())
+                        .task_id(intent.task_id.as_str())
+                        .package_id(unread.package_id.as_str()),
+                );
             }
         }
         // SS-4: the basis of each new intent, as this evaluation read its facts; its admission
@@ -7154,6 +7178,24 @@ fn event_data(
     })
 }
 
+/// Workflow #463 V2 fix round 2 (`contracts/package-variables.md`, "The record"): the reasons of
+/// `reason_chain` as a policy dispatch event records them, each in its recorded form
+/// (`recorded_dispatch_parameters`: a `policy_dispatch_parameters` whose record would pass an
+/// outcome record's bound carries, for a value whose text does not fit, its sha256 and length).
+/// The one builder of both event data, the one written and the one a replay compares with it.
+/// The chain itself is not changed: the run reads its values from it, whole.
+pub(crate) fn recorded_reasons(reason_chain: &DecisionReasonChain) -> Vec<PolicyReasonRecord> {
+    reason_chain
+        .reasons
+        .iter()
+        .map(|reason| {
+            PolicyReasonRecord(actingcommand_policy::recorded_dispatch_parameters(
+                &reason.outcome,
+            ))
+        })
+        .collect()
+}
+
 fn dispatch_event_data(
     intent: &DispatchIntent,
     reason_chain: &DecisionReasonChain,
@@ -7171,11 +7213,7 @@ fn dispatch_event_data(
         operation_id: intent.operation_id.clone(),
         procedure_binding_digest,
         reason_chain_id: reason_chain.id.clone(),
-        reasons: reason_chain
-            .reasons
-            .iter()
-            .map(|reason| PolicyReasonRecord(reason.outcome.clone()))
-            .collect(),
+        reasons: recorded_reasons(reason_chain),
         catalog_hash: intent.catalog_hash.clone(),
         catalog_version: intent.catalog_version,
         input_ledger_position: intent.input_ledger_position,

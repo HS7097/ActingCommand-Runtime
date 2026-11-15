@@ -831,7 +831,14 @@ outcome_keys! {
     set_unix_ms: unix_ms,
     set_channel: vocab(channel),
     variable_problem: vocab(variable_problem),
-    variable_values: records(variable_name, variable_source; value_json, set_unix_ms, set_channel, variable_problem),
+    // Fix round 2: a record whose value's text does not fit the ledger record's bound carries the
+    // text's sha256 and length in its place, and says so.
+    value_sha256: hash,
+    value_bytes: integer,
+    value_json_left_out: boolean,
+    variable_values: records(variable_name, variable_source; value_json, set_unix_ms, set_channel, variable_problem, value_sha256, value_bytes, value_json_left_out),
     declaration_sha256: hash,
+    // Fix round 2: why a game root's goals.json is not applied (`standard_pack_goals_not_applied`).
+    goals_failure: vocab(goals_failure),
     // ---- Workflow #463 V2: end ----
 }

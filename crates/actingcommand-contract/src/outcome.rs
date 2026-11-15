@@ -45,8 +45,10 @@ pub const CAUSES_MAX_DEPTH: usize = 8;
 /// The largest serialised envelope.
 pub const ENVELOPE_MAX_BYTES: usize = 32 * 1024;
 
-/// Room the envelope's own members (`schema_version`, `detail`) take beside the body.
-const ENVELOPE_BODY_BUDGET: usize = ENVELOPE_MAX_BYTES - 128;
+/// Room the envelope's own members (`schema_version`, `detail`) take beside the body. Workflow
+/// #463 V2 fix round 2: public, the bound of an outcome's record form (a ledger record's reason),
+/// which a writer that must keep a record within it measures against.
+pub const ENVELOPE_BODY_BUDGET: usize = ENVELOPE_MAX_BYTES - 128;
 const NAME_MAX_BYTES: usize = 256;
 const PATH_MAX_BYTES: usize = 1024;
 const POINTER_MAX_BYTES: usize = 512;

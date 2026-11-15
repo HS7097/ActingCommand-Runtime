@@ -263,10 +263,12 @@ for that game, and a reader of the declaration says why.
   read a root as it does, check-config and `actingd suspended`): with this reader, once per read of
   the root, for the variables' judgement alone ([package-variables.md](package-variables.md), "A
   variable that does not apply"): the names an accepted file takes, the parsed document kept with
-  the root's declarations, a refused one taking none. A refused file is recorded once per sha256
-  (`standard_pack_root_invalid`, its first problem), one that cannot be read once until it reads
-  again (`standard_pack_root_unreadable`); neither stops the root. No other reader of the Runtime
-  opens it, and the programs of 0.12.60 open none.
+  the root's declarations, a refused one taking none. Fix round 2: a refused file, or one that
+  cannot be read, is `standard_pack_goals_not_applied` (warning; `goals_failure` `refused` with the
+  reader's first problem as its cause, a `standard_pack_root_invalid`, or `unreadable` with the
+  operating system's failure), recorded once per sha256 of a refused file and once until an
+  unreadable one reads again; neither stops the root. No other reader of the Runtime opens it, and
+  the programs of 0.12.60 open none.
 
 ## Interface
 

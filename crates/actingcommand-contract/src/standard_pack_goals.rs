@@ -446,9 +446,11 @@ pub struct GoalReferences {
 /// no default, so no reader can answer "nothing is irreversible" by omission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IrreversiblePackages {
-    /// The packages whose declaration was read, by id, each `true` when it can do something
-    /// irreversible.
-    packages: BTreeMap<String, bool>,
+    /// The packages whose declaration was read, by id, each with the capabilities it provides or
+    /// its remedies list that a package of the root marks irreversible: it can do something
+    /// irreversible when there is one. Workflow #463 V2 fix round 2: kept, so that a reader can
+    /// name the capability that makes a package irreversible ([`Self::irreversible_capabilities`]).
+    packages: BTreeMap<String, BTreeSet<String>>,
     /// The packages whose declaration could not be read, by id.
     unreadable: BTreeSet<String>,
 }
@@ -488,12 +490,14 @@ impl IrreversiblePackages {
         for (package_id, declaration) in declared {
             match declaration {
                 Some(declaration) => {
-                    let can = declaration
+                    let reached = declaration
                         .provides
                         .keys()
                         .chain(&declaration.remedies)
-                        .any(|capability| irreversible.contains(capability));
-                    packages.insert(package_id, can);
+                        .filter(|capability| irreversible.contains(*capability))
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    packages.insert(package_id, reached);
                 }
                 None => {
                     unreadable.insert(package_id);
@@ -510,7 +514,17 @@ impl IrreversiblePackages {
     /// irreversible; `None` when it is no package of the root or its declaration could not be
     /// read.
     pub fn package(&self, package_id: &str) -> Option<bool> {
-        self.packages.get(package_id).copied()
+        self.packages
+            .get(package_id)
+            .map(|reached| !reached.is_empty())
+    }
+
+    /// Workflow #463 V2 fix round 2: the capabilities the package `package_id`, whose declaration
+    /// was read, provides or its remedies list that a package of the root marks irreversible
+    /// (empty when it can do nothing irreversible); `None` when it is no package of the root or
+    /// its declaration could not be read.
+    pub fn irreversible_capabilities(&self, package_id: &str) -> Option<&BTreeSet<String>> {
+        self.packages.get(package_id)
     }
 
     /// The packages of the root whose declaration could not be read, by id.
