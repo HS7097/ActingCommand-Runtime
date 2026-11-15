@@ -4797,7 +4797,10 @@ impl PolicyHost {
 
     /// Workflow #463 V3: the `policy_dispatch_parameters` the last evaluation's remedy plan gave
     /// the pairs of `instance_id`, by task, before the variable values joined it.
-    pub(crate) fn resolved_parameters(&self, instance_id: &str) -> BTreeMap<String, DecisionReason> {
+    pub(crate) fn resolved_parameters(
+        &self,
+        instance_id: &str,
+    ) -> BTreeMap<String, DecisionReason> {
         self.resolved_parameters
             .iter()
             .filter(|((_, instance), _)| instance == instance_id)

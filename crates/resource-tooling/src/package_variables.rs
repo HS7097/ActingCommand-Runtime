@@ -20,11 +20,12 @@ use std::time::Instant;
 
 /// What the package at `package` declares (see the module's description).
 pub fn package_variables(package: &Path) -> LabResult<Value> {
-    let read =
-        PreparedContainedTask::read_remedy_declarations(CHECK_LABEL, package, Instant::now() + PACK_DEADLINE)
-            .map_err(|error| {
-                LabError::package_invalid(format!("{}: {error}", package.display()))
-            })?;
+    let read = PreparedContainedTask::read_remedy_declarations(
+        CHECK_LABEL,
+        package,
+        Instant::now() + PACK_DEADLINE,
+    )
+    .map_err(|error| LabError::package_invalid(format!("{}: {error}", package.display())))?;
     let variables = read
         .variables
         .iter()

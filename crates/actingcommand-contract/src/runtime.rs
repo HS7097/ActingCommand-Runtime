@@ -4216,7 +4216,9 @@ pub enum RuntimeOperation {
     /// every variable a package the active catalog binds on it declares, each with its default,
     /// its stored value, who set it and whether it is in effect, and the stored values no entry
     /// offers any more. A general read that records nothing.
-    GoalView { instance_alias: String },
+    GoalView {
+        instance_alias: String,
+    },
     /// Sets or clears one value of one application's goal page by its name (`EditGoal`), with
     /// `expected_version` only while the goal record's version is that one (`0`: no record). The
     /// Runtime checks the name and the value before the fact write gate (`goal_value_invalid`),
@@ -5723,9 +5725,13 @@ pub enum RuntimeResult {
     PlayerHoldReleased(Box<PlayerHoldReleased>),
     // Workflow #463 V3 (register §1.383; `runtime-client` 9): the goal page's two results.
     /// `GoalView`: one application's goal page.
-    GoalViewed { view: Box<GoalView> },
+    GoalViewed {
+        view: Box<GoalView>,
+    },
     /// `EditGoal`: the goal record's version after the edit and the event that holds it.
-    GoalEdited { edited: GoalEdited },
+    GoalEdited {
+        edited: GoalEdited,
+    },
 }
 
 /// A Runtime's answer to one request (receipt v2, Workflow #378 A4). Every receipt carries

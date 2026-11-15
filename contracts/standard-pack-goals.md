@@ -267,6 +267,12 @@ for that game, and a reader of the declaration says why.
   (`standard_pack_root_invalid`, its first problem), one that cannot be read once until it reads
   again (`standard_pack_root_unreadable`); neither stops the root. No other reader of the Runtime
   opens it, and the programs of 0.12.60 open none.
+- **The goal page** (Workflow #463 V3, Runtime 0.12.61, register §1.383; `GoalView` and
+  `EditGoal`, [runtime-interface.md](runtime-interface.md), "Goal request kinds") opens no file: it
+  takes the parsed document the workbench's read of the root keeps, lists the entries in file
+  order and checks a name set by it against them. In 0.12.61 as built on the V2 fix round's head
+  `020a5681` the workbench keeps the document only during one check, so the page answers the
+  declaration `not_read` and lists no entry (a marked gap, closed when that round keeps it).
 
 ## Interface
 

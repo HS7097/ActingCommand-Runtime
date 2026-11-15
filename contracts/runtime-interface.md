@@ -560,6 +560,63 @@ the frame), each with `player_hold_settlement()` and `player_hold_attempt()`; no
 again. A Runtime that declares at most 3 drops either request: the client reconnects in the same
 epoch and reports `runtime_operation_unsupported` with the handle usable.
 
+### Goal request kinds
+
+Workflow #463 V3, which is Workflow #455 G-R2b with the variables in it (register §1.383, since
+0.12.61; `runtime-client` revision 9; [resource-targets.md](resource-targets.md), "One value by
+name"; [package-variables.md](package-variables.md), "Reading and setting a value by name"): one
+application's goals, read and set by name. Shapes: `crates/actingcommand-contract`,
+`runtime/goals.rs`. Both kinds are on the console's list.
+
+| Kind | Block | Class | Shape | Answer |
+|---|---|---|---|---|
+| `GoalView` | general | read (memory only, records nothing) | `{instance_alias}` | `GoalViewed {view}`: `instance_alias`, `game_id`, `version` (the sequence of the `fact.published` that holds the application's `session.resource_targets` record, `0` without one: the next `expected_version`), `declaration` (`absent`, `accepted`, `refused` with its sha256 and first `standard_pack_problem` and pointer, `unreadable`, or `not_read`), `entries`, `orphans`, `remedy_parameters`, `other_targets`, `targets` (the resource target view) |
+| `EditGoal` | general | instruction | `{instance_alias, expected_version?, op}`, `op` `{kind: set, name, value_json}` or `{kind: clear, name}` | `GoalEdited {version, event_id, replayed, replaced_target_id?}` |
+
+**The view.** The entries, in order: each entry of the game's accepted `goals.json`, as its
+reader read it (a heading and a note as they are; a resource entry with the target on its pool,
+the pool's reading and the target's gap; a tier `not_built` with its default; a placement with
+its variable), then each variable of the packages the active catalog binds on the application
+that no entry places, in the order the packages declare them, a variable two packages declare
+once with both. A variable shows its declaration (`default_origin` `model` when it says so), its
+default, the stored value with who set it (`set {unix_ms, channel, initiator?}`), the value the
+next dispatch hands its run (`effective_json`, `source`), the dispatch's own `variable_problem`
+word, its state (`not_applied` when the run reads the default with a word, the variable not
+applying in the game root included; `in_effect` otherwise, `keys_left_out` included) and the
+stored keys the run leaves out. The values come from the run's own resolution over the same
+projection and the variable table a dispatch reads; the view judges no stored value itself.
+`orphans` are the stored values no entry offers any more; `remedy_parameters` are the bound
+packages' remedy parameters, read-only, with what the last evaluation resolved; `other_targets`
+are the stored targets on no declared resource entry's pool. Before the scheduler workbench's
+first check after a start, its table holds no variable and the page lists none. 0.12.61 answers
+the declaration `not_read` and lists no entry of the file until the workbench keeps the parsed
+`goals.json` from one check to the next (register §1.383, "A marked gap").
+
+**The edit.** The checks before the gate, against the page: a name outside the entry name's form,
+or that no entry, variable, remedy parameter, stored value or stored target has, is
+`goal_value_invalid` with `goal_problem` `name_unknown`; a heading or a note `holds_no_value`; a
+tier `tier_not_built`; a remedy parameter `remedy_parameter` (never written here); a variable that
+does not apply `variable_not_applying` with its `variable_problem`; a value that is no JSON
+`value_not_json`; a variable's value against its declaration (`wrong_type`, `out_of_range` and
+`off_step` with `range_min` and `range_max`, `not_an_option`, `key_repeated` and the ordered
+item's `json_pointer`, `count_out_of_range`) and the store's bound (`value_too_large`, 1024 bytes
+of canonical text); a resource entry's `{at_least}` and an other target's `{resource, at_least}`
+(`by_unix_ms` is `deadline_unsupported`; another member `wrong_type` at it; `at_least` from 1 to
+the pool's capacity, `out_of_range`; `pool_not_targetable`, `pool_unvalued` with `pool_id`); a
+`clear` of a known name that holds nothing `value_not_set`. Then, in one hold of the fact write
+gate: the version compared (`fact_observation_version_conflict` with `current_version`; absent
+compares nothing), the checks again on the record read there (`record_unreadable` for a v1 policy
+or rows no reader reads, `record_out_of_limits` for a 17th target or a 97th entry), one row
+replaced, added or removed, the whole record read back by the v3 reader, and one `fact.published`
+keeping the request's origin; `fact_observation_not_newer` as for every observation. The row
+names the Runtime's clock at the request, the request's channel and, for the Lab, the initiator
+its connection declared. A resource entry's `set` replaces the target on its pool whatever its id
+(`replaced_target_id` names the one replaced). A refusal is Denied and appends nothing.
+
+The client (`runtime-client` 9): `goal_view` and `edit_goal`. A Runtime that declares at most 8
+drops either request: the read reports `runtime_operation_unsupported`; the instruction a
+transport failure, whose effect `GoalView` reads back before it is sent again.
+
 ### Instance fact key families
 
 `fact_key_family(key)` in the contract looks only at a key's spelling and returns one

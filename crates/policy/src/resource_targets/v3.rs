@@ -27,9 +27,8 @@ use super::{
     ROW_KIND, ROW_POLICY, ROW_TARGET, ROW_TASK, ResourceTargetSpecV2, ResourceTargetsDocument,
     ResourceTargetsDocumentV2, ResourceTargetsError, RowsDecodeError, TargetApplicationV2,
     TargetCondition, TargetMode, TargetObservation, TargetPolicyState, TargetRule, TargetWeight,
-    check_target_v2,
-    declaration_rejection, decode_rows_v2, encode_rows_v2, manual_offset_name, mode_name,
-    observe_target, present, rejected_at, rule_name, valid_identifier, weight_name,
+    check_target_v2, declaration_rejection, decode_rows_v2, encode_rows_v2, manual_offset_name,
+    mode_name, observe_target, present, rejected_at, rule_name, valid_identifier, weight_name,
 };
 use crate::canonical::canonical_serialized;
 use crate::codes::PolicyCode;
@@ -1523,7 +1522,8 @@ pub fn edit_goal_record(
                 name: name.clone(),
                 value: value.clone(),
             };
-            let row = entry_row(&entry, Some(setter)).map_err(|_| GoalRecordRefusal::ValueInvalid)?;
+            let row =
+                entry_row(&entry, Some(setter)).map_err(|_| GoalRecordRefusal::ValueInvalid)?;
             match entries.iter_mut().find(|kept| kept.name == *name) {
                 Some(kept) => *kept = row,
                 None if entries.len() >= MAX_RESOURCE_TARGET_ENTRIES => {

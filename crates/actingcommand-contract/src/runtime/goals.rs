@@ -152,16 +152,19 @@ pub struct GoalDeclarationState {
     pub json_pointer: Option<String>,
 }
 
-/// Whether the game's `goals.json` is in effect: none in the root (`absent`), read and taken
-/// (`accepted`), refused by its check (`refused`: no entry applies for that game; its variables
-/// and resource targets still do), or not read by this Runtime (`not_read`: no workbench reads
-/// the game root, in configured mode, or not yet).
+/// Whether the game's `goals.json` is in effect, as the scheduler workbench's last read of the
+/// game root holds it: none in the root (`absent`), read and taken (`accepted`), refused by its
+/// reader (`refused`: no entry applies for that game; its variables and resource targets still
+/// do), there but not readable (`unreadable`: no variable of the root applies, `goals_unreadable`),
+/// or not read by this Runtime (`not_read`: no workbench reads the game root, in configured mode,
+/// or no check has read it since the start).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalDeclarationRead {
     Absent,
     Accepted,
     Refused,
+    Unreadable,
     NotRead,
 }
 
@@ -208,12 +211,15 @@ pub struct GoalSetBy {
     pub initiator: Option<Initiator>,
 }
 
-/// One entry of the page, in its place: an entry of `goals.json` (`placed`), or a variable no entry
-/// places, after the entries. A variable shows its declaration as its package writes it, every
-/// package of the application that declares it (a shared variable is one entry), its default, the
-/// stored value, where the value the next run reads comes from, that value (`effective_json`), the
-/// stored keys an `ordered` value names that the declaration no longer offers, whether it is in
-/// effect and why not (a `variable_problem` word), and the value in the declaration's own texts
+/// One entry of the page, in its place: an entry of `goals.json` (`placed`, `entry` as its reader
+/// read it), or a variable no entry places, after the entries. A variable shows its declaration as
+/// its package writes it, `default_origin` `model` when the declaration says its default is the
+/// model's, every package of the application that declares it (a shared variable is one entry),
+/// its default, the stored value, where the value the next run reads comes from, that value
+/// (`effective_json`), the stored keys of an `ordered` value the next run leaves out, whether it
+/// is in effect and the `variable_problem` word the run gives it (`not_applied` when the run reads
+/// the default instead of a stored value, or the variable does not apply; `keys_left_out` with
+/// `in_effect` for a value applied in part), and the value in the declaration's own texts
 /// (`display`: an option's title, a number with its unit's text). A resource entry shows its pool,
 /// the target that holds its value and the pool's reading.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,6 +232,8 @@ pub struct GoalViewEntry {
     pub entry: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variable: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_origin: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub packages: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -259,6 +267,7 @@ impl GoalViewEntry {
             placed,
             entry: None,
             variable: None,
+            default_origin: None,
             packages: Vec::new(),
             default_json: None,
             value_json: None,

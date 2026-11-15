@@ -484,8 +484,11 @@ canonical text of at most 1024 bytes, the fact string bound. Its `target` and `e
 who set them (`set_unix_ms`, `channel`, `initiator`), which the Runtime writes from the request,
 never from the document. A v3 record is stored without expiry; no key and no file is added.
 
-**Formal entry.** Only `ApplyResourceTargets` writes it, through `publish_facts` with the
-request's origin (source `adapter`, actor `agent`) on the `fact.published` event. An ordinary
+**Formal entry.** Only `ApplyResourceTargets` and, since Workflow #463 V3 (0.12.61), `EditGoal`
+write it, through `publish_facts` with the request's origin on the `fact.published` event (for
+`ApplyResourceTargets`, as before, source `adapter`, actor `agent`; `EditGoal` compares its `expected_version` with the record's own sequence, `0` without a record,
+the version `GoalView` answers; [resource-targets.md](resource-targets.md), "One value by name").
+An ordinary
 `PublishFact` / `PublishFacts` record of this key is refused before the fact write gate as the
 non-fatal `resource_targets_formal_entry_required`. A configured policy input fact or a
 forward projection caller's fact of this key is refused as `resource_targets_key_reserved`:

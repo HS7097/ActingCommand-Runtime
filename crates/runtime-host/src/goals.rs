@@ -22,11 +22,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::{
-    DeclaredGoalKind, GoalEntryState, GoalEntryType, GoalOrphan, GoalProblem, GoalResourceState,
-    GoalSetBy, GoalUnit, GoalValueSource, GoalViewEntry, MAX_GOAL_SAFE_INTEGER,
-    NotTargetableResource, PackageVariable, ResourceTargetCondition, ResourceTargetConditionState,
-    StandardPackGoals, TargetableResource, VariableKind, VariableProblem, VariableSource, goal_name,
-    variable_value_json,
+    DeclaredGoal, DeclaredGoalKind, DefaultOrigin, GoalEntryState, GoalEntryType, GoalOrphan,
+    GoalProblem, GoalResourceState, GoalSetBy, GoalText, GoalUnit, GoalValueSource, GoalViewEntry,
+    MAX_GOAL_SAFE_INTEGER, NotTargetableResource, PackageVariable, ResourceTargetCondition,
+    ResourceTargetConditionState, StandardPackGoals, TargetableResource, VariableKind,
+    VariableProblem, VariableSource, goal_name, variable_value_json,
 };
 use actingcommand_policy::{
     GoalRecordEdit, GoalRecordRefusal, ResolvedVariable, StoredGoalEntry, StoredGoalRecord,
@@ -133,19 +133,20 @@ impl GoalRefusal {
     pub(crate) fn of_record(refusal: GoalRecordRefusal) -> Option<Self> {
         match refusal {
             GoalRecordRefusal::Unreadable => Some(Self::new(GoalProblem::RecordUnreadable)),
-            GoalRecordRefusal::ValueTooLarge => Some(
-                Self::new(GoalProblem::ValueTooLarge)
-                    .within(0, max_entry_value_bytes()),
-            ),
+            GoalRecordRefusal::ValueTooLarge => {
+                Some(Self::new(GoalProblem::ValueTooLarge).within(0, max_entry_value_bytes()))
+            }
             GoalRecordRefusal::ValueInvalid => Some(Self::new(GoalProblem::WrongType)),
             GoalRecordRefusal::TargetsFull => Some(
                 Self::new(GoalProblem::RecordOutOfLimits)
                     .within(0, max_i64(actingcommand_contract::MAX_RESOURCE_TARGETS)),
             ),
-            GoalRecordRefusal::EntriesFull => Some(
-                Self::new(GoalProblem::RecordOutOfLimits)
-                    .within(0, max_i64(actingcommand_policy::MAX_RESOURCE_TARGET_ENTRIES)),
-            ),
+            GoalRecordRefusal::EntriesFull => {
+                Some(Self::new(GoalProblem::RecordOutOfLimits).within(
+                    0,
+                    max_i64(actingcommand_policy::MAX_RESOURCE_TARGET_ENTRIES),
+                ))
+            }
             // An internal fault, not the caller's: the host fails the request on its own code.
             GoalRecordRefusal::Inconsistent => None,
         }
@@ -408,7 +409,10 @@ pub(crate) fn check_target(
         Some(_) => &["at_least", "by_unix_ms"],
         None => &["resource", "at_least", "by_unix_ms"],
     };
-    if let Some(member) = members.keys().find(|member| !allowed.contains(&member.as_str())) {
+    if let Some(member) = members
+        .keys()
+        .find(|member| !allowed.contains(&member.as_str()))
+    {
         let refusal = GoalRefusal::new(GoalProblem::WrongType);
         return Err(if carried(member) {
             refusal.at(format!("/{member}"))
@@ -519,14 +523,14 @@ pub(crate) struct ViewEntries {
 
 /// Workflow #463 V3 (`contracts/runtime-interface.md`, "Goal request kinds", the view): the
 /// entries of `page` with the stored record `stored`, `variables` its variables
-/// ([`page_variables`]), `raw` the accepted `goals.json`'s entries as written and `conditions` the
-/// stored targets' conditions:
+/// ([`page_variables`]) and `conditions` the stored targets' conditions:
 ///
-/// - each entry of the accepted `goals.json`, in its order: a `heading` and a `note` as they are; a
-///   `resource` entry with the target on its pool (its `{at_least}` the value, set, who set it)
-///   or no goal (the default), the pool's reading and the target's gap; a `tier` with its default
-///   and any stored value, `not_built`; a placement with its variable ([`variable_entry`]), or,
-///   when no bound package declares it, alone;
+/// - each entry of the accepted `goals.json`, in its order, with the entry as its reader read it
+///   ([`declared_entry`]): a `heading` and a `note` as they are; a `resource` entry with the
+///   target on its pool (its `{at_least}` the value, set, who set it) or no goal (the default),
+///   the pool's reading and the target's gap; a `tier` with its default and any stored value,
+///   `not_built`; a placement with its variable ([`variable_entry`]), or, when no bound package
+///   declares it, alone;
 /// - then each variable no entry places, in the order the bound packages declare them;
 /// - the orphans: each stored value whose name is no variable of the page and no entry of the
 ///   accepted file;
@@ -535,7 +539,6 @@ pub(crate) fn view_entries(
     page: &GoalPage,
     stored: &StoredGoalRecord,
     variables: &[PageVariable<'_>],
-    raw: &[Value],
     conditions: &[ResourceTargetCondition],
 ) -> ViewEntries {
     let targets = stored.targets();
@@ -544,13 +547,12 @@ pub(crate) fn view_entries(
     let mut placed = BTreeSet::new();
     let mut declared_pools = BTreeSet::new();
     let mut entries = Vec::new();
-    for (index, declared) in page
+    for declared in page
         .declaration
         .iter()
         .flat_map(|declaration| declaration.entries.iter())
-        .enumerate()
     {
-        let raw_entry = raw.get(index).cloned();
+        let raw_entry = Some(declared_entry(declared));
         let entry = match &declared.kind {
             DeclaredGoalKind::Heading | DeclaredGoalKind::Note => {
                 let entry_type = if declared.kind == DeclaredGoalKind::Heading {
@@ -601,8 +603,11 @@ pub(crate) fn view_entries(
                         raw_entry,
                     ),
                     None => {
-                        let mut entry =
-                            GoalViewEntry::new(declared.name.as_str(), GoalEntryType::Variable, true);
+                        let mut entry = GoalViewEntry::new(
+                            declared.name.as_str(),
+                            GoalEntryType::Variable,
+                            true,
+                        );
                         entry.entry = raw_entry;
                         if let Some(stored) = stored_entry(declared.name.as_str()) {
                             entry.value_json = Some(stored.value_json.clone());
@@ -705,12 +710,13 @@ fn resource_entry(
     entry
 }
 
-/// A variable's entry: its declaration, the packages that declare it, its default, the stored
-/// value and who set it, the value the next run reads with its source (the run's own resolution,
-/// `row.resolved`), the stored keys of an `ordered` value its declaration no longer offers, and
-/// whether it is in effect: `not_applied` with the resolution's word when the run reads the
-/// default instead of a stored value, or with `not_applying`'s when the variable does not apply
-/// in the game root; `in_effect` otherwise.
+/// A variable's entry: its declaration (with `default_origin` `model` when it says so), the
+/// packages that declare it, its default, the stored value and who set it, the value the next run
+/// reads with its source and its word (the run's own resolution, `row.resolved`; a variable that
+/// does not apply in the game root, `not_applying`, says so even with no stored value), the stored
+/// keys of an `ordered` value the run leaves out, and whether it is in effect: `not_applied` when
+/// the run reads the default with a word (a stored value not applied, or a variable that does not
+/// apply), `in_effect` otherwise (`keys_left_out`, a value applied in part, included).
 fn variable_entry(
     row: &PageVariable<'_>,
     stored: Option<&StoredGoalEntry>,
@@ -722,6 +728,9 @@ fn variable_entry(
     let mut entry = GoalViewEntry::new(variable.name.as_str(), GoalEntryType::Variable, placed);
     entry.entry = raw_entry;
     entry.variable = Some(variable.declaration.clone());
+    if variable.default_origin == DefaultOrigin::Model {
+        entry.default_origin = Some(DefaultOrigin::Model.as_str().to_owned());
+    }
     entry.packages.clone_from(&row.packages);
     let default = variable.default_value();
     entry.default_json = Some(variable_value_json(&default));
@@ -741,29 +750,96 @@ fn variable_entry(
         VariableSource::Set => GoalValueSource::Set,
         VariableSource::Default => GoalValueSource::Default,
     });
-    if let (VariableKind::Ordered { options, .. }, Some(stored), VariableSource::Set) =
+    // The keys of a stored `ordered` value the run's value does not hold: the ones it left out.
+    if let (VariableKind::Ordered { .. }, Some(stored), VariableSource::Set) =
         (&variable.kind, stored, source)
     {
+        let read = effective.as_array().map(Vec::as_slice).unwrap_or_default();
         entry.removed_keys = stored
             .value
             .as_array()
             .into_iter()
             .flatten()
+            .filter(|key| !read.contains(key))
             .filter_map(Value::as_str)
-            .filter(|key| !options.iter().any(|option| option.value == *key))
             .map(str::to_owned)
             .collect();
     }
     entry.display = display(variable, &effective);
     entry.effective_json = Some(variable_value_json(&effective));
-    match problem {
-        Some(problem) => {
-            entry.state = Some(GoalEntryState::NotApplied);
-            entry.variable_problem = Some(problem.as_str().to_owned());
-        }
-        None => entry.state = Some(GoalEntryState::InEffect),
-    }
+    entry.variable_problem = problem.map(|problem| problem.as_str().to_owned());
+    entry.state = Some(match (source, problem) {
+        (VariableSource::Default, Some(_)) => GoalEntryState::NotApplied,
+        _ => GoalEntryState::InEffect,
+    });
     entry
+}
+
+/// An entry of an accepted `goals.json` as its reader read it: its name, type, block, texts, and
+/// the members of its type (a resource entry's pool and rate, a tier's rules, options and
+/// default).
+pub(crate) fn declared_entry(goal: &DeclaredGoal) -> Value {
+    let text = |text: &GoalText| {
+        Value::Object(
+            text.iter()
+                .map(|(locale, written)| (locale.clone(), Value::String(written.clone())))
+                .collect(),
+        )
+    };
+    let mut entry = serde_json::Map::new();
+    entry.insert("name".to_owned(), Value::String(goal.name.clone()));
+    entry.insert(
+        "type".to_owned(),
+        Value::String(goal.goal_type().as_str().to_owned()),
+    );
+    if let Some(block) = goal.block {
+        entry.insert("block".to_owned(), Value::String(block.as_str().to_owned()));
+    }
+    if let Some(title) = &goal.title {
+        entry.insert("title".to_owned(), text(title));
+    }
+    if let Some(help) = &goal.help {
+        entry.insert("help".to_owned(), text(help));
+    }
+    match &goal.kind {
+        DeclaredGoalKind::Resource { pool, rate } => {
+            entry.insert("governs".to_owned(), serde_json::json!({ "pool": pool }));
+            if let Some(rate) = rate {
+                entry.insert(
+                    "rate".to_owned(),
+                    serde_json::json!({
+                        "floor_milli_per_day": rate.floor_milli_per_day,
+                        "ceiling_milli_per_day": rate.ceiling_milli_per_day,
+                    }),
+                );
+            }
+        }
+        DeclaredGoalKind::Tier {
+            rules,
+            options,
+            default,
+        } => {
+            entry.insert("governs".to_owned(), serde_json::json!({ "rules": rules }));
+            entry.insert(
+                "options".to_owned(),
+                Value::Array(
+                    options
+                        .iter()
+                        .map(|option| {
+                            serde_json::json!({
+                                "value": option.value,
+                                "title": text(&option.title),
+                                "scale_milli": option.scale_milli,
+                            })
+                        })
+                        .collect(),
+                ),
+            );
+            entry.insert("default".to_owned(), Value::String(default.clone()));
+        }
+        DeclaredGoalKind::Heading | DeclaredGoalKind::Note | DeclaredGoalKind::Variable => {}
+    }
+    Value::Object(entry)
 }
 
 /// `value` in the declaration's own texts, by locale: a `choice` value's option title, an

@@ -2256,3 +2256,11 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_463_v1::v1_a_bundle_that_carries_goals_version_2_below_revision_14_is_refused_goal_undeclared",
 ]
 incident = ["#463 V1"]
+
+# Workflow #463 V3 (0.12.61; register §1.383; brief rd-1115/brief-463-v3-goals-view-edit.md; contracts/lab-two-entries.md), the MCP server on a scripted Runtime that refuses every goal request (denied, lease_busy): ac_goals, ac_goals_get, ac_goals_set (expected_version 0, value "item_a") and ac_goals_clear answer the line and exit the command line's code answers for goals, goals get, goals set and goals clear; the two reads run on the kept connection (status, goal_view; then health, status, goal_view), each write on a connection of its own after today's provenance (declare_governance_identity, record_client_action, status, edit_goal), the set sending op {kind: set, name, value_json "\"item_a\""} with expected_version 0; ac_package_variables of a package directory that is not there, through a serve child of the real actinglab, answers the line actinglab --json package variables prints, isError its non-zero exit
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-mcp::serve_calls::mcp_goals_rows_are_the_command_lines",
+]
+incident = ["#463 V3"]

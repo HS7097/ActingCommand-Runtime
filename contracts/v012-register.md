@@ -26226,6 +26226,86 @@ applied is warned again; actinglab's test asserts the given value replaces the d
 the scan replay overlays (`scan_replay_parameters`). No test of main changes; no golden; no test
 leaves the gate map.
 
+### 1.383 Slice V3 (0.12.61): an application's goals are read and set by name; `runtime-client` revision 9 (Workflow #463 V3, which is Workflow #455 G-R2b with the variables in it; the owner asked that a person in the console and an agent through the Lab set an application's goals, board #455, and that a variable's number may come from a person or an agent, board #463; the designs `rd-1114/455-goals-design-final.md` §3.5, §3.6, §3.9 and the row G-R2b of §4 and §5, and `rd-1114/463-l4-design.md` section D, section E's table, the row V3 of section G and "The coordinator's rulings on I"; the coordinator's rulings in the work order and its two messages during the slice (the join of the parsed `goals.json` and of "does this variable apply" is #1728's fix round's; a declaration's `default_origin` is shown as declared), not the owner's words; coordinator work order `rd-1115/brief-463-v3-goals-view-edit.md`, on the head `29a0cbe4` of #1728, then #1728's fix round `020a5681` merged)
+
+**Interface** ([runtime-interface.md](runtime-interface.md), "Goal request kinds";
+[component-interfaces.md](component-interfaces.md), `runtime-client` 9). The read
+`GoalView {instance_alias}` answers `GoalViewed {view}`; the instruction
+`EditGoal {instance_alias, expected_version?, op}`, `op` `{kind: set, name, value_json}` or
+`{kind: clear, name}`, answers `GoalEdited {version, event_id, replayed, replaced_target_id?}`.
+Both are general (any channel), both on the console's list (`ui_allows`, the Lab table's
+`ui_kinds`). `runtime-client` [3, 9]; `ledger`, `package` and `actingd-config` do not move.
+
+**The page.** Every value is read from memory. The variable table is the one a dispatch reads:
+with a composed standard pack the scheduler workbench's (`standard_pack_variables`, judged over
+the whole root; before its first check after a start it holds no variable, so the page lists
+none), without one the remedy table's. The declaration state is `absent`, `accepted`, `refused`
+(its sha256, its first `standard_pack_problem` and pointer), `unreadable` or `not_read`. **A
+marked gap:** on #1728's head this slice contains (`020a5681`) the workbench keeps no parsed
+`goals.json` from one check to the next, and by the coordinator's ruling this slice neither reads
+the file nor keeps it itself: the page answers `not_read` and lists no entry of the file
+(`goal_declaration`) until #1728's second fix round, which keeps it, is merged; so is the detail
+of why a variable does not apply (the page names the word only). The entries: each entry of an accepted file
+in its order, as its reader read it; a resource entry with the target on its pool, its reading
+and its gap; a tier `not_built` with its default; a placement with its variable; then each variable
+of the bound packages no entry places, in the order the packages declare them, a variable two
+packages declare once with both. A variable shows its declaration (with `default_origin` as
+declared), its default, the stored value and who set it, and the value the next dispatch hands its
+run through the run's own resolution (`plan_variable_values` over the same projection and table):
+its source, its `variable_problem` word as the run gives it, `not_applied` when the run reads the
+default with a word or the variable does not apply (`VariableTable::not_applying`, the one
+judgement, moved out of the resolution, which calls it), `in_effect` otherwise (`keys_left_out`
+included), and the stored keys the run leaves out. Then the orphans (stored values no entry offers),
+the remedy parameters read-only with what the last evaluation resolved, the targets on no declared
+pool, the resource target view and the version (the sequence of the record's `fact.published`, `0`
+without one).
+
+**The edit.** Before the gate: the page read the same way and the name and value judged
+(`goal_value_invalid`, Denied, nothing appended); under the fact write gate: the version compared
+(`fact_observation_version_conflict` with `current_version`), the checks again on the record read
+there, one row replaced or removed (`edit_goal_record`: every other row as stored; a v2 policy's
+targets become v3 targets with its lifetime; a record left empty is the withdrawal; the whole
+record read back by the v3 reader), one `fact.published` keeping the request's origin. The row
+names the Runtime's clock at the request, the request's channel and, for the Lab, the initiator its
+connection declared. A resource entry's `set` replaces the target on its pool whatever its id and
+names it; its `clear` removes it. `fact_observation_not_newer` as for every observation. A value's
+canonical text holds at most 1024 bytes; no 256-byte bound is added.
+
+**Codes.** `goal_value_invalid` (error, runtime-host, prefix `goal_value_`): values `goal_problem`
+(required), `goal_name`, `json_pointer`, `range_min`, `range_max`, `pool_id`, `variable_problem`.
+`request_goal_view_completed` and `request_edit_goal_completed` (success, contract). Keys
+`goal_name` (token) and `goal_problem`. The closed vocabulary `goal_problem`, one word per
+situation: `name_unknown` (no entry of the accepted file, no variable of a bound package, no remedy
+parameter, no stored value or target of the name, or a name outside the form; `entry_unknown` was
+the same situation and is not a word), `holds_no_value` (a heading or a note), `tier_not_built`,
+`remedy_parameter` (read-only: never written, an irreversible one included), `variable_not_applying`
+(with its `variable_problem`), `value_not_json`, `wrong_type`, `out_of_range`, `off_step`,
+`not_an_option`, `key_repeated`, `count_out_of_range`, `value_too_large`, `pool_not_targetable`,
+`pool_unvalued` (the pool's valuation lacks the step or the importance a goal by name does not
+carry), `deadline_unsupported` (`by_unix_ms`, a later slice's), `value_not_set` (a clear of a known
+name that holds nothing), `record_unreadable` (a v1 policy or rows no reader reads),
+`record_out_of_limits` (a 17th target, a 97th entry).
+
+**The Lab.** Rows `goals` (option `package`), `goals get`, `goals set`, `goals clear` (core,
+served in the process, `lab_ops::core_ops`) and `package variables` (core, actinglab's own
+command: one package directory's control declaration, no Runtime); MCP tools `ac_goals`,
+`ac_goals_get`, `ac_goals_set`, `ac_goals_clear`, `ac_package_variables`; slice `463-V3`. Command
+inventory 106 (47 arms), the strict lists, the capability table, the help options, the dry-run
+preview and both READMEs moved with them.
+
+**Tests.** Policy `gate_463_v3` (the record an edit writes and the page's reading of it, the
+bounds); host `gate_463_v3` (each situation's word, the view's list of an accepted file, and
+three host scenes: a value set by name is the next dispatch's with a conflict, a refusal, not
+newer, the console's gate and a restart; an other target; a pack update's rows of §3.6, each line
+what the next dispatch hands its run; the host scene of a file and a refused file waits for the
+gap above); the MCP server's `mcp_goals_rows_are_the_command_lines` (the four rows and `package
+variables` answer the command line's lines). Adapted, as the work order allows: the console list of
+`gate_434_lab6s3` (two kinds more), `gate_434_lab5a`'s core rows (one more), the interface table's
+expected rows, the interface pins (`runtime-client` [3, 9]). No golden; no test leaves the gate map.
+
+**Rollback below 0.12.61.** A build before 0.12.61 cannot decode either kind and drops the
+connection; the record an edit writes is a v3 record G-R2a's builds read.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -26273,6 +26353,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W21 | the player workbench's request kinds, results and members (§1.213 R0-1 to R0-4, R0-8, R0-10; §1.216 R0C-3, `PackScheduleView`), and the read `StartReport` (§1.216 R0C-4) | runtime-client 3 | #429 R-0, R-0c | declared [2, 3] in 0.12.30; each kind answers `not_implemented` until its slice; `RuntimeInstanceStatus.activity` is the status member W13 warned about: it and R0-8's answer members stay absent until a release raises `min` to 3 with the console that reads them; R-0b fills `activity` for all kinds and raises `min` to 3 in 0.12.36 (§1.238) |
 | W22 | the player hold's request kinds `AcquirePlayerHold`, `ReleasePlayerHold`, their results, the status members `player_hold`, `player_hold_operation`, `control` and the start report members `player_holds_restored`, `player_holds_dropped`, `player_hold_not_durable` (§1.233 R7A-1 to R7A-3) | runtime-client 4 | #429 R-7a | declared [2, 4] in 0.12.35; both kinds answer `not_implemented` until R-7b; every new member is absent until R-7b, which raises `min` to 4 ([player-hold.md](player-hold.md), "Interfaces and rollout") |
 | W23 | `RuntimePerformanceStatus.memory` and `.vision` (§1.280 PR-1, PR-2; `since` 0.12.41) | runtime-client 6 | #407 PERF-READ | two optional members of W15's status (`deny_unknown_fields`), read from memory: the process's counters and the parts its owners hold, and each vision model's lock waits and inference times; declared [3, 6] in 0.12.41 with `min` unchanged; a reader whose `max` is below 6 refuses an answer that carries them (`runtime_receipt_decode_failed`), and this build fills `memory` on every answer; on PerformanceStatus, not on Status, as W20 |
+| W24 | `RuntimeOperation::GoalView { instance_alias }` → `RuntimeResult::GoalViewed { view }`; `RuntimeOperation::EditGoal { instance_alias, expected_version?, op }` → `RuntimeResult::GoalEdited { edited }` | runtime-client 9 | #463 V3 | §1.383; both on the console's list |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).

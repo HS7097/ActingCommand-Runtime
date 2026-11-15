@@ -2747,3 +2747,168 @@ fn mcp_capture_records_client_action() {
         "each Lab command reached the child once"
     );
 }
+
+/// `GoalView` or `EditGoal`, refused by the scripted Runtime (denied, `lease_busy`).
+fn goal_request_denied(
+    kind: &'static str,
+) -> impl FnOnce(&RuntimeRequest) -> ScriptedAnswer + Send {
+    denied_one(kind)
+}
+
+// Workflow #463 V3: the rows `goals`, `goals get`, `goals set` and `goals clear` through the
+// server answer the line the command line's code answers, each refused by the Runtime: the two
+// reads on the kept connection, each write on a connection of its own after today's provenance,
+// the instance resolved by one status read each time. `package variables` of a package that is not
+// there, served by a `serve` child of the real actinglab, answers the line actinglab's command line
+// prints with `--json`.
+#[test]
+fn mcp_goals_rows_are_the_command_lines() {
+    let state = TempDir::new().expect("tempdir");
+    let temp = TempDir::new().expect("tempdir");
+    let runtime = ScriptedRuntime::start(state.path(), |owner_epoch| {
+        vec![
+            // The server's kept connection: `goals`, then `goals get`.
+            ScriptedConnection::new()
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(goal_request_denied("goal_view"))
+                .request(healthy(owner_epoch))
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(goal_request_denied("goal_view")),
+            // `goals set` and `goals clear`, each on its own connection.
+            provenance()
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(goal_request_denied("edit_goal")),
+            provenance()
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(goal_request_denied("edit_goal")),
+            // The command line's code: the same four, each on its own connection.
+            ScriptedConnection::new()
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(goal_request_denied("goal_view")),
+            ScriptedConnection::new()
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(goal_request_denied("goal_view")),
+            ScriptedConnection::new()
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(goal_request_denied("edit_goal")),
+            ScriptedConnection::new()
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(goal_request_denied("edit_goal")),
+        ]
+    });
+    let view = json!({"instance": INSTANCE});
+    let get = json!({"instance": INSTANCE, "name": "pick"});
+    let set = json!({"instance": INSTANCE, "name": "pick", "value": "item_a",
+                     "expected_version": 0});
+    let clear = json!({"instance": INSTANCE, "name": "pick"});
+    let mut server = Server::start(actinglab_mcp(
+        Path::new(PROGRAM),
+        Some(state.path()),
+        temp.path(),
+    ));
+    server.initialize();
+    let answers = [
+        server.call_tool(2, "ac_goals", view.clone()),
+        server.call_tool(3, "ac_goals_get", get.clone()),
+        server.call_tool(4, "ac_goals_set", set.clone()),
+        server.call_tool(5, "ac_goals_clear", clear.clone()),
+    ];
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    for (answer, (row, params)) in answers.iter().zip([
+        ("goals", view),
+        ("goals get", get),
+        ("goals set", set),
+        ("goals clear", clear),
+    ]) {
+        let expected = command_line_line(state.path(), row, params);
+        assert_ne!(expected.1, 0, "{row}: the scripted Runtime refuses it");
+        assert_served_as(answer, &expected);
+    }
+    let record = runtime.finish();
+    assert!(
+        record.unscripted.is_empty(),
+        "a connection beyond the eight"
+    );
+    let [kept, first_write, second_write, ..] = record.connections.as_slice() else {
+        panic!("{} connections, not eight", record.connections.len());
+    };
+    assert_eq!(
+        operations(kept),
+        [
+            "health",
+            "bind_channel",
+            "status",
+            "goal_view",
+            "health",
+            "status",
+            "goal_view"
+        ],
+        "the reads: on the kept connection, no provenance"
+    );
+    for written in [first_write, second_write] {
+        assert_eq!(
+            operations(written),
+            [
+                "health",
+                "bind_channel",
+                "declare_governance_identity",
+                "record_client_action",
+                "status",
+                "edit_goal",
+            ],
+            "a write: today's provenance first, on a connection of its own"
+        );
+    }
+    let sent_edit = sent(&first_write.requests[5]);
+    assert_eq!(
+        (
+            &sent_edit["operation"]["expected_version"],
+            &sent_edit["operation"]["op"],
+        ),
+        (
+            &json!(0),
+            &json!({"kind": "set", "name": "pick", "value_json": "\"item_a\""})
+        ),
+        "{sent_edit}"
+    );
+
+    package_variables_from_the_real_actinglab(temp.path());
+}
+
+/// `package variables` of a package that is not there, served through the real actinglab the CI
+/// job builds beside this program, answers the line that actinglab's command line prints for it
+/// with `--json`, `isError` its non-zero exit.
+fn package_variables_from_the_real_actinglab(temp: &Path) {
+    let actinglab = std::env::var_os(ACTINGLAB_VARIABLE)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| panic!("{ACTINGLAB_VARIABLE} names the actinglab the job builds"));
+    let package = temp.join("neutral-missing-package");
+    let mut server = Server::start(actinglab_mcp(Path::new(PROGRAM), None, temp));
+    server.initialize();
+    let answer = server.call_tool(2, "ac_package_variables", json!({"package": package}));
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+    let output = Command::new(actinglab)
+        .arg("--json")
+        .args(["package", "variables", "--package"])
+        .arg(package)
+        .env("TMP", temp)
+        .env("TEMP", temp)
+        .env_remove("ACTINGCOMMAND_DETAIL")
+        .env_remove("ACTINGCOMMAND_INITIATOR")
+        .env_remove(STATE_ROOT_VARIABLE)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run the command line");
+    let text = String::from_utf8(output.stdout).expect("a UTF-8 line");
+    let line = serde_json::from_str::<Value>(text.trim())
+        .unwrap_or_else(|error| panic!("the command line printed no line ({error}): {text}"));
+    let code = output
+        .status
+        .code()
+        .and_then(|code| u8::try_from(code).ok())
+        .expect("the command line's exit code");
+    assert_ne!(code, 0, "setup: the package is not there: {line}");
+    assert_served_as(&answer, &(line, code));
+}

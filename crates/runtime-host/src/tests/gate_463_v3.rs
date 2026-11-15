@@ -54,14 +54,14 @@ fn options(items: &[&str]) -> Value {
 }
 
 /// `pick` (choice of item_a and item_b, default item_b), `floor` (integer 0 to 200 on steps of
-/// 10, default 0), `order` (ordered, 1 to 2 of item_a, item_b, item_c, default item_b) and `extra`
-/// (switch, default false).
+/// 10, default 0, the model's), `order` (ordered, 1 to 2 of item_a, item_b, item_c, default
+/// item_b) and `extra` (switch, default false).
 fn package_a_variables() -> Value {
     json!([
         {"name": "pick", "type": "choice", "title": {"en": "Item"},
          "options": options(&["item_a", "item_b"]), "default": "item_b"},
         {"name": "floor", "type": "integer", "title": {"en": "Keep at least"},
-         "min": 0, "max": 200, "step": 10, "default": 0},
+         "min": 0, "max": 200, "step": 10, "default": 0, "default_origin": "model"},
         {"name": "order", "type": "ordered", "title": {"en": "Order"},
          "options": options(&["item_a", "item_b", "item_c"]), "min_count": 1, "max_count": 2,
          "default": ["item_b"]},
@@ -94,11 +94,8 @@ fn goals_entries() -> Value {
 fn goals() -> StandardPackGoals {
     let document = json!({"schema_version": "actingcommand.goals.v2", "game": GAME,
                           "entries": goals_entries()});
-    parse_standard_pack_goals(
-        &serde_json::to_vec(&document).expect("goals bytes"),
-        GAME,
-    )
-    .unwrap_or_else(|issues| panic!("the fixture goals.json reads: {issues:?}"))
+    parse_standard_pack_goals(&serde_json::to_vec(&document).expect("goals bytes"), GAME)
+        .unwrap_or_else(|issues| panic!("the fixture goals.json reads: {issues:?}"))
 }
 
 fn targetable(resource: &str, valued: bool) -> TargetableResource {
@@ -298,12 +295,12 @@ fn v3_host_each_situation_of_the_checks_is_its_own_word() {
         (P::OutOfRange, Some("/at_least".to_owned()), Some((1, 120)))
     );
     assert_eq!(
-        refused(&page, &stored, set("points", "{\"at_least\":5,\"by_unix_ms\":9}")),
-        (
-            P::DeadlineUnsupported,
-            Some("/by_unix_ms".to_owned()),
-            None
-        )
+        refused(
+            &page,
+            &stored,
+            set("points", "{\"at_least\":5,\"by_unix_ms\":9}")
+        ),
+        (P::DeadlineUnsupported, Some("/by_unix_ms".to_owned()), None)
     );
     assert_eq!(
         refused(&page, &stored, set("points", "{\"amount\":5}")),
@@ -317,7 +314,10 @@ fn v3_host_each_situation_of_the_checks_is_its_own_word() {
     let unvalued = check_edit(
         &page,
         &stored,
-        set("spare", &format!("{{\"resource\":\"{UNVALUED}\",\"at_least\":5}}")),
+        set(
+            "spare",
+            &format!("{{\"resource\":\"{UNVALUED}\",\"at_least\":5}}"),
+        ),
     )
     .expect_err("an unvalued pool");
     assert_eq!(
@@ -448,8 +448,7 @@ fn v3_host_the_view_lists_the_file_then_the_unplaced_variables_and_the_orphans()
     }];
     let resolved = |task: &str| (task == TASK_A).then_some(resolved_a.as_slice());
     let variables = page_variables(&page, &resolved);
-    let raw = goals_entries().as_array().expect("the entries").clone();
-    let view = view_entries(&page, &stored, &variables, &raw, &[]);
+    let view = view_entries(&page, &stored, &variables, &[]);
 
     assert_eq!(
         view.entries
@@ -469,7 +468,23 @@ fn v3_host_the_view_lists_the_file_then_the_unplaced_variables_and_the_orphans()
         ]
     );
     let entries = &view.entries;
-    assert_eq!(listed(entries, "about").entry.as_ref(), Some(&raw[1]));
+    // Each entry as the reader read it, its type's block filled in.
+    assert_eq!(
+        listed(entries, "about").entry,
+        Some(json!({"name": "about", "type": "note", "block": "text",
+                    "title": {"en": "About"}, "help": {"en": "Text."}}))
+    );
+    assert_eq!(
+        listed(entries, "points").entry,
+        Some(
+            json!({"name": "points", "type": "resource", "block": "goal_row",
+                    "title": {"en": "Points"}, "governs": {"pool": POINTS}})
+        )
+    );
+    assert_eq!(
+        listed(entries, "pick").entry,
+        Some(json!({"name": "pick", "type": "variable"}))
+    );
     let lab = Some(GoalSetBy {
         unix_ms: 1_000,
         channel: RuntimeChannel::Lab,
@@ -524,13 +539,21 @@ fn v3_host_the_view_lists_the_file_then_the_unplaced_variables_and_the_orphans()
     assert!(missing.variable.is_none() && missing.value_json.is_none() && missing.state.is_none());
 
     let floor = listed(entries, "floor");
-    assert_eq!(floor.packages, [PACKAGE_A, PACKAGE_B], "one row, both packages");
+    assert_eq!(
+        floor.packages,
+        [PACKAGE_A, PACKAGE_B],
+        "one row, both packages"
+    );
     assert_eq!(
         (
-            floor.effective_json.as_deref(),
-            floor.source,
-            floor.state
+            floor.default_origin.as_deref(),
+            pick.default_origin.as_deref()
         ),
+        (Some("model"), None),
+        "the declaration's default_origin, as declared"
+    );
+    assert_eq!(
+        (floor.effective_json.as_deref(), floor.source, floor.state),
         (
             Some("0"),
             Some(GoalValueSource::Default),
@@ -565,7 +588,7 @@ fn v3_host_the_view_lists_the_file_then_the_unplaced_variables_and_the_orphans()
     // (`stray`) the orphans; every target is an other target.
     let bare = page_without_file();
     let variables = page_variables(&bare, &resolved);
-    let view = view_entries(&bare, &stored, &variables, &[], &[]);
+    let view = view_entries(&bare, &stored, &variables, &[]);
     assert_eq!(
         view.entries
             .iter()
@@ -967,7 +990,7 @@ fn agrees(view: &GoalView, chain: &DecisionReasonChain, name: &str) {
     );
     assert_eq!(
         entry.state == Some(GoalEntryState::NotApplied),
-        entry.variable_problem.is_some(),
+        source == "default" && entry.variable_problem.is_some(),
         "{name}"
     );
 }
@@ -985,13 +1008,17 @@ fn next_eligible(context: &PolicyRunContext) -> u64 {
 // The work order's tests "the view without the file", "set, get and clear of a variable", "a
 // version conflict", "not newer", "the console's gate takes both kinds", "a restart reloads the
 // values" and "a value the view shows in effect is the value the next dispatch's overlay holds",
-// on the variable `pick`. The workbench holds no reading of `goals.json` in this build, so the
-// declaration is `not_read` and the variable is listed unplaced.
+// on the variable `pick`. After the workbench's first check (the first policy cycle) the variable
+// is listed unplaced. The declaration is `not_read`: the marked gap of `goal_declaration` (the
+// workbench keeps no parsed `goals.json` on #1728's head `020a5681`), which "the view with the
+// file and with a refused file" waits for; the pure tests below hold the view of an accepted file.
 #[test]
 fn v3_host_a_value_set_by_name_is_the_next_dispatch_s_and_a_restart_reloads_it() {
     let scene = Scene::new(&pick_only());
-    let start = POLICY_NOW_UNIX_MS;
+    let (chain, context) = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 6);
+    let start = next_eligible(&context);
     let view = scene.view();
+    agrees(&view, &chain, "pick");
     assert_eq!(
         (view.instance_alias.as_str(), view.game_id.as_str()),
         (INSTANCE, GAME_A)
@@ -1055,7 +1082,10 @@ fn v3_host_a_value_set_by_name_is_the_next_dispatch_s_and_a_restart_reloads_it()
         &scene.edit(set_op("pick", &json!("item_b")), Some(0), at),
         "fact_observation_version_conflict",
     );
-    assert_eq!(conflict.value("current_version"), Some(&json!(edited.version)));
+    assert_eq!(
+        conflict.value("current_version"),
+        Some(&json!(edited.version))
+    );
     let invalid = denied(
         &scene.edit(set_op("pick", &json!("item_z")), None, at),
         INVALID,
@@ -1063,11 +1093,7 @@ fn v3_host_a_value_set_by_name_is_the_next_dispatch_s_and_a_restart_reloads_it()
     assert_eq!(invalid.value("goal_problem"), Some(&json!("not_an_option")));
     assert_eq!(invalid.value("goal_name"), Some(&json!("pick")));
     assert_eq!(scene.view().version, edited.version, "nothing was written");
-    let second = taken(&scene.edit(
-        set_op("pick", &json!("item_b")),
-        Some(edited.version),
-        at,
-    ));
+    let second = taken(&scene.edit(set_op("pick", &json!("item_b")), Some(edited.version), at));
     assert!(second.version > edited.version);
     denied(
         &scene.edit(set_op("pick", &json!("item_a")), None, at),
@@ -1112,15 +1138,14 @@ fn v3_host_a_value_set_by_name_is_the_next_dispatch_s_and_a_restart_reloads_it()
             None
         )
     );
-    denied(
-        &scene.edit(clear_op("pick"), None, at + 2),
-        INVALID,
-    );
+    denied(&scene.edit(clear_op("pick"), None, at + 2), INVALID);
 
-    // A restart reloads the stored value unchanged.
+    // A restart reloads the stored value unchanged: after the start's first check the page is
+    // the one before, and the dispatch hands the value to its run.
     taken(&scene.edit(set_op("pick", &json!("item_a")), None, at + 3));
     let before = scene.view();
     let scene = scene.restart(at + 4);
+    let (chain, context) = scene.evaluate_and_run(at + 4, 8);
     let after = scene.view();
     assert_eq!(after.version, before.version);
     assert_eq!(after.entries, before.entries);
@@ -1128,18 +1153,21 @@ fn v3_host_a_value_set_by_name_is_the_next_dispatch_s_and_a_restart_reloads_it()
         listed(&after.entries, "pick").value_json.as_deref(),
         Some("\"item_a\"")
     );
+    agrees(&after, &chain, "pick");
+    assert_eq!(run_values(&context), [("pick".to_owned(), json!("item_a"))]);
     scene.close();
 }
 
-// The work order's "set, get and clear of a resource entry", as an other target (no `goals.json`
-// in this build): `{resource, at_least}` on the pool, whose valuation names its step and its
-// importance, is one target row; another name on the same pool replaces it and names it; the
-// capacity, a deadline and a pool the application cannot target are refused with their words;
-// the clear removes the row, and a second clear finds nothing to clear.
+// An other target (a target no resource entry of `goals.json` names): `{resource, at_least}` on
+// the pool, whose valuation names its step and its importance, is one target row; another name on
+// the same pool replaces it and names it; the capacity, a deadline and a pool the application
+// cannot target are refused with their words; the clear removes the row, and a second clear finds
+// nothing to clear. The first policy cycle composes the root first.
 #[test]
 fn v3_host_a_target_by_name_replaces_the_one_on_its_pool_and_is_cleared() {
     let scene = Scene::new(&pick_only());
-    let start = POLICY_NOW_UNIX_MS;
+    let (_, context) = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 6);
+    let start = next_eligible(&context);
     let first = taken(&scene.edit(
         set_op("stock", &json!({"resource": POOL_A, "at_least": 50})),
         None,
@@ -1259,14 +1287,15 @@ fn after_update() -> Value {
 // shows in effect is the value the next dispatch's overlay holds": values set by name before an
 // update of the package, then the update and a restart. An option removed (`pick`), a range
 // narrowed (`floor`) and a type changed (`mode`) read the default `not_applied` with their words;
-// an ordered value whose key was removed reads the rest as set and names the removed key
-// (`order`); a changed default is followed by the value no one set (`extra`) and not by a set one
+// an ordered value whose key was removed reads the rest as set, in effect with the run's word
+// `keys_left_out`, and names the key left out (`order`); a changed default is followed by the value no one set (`extra`) and not by a set one
 // (`level`); a variable the package no longer declares leaves its value an orphan (`gone`). Every
 // variable's line is what the next dispatch hands its run, and no stored value was rewritten.
 #[test]
 fn v3_host_a_pack_update_leaves_each_stored_value_as_the_design_says() {
     let scene = Scene::new(&before_update());
-    let start = POLICY_NOW_UNIX_MS;
+    let (_, context) = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 6);
+    let start = next_eligible(&context);
     for (offset, (name, value)) in [
         ("pick", json!("item_a")),
         ("floor", json!(150)),
@@ -1286,8 +1315,12 @@ fn v3_host_a_pack_update_leaves_each_stored_value_as_the_design_says() {
 
     declare(scene.packs.path(), &after_update());
     let scene = scene.restart(start + 10);
+    let (chain, context) = scene.evaluate_and_run(start + 10, 11);
     let view = scene.view();
-    assert_eq!(view.version, set_before.version, "no stored value was rewritten");
+    assert_eq!(
+        view.version, set_before.version,
+        "no stored value was rewritten"
+    );
     let line = |name: &str| {
         let entry = listed(&view.entries, name);
         (
@@ -1299,15 +1332,15 @@ fn v3_host_a_pack_update_leaves_each_stored_value_as_the_design_says() {
         )
     };
     let text = |value: &str| Some(value.to_owned());
-    use GoalEntryState::{InEffect, NotApplied};
-    use GoalValueSource::{Default, Set};
+    use GoalEntryState as State;
+    use GoalValueSource as Source;
     assert_eq!(
         line("pick"),
         (
             text("\"item_a\""),
             text("\"item_b\""),
-            Some(Default),
-            Some(NotApplied),
+            Some(Source::Default),
+            Some(State::NotApplied),
             text("not_an_option")
         )
     );
@@ -1316,8 +1349,8 @@ fn v3_host_a_pack_update_leaves_each_stored_value_as_the_design_says() {
         (
             text("150"),
             text("0"),
-            Some(Default),
-            Some(NotApplied),
+            Some(Source::Default),
+            Some(State::NotApplied),
             text("out_of_range")
         )
     );
@@ -1326,33 +1359,42 @@ fn v3_host_a_pack_update_leaves_each_stored_value_as_the_design_says() {
         (
             text("true"),
             text("\"off\""),
-            Some(Default),
-            Some(NotApplied),
+            Some(Source::Default),
+            Some(State::NotApplied),
             text("type_changed")
         )
     );
-    let order = listed(&view.entries, "order");
+    // Applied in part: the run's word, the value still set and in effect.
     assert_eq!(
+        line("order"),
         (
-            order.value_json.as_deref(),
-            order.effective_json.as_deref(),
-            order.source,
-            order.removed_keys.as_slice()
-        ),
+            text("[\"item_c\",\"item_a\"]"),
+            text("[\"item_a\"]"),
+            Some(Source::Set),
+            Some(State::InEffect),
+            text("keys_left_out")
+        )
+    );
+    assert_eq!(listed(&view.entries, "order").removed_keys, ["item_c"]);
+    assert_eq!(
+        line("extra"),
         (
-            Some("[\"item_c\",\"item_a\"]"),
-            Some("[\"item_a\"]"),
-            Some(Set),
-            ["item_c".to_owned()].as_slice()
+            None,
+            text("true"),
+            Some(Source::Default),
+            Some(State::InEffect),
+            None
         )
     );
     assert_eq!(
-        line("extra"),
-        (None, text("true"), Some(Default), Some(InEffect), None)
-    );
-    assert_eq!(
         line("level"),
-        (text("5"), text("5"), Some(Set), Some(InEffect), None)
+        (
+            text("5"),
+            text("5"),
+            Some(Source::Set),
+            Some(State::InEffect),
+            None
+        )
     );
     assert_eq!(
         view.orphans
@@ -1363,7 +1405,7 @@ fn v3_host_a_pack_update_leaves_each_stored_value_as_the_design_says() {
     );
     assert!(view.entries.iter().all(|entry| entry.name != "gone"));
 
-    let (chain, context) = scene.evaluate_and_run(start + 10, 11);
+    // What the view shows is what the dispatch after the update handed its run.
     for name in ["pick", "floor", "order", "extra", "mode", "level"] {
         agrees(&view, &chain, name);
     }

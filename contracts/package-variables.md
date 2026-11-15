@@ -376,6 +376,38 @@ declare, a value it does not take, or a right side that is no JSON is `validatio
 `--variable` without `--select` `conflicting`. No request gives a live run without a dispatch a
 value (slice V3).
 
+## Reading and setting a value by name
+
+Workflow #463 V3 (Runtime 0.12.61, register §1.383; [runtime-interface.md](runtime-interface.md),
+"Goal request kinds"). A person in the console and an agent through the Lab set a variable's value
+on one application by its name; the store is the application's `session.resource_targets` v3
+record ([resource-targets.md](resource-targets.md), "One value by name").
+
+- **`GoalView`** lists each variable of the packages the active catalog binds on the application
+  once (a variable two packages declare once, with both), at its place when `goals.json` places it,
+  else after the entries in the order the packages declare them: its declaration as `control.json`
+  writes it (`default_origin` `model` when it says so), its default, the stored value with who set
+  it and when, and what the next dispatch hands its run, as "The run" resolves it over the same
+  projection and the variable table a dispatch reads (`effective_json`, `source`, the
+  `variable_problem` word): a value not applied, or a variable that does not apply, is
+  `not_applied` with its word; a value applied in part is `in_effect` with `keys_left_out` and the
+  keys left out. The view judges no stored value itself. A stored value no variable offers any more
+  is an orphan. The bound packages' remedy parameters are listed beside them, read-only.
+- **`EditGoal`** sets or clears one value: a variable that does not apply is refused
+  `variable_not_applying` with its `variable_problem`; a value is held to its declaration as a
+  write (a `choice` one of the options, an `integer` within the range on the step, a `switch` a
+  boolean, an `ordered` list of options each once within the counts; `goal_problem`
+  `wrong_type`, `not_an_option`, `out_of_range`, `off_step`, `key_repeated`,
+  `count_out_of_range`) and to the store's 1024 bytes (`value_too_large`); a remedy parameter's
+  name is `remedy_parameter` and is never written. `clear` removes the row: the next run reads the
+  default.
+- **The Lab**: `actinglab goals <inst> [--package <id>]`, `goals get <inst> <name>`, `goals set
+  <inst> <name> <json> [--expected-version <n>]`, `goals clear <inst> <name>
+  [--expected-version <n>]`, and `package variables --package <dir>`, which reads one package
+  directory's declaration through the Runtime's metadata reader without a Runtime; their MCP tools
+  `ac_goals`, `ac_goals_get`, `ac_goals_set`, `ac_goals_clear` and `ac_package_variables` answer the
+  same lines.
+
 ## Interface
 
 `package` revision 14 ([component-interfaces.md](component-interfaces.md)); revision 13 is
@@ -418,10 +450,10 @@ bundle without them keeps its revision, and the Runtime declares [3, 14].
 
 ## What arrives later
 
-- **V3** (the Lab and the view): reading, setting and clearing a value per application through the
-  Lab's command line and MCP, the view that lists every variable with its value and source, and
-  (its `runtime-client` revision) the values a live run without a dispatch is given, listed with
-  whether each is the default or given in the run's answer.
+- **V3** (the Lab and the view), built in 0.12.61 ("Reading and setting a value by name",
+  `runtime-client` 9): reading, setting and clearing a value per application through the Lab's
+  command line and MCP, and the view. Not in it: the values a live run without a dispatch is
+  given, listed in the run's answer.
 - **V4** (the recording): a recording's selection generates its variable and the gate that reads
   it; the default, the options and the texts can be edited after `record stop`.
 - **V5** (the console) shows and sets the variables on the goal page; **V6** moves the resource

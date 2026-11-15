@@ -37,8 +37,8 @@ use actingcommand_contract::{
     StandardPackGoals,
 };
 use actingcommand_policy::{
-    TargetSetter, VariablePlan, edit_goal_record, plan_variable_values, pool_capacity,
-    stored_goal_record,
+    TargetSetter, VariablePlan, VariableTable, edit_goal_record, plan_variable_values,
+    pool_capacity, stored_goal_record,
 };
 use serde_json::Value;
 
@@ -77,16 +77,15 @@ impl StoredRecord {
 }
 
 /// What a request read of the page: the page itself, what the workbench holds of the game's
-/// `goals.json` (its state and its entries as written), the projection, the active catalog, the
-/// remedy table, the resource target view, the remedy parameters the last evaluation resolved by
-/// task, and the record.
+/// `goals.json`, the projection, the active catalog, the variable table a dispatch reads, the
+/// resource target view, the remedy parameters the last evaluation resolved by task, and the
+/// record.
 struct PageRead {
     page: GoalPage,
     declaration: GoalDeclarationState,
-    raw_entries: Vec<Value>,
     facts: EvaluationFacts,
     catalog: Option<LoadedCatalog>,
-    table: Option<BuiltTable>,
+    variables: Arc<VariableTable>,
     target_view: ResourceTargetView,
     resolved_parameters: BTreeMap<String, DecisionReason>,
     record: StoredRecord,
@@ -95,7 +94,10 @@ struct PageRead {
 impl HostShared {
     /// `GoalView` (Workflow #463 V3): see the module's description. An alias no instance has is
     /// Denied `instance_unknown`.
-    pub(super) fn goal_view(&self, instance_alias: &str) -> Result<OperationSuccess, RequestFailure> {
+    pub(super) fn goal_view(
+        &self,
+        instance_alias: &str,
+    ) -> Result<OperationSuccess, RequestFailure> {
         self.resolve_instance(instance_alias)?;
         self.goal_view_read(instance_alias)
             .map(|view| OperationSuccess {
@@ -122,12 +124,10 @@ impl HostShared {
             instance_alias,
         );
         // The values the next dispatch of each bound package hands its run: the run's own
-        // resolution, over the same projection and the same table.
-        let plan = match (&read.catalog, &read.table) {
-            (Some(catalog), Some(table)) => {
-                plan_variable_values(catalog.compiled(), &read.facts, table.variables())
-            }
-            _ => VariablePlan::default(),
+        // resolution, over the same projection and the table a dispatch reads.
+        let plan = match &read.catalog {
+            Some(catalog) => plan_variable_values(catalog.compiled(), &read.facts, &read.variables),
+            None => VariablePlan::default(),
         };
         let variables = page_variables(&read.page, &|task_id: &str| {
             plan.values(task_id, instance_alias)
@@ -138,13 +138,7 @@ impl HostShared {
             .as_ref()
             .map(|active| active.conditions.clone())
             .unwrap_or_default();
-        let listed = view_entries(
-            &read.page,
-            &stored,
-            &variables,
-            &read.raw_entries,
-            &conditions,
-        );
+        let listed = view_entries(&read.page, &stored, &variables, &conditions);
         Ok(GoalView {
             instance_alias: instance_alias.to_owned(),
             game_id: read.page.game_id.clone(),
@@ -169,8 +163,14 @@ impl HostShared {
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         self.resolve_instance(instance_alias)?;
-        self.edit_goal_record(validated, instance_alias, expected_version, op, connection_id)
-            .map_err(planning_request_failure)
+        self.edit_goal_record(
+            validated,
+            instance_alias,
+            expected_version,
+            op,
+            connection_id,
+        )
+        .map_err(planning_request_failure)
     }
 
     fn edit_goal_record(
@@ -301,13 +301,17 @@ impl HostShared {
 
     /// The page of `instance_alias` at `time`, every refusal naming `operation`: the instance's
     /// game from the policy inputs (an instance they do not configure is
-    /// `resource_target_view_instance_unconfigured`, as the resource target view refuses it), what
-    /// the workbench holds of the game's `goals.json` (read before the policy: the workbench's
-    /// check holds its state while it locks the policy), then, under the locks of
-    /// `ResourceTargetView`, the projection, the resource target view, the active catalog, the
-    /// remedy table, the remedy parameters the last evaluation resolved and the record; then,
-    /// without a lock, the remedy table read from the packages when no evaluation built one for
-    /// the active catalog, as `PackScheduleView` reads it, and the page.
+    /// `resource_target_view_instance_unconfigured`, as the resource target view refuses it); the
+    /// game's `goals.json`, not available yet ([`goal_declaration`], a marked gap); with a
+    /// composed standard pack, the variable table the scheduler workbench judged over each whole
+    /// root, the one a dispatch reads (from memory, before the policy: the workbench's check holds
+    /// its state while it locks the policy); then, under the locks of `ResourceTargetView`, the
+    /// projection, the resource target view, the active catalog, the remedy table, the remedy
+    /// parameters the last evaluation resolved and the record; then, without a lock, the remedy
+    /// table read from the packages when no evaluation built one for the active catalog, as
+    /// `PackScheduleView` reads it (without a composed standard pack its variable table is the one
+    /// a dispatch reads), and the page. Before the workbench's first check after a start its table
+    /// holds no variable, so the page lists none.
     fn read_goal_page(
         &self,
         instance_alias: &str,
@@ -329,7 +333,8 @@ impl HostShared {
                     RuntimeErrorCode::InstanceUnknown,
                 )
             })?;
-        let (declaration, accepted, raw_entries) = goal_declaration(&game_id);
+        let (declaration, accepted) = goal_declaration();
+        let composed_variables = self.standard_pack_variables()?;
         let manifest = lock(&self.procedure_manifest, operation)?.clone();
         let scope = FactScope::Instance {
             instance_id: instance_alias.to_owned(),
@@ -388,9 +393,16 @@ impl HostShared {
                     RuntimeErrorCode::InstanceUnknown,
                 )
             })?;
-        let packages = match (&catalog, &table) {
-            (Some(catalog), Some(table)) => bound_packages(catalog, table, &instance),
-            _ => Vec::new(),
+        // The variable table a dispatch reads: the workbench's with a composed standard pack,
+        // else the remedy table's.
+        let variables = match (composed_variables, &table) {
+            (Some(composed), _) => composed,
+            (None, Some(table)) => Arc::new(table.variables().clone()),
+            (None, None) => Arc::new(VariableTable::default()),
+        };
+        let packages = match &catalog {
+            Some(catalog) => bound_packages(catalog, table.as_ref(), &variables, &instance),
+            None => Vec::new(),
         };
         let capacities = match &catalog {
             Some(catalog) => target_view
@@ -409,19 +421,19 @@ impl HostShared {
                 .collect(),
             None => BTreeMap::new(),
         };
-        let not_applying = match &table {
-            Some(table) => packages
-                .iter()
-                .flat_map(|package| &package.variables)
-                .filter_map(|variable| {
-                    table
-                        .variables()
-                        .not_applying(&game_id, &variable.name)
-                        .map(|problem| (variable.name.clone(), problem))
-                })
-                .collect(),
-            None => BTreeMap::new(),
-        };
+        // The one judgement a dispatch reads of whether each variable applies in the game root:
+        // its word, read from the dispatch's table. GAP (#1728's second fix round, item 2): the
+        // detail of the cause, and the root's packages that declare a name beyond the bound
+        // ones, are not available on this branch's head; the page names the word only.
+        let not_applying = packages
+            .iter()
+            .flat_map(|package| &package.variables)
+            .filter_map(|variable| {
+                variables
+                    .not_applying(&game_id, &variable.name)
+                    .map(|problem| (variable.name.clone(), problem))
+            })
+            .collect();
         let page = GoalPage {
             game_id,
             declaration: accepted,
@@ -434,10 +446,9 @@ impl HostShared {
         Ok(PageRead {
             page,
             declaration,
-            raw_entries,
             facts,
             catalog,
-            table,
+            variables,
             target_view,
             resolved_parameters,
             record,
@@ -445,11 +456,17 @@ impl HostShared {
     }
 }
 
-/// What the workbench holds of `game`'s `goals.json`: its state, the accepted file, and its entries
-/// as written. In this build no reader of the host opens the file (Workflow #463 V2's fix round
-/// gives the workbench's reading of it), so the state is `not_read` and no entry is listed; the
-/// variables and the resource targets of the page are listed all the same.
-fn goal_declaration(_game: &str) -> (GoalDeclarationState, Option<StandardPackGoals>, Vec<Value>) {
+/// What the workbench holds of the game's `goals.json`: its state and the accepted file.
+///
+/// GAP (Workflow #463 V2, the second fix round of #1728, item 1): the workbench's state does not
+/// keep the parsed `goals.json` from one check to the next on the head this branch contains
+/// (`020a5681`; `read_declarations` holds it during one check only), and the coordinator's ruling
+/// is that this slice neither reads the file nor keeps it itself. Until that round is merged the
+/// page answers the declaration as not available (`not_read`) and lists no entry of the file;
+/// its variables and resource targets are listed all the same. The merge replaces this body by
+/// the workbench's kept reading: `absent`, `accepted` with the document, `refused` with its sha256
+/// and first problem, or `unreadable`.
+fn goal_declaration() -> (GoalDeclarationState, Option<StandardPackGoals>) {
     (
         GoalDeclarationState {
             state: GoalDeclarationRead::NotRead,
@@ -458,16 +475,17 @@ fn goal_declaration(_game: &str) -> (GoalDeclarationState, Option<StandardPackGo
             json_pointer: None,
         },
         None,
-        Vec::new(),
     )
 }
 
-/// The packages the active catalog binds on `instance`: each catalog task whose scope covers it and
-/// whose package the remedy table read, in catalog order, each package once (its first task), with
-/// the variables it declares and the parameters its `provides` declare.
+/// The packages the active catalog binds on `instance`: each catalog task whose scope covers it
+/// and whose package the variable table a dispatch reads (`variables`) or the remedy table
+/// (`table`) knows, in catalog order, each package once (its first task), with the variables the
+/// variable table holds for it and the parameters its `provides` declare.
 fn bound_packages(
     catalog: &LoadedCatalog,
-    table: &BuiltTable,
+    table: Option<&BuiltTable>,
+    variables: &VariableTable,
     instance: &InstanceSnapshot,
 ) -> Vec<BoundPackage> {
     let mut packages = Vec::<BoundPackage>::new();
@@ -475,40 +493,44 @@ fn bound_packages(
         if !covers(&task.scope, instance) {
             continue;
         }
-        let Some(package_id) = table.task_packages().get(&task.id) else {
+        let declared = variables.declared_variables(task, &instance.game_id);
+        let package_id = match &declared {
+            Some((package_id, _)) => Some((*package_id).to_owned()),
+            None => table.and_then(|table| table.task_packages().get(&task.id).cloned()),
+        };
+        let Some(package_id) = package_id else {
             continue;
         };
         if packages
             .iter()
-            .any(|package| package.package_id == *package_id)
+            .any(|package| package.package_id == package_id)
         {
             continue;
         }
-        let variables = table
-            .variables()
-            .task_variables(&task.id)
-            .map(|(_, variables)| variables.to_vec())
-            .unwrap_or_default();
         let parameters = table
-            .table
-            .providers
-            .iter()
+            .into_iter()
+            .flat_map(|table| &table.table.providers)
             .filter(|provider| provider.task_id == task.id)
             .flat_map(|provider| &provider.provides)
             .flat_map(|capability| {
-                capability.parameters.iter().map(|parameter| BoundParameter {
-                    capability: capability.capability.clone(),
-                    irreversible: capability.irreversible,
-                    name: parameter.name.clone(),
-                    options: parameter.options.clone(),
-                    default_option: parameter.default.clone(),
-                })
+                capability
+                    .parameters
+                    .iter()
+                    .map(|parameter| BoundParameter {
+                        capability: capability.capability.clone(),
+                        irreversible: capability.irreversible,
+                        name: parameter.name.clone(),
+                        options: parameter.options.clone(),
+                        default_option: parameter.default.clone(),
+                    })
             })
             .collect();
         packages.push(BoundPackage {
             task_id: task.id.clone(),
-            package_id: package_id.clone(),
-            variables,
+            package_id,
+            variables: declared
+                .map(|(_, declared)| declared.into_iter().cloned().collect())
+                .unwrap_or_default(),
             parameters,
         });
     }

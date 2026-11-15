@@ -92,7 +92,8 @@ fn v3_policy_an_entry_set_on_no_record_is_read_back_and_clearing_it_withdraws() 
             ("initiator".to_owned(), text("Lab-CLI")),
         ])
     );
-    let StoredGoalRecord::V3 { targets, entries } = stored_goal_record(Some(rows.as_slice()), None, INSTANCE)
+    let StoredGoalRecord::V3 { targets, entries } =
+        stored_goal_record(Some(rows.as_slice()), None, INSTANCE)
     else {
         panic!("a v3 record: {rows:?}");
     };
@@ -108,9 +109,16 @@ fn v3_policy_an_entry_set_on_no_record_is_read_back_and_clearing_it_withdraws() 
         ("pick", &json!("item_a"), "\"item_a\"", lab(1_000))
     );
 
-    let again = edited(Some(&rows), set_entry("pick", json!("item_b")), console(2_000));
+    let again = edited(
+        Some(&rows),
+        set_entry("pick", json!("item_b")),
+        console(2_000),
+    );
     assert_eq!(again.len(), 2);
-    assert_eq!(row(&again, "entry", "pick")["value_json"], text("\"item_b\""));
+    assert_eq!(
+        row(&again, "entry", "pick")["value_json"],
+        text("\"item_b\"")
+    );
     assert_eq!(row(&again, "entry", "pick")["channel"], text("ui"));
     assert!(!row(&again, "entry", "pick").contains_key("initiator"));
 
@@ -212,7 +220,8 @@ fn v3_policy_one_row_changes_and_every_other_row_is_kept_as_stored() {
         },
         lab(5_000),
     );
-    let StoredGoalRecord::V3 { targets, .. } = stored_goal_record(Some(moved.as_slice()), None, INSTANCE)
+    let StoredGoalRecord::V3 { targets, .. } =
+        stored_goal_record(Some(moved.as_slice()), None, INSTANCE)
     else {
         panic!("a v3 record");
     };
@@ -271,7 +280,8 @@ fn v3_policy_a_v2_policy_becomes_v3_targets_and_a_v1_policy_is_unreadable() {
     .expect("an entry over a v2 policy")
     .composed
     .rows;
-    let StoredGoalRecord::V3 { targets, entries } = stored_goal_record(Some(rows.as_slice()), None, INSTANCE)
+    let StoredGoalRecord::V3 { targets, entries } =
+        stored_goal_record(Some(rows.as_slice()), None, INSTANCE)
     else {
         panic!("a v3 record: {rows:?}");
     };
