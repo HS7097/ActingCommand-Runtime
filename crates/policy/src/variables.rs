@@ -400,7 +400,7 @@ pub(crate) fn plan_with_entries(
         return plan;
     }
     for instance in &facts.instances {
-        let entries = entries_of(&instance.instance_id);
+        let entries = entries_of(instance.instance_id.as_str());
         let judged = table.games.get(&instance.game_id);
         for task in &catalog.catalog().tasks.tasks {
             let Some(declared) = table.task_variables(task, &instance.game_id) else {
