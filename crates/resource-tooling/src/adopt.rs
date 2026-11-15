@@ -268,7 +268,9 @@ pub enum AdoptDecision {
     /// class: "held", held: {reason, reference?}}`, built as that document and read by the
     /// reader of a document, so that every check and every byte written is the document's.
     Held {
-        reason: String,
+        /// The held entry's `reason` text (the name is the one the decision's reader uses for
+        /// it; the outcome guard keeps the word `reason` for typed reasons).
+        rationale: String,
         reference: Option<String>,
     },
 }
@@ -700,8 +702,11 @@ pub fn standard_pack_adopt(
         Some(AdoptDecision::Document(path)) => {
             Some(Decision::read(&absolute(path)?, &root.schedule)?)
         }
-        Some(AdoptDecision::Held { reason, reference }) => Some(Decision::of_document(
-            held_document(reason, reference.as_deref()),
+        Some(AdoptDecision::Held {
+            rationale,
+            reference,
+        }) => Some(Decision::of_document(
+            held_document(rationale, reference.as_deref()),
             Path::new(""),
             &root.schedule,
         )?),
@@ -2086,9 +2091,9 @@ impl Decision {
 /// Workflow #463 S3-4: the decision document `{schema_version, class: "held", held: {reason,
 /// reference?}}` of `--held-reason` and `--held-reference`, which [`Decision::of_document`] reads
 /// as it reads a document given by its path; the texts as given, so that its reader checks them.
-fn held_document(reason: &str, reference: Option<&str>) -> Value {
+fn held_document(rationale: &str, reference: Option<&str>) -> Value {
     let mut held = Map::new();
-    held.insert(HELD_REASON.to_owned(), json!(reason));
+    held.insert(HELD_REASON.to_owned(), json!(rationale));
     if let Some(reference) = reference {
         held.insert(HELD_REFERENCE.to_owned(), json!(reference));
     }

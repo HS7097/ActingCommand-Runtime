@@ -303,7 +303,10 @@ fn adopt_decision(flags: &FlagArgs) -> CliOutcome<Option<AdoptDecision>> {
             "standard-pack adopt takes --held-reference only with --held-reason <text>",
         )),
         (Some(document), None, None) => Ok(Some(AdoptDecision::Document(document))),
-        (None, Some(reason), reference) => Ok(Some(AdoptDecision::Held { reason, reference })),
+        (None, Some(rationale), reference) => Ok(Some(AdoptDecision::Held {
+            rationale,
+            reference,
+        })),
         (None, None, None) => Ok(None),
     }
 }

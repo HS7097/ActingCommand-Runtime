@@ -2479,7 +2479,7 @@ const HELD_REFERENCE: &str = "neutral reference 1";
 /// The decision of `--held-reason <reason> [--held-reference <reference>]`.
 fn held_by_flags(reason: &str, reference: Option<&str>) -> AdoptDecision {
     AdoptDecision::Held {
-        reason: reason.to_owned(),
+        rationale: reason.to_owned(),
         reference: reference.map(str::to_owned),
     }
 }
