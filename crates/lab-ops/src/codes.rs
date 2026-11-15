@@ -23,7 +23,8 @@ actingcommand_contract::outcome_codes! {
         OutputBudgetExceeded => "output_budget_exceeded": error / none,
         JobCapacityExhausted => "job_capacity_exhausted": error / none,
         JobStartFailed => "job_start_failed": error / none,
-        CallBudgetExhausted => "call_budget_exhausted": error / none,
+        // Workflow #469 D4a (since 0.12.62): a warning beside a result, never the top of one.
+        CallBudgetExhausted => "call_budget_exhausted": warning / none,
         HandleUnknown => "handle_unknown": error / none,
         SinceOutOfRange => "since_out_of_range": error / none,
         ErrorsQueryInvalid => "errors_query_invalid": error / none,

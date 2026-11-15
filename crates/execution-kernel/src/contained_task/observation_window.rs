@@ -583,6 +583,8 @@ impl PreparedContainedTask {
                             }),
                             still_limit: None,
                             loading_limit: None,
+                            // Workflow #469 K2 fix round 2: the window opened on its destination.
+                            destination_reached: true,
                         });
                     }
                     limit
@@ -678,6 +680,7 @@ impl PreparedContainedTask {
                             timing_failure: None,
                             still_limit: None,
                             loading_limit: None,
+                            destination_reached: false,
                         });
                     }
                     if judged.row == FrameRow::Reached {

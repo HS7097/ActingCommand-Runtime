@@ -345,6 +345,70 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// whole root (`standard_pack_variables`), read from memory as the cycle starts; `None`
     /// without one, where the remedy table's is read.
     pub(crate) standard_pack_variables: Option<&'a actingcommand_policy::VariableTable>,
+    /// Workflow #469 H1 (register §1.397): who withdrew the availability of each instance the
+    /// cycle's inputs projected unavailable, by alias, as the host read it from the record its
+    /// projection resolved; set on the evaluator's own `instance_unavailable` reasons before the
+    /// not-run explanation reads them.
+    pub(crate) availability_withdrawals: &'a AvailabilityWithdrawals,
+}
+
+/// Workflow #469 H1 (register §1.397; the design's place 3): who withdrew an application's
+/// availability, the word `availability_source` of `instance_unavailable`, with the handset's
+/// `device_link_state` beside `device_link` and its `device_hold` beside `device_state` when the
+/// record names one the vocabulary knows. The host reads it from the active
+/// `session.instance.available` record the projection resolved; it changes no decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AvailabilityWithdrawal {
+    pub(crate) source: crate::codes::AvailabilitySource,
+    pub(crate) device_link_state: Option<actingcommand_contract::DeviceLinkState>,
+    pub(crate) device_hold: Option<crate::codes::DeviceHold>,
+}
+
+impl AvailabilityWithdrawal {
+    /// `outcome` with the withdrawal's words added to its values.
+    fn words_on(self, outcome: Outcome) -> Outcome {
+        let outcome = outcome.availability_source(self.source);
+        let outcome = match self.device_link_state {
+            Some(state) => outcome.device_link_state(state),
+            None => outcome,
+        };
+        match self.device_hold {
+            Some(hold) => outcome.device_hold(hold),
+            None => outcome,
+        }
+    }
+}
+
+/// Workflow #469 H1: per instance alias the projection found unavailable, who withdrew it.
+pub(crate) type AvailabilityWithdrawals = BTreeMap<String, AvailabilityWithdrawal>;
+
+/// Workflow #469 H1 (register §1.397): sets each withdrawal's words on the `instance_unavailable`
+/// reasons of its instance's decisions, the evaluator's own reasons, values only: no reason is
+/// added or removed, no detail text and no other value changes, and nothing reads them to decide.
+fn set_availability_words(
+    evaluation: &mut PolicyEvaluation,
+    withdrawals: &AvailabilityWithdrawals,
+) {
+    if withdrawals.is_empty() {
+        return;
+    }
+    for decision in &mut evaluation.decisions {
+        let Some(withdrawal) = decision
+            .instance_id
+            .as_deref()
+            .and_then(|alias| withdrawals.get(alias))
+        else {
+            continue;
+        };
+        for reason in &mut decision.reasons {
+            if reason
+                .outcome
+                .is(actingcommand_policy::PolicyCode::InstanceUnavailable)
+            {
+                reason.outcome = withdrawal.words_on(reason.outcome.clone());
+            }
+        }
+    }
 }
 
 /// IDLE-3 (#447, register §1.332): the policy's own dispatches as an evaluation read its inputs,
@@ -3709,6 +3773,7 @@ impl PolicyHost {
             switch_cooldowns,
             dispatches_read,
             standard_pack_variables,
+            availability_withdrawals,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -4210,6 +4275,10 @@ impl PolicyHost {
         self.random_delays.retain_eligible(&evaluation);
         self.arbitration
             .extend(instance_arbitration_ranks(&evaluation));
+        // Workflow #469 H1 (register §1.397): who withdrew an unavailable instance's
+        // availability, on its decisions' `instance_unavailable` reasons, so the explanation below
+        // and its held records carry the word; every step above judged the evaluation without it.
+        set_availability_words(&mut evaluation, availability_withdrawals);
         // Workflow #386 SR-6b, MCP-19a (register §1.143): the not-run explanation of this
         // evaluation, before the host adds its notes to the decisions. SCH-M ED-2 (§3.4
         // "Visible"): each row with the duration its dispatch would reserve.
@@ -6275,6 +6344,14 @@ impl PolicyHost {
         self.dispatch_order = journal.order;
         self.pruned_pairs = journal.pruned;
         self.control = control;
+        // Workflow #469 H2 (register §1.398): a paused streak the value records loaded takes its
+        // pause cause from its dispatch's execution record, which the journal holds (it keeps a
+        // pair's latest admitted dispatches, the paused one among them).
+        let seen = &self.seen_dispatches;
+        self.control.restore_pause_causes(|decision_id| {
+            seen.get(decision_id)
+                .and_then(|dispatch| dispatch.execution.as_ref())
+        });
         Ok(())
     }
 

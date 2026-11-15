@@ -164,7 +164,9 @@ fn values(error: &ContainedTaskError) -> Value {
     Value::Object(error.outcome().values().clone())
 }
 
-// Requirement 1 (i): the tap was ignored, the screen stays on the departure page.
+// Requirement 1 (i): the tap was ignored, the screen stays on the departure page. Workflow #469 K2
+// (register §1.396): the outcome also says what the wait saw where it ended
+// (`confirmation_problem`), here the step's own page.
 #[test]
 fn a15_an_ignored_tap_names_the_departure_page() {
     let error = unconfirmed(&task(json!({})), &[Screen::A]);
@@ -174,12 +176,14 @@ fn a15_an_ignored_tap_names_the_departure_page() {
             "pack_operation_id": "open_b",
             "page_ids": ["page_b"],
             "attempts": 1,
-            "page_id": "page_a"
+            "page_id": "page_a",
+            "confirmation_problem": "input_not_taken"
         })
     );
 }
 
-// Requirement 1 (ii): the screen moved to a page the step does not expect.
+// Requirement 1 (ii): the screen moved to a page the step does not expect. Workflow #469 K2: its
+// word is another page.
 #[test]
 fn a15_a_move_to_another_page_names_it() {
     let error = unconfirmed(&task(json!({})), &[Screen::A, Screen::A, Screen::C]);
@@ -189,13 +193,14 @@ fn a15_a_move_to_another_page_names_it() {
             "pack_operation_id": "open_b",
             "page_ids": ["page_b"],
             "attempts": 1,
-            "page_id": "page_c"
+            "page_id": "page_c",
+            "confirmation_problem": "other_page_shown"
         })
     );
 }
 
 // Requirements 1-3 (iii): the last frame matched no page, so no `page_id`; the detail still
-// names the last frame that matched one.
+// names the last frame that matched one. Workflow #469 K2: its word is no page recognised.
 #[test]
 fn a15_an_unrecognised_last_frame_names_no_page() {
     let error = unconfirmed(&task(json!({})), &[Screen::A, Screen::A, Screen::Blank]);
@@ -204,7 +209,8 @@ fn a15_an_unrecognised_last_frame_names_no_page() {
         json!({
             "pack_operation_id": "open_b",
             "page_ids": ["page_b"],
-            "attempts": 1
+            "attempts": 1,
+            "confirmation_problem": "nothing_recognised"
         })
     );
     let detail = error.detail().expect("the developer detail");
@@ -216,7 +222,9 @@ fn a15_an_unrecognised_last_frame_names_no_page() {
 
 // Requirement 2: an observation window that ends without its destination names the page of its
 // last frame. The step arrives on `page_b`, the screen goes back to `page_a` for the rest of the
-// window and the confirmation budget after it.
+// window and the confirmation budget after it. Workflow #469 K2 (fix round 2): the last frame is
+// on the step's own page after the destination had passed, which opened the window: the screen
+// came back to it.
 #[test]
 fn a15_a_window_end_without_its_destination_names_the_last_page() {
     let window = task(json!({"observation_window": {"until": "window_end", "window_ms": 300}}));
@@ -227,7 +235,8 @@ fn a15_a_window_end_without_its_destination_names_the_last_page() {
             "pack_operation_id": "open_b",
             "page_ids": ["page_b"],
             "attempts": 1,
-            "page_id": "page_a"
+            "page_id": "page_a",
+            "confirmation_problem": "returned_to_own_page"
         })
     );
 }
