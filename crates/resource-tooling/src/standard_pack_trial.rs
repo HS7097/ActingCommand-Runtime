@@ -4,46 +4,53 @@
 //! `rd-1115/pack-stage3-design.md` §2.4 and §4.2 "S3-10", with the coordinator's rulings): the
 //! offline half of `actinglab standard-pack trial`, a trial of one package on a real application.
 //! [`plan_standard_pack_trial`] answers the plan of the one run the trial would send and every
-//! refusal before it; it reads the package directory, the game root `--root` names and the place
-//! of the state directory, and nothing else: no Runtime, no device, no installation, and it
-//! writes nothing. [`write_trial_record`] writes the record of a trial,
+//! refusal before it; it reads the package directory once, the game root `--root` names and the
+//! place of the state directory, and nothing else: no Runtime, no device, no installation, and it
+//! writes nothing. A plan prepares and shows (fix round 2, the coordinator's ruling 1): it needs no
+//! authorization and refuses nothing only the run needs; what the run will require that the plan
+//! was not given, it says. [`write_trial_record`] writes the record of a trial,
 //! `actingcommand.pack-trial.v1` under `<state>/trials/<package_id>/<content12>-<ms>.json`, and
 //! [`trial_records`] and [`latest_trial_record`] read them back. In this release nothing writes a
 //! record outside the tests: the run, and the record it leaves, are the next slice's.
 //!
-//! - **The content.** The hash of the directory given, measured by the containment crate's own
-//!   `measure_content_hash` (the one a scheduled run's break-in and its failure identity measure
-//!   with); its first [`CONTENT_PREFIX_DIGITS`] hex digits are the prefix they keep. Only a
+//! - **One reading** (fix round 2). The package directory is read once, one bounded snapshot by
+//!   the containment crate's `snapshot_content_directory`, and every member of the plan comes from
+//!   those bytes: the content hash, the kernel's admission of them
+//!   (`PreparedContainedTask::load_content_entries`), the declared ends, the declared variables
+//!   and, over a root, what the rule of irreversibility judges of the package.
+//! - **The content.** The hash of the directory given: the contract crate's
+//!   `content_directory_digest` of each file's SHA-256, what containment's `measure_content_hash`
+//!   computes for a directory (the hash a scheduled run's break-in and its failure identity
+//!   measure); its first [`CONTENT_PREFIX_DIGITS`] hex digits are the prefix they keep. Only a
 //!   directory is tried: adoption rewrites a package's JSON into the canonical form, so a
 //!   container and the directory adopted from it may hash differently, and what is tried must be
-//!   what is adopted.
+//!   what was adopted.
 //! - **The variables.** Each declared variable with the value given or its default; a given value
 //!   is judged by the contract crate's `PackageVariable::judge`, the rule a dispatch resolves a
 //!   value by, and must be taken exactly as given.
 //! - **The irreversible mark.** Judged only over a game root (`--root`), by the contract crate's
 //!   `IrreversiblePackages` over every package that root registers, the directory tried standing
-//!   for the package of its id; without a root it is `not_judged` and nothing is refused for it.
+//!   for the package of its id; without a root it is `not_judged`. It is shown, never refused.
 //! - **The state directory** is never a repository's or an installed root's, nor inside one: a
-//!   directory along its path that holds `.git` is a repository's; one that holds the markers by
-//!   which the Lab's location finds an installed root (`runtime\BUILD-MANIFEST.json` of a
-//!   single-location root, `install\active.json` of a root with a selection) is an installed
-//!   root.
+//!   directory along its path that holds `.git` is a repository's; one whose `install\state.json`
+//!   is a file is an installed root ([`installed_root_containing`]).
 
-use crate::codes::{ResourceToolingCode, TrialStatePlace};
+use crate::codes::{ResourceToolingCode, TrialRecordProblem, TrialStatePlace};
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{read_bounded, root_invalid};
-use crate::standard_pack_goals::root_irreversibility;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{CodeStr, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    INSTALL_SELECTION_PATH, LabError, LabErrorClass, LabResult, PackageVariable,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, StandardPackProblem,
-    StandardPackRootBytes, StandardPackRootIssue, TaskOutcome, VariableProblem,
-    package_id_names_one_path_segment, read_standard_pack_root,
+    DeclaredCapabilities, IrreversiblePackages, LabError, LabErrorClass, LabResult,
+    PackageVariable, ProvidedCapability, RemedyDeclaration, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, SchedulingOutcomeDeclaration,
+    SchedulingOutcomeMapping, StandardPackProblem, StandardPackRootBytes, StandardPackRootIssue,
+    TaskOutcome, VariableProblem, content_directory_digest, package_id_names_one_path_segment,
+    parse_package_variables, read_standard_pack_root,
 };
 use actingcommand_execution_kernel::{PreparedContainedTask, canonical_page_anchor};
-use actingcommand_pack_containment::Containment;
+use actingcommand_pack_containment::{Containment, Sha256Hash};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -65,21 +72,35 @@ pub const CONTENT_PREFIX_DIGITS: usize = 12;
 const MAX_RECORD_BYTES: u64 = 1024 * 1024;
 /// The label the package is admitted under: admission depends only on the package.
 const TRIAL_LABEL: &str = "standard-pack-trial";
+/// A package's control declaration, at the top of its directory.
+const CONTROL_FILE: &str = "control.json";
+/// The `execution_mode` whose other ends are ending pages (`contracts/linear-steps.md`,
+/// "Endings").
+const LINEAR_STEPS: &str = "linear_steps";
 /// The flags a refusal names, as the command line writes them.
 const AUTHORIZATION_FLAG: &str = "--authorization";
+const PACKAGE_FLAG: &str = "--package";
 const VARIABLE_FLAG: &str = "--variable";
+const EXPECT_FLAG: &str = "--expect";
 /// A Git work tree's top holds this entry (a directory, or a file in a linked work tree).
 const GIT_ENTRY: &str = ".git";
-/// A single-location installed root holds its Runtime member's manifest here (the place the Lab's
-/// location reads, `lab_ops::locate`).
-const RUNTIME_MANIFEST: [&str; 2] = ["runtime", "BUILD-MANIFEST.json"];
-/// The words of the argument problems a refusal names, as the command line's are.
+/// The installer's folder of an installed root and its own state file in it, in both layouts
+/// (`contracts/install-cli.md`, "Layout"). The Runtime host recognises an installation root of one
+/// directory by the same file (`installation_root_at`); the resource tooling may not reach the
+/// host's crate (the architecture guard `production_packages_cannot_reach_resource_tooling`), so
+/// only the file's name is repeated here.
+const INSTALL_FOLDER: &str = "install";
+const INSTALLER_STATE_FILE: &str = "state.json";
+/// The words of the argument problems a refusal names, as the command line's are (the vocabulary
+/// `argument_problem`).
 const NOT_RECOGNISED: &str = "not_recognised";
 const OUT_OF_RANGE: &str = "out_of_range";
 const REPEATED: &str = "repeated";
+const UNUSABLE: &str = "unusable";
+const VALUE_MISSING: &str = "value_missing";
 
 /// What one trial is to try: `actinglab standard-pack trial <instance> --package <dir>
-/// --authorization <reference> [--variable <name>=<json>]... [--expect <outcome_key>]
+/// [--authorization <reference>] [--variable <name>=<json>]... [--expect <outcome_key>]
 /// [--irreversible] [--root <game root>] [--state-dir <dir>] --plan`.
 #[derive(Debug, Clone)]
 pub struct StandardPackTrialRequest {
@@ -107,8 +128,19 @@ pub struct StandardPackTrialAnswer {
     /// Whether a run was sent: never in this release.
     pub sent: bool,
     pub plan: TrialPlan,
+    /// What the run will require that this plan was not given, in this order; empty when
+    /// nothing is missing.
+    pub run_requires: Vec<TrialRunRequirement>,
     /// Where the trial's record is to be kept: `<state>/trials/<package_id>`.
     pub record_directory: String,
+}
+
+/// Something the run will require that a plan may be made without.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrialRunRequirement {
+    /// `--authorization`: the run is sent only under the owner's authorization.
+    Authorization,
 }
 
 /// The plan of one trial run, as `--plan` answers it and as the record keeps it.
@@ -122,8 +154,9 @@ pub struct TrialPlan {
     pub package: String,
     /// The instance, as given.
     pub instance: String,
-    /// The reference of the owner's authorization, as given; never interpreted.
-    pub authorization: String,
+    /// The reference of the owner's authorization, as given and never interpreted; `null` in a
+    /// plan made without one. A record always holds one.
+    pub authorization: Option<String>,
     /// The ends the entry task declares, in mapping order.
     pub ends: Vec<TrialDeclaredEnd>,
     /// Every variable the package declares, in declaration order.
@@ -149,16 +182,27 @@ pub struct TrialDeclaredEnd {
     pub pages: Vec<String>,
 }
 
-/// Which end a mapping is.
+/// Which end a mapping is, named as the package's own declarations name it (fix round 2), in the
+/// order they are told apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrialEndKind {
-    /// Its terminal pages hold the task's target page.
+    /// Its terminal pages hold a target page of the task.
     Target,
     /// Its key is the `on_empty` key of a select step.
     OnEmpty,
-    /// Any other: an ending page, a normal end after the last press.
+    /// Its key is the key of an operation's keyed `on_max_runs`.
+    OnMaxRuns,
+    /// Its key is the key of an operation's keyed `on_guard_refused`.
+    OnGuardRefused,
+    /// Its key is a wait step's `on_timeout`.
+    OnTimeout,
+    /// Its terminal pages hold a page a stage lists in its `end_pages`.
+    EndPage,
+    /// In a `linear_steps` task, any other: an ending page, a normal end after the last press.
     Ending,
+    /// In a page graph, any other: a mapping none of the above names.
+    Other,
 }
 
 /// One declared variable and the value the trial runs with.
@@ -244,9 +288,21 @@ pub struct TrialRunEnd {
     pub failure_values: Map<String, Value>,
 }
 
+/// The package directory tried, read once ([`read_tried_package`]): everything a plan says of it.
+struct TriedPackage {
+    package_id: String,
+    content_hash_prefix: String,
+    ends: Vec<TrialDeclaredEnd>,
+    variables: Vec<PackageVariable>,
+    /// What the rule of irreversibility judges of it.
+    capabilities: DeclaredCapabilities,
+}
+
 /// Workflow #463 S3-10 (module doc): the plan of the trial `request` asks for, or its refusal, in
-/// this order: the authorization, the package path, the state directory's place, the package's
-/// admission, its variables, `--expect`, the irreversible mark. It writes nothing.
+/// this order: the authorization's bounds, the package path, the state directory's place, the
+/// package's reading and admission, its variables, `--expect`. Fix round 2: nothing is refused for
+/// an authorization not given or for the irreversible mark; the plan shows both. It writes
+/// nothing.
 pub fn plan_standard_pack_trial(
     request: &StandardPackTrialRequest,
 ) -> LabResult<StandardPackTrialAnswer> {
@@ -255,12 +311,14 @@ pub fn plan_standard_pack_trial(
     match fs::metadata(&package) {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => {
-            return Err(refused(
-                Outcome::new(ResourceToolingCode::TrialPackageNotDirectory).path(&package),
+            return Err(argument_refused(
+                PACKAGE_FLAG,
+                UNUSABLE,
                 format!(
-                    "{} is a file, not a package directory: a trial runs packs/<id> of a checkout \
-                     or a placed pack, the form adoption writes, never a .zip or .json container, \
-                     whose content may hash otherwise than the directory adopted from it",
+                    "--package {} is a file, not a package directory: a trial runs packs/<id> of a \
+                     checkout or a placed pack, the form adoption writes, because what is tried \
+                     must be what was adopted; adoption rewrites a package's JSON, so a .zip or \
+                     .json container may hash otherwise than the directory adopted from it",
                     package.display()
                 ),
             ));
@@ -274,115 +332,83 @@ pub fn plan_standard_pack_trial(
     }
     let state = absolute(&request.state_dir)?;
     check_trial_state_dir(&state)?;
-    let invalid = |error: &dyn std::fmt::Display| {
-        LabError::package_invalid(format!("{}: {error}", package.display()))
-    };
-    let descriptor =
-        PreparedContainedTask::describe_path(TRIAL_LABEL, &package, Instant::now() + PACK_DEADLINE)
-            .map_err(|error| invalid(&error))?;
-    let package_id = descriptor.package_id().to_owned();
-    if !names_directory(&package_id) {
-        return Err(LabError::package_invalid(format!(
-            "the package_id {package_id:?} names no directory {TRIALS_DIRECTORY}/<package_id>"
-        )));
-    }
-    let declarations = PreparedContainedTask::read_remedy_declarations(
-        TRIAL_LABEL,
-        &package,
-        Instant::now() + PACK_DEADLINE,
-    )
-    .map_err(|error| invalid(&error))?;
-    let task = entry_task(&package, descriptor.entry_task_id())?;
-    let ends = declared_ends(descriptor.game(), &task);
-    let content_hash = Containment::new()
-        .measure_content_hash(&package, Instant::now() + PACK_DEADLINE)
-        .map_err(|error| invalid(&error))?;
-    let content_hash_prefix = content_hash
-        .chars()
-        .take(CONTENT_PREFIX_DIGITS)
-        .collect::<String>();
-    let variables = trial_variables(&declarations.variables, &request.variables)?;
+    let tried = read_tried_package(&package)?;
+    let variables = trial_variables(&tried.variables, &request.variables)?;
     if let Some(expected) = &request.expect
-        && !ends.iter().any(|end| end.outcome_key == *expected)
+        && !tried.ends.iter().any(|end| end.outcome_key == *expected)
     {
-        let declared = ends
+        let declared = tried
+            .ends
             .iter()
             .map(|end| end.outcome_key.as_str())
             .collect::<Vec<_>>();
-        let outcome =
-            Outcome::new(ResourceToolingCode::TrialExpectationUnknown).package_id(&package_id);
-        return Err(LabError::new(
-            LabErrorClass::UsageValidation,
-            outcome.code().as_str(),
+        let mut error = argument_refused(
+            EXPECT_FLAG,
+            NOT_RECOGNISED,
             format!(
-                "--expect {expected:?} is no outcome key the package {package_id} declares \
-                 (it declares {declared:?})"
+                "--expect {expected:?} is no outcome key the package {} declares (it declares \
+                 {declared:?})",
+                tried.package_id
             ),
-            &[],
-        )
-        .with_details(json!({
-            "outcome": outcome.envelope(Detail::Full),
-            "expected": expected,
-            "declared_outcome_keys": declared,
-        })));
+        );
+        if let Some(details) = error.details.as_mut() {
+            details["expected"] = json!(expected);
+            details["declared_outcome_keys"] = json!(declared);
+        }
+        return Err(error);
     }
     let (irreversible, irreversible_basis) = match &request.root {
         None => (TrialIrreversible::NotJudged, None),
         Some(root) => {
-            let (mark, basis) = judge_irreversible(root, &package_id, &package)?;
+            let (mark, basis) = judge_irreversible(root, &tried.package_id, &tried.capabilities)?;
             (mark, Some(basis))
         }
     };
-    if irreversible == TrialIrreversible::Marked && !request.irreversible {
-        let root = irreversible_basis
-            .as_ref()
-            .map(|basis| basis.root.clone())
-            .unwrap_or_default();
-        return Err(refused(
-            Outcome::new(ResourceToolingCode::TrialIrreversibleUnacknowledged)
-                .package_id(&package_id)
-                .path(&root),
-            format!(
-                "the game root {root} counts the package {package_id} as able to do something \
-                 irreversible; a trial of it needs --irreversible as well as the authorization"
-            ),
-        ));
-    }
+    let run_requires = if authorization.is_none() {
+        vec![TrialRunRequirement::Authorization]
+    } else {
+        Vec::new()
+    };
+    let record_directory = state
+        .join(TRIALS_DIRECTORY)
+        .join(&tried.package_id)
+        .display()
+        .to_string();
     Ok(StandardPackTrialAnswer {
         sent: false,
-        record_directory: state
-            .join(TRIALS_DIRECTORY)
-            .join(&package_id)
-            .display()
-            .to_string(),
         plan: TrialPlan {
-            package_id,
-            content_hash_prefix,
+            package_id: tried.package_id,
+            content_hash_prefix: tried.content_hash_prefix,
             package: package.display().to_string(),
             instance: request.instance.clone(),
             authorization,
-            ends,
+            ends: tried.ends,
             variables,
             irreversible,
             irreversible_basis,
             irreversible_acknowledged: request.irreversible,
             expect: request.expect.clone(),
         },
+        run_requires,
+        record_directory,
     })
 }
 
-/// The reference `given`: not blank (`trial_authorization_missing`), at most
-/// [`MAX_AUTHORIZATION_BYTES`] bytes (`validation_failed`, `out_of_range`) and without a control
-/// character (`validation_failed`, `not_recognised`).
-fn authorization(given: Option<&str>) -> LabResult<String> {
-    let Some(reference) = given.filter(|reference| !reference.trim().is_empty()) else {
-        return Err(refused(
-            Outcome::new(ResourceToolingCode::TrialAuthorizationMissing),
-            "a trial on a real application names the owner's authorization: --authorization \
-             <reference>"
-                .to_owned(),
-        ));
+/// The reference `given`, `None` when none is given; given, it is not blank (`validation_failed`,
+/// `value_missing`, as the command line answers an option without its value), at most
+/// [`MAX_AUTHORIZATION_BYTES`] bytes (`out_of_range`) and without a control character
+/// (`not_recognised`).
+fn authorization(given: Option<&str>) -> LabResult<Option<String>> {
+    let Some(reference) = given else {
+        return Ok(None);
     };
+    if reference.trim().is_empty() {
+        return Err(argument_refused(
+            AUTHORIZATION_FLAG,
+            VALUE_MISSING,
+            "--authorization is given without a reference".to_owned(),
+        ));
+    }
     if reference.len() > MAX_AUTHORIZATION_BYTES {
         return Err(argument_refused(
             AUTHORIZATION_FLAG,
@@ -401,7 +427,103 @@ fn authorization(given: Option<&str>) -> LabResult<String> {
             "--authorization holds a control character".to_owned(),
         ));
     }
-    Ok(reference.to_owned())
+    Ok(Some(reference.to_owned()))
+}
+
+/// Fix round 2: the package directory `package`, read once, and everything a plan says of it from
+/// those bytes. The snapshot is the containment crate's bounded read; its hash is what
+/// `measure_content_hash` computes for a directory; the kernel admits the same bytes
+/// (`PreparedContainedTask::load_content_entries`, offline without a vision provider); the control
+/// declaration's `provides` and `variables` and the entry task are read from the snapshot after
+/// that admission. A refusal of any of these is `package_invalid`.
+fn read_tried_package(package: &Path) -> LabResult<TriedPackage> {
+    let deadline = Instant::now() + PACK_DEADLINE;
+    let invalid = |error: &dyn std::fmt::Display| {
+        LabError::package_invalid(format!("{}: {error}", package.display()))
+    };
+    let entries = Containment::new()
+        .snapshot_content_directory(package, deadline)
+        .map_err(|error| invalid(&error))?;
+    let content_hash = content_directory_digest(
+        entries
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())),
+    );
+    let prepared =
+        PreparedContainedTask::load_content_entries(TRIAL_LABEL, entries.clone(), None, deadline)
+            .map_err(|error| invalid(&error))?;
+    let package_id = prepared.package_label().to_owned();
+    if !names_directory(&package_id) {
+        return Err(LabError::package_invalid(format!(
+            "the package_id {package_id:?} names no directory {TRIALS_DIRECTORY}/<package_id>"
+        )));
+    }
+    let control = json_entry(package, &entries, CONTROL_FILE)?;
+    let provides = match control.get("provides") {
+        None => Vec::new(),
+        Some(provides) => serde_json::from_value::<Vec<ProvidedCapability>>(provides.clone())
+            .map_err(|error| invalid(&format!("{CONTROL_FILE}: provides: {error}")))?,
+    };
+    let variables = match control.get("variables") {
+        None => Vec::new(),
+        Some(variables) => parse_package_variables(variables, &provides).map_err(|violation| {
+            invalid(&format!(
+                "{CONTROL_FILE}: {} at {}",
+                violation.problem.as_str(),
+                violation.pointer
+            ))
+        })?,
+    };
+    let task = json_entry(
+        package,
+        &entries,
+        &format!("resources/operations/{}/task.json", prepared.task_label()),
+    )?;
+    let ends = declared_ends(&prepared, &task);
+    let mut provided = BTreeMap::new();
+    for capability in &provides {
+        *provided
+            .entry(capability.capability().to_owned())
+            .or_insert(false) |= capability.irreversible();
+    }
+    // What `RemedyDeclarations::declared_capabilities` reads of a package, from the one reading.
+    let capabilities = DeclaredCapabilities {
+        provides: provided,
+        remedies: prepared
+            .scheduling_outcome()
+            .map(SchedulingOutcomeDeclaration::mappings)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(SchedulingOutcomeMapping::remedy)
+            .flat_map(RemedyDeclaration::capabilities)
+            .cloned()
+            .collect(),
+    };
+    Ok(TriedPackage {
+        package_id,
+        content_hash_prefix: content_hash.chars().take(CONTENT_PREFIX_DIGITS).collect(),
+        ends,
+        variables,
+        capabilities,
+    })
+}
+
+/// The JSON of the file `relative` of the snapshot `entries` of the package `package`, a leading
+/// byte-order mark taken off; a file that is missing or no JSON is `package_invalid`.
+fn json_entry(
+    package: &Path,
+    entries: &BTreeMap<String, Vec<u8>>,
+    relative: &str,
+) -> LabResult<Value> {
+    let bytes = entries.get(relative).ok_or_else(|| {
+        LabError::package_invalid(format!("{} holds no {relative}", package.display()))
+    })?;
+    let bytes = bytes
+        .strip_prefix(b"\xEF\xBB\xBF")
+        .unwrap_or(bytes.as_slice());
+    serde_json::from_slice(bytes).map_err(|error| {
+        LabError::package_invalid(format!("{}: {relative}: {error}", package.display()))
+    })
 }
 
 /// Every variable `declared` declares, with the value `given` names for it (judged by the
@@ -477,44 +599,26 @@ fn trial_variables(
         .collect())
 }
 
-/// The entry task `entry_task_id` of the package directory `package`, as its files hold it.
-fn entry_task(package: &Path, entry_task_id: &str) -> LabResult<Value> {
-    let files = Containment::for_metadata_validation()
-        .snapshot_content_directory(package, Instant::now() + PACK_DEADLINE)
-        .map_err(|error| LabError::package_invalid(format!("{}: {error}", package.display())))?;
-    let relative = format!("resources/operations/{entry_task_id}/task.json");
-    let bytes = files.get(&relative).ok_or_else(|| {
-        LabError::package_invalid(format!("{} holds no {relative}", package.display()))
-    })?;
-    let bytes = bytes
-        .strip_prefix(b"\xEF\xBB\xBF")
-        .unwrap_or(bytes.as_slice());
-    serde_json::from_slice(bytes).map_err(|error| {
-        LabError::package_invalid(format!("{}: {relative}: {error}", package.display()))
-    })
-}
-
-/// The ends the task `task` of the game `game` declares, in mapping order: each mapping of its
-/// `scheduling_outcome` with its terminal pages, the target page's `target`, a select step's
-/// `on_empty` key's `on_empty`, every other `ending`.
-fn declared_ends(game: &str, task: &Value) -> Vec<TrialDeclaredEnd> {
-    let target = task
-        .get("target_page")
-        .and_then(Value::as_str)
-        .map(|page| canonical_page_anchor(game, page));
-    let on_empty = task
-        .get("operations")
+/// The ends the entry task `task` of the admitted package `prepared` declares, in mapping order:
+/// each mapping of its `scheduling_outcome` with its terminal pages as the task writes them, named
+/// by the declaration that makes it an end, told apart in [`TrialEndKind`]'s order: a target page
+/// of the task (the kernel's own target set), then the keyed end of an operation whose key it is,
+/// then a stage's end page, then the rest (`ending` in a `linear_steps` task, `other` in a page
+/// graph).
+fn declared_ends(prepared: &PreparedContainedTask, task: &Value) -> Vec<TrialDeclaredEnd> {
+    let game = prepared.game();
+    let keyed = keyed_ends(task);
+    let end_pages = task
+        .get("phases")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|operation| {
-            operation
-                .get("select")?
-                .get("on_empty")?
-                .get("outcome_key")?
-                .as_str()
-        })
+        .filter_map(|phase| phase.get("end_pages").and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|page| canonical_page_anchor(game, page))
         .collect::<BTreeSet<_>>();
+    let linear = prepared.execution_mode() == LINEAR_STEPS;
     task.get("scheduling_outcome")
         .and_then(|outcome| outcome.get("mappings"))
         .and_then(Value::as_array)
@@ -530,17 +634,23 @@ fn declared_ends(game: &str, task: &Value) -> Vec<TrialDeclaredEnd> {
                 .filter_map(Value::as_str)
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
-            let reaches_target = target.as_deref().is_some_and(|target| {
-                pages
-                    .iter()
-                    .any(|page| canonical_page_anchor(game, page) == target)
-            });
-            let end = if reaches_target {
+            let anchors = pages
+                .iter()
+                .map(|page| canonical_page_anchor(game, page))
+                .collect::<Vec<_>>();
+            let end = if anchors
+                .iter()
+                .any(|anchor| prepared.terminal_holds_page(anchor))
+            {
                 TrialEndKind::Target
-            } else if on_empty.contains(outcome_key) {
-                TrialEndKind::OnEmpty
-            } else {
+            } else if let Some(kind) = keyed.get(outcome_key) {
+                *kind
+            } else if anchors.iter().any(|anchor| end_pages.contains(anchor)) {
+                TrialEndKind::EndPage
+            } else if linear {
                 TrialEndKind::Ending
+            } else {
+                TrialEndKind::Other
             };
             Some(TrialDeclaredEnd {
                 outcome_key: outcome_key.to_owned(),
@@ -551,15 +661,65 @@ fn declared_ends(game: &str, task: &Value) -> Vec<TrialDeclaredEnd> {
         .collect()
 }
 
-/// The irreversible mark of the package `package_id`, the directory `package`, over the game root
-/// `root`: its root files read as every reader reads them (a refused or missing root file is
-/// `standard_pack_root_invalid`), then the contract crate's `IrreversiblePackages` over every
-/// package its `bundle.json` registers, read by the reader the goal check and the composer use,
-/// `package` read in place of the registered directory of its id.
+/// The keys the operations of the entry task `task` end a run on, each with the member that
+/// declares it, in operation order and, within one operation, as the package contract
+/// (`contracts/resource-declarations.md`) lists the keyed ends: a select step's `on_empty`, a
+/// keyed `on_max_runs`, a keyed `on_guard_refused`, a wait step's `on_timeout`. The first
+/// declaration of a key names it.
+fn keyed_ends(task: &Value) -> BTreeMap<&str, TrialEndKind> {
+    let mut keyed = BTreeMap::new();
+    for operation in task
+        .get("operations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let declared = [
+            (
+                operation
+                    .get("select")
+                    .and_then(|select| select.get("on_empty"))
+                    .and_then(|end| end.get("outcome_key")),
+                TrialEndKind::OnEmpty,
+            ),
+            (
+                operation
+                    .get("on_max_runs")
+                    .and_then(|end| end.get("outcome_key")),
+                TrialEndKind::OnMaxRuns,
+            ),
+            (
+                operation
+                    .get("on_guard_refused")
+                    .and_then(|end| end.get("outcome_key")),
+                TrialEndKind::OnGuardRefused,
+            ),
+            (
+                operation
+                    .get("wait")
+                    .and_then(|wait| wait.get("on_timeout")),
+                TrialEndKind::OnTimeout,
+            ),
+        ];
+        for (key, kind) in declared {
+            if let Some(key) = key.and_then(Value::as_str) {
+                keyed.entry(key).or_insert(kind);
+            }
+        }
+    }
+    keyed
+}
+
+/// The irreversible mark of the package `package_id`, whose declarations read `tried`, over the
+/// game root `root`: its root files read as every reader reads them (a refused or missing root
+/// file is `standard_pack_root_invalid`), then the contract crate's `IrreversiblePackages` over
+/// every package its `bundle.json` registers, each read by the Runtime's metadata reader as
+/// `root_irreversibility` reads them, the package of `package_id` by what `tried` says (the one
+/// reading of the directory tried) in place of its registered directory.
 fn judge_irreversible(
     root: &Path,
     package_id: &str,
-    package: &Path,
+    tried: &DeclaredCapabilities,
 ) -> LabResult<(TrialIrreversible, TrialIrreversibleBasis)> {
     let root = absolute(root)?;
     if !fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
@@ -608,18 +768,25 @@ fn judge_irreversible(
         };
         root_invalid(&game, &root.join(STANDARD_PACK_BUNDLE_FILE), &issue)
     })?;
-    let registered = checked
-        .registry
-        .get(package_id)
-        .map(|entry| entry.directory.clone());
-    let read = root_irreversibility(&checked, &|directory: &str| {
-        if registered.as_deref() == Some(directory) {
-            package.to_path_buf()
+    let registered = checked.registry.get(package_id).is_some();
+    let mut declared = BTreeMap::new();
+    for listed in checked.registry.package_ids() {
+        let capabilities = if listed == package_id {
+            Some(tried.clone())
         } else {
-            root.join(directory)
-        }
-    });
-    let packages = &read.packages;
+            checked.registry.get(listed).and_then(|entry| {
+                PreparedContainedTask::read_remedy_declarations(
+                    TRIAL_LABEL,
+                    &root.join(&entry.directory),
+                    Instant::now() + PACK_DEADLINE,
+                )
+                .ok()
+                .map(|declarations| declarations.declared_capabilities())
+            })
+        };
+        declared.insert(listed.to_owned(), capabilities);
+    }
+    let packages = IrreversiblePackages::new(declared);
     let mark = if packages.counts_irreversible(package_id) {
         TrialIrreversible::Marked
     } else {
@@ -627,7 +794,7 @@ fn judge_irreversible(
     };
     let basis = TrialIrreversibleBasis {
         root: root.display().to_string(),
-        registered: registered.is_some(),
+        registered,
         capabilities: packages
             .irreversible_capabilities(package_id)
             .map(|capabilities| capabilities.iter().cloned().collect())
@@ -637,47 +804,101 @@ fn judge_irreversible(
     Ok((mark, basis))
 }
 
-/// Workflow #463 S3-10: the state directory `state_dir` (made absolute, then also with its
-/// nearest existing part's links resolved) is no repository's or installed root's, nor inside
-/// one; otherwise `trial_state_dir_refused` with the word of the place. It reads whether those
-/// entries exist along the path, and nothing else.
-pub fn check_trial_state_dir(state_dir: &Path) -> LabResult<()> {
-    let state = absolute(state_dir)?;
-    let resolved = state
+/// Workflow #463 S3-10 fix round 2 (the review's item 2): the installed root `path` is or lies
+/// inside: the nearest directory along it whose `install\state.json` is a file, the installer's own
+/// state file in both layouts (`contracts/install-cli.md`, "Layout"); `None` outside every
+/// installed root. It looks along `path` made absolute and then along its nearest existing part
+/// with its links resolved. A check that cannot be made is never read as "absent": a part whose
+/// existence or kind the operating system does not tell, or that cannot be resolved, is
+/// `foreign_os_error` with that `path` and its `io_op`. It reads only whether those files exist,
+/// and writes nothing. The one test of the resource tooling and of the Lab for an installed root
+/// along a path; the Runtime host's `installation_root_at` asks the same file of one directory.
+pub fn installed_root_containing(path: &Path) -> LabResult<Option<PathBuf>> {
+    let given = absolute(path)?;
+    let resolved = resolved_existing_part(&given)?;
+    for ancestor in given
         .ancestors()
-        .find(|ancestor| ancestor.exists())
-        .and_then(|existing| fs::canonicalize(existing).ok());
+        .chain(resolved.iter().flat_map(|existing| existing.ancestors()))
+    {
+        let marker = ancestor.join(INSTALL_FOLDER).join(INSTALLER_STATE_FILE);
+        match fs::metadata(&marker) {
+            Ok(metadata) if metadata.is_file() => return Ok(Some(ancestor.to_path_buf())),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(check_failed(&marker, &error, IoOp::Metadata)),
+        }
+    }
+    Ok(None)
+}
+
+/// The nearest part of the absolute path `path` that exists, with its links resolved; `None` when
+/// no part exists. Whether a part exists is asked with `try_exists`: a part the operating system
+/// does not tell, and one that cannot be resolved, are `foreign_os_error`.
+fn resolved_existing_part(path: &Path) -> LabResult<Option<PathBuf>> {
+    for ancestor in path.ancestors() {
+        match ancestor.try_exists() {
+            Ok(true) => {
+                return fs::canonicalize(ancestor)
+                    .map(Some)
+                    .map_err(|error| check_failed(ancestor, &error, IoOp::Canonicalize));
+            }
+            Ok(false) => {}
+            Err(error) => return Err(check_failed(ancestor, &error, IoOp::Exists)),
+        }
+    }
+    Ok(None)
+}
+
+/// The Git work tree the absolute path `state` is or lies inside, along `state` and then along
+/// `resolved` (its nearest existing part with its links resolved): the nearest directory that
+/// holds `.git`. An entry whose existence the operating system does not tell is
+/// `foreign_os_error`.
+fn repository_containing(state: &Path, resolved: Option<&Path>) -> LabResult<Option<PathBuf>> {
     for ancestor in state
         .ancestors()
-        .chain(resolved.iter().flat_map(|path| path.ancestors()))
+        .chain(resolved.into_iter().flat_map(Path::ancestors))
     {
-        let place = if ancestor.join(GIT_ENTRY).exists() {
-            TrialStatePlace::Repository
-        } else if ancestor
-            .join(RUNTIME_MANIFEST[0])
-            .join(RUNTIME_MANIFEST[1])
-            .is_file()
-            || ancestor.join(INSTALL_SELECTION_PATH).is_file()
-        {
-            TrialStatePlace::InstalledRoot
-        } else {
-            continue;
-        };
-        return Err(refused(
-            Outcome::new(ResourceToolingCode::TrialStateDirRefused)
-                .path(&state)
-                .trial_state_place(place),
-            format!(
-                "the state directory {} lies inside {} ({}); trial records are Lab authoring \
-                 state, kept beside the recordings and never in a repository or an installed \
-                 root: give --state-dir outside it",
-                state.display(),
-                ancestor.display(),
-                place.as_str()
-            ),
-        ));
+        let entry = ancestor.join(GIT_ENTRY);
+        match entry.try_exists() {
+            Ok(true) => return Ok(Some(ancestor.to_path_buf())),
+            Ok(false) => {}
+            Err(error) => return Err(check_failed(&entry, &error, IoOp::Exists)),
+        }
     }
-    Ok(())
+    Ok(None)
+}
+
+/// Workflow #463 S3-10: the state directory `state_dir` (made absolute, then also with its
+/// nearest existing part's links resolved) is no installed root's or repository's, nor inside
+/// one; otherwise `trial_state_dir_refused` with the word of the place: an installed root by
+/// [`installed_root_containing`], then a repository by the `.git` it holds. A check that cannot
+/// be made is `foreign_os_error`, never passed. It reads whether those entries exist along the
+/// path, and nothing else.
+pub fn check_trial_state_dir(state_dir: &Path) -> LabResult<()> {
+    let state = absolute(state_dir)?;
+    let (place, holder) = match installed_root_containing(&state)? {
+        Some(root) => (TrialStatePlace::InstalledRoot, root),
+        None => {
+            let resolved = resolved_existing_part(&state)?;
+            match repository_containing(&state, resolved.as_deref())? {
+                Some(repository) => (TrialStatePlace::Repository, repository),
+                None => return Ok(()),
+            }
+        }
+    };
+    Err(refused(
+        Outcome::new(ResourceToolingCode::TrialStateDirRefused)
+            .path(&state)
+            .trial_state_place(place),
+        format!(
+            "the state directory {} lies inside {} ({}); trial records are Lab authoring state, \
+             kept beside the recordings and never in a repository or an installed root: give \
+             --state-dir outside it",
+            state.display(),
+            holder.display(),
+            place.as_str()
+        ),
+    ))
 }
 
 /// Where the record of a trial of the content `content_hash_prefix` of the package `package_id`
@@ -695,12 +916,21 @@ pub fn trial_record_path(
 }
 
 /// Workflow #463 S3-10: writes `record` once at its place ([`trial_record_path`]) under the state
-/// directory `state_dir`, which [`check_trial_state_dir`] must accept, and answers that path. The
-/// record is written whole under its name with `.part` added and renamed into place; a record of
-/// that name, or a `.part` of it, that is there already is never replaced
-/// (`trial_record_write_failed`, the operating system's refusal or `AlreadyExists` as its cause).
-/// Nothing is removed.
+/// directory `state_dir`, which [`check_trial_state_dir`] must accept, and answers that path. Fix
+/// round 2 (the review's item 3): the record is written whole, and flushed, under its name with
+/// `.part` added, a file created anew, and then hard-linked to its name, which adds that name in
+/// one operation and fails when the name is taken, so a record is never replaced. A record of that
+/// name, or a `.part` of it, that is there already is `trial_record_exists` naming that file (the
+/// `.part` this call wrote stays beside a record a link found there); every refusal of the
+/// operating system is `trial_record_write_failed` with it as the cause. Once linked, the `.part`
+/// this call created is removed. A record without an authorization breaks this function's
+/// contract (its caller is the run, which is sent only under one): no code says so, so it is a
+/// debug assertion.
 pub fn write_trial_record(state_dir: &Path, record: &PackTrialRecord) -> LabResult<PathBuf> {
+    debug_assert!(
+        record.plan.authorization.is_some(),
+        "a trial record names the authorization its run was sent under"
+    );
     check_trial_state_dir(state_dir)?;
     let state = absolute(state_dir)?;
     if record.schema_version != PACK_TRIAL_SCHEMA
@@ -720,36 +950,50 @@ pub fn write_trial_record(state_dir: &Path, record: &PackTrialRecord) -> LabResu
     );
     let directory = state.join(TRIALS_DIRECTORY).join(&record.plan.package_id);
     fs::create_dir_all(&directory)
-        .map_err(|error| write_failed(&directory, &error, IoOp::CreateDir))?;
+        .map_err(|error| write_failed(&path, &directory, &error, IoOp::CreateDir))?;
     match fs::symlink_metadata(&path) {
-        Ok(_) => {
-            let taken = io::Error::from(io::ErrorKind::AlreadyExists);
-            return Err(write_failed(&path, &taken, IoOp::Create));
-        }
+        Ok(_) => return Err(record_exists(&path)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(write_failed(&path, &error, IoOp::Metadata)),
+        Err(error) => return Err(write_failed(&path, &path, &error, IoOp::Metadata)),
     }
     let bytes = serde_json::to_vec_pretty(record)
         .map_err(|error| LabError::usage(format!("the trial record does not encode: {error}")))?;
     let part = path.with_extension("json.part");
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&part)
-        .map_err(|error| write_failed(&part, &error, IoOp::Create))?;
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(&part) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(record_exists(&part));
+        }
+        Err(error) => return Err(write_failed(&path, &part, &error, IoOp::Create)),
+    };
     file.write_all(&bytes)
         .and_then(|()| file.sync_all())
-        .map_err(|error| write_failed(&part, &error, IoOp::Write))?;
+        .map_err(|error| write_failed(&path, &part, &error, IoOp::Write))?;
     drop(file);
-    fs::rename(&part, &path).map_err(|error| write_failed(&part, &error, IoOp::Rename))?;
+    match fs::hard_link(&part, &path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(record_exists(&path));
+        }
+        Err(error) => return Err(write_failed(&path, &path, &error, IoOp::Create)),
+    }
+    fs::remove_file(&part).map_err(|error| {
+        let mut failed = write_failed(&path, &part, &error, IoOp::Remove);
+        failed.message = format!(
+            "the trial record {} is in place, but its {} could not be removed: {error}",
+            path.display(),
+            part.display()
+        );
+        failed
+    })?;
     Ok(path)
 }
 
 /// Workflow #463 S3-10: every trial record of the package `package_id` under the state directory
 /// `state_dir`, in the order the trials ended (then by content); none without a record. A file of
 /// a record's name (`<content12>-<ms>.json`) that does not read as the record of that package,
-/// content and time is `trial_record_unreadable`, never passed over; another name (a `.part` a
-/// write left) is no record.
+/// content and time is `trial_record_unreadable` with its word, never passed over; another name
+/// (a `.part` a write left) is no record.
 pub fn trial_records(state_dir: &Path, package_id: &str) -> LabResult<Vec<PackTrialRecord>> {
     if !names_directory(package_id) {
         return Err(LabError::usage(format!(
@@ -778,6 +1022,7 @@ pub fn trial_records(state_dir: &Path, package_id: &str) -> LabResult<Vec<PackTr
         if !named {
             return Err(unreadable(
                 &path,
+                TrialRecordProblem::NameMismatch,
                 None,
                 format!(
                     "{} is no {PACK_TRIAL_SCHEMA} record of the package {package_id}, the content \
@@ -831,6 +1076,7 @@ fn read_record(path: &Path) -> LabResult<PackTrialRecord> {
     if bytes.len() as u64 > MAX_RECORD_BYTES {
         return Err(unreadable(
             path,
+            TrialRecordProblem::TooLarge,
             None,
             format!("{} is larger than {MAX_RECORD_BYTES} bytes", path.display()),
         ));
@@ -841,6 +1087,7 @@ fn read_record(path: &Path) -> LabResult<PackTrialRecord> {
             .raw_text(error.to_string());
         unreadable(
             path,
+            TrialRecordProblem::Undecodable,
             Some(cause),
             format!(
                 "{} is no {PACK_TRIAL_SCHEMA} record: {error}",
@@ -907,33 +1154,71 @@ fn variable_refused(
     error
 }
 
-/// `trial_record_write_failed` at `path`, the operating system's refusal `error` of `op` its
-/// cause.
-fn write_failed(path: &Path, error: &io::Error, op: IoOp) -> LabError {
+/// `foreign_os_error` for a check of whether a path lies inside an installed root or a repository
+/// that the operating system refused at `path` (`op`): the answer is unknown, so the path is not
+/// taken.
+fn check_failed(path: &Path, error: &io::Error, op: IoOp) -> LabError {
+    refused(
+        Outcome::from_io_error(error, op).path(path),
+        format!(
+            "{} cannot be inspected ({error}), so whether the path lies inside an installed root \
+             or a repository is unknown",
+            path.display()
+        ),
+    )
+}
+
+/// `trial_record_exists`: the file `path`, a record or the `.part` of one, is there and is never
+/// replaced.
+fn record_exists(path: &Path) -> LabError {
+    refused(
+        Outcome::new(ResourceToolingCode::TrialRecordExists).path(path),
+        format!(
+            "{} is there already and a trial record is never replaced: look at that file (a \
+             record of the same content and millisecond, or the .part an interrupted write left)",
+            path.display()
+        ),
+    )
+}
+
+/// `trial_record_write_failed` of the record `record` at `path`, the operating system's refusal
+/// `error` of `op` there its cause.
+fn write_failed(record: &Path, path: &Path, error: &io::Error, op: IoOp) -> LabError {
     let outcome = Outcome::new(ResourceToolingCode::TrialRecordWriteFailed)
         .path(path)
         .caused_by(Outcome::from_io_error(error, op).path(path));
     refused(
         outcome,
         format!(
-            "the trial record {} could not be written: {error}",
-            path.display()
+            "the trial record {} could not be written: {} {} refused: {error}",
+            record.display(),
+            path.display(),
+            op.as_str()
         ),
     )
 }
 
-/// `trial_record_unreadable` at `path`, the operating system's refusal `error` of `op` its cause.
+/// `trial_record_unreadable` at `path` with the word `problem`, the operating system's refusal
+/// `error` of `op` its cause.
 fn read_failed(path: &Path, error: &io::Error, op: IoOp) -> LabError {
     unreadable(
         path,
+        TrialRecordProblem::ReadFailed,
         Some(Outcome::from_io_error(error, op).path(path)),
         format!("{} could not be read: {error}", path.display()),
     )
 }
 
-/// `trial_record_unreadable` at `path`, with `cause` when there is one.
-fn unreadable(path: &Path, cause: Option<Outcome>, message: String) -> LabError {
-    let outcome = Outcome::new(ResourceToolingCode::TrialRecordUnreadable).path(path);
+/// `trial_record_unreadable` at `path` with the word `problem`, and `cause` when there is one.
+fn unreadable(
+    path: &Path,
+    problem: TrialRecordProblem,
+    cause: Option<Outcome>,
+    message: String,
+) -> LabError {
+    let outcome = Outcome::new(ResourceToolingCode::TrialRecordUnreadable)
+        .path(path)
+        .trial_record_problem(problem);
     let outcome = match cause {
         Some(cause) => outcome.caused_by(cause),
         None => outcome,

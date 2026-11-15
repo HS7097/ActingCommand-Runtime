@@ -153,27 +153,20 @@ actingcommand_contract::outcome_codes! {
         /// stops a pack (keys `package_id`, `readiness_item`, `readiness_unjudged`).
         PackageReadinessUnjudged => "package_readiness_unjudged": info / none,
         // Workflow #463 S3-10: `actinglab standard-pack trial`, its plan and its record
-        // (`standard_pack_trial`, contracts/standard-pack-trial.md).
-        /// Workflow #463 S3-10: the trial names no authorization: `--authorization` absent or
-        /// blank. Nothing was read.
-        TrialAuthorizationMissing => "trial_authorization_missing": error / none,
-        /// Workflow #463 S3-10: `--package` names a file, not a package directory (key `path`):
-        /// a trial runs the form adoption writes, never a container.
-        TrialPackageNotDirectory => "trial_package_not_directory": error / none,
-        /// Workflow #463 S3-10: the game root counts the package as able to do something
-        /// irreversible and `--irreversible` is not given (keys `package_id`, `path` the root).
-        TrialIrreversibleUnacknowledged => "trial_irreversible_unacknowledged": error / none,
-        /// Workflow #463 S3-10: `--expect` names no outcome key the package declares (key
-        /// `package_id`; the declared keys in the details).
-        TrialExpectationUnknown => "trial_expectation_unknown": error / none,
+        // (`standard_pack_trial`, contracts/standard-pack-trial.md). Its malformed arguments are
+        // `validation_failed`, as the command line's are (fix round 2).
         /// Workflow #463 S3-10: the state directory is, or lies inside, a repository or an
         /// installed root (keys `path`, `trial_state_place`).
         TrialStateDirRefused => "trial_state_dir_refused": error / none,
-        /// Workflow #463 S3-10: a trial record could not be written, or one of its name is there
-        /// already (key `path`; the operating system's refusal as its cause).
+        /// Workflow #463 S3-10 fix round 2: a trial record of that name, or the `.part` of one,
+        /// is there already and is never replaced (key `path`, the file that is there).
+        TrialRecordExists => "trial_record_exists": error / none,
+        /// Workflow #463 S3-10: the operating system refused a write of a trial record (key
+        /// `path`; its refusal as the cause).
         TrialRecordWriteFailed => "trial_record_write_failed": error / none,
-        /// Workflow #463 S3-10: a file of a trial record's name does not read as that record (key
-        /// `path`; the refusal of the read or of the decoder as its cause).
+        /// Workflow #463 S3-10: a file of a trial record's name does not read as that record (keys
+        /// `path`, `trial_record_problem`; the refusal of the read or of the decoder as its
+        /// cause).
         TrialRecordUnreadable => "trial_record_unreadable": error / none,
     }
 }
@@ -184,9 +177,28 @@ actingcommand_contract::outcome_vocabulary! {
     pub enum TrialStatePlace: "trial_state_place" {
         /// It is, or lies inside, a Git work tree: a directory along its path holds `.git`.
         Repository => "repository",
-        /// It is, or lies inside, an installed root: a directory along its path holds
-        /// `runtime\BUILD-MANIFEST.json` or `install\active.json`.
+        /// It is, or lies inside, an installed root: a directory along its path holds the
+        /// installer's own state file `install\state.json` (fix round 2).
         InstalledRoot => "installed_root",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-10 fix round 2: why a file of a trial record's name is not read as that
+    /// record (vocabulary `trial_record_problem`, the value `trial_record_problem` of
+    /// `trial_record_unreadable`).
+    pub enum TrialRecordProblem: "trial_record_problem" {
+        /// The operating system refused to open or read the file, or to list its directory (its
+        /// refusal as the cause).
+        ReadFailed => "read_failed",
+        /// The file is larger than a record is read up to (1 MiB).
+        TooLarge => "too_large",
+        /// The file does not decode as `actingcommand.pack-trial.v1` (the decoder's refusal as
+        /// the cause).
+        Undecodable => "undecodable",
+        /// The file decodes, but is not the record of the package, the content and the time its
+        /// name says.
+        NameMismatch => "name_mismatch",
     }
 }
 

@@ -868,6 +868,8 @@ outcome_keys! {
     availability_source: vocab(availability_source),
     pause_cause: vocab(pause_cause),
     // ---- Workflow #463 S3-10 (`actinglab standard-pack trial`, contracts/standard-pack-trial.md):
-    // where a state directory refused for trial records lies; kept in codes mode. ----
+    // where a state directory refused for trial records lies, and (fix round 2) why a file of a
+    // trial record's name is not read as that record; kept in codes mode. ----
     trial_state_place: vocab(trial_state_place),
+    trial_record_problem: vocab(trial_record_problem),
 }

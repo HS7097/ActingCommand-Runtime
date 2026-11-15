@@ -32,12 +32,12 @@
 //! line), no pack is answered dispatchable, and the answer says `installation: not_read`.
 //!
 //! Workflow #463 S3-10 (contracts/standard-pack-trial.md; register §1.417): `actinglab
-//! standard-pack trial --instance <x> --package <dir> --authorization <reference> [--variable
+//! standard-pack trial --instance <x> --package <dir> [--authorization <reference>] [--variable
 //! <name>=<json>]... [--expect <outcome_key>] [--irreversible] [--root <game root>] [--state-dir
 //! <dir>] --plan` answers the plan of one trial run on a real application and every refusal
 //! before it (the resource tooling's `plan_standard_pack_trial`). In this release it answers only
 //! with `--plan`: without it the line is refused before anything is read, and nothing is ever
-//! sent; the run is the next slice's.
+//! sent; the run is the next slice's. A plan asks for no authorization (fix round 2).
 
 use crate::{CliError, CliOutcome, FlagArgs, GlobalOptions};
 use actingcommand_contract::codes::ContractCode;
@@ -49,7 +49,7 @@ use actingcommand_resource_tooling::{
     check_standard_pack_root, compose_standard_packs, judge_standard_pack_readiness,
     plan_standard_pack_trial, standard_pack_adopt,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -134,11 +134,11 @@ pub(crate) fn trial_options() -> [&'static str; 9] {
     [
         "--instance <the instance the trial is for, shown as given; not contacted>",
         "--package <a pack directory: packs/<id> of a checkout or a placed pack; no container>",
-        "--authorization <the reference of the owner's authorization, 1 to 1024 bytes>",
+        "--authorization <the owner's authorization reference, 1 to 1024 bytes; the run needs it>",
         "--variable <name>=<json> (repeatable, once per name; judged by its declaration)",
         "--expect <an outcome key the package declares>",
         "--irreversible (acknowledges a package the irreversible mark flags)",
-        "--root <a game root: the irreversible mark is judged over it; without it, not judged>",
+        "--root <judges the mark; a pack it does not register is marked; without it not judged>",
         "--state-dir <the Lab's state directory, where trial records go; default actinglab's>",
         "--plan (required in this release: the plan only; nothing is sent)",
     ]
@@ -313,9 +313,10 @@ fn run_adopt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 /// read, `validation_failed` naming `--plan` `required`, the word the command line gives a
 /// required flag that is missing. The flags' own refusals come first, each naming its flag:
 /// a flag the row does not take or a positional word (`unknown`), a flag given twice but
-/// `--variable` (`repeated`), an option without its value (`value_missing`), `--instance` or
-/// `--package` absent (`required`), a `--variable` as the scan replay refuses it. An
-/// `--authorization` without its value is no reference, which the plan refuses as absent.
+/// `--variable` (`repeated`), an option without its value (`value_missing`, `--authorization`
+/// among them), `--instance` or `--package` absent (`required`), a `--variable` as the scan
+/// replay refuses it (its own parser, `replay_cli::given_variables`). Fix round 2: a plan asks
+/// for no authorization; without `--authorization` it says that the run will require one.
 fn run_trial(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse_switches(args, &TRIAL_SWITCHES);
     if let Some(flag) = flags
@@ -344,16 +345,15 @@ fn run_trial(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         .ok_or_else(|| trial_refused("--instance", ArgumentProblem::Required))?;
     let package = trial_value(&flags, "--package")?
         .ok_or_else(|| trial_refused("--package", ArgumentProblem::Required))?;
+    let authorization = trial_value(&flags, "--authorization")?;
     let expect = trial_value(&flags, "--expect")?;
     let root = trial_value(&flags, "--root")?.map(PathBuf::from);
     trial_value(&flags, "--state-dir")?;
-    let variables = trial_variables(&flags)?;
+    let variables = crate::replay_cli::given_variables(&flags, TRIAL)?;
     let answer = plan_standard_pack_trial(&StandardPackTrialRequest {
         package: PathBuf::from(package),
         instance,
-        authorization: flags
-            .optional("--authorization")
-            .filter(|value| value != "true"),
+        authorization,
         variables,
         expect,
         irreversible: flags.bool("--irreversible"),
@@ -381,55 +381,6 @@ fn trial_value(flags: &FlagArgs, flag: &str) -> CliOutcome<Option<String>> {
         }
         Some(value) => Ok(Some(value)),
     }
-}
-
-/// Workflow #463 S3-10 (the coordinator's ruling 5): the `--variable <name>=<json>` values as
-/// given, parsed as the scan replay's `--variable` is (`replay_cli`), one flag per distinct name: a
-/// flag without its value is `value_missing`, a value that is not `<name>=<json>` (no `=`, an
-/// empty name, or a right side that is no JSON) `not_recognised`, a name given twice `repeated`.
-/// The plan judges each value against the package's declaration.
-fn trial_variables(flags: &FlagArgs) -> CliOutcome<Vec<(String, Value)>> {
-    let mut given: Vec<(String, Value)> = Vec::new();
-    for text in flags.values("--variable") {
-        if text == "true" || text.trim().is_empty() {
-            return Err(trial_variable_refused(
-                ArgumentProblem::ValueMissing,
-                "standard-pack trial takes --variable <name>=<json>".to_owned(),
-            ));
-        }
-        let Some((name, value)) = text.split_once('=').and_then(|(name, json)| {
-            let value = serde_json::from_str::<Value>(json).ok()?;
-            (!name.is_empty()).then_some((name, value))
-        }) else {
-            return Err(trial_variable_refused(
-                ArgumentProblem::NotRecognised,
-                format!("--variable {text} is not <name>=<json>"),
-            ));
-        };
-        if given.iter().any(|(given, _)| given == name) {
-            return Err(trial_variable_refused(
-                ArgumentProblem::Repeated,
-                format!(
-                    "standard-pack trial takes --variable {name} once; a repeated variable is \
-                     refused, never last-wins"
-                ),
-            ));
-        }
-        given.push((name.to_owned(), value));
-    }
-    Ok(given)
-}
-
-/// Workflow #463 S3-10: a refused `--variable`, as the scan replay refuses one: `validation_failed`
-/// with the details `{argument: "--variable", argument_problem, arguments: [{argument,
-/// argument_problem}]}`.
-fn trial_variable_refused(problem: ArgumentProblem, message: String) -> CliError {
-    let problem = problem.as_str();
-    CliError::usage(message).with_details(json!({
-        "argument": "--variable",
-        "argument_problem": problem,
-        "arguments": [{"argument": "--variable", "argument_problem": problem}],
-    }))
 }
 
 /// The checkout's version control as adopt asks it: `git status --porcelain=v1 -z

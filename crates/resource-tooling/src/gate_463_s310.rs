@@ -6,39 +6,45 @@
 // - `s310_the_plan_of_a_package_with_two_endings_lists_three_keys`: the plan of a `linear_steps`
 //   package whose task names its target page and two ending pages lists the three outcome keys in
 //   mapping order (`target`, then the two `ending`s, each with its page), the package id, the
-//   first 12 hex digits of containment's own content hash of the directory, the instance and the
-//   authorization as given, each declared variable with the value given (`given`) or its default
-//   (`default`), the irreversible mark `not_judged` without a root, `--expect`, and the record's
-//   directory `<state>/trials/<package_id>`; `sent` is false;
+//   first 12 hex digits of containment's own `measure_content_hash` of the directory (the plan
+//   derives them from its one reading), the instance and the authorization as given, each
+//   declared variable with the value given (`given`) or its default (`default`), the irreversible
+//   mark `not_judged` without a root, `--expect`, nothing the run would still require, and the
+//   record's directory `<state>/trials/<package_id>`; `sent` is false;
 // - `s310_the_plan_writes_nothing`: after a plan every file and directory of the temporary tree is
 //   as it was, the state directory included, which is not made;
-// - `s310_the_authorization_is_required_bounded_and_shown_back`: absent or blank is
-//   `trial_authorization_missing`, before the package is read (a path that does not exist); 1025
-//   bytes `validation_failed` `out_of_range`, a control character `not_recognised`; 1024 bytes are
-//   taken and shown back;
-// - `s310_only_a_directory_is_tried`: a `.zip` and a `.json` container are
-//   `trial_package_not_directory` naming the path;
+// - `s310_the_authorization_is_optional_bounded_and_shown_back` (fix round 2, the coordinator's
+//   ruling 1): without one the plan answers `authorization` null and that the run requires one;
+//   a blank one is `validation_failed` `value_missing`, 1025 bytes `out_of_range`, a control
+//   character `not_recognised`, each naming `--authorization` before the package is read (a path
+//   that does not exist); 1024 bytes are taken and shown back;
+// - `s310_only_a_directory_is_tried`: a `.zip` and a `.json` container are `validation_failed`
+//   naming `--package` `unusable` (fix round 2, ruling 2);
 // - `s310_a_given_value_is_judged_by_its_declaration`: a value off its step, of another type, an
 //   option not offered, a name the package does not declare and a name given twice are
 //   `validation_failed` naming `--variable`, with the variable and the judgement's word where the
 //   declaration judged it; a value the declaration takes is `given`;
-// - `s310_an_expectation_the_package_does_not_declare_is_refused`: `trial_expectation_unknown`
-//   naming the package, the declared keys in the details;
+// - `s310_an_expectation_the_package_does_not_declare_is_refused`: `validation_failed` naming
+//   `--expect` `not_recognised`, the word an undeclared `--variable` gets (fix round 2, ruling 2),
+//   the key given and the declared keys in the details;
 // - `s310_the_irreversible_mark_is_judged_only_over_a_root`: over a game root whose package
-//   provides a capability it marks irreversible the plan of that package is
-//   `trial_irreversible_unacknowledged` (the package and the root) and, with `--irreversible`,
-//   answers `marked` with the capability; a package that provides nothing such is `unmarked`; one
-//   the root does not register counts as marked (the type's safe side); without a root nothing
-//   is refused for it;
+//   provides a capability it marks irreversible the plan of that package answers `marked` with
+//   the capability, `irreversible_acknowledged` as `--irreversible` was given, and refuses nothing
+//   (fix round 2, ruling 1); a package that provides nothing such is `unmarked`; one the root does
+//   not register counts as marked (the type's safe side); without a root it is `not_judged`;
 // - `s310_a_state_directory_in_a_repository_or_an_installed_root_is_refused`: a state directory
-//   below a directory holding `.git` is `trial_state_dir_refused` `repository`, below one holding
-//   `install\active.json` or `runtime\BUILD-MANIFEST.json` `installed_root`; the plan and the
-//   record's writer both refuse it and write nothing;
+//   below a directory holding `.git` is `trial_state_dir_refused` `repository`, below one whose
+//   `install\state.json` is a file `installed_root` (`installed_root_containing` answers that
+//   directory); the plan and the record's writer both refuse it and write nothing; fix round 2: a
+//   directory holding only `runtime\BUILD-MANIFEST.json` (an unpacked release) or only
+//   `install\active.json` is no installed root;
 // - `s310_a_record_is_written_once_and_read_back_by_content_and_by_package`: the writer puts a
-//   record at `<state>/trials/<package_id>/<content12>-<ms>.json` and never replaces one; the
-//   reader answers every record of a package in the order of their times, as written, and the
-//   latest of one content; a `.part` is no record; a file of a record's name that is no record, or
-//   not the one its name says, is `trial_record_unreadable`.
+//   record at `<state>/trials/<package_id>/<content12>-<ms>.json` and leaves no `.part`; a record
+//   or a `.part` of that name already there is `trial_record_exists` naming it and is never
+//   replaced (fix round 2); the reader answers every record of a package in the order of their
+//   times, as written, and the latest of one content; a `.part` is no record; a file of a
+//   record's name that is no record, one larger than 1 MiB and one that is not the record its name
+//   says are `trial_record_unreadable` with `undecodable`, `too_large` and `name_mismatch`.
 // No device, no Runtime, no clock read, no sleep: temporary directories and made-up packages.
 
 use crate::codes::ResourceToolingCode;
@@ -46,9 +52,9 @@ use crate::package_directory::admission_deadline;
 use crate::{
     CONTENT_PREFIX_DIGITS, MAX_AUTHORIZATION_BYTES, PACK_TRIAL_SCHEMA, PackTrialRecord,
     StandardPackTrialAnswer, StandardPackTrialRequest, TrialDeclaredEnd, TrialEndKind,
-    TrialIrreversible, TrialIrreversibleBasis, TrialRunEnd, TrialValueSource, TrialVariable,
-    latest_trial_record, plan_standard_pack_trial, trial_record_path, trial_records,
-    write_trial_record,
+    TrialIrreversible, TrialIrreversibleBasis, TrialRunEnd, TrialRunRequirement, TrialValueSource,
+    TrialVariable, installed_root_containing, latest_trial_record, plan_standard_pack_trial,
+    trial_record_path, trial_records, write_trial_record,
 };
 use actingcommand_contract::{LabError, TaskOutcome};
 use actingcommand_pack_containment::Containment;
@@ -325,7 +331,8 @@ fn s310_the_plan_of_a_package_with_two_endings_lists_three_keys() {
     );
     assert_eq!(trial.package, absolute(&package).display().to_string());
     assert_eq!(trial.instance, INSTANCE);
-    assert_eq!(trial.authorization, AUTHORIZATION);
+    assert_eq!(trial.authorization.as_deref(), Some(AUTHORIZATION));
+    assert_eq!(answer.run_requires, Vec::new());
     let end = |outcome_key: &str, end: TrialEndKind, page: &str| TrialDeclaredEnd {
         outcome_key: outcome_key.to_owned(),
         end,
@@ -396,39 +403,47 @@ fn s310_the_plan_writes_nothing() {
 }
 
 #[test]
-fn s310_the_authorization_is_required_bounded_and_shown_back() {
+fn s310_the_authorization_is_optional_bounded_and_shown_back() {
     let temp = TempDir::new().expect("a temporary directory");
     let state = temp.path().join("state");
-    // Absent or blank, before anything is read: the package path does not exist.
-    let missing = temp.path().join("no-such-package");
-    for authorization in [None, Some(String::new()), Some(" \t ".to_owned())] {
-        let error = refusal(&StandardPackTrialRequest {
-            authorization: authorization.clone(),
-            ..request(&missing, &state)
-        });
-        let values = refused_with(&error, ResourceToolingCode::TrialAuthorizationMissing);
-        assert_eq!(values, json!({}), "{authorization:?}");
-    }
     let package = temp.path().join("packs").join(TRIED);
     write_trial_package(&package);
-    let too_long = "r".repeat(MAX_AUTHORIZATION_BYTES + 1);
-    let error = refusal(&StandardPackTrialRequest {
-        authorization: Some(too_long),
+    // None given: the plan is answered, says so, and says that the run will require one.
+    let answer = plan(&StandardPackTrialRequest {
+        authorization: None,
         ..request(&package, &state)
     });
-    argument_refused(&error, "--authorization", "out_of_range");
-    let error = refusal(&StandardPackTrialRequest {
-        authorization: Some("board item\u{7}463".to_owned()),
-        ..request(&package, &state)
-    });
-    argument_refused(&error, "--authorization", "not_recognised");
+    assert_eq!(answer.plan.authorization, None);
+    assert_eq!(
+        answer.run_requires,
+        vec![TrialRunRequirement::Authorization]
+    );
+    let shown = serde_json::to_value(&answer).expect("the answer as JSON");
+    assert_eq!(shown["plan"]["authorization"], Value::Null, "{shown}");
+    assert_eq!(shown["run_requires"], json!(["authorization"]), "{shown}");
+
+    // Given but unfit, before anything is read: the package path does not exist.
+    let missing = temp.path().join("no-such-package");
+    for (given, problem) in [
+        (String::new(), "value_missing"),
+        (" \t ".to_owned(), "value_missing"),
+        ("r".repeat(MAX_AUTHORIZATION_BYTES + 1), "out_of_range"),
+        ("board item\u{7}463".to_owned(), "not_recognised"),
+    ] {
+        let error = refusal(&StandardPackTrialRequest {
+            authorization: Some(given),
+            ..request(&missing, &state)
+        });
+        argument_refused(&error, "--authorization", problem);
+    }
 
     let longest = "r".repeat(MAX_AUTHORIZATION_BYTES);
     let answer = plan(&StandardPackTrialRequest {
         authorization: Some(longest.clone()),
         ..request(&package, &state)
     });
-    assert_eq!(answer.plan.authorization, longest);
+    assert_eq!(answer.plan.authorization, Some(longest));
+    assert_eq!(answer.run_requires, Vec::new());
 }
 
 #[test]
@@ -439,10 +454,10 @@ fn s310_only_a_directory_is_tried() {
         let container = temp.path().join(&name);
         fs::write(&container, b"a container").expect("the container");
         let error = refusal(&request(&container, &state));
-        let values = refused_with(&error, ResourceToolingCode::TrialPackageNotDirectory);
+        let details = argument_refused(&error, "--package", "unusable");
         assert_eq!(
-            values,
-            json!({"path": absolute(&container).display().to_string()}),
+            details["arguments"],
+            json!([{"argument": "--package", "argument_problem": "unusable"}]),
             "{name}"
         );
     }
@@ -532,9 +547,7 @@ fn s310_an_expectation_the_package_does_not_declare_is_refused() {
         expect: Some("task_unknown".to_owned()),
         ..request(&package, &state)
     });
-    let values = refused_with(&error, ResourceToolingCode::TrialExpectationUnknown);
-    assert_eq!(values, json!({"package_id": TRIED}));
-    let details = error.details.expect("the details");
+    let details = argument_refused(&error, "--expect", "not_recognised");
     assert_eq!(details["expected"], "task_unknown");
     assert_eq!(
         details["declared_outcome_keys"],
@@ -556,29 +569,28 @@ fn s310_the_irreversible_mark_is_judged_only_over_a_root() {
         root: Some(root.clone()),
         ..request(&spend, &state)
     };
-    let values = refused_with(
-        &refusal(&over_root),
-        ResourceToolingCode::TrialIrreversibleUnacknowledged,
-    );
-    assert_eq!(values, json!({"package_id": SPEND, "path": shown_root}));
+    let marked_basis = Some(TrialIrreversibleBasis {
+        root: shown_root.clone(),
+        registered: true,
+        capabilities: vec![CAPABILITY.to_owned()],
+        unreadable_packages: Vec::new(),
+    });
+    // Shown, never refused: without `--irreversible` as with it.
+    let unacknowledged = plan(&over_root);
+    assert_eq!(unacknowledged.plan.irreversible, TrialIrreversible::Marked);
+    assert!(!unacknowledged.plan.irreversible_acknowledged);
+    assert_eq!(unacknowledged.plan.irreversible_basis, marked_basis);
     let acknowledged = plan(&StandardPackTrialRequest {
         irreversible: true,
         ..over_root
     });
     assert_eq!(acknowledged.plan.irreversible, TrialIrreversible::Marked);
     assert!(acknowledged.plan.irreversible_acknowledged);
-    assert_eq!(
-        acknowledged.plan.irreversible_basis,
-        Some(TrialIrreversibleBasis {
-            root: shown_root.clone(),
-            registered: true,
-            capabilities: vec![CAPABILITY.to_owned()],
-            unreadable_packages: Vec::new(),
-        })
-    );
-    // Without a root the mark is not judged, and nothing is refused for it.
+    assert_eq!(acknowledged.plan.irreversible_basis, marked_basis);
+    // Without a root the mark is not judged.
     let unjudged = plan(&request(&spend, &state));
     assert_eq!(unjudged.plan.irreversible, TrialIrreversible::NotJudged);
+    assert_eq!(unjudged.plan.irreversible_basis, None);
 
     // A package that provides nothing marked, over the same root.
     let tried = temp.path().join("checkout").join("packs").join(TRIED);
@@ -600,16 +612,19 @@ fn s310_the_irreversible_mark_is_judged_only_over_a_root() {
 
     // A root that does not register the package counts it as marked.
     let other = game_root(&temp, "other", &[SPEND]);
-    let values = refused_with(
-        &refusal(&StandardPackTrialRequest {
-            root: Some(other.clone()),
-            ..request(&tried, &state)
-        }),
-        ResourceToolingCode::TrialIrreversibleUnacknowledged,
-    );
+    let unregistered = plan(&StandardPackTrialRequest {
+        root: Some(other.clone()),
+        ..request(&tried, &state)
+    });
+    assert_eq!(unregistered.plan.irreversible, TrialIrreversible::Marked);
     assert_eq!(
-        values,
-        json!({"package_id": TRIED, "path": absolute(&other).display().to_string()})
+        unregistered.plan.irreversible_basis,
+        Some(TrialIrreversibleBasis {
+            root: absolute(&other).display().to_string(),
+            registered: false,
+            capabilities: Vec::new(),
+            unreadable_packages: Vec::new(),
+        })
     );
 }
 
@@ -620,13 +635,17 @@ fn s310_a_state_directory_in_a_repository_or_an_installed_root_is_refused() {
     write_trial_package(&package);
     let repository = temp.path().join("repository");
     fs::create_dir_all(repository.join(".git")).expect("the repository's Git directory");
-    let selected = temp.path().join("selected");
-    write_json(&selected.join("install").join("active.json"), &json!({}));
-    let single = temp.path().join("single");
+    // An installed root holds the installer's own state file; an unpacked release holds a
+    // member's manifest and a selection alone is no installation (fix round 2).
+    let installed = temp.path().join("installed");
+    write_json(&installed.join("install").join("state.json"), &json!({}));
+    let unpacked = temp.path().join("unpacked");
     write_json(
-        &single.join("runtime").join("BUILD-MANIFEST.json"),
+        &unpacked.join("runtime").join("BUILD-MANIFEST.json"),
         &json!({}),
     );
+    let selected = temp.path().join("selected");
+    write_json(&selected.join("install").join("active.json"), &json!({}));
     let accepted = plan(&request(&package, &temp.path().join("state")));
     let record = PackTrialRecord {
         schema_version: PACK_TRIAL_SCHEMA.to_owned(),
@@ -645,8 +664,11 @@ fn s310_a_state_directory_in_a_repository_or_an_installed_root_is_refused() {
     };
     for (state, place) in [
         (repository.join("lab").join("state"), "repository"),
-        (selected.join("state"), "installed_root"),
-        (single.join("tools").join("state"), "installed_root"),
+        (installed.join("state"), "installed_root"),
+        (
+            installed.join("packages").join(GAME).join("state"),
+            "installed_root",
+        ),
     ] {
         let expected = json!({
             "path": absolute(&state).display().to_string(),
@@ -663,6 +685,26 @@ fn s310_a_state_directory_in_a_repository_or_an_installed_root_is_refused() {
         );
         assert_eq!(values, expected, "the writer");
         assert!(!state.exists(), "{} was made", state.display());
+    }
+    assert_eq!(
+        installed_root_containing(&installed.join("packages").join(GAME))
+            .expect("the check is made"),
+        Some(absolute(&installed))
+    );
+    for not_installed in [unpacked.join("state"), selected.join("state")] {
+        assert_eq!(
+            installed_root_containing(&not_installed).expect("the check is made"),
+            None,
+            "{}",
+            not_installed.display()
+        );
+        let answer = plan(&request(&package, &not_installed));
+        assert!(!answer.sent);
+        assert!(
+            !not_installed.exists(),
+            "{} was made",
+            not_installed.display()
+        );
     }
 }
 
@@ -723,24 +765,40 @@ fn s310_a_record_is_written_once_and_read_back_by_content_and_by_package() {
     assert_eq!(document["plan"]["authorization"], AUTHORIZATION);
     assert_eq!(document["plan"]["content_hash_prefix"], content.as_str());
     assert_eq!(document["end"]["outcome"], "success");
+    let directory = absolute(&state).join("trials").join(TRIED);
+    let names = |directory: &Path| {
+        fs::read_dir(directory)
+            .expect("the trials directory")
+            .map(|entry| entry.expect("an entry").file_name())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(&directory),
+        vec![std::ffi::OsString::from(format!("{content}-1000.json"))],
+        "the write left its .part"
+    );
 
-    // Never replaced.
+    // Never replaced: the record of that name is there.
     let values = refused_with(
         &write_trial_record(&state, &first).expect_err("the same record again"),
-        ResourceToolingCode::TrialRecordWriteFailed,
+        ResourceToolingCode::TrialRecordExists,
     );
     assert_eq!(values, json!({"path": place.display().to_string()}));
     assert_eq!(fs::read(&place).expect("the record file"), bytes);
 
     write_trial_record(&state, &latest).expect("the latest record");
     write_trial_record(&state, &other).expect("a record of another content");
-    // A `.part` a write left is no record.
-    let directory = absolute(&state).join("trials").join(TRIED);
-    fs::write(
-        directory.join(format!("{content}-3000.json.part")),
-        b"half a record",
-    )
-    .expect("a .part");
+    // A `.part` a write left is no record, and a record of its name is never written over it.
+    let left = directory.join(format!("{content}-3000.json.part"));
+    fs::write(&left, b"half a record").expect("a .part");
+    let values = refused_with(
+        &write_trial_record(&state, &record(3_000, &content, TaskOutcome::Success))
+            .expect_err("a record over a .part"),
+        ResourceToolingCode::TrialRecordExists,
+    );
+    assert_eq!(values, json!({"path": left.display().to_string()}));
+    assert_eq!(fs::read(&left).expect("the .part"), b"half a record");
+    assert!(!directory.join(format!("{content}-3000.json")).exists());
 
     assert_eq!(
         trial_records(&state, TRIED).expect("the records"),
@@ -763,10 +821,20 @@ fn s310_a_record_is_written_once_and_read_back_by_content_and_by_package() {
         Vec::new()
     );
 
-    // A file of a record's name that is no record, and one that is not the record its name says.
-    for (name, bytes) in [
-        (format!("{content}-4000.json"), b"not a record".to_vec()),
-        (format!("{content}-5000.json"), bytes),
+    // A file of a record's name that is no record, one larger than a record is read up to, and
+    // one that is not the record its name says, each with its word.
+    for (name, bytes, problem) in [
+        (
+            format!("{content}-4000.json"),
+            b"not a record".to_vec(),
+            "undecodable",
+        ),
+        (
+            format!("{content}-4500.json"),
+            vec![b' '; 1024 * 1024 + 1],
+            "too_large",
+        ),
+        (format!("{content}-5000.json"), bytes, "name_mismatch"),
     ] {
         let unread = temp.path().join(format!("unread-{name}"));
         let unread_directory = unread.join("trials").join(TRIED);
@@ -777,7 +845,10 @@ fn s310_a_record_is_written_once_and_read_back_by_content_and_by_package() {
         let values = refused_with(&error, ResourceToolingCode::TrialRecordUnreadable);
         assert_eq!(
             values,
-            json!({"path": absolute(&path).display().to_string()}),
+            json!({
+                "path": absolute(&path).display().to_string(),
+                "trial_record_problem": problem
+            }),
             "{name}"
         );
         let error =

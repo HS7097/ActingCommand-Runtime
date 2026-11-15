@@ -28262,70 +28262,145 @@ this slice's branch and lifts that refusal. The offline part is one module of th
 `check_trial_state_dir`, `write_trial_record`, `trial_records` and `latest_trial_record`.
 
 **The plan** (ruling 5): the package id; `content_hash_prefix`, the first 12 hex digits of the
-containment crate's own `measure_content_hash` of the directory given, the digits the failure
-identity keeps and the break-in of #1737 takes of the same function's hash (#1737 is not on main;
-nothing of it is used); the instance as given, never contacted; the declared ends, each
-`scheduling_outcome` mapping of the entry task with its key, its kind (`target`, `on_empty`,
-`ending`) and its pages; each declared variable with the value `--variable` gives (parsed as the
-scan replay's, judged offline by the contract crate's `PackageVariable::judge`, the rule a dispatch
-resolves a value by, taken only as given) or its default; the irreversible mark; the authorization
-reference; `--expect`; and `record_directory`. It reads the package directory, `--root` and whether
-the state directory's path holds the markers below: no Runtime, no device, no installation, and it
-writes nothing (ruling 7).
+content hash of the directory given, the digits the failure identity keeps and the break-in of
+#1737 takes of the same function's hash (#1737 is not on main; nothing of it is used); the instance
+as given, never contacted; the declared ends, each `scheduling_outcome` mapping of the entry task
+with its key, its kind and its pages; each declared variable with the value `--variable` gives
+(parsed by the scan replay's own parser, judged offline by the contract crate's
+`PackageVariable::judge`, the rule a dispatch resolves a value by, taken only as given) or its
+default; the irreversible mark; the authorization reference, `null` when none was given;
+`--expect`; `run_requires`, what the run will require that the plan was not given; and
+`record_directory`. It reads the package directory once, `--root`, and whether the state
+directory's path holds the entries below: no Runtime, no device, no installation, and it writes
+nothing (ruling 7).
+
+**A plan asks for nothing** (fix round 2, the coordinator's ruling 1, the review's item 1). The plan
+is "prepare and show" (the design's authorization line): it needs no authorization and refuses
+nothing only the run needs. `--authorization` is optional with `--plan`: given, it is bounded and
+checked and shown back; given without a value or blank, `validation_failed` `value_missing`, the
+command line's refusal of an option without its value; not given, the plan answers `authorization`
+`null` and `run_requires` `["authorization"]`. A package the irreversible mark flags is shown,
+`irreversible_acknowledged` true or false as `--irreversible` was given; nothing is refused for it.
+So `trial_authorization_missing` and `trial_irreversible_unacknowledged` had no path in this slice
+and are removed (enum entries, fragment, index, texts, tests); they arrive with the slice that sends
+the run. The record's writer is called by no command yet; a record without an authorization breaks
+its contract with its caller, and since no existing code says "the caller broke the function's
+contract" (`validation_failed` says only that validation failed), it is a `debug_assert` and has no
+code.
+
+**Malformed arguments are `validation_failed`** (fix round 2, the coordinator's ruling 2): one code,
+one cause, and one way for the same kind of mistake, as the slice already answered an undeclared
+`--variable` name. A `--package` that is a file is `validation_failed` naming `--package` with
+`unusable`, the vocabulary `argument_problem`'s word for an argument that names something not of its
+kind (no word of the command line names a path of the wrong kind more closely), the message saying
+why a directory is required; an `--expect` the package does not declare is `validation_failed`
+naming `--expect` with `not_recognised`, the word an undeclared `--variable` name gets, the details
+keeping `expected` and `declared_outcome_keys`. `trial_package_not_directory` and
+`trial_expectation_unknown` are removed.
+
+**One reading** (fix round 2, point 5): the plan read the package four times (its description, its
+remedy declarations, its content hash, its entry task) and, over a root, a fifth time for the
+irreversible mark. It now takes one bounded snapshot by the containment crate's
+`snapshot_content_directory` and derives everything from it: the hash is the contract crate's
+`content_directory_digest` of each file's SHA-256 (`Sha256Hash::digest`), exactly the directory
+branch of `measure_content_hash`, which the test compares it with; the kernel admits the same bytes
+(`PreparedContainedTask::load_content_entries`, offline without a vision provider); the package id,
+the entry task, the control declaration's `provides` and `variables` (the contract crate's
+`parse_package_variables`) and what the rule of irreversibility judges of it (its provided
+capabilities and the capabilities its remedies list, read as
+`RemedyDeclarations::declared_capabilities` reads them) come from the snapshot.
+
+**The ends** (fix round 2, point 5): the first round listed the keyed ends of a page graph as
+`ending`. Each kind is now named by the declaration that makes it one, as the package's own
+contracts name them, told apart in this order: `target` (a target page of the task, by the kernel's
+`terminal_holds_page`), `on_empty`, `on_max_runs`, `on_guard_refused`, `on_timeout` (the key of an
+operation's select step, keyed cap, keyed guard refusal or wait step), `end_page` (a stage's
+`end_pages`), and for every other mapping `ending` in a `linear_steps` task or `other` in a page
+graph.
 
 **The refusals.**
 
 | Code (resource-tooling) | The one situation | Refuses / warns | Exit |
 |---|---|---|---|
-| `trial_authorization_missing` | `--authorization` absent or blank (ruling 2) | refuses | 1 (envelope 2) |
-| `trial_package_not_directory` | `--package` names a file: a container is never tried, since adoption rewrites the JSON (ruling 4) | refuses | 1 (envelope 2) |
-| `trial_irreversible_unacknowledged` | over `--root`, `IrreversiblePackages` (called, not copied) counts the package as marked and `--irreversible` is not given (ruling 3) | refuses | 1 (envelope 2) |
-| `trial_expectation_unknown` | `--expect` names no key the package declares (ruling 5) | refuses | 1 (envelope 2) |
-| `trial_state_dir_refused` (word `trial_state_place`: `repository`, `installed_root`) | the state directory is, or lies inside, a repository or an installed root (ruling 6) | refuses | 1 (envelope 2) |
-| `trial_record_write_failed` | a record could not be written, or one of its name is there | refuses | 1 (envelope 2) |
-| `trial_record_unreadable` | a file of a record's name is not that record | refuses | 1 (envelope 2) |
+| `trial_state_dir_refused` (word `trial_state_place`: `installed_root`, `repository`) | the state directory is, or lies inside, an installed root or a repository (ruling 6) | refuses | 1 (envelope 2) |
+| `trial_record_exists` (fix round 2) | a record or its `.part` of that name is already there: it is never replaced; a person looks at that file | refuses | 1 (envelope 2) |
+| `trial_record_write_failed` | the operating system refused a step of the write | refuses | 1 (envelope 2) |
+| `trial_record_unreadable` (word `trial_record_problem`, fix round 2: `read_failed`, `too_large`, `undecodable`, `name_mismatch`) | a file of a record's name is not that record | refuses | 1 (envelope 2) |
 
-An `--authorization` of more than 1024 bytes or with a control character, and a `--variable` the
-scan replay would refuse or the declaration does not take, are `validation_failed` naming the flag
-(the details carry `variable_name` and the judgement's `variable_problem`). One new key and its
-vocabulary, `trial_state_place`, and the domain `trial_` of the resource tooling's fragment. No
-decision point reads a code: each refusal is built where its situation is known.
+The command line's own refusals and the malformed arguments are `validation_failed` naming the
+flag: `--authorization` given blank (`value_missing`), longer than 1024 bytes (`out_of_range`) or
+with a control character (`not_recognised`); `--package` a file (`unusable`); a `--variable` the
+scan replay's parser refuses or the declaration does not take (the details carry `variable_name` and
+the judgement's `variable_problem`); `--expect` undeclared (`not_recognised`). A check of the state
+directory's path that the operating system refuses is `foreign_os_error`. Two new keys and their
+vocabularies, `trial_state_place` and `trial_record_problem`, and the domain `trial_` of the
+resource tooling's fragment. No decision point reads a code: each refusal is built where its
+situation is known.
 
-**Without `--root`** the mark cannot be judged: the plan answers `irreversible` `not_judged` and
-`trial_irreversible_unacknowledged` cannot happen. The row's notes and the contract say so; S3-11
-decides whether the run requires `--root` (ruling 3).
+**Without `--root`** the mark cannot be judged: the plan answers `irreversible` `not_judged`. The
+row's notes and the contract say so; S3-11 decides whether the run requires `--root` (ruling 3).
 
-**The record** `actingcommand.pack-trial.v1` (ruling 6): `schema_version`, `at_unix_ms`, `plan`,
-`request_id`, `run_id`, `end` (`outcome`, `outcome_key`, `final_page`, `failure_code`,
-`failure_values`) and `matched`, under `<state>/trials/<package_id>/<content12>-<ms>.json`. The
-writer writes it once (a `.part`, then a rename; never replacing), the reader answers every record
-of a package and the latest of one content and refuses a file of a record's name that is not the
-record its name says. Nothing writes one outside the tests in this release.
+**The record** `actingcommand.pack-trial.v1` (ruling 6): `schema_version`, `at_unix_ms`, `plan`
+(whose `authorization` always holds a reference), `request_id`, `run_id`, `end` (`outcome`,
+`outcome_key`, `final_page`, `failure_code`, `failure_values`) and `matched`, under
+`<state>/trials/<package_id>/<content12>-<ms>.json`. Fix round 2 (the review's item 3): "never
+replaced" holds without a window between a check and the write. The writer writes the record whole,
+and flushed, under its name with `.part` added (a file created anew, `create_new`), then
+`hard_link`s it to its name, which fails when the name is taken (a rename would replace an existing
+file on Windows); a record or a `.part` of that name already there is `trial_record_exists`, built
+from what was found and from no forged I/O error; once linked, the `.part` it created is removed.
+The reader answers every record of a package and the latest of one content and refuses a file of a
+record's name that is not the record its name says, with the word that says why. Nothing writes one
+outside the tests in this release.
 
-**The state directory's place.** The work order asked to refuse a state directory inside a
-repository or an installed root "by the test the Lab already has for that". Main has none for a
-directory: the Lab's location (`lab_ops::locate`, `executable_install_root`) finds the installed
-root of a running program by its place (§1.376 says the same of `standard-pack build`'s `--out`),
-and pull request #1736 adds one that recognises an installed root by its `install\` folder. So the
-module asks main's markers of the state directory's path: `runtime\BUILD-MANIFEST.json` and
-`install\active.json` (`INSTALL_SELECTION_PATH`) for an installed root, and `.git` for a
-repository, along the path made absolute and again with its nearest existing part's links resolved.
+**The state directory's place** (fix round 2, the review's item 2). The work order asked to refuse a
+state directory inside a repository or an installed root "by the test the Lab already has for
+that". The first round recognised an installed root by `runtime\BUILD-MANIFEST.json` or
+`install\active.json` and said that main has no such test; both were wrong. The first file is in
+every unpacked release and every kept build (it marks a member folder, not an installation), the
+second exists only in one layout, and `install\state.json` is the installer's own state file in both
+layouts ([install-cli.md](install-cli.md), "Layout"); main recognises an installation by it for one
+directory (`actingcommand_runtime_host::installation_root_at`, `state_root_installation.rs`). Now one
+function of the resource tooling, `installed_root_containing`, answers the directory a path is or
+lies inside whose `install\state.json` is a file, along the path made absolute and then along its
+nearest existing part with its links resolved, a part whose existence or kind the operating system
+does not tell, or that cannot be resolved, being `foreign_os_error` (`try_exists`), never read as
+"absent". The resource tooling may not reach the host's crate (the architecture guard
+`production_packages_cannot_reach_resource_tooling`), so the function repeats only the file's name
+and none of `installation_root_at`. It sits below the Lab's crate so that both can call it: pull
+request #1736 (open) refuses a recording's output directory inside an installed root by the same
+file with its own walk, and the coordinator points it at this function once both are merged. A
+state directory inside a repository (a directory along the path that holds `.git`) keeps its
+refusal (the work order's "never in a repository"); what it costs: a state directory kept inside a
+checkout is refused for the trial's records though recordings accept it there, and `--state-dir`
+names another.
 
 **Where the row is wired.** Beside the module and actinglab's `standard_pack_cli.rs`: the row in
 `lab-operations.json`; `engine::COMMANDS` (68), the strict rows (33) with the command's flag lists
 `TRIAL_FLAGS` and `TRIAL_SWITCHES`, the census's group (a) (66), `BUILT_SLICES` and the MCP
 server's `ACTINGLAB_SLICES` (`PACK-TRIAL`), the capability (`offline`, `read_only`), the help's
 options, the dry-run declaration (`no_effect`, [actinglab-dry-run.md](actinglab-dry-run.md)) and
-the command inventory (106 commands). The resource tooling reads the root by the contract crate's
-`read_standard_pack_root` and judges it by `root_irreversibility`, the directory tried read in
-place of the registered one of its id.
+the command inventory (106 commands); fix round 2: `--variable` by `replay_cli::given_variables`,
+the scan replay's own parser, which names the command in its messages, and the counts of
+[lab-two-entries.md](lab-two-entries.md) (23 rows take the instance on the command line only as
+`--instance`; 161 offered rows on Windows, 68 of them by children, 122 elsewhere) and the Files list
+of [README.md](README.md). The resource tooling reads the root by the contract crate's
+`read_standard_pack_root` and judges it by `IrreversiblePackages`, every other package of the root
+read by the Runtime's metadata reader as `root_irreversibility` reads them and the package tried by
+what its one reading says, in place of the registered one of its id.
 
 **Tests.** `crates/resource-tooling/src/gate_463_s310.rs` (nine) and
 `apps/actinglab/src/tests/gate_463_s310.rs` (two), gate map `exec.toml` "#463 S3-10": the plan of a
-`linear_steps` package with two ending pages lists three keys; a plan writes nothing; each refusal
-of the table above but the write and read failures through the plan, those two through the writer
-and the reader; the command line without `--plan` and with it. No golden changes, no test leaves
-the gate map, no test is adapted.
+`linear_steps` package with two ending pages lists three keys; a plan writes nothing; a plan without
+an authorization answers `null` and `run_requires`, a given one is bounded; a container, an
+undeclared `--expect` and unfit `--variable` values are `validation_failed`; a marked package is
+shown, not refused; a state directory in a repository or an installed root is refused by the plan
+and by the writer, and an unpacked release or a selection alone is no installed root; the writer
+never replaces a record or a `.part` (`trial_record_exists`) and the reader's three words; the
+command line without `--plan` and with it, with and without `--authorization`. Fix round 2 renames
+`s310_the_authorization_is_required_bounded_and_shown_back` to
+`s310_the_authorization_is_optional_bounded_and_shown_back` (neither is on main, so nothing leaves
+the gate map's merge base). No golden changes, no test of main is adapted.
 
 **What is not changed.** `run start` and the run path of `crates/lab-ops`, the Runtime, `adopt.rs`,
 readiness, the placement, every interface revision and record shape.

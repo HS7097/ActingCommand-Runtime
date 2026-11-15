@@ -11,9 +11,11 @@
 //   plan of a made-up package (`sent` false, the package id, the instance as `--instance` gives
 //   it, the authorization, the variable given, the irreversible mark `not_judged`, the record's
 //   directory under `--state-dir`) and makes nothing: neither the state directory nor any file of
-//   the Runtime's state root it points at; `--variable` is parsed as the scan replay's (a value
-//   that is not `<name>=<json>` `not_recognised`, a name given twice `repeated`), and an
-//   `--authorization` without its value is `trial_authorization_missing`.
+//   the Runtime's state root it points at; `--variable` is parsed by the scan replay's own parser
+//   (a value that is not `<name>=<json>` `not_recognised`, a name given twice `repeated`); fix
+//   round 2: an `--authorization` without its value is `validation_failed` `value_missing`, and a
+//   line without `--authorization` answers the plan with `authorization` null and
+//   `run_requires` `["authorization"]`.
 // No Runtime, no device, no clock read, no sleep: temporary directories and a made-up package.
 
 use super::*;
@@ -279,8 +281,27 @@ fn s310_the_command_line_answers_the_plan_and_sends_nothing() {
         "--variable",
         "repeated",
     );
-    // An `--authorization` without its value names no authorization.
-    refused(&line(&["--authorization"]), "trial_authorization_missing");
-    refused(&line(&[]), "trial_authorization_missing");
+    // An `--authorization` without its value is refused as every option without its value is.
+    argument_refused(
+        &line(&["--authorization"]),
+        "--authorization",
+        "value_missing",
+    );
+    // Without `--authorization` the plan is answered and says that the run will require one.
+    let unauthorized = line(&[]);
+    let unauthorized_shown = unauthorized.envelope_json();
+    assert_eq!(unauthorized.exit_code(), 0, "{unauthorized_shown}");
+    let planned = unauthorized.envelope.data.clone().expect("the plan");
+    assert_eq!(
+        planned["plan"]["authorization"],
+        Value::Null,
+        "{unauthorized_shown}"
+    );
+    assert_eq!(
+        planned["run_requires"],
+        json!(["authorization"]),
+        "{unauthorized_shown}"
+    );
+    assert_eq!(planned["sent"], false, "{unauthorized_shown}");
     assert!(!state.exists());
 }
