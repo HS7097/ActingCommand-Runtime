@@ -122,6 +122,10 @@ mod gate_463_v2;
 // Workflow #469 K2: a page-graph step's end and a guard's refusal say why.
 #[cfg(test)]
 mod gate_469_k2;
+// Workflow #469 D4b: a vision provider failure at a guard, a `when` or an identity is reported as
+// one.
+#[cfg(test)]
+mod gate_469_d4b;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.
@@ -6951,12 +6955,17 @@ impl PreparedContainedTask {
         expect: &TaskExpectIdentity,
         identity: &actingcommand_recognition_pack::CandidateIdentityDeclaration,
     ) -> Result<ExpectedIdentityReading, ContainedTaskError> {
+        // Workflow #469 D4b: a failure of the vision provider is
+        // `contained_task_vision_provider_failed`, with the same detail.
         let evaluate = |target_id: &str| {
             self.evaluator
                 .evaluate_target(scene, target_id)
                 .map_err(|error| {
                     ContainedTaskError::with_detail(
-                        SharedCode::ContainedTaskRecognitionFailed.code(),
+                        target_evaluation_failure_code(
+                            &error,
+                            SharedCode::ContainedTaskRecognitionFailed.code(),
+                        ),
                         error.to_string(),
                     )
                 })
@@ -12002,8 +12011,13 @@ impl TaskOperation {
                 Some(outcome) => format!("{error} cause={}", outcome.code().as_str()),
                 None => error.to_string(),
             };
+            // Workflow #469 D4b: a failure of the vision provider is
+            // `contained_task_vision_provider_failed`, with the same detail.
             ContainedTaskError::with_detail(
-                SharedCode::ContainedTaskGuardEvaluationFailed.code(),
+                target_evaluation_failure_code(
+                    &error,
+                    SharedCode::ContainedTaskGuardEvaluationFailed.code(),
+                ),
                 detail,
             )
         })?;
@@ -12677,17 +12691,44 @@ fn contained_task_declaration_error(error: actingcommand_contract::LabError) -> 
     failure.with_expected_shape()
 }
 
+/// Workflow #387 D1c-G: whether a recognition evaluation failed because the vision provider
+/// failed or answered invalidly, the causes admission reports as
+/// `contained_task_vision_provider_failed` (`contained_task_admission_error`). Workflow #469 D4b
+/// (register §1.401): a page evaluation, a guard, a `when` and an expected identity all tell a
+/// provider failure from a real evaluation error by this one reading of the error's cause.
+fn failed_by_provider(error: &actingcommand_recognition_pack::RecognitionPackError) -> bool {
+    matches!(
+        error.code(),
+        RecognitionPackErrorCode::VisionProviderFailure
+            | RecognitionPackErrorCode::VisionProviderInvalidResponse
+    )
+}
+
 /// Workflow #387 D1c-G: whether a page evaluation failed because the vision provider failed or
-/// answered invalidly, the causes admission reports as `contained_task_vision_provider_failed`
-/// (`contained_task_admission_error`).
+/// answered invalidly (`failed_by_provider`, of the failed target's cause).
 fn page_failed_by_provider(error: &actingcommand_page_detector::PageDetectorError) -> bool {
-    error.failed_target.as_ref().is_some_and(|failed| {
-        matches!(
-            failed.cause.code(),
-            RecognitionPackErrorCode::VisionProviderFailure
-                | RecognitionPackErrorCode::VisionProviderInvalidResponse
-        )
-    })
+    error
+        .failed_target
+        .as_ref()
+        .is_some_and(|failed| failed_by_provider(&failed.cause))
+}
+
+/// Workflow #469 D4b (register §1.401; the owner's approval on board #469): the code a target
+/// evaluation that failed ends with at a step's guard, an operation's `when` or an expected
+/// identity: `contained_task_vision_provider_failed` when the vision provider failed or answered
+/// invalidly, as a page evaluation's (Workflow #387 D1c-G), and otherwise `evaluation_code`, the
+/// place's own code for a real evaluation error (`contained_task_guard_evaluation_failed` at the
+/// guard, `contained_task_recognition_failed` at the `when` and the identity). The host's record
+/// of the same failed guard or `when` evaluation takes its code from here too.
+pub fn target_evaluation_failure_code(
+    error: &actingcommand_recognition_pack::RecognitionPackError,
+    evaluation_code: Code,
+) -> Code {
+    if failed_by_provider(error) {
+        ExecutionKernelCode::ContainedTaskVisionProviderFailed.code()
+    } else {
+        evaluation_code
+    }
 }
 
 /// Workflow #387 D1c-G: whether a page of a batch evaluation failed because the vision provider
