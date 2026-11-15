@@ -32,7 +32,8 @@ records leniently and needs no change. The
 writers come with #389 slice U-4: the upgrade state's close record, and a
 maintenance owner (`ledger-maintenance`) whose previous close carries the marker
 copies it onto its own close, until a Runtime owner that is not a maintenance owner
-starts.
+starts. Workflow #434 LAB-6S4a (0.12.62) deletes `UpgradeState`, which U-4 never built:
+no writer of the marker exists, and the readers keep accepting it.
 
 Writers, all through the handle that holds the lock:
 

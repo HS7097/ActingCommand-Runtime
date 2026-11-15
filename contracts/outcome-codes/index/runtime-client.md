@@ -11,7 +11,7 @@ by hand. The [summary](README.md) says what each column means. 211 codes.
 | `client_channel_unsupported` | warning | none | 0.12.0 | active | pending | written | The Runtime closed the connection on BindChannel without a receipt: an actingd built before #389 U-2. |
 | `forward_projection_config_invalid` | error | none | 0.12.0 | active | pending | TBD | A runtime client call failed: forward projection config invalid. |
 | `forward_projection_request_invalid` | error | none | 0.12.0 | active | pending | TBD | A runtime client call failed: forward projection request invalid. |
-| `install_transition_receipt_unconfirmed` | error | none | 0.12.0 | active | pending | TBD | A runtime client call failed: install transition receipt unconfirmed. |
+| `install_transition_receipt_unconfirmed` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The client's install_transition went with the request kind InstallTransition. |
 | `maintenance_trend_policy_invalid` | error | none | 0.12.0 | active | pending | TBD | A runtime client call failed: maintenance trend policy invalid. |
 | `material_read_assembly_mismatch` | error | none | 0.12.0 | active | pending | TBD | A runtime client call failed: material read assembly mismatch. |
 | `material_read_cancelled` | error | none | 0.12.0 | active | pending | TBD | A runtime client call failed: material read cancelled. |

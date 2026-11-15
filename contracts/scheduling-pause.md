@@ -339,8 +339,12 @@ restart. The held pauses are the runtime fact `host.scheduling_pause` (scope `Ru
   scope=<global|instance:alias> since=<ms>` or `actingd scheduling_pause_dropped
   scope=instance:<alias> reason=instance_not_registered`. A malformed fact fails the start
   (`scheduling_pause_fact_invalid`).
-- **Installer-held starts** keep the pauses their install transition carried
-  (`host.install_transition.pauses`) and record them as `host.scheduling_pause`.
+- **Installer-held starts** kept the pauses their install transition carried
+  (`host.install_transition.pauses`) and recorded them as `host.scheduling_pause`, until Workflow
+  #434 LAB-6S4a (0.12.62) deleted the held start: since then a start invalidates the two
+  transition facts a 0.12.61 state root may still hold (`host.install_transition` and its
+  `.pauses`, once, as a takeover) and restores only the persisted pauses above; an installer
+  pauses each instance itself before it stops the Runtime and resumes it after the new start.
 - **Conditional resume** after a restart needs the restored pause's new owner epoch and
   revision 1, read from `Status`.
 - **Older Runtimes** ignore the fact: a switch back to one starts unpaused, and a resume made
@@ -364,8 +368,8 @@ it on an instance it adds while the Runtime is stopped (Workflow #453 S3, 0.12.6
 
 - **Who holds it.** The Runtime itself, at every start, as the third kind of start hold beside the
   hold of an unsettled dispatch and of an instance whose settlement facts the start skipped: after
-  the persisted pauses are restored (an installer-held start: after its transition's pauses are
-  kept) and those holds are taken, before the instance workers and any instance's daemon-start
+  the persisted pauses are restored (an installer-held start, until Workflow #434 LAB-6S4a: after
+  its transition's pauses were kept) and those holds are taken, before the instance workers and any instance's daemon-start
   preparation. For each entry that declares it and whose instance id the tagged runtime fact
   `host.start_pause_applied` ([runtime-fact-store.md](runtime-fact-store.md)) does not name yet,
   in the order of the instance ids (the global pause does not count as the instance's own):

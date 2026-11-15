@@ -46,17 +46,17 @@ use crate::client::{
 };
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use actingcommand_contract::{
-    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ArtifactKind, ArtifactProducer,
-    ArtifactRedactionState, AuditInput, CaptureSequenceSpec, ClientActionKind, ClientActionRecord,
-    ContainedTaskRequest, CorrelationId, EventActor, EventDraft, EventLinksDraft, EventOrigin,
-    EventQuery, EventSeverity, EventSource, EventType, FrameId, IdentifierIssuer, InputAction,
-    InstanceId, LeasePriority, LeaseQueuePolicy, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule,
-    OwnerEpoch, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
-    RUNTIME_INFO_FILE, ResourceAuthoringEvent, ResourceAuthoringPhase, RetentionClass, RunId,
-    RuntimeCaptureBackend, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeInfo,
-    RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
-    RuntimeResult, RuntimeSubscriptionRequest, SanitizationError, SecretField, SecretFingerprinter,
+    ArtifactKind, ArtifactProducer, ArtifactRedactionState, AuditInput, CaptureSequenceSpec,
+    ClientActionKind, ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor,
+    EventDraft, EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
+    FrameId, IdentifierIssuer, InputAction, InstanceId, LeasePriority, LeaseQueuePolicy,
+    MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch, ProjectedArtifactReference,
+    ProjectedEvent, ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE,
+    ResourceAuthoringEvent, ResourceAuthoringPhase, RetentionClass, RunId, RuntimeCaptureBackend,
+    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeErrorCode, RuntimeErrorProjection,
+    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeInfo, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    RuntimeSubscriptionRequest, SanitizationError, SecretField, SecretFingerprinter,
     Sha256Fingerprint, SubscriptionCursor, TaskId, TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
     TerminalEvent,
 };
@@ -2764,13 +2764,14 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
 }
 
+// Workflow #434 LAB-6S4a (0.12.62): the identity card and the approval request are gone; the
+// client action stays.
 #[test]
-fn typed_client_records_client_actions_and_approval_decisions_through_runtime() {
+fn typed_client_records_client_actions_through_runtime() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host(&root, state, 1_000);
-    // Workflow #434 LAB-6S3: the identity card and the approval are not on the UI list, so the
-    // client binds `cli`, as actingctl does, with the (User, Ui) envelope they need.
+    // The client binds `cli`, as actingctl does, with the person's (User, Ui) envelope.
     let client = RuntimeClient::connect(
         RuntimeClientConfig::new(
             root.path(),
@@ -2794,28 +2795,6 @@ fn typed_client_records_client_actions_and_approval_decisions_through_runtime() 
             .expect("client action"),
         )
         .expect("record client action");
-    client
-        .declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
-            client: "runtime-client-test".to_owned(),
-            client_version: None,
-            instance: None,
-        })
-        .expect("declare governance identity");
-    client
-        .record_approval_decision(
-            ApprovalDecisionRecord::new(
-                "approval:client-fixture",
-                ApprovalDisposition::Approved,
-                ApprovalTarget::Catalog {
-                    catalog_hash: format!("sha256:{}", "a".repeat(64)),
-                    catalog_version: 1,
-                },
-                actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
-                    .expect("approval reason"),
-            )
-            .expect("approval decision"),
-        )
-        .expect("record approval decision");
 
     let events = client
         .query_events(EventQuery::default(), ProjectionProfile::Forensic)
@@ -2824,20 +2803,6 @@ fn typed_client_records_client_actions_and_approval_decisions_through_runtime() 
         events
             .iter()
             .filter(|event| event.event_type == EventType::ClientAction)
-            .count(),
-        1
-    );
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.event_type == EventType::ApprovalDecision)
-            .count(),
-        1
-    );
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.event_type == EventType::GovernanceIdentityDeclared)
             .count(),
         1
     );

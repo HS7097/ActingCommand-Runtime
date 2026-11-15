@@ -1958,11 +1958,12 @@
         "phase": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "actingctl install-transition: the Runtime answered the transition action. transition_id names the transition and phase the phase the Runtime reports (draining, drained, held, preparing or released); a commit's receipt, the accepted shutdown, reports no phase. Exit 0.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): Actingctl install-transition went with InstallTransition. Was: actingctl install-transition: the Runtime answered the transition action. transition_id names the transition and phase the phase the Runtime reports (draining, drained, held, preparing or released); a commit's receipt, the accepted shutdown, reports no phase. Exit 0.",
       "common_causes": "An install-transition action the Runtime accepted.",
-      "handling": "None; the installer continues with the next action for the reported phase."
+      "handling": "None in 0.12.62 and later: the code is no longer emitted."
     },
     "install_transition_failed": {
       "category": "error",
@@ -1975,11 +1976,12 @@
         "phase": "required"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "actingctl install-transition: the Runtime reports the transition in phase failed, with admission closed. transition_id names the transition; the transition's failure code is the caused_by link. Exit 1.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): Actingctl install-transition went with InstallTransition. Was: actingctl install-transition: the Runtime reports the transition in phase failed, with admission closed. transition_id names the transition; the transition's failure code is the caused_by link. Exit 1.",
       "common_causes": "A held or released start that timed out (held_timeout, release_timeout), whose preparation failed, or that a latched failure stopped.",
-      "handling": "Read the caused_by link and the Runtime's log; the installer ends the transition and starts the previous Runtime again."
+      "handling": "None in 0.12.62 and later: the code is no longer emitted."
     },
     "install_transition_aborted": {
       "category": "error",
@@ -1992,11 +1994,12 @@
         "phase": "required"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "actingctl install-transition: the Runtime reports the transition in phase aborted: the drain ended and admission reopened on the old owner. transition_id names the transition; the failure code, when the transition has one (drain_timeout), is the caused_by link. Exit 1.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): Actingctl install-transition went with InstallTransition. Was: actingctl install-transition: the Runtime reports the transition in phase aborted: the drain ended and admission reopened on the old owner. transition_id names the transition; the failure code, when the transition has one (drain_timeout), is the caused_by link. Exit 1.",
       "common_causes": "A drain that did not finish before its deadline, or an Abort action.",
-      "handling": "Wait until running work finishes, or give the drain a longer timeout, then begin a new transition."
+      "handling": "None in 0.12.62 and later: the code is no longer emitted."
     },
     "instance_reset_done": {
       "category": "success",
@@ -2684,9 +2687,10 @@
         "mcp_blocker": "required"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime refused mcp-serve's governance identity card (governance.allowed_clients); the write went ahead without it and the refusal is the caused_by link.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): The identity card actingctl mcp-serve declared before a write went with DeclareGovernanceIdentity (the coordinator's ruling N8 on board #434: the initiator Lab-MCP its binding carries names where the write came from), so nothing emits this code. Was: The Runtime refused mcp-serve's governance identity card (governance.allowed_clients); the write went ahead without it and the refusal is the caused_by link.",
       "common_causes": "actingd's governance.allowed_clients does not admit actingctl-mcp, so the Runtime refused mcp-serve's governance identity card as a client not allowed when the server recorded a tool call's client.action.",
       "handling": "The write went ahead and the Runtime recorded its own warning event. To stop it, the person adds actingctl-mcp to governance.allowed_clients in actingd.config.json, which actingd reads at its start (mcp_blocker person_action)."
     },

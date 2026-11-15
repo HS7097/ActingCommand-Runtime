@@ -3121,11 +3121,6 @@ impl HostShared {
         connection_id: ConnectionId,
         reason: LeaseReleaseReason,
     ) -> RuntimeHostResult<()> {
-        lock(
-            &self.governance_connections,
-            HostLocation::CleanupGovernanceConnection,
-        )?
-        .remove(&connection_id);
         // Workflow #389 U-2: the connection's channel binding leaves with it.
         self.forget_connection_channel(connection_id)?;
         // Workflow #191 ps2: a closed connection sends no further reset.

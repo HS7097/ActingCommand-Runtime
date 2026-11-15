@@ -16,31 +16,27 @@
 //!   made, the generation counted; one the client latched a failure on is dropped after the call
 //!   ([`Runtime::settle`]). The cursors the serving code issues bind to this server's session and
 //!   that generation.
-//! - **A write** ([`begin_write`]) goes on a connection of its own, after the provenance today's
-//!   server records before a write (`apps/actingctl/src/mcp/operator.rs`, `record_provenance`):
-//!   `begin_interaction`, the identity card `{client: "actingctl-mcp"}`, then
+//! - **A write** ([`begin_write`]) goes on a connection of its own, under a correlation of its
+//!   own (`begin_interaction`). Until Workflow #434 LAB-6S4a it went after the provenance today's
+//!   server recorded before a write (the identity card `{client: "actingctl-mcp"}`, then
 //!   `RecordClientAction{surface_id: "mcp", control_id: <tool>, kind: command}` naming the
-//!   instance, all under that one correlation, and the write after them. The instance is
-//!   resolved as today's server resolves it, by one status read on the kept connection
-//!   ([`Runtime::alias`]). Workflow #434 LAB-5G4b, second part: the same steps record the client
-//!   action after a capture, its value the Lab request's id ([`record_provenance`],
-//!   `crate::after_child`).
+//!   instance it resolved by one status read on the kept connection); since LAB-6S4a (0.12.62;
+//!   the coordinator's ruling N8 on board #434) the write is the first request after the
+//!   handshake, the initiator `Lab-MCP` its binding carries naming where it came from. Workflow
+//!   #434 LAB-5G4b, second part: the client action after a capture, its value the Lab request's
+//!   id, is recorded on a connection of its own ([`record_capture_action`], `crate::after_child`),
+//!   since LAB-6S4a without the identity card before it.
 
-use crate::codes::McpCode;
 use crate::lock;
-use actingcommand_contract::codes::{GovernanceIdentityRefusal, SharedCode};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Detail, Outcome};
-use actingcommand_contract::{
-    ClientActionKind, ClientActionRecord, ClientActionValue, GovernanceIdentityCard,
-};
+use actingcommand_contract::{ClientActionKind, ClientActionRecord, ClientActionValue};
 use actingcommand_lab_ops::cli_line::{self, Exit};
 use actingcommand_lab_ops::core_ops::Place;
 use actingcommand_lab_ops::events;
 use actingcommand_lab_ops::front::{self, Front};
-use actingcommand_lab_ops::instance_selector::{self, SelectorMiss};
 use actingcommand_lab_ops::locate;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
-use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -53,8 +49,6 @@ pub(crate) const UNLOCATED: &str = "actinglab-mcp finds its root from its own pl
      state root with ACTINGCOMMAND_RUNTIME_STATE_ROOT";
 /// The surface of every client action this server records, today's server's.
 const MCP_SURFACE: &str = "mcp";
-/// The client the identity card names, today's server's (ruling 11: the same identity card).
-const MCP_CLIENT: &str = "actingctl-mcp";
 
 /// A step that ends the call, with the call's line.
 pub(crate) type Ended = Box<Exit>;
@@ -177,61 +171,28 @@ impl Runtime {
             }
         }
     }
-
-    /// The alias of the instance `selector` names (an alias, an `instance_id` or an ADB port),
-    /// for a write's client action: one status read on the kept connection, as today's server
-    /// resolves it. A Runtime that does not answer, a read that fails and a selector that names no
-    /// instance, or more than one, end the call with the line the serving code gives each, and
-    /// nothing is written.
-    pub(crate) fn alias(&self, state_root: &Path, selector: &str) -> Result<String, Ended> {
-        let kept = self
-            .kept(state_root)
-            .map_err(|error| client_failed(&error))?;
-        let read = kept.client.status();
-        self.settle(&kept);
-        let status = read.map_err(|error| client_failed(&error))?;
-        instance_selector::select(status.instances(), selector)
-            .map(|instance| instance.instance_alias().to_owned())
-            .map_err(|miss| selector_missed(miss, selector))
-    }
 }
 
-/// A selector that names no instance, or more than one, as the serving code refuses it
-/// (`lab_ops::core_ops`, `selector_missed`).
-fn selector_missed(miss: SelectorMiss, selector: &str) -> Ended {
-    let text = match miss {
-        SelectorMiss::Unknown => "the runtime status lists no instance with that alias",
-        SelectorMiss::Ambiguous => {
-            "more than one instance of the runtime status matches that selector"
-        }
-    };
-    Box::new(cli_line::refused(&miss.outcome(selector), Some(text)))
+// Workflow #434 LAB-6S4a (0.12.62): `Runtime::alias`, the status read that named a write's
+// instance in its client action, went with that client action.
+
+/// A connection of its own to the Runtime of `state_root` for one write, under a correlation of
+/// its own (`begin_interaction`). Workflow #434 LAB-6S4a (0.12.62; the coordinator's ruling N8 on
+/// board #434): the identity card and the client action that came before the write are gone, the
+/// initiator `Lab-MCP` the connection's binding carries names where it came from, so the write is
+/// the first request after the handshake. A connection that fails ends the call with its line,
+/// as the serving code answers a client's failure, and nothing is written.
+pub(crate) fn begin_write(state_root: &Path) -> Result<RuntimeClient, Ended> {
+    RuntimeClient::connect(config(state_root))
+        .and_then(|connection| connection.begin_interaction())
+        .map_err(|error| client_failed(&error))
 }
 
-/// One write's connection after its provenance was recorded, and the warnings recording it gave
-/// (each `{outcome}`), which the line carries.
-pub(crate) struct Write {
-    pub(crate) client: RuntimeClient,
-    pub(crate) warnings: Vec<Value>,
-}
-
-/// A connection of its own to the Runtime of `state_root` for one write of the tool `tool`, with
-/// today's provenance recorded on it ([`record_provenance`], the client action without a value).
-/// A step that fails ends the call with its line, as the serving code answers a client's failure,
-/// and nothing is written.
-pub(crate) fn begin_write(
-    state_root: &Path,
-    tool: &str,
-    instance_alias: Option<&str>,
-) -> Result<Write, Ended> {
-    record_provenance(state_root, tool, instance_alias, None).map_err(|failed| failed.ended())
-}
-
-/// A step of today's provenance that failed (Workflow #434 LAB-5G4b, second part: a write ends
-/// with its line, the client action after a capture reads its outcome).
+/// The client action after a capture that was not recorded (Workflow #434 LAB-5G4b, second part:
+/// the client action after a capture reads its outcome).
 pub(crate) enum NotRecorded {
-    /// The Runtime client's failure: to connect, to begin the interaction, a card refused for
-    /// another reason than the client not allowed, or the client action refused.
+    /// The Runtime client's failure: to connect, to begin the interaction, or the client action
+    /// refused.
     Client(Box<RuntimeClientError>),
     /// A client action the contract does not build (`client_action_invalid`).
     Invalid,
@@ -249,51 +210,24 @@ impl NotRecorded {
             Self::Invalid => Outcome::new(SharedCode::ClientActionInvalid),
         }
     }
-
-    /// The line a write ends with: the client's failure as the serving code answers it, or the
-    /// failure `client_action_invalid`.
-    fn ended(&self) -> Ended {
-        match self {
-            Self::Client(error) => client_failed(error),
-            Self::Invalid => Box::new(cli_line::failure(&self.outcome(), None)),
-        }
-    }
 }
 
-/// Today's provenance (`apps/actingctl/src/mcp/operator.rs`, `record_provenance`) on a connection
-/// of its own to the Runtime of `state_root`: `begin_interaction`, the identity card, then the
-/// client action of the tool `tool` naming `instance_alias` and carrying `value` when given
-/// (Workflow #434 LAB-5G4b, second part: the Lab request's id after a capture, as today's
-/// `record_action` gives it). A card the Runtime refuses because its `allowed_clients` does not
-/// list the client is no failure, as today: the client action goes ahead, and the connection's
-/// warnings carry `mcp_identity_declaration_refused` caused by the refusal (where today's server
-/// answers `mcp_identity_card_refused` with `mcp_blocker`, a vocabulary only actingctl's server
-/// builds). Any other failure is the step's ([`NotRecorded`]), and nothing more is sent.
-pub(crate) fn record_provenance(
+/// The client action after a capture (Workflow #434 LAB-5G4b, second part; today's
+/// `record_action`), on a connection of its own to the Runtime of `state_root`:
+/// `begin_interaction`, then the client action of the tool `tool` naming `instance_alias` and
+/// carrying `value` when given (the Lab request's id). Workflow #434 LAB-6S4a (0.12.62): no
+/// identity card is declared before it. A failure is the step's ([`NotRecorded`]), and nothing
+/// more is sent.
+pub(crate) fn record_capture_action(
     state_root: &Path,
     tool: &str,
     instance_alias: Option<&str>,
     value: Option<ClientActionValue>,
-) -> Result<Write, NotRecorded> {
+) -> Result<(), NotRecorded> {
     let connection = RuntimeClient::connect(config(state_root)).map_err(NotRecorded::client)?;
     let client = connection
         .begin_interaction()
         .map_err(NotRecorded::client)?;
-    let mut warnings = Vec::new();
-    let card = GovernanceIdentityCard {
-        client: MCP_CLIENT.to_owned(),
-        client_version: None,
-        instance: None,
-    };
-    if let Err(error) = client.declare_governance_identity(&card) {
-        let refusal = error.outcome();
-        if !refusal.is(GovernanceIdentityRefusal::ClientNotAllowed) {
-            return Err(NotRecorded::client(error));
-        }
-        warnings.push(cli_line::warning(
-            &Outcome::new(McpCode::IdentityDeclarationRefused).caused_by(refusal),
-        ));
-    }
     let action = ClientActionRecord::new(
         MCP_SURFACE,
         tool,
@@ -305,5 +239,5 @@ pub(crate) fn record_provenance(
     client
         .record_client_action(action)
         .map_err(NotRecorded::client)?;
-    Ok(Write { client, warnings })
+    Ok(())
 }

@@ -13,15 +13,8 @@
 // `: pid <pid> alive`; a probe that cannot decide keeps it, ending in
 // `: probe unknown: <reason>`, and is never read as dead.
 //
-// G4 (inventory-host key 10; req-basis-ha H-5 G4): the host side of #376. While an install drain
-// is under way an event subscription is a refusable request like any other (m376 §5): it is
-// Denied `RuntimeUnavailable`, not fatal, and the Runtime stays healthy; `is_lifecycle_draining`
-// is true across Draining and Drained and false once the drain is aborted (INSTALL.md:166-172);
-// after the Abort the same cursor subscribes again and reads on from where it stood (m376 M5).
-// The `drain_timeout` row (test plan v2.2 §3.10 H-1-rest, HOST-I2): on the manual clock the drain
-// passes its deadline and is aborted by the Runtime itself (INSTALL.md: a drain timeout removes
-// only this transaction's barrier); `is_lifecycle_draining` is false again and the same cursor
-// subscribes again.
+// G4 (inventory-host key 10), a subscription during an install drain, left with the install
+// transition (Workflow #434 LAB-6S4a, 0.12.62).
 //
 // G11 (no inventory key; host key 79; req-basis-ha H-5 G11, coordinator 10-09 on
 // input-receipt-wait.md): the ledger writer stalls past a client's I/O budget, with the stall
@@ -47,9 +40,8 @@
 use super::*;
 use crate::owner::ScriptedProcessProbe;
 use actingcommand_contract::{
-    ConfigParameter, ConfigParameterSource, FactScalar, InstallTransitionAction,
-    InstallTransitionPhase, OWNER_JOURNAL_SCHEMA, OwnerResourceDisposition, RuntimeConfigManifest,
-    RuntimeLifecyclePhase, RuntimePayload, RuntimeSubscriptionRequest, SubscriptionCursor,
+    ConfigParameter, ConfigParameterSource, FactScalar, OWNER_JOURNAL_SCHEMA,
+    OwnerResourceDisposition, RuntimeConfigManifest, RuntimeLifecyclePhase, RuntimePayload,
 };
 use actingcommand_host_metrics::{HostMetricsCode, ProcessProbe};
 use actingcommand_ledger::WriterStallGate;
@@ -228,203 +220,6 @@ fn gate_a_previous_owner_gone_is_released_with_one_fact_and_the_daemon_line() {
         assert!(host.fatal_error().expect("runtime health").is_none());
         host.close().expect("close host");
     }
-}
-
-/// One page of every event from `cursor`, at most `max_events`, as the #376 policy monitor
-/// subscribes.
-fn subscribe(
-    client: &mut TestClient,
-    cursor: SubscriptionCursor,
-    max_events: u16,
-) -> RuntimeReceipt {
-    let request = client.request(RuntimeOperation::SubscribeEvents {
-        request: RuntimeSubscriptionRequest::new(
-            EventQuery::default(),
-            ProjectionProfile::Forensic,
-            cursor,
-            100,
-            max_events,
-        )
-        .expect("subscription request"),
-    });
-    client.send(&request)
-}
-
-/// The install transition's status in `receipt`.
-fn transition_status(receipt: &RuntimeReceipt) -> &actingcommand_contract::InstallTransitionStatus {
-    let Some(RuntimeResult::InstallTransition { status }) = receipt.result() else {
-        panic!("an install transition status: {receipt:?}");
-    };
-    status
-}
-
-#[test]
-fn gate_a_subscription_during_an_install_drain_is_refused_and_resumes_from_its_cursor_after_abort()
-{
-    let root = TempDir::new().expect("tempdir");
-    let host = host_with_state(&root, "node.a", Arc::new(FakeState::default()));
-    let mut monitor = TestClient::connect(&host);
-    let mut installer = TestClient::connect(&host);
-    assert!(!host.is_lifecycle_draining().expect("draining state"));
-
-    // Before the drain the monitor reads its first event and keeps the cursor after it.
-    let before = subscribe(&mut monitor, SubscriptionCursor::default(), 1);
-    let Some(RuntimeResult::EventBatch { batch }) = before.result() else {
-        panic!("an event batch before the drain: {before:?}");
-    };
-    let [first] = batch.events() else {
-        panic!("one event before the drain: {:?}", batch.events());
-    };
-    let first_sequence = first.sequence;
-    let cursor = batch.next_cursor();
-
-    installer.declare_governance_identity();
-    let begin = installer.governance_request(RuntimeOperation::InstallTransition {
-        target: host.runtime_info().shutdown_target(),
-        action: InstallTransitionAction::BeginDrain {
-            transition_id: "h5-g4-drain".to_owned(),
-            timeout_ms: 600_000,
-        },
-    });
-    let begun = installer.send(&begin);
-    let status = transition_status(&begun);
-    assert!(
-        matches!(
-            status.phase,
-            InstallTransitionPhase::Draining | InstallTransitionPhase::Drained
-        ),
-        "{begun:?}"
-    );
-    let ticket = status.ticket.clone();
-    assert!(host.is_lifecycle_draining().expect("draining state"));
-
-    // During the drain the subscription is a refused request, not a fatal one.
-    let refused = subscribe(&mut monitor, cursor, 1);
-    assert_eq!(refused.state(), RuntimeReceiptState::Denied, "{refused:?}");
-    let projection = refused.error_projection().expect("refusal projection");
-    assert_eq!(projection.code, RuntimeErrorCode::RuntimeUnavailable);
-    assert!(!projection.fatal, "{refused:?}");
-    assert!(host.fatal_error().expect("runtime health").is_none());
-    assert!(host.is_lifecycle_draining().expect("draining state"));
-
-    let abort = installer.governance_request(RuntimeOperation::InstallTransition {
-        target: host.runtime_info().shutdown_target(),
-        action: InstallTransitionAction::Abort { ticket },
-    });
-    let aborted = installer.send(&abort);
-    assert_eq!(
-        transition_status(&aborted).phase,
-        InstallTransitionPhase::Aborted,
-        "{aborted:?}"
-    );
-    assert!(!host.is_lifecycle_draining().expect("draining state"));
-
-    // After the Abort the same cursor subscribes again and reads on after the first event.
-    let resumed = subscribe(&mut monitor, cursor, 1);
-    let Some(RuntimeResult::EventBatch { batch }) = resumed.result() else {
-        panic!("an event batch after the abort: {resumed:?}");
-    };
-    let [next] = batch.events() else {
-        panic!("the next event after the abort: {:?}", batch.events());
-    };
-    assert!(next.sequence > first_sequence, "{next:?}");
-    assert!(host.fatal_error().expect("runtime health").is_none());
-    drop(monitor);
-    drop(installer);
-    host.close().expect("close host");
-}
-
-// G4's `drain_timeout` row (host key 10): the drain passes its deadline on the manual clock. The
-// drain is Aborted under `drain_timeout` with admission open again, `is_lifecycle_draining` is
-// false, the same cursor subscribes again and reads on after the first event, and the Runtime is
-// not fatal.
-#[test]
-fn gate_a_subscription_resumes_from_its_cursor_after_the_drain_times_out_on_the_manual_clock() {
-    const DRAIN_TIMEOUT_MS: u64 = 60_000;
-    let root = TempDir::new().expect("tempdir");
-    let clock = Arc::new(super::gate_382_h1::ManualMonotonicClock::new(
-        POLICY_NOW_UNIX_MS,
-    ));
-    let host = RuntimeHost::start(
-        config(&root).with_runtime_clock(clock.clone()),
-        Arc::new(FakeProvider::one(
-            "node.a",
-            instance_id(),
-            Arc::new(FakeState::default()),
-        )),
-    )
-    .expect("runtime host on the manual clock");
-    let mut monitor = TestClient::connect(&host);
-    let mut installer = TestClient::connect(&host);
-
-    let before = subscribe(&mut monitor, SubscriptionCursor::default(), 1);
-    let Some(RuntimeResult::EventBatch { batch }) = before.result() else {
-        panic!("an event batch before the drain: {before:?}");
-    };
-    let [first] = batch.events() else {
-        panic!("one event before the drain: {:?}", batch.events());
-    };
-    let first_sequence = first.sequence;
-    let cursor = batch.next_cursor();
-
-    installer.declare_governance_identity();
-    let target = host.runtime_info().shutdown_target();
-    let begin = installer.governance_request(RuntimeOperation::InstallTransition {
-        target,
-        action: InstallTransitionAction::BeginDrain {
-            transition_id: "h5-g4-timeout".to_owned(),
-            timeout_ms: DRAIN_TIMEOUT_MS,
-        },
-    });
-    let begun = installer.send(&begin);
-    assert!(
-        matches!(
-            transition_status(&begun).phase,
-            InstallTransitionPhase::Draining | InstallTransitionPhase::Drained
-        ),
-        "{begun:?}"
-    );
-    assert!(host.is_lifecycle_draining().expect("draining state"));
-
-    clock.advance(DRAIN_TIMEOUT_MS);
-    let query = installer.governance_request(RuntimeOperation::InstallTransition {
-        target,
-        action: InstallTransitionAction::Query {
-            transition_id: "h5-g4-timeout".to_owned(),
-        },
-    });
-    let timed_out = installer.send(&query);
-    let status = transition_status(&timed_out);
-    assert_eq!(
-        (
-            status.phase,
-            status.admission_closed,
-            status.failure_code.as_deref()
-        ),
-        (
-            InstallTransitionPhase::Aborted,
-            false,
-            Some("drain_timeout")
-        ),
-        "{timed_out:?}"
-    );
-    assert!(!host.is_lifecycle_draining().expect("draining state"));
-
-    let resumed = subscribe(&mut monitor, cursor, 1);
-    let Some(RuntimeResult::EventBatch { batch }) = resumed.result() else {
-        panic!("an event batch after the drain timed out: {resumed:?}");
-    };
-    let [next] = batch.events() else {
-        panic!(
-            "the next event after the drain timed out: {:?}",
-            batch.events()
-        );
-    };
-    assert!(next.sequence > first_sequence, "{next:?}");
-    assert!(host.fatal_error().expect("runtime health").is_none());
-    drop(monitor);
-    drop(installer);
-    host.close().expect("close host");
 }
 
 /// A client action, the request whose one effect is its own record.

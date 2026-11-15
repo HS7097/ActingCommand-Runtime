@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// #382 C-2 (test plan v2.2 C-2), each over `ScriptedRuntime` (inventory-contract I1).
-// - G4, inventory key R4 (with R3): an installation request whose receipt never came is
-//   unconfirmed, uncertain and sent once; the client never retries it (Workflow #352,
-//   INSTALL.md "A missing client receipt is unknown ... The client never retries"). A receipt
-//   for another transition or ticket is unexpected; CommitShutdown takes its ShutdownAccepted
-//   and Release its own ticket.
+// #382 C-2 (test plan v2.2 C-2), each over `ScriptedRuntime` (inventory-contract I1). G4,
+// inventory key R4 (the installation request's receipt matching) left with `InstallTransition`
+// (Workflow #434 LAB-6S4a, 0.12.62).
 // - G5, inventory key R2: the latch table (Workflow #376 M2: a non-fatal rejection does not
 //   latch, only fatal errors do; input-receipt-wait.md: a timeout or a disconnected transport
 //   stays latched and authorizes no replay; client-interactions.md: a latched connection is not
@@ -35,14 +32,13 @@ use actingcommand_contract::{
     AuditInput, ClientPayloadDraft, CommandPayloadDraft, ContainedTaskCancellationReason,
     ContainedTaskLeaseTerminal, ContainedTaskRequest, EffectDisposition, EmulatorInstanceAction,
     EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft,
-    EventSeverity, EventSource, IdentifierIssuer, InputAction, InstallTransitionAction,
-    InstallTransitionPhase, InstallTransitionStatus, InstallTransitionTicket, InstancePauseStage,
+    EventSeverity, EventSource, IdentifierIssuer, InputAction, InstancePauseStage,
     InstancePauseState, LeaseId, LeasePayloadDraft, LeaseToken, OriginModule, OwnerEpoch,
     ProjectedEvent, ProjectionPayload, RequestId, RunId, RuntimeControlPlaneStatus,
     RuntimeErrorCode, RuntimeErrorProjection, RuntimeInstanceStatus, RuntimeOperation,
-    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
-    SchedulingPauseExpectation, SchedulingPauseReason, SchedulingPauseScope, SchedulingPauseState,
-    StartupPackageDisposition, TaskOutcome, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
+    RuntimePayloadDraft, RuntimeReceiptState, RuntimeResult, SchedulingPauseExpectation,
+    SchedulingPauseReason, SchedulingPauseScope, SchedulingPauseState, StartupPackageDisposition,
+    TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
 };
 use actingcommand_runtime_host::HostCode;
 use std::path::Path;
@@ -60,9 +56,6 @@ const INPUT_IO: Duration = SHORT_IO;
 const INPUT_BACKEND_OPEN: Duration = Duration::from_millis(600);
 const INSTANCE: &str = "node-01";
 const OTHER_INSTANCE: &str = "node-02";
-const TRANSITION: &str = "transition-0001";
-const OTHER_TRANSITION: &str = "transition-0002";
-const INSTALL_TIMEOUT_MS: u64 = 30_000;
 
 fn connect(state_root: &Path, io_timeout: Duration) -> RuntimeClient {
     RuntimeClient::connect(
@@ -79,225 +72,6 @@ fn connect(state_root: &Path, io_timeout: Duration) -> RuntimeClient {
 
 fn assert_code(error: &RuntimeClientError, code: Code, row: &str) {
     assert_eq!(error.code().as_str(), code.as_str(), "{row}: {error:?}");
-}
-
-/// The installation status of `ticket` in `phase`, as the Runtime answers a transition.
-fn install_status(ticket: InstallTransitionTicket, phase: InstallTransitionPhase) -> RuntimeResult {
-    RuntimeResult::InstallTransition {
-        status: InstallTransitionStatus {
-            ticket,
-            phase,
-            admission_closed: !matches!(
-                phase,
-                InstallTransitionPhase::Released | InstallTransitionPhase::Aborted
-            ),
-            timeout_ms: INSTALL_TIMEOUT_MS,
-            failure_code: None,
-        },
-    }
-}
-
-/// A ticket of the scripted Runtime's own installation transition `transition_id`.
-fn ticket(client: &RuntimeClient, transition_id: &str) -> InstallTransitionTicket {
-    let issuer = IdentifierIssuer::new().expect("identifier issuer");
-    InstallTransitionTicket {
-        target: client.runtime_info().shutdown_target(),
-        transition_id: transition_id.to_owned(),
-        request_id: *issuer.mint_request_id().expect("request id").transport(),
-    }
-}
-
-// G4 (R4, R3): a Query whose receipt never came, past the IO budget, is
-// `install_transition_receipt_unconfirmed` and uncertain, and the script saw exactly one
-// installation request: no retry, no reconnect. The script holds the request until the client
-// closes its connection.
-#[test]
-fn gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_and_sent_once() {
-    let root = TempDir::new().expect("tempdir");
-    let runtime = ScriptedRuntime::start(root.path(), |_| {
-        vec![ScriptedConnection::new().request(|request| {
-            assert!(
-                matches!(
-                    request.operation(),
-                    RuntimeOperation::InstallTransition {
-                        action: InstallTransitionAction::Query { .. },
-                        ..
-                    }
-                ),
-                "{:?}",
-                request.operation()
-            );
-            ScriptedAnswer::StallUntilClosed
-        })]
-    });
-    let client = connect(root.path(), SHORT_IO);
-    let error = client
-        .install_transition(InstallTransitionAction::Query {
-            transition_id: TRANSITION.to_owned(),
-        })
-        .expect_err("a Query whose receipt never came");
-    drop(client);
-    assert_code(
-        &error,
-        ClientCode::InstallTransitionReceiptUnconfirmed.code(),
-        "unconfirmed",
-    );
-    assert!(error.projection().is_none(), "{error:?}");
-    assert_eq!(error.disposition(), RuntimeClientErrorClass::Uncertain);
-
-    let record = runtime.finish();
-    assert_eq!(
-        record.connections[0]
-            .count(|operation| matches!(operation, RuntimeOperation::InstallTransition { .. })),
-        1,
-        "installation requests the script saw"
-    );
-    assert!(
-        record.unscripted.is_empty(),
-        "the client reconnected: {:?}",
-        record.unscripted
-    );
-}
-
-// G4 (R4): a receipt that answers another transition or another ticket than the one asked for
-// is `runtime_result_unexpected`, an uncertain failure after send.
-#[test]
-fn gate_an_install_transition_receipt_for_another_transition_or_ticket_is_unexpected() {
-    // Query: the receipt names another transition.
-    let root = TempDir::new().expect("tempdir");
-    let runtime = ScriptedRuntime::start(root.path(), |_| {
-        vec![ScriptedConnection::new().request(|request| {
-            let RuntimeOperation::InstallTransition { target, .. } = request.operation() else {
-                panic!("an installation request, got {:?}", request.operation())
-            };
-            let other = InstallTransitionTicket {
-                target: *target,
-                transition_id: OTHER_TRANSITION.to_owned(),
-                request_id: request.request_id(),
-            };
-            ScriptedAnswer::completed(
-                request,
-                install_status(other, InstallTransitionPhase::Draining),
-            )
-        })]
-    });
-    let client = connect(root.path(), IO);
-    let query = client.install_transition(InstallTransitionAction::Query {
-        transition_id: TRANSITION.to_owned(),
-    });
-    drop(client);
-    let error = query.expect_err("a Query answered for another transition");
-    assert_code(&error, ClientCode::RuntimeResultUnexpected.code(), "query");
-    assert_eq!(error.disposition(), RuntimeClientErrorClass::Uncertain);
-    runtime.finish();
-
-    // Release: the receipt names another ticket.
-    let root = TempDir::new().expect("tempdir");
-    let runtime = ScriptedRuntime::start(root.path(), |_| {
-        vec![ScriptedConnection::new().request(|request| {
-            let RuntimeOperation::InstallTransition {
-                action: InstallTransitionAction::Release { ticket, .. },
-                ..
-            } = request.operation()
-            else {
-                panic!("a Release, got {:?}", request.operation())
-            };
-            let other = InstallTransitionTicket {
-                transition_id: OTHER_TRANSITION.to_owned(),
-                ..ticket.clone()
-            };
-            ScriptedAnswer::completed(
-                request,
-                install_status(other, InstallTransitionPhase::Released),
-            )
-        })]
-    });
-    let client = connect(root.path(), IO);
-    let release = client.install_transition(InstallTransitionAction::Release {
-        ticket: ticket(&client, TRANSITION),
-        timeout_ms: INSTALL_TIMEOUT_MS,
-    });
-    drop(client);
-    let error = release.expect_err("a Release answered for another ticket");
-    assert_code(
-        &error,
-        ClientCode::RuntimeResultUnexpected.code(),
-        "release",
-    );
-    assert_eq!(error.disposition(), RuntimeClientErrorClass::Uncertain);
-    runtime.finish();
-}
-
-// G4 (R4): CommitShutdown answered with the shutdown of this Runtime is Ok, and so is a
-// Release answered for its own ticket.
-#[test]
-fn gate_commit_shutdown_takes_its_shutdown_and_release_its_own_ticket() {
-    let root = TempDir::new().expect("tempdir");
-    let runtime = ScriptedRuntime::start(root.path(), |_| {
-        vec![
-            ScriptedConnection::new()
-                .request(|request| {
-                    let RuntimeOperation::InstallTransition {
-                        target,
-                        action: InstallTransitionAction::CommitShutdown { .. },
-                    } = request.operation()
-                    else {
-                        panic!("a CommitShutdown, got {:?}", request.operation())
-                    };
-                    // An accepted shutdown is admitted with its terminal, as the host answers it.
-                    let event_id = *IdentifierIssuer::new()
-                        .expect("identifier issuer")
-                        .mint_event_id()
-                        .expect("event id")
-                        .transport();
-                    let receipt = RuntimeReceipt::success(
-                        request,
-                        RuntimeReceiptState::Admitted,
-                        Some(TerminalEvent {
-                            sequence: 1,
-                            event_id,
-                        }),
-                        RuntimeResult::ShutdownAccepted { target: *target },
-                    )
-                    .expect("shutdown receipt");
-                    ScriptedAnswer::Receipt(Box::new(receipt))
-                })
-                .request(|request| {
-                    let RuntimeOperation::InstallTransition {
-                        action: InstallTransitionAction::Release { ticket, .. },
-                        ..
-                    } = request.operation()
-                    else {
-                        panic!("a Release, got {:?}", request.operation())
-                    };
-                    let ticket = ticket.clone();
-                    ScriptedAnswer::completed(
-                        request,
-                        install_status(ticket, InstallTransitionPhase::Released),
-                    )
-                }),
-        ]
-    });
-    let client = connect(root.path(), IO);
-    let commit = client.install_transition(InstallTransitionAction::CommitShutdown {
-        ticket: ticket(&client, TRANSITION),
-    });
-    let release = client.install_transition(InstallTransitionAction::Release {
-        ticket: ticket(&client, OTHER_TRANSITION),
-        timeout_ms: INSTALL_TIMEOUT_MS,
-    });
-    drop(client);
-    let commit = commit.expect("CommitShutdown answered with this Runtime's shutdown");
-    assert!(matches!(
-        commit.result(),
-        Some(RuntimeResult::ShutdownAccepted { .. })
-    ));
-    let release = release.expect("Release answered for its own ticket");
-    assert!(matches!(
-        release.result(),
-        Some(RuntimeResult::InstallTransition { .. })
-    ));
-    runtime.finish();
 }
 
 /// One row of the latch table.

@@ -2526,9 +2526,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): invalid governance origin.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): DeclareGovernanceIdentity and RecordApprovalDecision went, and with them the host's check of a card's origin. Was: A code several owners emit with one meaning (contract-owned, A2a D3): invalid governance origin.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -5497,9 +5498,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid approval decision.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind RecordApprovalDecision is gone, so no approval decision of a request is validated. Was: Runtime contract validation refused a value: invalid approval decision.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -6141,11 +6143,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A receipt that carries an install transition status is not in state completed, so it breaks the receipt contract.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition is gone, so no transition receipt is validated. Was: A receipt that carries an install transition status is not in state completed, so it breaks the receipt contract.",
       "common_causes": "A Runtime and a client of incompatible releases, or a defect.",
-      "handling": "Use a client of the same release as the Runtime; report it with both builds."
+      "handling": "None in 0.12.62 and later: the code is no longer emitted."
     },
     "invalid_scheduling_pause_receipt": {
       "category": "error",
@@ -8881,11 +8884,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A held start's previous ticket names another transition than the held start itself; the previous Runtime's drained transition and the new start must share one transition_id.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its status are gone, so no previous transition is compared. Was: A held start's previous ticket names another transition than the held start itself; the previous Runtime's drained transition and the new start must share one transition_id.",
       "common_causes": "An installer that mixes the identities of two transitions.",
-      "handling": "Start the held Runtime with the ticket of the transition that drained the previous one."
+      "handling": "None in 0.12.62 and later: the code is no longer emitted."
     },
     "invalid_install_transition_status": {
       "category": "error",
@@ -8901,11 +8905,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "An install transition status breaks its rules: admission_closed disagrees with the phase, or the failure code is empty, longer than 128 bytes or not a code spelling.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its status are gone. Was: An install transition status breaks its rules: admission_closed disagrees with the phase, or the failure code is empty, longer than 128 bytes or not a code spelling.",
       "common_causes": "A Runtime and a client of incompatible releases, or a defect.",
-      "handling": "Report it with the builds; use a client of the same release as the Runtime."
+      "handling": "None in 0.12.62 and later: the code is no longer emitted."
     },
     "invalid_install_timeout": {
       "category": "error",
@@ -8921,11 +8926,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "An install transition timeout is 0 or above 600000 ms.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its actions are gone, so no timeout of one is read. Was: An install transition timeout is 0 or above 600000 ms.",
       "common_causes": "A timeout written in seconds, or a caller of another release.",
-      "handling": "Pass timeout_ms from 1 to 600000."
+      "handling": "None in 0.12.62 and later: the code is no longer emitted."
     },
     "invalid_install_transition_id": {
       "category": "error",
@@ -8941,11 +8947,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "An install transition id is empty, longer than 128 bytes, or holds a character other than ASCII letters, digits, '-' and '_'.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its actions are gone, so no transition id is read. Was: An install transition id is empty, longer than 128 bytes, or holds a character other than ASCII letters, digits, '-' and '_'.",
       "common_causes": "An installer of another release, or a hand-written action.",
-      "handling": "Use a transition id of 1 to 128 ASCII letters, digits, '-' or '_'."
+      "handling": "None in 0.12.62 and later: the code is no longer emitted."
     },
     "selection_record_too_large": {
       "category": "error",
@@ -16645,11 +16652,12 @@
       "uncertain": false,
       "values": {},
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The receipt of an InstallTransition request completed: the Runtime performed the action and reports the transition's status (one success code per request kind).",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition is gone, so no receipt carries this code. Was: The receipt of an InstallTransition request completed: the Runtime performed the action and reports the transition's status (one success code per request kind).",
       "common_causes": "An install transition action the Runtime accepted.",
-      "handling": "None."
+      "handling": "None in 0.12.62 and later: the code is no longer emitted."
     },
     "request_status_completed": {
       "category": "success",
@@ -17177,9 +17185,10 @@
       "uncertain": false,
       "values": {},
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A completed receipt of a DeclareGovernanceIdentity request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind DeclareGovernanceIdentity is gone, so no receipt carries this code. Was: A completed receipt of a DeclareGovernanceIdentity request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
@@ -17191,9 +17200,10 @@
       "uncertain": false,
       "values": {},
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A completed receipt of a RecordApprovalDecision request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
+      "retired_in": "0.12.62",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind RecordApprovalDecision is gone, so no receipt carries this code. Was: A completed receipt of a RecordApprovalDecision request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },

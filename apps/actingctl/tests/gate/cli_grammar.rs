@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #382 A-1 (test plan v2.2 §3.7), actingctl's binary.
-// G10 (apps 13): a usage error of pause / resume, emulator, selfcheck and install-transition is
-// reported before any connection (inventory-apps item 13). The grammar: contracts/
-// scheduling-pause.md "CLI" (the scope is global only without --instance; --reason and
-// --drain-timeout-ms are checked against their bounds, 1..=64 bytes of [a-z0-9_.-] and
-// 1000..=600000, before any request is sent); contracts/emulator-control.md (status, start,
-// stop and restart require --instance; discover takes none); README.md (`selfcheck <alias>`);
-// distribution/windows/INSTALL.md "Host installation control" (`--action-json` with one of five
-// actions, deadlines bounded at 600 s). The state root has no Runtime: a form the grammar takes
-// meets the client's connection failure, and a usage error is `actingctl_usage_invalid` on the one
-// result line with exit 1 (model v2.2 §7.3, §7.6). The flag rows are A1-FLAG's (flag_refusals.rs);
-// what the taken forms parse to is `gate_382_a1` in the binary.
+// G10 (apps 13): a usage error of pause / resume, emulator and selfcheck is reported before any
+// connection (inventory-apps item 13). The grammar: contracts/scheduling-pause.md "CLI" (the scope
+// is global only without --instance; --reason and --drain-timeout-ms are checked against their
+// bounds, 1..=64 bytes of [a-z0-9_.-] and 1000..=600000, before any request is sent);
+// contracts/emulator-control.md (status, start, stop and restart require --instance; discover
+// takes none); README.md (`selfcheck <alias>`). Workflow #434 LAB-6S4a (0.12.62):
+// `install-transition` is gone, so each of its forms, the one it took included, is now a usage
+// error before any connection, as a word no subcommand is. The state root has no Runtime: a form
+// the grammar takes meets the client's connection failure, and a usage error is
+// `actingctl_usage_invalid` on the one result line with exit 1 (model v2.2 §7.3, §7.6). The flag
+// rows are A1-FLAG's (flag_refusals.rs); what the taken forms parse to is `gate_382_a1` in the
+// binary.
 // G10 (apps 15): a Runtime refuses the request of each of these subcommands; the line is
 // `{outcome}` topped by the refused receipt's outcome, and the exit is 1 (model v2.2 §7.2, §7.3,
 // §7.6; scheduling-pause.md: an unknown alias is `instance_unknown` for pause and resume).
 
-use crate::held_runtime::{HELD_SALT, NoInstances};
+use crate::no_instance_runtime::{NoInstances, TEST_SALT};
 use actingcommand_contract::{
     EmulatorInstanceAction, EventActor, EventSource, SchedulingPauseReason, SchedulingPauseScope,
 };
@@ -108,8 +109,6 @@ fn grammar_mismatches(usage: &[&[&str]], taken: &[&[&str]]) -> Vec<String> {
 #[test]
 fn gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection() {
     let long_reason = "r".repeat(65);
-    let begin_drain_over_600_s =
-        r#"{"action":"begin_drain","transition_id":"transition-grammar","timeout_ms":600001}"#;
     let usage: &[&[&str]] = &[
         &["pause", "--reason", "Operator"],
         &["pause", "--reason", long_reason.as_str()],
@@ -125,16 +124,8 @@ fn gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection() {
         &["selfcheck"],
         &["install-transition"],
         &["install-transition", "--action-json", "{"],
-        &[
-            "install-transition",
-            "--action-json",
-            r#"{"action":"upgrade","transition_id":"transition-grammar"}"#,
-        ],
-        &[
-            "install-transition",
-            "--action-json",
-            begin_drain_over_600_s,
-        ],
+        // The one form 0.12.61 took (Workflow #434 LAB-6S4a).
+        &["install-transition", "--action-json", QUERY],
     ];
     let taken: &[&[&str]] = &[
         &["pause"],
@@ -156,7 +147,6 @@ fn gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection() {
         &["emulator", "restart", "--instance", ALIAS],
         &["emulator", "discover"],
         &["selfcheck", ALIAS],
-        &["install-transition", "--action-json", QUERY],
     ];
     let wrong = grammar_mismatches(usage, taken);
     assert!(
@@ -201,7 +191,7 @@ fn refusal<T>(result: Result<T, RuntimeClientError>) -> String {
 fn gate_a_refused_request_of_these_subcommands_exits_1_with_the_receipts_outcome() {
     let root = TempDir::new().expect("tempdir");
     let host = RuntimeHost::start(
-        RuntimeHostConfig::new(root.path(), HELD_SALT),
+        RuntimeHostConfig::new(root.path(), TEST_SALT),
         Arc::new(NoInstances),
     )
     .expect("start the Runtime");
@@ -216,7 +206,8 @@ fn gate_a_refused_request_of_these_subcommands_exits_1_with_the_receipts_outcome
     let unknown = || SchedulingPauseScope::Instance {
         instance_alias: UNKNOWN.to_owned(),
     };
-    let rows: [(&[&str], String); 5] = [
+    // Workflow #434 LAB-6S4a (0.12.62): `install-transition`'s row went with the subcommand.
+    let rows: [(&[&str], String); 4] = [
         (
             &["pause", "--instance", UNKNOWN],
             refusal(client.pause_scheduling(
@@ -236,12 +227,6 @@ fn gate_a_refused_request_of_these_subcommands_exits_1_with_the_receipts_outcome
         (
             &["selfcheck", UNKNOWN],
             refusal(client.self_check_instance(UNKNOWN)),
-        ),
-        (
-            &["install-transition", "--action-json", QUERY],
-            refusal(
-                client.install_transition(serde_json::from_str(QUERY).expect("the query action")),
-            ),
         ),
     ];
     drop(client);

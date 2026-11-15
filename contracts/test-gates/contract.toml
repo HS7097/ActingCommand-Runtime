@@ -51,14 +51,12 @@ tests = [
 ]
 incident = []
 
-# Install-control inputs: selection slot, generation and provider; admission per phase; the 600 s bound
+# Install-control inputs: selection slot, generation and provider (the transition's admission per phase and its 600 s bound left with the transition, Workflow #434 LAB-6S4a)
 [[gate]]
 key = "K8"
 coverage = "Y"
 tests = [
     "actingcommand-contract::gate::c1::install_control::gate_install_selection_refuses_a_slot_generation_or_provider_mismatch",
-    "actingcommand-contract::gate::c1::install_control::gate_install_status_admission_is_closed_except_when_released_or_aborted",
-    "actingcommand-contract::gate::c1::install_control::gate_install_timeouts_accept_600000_ms_and_refuse_600001_ms",
 ]
 incident = ["#382 C-1"]
 
@@ -331,7 +329,6 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_failures_after_send_without_a_projection_are_uncertain",
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_a_failure_chained_to_an_after_send_failure_is_uncertain",
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_settled_failures_are_not_uncertain",
-    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_and_sent_once",
 ]
 incident = ["#382 C-1"]
 
@@ -489,7 +486,6 @@ key = "A3"
 coverage = "Y"
 tests = [
     "actingcommand-actinglab-architecture::workspace_guards::b3_every_runtime_operation_has_an_explicit_origin_category",
-    "actingcommand-actinglab-architecture::workspace_guards::b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection",
     "actingcommand-actinglab-architecture::workspace_guards::b5_forensic_read_chain_reaches_no_write_entry",
 ]
 incident = []
@@ -593,17 +589,6 @@ coverage = "Y"
 tests = [
     "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_client_latches_on_fatal_and_transport_failures_and_never_on_a_non_fatal_rejection",
     "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_input_whose_receipt_never_came_latches_with_its_request_context_and_is_sent_once",
-]
-incident = ["#382 C-2"]
-
-# Install-transition receipt matching (#382 C-2 G4, ScriptedRuntime): a missing receipt is unconfirmed and uncertain and the request is never sent again; another transition or ticket is unexpected; CommitShutdown takes its ShutdownAccepted, Release its own ticket
-[[gate]]
-key = "R4"
-coverage = "Y"
-tests = [
-    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_and_sent_once",
-    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_receipt_for_another_transition_or_ticket_is_unexpected",
-    "actingcommand-runtime-client::lib::tests::gate_c2::gate_commit_shutdown_takes_its_shutdown_and_release_its_own_ticket",
 ]
 incident = ["#382 C-2"]
 
@@ -869,7 +854,7 @@ tests = [
 ]
 incident = ["#434 LAB-6S1a"]
 
-# Workflow #434 LAB-6S1b (0.12.58; register §1.287, "Slice LAB-6S1b"; brief rd-1113/brief-lab6s1b.md; contracts/lab-two-entries.md §2.4): RuntimeRequest::validate judges no request by its origin. A request of each family of deleted origin gate (shutdown, install transition, authoring, signatures, debugging, governance, emulator control, discovery, self-check, drill, pause and resume, the agent wake test, fact publication of a family with and without the origin exception, the agent dispatcher's kinds, the player hold) is built and validated from each envelope of the client set, the ones its gate refused included, and validates again read back off the wire; an envelope outside the client set is still invalid_client_origin and an observation that mixes two key families still fact_origin_mixed, from every client envelope. What the retired row K6 held beside its origin gates stays here: a debug event and a pin release are strict and round-trip, and a governance identity card is refused by its own rules. The architecture guard (row A3) holds that no branch of validate() names an actor or a source and the one origin predicate it reads is valid_client_origin
+# Workflow #434 LAB-6S1b (0.12.58; register §1.287, "Slice LAB-6S1b"; brief rd-1113/brief-lab6s1b.md; contracts/lab-two-entries.md §2.4): RuntimeRequest::validate judges no request by its origin. A request of each family of deleted origin gate (shutdown, authoring, signatures, debugging, emulator control, discovery, self-check, drill, pause and resume, the agent wake test, fact publication of a family with and without the origin exception, the agent dispatcher's kinds, the player hold; the install transition and the governance kinds left with their kinds in Workflow #434 LAB-6S4a) is built and validated from each envelope of the client set, the ones its gate refused included, and validates again read back off the wire; an envelope outside the client set is still invalid_client_origin and an observation that mixes two key families still fact_origin_mixed, from every client envelope. What the retired row K6 held beside its origin gates stays here: a debug event and a pin release are strict and round-trip, and a governance identity card is refused by its own rules. The architecture guard (row A3) holds that no branch of validate() names an actor or a source and the one origin predicate it reads is valid_client_origin
 [[gate]]
 coverage = "Y"
 tests = [

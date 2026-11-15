@@ -22,43 +22,43 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3932 |
-| retired | 28 |
+| active | 3873 |
+| retired | 87 |
 | all | 3960 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
-| success | 132 |
+| success | 125 |
 | info | 213 |
-| warning | 155 |
-| error | 3415 |
+| warning | 151 |
+| error | 3367 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 745 |
+| `common_causes` and `handling` both written | 721 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3183 |
-| `settled` | 170 |
-| `pending` | 3762 |
-| all active codes | 3932 |
+| neither written (`TBD` or empty) | 3148 |
+| `settled` | 155 |
+| `pending` | 3718 |
+| all active codes | 3873 |
 
 ## By owner
 
 | Owner | Codes | Active | Text written | Settled |
 |---|---:|---:|---:|---:|
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
-| [actingctl](actingctl.md) | 204 | 203 | 44 | 11 |
-| [actingd](actingd.md) | 155 | 154 | 99 | 86 |
+| [actingctl](actingctl.md) | 204 | 199 | 40 | 8 |
+| [actingd](actingd.md) | 155 | 153 | 98 | 85 |
 | [actinglab](actinglab.md) | 43 | 42 | 42 | 0 |
-| [actinglab-mcp](actinglab-mcp.md) | 3 | 3 | 3 | 0 |
+| [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
-| [contract](contract.md) | 918 | 904 | 160 | 38 |
+| [contract](contract.md) | 918 | 894 | 152 | 32 |
 | [device](device.md) | 33 | 33 | 27 | 23 |
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
 | [execution-kernel](execution-kernel.md) | 204 | 201 | 30 | 0 |
@@ -74,12 +74,12 @@ here.
 | [recognition](recognition.md) | 6 | 6 | 0 | 0 |
 | [recognition-pack](recognition-pack.md) | 22 | 22 | 0 | 0 |
 | [resource-tooling](resource-tooling.md) | 87 | 87 | 11 | 0 |
-| [runtime-client](runtime-client.md) | 211 | 210 | 5 | 0 |
+| [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1157 | 1153 | 198 | 12 |
+| [runtime-host](runtime-host.md) | 1157 | 1111 | 188 | 7 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3960 | 3932 | 745 | 170 |
+| all | 3960 | 3873 | 721 | 155 |

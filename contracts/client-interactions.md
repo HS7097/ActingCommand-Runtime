@@ -54,6 +54,16 @@ An approval or control call on that handle still needs its original authorizatio
 
 ## Governance connections: the identity card
 
+Workflow #434 LAB-6S4a (0.12.62; register §1.287, "Slice LAB-6S4a"): `DeclareGovernanceIdentity`
+and `RecordApprovalDecision` are deleted, and with them the governance connections, the card's
+checks and `RuntimeClient::declare_governance_identity`. No request declares a card; the
+configured approvals are transcribed by the Runtime in process, with no connection and no card;
+the `governance { allowed_clients }` section is still read, checked and reported, and decides
+nothing. A request of either kind does not decode (the connection is dropped without a receipt,
+`runtime_protocol_invalid` recorded once). The `governance.identity_declared` records and the
+approval records of earlier releases stay readable. What follows is the section as it held until
+0.12.61.
+
 Workflow #318 (cfg4) retires the shared governance secret. A connection that
 records approval decisions first declares who it is with a
 `GovernanceIdentityCard`; the Runtime verifies the card, records the

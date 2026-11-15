@@ -1108,7 +1108,8 @@ the rescue face:
   manual start, the watchdog's own, a reboot's) restores each persisted pause at revision 1 with
   its reason (`crates/runtime-host/src/host/scheduling_pause.rs`, `restore_scheduling_pauses`);
   only an installer-held start (actingd's `--install-held`, which neither `actingctl install` nor
-  the module passes) keeps the pauses its transition restored. So the module matches the reason
+  the module passed, and which Workflow #434 LAB-6S4a deleted in 0.12.62) kept the pauses its
+  transition restored; since 0.12.62 every start restores them so. So the module matches the reason
   and the alias across epochs, and resumes by the epoch and revision the running Runtime shows. A
   start of the module whose readiness was never seen (it timed out and was left running) or whose
   status could not be read therefore leaves no dead end.

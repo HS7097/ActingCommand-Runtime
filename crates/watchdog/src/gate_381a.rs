@@ -2,23 +2,20 @@
 
 // Workflow #381 A: the watchdog after a held start stopped (R5′) and after a later formal close
 // that no log covers (R5b). Test plan A-2 G3a, G3c and G3d read fixture state roots with fixed
-// times; H-1 G2 reads the state root a real held start left (I7). Workflow #378 A6a: the logs
-// hold actingd's daemon lines, and the last `OUTCOME` line, the terminal outcome, decides by its
-// category (it was the FATAL line's top code).
+// times. Workflow #378 A6a: the logs hold actingd's daemon lines, and the last `OUTCOME` line,
+// the terminal outcome, decides by its category (it was the FATAL line's top code). Workflow #434
+// LAB-6S4a (0.12.62): the held start is gone, so H-1 G2, which read the state root a real held
+// start left, went with it; the fixtures stay, as the logs and journals a 0.12.61 Runtime left
+// are read by this build's watchdog.
 
-use super::decide::{self, Decision, Journal, Stage, StartProbes};
+use super::decide::{self, Decision, Stage, StartProbes};
 use super::observe;
 use super::state::{Recorded, StartRecord, WatchdogState};
 use crate::codes::ActingctlCode;
-use crate::held_runtime::{HELD_SALT, HeldStart, NoInstances};
-use actingcommand_contract::outcome::{Detail, Outcome};
-use actingcommand_runtime_host::{
-    PreparationCheckpoint, PreparationTestAction, RuntimeHost, RuntimeHostConfig,
-};
+use actingcommand_contract::outcome::Outcome;
 use serde_json::json;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 use tempfile::TempDir;
 
@@ -348,83 +345,5 @@ fn gate_an_unlogged_formal_close_looks_back_to_the_last_logged_owner() {
         Decision::FormalClose {
             owner_epoch: "epoch_maintenance".to_owned()
         }
-    );
-}
-
-/// H-1 G2 (I7): the state root a held start leaves after a latched failure stopped it, read by
-/// the watchdog: a start (R5′). Then a later owner closes formally without a log, as an
-/// installer's maintenance owner, and the tick comes seconds later: still a start (R5b).
-#[test]
-fn gate_the_state_root_of_a_stopped_held_start_leads_the_watchdog_to_a_start() {
-    let base = TempDir::new().expect("tempdir");
-    let state = base.path().join("state");
-    let logs = base.path().join("logs");
-    fs::create_dir_all(&logs).expect("log directory");
-    let start = HeldStart::spawn(&state);
-    start.reached(PreparationCheckpoint::Held);
-    let installer = start.release(&state);
-    start.reached(PreparationCheckpoint::Preparing);
-    start.go_on(PreparationTestAction::LatchLedgerFailure {
-        operation: actingcommand_runtime_host::HostLocation::AppendRuntimeEvent.location(),
-    });
-    let stopped = start.finish().err().expect("the held start stops");
-    drop(installer);
-    // actingd's last act: `runtime_stopped` and the stop's daemon lines, in the log its starter
-    // gave it (Workflow #378 A6a).
-    let fatal_log = logs.join("actingd-held.log");
-    let condition = stopped.daemon_outcome();
-    fs::write(
-        &fatal_log,
-        format!(
-            "{}ERROR actingd: {} {}\nOUTCOME actingd: {}\n",
-            daemon_lines("INFO", &envelope("runtime_stopped", "info", json!({}))),
-            condition.code(),
-            stopped.complete_message(),
-            serde_json::to_string(&condition.envelope(Detail::Full)).expect("the envelope"),
-        ),
-    )
-    .expect("write the stop's log");
-    let read_root = || {
-        observe::observe_owner(&state, std::slice::from_ref(&logs), None, START_WINDOW_MS)
-            .unwrap_or_else(|failure| panic!("observe: {failure}"))
-    };
-    assert_eq!(
-        decision(&read_root(), &WatchdogState::default()),
-        Decision::Start,
-        "R5′ after the stopped held start"
-    );
-
-    let Journal::Record {
-        record: held_owner, ..
-    } = read_root().journal
-    else {
-        panic!("the held owner's journal record");
-    };
-    RuntimeHost::start(
-        RuntimeHostConfig::new(&state, HELD_SALT),
-        Arc::new(NoInstances),
-    )
-    .expect("a later owner starts")
-    .close()
-    .expect("and closes formally");
-    let Journal::Record {
-        record: later_owner,
-        ..
-    } = read_root().journal
-    else {
-        panic!("the later owner's journal record");
-    };
-    set_modified(&fatal_log, held_owner.started_at_unix_ms);
-    set_modified(
-        &state.join("owner.lock"),
-        later_owner
-            .closed_at_unix_ms
-            .expect("the later owner closed")
-            + 3_000,
-    );
-    assert_eq!(
-        decision(&read_root(), &WatchdogState::default()),
-        Decision::Start,
-        "R5b after an unlogged formal close"
     );
 }

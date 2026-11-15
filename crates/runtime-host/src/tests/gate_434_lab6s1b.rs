@@ -4,16 +4,13 @@
 // `RuntimeRequest::validate()` judges no request by its origin. A (Lab, Lab) connection's global
 // and instance pause are taken as a (Cli, Cli) connection's are (completed, revision 1, the
 // connection's channel on the receipt), held with their reason, recorded so that a restart
-// restores both, and resumed from the same envelope. The host's own checks of the kinds LAB-6S4a
-// deletes still refuse what they refused: a governance identity card from an envelope other than
-// (User, Ui) or (Cli, Cli) is `invalid_governance_origin`; an approval decision from any envelope
-// on a connection whose card was not accepted is `governance_authority_required`; an install
-// transition other than its Query on such a connection is `install_identity_required`.
+// restores both, and resumed from the same envelope. Workflow #434 LAB-6S4a (0.12.62): the host's
+// own checks of the governance and installation kinds went with those kinds, and with them this
+// gate's test of those checks.
 
 use super::*;
 use actingcommand_contract::{
-    GovernanceIdentityCard, InstallTransitionAction, InstancePauseStage, RuntimeChannel,
-    SchedulingPauseReason, SchedulingPauseScope,
+    InstancePauseStage, RuntimeChannel, SchedulingPauseReason, SchedulingPauseScope,
 };
 
 const ALIAS: &str = "node.a";
@@ -40,20 +37,6 @@ fn request_as(
 
 fn reason() -> SchedulingPauseReason {
     SchedulingPauseReason::new(REASON).expect("pause reason")
-}
-
-// Workflow #434 LAB-6S3: binds the connection to `cli`, as actingctl's is. On a connection bound
-// to `ui` the door refuses the governance kinds by the UI list before the host's own check is
-// reached, and a first request with the console's envelope would bind an unbound connection to
-// `ui`. Bound to `cli`, every envelope reaches the host's own check.
-fn bind_cli(client: &mut TestClient) {
-    let bind = client.request(RuntimeOperation::BindChannel {
-        channel: RuntimeChannel::Cli,
-        via: None,
-        initiator: None,
-    });
-    let bound = client.send(&bind);
-    assert_eq!(bound.state(), RuntimeReceiptState::Completed, "{bound:?}");
 }
 
 // The pause and the resume of a (Lab, Lab) connection are taken and recorded as those of a
@@ -187,109 +170,4 @@ fn lab6s1b_a_lab_connections_pause_and_resume_are_taken_and_recorded_as_the_clis
         assert!(instances.is_empty(), "{source:?}");
         reopened.close().expect("close reopened host");
     }
-}
-
-// The host's own checks of the governance and installation kinds, which `validate()` no longer
-// repeats, still refuse: the card from the Lab, an agent or the console's read envelope; an
-// approval decision from every envelope on a connection without an accepted card; and an install
-// transition's drain from the Lab, whose connection declared no card. The card's and the
-// approval's connections are bound to `cli` (Workflow #434 LAB-6S3: on `ui` the door refuses
-// both kinds first, `channel_request_refused`, which that slice's own gate holds).
-#[test]
-fn lab6s1b_the_hosts_own_checks_of_the_governance_and_install_kinds_still_refuse() {
-    let root = TempDir::new().expect("tempdir");
-    let host = host_with_state(&root, ALIAS, Arc::new(FakeState::default()));
-
-    for (actor, source) in [
-        (EventActor::Lab, EventSource::Lab),
-        (EventActor::Agent, EventSource::Adapter),
-        (EventActor::Ui, EventSource::Ui),
-    ] {
-        let mut client = TestClient::connect(&host);
-        bind_cli(&mut client);
-        let card = request_as(
-            &client,
-            actor,
-            source,
-            RuntimeOperation::DeclareGovernanceIdentity {
-                card: GovernanceIdentityCard {
-                    client: TEST_GOVERNANCE_CLIENT.to_owned(),
-                    client_version: None,
-                    instance: None,
-                },
-            },
-        );
-        let refused = client.send(&card);
-        assert_eq!(
-            refused.state(),
-            RuntimeReceiptState::Denied,
-            "{source:?}: {refused:?}"
-        );
-        assert_eq!(
-            refused.outcome().code().as_str(),
-            "invalid_governance_origin",
-            "{source:?}"
-        );
-    }
-
-    for (actor, source) in [
-        (EventActor::Lab, EventSource::Lab),
-        (EventActor::Agent, EventSource::Adapter),
-        (EventActor::Cli, EventSource::Cli),
-        (EventActor::User, EventSource::Ui),
-    ] {
-        let mut client = TestClient::connect(&host);
-        bind_cli(&mut client);
-        let decision = ApprovalDecisionRecord::new(
-            "approval:fixture-a",
-            ApprovalDisposition::Approved,
-            ApprovalTarget::Catalog {
-                catalog_hash: format!("sha256:{}", "a".repeat(64)),
-                catalog_version: 1,
-            },
-            actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
-                .expect("approval reason"),
-        )
-        .expect("approval decision");
-        let approval = request_as(
-            &client,
-            actor,
-            source,
-            RuntimeOperation::RecordApprovalDecision { decision },
-        );
-        let refused = client.send(&approval);
-        assert_eq!(
-            refused.state(),
-            RuntimeReceiptState::Denied,
-            "{source:?}: {refused:?}"
-        );
-        assert_eq!(
-            refused.outcome().code().as_str(),
-            "governance_authority_required",
-            "{source:?}"
-        );
-    }
-
-    let mut client = TestClient::connect(&host);
-    let drain = request_as(
-        &client,
-        EventActor::Lab,
-        EventSource::Lab,
-        RuntimeOperation::InstallTransition {
-            target: host.runtime_info().shutdown_target(),
-            action: InstallTransitionAction::BeginDrain {
-                transition_id: "lab6s1b-check".to_owned(),
-                timeout_ms: 60_000,
-            },
-        },
-    );
-    let refused = client.send(&drain);
-    assert_eq!(refused.state(), RuntimeReceiptState::Denied, "{refused:?}");
-    assert_eq!(
-        refused.outcome().code().as_str(),
-        "install_identity_required"
-    );
-    drop(client);
-    assert!(host.fatal_error().expect("runtime health").is_none());
-    host.close().expect("close host");
 }

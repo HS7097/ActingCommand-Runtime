@@ -57,10 +57,6 @@
   "not_exposed": [
     {"kind": "Health", "reason": "handshake", "note": "every connection's first request; the watchdog sends only this"},
     {"kind": "BindChannel", "reason": "handshake", "note": "the binding of section 2.2"},
-    {"kind": "RecordApprovalDecision", "reason": "deleted", "note": "LAB-6 deletes the kind; this row leaves with it"},
-    {"kind": "InstallTransition", "reason": "deleted", "note": "LAB-6 deletes the kind; this row leaves with it"},
-    {"kind": "UpgradeState", "reason": "deleted", "note": "LAB-6 deletes the kind; this row leaves with it"},
-    {"kind": "UpgradeStateStatus", "reason": "deleted", "note": "LAB-6 deletes the kind; this row leaves with it"},
     {"kind": "PublishFact", "reason": "unsent", "note": "no front end sends it; every fact write is PublishFacts"},
     {"kind": "ProjectInterface", "reason": "unsent", "note": "no front end sends it today"},
     {"kind": "ProjectPolicyInputIdentity", "reason": "unsent", "note": "the planning session's read; nothing starts a session"},
@@ -707,11 +703,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["DeclareGovernanceIdentity", "RecordClientAction", "RuntimeFactSnapshot"],
+      "requests": ["RecordClientAction", "RuntimeFactSnapshot"],
       "source": ["actingctl evidence confirm-read", "MCP ac_evidence_confirm_read"],
       "slice": "LAB-1",
       "status": "planned",
-      "notes": "LAB-6S1b: requests add DeclareGovernanceIdentity, the identity card the row declares before its confirmation (crates/lab-ops evidence_read), which the row's code sent since LAB-1 and the table left out; the kind therefore left not_exposed. LAB-6S4a deletes the kind and takes it off this row. From the Lab's envelope the Runtime still refuses the card (the host's own check, invalid_governance_origin)"
+      "notes": "LAB-6S1b: requests added DeclareGovernanceIdentity, the identity card the row declared before its confirmation (crates/lab-ops evidence_read), which the row's code sent since LAB-1 and the table left out; the kind therefore left not_exposed. Workflow #434 LAB-6S4a (0.12.62) deletes the kind and takes it off this row: the row sends no identity card, the confirmation is the first request of its interaction"
     },
     {
       "name": "emu start",

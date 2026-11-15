@@ -412,8 +412,10 @@ fn typed_client_action_is_idempotent_and_public_projection_hides_the_value() {
     host.close().expect("close host");
 }
 
+// Workflow #434 LAB-6S4a (0.12.62): the approval request, the other client fact a request id
+// could have crossed into, is gone; the correlation boundary stays.
 #[test]
-fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
+fn client_fact_request_id_cannot_cross_correlations() {
     let root = TempDir::new().expect("tempdir");
     let host = host_with_state(&root, "fixture-instance-a", Arc::new(FakeState::default()));
     let ids = IdentifierIssuer::new().expect("identifier issuer");
@@ -447,48 +449,7 @@ fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
         action.operation().clone(),
     )
     .expect("action request with another correlation");
-    let approval = RuntimeRequest::new(
-        request_id,
-        ids.mint_correlation_id().expect("approval correlation"),
-        None,
-        EventActor::User,
-        EventSource::Ui,
-        unix_ms_now().expect("wall clock"),
-        RuntimeOperation::RecordApprovalDecision {
-            decision: ApprovalDecisionRecord::new(
-                "approval:request-boundary",
-                ApprovalDisposition::Approved,
-                ApprovalTarget::Catalog {
-                    catalog_hash: format!("sha256:{}", "a".repeat(64)),
-                    catalog_version: 1,
-                },
-                actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
-                    .expect("approval reason"),
-            )
-            .expect("approval decision"),
-        },
-    )
-    .expect("approval request");
     let connection = ConnectionId::new(99).expect("connection id");
-    let declaration = RuntimeRequest::new(
-        ids.mint_request_id().expect("declaration request"),
-        ids.mint_correlation_id().expect("declaration correlation"),
-        None,
-        EventActor::User,
-        EventSource::Ui,
-        unix_ms_now().expect("wall clock"),
-        RuntimeOperation::DeclareGovernanceIdentity {
-            card: test_governance_card(),
-        },
-    )
-    .expect("declaration request");
-    assert_eq!(
-        host.process_request_for_test(&declaration, connection)
-            .expect("declaration receipt")
-            .state(),
-        RuntimeReceiptState::Completed
-    );
-
     assert_eq!(
         host.process_request_for_test(&action, connection)
             .expect("action receipt")
@@ -499,16 +460,8 @@ fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
         .process_request_for_test(&action_other_correlation, connection)
         .expect("correlation collision receipt");
     assert_eq!(correlation_collision.state(), RuntimeReceiptState::Denied);
-    let collision = host
-        .process_request_for_test(&approval, connection)
-        .expect("collision receipt");
-    assert_eq!(collision.state(), RuntimeReceiptState::Denied);
-    assert_eq!(
-        collision.error_projection().expect("collision error").code,
-        RuntimeErrorCode::InvalidRequest
-    );
     // Test plan v2.2 §4 #22: the action's client fact is its request id's one terminal; the
-    // refused collisions add no second terminal (no rejection) under that id.
+    // refused collision adds no second terminal (no rejection) under that id.
     assert_events_in_order_with_one_terminal(
         &event_types_for_request(&host, &ids, connection, action.request_id()),
         &[EventType::ClientAction],
@@ -521,55 +474,36 @@ fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
 fn concurrent_approval_targets_commit_exactly_one_authoritative_fact() {
     let root = TempDir::new().expect("tempdir");
     let host = host_with_state(&root, "fixture-instance-a", Arc::new(FakeState::default()));
-    let first = TestClient::connect(&host);
-    let second = TestClient::connect(&host);
-    let start = Arc::new(Barrier::new(3));
-    let run = |mut client: TestClient, marker: char, start: Arc<Barrier>| {
-        thread::spawn(move || {
-            client.declare_governance_identity();
-            let request = client.governance_request(RuntimeOperation::RecordApprovalDecision {
-                decision: ApprovalDecisionRecord::new(
-                    "approval:concurrent-target",
-                    ApprovalDisposition::Approved,
-                    ApprovalTarget::Catalog {
-                        catalog_hash: format!("sha256:{}", marker.to_string().repeat(64)),
-                        catalog_version: 1,
-                    },
-                    actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
-                        .expect("approval reason"),
-                )
-                .expect("approval decision"),
-            });
-            start.wait();
-            client.send(&request)
-        })
+    // Workflow #434 LAB-6S4a (0.12.62): the approval request is gone; the two writers are the
+    // host's transcription, and the governance write gate still lets exactly one of them commit.
+    let decision = |marker: char| {
+        ApprovalDecisionRecord::new(
+            "approval:concurrent-target",
+            ApprovalDisposition::Approved,
+            ApprovalTarget::Catalog {
+                catalog_hash: format!("sha256:{}", marker.to_string().repeat(64)),
+                catalog_version: 1,
+            },
+            actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
+                .expect("approval reason"),
+        )
+        .expect("approval decision")
     };
-    let first = run(first, 'a', Arc::clone(&start));
-    let second = run(second, 'b', Arc::clone(&start));
-    start.wait();
-    let receipts = [
-        first.join().expect("first approval writer"),
-        second.join().expect("second approval writer"),
-    ];
-    assert_eq!(
-        receipts
-            .iter()
-            .filter(|receipt| receipt.state() == RuntimeReceiptState::Completed)
-            .count(),
-        1
-    );
-    assert_eq!(
-        receipts
-            .iter()
-            .filter(|receipt| receipt.state() == RuntimeReceiptState::Denied)
-            .count(),
-        1
-    );
-    assert!(receipts.iter().any(|receipt| {
-        receipt
-            .error_projection()
-            .is_some_and(|error| error.code == RuntimeErrorCode::InvalidRequest)
-    }));
+    let (first, second) = (decision('a'), decision('b'));
+    let start = Barrier::new(2);
+    let results = thread::scope(|scope| {
+        let (host, start) = (&host, &start);
+        let writers = [&first, &second].map(|decision| {
+            scope.spawn(move || {
+                start.wait();
+                host.transcribe_configured_approval(decision)
+            })
+        });
+        writers.map(|writer| writer.join().expect("approval writer"))
+    });
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+    assert!(host.fatal_error().expect("runtime health").is_none());
 
     let mut client = TestClient::connect(&host);
     let events = projected_events(

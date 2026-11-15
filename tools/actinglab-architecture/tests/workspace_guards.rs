@@ -10,15 +10,14 @@ use actingcommand_actinglab_architecture::{
     FunctionReference, LedgerOwnerModule, RefusalBranch, SourceFacts,
     contract_dependency_violations, discover_ledger_owners, extract_command_inventory,
     inspect_call_sites, inspect_contract_fact_matching, inspect_disallowed_lint_escapes,
-    inspect_enum_variants, inspect_field_accesses, inspect_function_origin_terms,
-    inspect_generic_authoring_identity, inspect_generic_runtime_identity, inspect_lab_source,
-    inspect_ledger_append_ingress, inspect_ledger_forbidden_sources, inspect_ledger_public_api,
-    inspect_persisted_event_ownership, inspect_producer_event_capabilities_in_files,
-    inspect_provider_symbol_literals, inspect_public_api, inspect_pure_decision_source,
-    inspect_refusal_branches, inspect_source_facts, inspect_stderr_writes,
-    lab_removability_violations, ledger_owns_query_matching,
-    resource_tooling_removability_violations, workspace_dependency_allow_list_violations,
-    workspace_dependency_violations,
+    inspect_enum_variants, inspect_generic_authoring_identity, inspect_generic_runtime_identity,
+    inspect_lab_source, inspect_ledger_append_ingress, inspect_ledger_forbidden_sources,
+    inspect_ledger_public_api, inspect_persisted_event_ownership,
+    inspect_producer_event_capabilities_in_files, inspect_provider_symbol_literals,
+    inspect_public_api, inspect_pure_decision_source, inspect_refusal_branches,
+    inspect_source_facts, inspect_stderr_writes, lab_removability_violations,
+    ledger_owns_query_matching, resource_tooling_removability_violations,
+    workspace_dependency_allow_list_violations, workspace_dependency_violations,
 };
 
 fn workspace_root() -> PathBuf {
@@ -2133,11 +2132,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "CompileProposal",
     "ControlEmulatorInstance",
     "DebugPackage",
-    "DeclareGovernanceIdentity",
     "DiscoverInstances",
     "DrillRecoveryLadder",
     "ExportEvidence",
-    "InstallTransition",
     "MatchDiagnosticSignatures",
     "PauseScheduling",
     "PrepareStrategicReport",
@@ -2146,7 +2143,6 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "PromoteProposal",
     "RecognizeArtifact",
     "RecordAgentResponse",
-    "RecordApprovalDecision",
     "RecordAuthoringEvent",
     "RecordDebugEvent",
     "RegisterDiagnosticSignature",
@@ -2226,8 +2222,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "StopInstanceRun",
     "SubscribeEvents",
     "UnloadPack",
-    "UpgradeState",
-    "UpgradeStateStatus",
+    // Workflow #434 LAB-6S4a (0.12.62): `DeclareGovernanceIdentity`, `InstallTransition`,
+    // `RecordApprovalDecision`, `UpgradeState` and `UpgradeStateStatus` left the list with their
+    // kinds.
 ];
 
 const RUNTIME_CONTRACT_SOURCE: &str = "crates/actingcommand-contract/src/runtime.rs";
@@ -2317,113 +2314,11 @@ fn b3_every_runtime_operation_has_an_explicit_origin_category() {
     );
 }
 
-/// Production Rust sources of crates/runtime-host/src (test files and `tests` trees excluded).
-fn runtime_host_production_sources(root: &Path) -> Vec<(String, String)> {
-    let mut files = Vec::new();
-    collect_rust_files(&root.join("crates/runtime-host/src"), &mut files);
-    files.sort();
-    let sources = files
-        .into_iter()
-        .map(|file| (workspace_relative(root, &file), file))
-        .filter(|(path, _)| {
-            !path
-                .split('/')
-                .any(|component| component == "tests" || component == "tests.rs")
-        })
-        .map(|(path, file)| {
-            let source =
-                fs::read_to_string(&file).unwrap_or_else(|error| panic!("read {path}: {error}"));
-            (path, source)
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        !sources.is_empty(),
-        "crates/runtime-host/src has no production Rust sources"
-    );
-    sources
-}
-
-#[test]
-fn b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection() {
-    let root = workspace_root();
-    // Slice cfg4's predicate in the contract crate: a card is declared by User + Ui or Cli + Cli.
-    // Since Workflow #434 LAB-6S1b `RuntimeRequest::validate` no longer reads it (no branch names
-    // an actor or a source, b3_every_runtime_operation_has_an_explicit_origin_category): the
-    // host's own check below is the one gate of both governance kinds, until LAB-6S4a deletes
-    // them.
-    let contract = fs::read_to_string(root.join(RUNTIME_CONTRACT_SOURCE))
-        .unwrap_or_else(|error| panic!("read {RUNTIME_CONTRACT_SOURCE}: {error}"));
-    assert_eq!(
-        inspect_function_origin_terms(
-            RUNTIME_CONTRACT_SOURCE,
-            &contract,
-            "valid_governance_declaration_origin"
-        )
-        .unwrap_or_else(|error| panic!("{error}")),
-        owned(&[
-            "EventActor::Cli",
-            "EventActor::User",
-            "EventSource::Cli",
-            "EventSource::Ui",
-        ]),
-        "a governance identity card is declared by the person or the operator only"
-    );
-
-    // The host refuses a card from any other origin with that predicate, and an approval first
-    // unless it comes from User + Ui on a connection whose identity card was accepted.
-    let governance_path = "crates/runtime-host/src/host/governance.rs";
-    let governance = fs::read_to_string(root.join(governance_path))
-        .unwrap_or_else(|error| panic!("read {governance_path}: {error}"));
-    assert!(
-        governance
-            .contains("if !valid_governance_declaration_origin(request.actor(), request.source())"),
-        "HostShared::declare_governance_identity no longer refuses a card by \
-         valid_governance_declaration_origin"
-    );
-    let approval = inspect_refusal_branches(
-        governance_path,
-        &governance,
-        "HostShared",
-        "record_approval_decision",
-        "RuntimeOperation",
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(
-        approval.first(),
-        Some(&RefusalBranch {
-            variants: Vec::new(),
-            codes: owned(&["governance_authority_required"]),
-            terms: owned(&[
-                "EventActor::User",
-                "EventSource::Ui",
-                "self.governance_connections",
-            ]),
-        }),
-        "record_approval_decision must first refuse anything but User + Ui on an accepted connection"
-    );
-    // Only an accepted identity card grows the accepted governance connections: any production
-    // access other than a read (`contains`) or a cleanup (`remove`) sits in
-    // `HostShared::declare_governance_identity`, whichever host file holds it.
-    let growing = runtime_host_production_sources(&root)
-        .iter()
-        .flat_map(|(path, source)| {
-            inspect_field_accesses(path, source, "governance_connections")
-                .unwrap_or_else(|error| panic!("scan {path}: {error}"))
-        })
-        .filter(|access| {
-            !access.ends_with("-> governance_connections.contains")
-                && !access.ends_with("-> governance_connections.remove")
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        !growing.is_empty()
-            && growing
-                .iter()
-                .all(|access| access.contains("::HostShared::declare_governance_identity -> ")),
-        "only HostShared::declare_governance_identity may grow the accepted governance \
-         connections: {growing:?}"
-    );
-}
+// Workflow #434 LAB-6S4a (0.12.62): the test
+// `b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection` went
+// with `DeclareGovernanceIdentity` and `RecordApprovalDecision`, the two kinds whose one gate it
+// held (the card's origin predicate, the approval's first refusal and the accepted governance
+// connections), and with it `runtime_host_production_sources`, which only it read.
 
 #[test]
 fn bplus_vision_provider_check_takes_provider_symbols_from_vision_ffi() {

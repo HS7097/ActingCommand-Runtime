@@ -29,9 +29,6 @@ mod vision_report;
 #[allow(dead_code)]
 #[path = "../../../tests/support/c4_runtime.rs"]
 mod c4_support;
-// Test-only: Workflow #381 A, the last daemon lines of a stopped held start (test plan A-2 G3b).
-#[cfg(test)]
-mod gate_381a;
 // Test-only: Workflow #382 A-4 (test plan v2.2 §3.7), resource-package admission and the
 // policy cycle.
 #[cfg(test)]
@@ -487,7 +484,7 @@ fn run_daemon(arguments: Vec<std::ffi::OsString>) -> Category {
     let install_root = installation.map(actingcommand_contract::InstalledProcess::root);
     let (host, policy) = match start_daemon(arguments) {
         Ok(started) => started,
-        // An accepted shutdown of a held start is a requested stop, which the watchdog never
+        // An accepted shutdown of a starting Runtime is a requested stop, which the watchdog never
         // restarts (`contracts/runtime-watchdog.md`, rows 5 and 6): its terminal outcome is
         // `runtime_stopped`, with the shutdown as its link.
         Err(error)
@@ -653,7 +650,6 @@ fn append_fallback_log(
 fn start_daemon(
     arguments: Vec<std::ffi::OsString>,
 ) -> Result<(RuntimeHost, Option<PolicyBootstrap>), ActingdError> {
-    let (arguments, install_held) = parse_install_held_arguments(arguments)?;
     let config_path = parse_arguments(arguments)?;
     let file = config::load(&config_path).map_err(ActingdError::config)?;
     // Workflow #398 RD-1b: a device refusal names its instance or file in its outcome.
@@ -720,10 +716,6 @@ fn start_daemon(
     let host = host.with_recognition_packages(recognition_packages);
     let host = match recognition_subsystem {
         Some(subsystem) => host.with_config_subsystem(subsystem),
-        None => host,
-    };
-    let host = match install_held {
-        Some(held) => host.with_install_held(held),
         None => host,
     };
     // Workflow #453 S11 (`contracts/state-root-installation.md`): the start is not told its
@@ -1538,7 +1530,6 @@ fn run_policy_monitor(
     wakes: &PolicyWakes,
     driver: &thread::JoinHandle<Result<(), ActingdError>>,
 ) -> Result<(), ActingdError> {
-    let mut waiting_for_install = false;
     let autostart_reports = host.emulator_autostart_reports();
     loop {
         write_autostart_reports(&autostart_reports)?;
@@ -1555,26 +1546,8 @@ fn run_policy_monitor(
         if driver.is_finished() {
             return Err(ActingdError::process(ActingdCode::PolicyDriverStopped));
         }
-        // Workflow #376 M1: during an install drain the monitor holds the driver's wakes back
-        // (they stay pending in the host); an abort or a drain timeout resumes exactly here, and
-        // only the accepted `commit_shutdown` (the shutdown check above) ends the monitor.
-        match host.is_lifecycle_draining() {
-            Ok(true) => {
-                if !waiting_for_install {
-                    waiting_for_install = true;
-                    report_policy_monitor("waiting install_transition");
-                }
-                thread::sleep(Duration::from_millis(POLICY_EVENT_WAIT_MS));
-                continue;
-            }
-            Ok(false) => {
-                if waiting_for_install {
-                    waiting_for_install = false;
-                    report_policy_monitor("resumed");
-                }
-            }
-            Err(error) => return Err(ActingdError::runtime(error)),
-        }
+        // Workflow #434 LAB-6S4a (0.12.62): the install drain the monitor waited out (#376 M1)
+        // went with the install transition; only an accepted shutdown (the check above) ends it.
         forward_policy_wakes(control, wakes, Duration::from_millis(POLICY_EVENT_WAIT_MS))?;
     }
 }
@@ -1658,13 +1631,6 @@ fn is_admission_refusal(code: Code, projection: Option<&RuntimeErrorProjection>)
         && projection.is_some_and(|projection| {
             projection.code == RuntimeErrorCode::RuntimeUnavailable && !projection.fatal
         })
-}
-
-/// Workflow #376 M6: one informational stdout line per policy monitor change; the ledger's
-/// `host.install_transition` facts stay authoritative. Like the other informational daemon
-/// lines, a failed stdout write does not stop the daemon.
-fn report_policy_monitor(state: &str) {
-    let _ = writeln!(std::io::stdout().lock(), "actingd policy_monitor {state}");
 }
 
 fn finish_policy_closeout(
@@ -2396,31 +2362,6 @@ fn system_unix_ms() -> Result<u64, ActingdError> {
         .map_err(|_| ActingdError::process(SharedCode::SystemClockInvalid))?;
     u64::try_from(elapsed.as_millis())
         .map_err(|_| ActingdError::process(SharedCode::SystemClockInvalid))
-}
-
-fn parse_install_held_arguments(
-    mut arguments: Vec<std::ffi::OsString>,
-) -> Result<
-    (
-        Vec<std::ffi::OsString>,
-        Option<actingcommand_contract::InstallHeldStartup>,
-    ),
-    ActingdError,
-> {
-    if arguments.len() == 4 && arguments[2] == "--install-held" {
-        let value = arguments[3]
-            .to_str()
-            .filter(|value| value.len() <= 4096)
-            .ok_or_else(|| ActingdError::config(ActingdCode::InstallHeldInputInvalid))?;
-        let held: actingcommand_contract::InstallHeldStartup = serde_json::from_str(value)
-            .map_err(|_| ActingdError::config(ActingdCode::InstallHeldInputInvalid))?;
-        held.validate()
-            .map_err(|error| ActingdError::config(error.code()))?;
-        arguments.truncate(2);
-        Ok((arguments, Some(held)))
-    } else {
-        Ok((arguments, None))
-    }
 }
 
 fn parse_arguments(arguments: Vec<std::ffi::OsString>) -> Result<PathBuf, ActingdError> {

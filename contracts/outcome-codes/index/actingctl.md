@@ -50,9 +50,9 @@ column means. 204 codes.
 | `install_process_state_root_mismatch` | error | none | 0.12.0 | active | pending | TBD | mcp-serve --state-root names another state root than the install's configuration. |
 | `install_root_unresolved` | error | none | 0.12.0 | active | pending | TBD | actingctl does not run from an install root and mcp-serve got no --root. |
 | `install_state_root_unresolved` | error | none | 0.12.0 | active | pending | TBD | The MCP server cannot tell the Runtime state root. |
-| `install_transition_aborted` | error | none | 0.12.0 | active | settled | written | actingctl install-transition: the Runtime reports the transition in phase aborted: the drain ended and admission reopened on the old owner. |
-| `install_transition_failed` | error | none | 0.12.0 | active | settled | written | actingctl install-transition: the Runtime reports the transition in phase failed, with admission closed. |
-| `install_transition_reported` | success | none | 0.12.0 | active | settled | written | actingctl install-transition: the Runtime answered the transition action. |
+| `install_transition_aborted` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): Actingctl install-transition went with InstallTransition. |
+| `install_transition_failed` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): Actingctl install-transition went with InstallTransition. |
+| `install_transition_reported` | success | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): Actingctl install-transition went with InstallTransition. |
 | `instance_ambiguous` | error | none | 0.12.0 | active | pending | TBD | An instance selector names more than one configured instance. |
 | `instance_emulator_controlled` | success | none | 0.12.0 | active | pending | TBD | actingctl emulator start\|stop\|restart: the Runtime completed the emulator control. |
 | `instance_facts_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl facts --instance: one instance's facts (InstanceFactSnapshot) were printed, as ac_facts with scope instance answers them (Workflow #389 MCP-4). |
@@ -85,7 +85,7 @@ column means. 204 codes.
 | `mcp_config_program_unresolved` | error | none | 0.12.0 | active | pending | TBD | actingctl mcp-config cannot name the program a client registers: the executable or the installation selection cannot be read, or a slot's fixed entry is… |
 | `mcp_config_program_unsupported` | error | none | 0.12.0 | active | pending | TBD | actingctl mcp-config cannot write the client configuration for this program path (not Unicode, or a double quote for claude). |
 | `mcp_file_too_large` | error | none | 0.12.0 | active | pending | TBD | mcp-serve, or actingctl overview reading the build manifest, read a file (a configuration, a manifest, an export) larger than its bound limit_bytes. |
-| `mcp_identity_card_refused` | warning | none | 0.12.0 | active | pending | written | The Runtime refused mcp-serve's governance identity card (governance.allowed_clients); the write went ahead without it and the refusal is the caused_by link. |
+| `mcp_identity_card_refused` | warning | none | 0.12.0 | retired | pending | written | Retired (Workflow #434 LAB-6S4a): The identity card actingctl mcp-serve declared before a write went with DeclareGovernanceIdentity (the coordinator's ruling N8… |
 | `mcp_input_failed` | error | none | 0.12.0 | active | pending | TBD | mcp-serve could not read stdin and ended; the OS error is the caused_by link. |
 | `mcp_message_malformed` | error | none | 0.12.0 | active | pending | TBD | JSON-RPC -32700: an MCP message line is not JSON; the parser's error is the caused_by link. |
 | `mcp_message_too_large` | error | none | 0.12.0 | active | pending | TBD | JSON-RPC -32700: an MCP message line is longer than limit_bytes and was skipped. |

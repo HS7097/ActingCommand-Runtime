@@ -1,26 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Operator tools (#338 §四 工具表, S2) and the two R5 observer tools. Every write goes the
-//! model's provenance way on its own connection: `begin_interaction`, then on a (Cli, Cli)
-//! connection the identity card `{client: "actingctl-mcp"}` (a refused card is only the warning
-//! `governance_client_not_allowed`), then `RecordClientAction{surface_id: "mcp", control_id:
-//! <tool>, kind: Command}`, then the formal operation, all under that one correlation. What a
-//! run is, whether it may run, whether a pause or a target policy is accepted: all of it is the
-//! Runtime's answer, passed on unchanged. Nothing here pauses implicitly (C1 甲). A refusal
-//! keeps the Runtime receipt's outcome on top (`client_error`, Workflow #378 A5).
+//! Operator tools (#338 §四 工具表, S2) and the two R5 observer tools. Every write goes on its
+//! own connection under one correlation of its own (`begin_interaction`), the formal operation
+//! first: since Workflow #434 LAB-6S4a (0.12.62; the coordinator's ruling N8 on board #434) it
+//! declares no identity card and records no `client.action` before it, the initiator `Lab-MCP`
+//! its connection's binding carries names where it came from. What a run is, whether it may
+//! run, whether a pause or a target policy is accepted: all of it is the Runtime's answer,
+//! passed on unchanged. Nothing here pauses implicitly (C1 甲). A refusal keeps the Runtime
+//! receipt's outcome on top (`client_error`, Workflow #378 A5).
 
 use super::observer::select_instance;
 use super::runtime::client_error;
 use super::tools::{
-    self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
+    Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
 use crate::codes::{ActingctlCode, ArgumentProblem, RunState};
 use crate::{emulators, scheduling, targets};
-use actingcommand_contract::codes::{GovernanceIdentityRefusal, SharedCode};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, IoOp, Outcome};
 use actingcommand_contract::{
     ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRecoveryBinding,
-    ContainedTaskRequest, EventActor, EventSource, GovernanceIdentityCard, OwnerEpoch, RequestId,
+    ContainedTaskRequest, EventActor, EventSource, OwnerEpoch, RequestId,
     SchedulingPauseExpectation, SchedulingPauseScope,
 };
 use actingcommand_runtime_client::ClientCode;
@@ -32,7 +32,6 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const MCP_SURFACE: &str = "mcp";
-const MCP_CLIENT: &str = "actingctl-mcp";
 const MIN_DEADLINE_S: u64 = 60;
 const MAX_DEADLINE_S: u64 = 1800;
 // Workflow #434 LAB-1b: `ac_pause`'s reason and drain timeout defaults and bound are
@@ -42,60 +41,34 @@ const MAX_DEADLINE_S: u64 = 1800;
 /// Time kept back from the call budget for answering after a job wait.
 const ANSWER_RESERVE: Duration = Duration::from_secs(2);
 
-/// One write's connection after its provenance was recorded, with the warnings (each
-/// `{outcome}`) recording it gave.
-pub(super) struct Write {
-    pub(super) client: RuntimeClient,
-    pub(super) warnings: Vec<Value>,
-}
-
-/// Opens a connection with this origin and records the provenance of `tool`.
+/// Opens a connection with this origin for one write, under a correlation of its own.
 fn begin_write(
     context: &ToolContext<'_>,
-    tool: &str,
-    instance_alias: Option<&str>,
     origin: (EventActor, EventSource),
-) -> Result<Write, ToolError> {
+) -> Result<RuntimeClient, ToolError> {
     let connection = context.runtime.connect_fresh(origin.0, origin.1)?;
-    record_provenance(connection, tool, instance_alias, origin, None)
+    write_interaction(&connection)
 }
 
-/// On `connection`: `begin_interaction`, the identity card on (Cli, Cli), then the
-/// `client.action` of `tool`, carrying `value` when given (a Lab call's req_id).
-pub(super) fn record_provenance(
-    connection: RuntimeClient,
+/// The correlation of one write on `connection` (`begin_interaction`). Workflow #434 LAB-6S4a
+/// (0.12.62): the identity card and the `client.action` that came before the write are gone (the
+/// coordinator's ruling N8), so its first request is the write itself.
+pub(super) fn write_interaction(connection: &RuntimeClient) -> Result<RuntimeClient, ToolError> {
+    connection
+        .begin_interaction()
+        .map_err(|error| client_error(&error))
+}
+
+/// On `connection`, under a correlation of its own: the `client.action` of `tool` after a Lab
+/// call's capture, carrying `value` when given (the call's req_id). Workflow #434 LAB-6S4a
+/// (0.12.62): it declares no identity card before it.
+pub(super) fn record_capture_action(
+    connection: &RuntimeClient,
     tool: &str,
     instance_alias: Option<&str>,
-    origin: (EventActor, EventSource),
     value: Option<ClientActionValue>,
-) -> Result<Write, ToolError> {
-    let client = connection
-        .begin_interaction()
-        .map_err(|error| client_error(&error))?;
-    let mut warnings = Vec::new();
-    // (Agent, Adapter) declares no card (rt:3640-3646).
-    if origin == (EventActor::Cli, EventSource::Cli) {
-        let card = GovernanceIdentityCard {
-            client: MCP_CLIENT.to_owned(),
-            client_version: None,
-            instance: None,
-        };
-        if let Err(error) = client.declare_governance_identity(&card) {
-            let error = client_error(&error);
-            if !error.is(GovernanceIdentityRefusal::ClientNotAllowed) {
-                return Err(error);
-            }
-            // actingd's allowed_clients does not list actingctl-mcp: the Runtime recorded its
-            // warning event and still takes Cli writes. The write goes ahead with the warning
-            // `mcp_identity_card_refused`, caused by the refusal; the person changes
-            // `governance.allowed_clients` in actingd.config.json.
-            warnings.push(tools::warning(
-                &Outcome::new(ActingctlCode::McpIdentityCardRefused)
-                    .mcp_blocker(McpBlocker::PersonAction)
-                    .caused_by(error.into_outcome()),
-            ));
-        }
-    }
+) -> Result<(), ToolError> {
+    let client = write_interaction(connection)?;
     let action = ClientActionRecord::new(
         MCP_SURFACE,
         tool,
@@ -107,7 +80,7 @@ pub(super) fn record_provenance(
     client
         .record_client_action(action)
         .map_err(|error| client_error(&error))?;
-    Ok(Write { client, warnings })
+    Ok(())
 }
 
 pub(super) const CLI: (EventActor, EventSource) = (EventActor::Cli, EventSource::Cli);
@@ -202,35 +175,25 @@ pub(super) fn run_pack(context: &ToolContext<'_>, arguments: &Map<String, Value>
     let request = request
         .with_response_deadline_ms(deadline_s * 1000)
         .map_err(|error| refused_argument("deadline_s", error.code()))?;
-    let write = begin_write(context, "ac_run_pack", Some(alias.as_str()), CLI)?;
-    let prepared = write
-        .client
+    let client = begin_write(context, CLI)?;
+    let prepared = client
         .prepare_contained_task(&alias, request)
         .map_err(|error| client_error(&error))?;
     let handle = text_of(json!(prepared.request_id()));
     let correlation_id = text_of(json!(prepared.correlation_id()));
-    let client = write.client.clone();
-    context.jobs.start(
-        handle.clone(),
-        "run_pack",
-        Some(alias),
-        "submitting",
-        write.warnings.clone(),
-        move || {
+    context
+        .jobs
+        .start(handle.clone(), "run_pack", "submitting", move || {
             client
                 .submit_prepared(prepared)
                 .map(|output| json!({"receipt_state": output.receipt().state()}))
                 .map_err(|error| client_error(&error))
-        },
-    )?;
-    Ok(ToolSuccess {
-        result: json!({
-            "handle": handle,
-            "correlation_id": correlation_id,
-            "phase": "submitting",
-        }),
-        warnings: write.warnings,
-    })
+        })?;
+    Ok(ToolSuccess::new(json!({
+        "handle": handle,
+        "correlation_id": correlation_id,
+        "phase": "submitting",
+    })))
 }
 
 /// `arguments_invalid` `unusable` for an argument the contract refused, caused by its code.
@@ -264,15 +227,12 @@ pub(super) fn stop_run(context: &ToolContext<'_>, arguments: &Map<String, Value>
         .find(handle)
         .filter(|job| job.kind == "run_pack" && !job.finished())
     {
-        let write = begin_write(context, "ac_stop_run", job.instance_alias.as_deref(), CLI)?;
-        let cancellation = write
-            .client
+        let cancellation = begin_write(context, CLI)?
             .cancel_contained_task(request_id)
             .map_err(|error| stop_error(&error))?;
-        return Ok(ToolSuccess {
-            result: json!({"cancellation": cancellation, "job_phase": job.phase()}),
-            warnings: write.warnings,
-        });
+        return Ok(ToolSuccess::new(
+            json!({"cancellation": cancellation, "job_phase": job.phase()}),
+        ));
     }
     // Otherwise a background cancel_contained_task_and_reset, waiting up to the longest run
     // deadline so a Pending answer rarely leaves the touch release undone.
@@ -301,17 +261,12 @@ pub(super) fn stop_run(context: &ToolContext<'_>, arguments: &Map<String, Value>
                 .run_state(RunState::of(run.state))
         }));
     };
-    let write = begin_write(context, "ac_stop_run", Some(alias.as_str()), CLI)?;
-    let job_handle = text_of(json!(write.client.correlation_id()));
-    let client = write.client.clone();
+    let client = begin_write(context, CLI)?;
+    let job_handle = text_of(json!(client.correlation_id()));
     let wait = Duration::from_millis(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS);
-    let job = context.jobs.start(
-        job_handle,
-        "stop_run",
-        Some(alias.clone()),
-        "stopping",
-        write.warnings,
-        move || {
+    let job = context
+        .jobs
+        .start(job_handle, "stop_run", "stopping", move || {
             let stopped = client
                 .cancel_contained_task_and_reset(&alias, request_id, wait)
                 .map_err(|error| stop_error(&error))?;
@@ -328,8 +283,7 @@ pub(super) fn stop_run(context: &ToolContext<'_>, arguments: &Map<String, Value>
                 None => {}
             }
             Ok(outcome)
-        },
-    )?;
+        })?;
     job_answer(context, &job, wait_until).map(|mut answer| {
         if answer.result.get("job_phase").is_none() {
             answer.result["job_phase"] = json!("done");
@@ -377,22 +331,16 @@ pub(super) fn pause(context: &ToolContext<'_>, arguments: &Map<String, Value>) -
         .unwrap_or(scheduling::MCP_DRAIN_TIMEOUT_S);
     context.jobs.has_capacity()?;
     let scope = pause_scope(context, arguments.string("instance")?)?;
-    let write = begin_write(context, "ac_pause", scheduling::scope_alias(&scope), CLI)?;
-    let owner_epoch = write.client.runtime_info().owner_epoch();
-    let job_handle = text_of(json!(write.client.correlation_id()));
-    let client = write.client.clone();
-    let job = context.jobs.start(
-        job_handle,
-        "pause",
-        scheduling::scope_alias(&scope).map(str::to_owned),
-        "pausing",
-        write.warnings,
-        move || {
+    let client = begin_write(context, CLI)?;
+    let owner_epoch = client.runtime_info().owner_epoch();
+    let job_handle = text_of(json!(client.correlation_id()));
+    let job = context
+        .jobs
+        .start(job_handle, "pause", "pausing", move || {
             let paused = scheduling::pause(&client, scope, reason, drain_timeout_s * 1000)
                 .map_err(|error| client_error(&error))?;
             Ok(scheduling::paused_answer(&paused, owner_epoch))
-        },
-    )?;
+        })?;
     job_answer(context, &job, context.deadline)
 }
 
@@ -411,16 +359,11 @@ pub(super) fn resume(context: &ToolContext<'_>, arguments: &Map<String, Value>) 
         .ok_or_else(|| invalid_argument("expected_revision", ArgumentProblem::Required))?;
     context.jobs.has_capacity()?;
     let scope = pause_scope(context, arguments.string("instance")?)?;
-    let write = begin_write(context, "ac_resume", scheduling::scope_alias(&scope), CLI)?;
-    let job_handle = text_of(json!(write.client.correlation_id()));
-    let client = write.client.clone();
-    let job = context.jobs.start(
-        job_handle,
-        "resume",
-        scheduling::scope_alias(&scope).map(str::to_owned),
-        "resuming",
-        write.warnings,
-        move || {
+    let client = begin_write(context, CLI)?;
+    let job_handle = text_of(json!(client.correlation_id()));
+    let job = context
+        .jobs
+        .start(job_handle, "resume", "resuming", move || {
             scheduling::resume_expected(
                 &client,
                 scope,
@@ -431,8 +374,7 @@ pub(super) fn resume(context: &ToolContext<'_>, arguments: &Map<String, Value>) 
             )
             .map(|resumed| scheduling::resumed_answer(&resumed))
             .map_err(|error| client_error(&error))
-        },
-    )?;
+        })?;
     job_answer(context, &job, context.deadline)
 }
 
@@ -445,21 +387,15 @@ pub(super) fn emulator(context: &ToolContext<'_>, arguments: &Map<String, Value>
         .ok_or_else(|| invalid_argument("action", ArgumentProblem::NotRecognised))?;
     context.jobs.has_capacity()?;
     let alias = resolve_alias(context, arguments.required_string("instance")?)?;
-    let write = begin_write(context, "ac_emulator", Some(alias.as_str()), CLI)?;
-    let job_handle = text_of(json!(write.client.correlation_id()));
-    let client = write.client.clone();
-    let job = context.jobs.start(
-        job_handle,
-        "emulator",
-        Some(alias.clone()),
-        "running",
-        write.warnings,
-        move || {
+    let client = begin_write(context, CLI)?;
+    let job_handle = text_of(json!(client.correlation_id()));
+    let job = context
+        .jobs
+        .start(job_handle, "emulator", "running", move || {
             emulators::control(&client, &alias, action)
                 .map(|controlled| emulators::controlled_answer(&controlled))
                 .map_err(|error| client_error(&error))
-        },
-    )?;
+        })?;
     job_answer(context, &job, context.deadline)
 }
 
@@ -482,15 +418,12 @@ pub(super) fn ladder_drill(
         Some(_) => return Err(invalid_argument("device", ArgumentProblem::WrongType)),
     };
     let alias = resolve_alias(context, selector)?;
-    let write = begin_write(context, "ac_ladder_drill", Some(alias.as_str()), CLI)?;
-    let drill = write
-        .client
+    let drill = begin_write(context, CLI)?
         .drill_recovery_ladder(&alias, crate::ladder_drill::mode(device))
         .map_err(|error| client_error(&error))?;
-    Ok(ToolSuccess {
-        result: serde_json::to_value(&drill).map_err(super::packs::encode_failed)?,
-        warnings: write.warnings,
-    })
+    Ok(ToolSuccess::new(
+        serde_json::to_value(&drill).map_err(super::packs::encode_failed)?,
+    ))
 }
 
 // ---------------------------------------------------------------- resource targets
@@ -557,19 +490,11 @@ pub(super) fn targets_set(
     };
     let document = targets::document(&view, valid_until_unix_ms, policy_targets)
         .map_err(|outcome| ToolError::outcome("usage", outcome))?;
-    let write = begin_write(
-        context,
-        "ac_targets_set",
-        Some(view.instance_alias.as_str()),
-        AGENT,
-    )?;
-    match targets::apply(&write.client, document) {
-        Ok(applied) => Ok(ToolSuccess {
-            result: Value::Object(
-                targets::applied_answer(&applied).map_err(super::packs::encode_failed)?,
-            ),
-            warnings: write.warnings,
-        }),
+    let client = begin_write(context, AGENT)?;
+    match targets::apply(&client, document) {
+        Ok(applied) => Ok(ToolSuccess::new(Value::Object(
+            targets::applied_answer(&applied).map_err(super::packs::encode_failed)?,
+        ))),
         // The Runtime's refusal on top, with the document position and reason its receipt
         // carries (`targets::with_rejection`).
         Err(error) => {

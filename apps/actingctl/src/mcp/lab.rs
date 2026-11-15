@@ -1213,15 +1213,14 @@ fn run_job(
     let own = handle.clone();
     let job = context
         .jobs
-        .start_noted(handle, "lab", None, "running", Vec::new(), move || {
-            body(&own)
-        })?;
+        .start_noted(handle, "lab", "running", move || body(&own))?;
     operator::job_answer(context, &job, context.deadline)
 }
 
 /// The client.action of a Lab request this call made, after its child returned. Its warnings:
-/// `client_action_without_req_id`, the recording's own, or `client_action_not_recorded` caused
-/// by the recording's failure (the Lab command is not run again).
+/// `client_action_without_req_id`, or `client_action_not_recorded` caused by the recording's
+/// failure (the Lab command is not run again). Workflow #434 LAB-6S4a (0.12.62): no identity card
+/// is declared before it, so the card's refusal is no warning of it any more.
 fn record_action(
     state_root: &Result<PathBuf, Outcome>,
     tool: &str,
@@ -1236,12 +1235,11 @@ fn record_action(
     }
     let value = req_id.map(|id| ClientActionValue::PathSafeString(id.to_owned()));
     let recorded = runtime::connect_at(state_root, CLI.0, CLI.1)
-        .and_then(|connection| operator::record_provenance(connection, tool, instance, CLI, value));
-    match recorded {
-        Ok(write) => warnings.extend(write.warnings),
-        Err(error) => warnings.push(tools::warning(
+        .and_then(|connection| operator::record_capture_action(&connection, tool, instance, value));
+    if let Err(error) = recorded {
+        warnings.push(tools::warning(
             &Outcome::new(ActingctlCode::ClientActionNotRecorded).caused_by(error.into_outcome()),
-        )),
+        ));
     }
     warnings
 }

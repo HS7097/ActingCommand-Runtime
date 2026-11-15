@@ -6,8 +6,9 @@
 //! frames; the MCP server and the CLI are the real binaries.
 //!
 //! - MCP `ac_evidence_confirm_read` records one `client.action` with the agent's origin (Agent,
-//!   Adapter), and `actingctl evidence confirm-read` one with the command line's (Cli, Cli) after
-//!   its identity card `actingctl` in the same correlation. Each names a frame or a run with the
+//!   Adapter), and `actingctl evidence confirm-read` one with the command line's (Cli, Cli),
+//!   since Workflow #434 LAB-6S4a (0.12.62) with no identity card before it (the ledger holds no
+//!   `governance.identity_declared` record). Each names a frame or a run with the
 //!   controls R's frame index takes (`evidence_read_frame`, `evidence_read_run`), and each has its
 //!   frame index row (`('artifact'|'run', id, 'read_confirmed')` at the record's sequence).
 //! - An artifact or a run the ledger does not hold is refused on both sides
@@ -22,7 +23,7 @@ use crate::mcp_harness::{McpServer, accepted};
 use actingcommand_artifact_store::ArtifactStore;
 use actingcommand_contract::{
     ClientActionValue, ClientPayload, EventActor, EventPayload, EventQuery, EventSource,
-    GovernanceIdentityVerdict, IdentifierIssuer,
+    IdentifierIssuer,
 };
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerEvidenceConfig, PersistedEvent};
 use actingcommand_runtime_database::{DatabaseLocation, RuntimeDatabase};
@@ -150,30 +151,15 @@ fn ln7c_c_mcp_and_the_cli_each_record_one_client_action_with_its_frame_index_row
         "each call records exactly its one client.action, with the caller's origin"
     );
 
-    // The CLI declared its identity card `actingctl` in the correlation of each confirmation.
-    for confirmation in &expected[2..] {
-        let correlation = events
-            .iter()
-            .find(|event| event.sequence() == confirmation.sequence)
-            .and_then(|event| event.links().correlation_id().copied())
-            .unwrap_or_else(|| panic!("the confirmation has no correlation: {confirmation:?}"));
-        let declared = events.iter().any(|event| {
-            event.links().correlation_id() == Some(&correlation)
-                && event.sequence() < confirmation.sequence
-                && (event.origin().actor(), event.origin().source())
-                    == (EventActor::Cli, EventSource::Cli)
-                && matches!(
-                    event.payload(),
-                    EventPayload::Client(ClientPayload::GovernanceIdentityDeclared(payload))
-                        if payload.card().client == "actingctl"
-                            && payload.verdict() == GovernanceIdentityVerdict::Accepted
-                )
-        });
-        assert!(
-            declared,
-            "no accepted identity card actingctl before {confirmation:?}"
-        );
-    }
+    // Workflow #434 LAB-6S4a (0.12.62): the CLI declares no identity card before a confirmation
+    // any more, so the ledger holds no `governance.identity_declared` record.
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.payload(),
+            EventPayload::Client(ClientPayload::GovernanceIdentityDeclared(_))
+        )),
+        "an identity card was declared"
+    );
 
     // R's frame index links each confirmation to its target at the record's sequence.
     assert_eq!(

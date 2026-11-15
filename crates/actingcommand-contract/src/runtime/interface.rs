@@ -269,10 +269,8 @@ pub enum InterfaceBlock {
     General,
     /// What one Lab option opens, on the Lab channel only.
     Lab(LabOption),
-    /// Accepted from no channel any more.
-    Retired,
-    /// Kept for older peers only.
-    Compat,
+    // Workflow #434 LAB-6S4a (0.12.62): the blocks `Retired` (the approval request) and `Compat`
+    // (`InstallTransition`) went with their last kinds.
 }
 
 /// What a request does (section 2.2). Descriptive only: the block decides whether it is accepted.
@@ -340,16 +338,6 @@ const DEBUGGING_OPERATION: InterfaceClassification = InterfaceClassification::ne
     Some(InterfaceClass::Operation),
     true,
 );
-const RETIRED_INSTRUCTION: InterfaceClassification = InterfaceClassification::new(
-    InterfaceBlock::Retired,
-    Some(InterfaceClass::Instruction),
-    false,
-);
-const COMPAT_INSTRUCTION: InterfaceClassification = InterfaceClassification::new(
-    InterfaceBlock::Compat,
-    Some(InterfaceClass::Instruction),
-    true,
-);
 
 macro_rules! runtime_operation_kinds {
     ($($kind:ident),+ $(,)?) => {
@@ -370,7 +358,6 @@ macro_rules! runtime_operation_kinds {
 runtime_operation_kinds! {
     Health,
     RequestShutdown,
-    InstallTransition,
     Status,
     ProjectInterface,
     ProjectPolicyInputIdentity,
@@ -419,8 +406,6 @@ runtime_operation_kinds! {
     RecordDebugEvent,
     ReleaseLabPin,
     RecordClientAction,
-    DeclareGovernanceIdentity,
-    RecordApprovalDecision,
     StartAgentSession,
     ResumeAgentSession,
     AgentSessionStatus,
@@ -434,8 +419,6 @@ runtime_operation_kinds! {
     ResourceTargetView,
     ConfigureSettings,
     BindChannel,
-    UpgradeState,
-    UpgradeStateStatus,
     LoadPack,
     UnloadPack,
     // Workflow #429 R-0 (register §1.213): the player workbench's kinds.
@@ -463,8 +446,9 @@ impl RuntimeOperationKind {
     /// from their keys' family ([`RuntimeOperation::interface_class`]); every family is general.
     pub const fn interface_class(self) -> InterfaceClassification {
         match self {
-            // The handshake: `Health` and `BindChannel`; the identity card retires at U-6.
-            Self::Health | Self::DeclareGovernanceIdentity | Self::BindChannel => HANDSHAKE,
+            // The handshake: `Health` and `BindChannel` (the identity card went with Workflow #434
+            // LAB-6S4a).
+            Self::Health | Self::BindChannel => HANDSHAKE,
             // General reads answered without any record.
             Self::Status
             | Self::MonitorStatus
@@ -479,7 +463,6 @@ impl RuntimeOperationKind {
             | Self::SubscribeEvents
             | Self::ReadMaterial
             | Self::ResourceTargetView
-            | Self::UpgradeStateStatus
             // Workflow #429 R-0: the routine summary, a general read from memory.
             | Self::RoutineSummary
             // Workflow #429 R-0c: the pack schedule's read view, a general read (not through
@@ -502,7 +485,6 @@ impl RuntimeOperationKind {
             | Self::PublishFacts
             | Self::ApplyResourceTargets
             | Self::ConfigureSettings
-            | Self::UpgradeState
             // Workflow #429 A.2 R-0: what the workbench needs without the Lab. Its new kinds act
             // only on what is bound to the instance; emulator control, the self-check and the
             // assigned application's start and stop already do (moved from option two; the
@@ -560,10 +542,6 @@ impl RuntimeOperationKind {
             | Self::ReleaseLabPin
             | Self::LoadPack
             | Self::UnloadPack => DEBUGGING_OPERATION,
-            // The foreign approval request: approvals stay in the configuration.
-            Self::RecordApprovalDecision => RETIRED_INSTRUCTION,
-            // install-control revision 1, until the upgrade state replaces it.
-            Self::InstallTransition => COMPAT_INSTRUCTION,
         }
     }
 }
@@ -638,7 +616,6 @@ impl RuntimeOperationKind {
     pub const fn success_code(self) -> Option<Code> {
         match self {
             Self::Health => Some(ReceiptCode::HealthCompleted.code()),
-            Self::InstallTransition => Some(ReceiptCode::InstallTransitionCompleted.code()),
             Self::Status => Some(ReceiptCode::StatusCompleted.code()),
             Self::ProjectInterface => Some(ReceiptCode::ProjectInterfaceCompleted.code()),
             Self::ProjectPolicyInputIdentity => {
@@ -699,12 +676,6 @@ impl RuntimeOperationKind {
             Self::RecordDebugEvent => Some(ReceiptCode::RecordDebugEventCompleted.code()),
             Self::ReleaseLabPin => Some(ReceiptCode::ReleaseLabPinCompleted.code()),
             Self::RecordClientAction => Some(ReceiptCode::RecordClientActionCompleted.code()),
-            Self::DeclareGovernanceIdentity => {
-                Some(ReceiptCode::DeclareGovernanceIdentityCompleted.code())
-            }
-            Self::RecordApprovalDecision => {
-                Some(ReceiptCode::RecordApprovalDecisionCompleted.code())
-            }
             Self::StartAgentSession => Some(ReceiptCode::StartAgentSessionCompleted.code()),
             Self::ResumeAgentSession => Some(ReceiptCode::ResumeAgentSessionCompleted.code()),
             Self::AgentSessionStatus => Some(ReceiptCode::AgentSessionStatusCompleted.code()),
@@ -729,9 +700,7 @@ impl RuntimeOperationKind {
             | Self::PollQueuedLease
             | Self::CancelQueuedLease
             | Self::ObserveContainedPage => None,
-            Self::UpgradeState | Self::UpgradeStateStatus | Self::LoadPack | Self::UnloadPack => {
-                None
-            }
+            Self::LoadPack | Self::UnloadPack => None,
             // Workflow #429 R-0: each gets its success code with its behaviour.
             Self::RunInstanceTask | Self::EditResourceTarget => None,
             // Workflow #429 R-12 (register §1.264).
@@ -773,7 +742,6 @@ impl RuntimeOperation {
         match self {
             Self::Health => Kind::Health,
             Self::RequestShutdown { .. } => Kind::RequestShutdown,
-            Self::InstallTransition { .. } => Kind::InstallTransition,
             Self::Status => Kind::Status,
             Self::ProjectInterface { .. } => Kind::ProjectInterface,
             Self::ProjectPolicyInputIdentity { .. } => Kind::ProjectPolicyInputIdentity,
@@ -822,8 +790,6 @@ impl RuntimeOperation {
             Self::RecordDebugEvent { .. } => Kind::RecordDebugEvent,
             Self::ReleaseLabPin { .. } => Kind::ReleaseLabPin,
             Self::RecordClientAction { .. } => Kind::RecordClientAction,
-            Self::DeclareGovernanceIdentity { .. } => Kind::DeclareGovernanceIdentity,
-            Self::RecordApprovalDecision { .. } => Kind::RecordApprovalDecision,
             Self::StartAgentSession { .. } => Kind::StartAgentSession,
             Self::ResumeAgentSession { .. } => Kind::ResumeAgentSession,
             Self::AgentSessionStatus { .. } => Kind::AgentSessionStatus,
@@ -837,8 +803,6 @@ impl RuntimeOperation {
             Self::ResourceTargetView { .. } => Kind::ResourceTargetView,
             Self::ConfigureSettings { .. } => Kind::ConfigureSettings,
             Self::BindChannel { .. } => Kind::BindChannel,
-            Self::UpgradeState { .. } => Kind::UpgradeState,
-            Self::UpgradeStateStatus { .. } => Kind::UpgradeStateStatus,
             Self::LoadPack { .. } => Kind::LoadPack,
             Self::UnloadPack { .. } => Kind::UnloadPack,
             Self::RunInstanceTask { .. } => Kind::RunInstanceTask,
@@ -883,14 +847,13 @@ fn observation_key_family(observation: &FactObservation) -> FactKeyFamily {
 
 #[cfg(test)]
 mod tests {
-    use super::InterfaceBlock::{Compat, General, Handshake, Lab, Retired};
+    use super::InterfaceBlock::{General, Handshake, Lab};
     use super::InterfaceClass::{Instruction, Operation, Read};
     use super::LabOption::{Authoring, Debugging};
     use super::*;
     use crate::{
         EventActor, EventSource, FactRecord, FactScope, IdentifierIssuer, LeaseToken,
-        PackLoadEntry, PackRegistryKey, RuntimeRequest, RuntimeShutdownTarget, UpgradeStateAction,
-        priority_offset_fact_key,
+        PackLoadEntry, PackRegistryKey, RuntimeRequest, priority_offset_fact_key,
     };
 
     /// TU-1's expected row of each kind, from section 2.2 (the 58 kinds of v0.11.6) and section 2.3
@@ -901,7 +864,6 @@ mod tests {
         match kind {
             // section 2.2 handshake.
             K::Health => (Handshake, None, false),
-            K::DeclareGovernanceIdentity => (Handshake, None, false),
             // section 2.2 general reads.
             K::Status => (General, Some(Read), false),
             K::MonitorStatus => (General, Some(Read), false),
@@ -986,13 +948,9 @@ mod tests {
             K::RetireDiagnosticSignature => (Lab(Debugging), Some(Operation), true),
             K::RecordDebugEvent => (Lab(Debugging), Some(Operation), true),
             K::ReleaseLabPin => (Lab(Debugging), Some(Operation), true),
-            // section 2.2 retired and compatibility.
-            K::RecordApprovalDecision => (Retired, Some(Instruction), false),
-            K::InstallTransition => (Compat, Some(Instruction), true),
-            // section 2.3 new kinds.
+            // section 2.3 new kinds (Workflow #434 LAB-6S4a: the retired approval request, the
+            // compatibility kind `InstallTransition` and the upgrade state's two kinds are gone).
             K::BindChannel => (Handshake, None, false),
-            K::UpgradeState => (General, Some(Instruction), true),
-            K::UpgradeStateStatus => (General, Some(Read), false),
             K::LoadPack => (Lab(Debugging), Some(Operation), true),
             K::UnloadPack => (Lab(Debugging), Some(Operation), true),
             // Workflow #429 A.2 R-0: the workbench's kinds. The four writes are general
@@ -1044,12 +1002,6 @@ mod tests {
         }
 
         // The new kinds' operations take their kinds' rows.
-        let ids = IdentifierIssuer::new().expect("identifier issuer");
-        let target = RuntimeShutdownTarget {
-            owner_epoch: *ids.mint_owner_epoch().expect("owner epoch").transport(),
-            pid: 4_242,
-            started_at_unix_ms: 1,
-        };
         for (operation, kind) in [
             (
                 RuntimeOperation::BindChannel {
@@ -1058,22 +1010,6 @@ mod tests {
                     initiator: None,
                 },
                 RuntimeOperationKind::BindChannel,
-            ),
-            (
-                RuntimeOperation::UpgradeState {
-                    target,
-                    action: UpgradeStateAction::Enter {
-                        transition_id: "transition-1".to_owned(),
-                        timeout_ms: 60_000,
-                    },
-                },
-                RuntimeOperationKind::UpgradeState,
-            ),
-            (
-                RuntimeOperation::UpgradeStateStatus {
-                    transition_id: "transition-1".to_owned(),
-                },
-                RuntimeOperationKind::UpgradeStateStatus,
             ),
             (
                 RuntimeOperation::LoadPack {

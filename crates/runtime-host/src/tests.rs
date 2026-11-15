@@ -302,7 +302,6 @@ mod gate_357_db1;
 mod gate_357_db2;
 // Workflow #432 AGT-1a: the client words stay in the forwarding crate.
 mod gate_375_r3;
-mod gate_381a;
 mod gate_381b;
 mod gate_agt_1a;
 // Workflow #432 AGT-1b: the worker of the Runtime's messages, over a real ledger and a fake clock.
@@ -314,17 +313,12 @@ mod gate_agt_2b;
 // CAP-IDX (since 0.12.27): capture takes the MuMu index from the discovery binding; a shifted
 // port is checked against MuMu's report before capture opens.
 mod gate_cap_idx;
-// Workflow #382 H-1-rest (test plan v2.2 §3.10): the install transition's deadlines on the
-// manual Runtime clock (HOST-I2), G1 and G3.
-mod gate_382_h1;
 // Workflow #382 H-4 (test plan v2.2 §3.6): the recovery ladder's G8 and G9 rows.
 mod gate_382_h4;
 // Workflow #382 H-5 (test plan v2.2 §3.6): host wave B.
 mod gate_382_h5;
 // Workflow #378 A6a: the latch rule, `ledger_opened` and `owner_released`.
 mod gate_378_a6a;
-// Workflow #378 SHUT-FU: the install CommitShutdown lets lifecycle work in flight end first.
-mod gate_378_shutfu;
 // Workflow #383 AO-7, test row AO7-b.
 mod gate_383;
 // Workflow #383 AO-1, the acceptance row of additions §8.3: a forced write failure's dump is
@@ -404,14 +398,17 @@ mod gate_389_u2;
 // answers byte for byte as before.
 mod gate_434_lab6s1a;
 // Workflow #434 LAB-6S1b: `validate()` judges no request by its origin; a Lab connection's pause
-// and resume are a CLI connection's, and the host's own checks of the governance and install
-// kinds still refuse.
+// and resume are a CLI connection's (the host's own checks of the governance and install kinds
+// went with those kinds in LAB-6S4a).
 mod gate_434_lab6s1b;
 // Workflow #434 LAB-6S3: the UI list on the `ui` channel; every other connection as before.
 mod gate_434_lab6s3;
 // Workflow #434 LAB-6S2-M: on `lab` with a word the host records, and answers a request not from
 // the Lab with, the channel that program's binding had on 0.12.58.
 mod gate_434_lab6s2m;
+// Workflow #434 LAB-6S4a: a request of a deleted kind carries an unknown operation tag and is
+// refused undecoded, its connection's failure recorded, and the Runtime goes on.
+mod gate_434_lab6s4a;
 // Workflow #429 R-0: the workbench's kinds have their shapes and answer `not_implemented`.
 mod gate_429_r0;
 // Workflow #429 R-0b: the Status member `activity` while each activity runs and after it ends.

@@ -1078,3 +1078,290 @@ test = "actingcommand-runtime-host::lib::tests::gate_411_a52::a52_t2_a_close_und
 ruling = "Workflow #456 (contracts/read-session-resource-close.md; the coordinator's work order on board #458, which closes #456; register §1.364)"
 reason = "Renamed: the test pinned that a keyless observation's close under a client lease that lapsed during the observation, refused lease_expired, halts the Runtime (the observation's failure fatal, the latched fatal that refusal, no instance fenced, the host's close failed), as the contract then kept it. #456 makes that refusal fence only the instance, so the halt it pinned no longer exists; the same shape is kept and asserts the new truth."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_411_a52::a52_t2_a_close_under_a_lapsed_lease_fences_only_its_instance, in the same host.toml row (key 172): the same lapsed lease reused by the same failing observation; the observation fails capture_failed, not fatal, the instance alone is fenced with lease_expired, and the session is closed once the sweep ends the lapsed lease."
+
+# contract.toml, the row of the install-control inputs (Workflow #434 LAB-6S4a).
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::gate::c1::install_control::gate_install_status_admission_is_closed_except_when_released_or_aborted"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with its type: it pinned that InstallTransitionStatus reports admission closed in every phase but released and aborted. The request kind InstallTransition, its status and its phases went (install-control [0, 0]), so no transition status exists to report admission."
+covered_by = "Nothing of it is left to cover: no request of the kind decodes (actingcommand-runtime-host::lib::tests::gate_434_lab6s4a::lab6s4a_an_unknown_operation_tag_is_refused_undecoded_and_the_runtime_goes_on), and admission closes only by a stop; the phase words stay readable in old records (InstallTransitionPhase, the catalog's vocabulary install_phase)."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::gate::c1::install_control::gate_install_timeouts_accept_600000_ms_and_refuse_600001_ms"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with its bound: it pinned the 600 s bound of an install transition's timeout (invalid_install_timeout, retired in 0.12.62). The transition and its actions went, so no timeout of it is read."
+covered_by = "Nothing of it is left to cover: a request of the kind does not decode (actingcommand-runtime-host::lib::tests::gate_434_lab6s4a::lab6s4a_an_unknown_operation_tag_is_refused_undecoded_and_the_runtime_goes_on)."
+
+# contract.toml, the row of the install-transition receipt matching (key R4).
+[[retired]]
+fragment = "contract"
+key = "R4"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "The row held how the runtime client matches the receipt of an install transition (a missing one unconfirmed and uncertain, another transition or ticket unexpected, CommitShutdown's ShutdownAccepted, Release's own ticket). The client's install_transition went with the request kind, and with it install_transition_receipt_unconfirmed."
+covered_by = "The client's receipt matching that stays: contract.toml row R2 (actingcommand-runtime-client::lib::tests::gate_c2::gate_an_input_whose_receipt_never_came_latches_with_its_request_context_and_is_sent_once: a receipt that never came is uncertain and the request is never sent again) and row R12 (a result for another instance or action is unexpected); the installer's close of a running Runtime is request-shutdown's, whose receipt is held by actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_request_shutdown_receipt_decodes_as_the_released_helper_decodes."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_and_sent_once"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the client's install_transition: it pinned that a transition whose receipt never came is install_transition_receipt_unconfirmed, uncertain, and sent once. The method and the code are gone."
+covered_by = "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_input_whose_receipt_never_came_latches_with_its_request_context_and_is_sent_once (contract.toml row R2): the same rule for every request that stays, uncertain after the send and never sent again."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_receipt_for_another_transition_or_ticket_is_unexpected"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the client's install_transition: it pinned that a transition's receipt for another transition or ticket is unexpected. No transition exists any more."
+covered_by = "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_emulator_control_result_for_another_instance_or_action_is_unexpected (contract.toml row R12): a result for another request's subject is unexpected, the rule the client keeps for every request that names one."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-runtime-client::lib::tests::gate_c2::gate_commit_shutdown_takes_its_shutdown_and_release_its_own_ticket"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the client's install_transition: it pinned that CommitShutdown takes its ShutdownAccepted and Release its own ticket. Both actions went with the request kind."
+covered_by = "The close the installer takes instead, request-shutdown, and its accepted shutdown: actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_request_shutdown_receipt_decodes_as_the_released_helper_decodes."
+
+# contract.toml, the row of the single owners (key A3).
+[[retired]]
+fragment = "contract"
+test = "actingcommand-actinglab-architecture::workspace_guards::b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with its two kinds: it held the one gate of DeclareGovernanceIdentity and RecordApprovalDecision (the card's origin predicate valid_governance_declaration_origin, the approval's first refusal governance_authority_required, and that only an accepted card grows the accepted governance connections). The kinds, the predicate, the host's handlers and the connection set went, as the guard itself said they would at LAB-6S4a."
+covered_by = "actingcommand-actinglab-architecture::workspace_guards::b3_every_runtime_operation_has_an_explicit_origin_category (the same row A3): the operation list no longer names the five kinds, so a kind that came back would fail it; approvals come only from the configuration's transcription, held by host.toml row 32."
+
+# host.toml, the row of the catalog approval lineage (key 32).
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::approvals::governance_authority_requires_an_accepted_identity_card_and_is_connection_bound"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with RecordApprovalDecision: it pinned that an approval needs an accepted identity card on its own connection (governance_authority_required). The request kind, the card and the accepted connections went; no client can send an approval."
+covered_by = "The approvals that remain, from the configuration's transcription, in the same host.toml row 32 (actingcommand-runtime-host::lib::tests::approvals::approval_decision_is_authoritative_target_bound_and_revocable and its neighbours); a request of the kind is refused undecoded, actingcommand-runtime-host::lib::tests::gate_434_lab6s4a::lab6s4a_an_unknown_operation_tag_is_refused_undecoded_and_the_runtime_goes_on."
+
+# host.toml, the row of an install start with one unreachable device (key 49).
+[[retired]]
+fragment = "host"
+key = "49"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "The row held the install start's preparation self-check (one unreachable device leaves only its instance unavailable, install_preparation_instance_unavailable; a start that reached no device ends install_preparation_selfcheck_failed), which ran only in a held start. The held start went with InstallTransition, and both codes are retired."
+covered_by = "Nothing of the held start's self-check is left to cover; one device's failure fences that instance alone under the instance-isolation rows of host.toml (#419 ISO-M, actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_a_the_scope_classification_table)."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_381a::gate_one_unreachable_device_leaves_only_its_instance_unavailable_and_the_start_goes_on"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the held start: it pinned the preparation self-check of an install start, which ran only while a held start prepared."
+covered_by = "As for host.toml key 49: the instance-isolation rows of host.toml (#419 ISO-M, actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_a_the_scope_classification_table)."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_held_start_that_reaches_no_device_still_ends_under_the_selfcheck_failure"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the held start: it pinned that a held start that reached no device ends install_preparation_selfcheck_failed. No start is held any more, and the code is retired."
+covered_by = "Nothing of it is left to cover: a start is never held, so it never waits for a preparation self-check; the watchdog still reads such an end in a 0.12.61 log as an error that considers a start, actingcommand-watchdog::lib::gate_381a::gate_fatal_line_formats_class_by_the_registered_top_code_only."
+
+# host.toml, the row of Workflow #378 SHUT-FU (key 73).
+[[retired]]
+fragment = "host"
+key = "73"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "The row held the installer's commit-shutdown of a drained Runtime (taken after another connection's lifecycle work, refused install_not_drained while a lease is held). CommitShutdown went with InstallTransition, and install_not_drained is retired."
+covered_by = "The installer's close is request-shutdown since install-control [0, 0] (it pauses scheduling first); its acceptance is held by host.toml's shutdown rows (for example actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_routine_claim), and its receipt by actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_request_shutdown_receipt_decodes_as_the_released_helper_decodes."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_378_shutfu::shutfu_an_idle_runtime_accepts_the_install_commit_shutdown_right_after_ready"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with CommitShutdown: it pinned that an idle Runtime drained right after ready accepts the installer's commit-shutdown."
+covered_by = "As for host.toml key 73: the installer sends request-shutdown since install-control [0, 0], whose acceptance host.toml's shutdown rows hold."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_378_shutfu::shutfu_a_runtime_holding_a_lease_refuses_the_install_commit_shutdown_at_once"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with CommitShutdown: it pinned the refusal install_not_drained of a commit while a lease is held, a refusal only the drain had. The code is retired."
+covered_by = "Nothing of it is left to cover: no drain exists, and the installer pauses scheduling and closes with request-shutdown (as for host.toml key 73)."
+
+# host.toml, the row of a subscription during an install drain (key 10).
+[[retired]]
+fragment = "host"
+key = "10"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "The row held that a subscription during an install drain is refused RuntimeUnavailable and resumes from its cursor after the drain's Abort or timeout. The drain went with InstallTransition."
+covered_by = "Nothing of the drain is left to cover; a subscription's resumption from its cursor stays held by actingcommand-runtime-host::lib::tests::gate_sub_lag_1::a_lagged_subscriber_can_resume_from_its_cursor."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_subscription_during_an_install_drain_is_refused_and_resumes_from_its_cursor_after_abort"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the install drain: it began a drain through InstallTransition and aborted it."
+covered_by = "As for host.toml key 10."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_subscription_resumes_from_its_cursor_after_the_drain_times_out_on_the_manual_clock"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the install drain and its deadline (drain_timeout, retired)."
+covered_by = "As for host.toml key 10."
+
+# host.toml, the row of a ladder wait that ends (Workflow #382 H-4 G9).
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_an_install_drain_during_the_readiness_wait_fails_rung_three_and_releases_once"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the install drain: it pinned that a drain begun through InstallTransition ends a ladder's readiness wait."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_a_shutdown_during_the_readiness_wait_fails_rung_three_and_releases_once, in the same host.toml row: a ladder wait that a shutdown ends fails rung three with the interruption and releases its key once."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_on_the_manual_clock_an_install_drain_ends_the_readiness_wait_at_its_next_poll"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the install drain: it pinned on the manual clock that a drain ends the readiness wait at its next poll."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_on_the_manual_clock_a_shutdown_ends_the_readiness_wait_at_its_next_poll, in the same host.toml row: the same wait on the manual clock, ended by a shutdown at its next poll."
+
+# host.toml, the rows of the install drain and the held start (keys 7, 8 and 9).
+[[retired]]
+fragment = "host"
+key = "7"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "The row held the install drain's phases on the manual clock (BeginDrain, Drained, CommitShutdown, Abort, the mismatches and the held owner's Release). The drain and the held start went with InstallTransition (install-control [0, 0])."
+covered_by = "Nothing of it is left to cover: a request of the kind does not decode, actingcommand-runtime-host::lib::tests::gate_434_lab6s4a::lab6s4a_an_unknown_operation_tag_is_refused_undecoded_and_the_runtime_goes_on; a state root of 0.12.61 whose transition facts remain is taken over with those facts invalidated once (register §1.287, \"Slice LAB-6S4a\", the load of a 0.12.61 state root)."
+
+[[retired]]
+fragment = "host"
+key = "8"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "The row held the install deadlines on the Runtime clock (drain_timeout, held_timeout, release_timeout), each of the drain or of the held start. Both went with InstallTransition, and the three codes are retired."
+covered_by = "Nothing of it is left to cover: no deadline of a drain or a held start exists; the watchdog still classes those codes in a 0.12.61 log as errors that consider a start (actingcommand-watchdog::lib::gate_381a::gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold)."
+
+[[retired]]
+fragment = "host"
+key = "9"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "The row held the held start (the Release receipt while preparation is held, an undeclared Query while preparing, a latched failure, the held and release timeouts, Released once preparation finished). actingd's --install-held start went with InstallTransition."
+covered_by = "No start is held any more: --install-held is refused as a usage error, actingcommand-actingd::bin:actingcommand-actingd::gate_382_a1::gate_install_held_is_refused_as_a_usage_error; a cold start's end install_startup_stopped stays, and the watchdog classes it as before (actingcommand-watchdog::lib::gate_381a::gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold)."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_drain_answers_each_action_by_its_phase_and_times_out_on_the_manual_clock"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the install drain (rows 7 and 8): it drove each transition action by its phase on the manual clock."
+covered_by = "As for host.toml keys 7 and 8: a request of the kind does not decode (gate_434_lab6s4a)."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_held_start_answers_each_action_by_its_phase_and_opens_when_released"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the held start (rows 7 and 9)."
+covered_by = "As for host.toml keys 7 and 9: no start is held; --install-held is a usage error (actingcommand-actingd::bin:actingcommand-actingd::gate_382_a1::gate_install_held_is_refused_as_a_usage_error)."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g1_a_release_held_at_preparing_fails_closed_once_the_clock_passes_its_deadline"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the held start and release_timeout (rows 8 and 9)."
+covered_by = "As for host.toml keys 8 and 9."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_held_start_fails_closed_once_the_clock_passes_its_held_deadline"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the held start and held_timeout (row 8)."
+covered_by = "As for host.toml key 8."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_381a::gate_undeclared_query_while_preparing_completes_and_leaves_the_ledger_head"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the held start and the transition's Query (row 9)."
+covered_by = "As for host.toml key 9; a Query is a request of a kind that no longer decodes (gate_434_lab6s4a)."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_381a::gate_latched_failure_while_preparing_stops_the_start_under_its_own_code_with_the_cause"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the held start (row 9): it held a start at its preparation checkpoint, a test hook the held start's support gave, and latched a failure there."
+covered_by = "As for host.toml key 9."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_release_that_times_out_ends_the_start_under_release_timeout"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the held start and release_timeout (row 9)."
+covered_by = "As for host.toml keys 8 and 9."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_held_start_whose_deadline_passes_ends_under_held_timeout"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the held start and held_timeout (row 9)."
+covered_by = "As for host.toml keys 8 and 9."
+
+# host.toml, the row of Workflow #434 LAB-6S1b.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_434_lab6s1b::lab6s1b_the_hosts_own_checks_of_the_governance_and_install_kinds_still_refuse"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the kinds whose host checks it pinned until LAB-6S4a (invalid_governance_origin of a card, governance_authority_required of an approval, install_identity_required of a drain): the kinds, their handlers and those codes went."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_434_lab6s4a::lab6s4a_an_unknown_operation_tag_is_refused_undecoded_and_the_runtime_goes_on: a request of each of the five kinds is refused undecoded, without a receipt, recorded runtime_protocol_invalid, and the Runtime stays healthy."
+
+# apps.toml, the row of the install-transition client budget (key 17).
+[[retired]]
+fragment = "apps"
+key = "17"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "The row held actingctl install-transition's client budget (one deadline from the run's start, a query that declares no identity card, a query answered while the ledger writer stalls in preparing). The subcommand went with InstallTransition."
+covered_by = "actingctl refuses the subcommand before any connection as a word no subcommand is: actingcommand-actingctl::gate::cli_grammar::gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection (its usage rows name install-transition and the one form 0.12.61 took)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::gate_381a::gate_the_run_client_carries_one_deadline_from_the_runs_start"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with install-transition's run (apps key 17): the run client and its one deadline were that subcommand's."
+covered_by = "As for apps.toml key 17."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::gate_381a::gate_each_install_transition_run_has_one_deadline_and_query_declares_no_identity"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with install-transition (apps key 17)."
+covered_by = "As for apps.toml key 17."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::install_transition::gate_install_transition_query_answers_while_the_ledger_writer_is_stalled_in_preparing"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with install-transition and the held start's support (apps key 17): it held a start at its preparation checkpoint and queried the transition."
+covered_by = "As for apps.toml key 17."
+
+# apps.toml, the row of a stop caused by a failed install (key 26).
+[[retired]]
+fragment = "apps"
+test = "actingcommand-watchdog::lib::gate_381a::gate_the_state_root_of_a_stopped_held_start_leads_the_watchdog_to_a_start"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with the held start: it made a real held start stop at its preparation checkpoint (tests/support/held_runtime.rs) and read the state root it left. No start is held any more."
+covered_by = "The fixture forms of the same rows in the same apps.toml row 26, which read the logs and journals a 0.12.61 Runtime may have left: actingcommand-watchdog::lib::gate_381a::gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold (R5′) and gate_an_unlogged_formal_close_looks_back_to_the_last_logged_owner (R5b)."
+
+# apps.toml, the row of actingd's subcommand arguments (key 12).
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a1::gate_install_held_is_taken_only_after_config_and_bounded_at_600_s"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Replaced: it pinned that --install-held is taken only right after --config and bounded at 600 s. The option went with the held start, so every form that names it is now a usage error."
+covered_by = "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a1::gate_install_held_is_refused_as_a_usage_error, in the same apps.toml row 12: each form that names --install-held is usage_invalid with exit 1."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingd::bin:actingcommand-actingd::gate_a2a::gate_ledger_maintenance_and_install_held_refusals_carry_registered_error_codes"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Renamed: its --install-held half (install_held_input_invalid, retired in 0.12.62) went with the option; its ledger-maintenance half is kept."
+covered_by = "actingcommand-actingd::bin:actingcommand-actingd::gate_a2a::gate_ledger_maintenance_refusals_carry_registered_error_codes, in the same apps.toml row 12; the option's refusal is gate_382_a1::gate_install_held_is_refused_as_a_usage_error."
+
+# apps.toml, the row of Workflow #434 LAB-6S2-B2.
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_install_transition_receipts_decode_as_the_released_helper_decodes"
+ruling = "Workflow #434 LAB-6S4a (0.12.62; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
+reason = "Removed with install-transition: it pinned the receipts of the transition's drain and of its ticket's commit, as the released console's installation helper decodes them. With install-control [0, 0] the helper negotiates revision 0 and takes its cold path, request-shutdown."
+covered_by = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_request_shutdown_receipt_decodes_as_the_released_helper_decodes, in the same apps.toml row: the cold path's receipt, decoded as the helper decodes it."

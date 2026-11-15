@@ -9,7 +9,9 @@
 // refused among them, is built, encoded, decoded and validated. An envelope outside the client
 // set is still `invalid_client_origin`, and an observation that mixes two fact key families is
 // still `fact_origin_mixed`, from every envelope: the shape rule of the envelope and the content
-// rule stay.
+// rule stay. Workflow #434 LAB-6S4a (0.12.62): the install transition and governance families
+// left with their kinds (`InstallTransition`, `DeclareGovernanceIdentity`,
+// `RecordApprovalDecision`); every other family stays.
 
 use super::*;
 use serde_json::Value;
@@ -80,29 +82,10 @@ fn operations(ids: &IdentifierIssuer) -> Vec<(&'static str, RuntimeOperation)> {
         pid: 1,
         started_at_unix_ms: 1,
     };
-    let approval = crate::ApprovalDecisionRecord::new(
-        "approval:fixture-a",
-        crate::ApprovalDisposition::Approved,
-        crate::ApprovalTarget::Catalog {
-            catalog_hash: format!("sha256:{}", "a".repeat(64)),
-            catalog_version: 1,
-        },
-        crate::ApprovalReasonCode::new("user_confirmed").expect("approval reason"),
-    )
-    .expect("approval decision");
     vec![
         (
             "invalid_shutdown_origin",
             RuntimeOperation::RequestShutdown { target },
-        ),
-        (
-            "invalid_install_transition_origin",
-            RuntimeOperation::InstallTransition {
-                target,
-                action: crate::InstallTransitionAction::Query {
-                    transition_id: "lab6s1b-check".to_owned(),
-                },
-            },
         ),
         (
             "invalid_resource_authoring_origin",
@@ -163,20 +146,6 @@ fn operations(ids: &IdentifierIssuer) -> Vec<(&'static str, RuntimeOperation)> {
                 )
                 .expect("evidence request"),
             },
-        ),
-        (
-            "invalid_governance_origin",
-            RuntimeOperation::DeclareGovernanceIdentity {
-                card: GovernanceIdentityCard {
-                    client: "neutral.client".to_owned(),
-                    client_version: None,
-                    instance: None,
-                },
-            },
-        ),
-        (
-            "invalid_governance_origin",
-            RuntimeOperation::RecordApprovalDecision { decision: approval },
         ),
         (
             "invalid_emulator_control_origin",
