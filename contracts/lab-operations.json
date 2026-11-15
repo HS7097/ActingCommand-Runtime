@@ -2294,6 +2294,30 @@
       "notes": "#463 S2-1 (0.12.64; contracts/lab-recording.md, What a recording still lacks: record ready): every pre-check of record stop the recording fails, at once, each with its word (what) and the code record stop answers for it; once none fails, the self-checks record stop runs, on the package it would generate, written nowhere, and the refusal of the first that refuses; record stop answers the first failed pre-check as before, with details.missing_total and details.hint record ready. The first-generation MCP server (actingctl mcp-serve) has no such tool"
     },
     {
+      "name": "record frames",
+      "module": "authoring",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
+        {"name": "step", "form": "option", "type": "integer", "required": true, "note": "the step's serial number, as record mark --step takes it (record status lists it as index); a step that does not exist, is dropped or was converted into a transition is record_step_not_found"},
+        {"name": "before", "form": "option", "type": "integer", "required": false, "note": "0 to 100, default 3: how many of the stored frames captured before the frame the press was sent on are listed, the latest of them"},
+        {"name": "after", "form": "option", "type": "integer", "required": false, "note": "0 to 100, default 10: how many of the stored frames captured after the press are listed, the earliest of them"},
+        {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "a recording of the instance by its id, active, archived or stopped; absent: the one the session header names, as record status reads it"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+      ],
+      "help": "Lists the stored frames captured just before and just after one recorded step's press, each with its path and capture time; reads only.",
+      "output": "the step's press (its time, its point and the frame it was sent on), the frames before and after it in the order they entered the step table, each with its path, sha256, capture time, offset from the press and step, how many each side holds, and warnings",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab record frames", "actinglab session record frames"],
+      "new": "#463",
+      "slice": "463-S2-13",
+      "status": "planned",
+      "notes": "#463 S2-13 (0.12.64; contracts/lab-recording.md, The frames around a press): no lock is taken and nothing is written; no image is decoded, compared or copied. The sequence is every frame the step table stores under a step, its page transition's and superseded ones included, in the order they entered the step table, which their frame ids number: a frame captured from the device enters when it is captured, a frame attached from a file (a mark's sample, a page transition's frame, an offline frame, a step inserted after the stop) when it is attached, and its time is that moment, not the moment its screen was captured; with the frame the press was sent on the sides are the frames before and after it, without one but with the press's time (an application operation's: its completed receipt's) those recorded at or before it and after it, with neither those stored under the steps numbered below the step and the rest. Paths are absolute, as the archive's manifest names the files; a missing file is listed with path null and named in the warning frame_file_missing; a press sent on a capture that was not stored names the stored frame and the warning press_frame_not_stored, and its after are the frames after that one recorded after the press's time"
+    },
+    {
       "name": "package check",
       "module": "authoring",
       "params": [

@@ -2187,6 +2187,53 @@ $lab = 'C:\ActingCommand\tools\actinglab.exe'
 & $lab --json --instance emu-a record archive
 ```
 
+## The frames around a press: `record frames`
+
+#463 S2-13 (0.12.64; the owner on board #463: in stage two the Lab may need to give an agent that
+asks the several, or several dozen, frames before and after a press; the rules here are the
+coordinator's). `record frames --step <k> [--before <0..100>] [--after <0..100>] [--record-id
+<id>]` (MCP `ac_record_frames` with `step`, `before`, `after` and `record_id`) reads the recording
+`record status` reads, or the one `--record-id` names (active, archived or stopped), takes no lock,
+writes nothing and decodes no frame: it lists what the step table holds. Its sequence is every
+frame stored under a step, its page transition's and superseded ones included (an ending's are
+not), in the order the frames entered the step table, which their frame ids number: a frame
+captured from the device enters when it is captured; a frame attached from a file (a mark's sample,
+a page transition's frame, an offline frame, a step inserted after the stop) enters when it is
+attached, and its time (`captured_at_unix_ms`, the step table's `recorded_at_unix_ms`) is that
+moment, not the moment its screen was captured. `press` is step k's press as its click execution
+holds it (`executed_at_unix_ms`, `point`, a swipe's `to_point`) with the frame it was sent on
+(`before_frame`), `before` the last `--before` (3 without it) frames before that frame, `after` the
+first `--after` (10) frames after it, across step boundaries, `before_total` and `after_total` how
+many each side holds, and `offset_ms` a frame's time minus the press's time. A step without an
+executed press (an application operation, an entry launch, a step without an effect) has no
+`point`: its time and its `frame` are those its application operation's completed receipt names
+(`executed_at_unix_ms`, recorded since 0.12.64, and `before_frame`), or `null`, and without a frame
+the sides are split at the press's time (a press an earlier build recorded: the frames recorded at
+or before it, and after it) or, without a time either, at the step (the frames stored under the
+steps numbered below k, and those stored under k and above it), `offset_ms` `null` where there is
+no time. Paths are absolute, as the archive's manifest names the files; a frame whose file is not
+there is listed with `path: null` and named in the warning `frame_file_missing`, and a press sent
+on a capture that was not stored (`sent_on_unstored_capture`) answers the stored frame its step
+names and the warning `press_frame_not_stored`, its `after` being the frames after that one
+recorded after the press's time (one recorded between them, a mark's sample or a transition's
+frame, is `before`); `--before` or `--after` outside 0..=100 (`details{argument, reason:
+"range", value, min, max}`), not a whole number or given twice (`details{argument, reason: "range",
+value}`) is `validation_failed`, and a step that does not exist, is dropped or was converted is
+`record_step_not_found`.
+
+```json
+{"record_id": "…", "step": 3, "artifact_step": 3, "kind": "tap",
+ "press": {"at_unix_ms": …, "point": {"x": 962, "y": 658},
+           "frame": {"frame_id": "f0006", "path": "…", "sha256": "…",
+                     "captured_at_unix_ms": …, "stored_under_step": 3}},
+ "before": [{"frame_id": "f0004", "path": "…", "sha256": "…", "captured_at_unix_ms": …,
+             "offset_ms": -1830, "stored_under_step": 2}],
+ "after": [{"frame_id": "f0007", "path": "…", "sha256": "…", "captured_at_unix_ms": …,
+            "offset_ms": 104, "stored_under_step": 4}],
+ "before_total": 4, "after_total": 12,
+ "warnings": [{"code": "frame_file_missing", "frame_ids": ["f0009"]}]}
+```
+
 ## Optional steps
 
 A step whose screen a run does not always show (a daily notice, a reward pop-up, an update

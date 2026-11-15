@@ -147,6 +147,12 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             ["offline", "read_only"],
             "available",
         ),
+        // #463 S2-13: the stored frames around one step's press; it only reads.
+        command_cap(
+            "session record frames",
+            ["offline", "read_only"],
+            "available",
+        ),
         command_cap("record", ["offline"], "available"),
         command_cap("record start", ["offline", "runtime_optional"], "available"),
         command_cap("record status", ["offline"], "available"),
@@ -166,6 +172,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("record reopen", ["offline"], "available"),
         // #463 S2-1.
         command_cap("record ready", ["offline", "read_only"], "available"),
+        // #463 S2-13.
+        command_cap("record frames", ["offline", "read_only"], "available"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
         command_cap("session app --record", ["device"], "available"),

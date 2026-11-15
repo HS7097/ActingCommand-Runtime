@@ -142,6 +142,8 @@ const RECORD_FORMS: &[(&str, Mode)] = &[
     ("candidates", Mode::NoEffect),
     // #463 S2-1: it reads under no lock and writes nothing.
     ("ready", Mode::NoEffect),
+    // #463 S2-13: it reads the step table only.
+    ("frames", Mode::NoEffect),
     ("build-task", Mode::Refused("resource_production_retired")),
     ("promote", Mode::Refused("resource_production_retired")),
     ("publish", Mode::Refused("resource_production_retired")),
@@ -351,6 +353,9 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("session record ready", Mode::NoEffect),
     // Workflow #434 LAB-5G4c: it changes nothing (its row's `writes` is false).
     ("record draft", Mode::NoEffect),
+    // #463 S2-13: it reads the step table only.
+    ("record frames", Mode::NoEffect),
+    ("session record frames", Mode::NoEffect),
     ("current-page", Mode::NoEffect),
     ("is-visible", Mode::NoEffect),
     ("locate", Mode::NoEffect),

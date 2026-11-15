@@ -837,6 +837,7 @@ fn named_recording(
 
 /// The step table of the recording `record_id`, read by its id; `None` when there is none. #463
 /// S2-1: `record ready --record-id` reads a recording the session header does not name with it.
+/// #463 S2-13: `record frames --record-id` reads its recording so too, whatever its state.
 pub(crate) fn read_recording(state_dir: &Path, record_id: &str) -> LabResult<Option<LabRecording>> {
     let path = recording_path(state_dir, record_id);
     let text = match fs::read_to_string(&path) {
@@ -1229,8 +1230,9 @@ fn final_frame(recording: &LabRecording, index: &FrameIndex<'_>) -> Option<Archi
 }
 
 /// A step's kind: `tap` (a click without a gesture), `swipe` (a drag), `none` (no effect), or the
-/// step table's word for another gesture or an application operation.
-fn step_kind(step: &RecordingStep) -> &'static str {
+/// step table's word for another gesture or an application operation. #463 S2-13: `record frames`
+/// names its step's kind so too.
+pub(crate) fn step_kind(step: &RecordingStep) -> &'static str {
     if step.application.is_some() {
         return "application";
     }
@@ -1346,6 +1348,12 @@ fn row_of(recording: &LabRecording, step: &RecordingStep, index: &FrameIndex<'_>
         at_unix_ms,
         request_id,
     }
+}
+
+/// #463 S2-13 (`record frames`): the file of `frame` in the recording's directory `dir` as the
+/// manifest names it (`frames/<name>`), in the absolute form the answers give a path.
+pub(crate) fn stored_frame_path(dir: &Path, frame: &RecordedFrame) -> String {
+    display(&under(dir, &archive_frame(frame).file))
 }
 
 fn archive_frame(frame: &RecordedFrame) -> ArchiveFrame {
@@ -1564,7 +1572,9 @@ fn not_archived(record_id: Option<&str>, state: &str) -> LabError {
     )
 }
 
-fn instance_mismatch(recorded: &str, command: &str) -> LabError {
+/// The recording belongs to another instance than the command's. #463 S2-13: `record frames`
+/// refuses so too.
+pub(crate) fn instance_mismatch(recorded: &str, command: &str) -> LabError {
     with_details(
         blocked(
             "record_instance_mismatch",

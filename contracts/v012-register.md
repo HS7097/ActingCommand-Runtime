@@ -30502,6 +30502,115 @@ own members, and `ending_mark_missing` the ending's outcome key (`Lack::outcome_
 tests added (exec gate map "#463 S2-1"); the first and third tests adapted (their identity items
 now show `details.missing`). No code, word or key added.
 
+### 1.426 Slice #463 S2-13 (0.12.64): `record frames` lists the stored frames just before and just after one press (Workflow #463; the owner's words of 11-15 on board #463 that in the second stage of recording the Lab may need to accept an agent's request to hand back the several, or several dozen, frames before and after a press, and that after a press the screen may change quickly; the rules are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s213-record-frames.md`, read on the head `5706d568` of the train of stage one, #1757)
+
+The coordinator gave this slice 1.426. It stands on the train of stage one (§1.402, §1.403, §1.404;
+fix round 2 merged its head `32f71ea6`, which adds §1.406 and §1.424) and ships in 0.12.64.
+
+**Why.** Stage one keeps every capture it takes: the frame each recorded press is sent on and every
+capture of the loop after it. Stage two works on the frame each press happened on and the final
+screen; when that does not show what a press did (an animation, a pop-up that came and went, a list
+that scrolled), the agent asks for the frames around that press. This slice is that read
+([lab-recording.md](lab-recording.md), "The frames around a press: `record frames`"). It adds
+nothing to what is recorded.
+
+**Established by reading** (the code's facts where the work order said otherwise).
+- *An application operation's time.* A click execution holds its time (`executed_at_unix_ms`,
+  written when the press's outcome is recorded). An application operation's completed receipt
+  holds one since #463 S1-5 (`ApplicationExecution.executed_at_unix_ms`, §1.406, which fix round 2
+  merged); an operation an earlier build recorded, one without a completed receipt and a step
+  without an effect hold none. So a step without an executed press answers no point and
+  `press.at_unix_ms` its receipt's time, or `null` without one. Its sides are split at the frame its
+  receipt names (`before_frame`, §1.404) when it names one, at its time when it names only that,
+  and otherwise at the step: the frames stored under the steps numbered below it, and those stored
+  under it and above it. A press an earlier build recorded (`do --capture --record`, no
+  `before_frame`) is split at its time: the frames recorded at or before it, and those after it.
+- *The order.* The step table numbers every frame as it enters (`frame_id`, `f0001`, …;
+  `admit_frame` gives `next_frame`, one above the highest on record, and writes
+  `recorded_at_unix_ms` then). The sequence is in that order, the order the frames entered the
+  step table: a frame captured from the device enters when it is captured, in the command that
+  captured it, right after the capture; a frame attached from a file (a mark's sample, a page
+  transition's frame, an offline frame, a step inserted after the stop) enters when it is
+  attached, and its time is that moment, not the moment its screen was captured.
+  `captured_at_unix_ms` is the frame's `recorded_at_unix_ms`.
+- *Which frames.* The steps' frames and their page transitions' frames, as the archive's manifest
+  lists a row's (`row_of`, `crates/lab/src/recording/archive.rs`). An ending's frames (#463 R2) are
+  stored under no step and come from a later run: they are not in the sequence, and the contract
+  says so.
+- *`runtime: none`.* The table's vocabulary has no such word; `offline` is "never needs it"
+  (`RuntimeNeed`, `crates/lab-ops/src/table.rs`), and the row says `offline`.
+- *The refusal of a step.* `record mark --step` refuses a step that does not exist, is dropped or
+  was converted into a transition with `record_step_not_found` and no word in its details
+  (`effective_step`, `crates/lab/src/recording/steps.rs`); `record frames` calls the same function.
+- *The flags' refusal.* The parent's flags (`after_capture_ms`,
+  `apps/actinglab/src/commands/device_commands.rs`) answer a value that is no whole number with
+  `validation_failed`, `details{argument, reason: "range", value}`, and the Lab adds `min` and `max`
+  for a number out of its range (`check_after_capture`); a flag given twice is not refused there
+  (the last is read). `record frames` answers all three so, a flag given twice with `value` the
+  texts given.
+- *`sent_on_unstored_capture`* is a member of the execution, and the parent has no warning word for
+  it; this slice adds `press_frame_not_stored`. Such a press names its step's stored frame
+  (`before_frame`), and a frame may be stored after that one and before the press is sent (a mark's
+  sample, a transition's frame). Fix round 2 (the review of #1765): its `after` are the frames
+  after the stored frame recorded after the press was sent (`recorded_at_unix_ms` later than
+  `executed_at_unix_ms`), and those recorded at or before it are `before`.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The read | `record_frames`, `RecordFramesRequest`, `RecordFramesOutcome` and its parts (`crates/lab/src/recording/around.rs`, new); `effective_step` (`steps.rs`) and `read_recording`, `step_kind` and `instance_mismatch` (`archive.rs`) are `pub(crate)`; `stored_frame_path` (`archive.rs`), the absolute path of a frame's file as the manifest names it |
+| The command | `record frames` and `session record frames`: `RECORD_FRAMES_READS`, the dispatch (no lock), `run_record_frames` and `frames_number`; the session directory is not created for it (`apps/actinglab/src/commands/session_record.rs`) |
+| The registers | `own_flags::READ_LIST_ROWS` and `reads`, `engine::COMMANDS`, `words::BUILT_SLICES` and the Lab's MCP server's `ACTINGLAB_SLICES` (slice `463-S2-13`), the capability entries `record frames` and `session record frames` and their dry-run declarations (`no_effect`) |
+| The table | the row `record frames` (authoring, `runtime: offline`, `writes: false`, `help` 135 bytes), so that the Lab's MCP server offers `ac_record_frames`; today's server (`actingctl mcp-serve`) gets nothing |
+| Texts | [lab-recording.md](lab-recording.md), "The frames around a press: `record frames`" (new); [actinglab-dry-run.md](actinglab-dry-run.md), the `record` row; `apps/actinglab-mcp/MANUAL.md`, "Recordings" |
+
+**Codes and words.** No outcome code is added and no fragment changes. Two warning words of the
+answer's `warnings` (`[{code, frame_ids}]`), each from what the step table and the frames' directory
+hold, never in a text:
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `frame_file_missing` | a listed frame's file is not where the manifest names it; `frame_ids` names each such frame, listed with `path: null` | warns | 0 |
+| `press_frame_not_stored` | the press was sent on a capture its command did not store (`sent_on_unstored_capture`); `press.frame` is the stored frame its step names, which `frame_ids` names | warns | 0 |
+
+The refusals reuse existing codes and words: `validation_failed` with `details{argument, reason:
+"range", value}` (and `min`, `max` for a number out of range; `argument` `before`, `after` or
+`step`), exit 2; `record_step_not_found`, exit 3; `record_session_not_active`,
+`record_lab_unavailable` (`lab_recording_missing` and its other reasons) and
+`record_instance_mismatch` when there is no recording to read. No decision reads a code.
+
+**Tests.** `crates/lab/src/gate_463_s213.rs` (exec gate map "#463 S2-13"; a step table written as
+stage one writes it, made-up frame files that are never decoded, no Runtime, no clock read): step 2
+of three presses (its press, the three frames before the frame it was sent on and the eight after
+it across the step boundaries, offsets, paths and totals; then five before and two after); `before`
+and `after` 0 on a tap and on a swipe (both ends); 101 refused and 100 accepted; the last step,
+without an effect; a dropped step and one that does not exist; two missing files; archived (by
+`record archive`, read by its id under another recording's session header) and stopped; the reads
+under another command's lock, every directory and file unchanged. Adapted, as the requirement
+changes what it pins: `apps/actinglab/src/tests/gate_434_lab5b4.rs`, whose list of the own commands
+that refuse an unknown flag is held equal to `READ_LIST_ROWS` and the unrowed lists (32 now, `record
+frames` after `record reopen`; still 32 after fix round 2 merged #463 S1-5 and S1-7, which add no
+read list). Fix round 2 (the review of #1765) adds five tests to the same gate: in the same file, a
+press sent on a capture that was not stored, with a mark's sample stored between its step's frame
+and the press (the sample `before`, the warning `press_frame_not_stored`); an application
+operation's step split at the frame its receipt names, with offsets from its receipt's time and,
+recorded before #463 S1-5, without; a recording whose presses an earlier build recorded (no
+`before_frame`), split at the press's time with offsets; and in
+`apps/actinglab/src/tests/gate_463_s213.rs`, on the command line, a value that is no whole number,
+a flag given twice and `--step` missing refused, and a read that creates no session directory. No
+test leaves the gate map.
+
+**What is not changed.** Anything recorded or written; the step table's format; every other
+command's answer; the recording lock; the archive and its manifest; today's MCP server.
+
+**At deploy.** Nothing to configure. Recordings already on disk are read as they are: one made
+before stage one (presses of `do --capture --record`, without `before_frame` or a loop after them)
+lists its frames in their stored order, each press split at its time with offsets, and a step
+without a press split at the step with `offset_ms` `null`. Through MCP the tool is
+`ac_record_frames` of the Lab's MCP server (`actinglab-mcp`); a client registered with today's
+server has no such tool until its registration moves, which is the owner's to do.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

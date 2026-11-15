@@ -14,12 +14,13 @@ use crate::{
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ArchiveCopyFrames, ClickRetry, ClickSpec, EndingSpec, LAB_RECORD_MARK_SCHEMA,
-    MarkFamily, MarkRequest, MarkSpec, OptionalAfterSpec, RecordArchiveOptions, RecordRect,
-    RecordReopenOptions, RecordStartOptions, RecordStopOptions, RecordingHold, RecordingLock,
-    StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request,
-    record_archive, record_archive_copy, record_archive_warnings, record_hold_status,
-    record_instance_check, record_mark, record_ready, record_reopen, record_start,
-    record_start_defaults, record_status, record_stop, record_stop_close,
+    MarkFamily, MarkRequest, MarkSpec, OptionalAfterSpec, RecordArchiveOptions,
+    RecordFramesRequest, RecordRect, RecordReopenOptions, RecordStartOptions, RecordStopOptions,
+    RecordingHold, RecordingLock, StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec,
+    parse_mark_request, record_archive, record_archive_copy, record_archive_warnings,
+    record_frames, record_hold_status, record_instance_check, record_mark, record_ready,
+    record_reopen, record_start, record_start_defaults, record_status, record_stop,
+    record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -397,6 +398,21 @@ pub(crate) const RECORD_READY_READS: FlagReads = FlagReads {
     positionals: &[],
 };
 
+/// #463 S2-13: the flags `record frames` reads: the step, how many frames each side lists and the
+/// recording named by its id.
+pub(crate) const RECORD_FRAMES_READS: FlagReads = FlagReads {
+    row: "record frames",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--step", "--before", "--after", "--record-id"],
+            switches: &[],
+            refused: &[],
+        },
+    ],
+    positionals: &[],
+};
+
 /// Workflow #434 LAB-5B3: the flags `record candidates` reads; its step id is also
 /// its first positional.
 pub(crate) const RECORD_CANDIDATES_READS: FlagReads = FlagReads {
@@ -533,6 +549,8 @@ fn record_reads(action: &str) -> Option<&'static FlagReads> {
         "reopen" => &RECORD_REOPEN_READS,
         // #463 S2-1.
         "ready" => &RECORD_READY_READS,
+        // #463 S2-13.
+        "frames" => &RECORD_FRAMES_READS,
         _ => return None,
     })
 }
@@ -600,7 +618,7 @@ fn run_session_record_inner(
     let action = args.first().map(String::as_str).ok_or_else(|| {
         CliError::usage(
             "session record requires \
-             start|status|stop|mark|step|candidates|amend|archive|reopen|ready",
+             start|status|stop|mark|step|candidates|amend|archive|reopen|ready|frames",
         )
     })?;
     // Workflow #434 LAB-5B4: before anything is read or written.
@@ -610,12 +628,15 @@ fn run_session_record_inner(
         .map(Path::to_path_buf)
         .map(Ok)
         .unwrap_or_else(|| session_state_dir_from_flags(&flags))?;
-    fs::create_dir_all(&state_dir).map_err(|err| {
-        CliError::runtime_not_running(format!(
-            "failed to create session state dir {}: {err}",
-            state_dir.display()
-        ))
-    })?;
+    // #463 S2-13: `record frames` writes nothing, not even the session directory.
+    if action != "frames" {
+        fs::create_dir_all(&state_dir).map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to create session state dir {}: {err}",
+                state_dir.display()
+            ))
+        })?;
+    }
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
     let record_path = session_record_path(&state_dir, &instance_id);
     let record_lock = record_action_lock(global, action, &state_dir, &instance_id)?;
@@ -773,6 +794,8 @@ fn run_session_record_inner(
                 CliError::usage(format!("failed to encode record ready output: {error}"))
             })
         }
+        // #463 S2-13: offline, without the recording lock.
+        "frames" => run_record_frames(&flags, &state_dir, &instance_id),
         "step" => {
             let Some(mut record) = read_json_file::<SessionRecordContext>(&record_path)? else {
                 return Err(CliError::safety_blocked(
@@ -3290,6 +3313,53 @@ fn run_record_reopen(
         "path": record_path.display().to_string(),
         "lab": reopened
     }))
+}
+
+/// #463 S2-13 (`contracts/lab-recording.md`, "The frames around a press: `record frames`"): `record
+/// frames --step <k> [--before <n>] [--after <n>] [--record-id <id>]`, offline and without the
+/// recording lock: the stored frames just before and just after the press of step `k` of the
+/// recording `record status` reads, or of the one `--record-id` names (`record_frames`). `--step`
+/// is required; it and `--before` and `--after` are whole numbers given once (the Lab checks the
+/// two sides' range, 0 to 100), anything else `validation_failed` with `details{argument, reason:
+/// "range", value}`, as the waits of a recorded press are refused (`after_capture_ms`). The answer
+/// is the Lab's.
+fn run_record_frames(flags: &FlagArgs, state_dir: &Path, instance_id: &str) -> CliOutcome<Value> {
+    let step = frames_number::<u32>(flags, "--step", "step")?.ok_or_else(|| {
+        CliError::usage("record frames needs --step <k>, the step's serial number")
+    })?;
+    let request = RecordFramesRequest {
+        record_id: record_flag_value(flags, "--record-id")?,
+        step,
+        before: frames_number(flags, "--before", "before")?,
+        after: frames_number(flags, "--after", "after")?,
+    };
+    let outcome = record_frames(state_dir, instance_id, &request)?;
+    serde_json::to_value(outcome)
+        .map_err(|error| CliError::usage(format!("failed to encode record frames output: {error}")))
+}
+
+/// #463 S2-13: the whole number `flag` gives (`argument` its MCP name), `None` when it is not
+/// given; a value that is no such number, or the flag given more than once, is `validation_failed`
+/// with `details{argument, reason: "range", value}` (`value` the text, or the texts given).
+fn frames_number<T: std::str::FromStr>(
+    flags: &FlagArgs,
+    flag: &str,
+    argument: &str,
+) -> CliOutcome<Option<T>> {
+    match flags.values(flag).as_slice() {
+        [] => Ok(None),
+        [value] => value.parse::<T>().map(Some).map_err(|_| {
+            CliError::usage(format!(
+                "{flag} (MCP {argument}) takes a whole number, got {value}"
+            ))
+            .with_details(json!({"argument": argument, "reason": "range", "value": value}))
+        }),
+        values => Err(CliError::usage(format!(
+            "{flag} (MCP {argument}) may be given once, got {}",
+            values.join(", ")
+        ))
+        .with_details(json!({"argument": argument, "reason": "range", "value": values}))),
+    }
 }
 
 fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {

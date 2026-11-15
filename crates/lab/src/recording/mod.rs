@@ -9,6 +9,8 @@
 
 // Workflow #449 REC-ARCH: a recording ended as material only, reopened later.
 pub(crate) mod archive;
+// #463 S2-13: the stored frames just before and just after one step's press, read on request.
+pub(crate) mod around;
 pub(crate) mod container;
 pub(crate) mod crosscheck;
 // #463 R2: a screen that ends the business another way after the last press, taken by a stopped
@@ -34,6 +36,10 @@ pub(crate) mod store;
 
 pub use archive::{
     ArchiveCopyFrames, record_archive, record_archive_copy, record_archive_warnings, record_reopen,
+};
+pub use around::{
+    RecordFramesFrame, RecordFramesOutcome, RecordFramesPress, RecordFramesPressFrame,
+    RecordFramesRequest, RecordFramesWarning, record_frames,
 };
 pub use hold::{
     LAB_RECORDING_HOLD_PREFIX, LAB_RECORDING_WARNING_HOLD_UNREAD,

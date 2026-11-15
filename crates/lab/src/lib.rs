@@ -81,6 +81,9 @@ mod gate_463_s17;
 // #463 S2-1: one read lists everything a recording still lacks before `record stop`.
 #[cfg(test)]
 mod gate_463_s21;
+// #463 S2-13: `record frames` lists the stored frames just before and just after one step's press.
+#[cfg(test)]
+mod gate_463_s213;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

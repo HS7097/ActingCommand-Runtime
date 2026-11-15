@@ -255,6 +255,11 @@ naming this file.
   `record archive` with `record_id`), never an unconditional resume. A press with `record` on an
   instance that is not held is made and recorded with `record.warnings` `instance_not_held`
   (`instance_hold_unread` when the status read got no answer); `ac_record_status` shows the hold.
+  #463 S2-13 (0.12.64; `contracts/lab-recording.md`, "The frames around a press"):
+  `ac_record_frames` (`step`, `before` 0 to 100, default 3, `after` 0 to 100, default 10,
+  `record_id`) lists the stored frames captured just before the frame a step's press was sent on
+  and just after the press, with their paths, capture times and offsets from the press; it reads
+  only and takes no lock.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any
