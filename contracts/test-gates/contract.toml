@@ -931,3 +931,11 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome",
 ]
 incident = ["#469 F1"]
+
+# Workflow #463 S3-3 (0.12.63; register §1.410; brief rd-1115/brief-463-s33-outcome-key.md; contracts/runtime-state-observation.md, "Contained-run queries"), on the ScriptedRuntime ledger of the run-status gates (R7): the terminal of a run's status, brief and full, names the business end the run finished on as outcome_key, the key of the mapping the host wrote on its terminal fact (scheduling_disposition): a run completed on its target page answers the target mapping's key (task_done), one completed on an ending page the ending's key (task_short), in the struct and in the status's JSON, with the page it finished on; a failed run, a cancelled run and a completed run of a package without mappings (no disposition on the terminal) have no outcome_key, in the struct or in the JSON
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::s3_3_a_run_terminal_names_the_outcome_key_of_the_end_it_finished_on",
+]
+incident = ["#463 S3-3"]

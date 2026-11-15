@@ -91,10 +91,18 @@ pub enum ContainedRunState {
 /// `values` holds them. A value of any other type (an id, a name, a number, a duration) is never
 /// in it, nor are the outcome's causes. Absent when the outcome carries none, so a terminal
 /// without such a value serializes as it did before.
+///
+/// Workflow #463 S3-3 (since 0.12.63): `outcome_key` names the business end the run finished
+/// on, the `outcome_key` of the package's `scheduling_outcome` mapping whose terminal page the
+/// run completed on (its target page or one of its ending pages), as the host wrote it on the
+/// terminal fact (`scheduling_disposition`). Absent when the terminal carries no disposition: a
+/// failed or cancelled run, and a run whose package declares no mappings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContainedRunTerminal {
     pub outcome: TaskOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_code: Option<CodeStr>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
@@ -558,6 +566,7 @@ impl RunFold {
                 final_page,
                 executed_steps,
                 outcome,
+                scheduling_disposition,
                 ..
             } => {
                 let failure_code = outcome.as_ref().map(|outcome| outcome.code().clone());
@@ -569,6 +578,11 @@ impl RunFold {
                     .unwrap_or_default();
                 let terminal = ContainedRunTerminal {
                     outcome: *task_result,
+                    // Workflow #463 S3-3: the key of the mapping the host keyed the run by, from
+                    // the same terminal fact; the disposition's effect evidence is not read.
+                    outcome_key: scheduling_disposition
+                        .as_ref()
+                        .map(|disposition| disposition.outcome_key().to_owned()),
                     final_page: final_page.clone(),
                     executed_steps: *executed_steps,
                     cancellation_reason: (*task_result == TaskOutcome::Cancelled).then_some(
