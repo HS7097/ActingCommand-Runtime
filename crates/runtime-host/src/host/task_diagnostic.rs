@@ -616,12 +616,18 @@ impl RuntimeContainedTask<'_> {
             Some(Err(error)) => error.ppocr_diagnostics().clone(),
             None => Vec::new(),
         };
+        // Workflow #469 D4b: a failure of the vision provider is the run's own
+        // `contained_task_vision_provider_failed` here too, as for a page batch (Workflow #387
+        // D1c-G); any other evaluation error stays `contained_task_guard_evaluation_failed`.
         let primary = result
             .and_then(|result| result.as_ref().err())
             .map(|error| {
                 ppocr_diagnostic::attach_ppocr_source(
                     ppocr_diagnostic::task_ppocr_failure(
-                        SharedCode::ContainedTaskGuardEvaluationFailed,
+                        actingcommand_execution_kernel::target_evaluation_failure_code(
+                            error,
+                            SharedCode::ContainedTaskGuardEvaluationFailed.code(),
+                        ),
                         error.to_string(),
                         &reports,
                     ),

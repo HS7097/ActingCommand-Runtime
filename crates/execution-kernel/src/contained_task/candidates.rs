@@ -512,7 +512,9 @@ impl PreparedContainedTask {
     /// Workflow #390 EXEC-1: whether `operation`'s `when` holds on `scene`, the frame its step
     /// would start on; `true` without a `when`. The evaluation is recorded as every guard
     /// evaluation is, as a `When` evaluation; one that does not conclude ends the run with
-    /// `contained_task_recognition_failed`.
+    /// `contained_task_recognition_failed`, or (Workflow #469 D4b) with
+    /// `contained_task_vision_provider_failed` when the vision provider failed or answered
+    /// invalidly.
     pub(super) fn when_holds<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -541,7 +543,10 @@ impl PreparedContainedTask {
                 None => format!("operation={} when={target} {error}", operation.id),
             };
             ContainedTaskError::with_detail(
-                SharedCode::ContainedTaskRecognitionFailed.code(),
+                super::target_evaluation_failure_code(
+                    &error,
+                    SharedCode::ContainedTaskRecognitionFailed.code(),
+                ),
                 detail,
             )
         })?;

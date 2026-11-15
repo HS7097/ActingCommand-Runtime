@@ -288,6 +288,10 @@ mod gate_mapp2b;
 // Workflow #469 H3 (0.12.62; register §1.399): an emulator control failure says where it failed
 // (`stage`, `device_category`).
 mod gate_469_h3;
+// Workflow #469 D4b (0.12.63; register §1.401): a scheduled run whose guard or `when` meets a vision
+// provider failure starts no ladder at once and is counted toward the burst; a real evaluation
+// error there still starts the ladder.
+mod gate_469_d4b;
 // Workflow #437 ORD-1c (0.12.60; register §1.373): the host passes the order within one device: the
 // member in front, the queue waits and the configured default limit.
 mod gate_ord1c;

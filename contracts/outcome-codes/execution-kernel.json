@@ -897,7 +897,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The vision provider failed or answered invalidly while a contained task package was admitted, or while a run evaluated its pages (home preflight, page evaluation, a shared interrupt check); a page evaluation that fails for any other cause stays contained_task_recognition_failed (Workflow #387 D1c-G).",
+      "description": "The vision provider failed or answered invalidly while a contained task package was admitted, or while a run evaluated its pages (home preflight, page evaluation, a shared interrupt check); a page evaluation that fails for any other cause stays contained_task_recognition_failed (Workflow #387 D1c-G). So does a failure of the provider while a run evaluates a step's guard target, an operation's when target or an expected identity's target (#469 D4b, since 0.12.63), with the detail that place writes and no values; an evaluation there that fails for any other cause stays contained_task_guard_evaluation_failed (the guard) or contained_task_recognition_failed (the when, the identity). Its ladder class is environment_fault: no default trigger item starts a recovery ladder at the end of a run with it, and the default stability_burst item counts it toward a burst.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

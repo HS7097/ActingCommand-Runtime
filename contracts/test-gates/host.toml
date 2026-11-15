@@ -4095,3 +4095,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t11_actingd_suspended_lists_the_break_in_before_and_after_it_ends",
 ]
 incident = ["#463 U1b"]
+
+# Workflow #469 D4b (0.12.63; register §1.401; brief rd-1115/brief-469-d4-owner-four.md; the owner's approval on board #469; contracts/emulator-control.md, "Triggers" and direction ①): contained_task_vision_provider_failed, which a vision provider failure at a guard, a when or an expected identity now ends a run with, is of the ladder class environment_fault; under the defaults no trigger item matches it at the task stage (no ladder at once), the stability_burst item matches it by class at stability_warnings, and three of its failures on one instance within the window register one burst of that item; contained_task_guard_evaluation_failed and contained_task_recognition_failed, which a real evaluation error still ends with, match pack_logic by class at the task stage and three of each register no burst. Fix round 2, the run level (modelled on the page row of gate_387_d1cg): a scheduled run on the ladder fixture's physical instance of a package with colour pages whose located OCR target a scripted provider reads at claim's guard or at open's when: a provider that fails ends the run with contained_task_vision_provider_failed, no ladder claim holds or waits for the instance, the run's lease hands its key to no ladder, no ladder starts at the task stage, and the run's task.failed is what direction ① counts (its instance link, warning severity or worse, a code of the class environment_fault); a read that cannot conclude while the provider answered ends it with contained_task_guard_evaluation_failed (the guard) or contained_task_recognition_failed (the when), the lease end hands the key to the ladder, and one ladder starts at the task stage for the run with that failure code, by pack_logic, matched by the class pack_logic_mismatch
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d4b_a_vision_provider_failure_counts_toward_the_burst_and_starts_no_ladder_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_469_d4b::d4b_a_provider_failure_at_a_guard_or_a_when_starts_no_ladder_and_counts_toward_the_burst",
+    "actingcommand-runtime-host::lib::tests::gate_469_d4b::d4b_a_real_evaluation_error_at_a_guard_or_a_when_still_starts_the_ladder_at_once",
+]
+incident = ["#469 D4b"]
