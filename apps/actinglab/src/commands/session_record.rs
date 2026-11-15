@@ -1,3 +1,4 @@
+use super::record_hold::{self, Ended};
 use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, UserConfig, canonical_game, canonical_server,
@@ -14,11 +15,11 @@ use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ArchiveCopyFrames, ClickRetry, ClickSpec, EndingSpec, LAB_RECORD_MARK_SCHEMA,
     MarkFamily, MarkRequest, MarkSpec, OptionalAfterSpec, RecordArchiveOptions, RecordRect,
-    RecordReopenOptions, RecordStartOptions, RecordStopOptions, RecordingLock, StepAction,
-    StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive,
-    record_archive_copy, record_archive_warnings, record_instance_check, record_mark,
-    record_reopen, record_start,
-    record_start_defaults, record_status, record_stop, record_stop_close,
+    RecordReopenOptions, RecordStartOptions, RecordStopOptions, RecordingHold, RecordingLock,
+    StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request,
+    record_archive, record_archive_copy, record_archive_warnings, record_hold_status,
+    record_instance_check, record_mark, record_reopen, record_start, record_start_defaults,
+    record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -42,6 +43,11 @@ pub(crate) struct SessionRecordContext {
     pub(crate) updated_at_unix_ms: u64,
     #[serde(default)]
     pub(crate) steps: Vec<SessionRecordStep>,
+    /// #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): the
+    /// instance's scheduling pause the recording runs under, its own or another party's; absent
+    /// when it holds nothing, so that such a header is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) hold: Option<RecordingHold>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -603,10 +609,25 @@ fn run_session_record_inner(
             }
             let lab_options = record_start_lab_options(global, &config, &flags, &instance_id)?;
             record_start_defaults(&lab_options)?;
-            if record_path.exists()
-                && !flags.bool("--force")
-                && let Some(existing) = read_json_file::<SessionRecordContext>(&record_path)?
-                && existing.status == "active"
+            let force = flags.bool("--force");
+            // #463 S1-7 fix round 2: the header's bytes before this start, which a pause the
+            // Runtime refuses puts back (`None`: there is none, or they cannot be read).
+            let before = fs::read(&record_path).ok();
+            let (replaced, unread) = match (record_path.exists(), force) {
+                (false, _) => (None, None),
+                (true, false) => (read_json_file::<SessionRecordContext>(&record_path)?, None),
+                // #463 S1-7: `--force` replaces the header whatever it holds, as before; only the
+                // hold of one that reads is taken over. Fix round 2: one that cannot be read is
+                // named in the answer (`replaced_header_unread`), never forgotten in silence.
+                (true, true) => match read_json_file::<SessionRecordContext>(&record_path) {
+                    Ok(replaced) => (replaced, None),
+                    Err(error) => (None, Some(error)),
+                },
+            };
+            if !force
+                && let Some(existing) = replaced
+                    .as_ref()
+                    .filter(|existing| existing.status == "active")
             {
                 return Err(CliError::safety_blocked(
                     "record_session_active",
@@ -617,10 +638,30 @@ fn run_session_record_inner(
                     &["session_record"],
                 ));
             }
-            let record = new_session_record(&instance_id, &task_id, &flags);
-            write_json_file_atomic(&record_path, &record)?;
-            let lab_recording = record_start(held_record_lock(&record_lock)?, &lab_options)?;
-            let (flag_state_dir, reachable) = record_flag_reachability(&state_dir)?;
+            let mut record = new_session_record(&instance_id, &task_id, &flags);
+            // #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): the
+            // recording holds its instance; fix round 2: `take` writes the session header naming
+            // the hold before it asks the Runtime to pause, and puts it back when the Runtime
+            // refuses the pause.
+            let mut hold_answer = record_hold::take(
+                &record_path,
+                &mut record,
+                replaced
+                    .as_ref()
+                    .and_then(|replaced| replaced.hold.as_ref()),
+                before.as_deref(),
+            )?;
+            if let Some(error) = &unread {
+                record_hold::replaced_header_unread(&mut hold_answer, &record_path, error);
+            }
+            // Fix round 2: the header names the hold now; a failure after it carries the hold in
+            // its details, since its end releases a pause with that reason.
+            let (lab_recording, (flag_state_dir, reachable)) = held_record_lock(&record_lock)
+                .and_then(|lock| record_start(lock, &lab_options))
+                .and_then(|lab_recording| {
+                    record_flag_reachability(&state_dir).map(|reachable| (lab_recording, reachable))
+                })
+                .map_err(|error| record_hold::with_hold(error, record.hold.as_ref()))?;
             Ok(json!({
                 "status": "started",
                 "record": record,
@@ -628,7 +669,8 @@ fn run_session_record_inner(
                 "auto_recording": false,
                 "lab_recording": lab_recording,
                 "record_flag_state_dir": flag_state_dir,
-                "record_flag_reachable": reachable
+                "record_flag_reachable": reachable,
+                "hold": hold_answer
             }))
         }
         "status" => Ok(json!({
@@ -636,7 +678,9 @@ fn run_session_record_inner(
             "instance": instance_id,
             "record": read_json_file::<SessionRecordContext>(&record_path)?,
             "path": record_path.display().to_string(),
-            "lab": record_status_lab(&state_dir, &instance_id)?
+            "lab": record_status_lab(&state_dir, &instance_id)?,
+            // #463 S1-7: what the recording holds: own, foreign, none or kept.
+            "hold": record_hold_status(&state_dir, &instance_id)?
         })),
         "stop" => {
             let options = record_stop_options(global, &config, &flags, &instance_id)?;
@@ -651,19 +695,46 @@ fn run_session_record_inner(
             };
             let lock = held_record_lock(&record_lock)?;
             let outcome = record_stop(lock, &options, crate::offline_ocr::lab_ocr())?;
-            if !options.dry_run {
-                record.status = "stopped".to_string();
-                record.updated_at_unix_ms = current_unix_ms();
-                write_json_file_atomic(&record_path, &record)?;
-                record_stop_close(lock)?;
+            if options.dry_run {
+                return Ok(json!({
+                    "status": "validated",
+                    "dry_run": true,
+                    "record": record,
+                    "path": record_path.display().to_string(),
+                    "lab": outcome.lab
+                }));
             }
-            Ok(json!({
-                "status": if options.dry_run { "validated" } else { "stopped" },
-                "dry_run": options.dry_run,
+            // #463 S1-7: the stop ends the recording, which then releases its own hold; a refused
+            // stop returned above and keeps it.
+            let held = record.hold.take();
+            record.hold = held.as_ref().and_then(RecordingHold::ended);
+            record.status = "stopped".to_string();
+            record.updated_at_unix_ms = current_unix_ms();
+            write_json_file_atomic(&record_path, &record)?;
+            record_stop_close(lock)?;
+            let ended = record_hold::end(&record_path, &mut record, held)?;
+            let mut answer = json!({
+                "status": "stopped",
+                "dry_run": false,
                 "record": record,
                 "path": record_path.display().to_string(),
                 "lab": outcome.lab
-            }))
+            });
+            match ended {
+                Ended::Nothing => {}
+                Ended::Hold(hold) => answer["hold"] = hold,
+                Ended::Kept(kept) => {
+                    // Fix round 2: `record stop` of the stopped recording tries the release again.
+                    let release = record_hold::release_again(&instance_id, &state_dir, &["stop"]);
+                    return Err(kept.answer(
+                        &instance_id,
+                        "record stop ended the recording (its package, if it has one, is written)",
+                        answer,
+                        &release,
+                    ));
+                }
+            }
+            Ok(answer)
         }
         "mark" => run_record_mark(global, &flags, held_record_lock(&record_lock)?),
         // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
@@ -2647,6 +2718,8 @@ fn new_session_record(instance: &str, task_id: &str, flags: &FlagArgs) -> Sessio
         started_at_unix_ms: now,
         updated_at_unix_ms: now,
         steps: Vec::new(),
+        // #463 S1-7: `record start` sets it once the hold is taken.
+        hold: None,
     }
 }
 
@@ -3026,28 +3099,56 @@ fn run_record_archive(
     };
     let warnings = record_archive_warnings(&archived).map_err(with_manifest)?;
     let mut record = read_json_file::<SessionRecordContext>(record_path).map_err(with_manifest)?;
+    // #463 S1-7: what the recording's session header holds, when the header names it: before
+    // this archive for an active recording, the hold an earlier end kept for an archived one.
+    let held = record
+        .as_ref()
+        .filter(|record| record.record_id == archived.record_id)
+        .and_then(|record| record.hold.clone());
     if archived.ends_session
         && let Some(record) = record.as_mut()
     {
         record.status = "archived".to_string();
         record.updated_at_unix_ms = current_unix_ms();
+        record.hold = held.as_ref().and_then(RecordingHold::ended);
         write_json_file_atomic(record_path, &*record).map_err(with_manifest)?;
     }
     if let Some(target) = &options.copy_to {
         let copy = record_archive_copy(lock, &archived, target, frames).map_err(|error| {
-            with_archive_context(
-                error,
-                &[
-                    ("record_id", json!(&archived.record_id)),
-                    ("archived", json!(true)),
-                    ("manifest", json!(&archived.manifest)),
-                ],
-            )
+            let mut context = vec![
+                ("record_id", json!(&archived.record_id)),
+                ("archived", json!(true)),
+                ("manifest", json!(&archived.manifest)),
+            ];
+            // #463 S1-7: the copy failed before the release was tried: an own hold stays.
+            if let Some(held) = held.as_ref().filter(|held| held.own) {
+                context.push((
+                    "hold",
+                    json!({"reason": held.reason, "own": true, "kept": true}),
+                ));
+            }
+            with_archive_context(error, &context)
         })?;
         archived.copy = Some(copy);
     }
     let status = archived.status.clone();
+    // #463 S1-7: the archive's own work is done; the recording then releases its own hold.
+    let ended = match record
+        .as_mut()
+        .filter(|record| record.record_id == archived.record_id)
+    {
+        Some(header) => record_hold::end(record_path, header, held)?,
+        None => Ended::Nothing,
+    };
     let record = record.filter(|record| record.record_id == archived.record_id);
+    // Fix round 2: `record archive --record-id <id>` of the archived recording tries a release
+    // that failed again (without `--record-id` an archive finds no active recording and is
+    // refused, `record_session_not_active`).
+    let release = record_hold::release_again(
+        lock.instance(),
+        lock.state_dir(),
+        &["archive", "--record-id", archived.record_id.as_str()],
+    );
     let mut answer = json!({
         "status": status,
         "record": record,
@@ -3055,12 +3156,26 @@ fn run_record_archive(
         "lab": archived
     });
     answer["lab"]["warnings"] = json!(warnings);
+    match ended {
+        Ended::Nothing => {}
+        Ended::Hold(hold) => answer["hold"] = hold,
+        Ended::Kept(kept) => {
+            return Err(kept.answer(
+                lock.instance(),
+                "record archive archived the recording (its manifest is written, and copied when \
+                 asked)",
+                answer,
+                &release,
+            ));
+        }
+    }
     Ok(answer)
 }
 
 /// Workflow #449 REC-ARCH: `error` with `context` added to its details, an object (details of
-/// another form are kept under `cause`).
-fn with_archive_context(mut error: CliError, context: &[(&str, Value)]) -> CliError {
+/// another form are kept under `cause`). #463 S1-7: the recording's hold is added so too
+/// (`record_hold::with_hold`).
+pub(super) fn with_archive_context(mut error: CliError, context: &[(&str, Value)]) -> CliError {
     let mut details = match error.details.take() {
         Some(Value::Object(details)) => details,
         given => {
@@ -3098,7 +3213,7 @@ fn run_record_reopen(
             record.updated_at_unix_ms = now;
             record
         }
-        _ => SessionRecordContext {
+        replaced => SessionRecordContext {
             schema_version: "session-record-v0".to_string(),
             record_id: reopened.record_id.clone(),
             task_id: reopened.task_id.clone(),
@@ -3109,6 +3224,11 @@ fn run_record_reopen(
             started_at_unix_ms: reopened.record_started_at_unix_ms,
             updated_at_unix_ms: now,
             steps: Vec::new(),
+            // #463 S1-7: a reopen takes no hold; an own pause the replaced header kept stays
+            // named, so that the end of this recording releases it.
+            hold: replaced
+                .and_then(|replaced| replaced.hold)
+                .filter(|hold| hold.own),
         },
     };
     write_json_file_atomic(record_path, &record)?;

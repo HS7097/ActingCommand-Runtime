@@ -806,11 +806,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["ApplicationLifecycle", "ObserveReadonly"],
+      "requests": ["ApplicationLifecycle", "ObserveReadonly", "Status"],
       "source": ["MCP ac_app (launch)", "actinglab session app launch", "actinglab session instance app launch", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself; #463 S1-3 (contracts/lab-recording.md, Application steps): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; the Lab's MCP server writes the command line from these parameters itself, and `apps::App::recorded` of crates/lab-ops (record, after_ms and still_max_ms on the child's line) has no caller in the product; no request kind is new to the Runtime; these core rows take record, after_ms, interval_ms, still_ms and still_max_ms (the slice's ruling 4 replaces the coordinator's ruling of 2026-11-11, L5C-7, that kept record off the core rows), so actinglab's `own_flags::DECLARED_EXCEPTIONS` is empty; round 2: the screen before is captured immediately before the operation, as before a press; the train of stage one (S1-1, S1-2 and S1-3 joined): the screen after is captured until it is still, as after a press (contracts/lab-recording.md, Recording while playing, The screen after), with the operation's own defaults (2000, 1000, 2000, 30000: at most 31 captures), every capture kept, the bound of 120 intervals checked before the operation is sent, and record.warnings holding after_not_still as a press's answer does"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself; #463 S1-3 (contracts/lab-recording.md, Application steps): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; the Lab's MCP server writes the command line from these parameters itself, and `apps::App::recorded` of crates/lab-ops (record, after_ms and still_max_ms on the child's line) has no caller in the product; no request kind is new to the Runtime; these core rows take record, after_ms, interval_ms, still_ms and still_max_ms (the slice's ruling 4 replaces the coordinator's ruling of 2026-11-11, L5C-7, that kept record off the core rows), so actinglab's `own_flags::DECLARED_EXCEPTIONS` is empty; round 2: the screen before is captured immediately before the operation, as before a press; the train of stage one (S1-1, S1-2 and S1-3 joined): the screen after is captured until it is still, as after a press (contracts/lab-recording.md, Recording while playing, The screen after), with the operation's own defaults (2000, 1000, 2000, 30000: at most 31 captures), every capture kept, the bound of 120 intervals checked before the operation is sent, and record.warnings holding after_not_still as a press's answer does; #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with --record (session app --record), one Status read before the operation, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer"
     },
     {
       "name": "app restart",
@@ -830,11 +830,11 @@
       "disruptive": true,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["ApplicationLifecycle", "ObserveReadonly"],
+      "requests": ["ApplicationLifecycle", "ObserveReadonly", "Status"],
       "source": ["MCP ac_app (restart)", "actinglab session app restart", "actinglab session instance app restart", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself; #463 S1-3 (contracts/lab-recording.md, Application steps): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; the Lab's MCP server writes the command line from these parameters itself, and `apps::App::recorded` of crates/lab-ops (record, after_ms and still_max_ms on the child's line) has no caller in the product; no request kind is new to the Runtime; these core rows take record, after_ms, interval_ms, still_ms and still_max_ms (the slice's ruling 4 replaces the coordinator's ruling of 2026-11-11, L5C-7, that kept record off the core rows), so actinglab's `own_flags::DECLARED_EXCEPTIONS` is empty; round 2: the screen before is captured immediately before the operation, as before a press; the train of stage one (S1-1, S1-2 and S1-3 joined): the screen after is captured until it is still, as after a press (contracts/lab-recording.md, Recording while playing, The screen after), with the operation's own defaults (2000, 1000, 2000, 30000: at most 31 captures), every capture kept, the bound of 120 intervals checked before the operation is sent, and record.warnings holding after_not_still as a press's answer does"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself; #463 S1-3 (contracts/lab-recording.md, Application steps): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; the Lab's MCP server writes the command line from these parameters itself, and `apps::App::recorded` of crates/lab-ops (record, after_ms and still_max_ms on the child's line) has no caller in the product; no request kind is new to the Runtime; these core rows take record, after_ms, interval_ms, still_ms and still_max_ms (the slice's ruling 4 replaces the coordinator's ruling of 2026-11-11, L5C-7, that kept record off the core rows), so actinglab's `own_flags::DECLARED_EXCEPTIONS` is empty; round 2: the screen before is captured immediately before the operation, as before a press; the train of stage one (S1-1, S1-2 and S1-3 joined): the screen after is captured until it is still, as after a press (contracts/lab-recording.md, Recording while playing, The screen after), with the operation's own defaults (2000, 1000, 2000, 30000: at most 31 captures), every capture kept, the bound of 120 intervals checked before the operation is sent, and record.warnings holding after_not_still as a press's answer does; #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with --record (session app --record), one Status read before the operation, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer"
     },
     {
       "name": "app stop",
@@ -854,11 +854,11 @@
       "disruptive": true,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["ApplicationLifecycle", "ObserveReadonly"],
+      "requests": ["ApplicationLifecycle", "ObserveReadonly", "Status"],
       "source": ["MCP ac_app (stop)", "actinglab session app stop", "actinglab session instance app stop", "actinglab session app force-stop", "actinglab session instance app force-stop"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself; #463 S1-3 (contracts/lab-recording.md, Application steps): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; the Lab's MCP server writes the command line from these parameters itself, and `apps::App::recorded` of crates/lab-ops (record, after_ms and still_max_ms on the child's line) has no caller in the product; no request kind is new to the Runtime; these core rows take record, after_ms, interval_ms, still_ms and still_max_ms (the slice's ruling 4 replaces the coordinator's ruling of 2026-11-11, L5C-7, that kept record off the core rows), so actinglab's `own_flags::DECLARED_EXCEPTIONS` is empty; round 2: the screen before is captured immediately before the operation, as before a press; the train of stage one (S1-1, S1-2 and S1-3 joined): the screen after is captured until it is still, as after a press (contracts/lab-recording.md, Recording while playing, The screen after), with the operation's own defaults (2000, 1000, 2000, 30000: at most 31 captures), every capture kept, the bound of 120 intervals checked before the operation is sent, and record.warnings holding after_not_still as a press's answer does"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself; #463 S1-3 (contracts/lab-recording.md, Application steps): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; the Lab's MCP server writes the command line from these parameters itself, and `apps::App::recorded` of crates/lab-ops (record, after_ms and still_max_ms on the child's line) has no caller in the product; no request kind is new to the Runtime; these core rows take record, after_ms, interval_ms, still_ms and still_max_ms (the slice's ruling 4 replaces the coordinator's ruling of 2026-11-11, L5C-7, that kept record off the core rows), so actinglab's `own_flags::DECLARED_EXCEPTIONS` is empty; round 2: the screen before is captured immediately before the operation, as before a press; the train of stage one (S1-1, S1-2 and S1-3 joined): the screen after is captured until it is still, as after a press (contracts/lab-recording.md, Recording while playing, The screen after), with the operation's own defaults (2000, 1000, 2000, 30000: at most 31 captures), every capture kept, the bound of 120 intervals checked before the operation is sent, and record.warnings holding after_not_still as a press's answer does; #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with --record (session app --record), one Status read before the operation, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer"
     },
     {
       "name": "shutdown",
@@ -1307,11 +1307,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "ObserveReadonly"],
+      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "ObserveReadonly", "Status"],
       "source": ["actinglab tap"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it. #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with record, one Status read before the press, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer"
     },
     {
       "name": "swipe",
@@ -1335,11 +1335,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "ObserveReadonly"],
+      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "ObserveReadonly", "Status"],
       "source": ["actinglab swipe"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it. #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with record, one Status read before the press, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer"
     },
     {
       "name": "long-tap",
@@ -1361,11 +1361,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "ObserveReadonly"],
+      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "ObserveReadonly", "Status"],
       "source": ["actinglab long-tap"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it. #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with record, one Status read before the press, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer"
     },
     {
       "name": "key",
@@ -1988,16 +1988,17 @@
         {"name": "template_threshold", "form": "option", "type": "decimal", "required": false, "note": "a number 0 to 1"},
         {"name": "metric", "form": "option", "type": "enum:ccoeff_normed|ccorr_normed", "required": false}
       ],
-      "help": "Starts a recording session and its Lab recording for one task, kept in actinglab's state files.",
-      "output": "as today's command",
+      "help": "Starts a recording session for one task and pauses the instance's scheduling for it with a reason of its own; with no Runtime it starts holding nothing.",
+      "output": "as today's command, with hold: what the recording holds",
       "writes": true,
       "irreversible": false,
-      "runtime": "offline",
+      "runtime": "optional",
       "entries": ["lab"],
-      "requests": [],
+      "requests": ["Status", "PauseScheduling"],
       "source": ["actinglab record start", "actinglab session record start", "MCP ac_record_start"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#463 S1-7 (contracts/lab-recording.md, A recording holds its instance): one status read; an instance not paused is paused as the pause row pauses it (drain 300s), reason lab-record-<the session's started_at_unix_ms>, kept in the session header's hold; an instance paused by another party is held by that pause and nothing is sent (foreign); with force the replaced recording's own pause is taken over. Fix round 2 (0.12.64): the session header names the own hold before PauseScheduling is sent; a pause the Runtime refuses puts the header back and starts nothing; a pause without an answer that says it was not made leaves the header and fails with the hold in its details, so that record stop or record start --force releases it; nothing listening: nothing held, hold.warnings no_runtime_listening; a Runtime that listens but does not complete the handshake, or a status refused, starts nothing; force over a header that cannot be read: hold.warnings replaced_header_unread with replaced_header.path; the start waits as the pause waits, up to the drain, the pause's checkpoint grace (30s) and the IO timeout (5s). Today's MCP server runs this command too"
     },
     {
       "name": "record mark",
@@ -2095,16 +2096,17 @@
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
-      "help": "Stops the recording session and generates its linear-steps package, with the binding parts record draft takes.",
-      "output": "as today's command",
+      "help": "Stops the recording session, generates its linear-steps package with the binding parts record draft takes, and resumes the recording's own pause.",
+      "output": "as today's command, with hold when the recording held one",
       "writes": true,
       "irreversible": false,
-      "runtime": "offline",
+      "runtime": "optional",
       "entries": ["lab"],
-      "requests": [],
+      "requests": ["Status", "ResumeScheduling"],
       "source": ["actinglab record stop", "actinglab session record stop", "MCP ac_record_stop"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#463 S1-7 (contracts/lab-recording.md, A recording holds its instance): once a stop that is no dry run has ended the recording, the recording's own pause is found by its reason in one status read and resumed by the pause the status shows (its owner epoch and revision), another party's never; a refused stop sends nothing and keeps the hold; a release that fails or no Runtime answering keeps it: the stop stands and the answer is the release's failure with hold kept and (fix round 2, 0.12.64) next.release, record stop again, which can release only the recording's own pause"
     },
     {
       "name": "record candidates",
@@ -2237,17 +2239,17 @@
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
       "help": "Ends a recording as material (stage one): writes its manifest (the presses, their screens and the final screen), keeps every file, and can copy them.",
-      "output": "the session header, archived, and the manifest of the recording with lab.warnings (final_frame_missing); with copy_to the files copied and checked",
+      "output": "the session header, archived, and the manifest of the recording with lab.warnings (final_frame_missing); with copy_to the files copied and checked; with hold when the recording held one",
       "writes": true,
       "irreversible": false,
-      "runtime": "offline",
+      "runtime": "optional",
       "entries": ["lab"],
-      "requests": [],
+      "requests": ["Status", "ResumeScheduling"],
       "source": ["actinglab record archive", "actinglab session record archive", "MCP ac_record_archive"],
       "new": "#449",
       "slice": "REC-ARCH",
       "status": "planned",
-      "notes": "Workflow #449 REC-ARCH (0.12.59; contracts/lab-recording.md, Archiving): it requires no mark and no last step without an effect, writes archive-manifest-<n>.json into the recording's own directory and never deletes, moves or rewrites a frame or the step table; the session ends in its own state, archived, so that record start needs no --force; a copy that fails names the file and the reason, deletes nothing and leaves the recording archived. Fix 1: copy_to must be an absolute path; a recording record start --force left behind is archived by its record_id, its session header (another recording's) unchanged and named in the answer's lab.session_header. #463 S1-5 (0.12.64; contracts/lab-recording.md, Archiving, The manifest): the manifest written is actingcommand.lab-recording-archive.v2: each row names the frame its effect was on and the frame after it (derived: true where the step table named none), and material names what stage one hands over, each press with its frame and where it was pressed and the final screen; a v1 manifest on disk is read, verified, copied as it is and reopened, never rewritten; lab.warnings holds final_frame_missing when the manifest names no final screen, and the archive stands"
+      "notes": "Workflow #449 REC-ARCH (0.12.59; contracts/lab-recording.md, Archiving): it requires no mark and no last step without an effect, writes archive-manifest-<n>.json into the recording's own directory and never deletes, moves or rewrites a frame or the step table; the session ends in its own state, archived, so that record start needs no --force; a copy that fails names the file and the reason, deletes nothing and leaves the recording archived. Fix 1: copy_to must be an absolute path; a recording record start --force left behind is archived by its record_id, its session header (another recording's) unchanged and named in the answer's lab.session_header. #463 S1-5 (0.12.64; contracts/lab-recording.md, Archiving, The manifest): the manifest written is actingcommand.lab-recording-archive.v2: each row names the frame its effect was on and the frame after it (derived: true where the step table named none), and material names what stage one hands over, each press with its frame and where it was pressed and the final screen; a v1 manifest on disk is read, verified, copied as it is and reopened, never rewritten; lab.warnings holds final_frame_missing when the manifest names no final screen, and the archive stands. #463 S1-7 (contracts/lab-recording.md, A recording holds its instance): once the manifest, the session header and the copy are written, the recording's own pause is found by its reason in one status read and resumed by the pause the status shows, another party's never; a release that fails or no Runtime answering keeps the hold: the archive stands and the answer is the release's failure with hold kept and (fix round 2, 0.12.64) next.release, record archive --record-id <id>, which can release only the recording's own pause; named again, an archived recording whose header kept its hold tries the release again"
     },
     {
       "name": "record reopen",

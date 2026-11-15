@@ -229,7 +229,23 @@ naming this file.
   transition, another step or a frame file, is `validation_failed`: send it with `ac_record_mark`),
   and `next_frame_after_ms` (0 to 60000) takes the next frame after
   a press performed without a failure, as `capture --record` takes it, opening the next step
-  (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command.
+  (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command. #463 S1-7
+  (0.12.64; `contracts/lab-recording.md`, "A recording holds its instance"): a recording holds its
+  instance, so no pause is asked of the agent: `ac_record_start` pauses the instance's scheduling
+  with the recording's own reason `lab-record-<ms>` (an instance already paused by another party is
+  held by that pause, which the recording never resumes; with nothing listening where the Runtime
+  would, it starts holding nothing, `hold.warnings` `no_runtime_listening`; a Runtime that listens
+  but does not complete the handshake fails the start). **`ac_record_start` waits until the
+  instance's running task has ended**: up to the pause's drain (300 s), its checkpoint grace (30 s)
+  and the IO timeout (5 s), 335 s in all; a caller with a shorter time limit must give it that time.
+  Should the start end before the pause answers,
+  the session header already names the hold and `ac_record_stop` releases it. `ac_record_archive`
+  and `ac_record_stop` resume only the recording's own pause, found by its reason. A release that
+  fails keeps the hold: the archive or the stop stands, and the answer is the failure with
+  `hold.kept` and `next.release`, the call that tries the release again (`record stop` again, or
+  `record archive` with `record_id`), never an unconditional resume. A press with `record` on an
+  instance that is not held is made and recorded with `record.warnings` `instance_not_held`
+  (`instance_hold_unread` when the status read got no answer); `ac_record_status` shows the hold.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any

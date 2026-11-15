@@ -418,7 +418,14 @@ fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutco
             origin: started,
         })
     };
+    // #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): whether the
+    // instance is held, one status read before the operation, on a connection of its own, so that a
+    // read that fails never stands in the operation's way. The train of stage one: read where the
+    // operation is sent, after its plan and its screen before, as a press reads it before it is
+    // sent.
+    let mut hold_warning = None;
     let operate = |plan: &ApplicationPlan| -> CliOutcome<Operated> {
+        hold_warning = crate::commands::hold_warning_read(&instance_id);
         let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
             .map_err(runtime_slice_cli::map_runtime_error)?;
         let output = client
@@ -434,7 +441,7 @@ fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutco
             })
             .map_err(|error| record_application_append_failed(plan, "performed", error))
     };
-    record_application_operation(
+    let recorded = record_application_operation(
         &lock,
         &PlanApplicationRequest {
             verb: verb.to_string(),
@@ -442,7 +449,20 @@ fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutco
         &after,
         frames,
         operate,
-    )
+    );
+    // #463 S1-7: the word of the status read in `record.warnings`, beside `after_not_still`, as a
+    // press's answer carries it: of the answer, and of a failure whose details carry `record` (the
+    // operation performed and recorded, its screen after not taken).
+    match recorded {
+        Ok(mut data) => {
+            crate::commands::add_hold_warning(&mut data["record"], hold_warning);
+            Ok(data)
+        }
+        Err(mut error) => {
+            crate::commands::add_hold_warning_to_failure(&mut error, hold_warning);
+            Err(error)
+        }
+    }
 }
 
 /// #463 S1-3 (`contracts/lab-recording.md`, "Application steps"): how the screen after a recorded
