@@ -3331,8 +3331,9 @@ actingcommand_contract::outcome_codes! {
         /// game says its client must be updated, the run ends with no further input, and the
         /// instance fact `health.application.update_required` is true. A scheduled run ends by
         /// a condition (the default `scheduling.rerun.condition_codes`); no ladder by default.
-        /// Keys `page_id`.
-        RunEnded => "contained_task_application_update_required": warning / none,
+        /// Keys `page_id`. Workflow #469 D4a (since 0.12.62): of the ladder class
+        /// `planned_stop`, since the package declares the page and the run stops on purpose.
+        RunEnded => "contained_task_application_update_required": warning / planned_stop,
         /// Info. The candidate's instance waits for its game's client update
         /// (`health.application.update_required` true): every task of the instance except a
         /// `store_update` package's is deferred, position 4a, with no wake of its own. Keys

@@ -2260,7 +2260,8 @@ fn ladder_started(events: &[PersistedEvent]) -> bool {
 
 /// UPD-1 A9 (and the code's class, A1's "no ladder" by default): a direct run that meets the
 /// update dialog runs its handler, then ends with `contained_task_application_update_required`
-/// (warning, ladder class none, `page_id`) with no further input; the instance's
+/// (warning, ladder class `planned_stop` since Workflow #469 D4a, `page_id`) with no further
+/// input; the instance's
 /// `health.application.update_required` is published true before the run's terminal; no ladder
 /// starts. The code never accumulates toward a pause, in any scope.
 #[test]
@@ -2312,7 +2313,8 @@ fn upd1_a9_a_direct_run_meeting_the_update_dialog_ends_with_its_code_and_records
     let code = crate::codes::ApplicationUpdateCode::RunEnded;
     assert_eq!(code.as_str(), UPDATE_REQUIRED);
     assert_eq!(code.category(), Category::Warning);
-    assert_eq!(code.ladder_class(), LadderClass::NotApplicable);
+    // Workflow #469 D4a (register §1.400): the class is `planned_stop` (it was `none`).
+    assert_eq!(code.ladder_class(), LadderClass::PlannedStop);
     let code = CodeStr::from(code.code());
     for scope in ["prepare", "gate", "pre:0123abcd", "main"] {
         for restart_segment in [false, true] {
@@ -2737,4 +2739,122 @@ fn upd1_a4_the_ladder_s_application_restart_meeting_the_update_dialog_stops_the_
         Some("recovery_ladder_interrupted")
     );
     assert_eq!(fact.map(|(value, _)| value), Some(true));
+}
+
+/// Workflow #469 D4a (0.12.62; register §1.400; the owner's approval on board #469):
+/// `contained_task_application_update_required` is of the ladder class `planned_stop` (the
+/// package declares the update page and the run stops on purpose), and the ladder does with it
+/// what it did, by its code: as in UPD-1 A4, a scheduled run fails by the pack's logic and opens
+/// the `pack_logic` ladder, its application restart runs the startup package, which meets the
+/// update dialog, and the ladder ends there: the rung fails with the code, the ladder ends
+/// `exhausted` at Warning with `recovery_ladder_interrupted`, no emulator restart rung is recorded,
+/// and no other ladder starts.
+#[test]
+fn d4a_the_update_dialog_is_a_planned_stop_and_still_ends_the_ladder_at_its_rung() {
+    assert_eq!(
+        crate::codes::ApplicationUpdateCode::RunEnded.ladder_class(),
+        LadderClass::PlannedStop
+    );
+    assert_eq!(
+        actingcommand_runtime_config::ladder_class_of(UPDATE_REQUIRED),
+        Some(LadderClass::PlannedStop)
+    );
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let mut root = GameRoot::new(temp.path());
+    root.features()
+        .pack(
+            CLOSE_NOTICE,
+            "navigable_route",
+            handler_task("notice", "first_white", TO_AWAY),
+        )
+        .pack(
+            CLOSE_ALERT,
+            "navigable_route",
+            handler_task("alert", "third_white", TO_AWAY),
+        )
+        .bundle()
+        .pages()
+        .interrupts(json!([
+            interrupt("notice", CLOSE_NOTICE, json!("end_run"), 1),
+            update_entry("alert", CLOSE_ALERT)
+        ]));
+    let (host_config, bound) =
+        super::instance_workers::ladder_setup_with_package(temp.path(), &away_to_home());
+    // The scheduled run binds no return-home package: the ladder's first rung is skipped.
+    let request = ContainedTaskRequest::new(bound.package_path().to_owned())
+        .expect("scheduled request without a return-home binding");
+    // Before the application restart the notice, then `away`; after it the update dialog until
+    // the next input (its handler's tap), then `away`.
+    let device = Arc::downgrade(&state);
+    let restarted_at = std::sync::Mutex::new(None::<usize>);
+    script(&state, move |_, inputs| {
+        let applications = device
+            .upgrade()
+            .map_or(0, |state| state.application_count.load(Ordering::Acquire));
+        if applications == 0 {
+            return frame(RED, (inputs == 0).then_some(Overlay::Notice));
+        }
+        let mut restarted_at = restarted_at.lock().expect("the restart's inputs");
+        if *restarted_at.get_or_insert(inputs) == inputs {
+            frame(RED, Some(Overlay::Alert))
+        } else {
+            frame(RED, None)
+        }
+    });
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        host_config.with_standard_packs_root(Some(root.root.clone())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let context = super::instance_workers::admit_ladder_run(&host, &request);
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("the scheduled run fails");
+    assert_eq!(error.code(), "contained_task_interrupt_escalated");
+    super::instance_workers::wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
+    let events = super::instance_workers::all_events(&host);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close runtime host");
+
+    let rungs = super::instance_workers::rung_outcomes(&events);
+    assert!(
+        !rungs
+            .iter()
+            .any(|(rung, ..)| *rung == actingcommand_contract::RecoveryRung::EmulatorRestart),
+        "no emulator restart rung: {rungs:?}"
+    );
+    let restart = rungs
+        .iter()
+        .find(|(rung, ..)| *rung == actingcommand_contract::RecoveryRung::ApplicationRestart)
+        .unwrap_or_else(|| panic!("the application restart rung: {rungs:?}"));
+    assert_eq!(
+        (restart.1, restart.2.as_deref()),
+        (
+            actingcommand_contract::RecoveryRungOutcome::Failed,
+            Some(UPDATE_REQUIRED)
+        ),
+        "{rungs:?}"
+    );
+    let (finished, result, _) =
+        super::instance_workers::ladder_finished(&events).expect("the ladder's end");
+    assert_eq!(
+        result,
+        actingcommand_contract::RecoveryLadderOutcome::Exhausted
+    );
+    assert_eq!(finished.severity(), EventSeverity::Warning);
+    assert_eq!(
+        super::instance_workers::ladder_end_code(finished),
+        Some("recovery_ladder_interrupted")
+    );
+    let started = super::instance_workers::phases(&events)
+        .iter()
+        .filter(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::RecoveryLadderStarted { .. }))
+        .count();
+    assert_eq!(started, 1, "the pack_logic ladder alone");
 }

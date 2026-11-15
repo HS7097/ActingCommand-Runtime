@@ -27447,6 +27447,81 @@ revision or record shape is added.
 **At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
 0.12.62 shows the values its terminal outcome recorded.
 
+### 1.400 Slice #469 D4a (0.12.62): a locked device and an application update stop on purpose; a spent call budget is a warning (Workflow #469; the owner's approval on board #469 on 11-15 of the four corrections that change what the program does, these three of them; the design `rd-1115/status-codes-a-design.md`, Part 2, A-2 item 1, the rows of `device_locked`, `contained_task_application_update_required` and `call_budget_exhausted`, and the slice row D4; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-d4-owner-four.md`, read on main `a5827228`)
+
+The coordinator gave this slice 1.400: main `a5827228` holds the sections up to §1.387, and the
+numbers between them and this one belong to slices dispatched with it (1.401 is D4b, the fourth
+correction). The slice ships in 0.12.62.
+
+**What it is.** Three corrections of a registered class, each in the registry macro and its
+fragment (G1). Each changes what the program does where a reader already reads the class; no
+decision point is added and none names a code.
+
+| Code (owner) | Was | Is | What reads the change |
+|---|---|---|---|
+| `device_locked` (device) | warning, `budget_or_permission` | warning, `planned_stop` | the errors view's run-recovery grouping (§1.337): its records are no failure of their run, as those of `device_thermal_hold`, `device_battery_low` and `device_in_use` are not |
+| `contained_task_application_update_required` (runtime-host) | warning, `none` | warning, `planned_stop` | the same: the package declares the update page and the run stops on purpose |
+| `call_budget_exhausted` (actingctl, registered in `crates/lab-ops/src/codes.rs`) | error, `none` | warning, `none` | the `category` of each envelope that carries it (below) |
+
+**What stays as it was.** Under the defaults no trigger item names `budget_or_permission`, `none`
+or `planned_stop` (they name `pack_logic_mismatch`, `stability_warning` and `environment_fault`,
+and `busy.screen.classes` names `pack_logic_mismatch`), so no trigger, burst or screen hold
+changes. A rung whose entry `device_locked` holds is skipped `device_not_ready` by its code
+(`recovery_entry_skip`), as before. A rung run that ends with
+`contained_task_application_update_required` ends the ladder by its code, a scheduled run that
+ends with it is a condition termination by its code (`scheduling.rerun.condition_codes`), and it
+never accumulates (by prefix). The policy's streak and pause read no class. No detail text, failure
+identity or streak changes.
+
+**Where `call_budget_exhausted` is written.** Searched: the code's variant and its spelling in
+every file of `apps/`, `crates/`, `tools/` and `tests/`, tests included, and every program that
+builds an answer from those writers. It is written only in `crates/lab-ops`: the overview
+(`budget_skipped`, `not_running_skipped`, `run_block`: a warning beside the overview), the
+diagnosis (`Unfinished::cut` and the `not_run` read: a warning beside the diagnosis), the run list
+(`RunsAnswer::warnings`: the warning of a page the read budget ended early) and the problem report
+(`RuntimeSource::step`: the cause of `report_part_missing` with `budget_spent`). Those reads are
+served by actingctl's command line and its MCP server (`overview`, `diagnose`, `runs`; `ac_overview`,
+`ac_diagnose`, `ac_runs`), by actinglab's command line (`status`, `diagnose`, `runs`, `report
+export`) and by actinglab-mcp, which serves the same operations and neither registers nor writes the
+code itself. In none is it the top code of an answer, a line or an exit status: each answer's top is
+its success code (`runtime_overview_reported`, `runtime_diagnosis_reported`, `run_list_reported`,
+`report_exported`), and no failure's outcome is built from it. So no exit status and no MCP
+`isError` changes; the `category` of the warning's envelope does (`warning`), in the command
+line's result line, both MCP servers' answers and a report's warnings. The code is registered once
+(that macro and `actingctl.json`).
+
+**Texts.** The three fragments' descriptions say the new class or category; the contracts that
+state the class: [application-lifecycle.md](application-lifecycle.md) ("The handset start
+gate"), [emulator-control.md](emulator-control.md) ("The game's update dialog"),
+[package-reference.md](package-reference.md) (`interrupts.json` `result`) and
+[global-ledger-query.md](global-ledger-query.md) (`run_recovery`: twenty codes of the class, from
+eighteen). The index is regenerated: warning 156 codes (155 before), error 3414 (3415).
+
+**Tests.** `crates/ledger/src/global/tests/gate_429_rg_stop.rs`, `d4a_t1_…` (`device_locked`) and
+`d4a_t2_…` (`contained_task_application_update_required`), gate map `ledger.toml` "#469 D4a": the
+embedded catalog gives the code `warning` and `planned_stop`; a run whose `task.failed` terminal and
+`runtime.failed` carry it has no group, both records stay warnings and rows of the page in the
+Errors view; a warning of the class `none` appended to the run is listed alone (missing relation,
+unknown). `crates/runtime-host/src/host/recovery_ladder/tests.rs`, `d4a_a_locked_device_…`: the
+four holds are `planned_stop` and each is skipped `device_not_ready`; no default trigger item
+matches `device_locked` at any stage; three of its warnings within the window register no burst.
+`crates/runtime-host/src/tests/gate_373_nav6.rs`, `d4a_the_update_dialog_…` (UPD-1 A4's run): the
+rung fails with the code, the ladder ends `exhausted` at Warning with
+`recovery_ladder_interrupted`, no emulator restart, one ladder only (gate map `host.toml`).
+`crates/lab-ops/src/overview.rs`, `d4a_a_spent_call_budget_…` (gate map `apps.toml`): the
+overview's two writers give warnings beside its success line, exit 0, no developer line, envelope
+`warning`; a line whose top it were exits 0. Adapted: `upd1_a9_…` of `gate_373_nav6.rs` asserted the
+update code's class `none`; it asserts `planned_stop`. No golden changes, no test leaves the gate
+map.
+
+**What is not changed.** Every emitter, every detail text, every other code's class and category,
+every decision that names a code, the configuration, the record shapes and every interface
+revision.
+
+**At deploy.** Nothing to do. The grouping reads the class of a record's code from the catalog
+the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
+`device_locked` or the update code shows no group in the errors view either.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
