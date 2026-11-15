@@ -3157,3 +3157,13 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_a_select_step_whose_tap_reaches_an_ending_completes_the_run_on_it",
 ]
 incident = ["#463 K2"]
+
+# Workflow #463 K2 fix round 1 (0.12.61; register §1.380; brief rd-1115/brief-1727-fix1.md, items 3 and 6; contracts/linear-steps.md, "Endings"), on the same packages: validate_linear refuses an ending page that buy's confirmation adds as a loading page (expect_after.loading.add, with its max_ms) and one that is buy's wait page (expect_after.wait_page), each contained_task_linear_invalid reason=ending_page (1); a control that declares store_update with the two endings is refused contained_task_linear_invalid reason=store_update_endings, and the same control with the usual ending alone passes validate_linear (2); the select step pick, last, in a package that also maps the ending short, with both cards closed and read: one record empty, one input (open's tap), pick's StepFinished on the list, Completed on the list after 2 steps with its on_empty key task_not_found (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_an_ending_page_that_a_confirmation_adds_or_waits_on_is_refused_ending_page",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_a_store_update_package_that_declares_an_ending_page_is_refused",
+    "actingcommand-execution-kernel::lib::contained_task::gate_463_k2::k2_a_select_steps_empty_end_in_a_package_with_an_ending_keeps_its_key",
+]
+incident = ["#463 K2"]

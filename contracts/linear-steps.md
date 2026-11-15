@@ -90,6 +90,7 @@ one operation is at fault; an existing check keeps its existing code.
 | every terminal page of that outcome is the target page, (Workflow #463 K1) the page of a select step that declares `on_empty`, or (Workflow #463 K2, since 0.12.61) a page no operation leaves or reaches, an ending page ("Endings" below) | `terminal_page` |
 | (Workflow #463 K2) an ending page is no operation's intermediate page and no page an operation's confirmation adds as a loading page or waits on ("Endings" below) | `ending_page` |
 | (Workflow #463 K2) no detector page is a terminal page of two mappings ("Endings" below) | `terminal_page_duplicate` |
+| (Workflow #463 K2) a package whose `control.json` declares `store_update` declares no ending page ("Endings" below) | `store_update_endings` |
 | the application rules of "Application steps" below | `application_retry`, `any_from`, `any_requires_application`, `input_after_application_stop`, `application_without_home` |
 | an application entry declares no `prerequisite_package_id` ("Prerequisite packages" below) | `prerequisite_with_application_entry` |
 | the optional-step rules of "Optional steps" below | `optional_first_step`, `optional_application`, `optional_restart_segment_end`, `optional_settle`, `optional_candidates`, `transition_page` |
@@ -431,6 +432,7 @@ ending that the target page or an `on_empty` page already is, is none. Admission
 | an ending page is a page no operation leaves or reaches; a terminal page on the path that is neither the target page nor an `on_empty` page is refused as before | `terminal_page` |
 | an ending page is no operation's intermediate page (its `page` transition's) and no page an operation's confirmation adds as a loading page or waits on (`expect_after.loading.add`, its wait page): those waits evaluate it apart from the step's candidates | `ending_page` |
 | no detector page is a terminal page of two mappings, since the host keys a run by the one mapping of the page it finished on (`contained_task_outcome_mapping_conflict` at the run's end otherwise). Two mappings that write a page alike are refused first by the declaration's own check (`contained_task_outcome_declaration_invalid`); this rule finds one page written two ways, with and without the game prefix | `terminal_page_duplicate` |
+| a package whose `control.json` declares `store_update` ([resource-declarations.md](resource-declarations.md), "Store update packages") declares no ending page: every success of such a package clears the instance's `health.application.update_required` ([instance-fact-store.md](instance-fact-store.md), "Application update facts"), and a run that finished on an ending page is a success | `store_update_endings` |
 
 `terminal_page_duplicate` holds every terminal page, the target page and an `on_empty` page
 included; K1's `select_on_empty_terminal` then answers an `on_empty` page that no mapping lists or
@@ -468,16 +470,35 @@ a success. So `contained_task_linear_unrecorded_screen` never names a frame on w
 ending passes, and an ending added from the frame it names makes that screen a normal end of the
 next run. A failure's `awaited=` lists the endings before the target page ("Failure codes").
 
-**The scheduler** tells the ends apart by their keys: the catalog's `outcome` predicate and metric
-(`task_id`, `outcome_key`) read the pair's latest settled success, in which the key that run
-produced is `true` and every other key the catalog references for the task `false`, so a rule sees
-which end the last run reached (bought, or too little balance); nothing counts the ends over
-several runs.
+**Resource adjustments** (Workflow #384 D2-S3; the coordinator's ruling on this slice's review):
+an operation that arrives on an ending page confirms no adjustment. The rule is the page the
+operation arrived on, not its declared destination: after a run of optional steps the operation
+before the run may arrive on the target page, which is not its declared destination, and its
+effect did happen, so it is confirmed there as before. The frame is still handed to recognition
+when the ending page carries a mark the run reads, and its readings are published as on any frame.
+A reader of the ledger then sees the run Completed on the ending page with its key, no adjustment
+record of that operation, and the adjusted key's earlier record unchanged.
 
-Known limit: the last operation's resource adjustments (Workflow #384 D2-S3) are confirmed on the
-frame it arrived on, an ending page included, as on every arrival; a package whose last press may
-end without its effect declares no adjustment on it. A task without an ending page has the
-candidate lists, the details and the records it had.
+**The scheduler** tells the ends apart by their keys, from the pair's latest completed run alone.
+For each task and instance the host projects the outcome of the latest completion in admission
+order: when that run succeeded, its key reads `true`, every other key of the task that the catalog
+references `false`, and `<key>.duration_ms` and `<key>.completed_at_unix_ms` hold the run's
+duration and completion time; when it failed or was stopped, the host projects nothing for the
+pair, so its keys read `outcome_missing` until a later success. The catalog's `outcome` predicate
+(`task_id`, `outcome_key`) compares such a value, a boolean for a key; a metric reads integers
+only, so of a key it reads `<key>.duration_ms` or `<key>.completed_at_unix_ms`, never the key
+itself. A rule therefore sees which end the pair's latest run reached when that run succeeded
+(bought, or too little balance); nothing counts the ends over several runs.
+
+Known limit: a rule's resource effects (`consumes`, `produces`) have no condition by outcome key.
+The policy settles no run's effects into a pool, whose amount is its latest reading: until a
+reading of the pool observed after a task's latest dispatch, the reserve gate and a capped pool's
+lines count the task's declared consumption as consumption the reading does not show yet, whatever
+the run's end ([scheduling/README.md](scheduling/README.md), "Task Reserves"). So a run that
+finished on an ending (too little balance) is held as one consumption until the pool's next
+reading, which corrects it; `produces` enters only the expectations of later decisions, never a
+pool's amount. A task without an ending page has the candidate lists, the details and the records
+it had.
 
 ## Loading pages
 

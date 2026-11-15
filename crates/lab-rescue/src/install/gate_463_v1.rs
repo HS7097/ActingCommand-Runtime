@@ -11,7 +11,8 @@
 //   contract crate's `VARIABLES_PACKAGE_REVISION`, 14 (Workflow #463 K2, register §1.380: to 15
 //   since, the same release, 14 still read);
 // - `v1_a_bundle_at_revision_14_is_planned_here_and_refused_by_an_earlier_installer`: on an
-//   installer of [3, 14] the bundle that declares [14, 14] is planned (its pack and `bundle.json`
+//   installer of [3, 14] (this build's [3, 15] since Workflow #463 K2, 14 within it) the bundle
+//   that declares [14, 14] is planned (its pack and `bundle.json`
 //   new, exit 0, no pause); on one of [3, 13] the same bundle is refused `interface_edge` at its
 //   `interfaces.json` before the hold: no pause, no journal, nothing in the game root;
 // - fix round 1 (`rd-1114/brief-1723-fix1.md`, item 4),
@@ -51,8 +52,9 @@ const WORD: Initiator = Initiator::LabRescue;
 /// The neutral game and pack of the bundle (made-up ids, no real game).
 const GAME: &str = "neutral-game";
 const PACK: &str = "neutral.pack";
-/// The `package` range of this build's installer: up to the revision a bundle whose packages
-/// declare variables declares.
+/// The `package` range of the installer these tests run: up to the revision a bundle whose
+/// packages declare variables declares (this build's reaches 15 since Workflow #463 K2, 14 within
+/// it).
 const INSTALLER_PACKAGE: [u64; 2] = [3, VARIABLES_PACKAGE_REVISION];
 /// The `package` range of an installer before this slice: up to the revision just below.
 const EARLIER_INSTALLER_PACKAGE: [u64; 2] = [3, VARIABLES_PACKAGE_REVISION - 1];
@@ -302,7 +304,8 @@ fn values_of<'a>(line: &'a Value, code: &str) -> Option<&'a Value> {
 
 // Fix round 1 (`rd-1114/brief-1723-fix1.md`, item 4), as
 // `goals_bundle_that_does_not_declare_revision_12_is_refused_goal_undeclared` holds
-// `goal_undeclared`: on this build's installer ([3, 14]) the bundle whose pack declares variables
+// `goal_undeclared`: on the tests' installer ([3, 14]; this build's [3, 15] since Workflow #463 K2,
+// 14 within it) the bundle whose pack declares variables
 // and that declares [3, 13], within the installer's range, is refused `pack_invalid` caused by
 // `standard_pack_root_invalid` with `variable_undeclared` at its `interfaces.json`, the pointer
 // empty, naming the pack, in the plan: no pause, no journal, nothing in the game root.
@@ -368,7 +371,8 @@ fn goals_version_2() -> Vec<u8> {
 
 // Fix round 3 (`rd-1115/brief-1723-fix3.md`, items 3 and 6), as
 // `goals_bundle_that_does_not_declare_revision_12_is_refused_goal_undeclared` holds version 1's
-// revision: on this build's installer ([3, 14]) a bundle that carries a version 2 `goals.json` and
+// revision: on the tests' installer ([3, 14]; this build's [3, 15] since Workflow #463 K2, 14 within
+// it) a bundle that carries a version 2 `goals.json` and
 // declares [12, 12], what a bundle that carried version 1 declared, within the installer's range
 // and its pack declaring no variable, is refused `pack_invalid` caused by
 // `standard_pack_root_invalid` with `goal_undeclared` at its `interfaces.json`, the pointer empty,

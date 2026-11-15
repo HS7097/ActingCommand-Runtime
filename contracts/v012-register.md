@@ -25536,11 +25536,16 @@ and every part of the Lab are later slices.
   (`contained_task_linear_invalid`, `reason=terminal_page`, before `PackageAdmitted`), so every run of
   such a package would fail, and the installer must refuse the bundle instead. **`package` 15**
   (Interface, below).
-- *The scheduler.* The catalog's `outcome` predicate and metric read the pair's latest settled
-  success (the host's projection of completed runs, `policy_dispatch.rs`): the key it produced is
-  `true`, with `<key>.duration_ms` and `<key>.completed_at_unix_ms`, and every other key the catalog
-  references for the task `false`, so a rule tells which end the last run reached; nothing counts the
-  ends over several runs.
+- *The scheduler* (fix round 1 corrects this point). The host projects, per task and instance, the
+  outcome of the latest completion in admission order (`outcome_key_snapshot` in `policy_host.rs`,
+  the projection in `policy_dispatch.rs`): when that run succeeded, its key is `true`, every other
+  key of the task the catalog references `false`, and `<key>.duration_ms` and
+  `<key>.completed_at_unix_ms` hold its duration and completion time; when it failed or was
+  stopped, nothing is projected for the pair, whose keys then read `outcome_missing` until a later
+  success. The `outcome` predicate compares such a value, a boolean for a key (`evaluator.rs`); a
+  metric reads integers only, so of a key it reads `<key>.duration_ms` or
+  `<key>.completed_at_unix_ms`, never the key itself (`strategy.rs`). A rule sees which end the
+  pair's latest run reached when that run succeeded; nothing counts the ends over several runs.
 
 **Admission** (`contained_task_linear_invalid`, no `operation=`):
 
@@ -25550,12 +25555,18 @@ and every part of the Lab are later slices.
 | an ending page is no operation's intermediate page and no page an operation's confirmation adds as a loading page or waits on | `ending_page` (new) |
 | no detector page is a terminal page of two mappings, after resolution | `terminal_page_duplicate` (new) |
 | a package with an ending page is no prerequisite and no return-home package (`contained_task_prerequisite_incompatible`, after `select_on_empty` in `scheduling_outcome_incompatibility`) | `linear_endings` (new) |
+| (fix round 1) a package whose `control.json` declares `store_update` declares no ending page | `store_update_endings` (new) |
 
 The design's `ending_page` also named the steps' own pages and optional pages. Those are pages of
 the path, which `terminal_page` already refuses and K1's and Workflow #336's tests pin
 (`gate_463_k1`, `gate_e5_linear`); the work order changes no existing test, so they keep that word,
 and `ending_page` is the one word for an ending page the step's intermediate or loading waits
-evaluate apart from its candidates. The three new words are detail values of existing codes,
+evaluate apart from its candidates. `store_update_endings` (fix round 1, item 3 of the work order
+`rd-1115/brief-1727-fix1.md`): any success of a package that declares `store_update` clears
+`health.application.update_required` (UPD-1, the host's terminal of a Completed run), a run that
+finished on an ending page included, so `validate_linear`, which reads the control declaration,
+refuses the combination after it has collected the endings, before K1's `on_empty` rules. The four
+new words are detail values of existing codes,
 registered where their family's words are, in the admission tables of
 [linear-steps.md](linear-steps.md) ("Admission", "Endings", "Prerequisite packages"); no outcome
 code, no key and no vocabulary changes, so the outcome code index does not change (its `--check`
@@ -25575,17 +25586,37 @@ budget only of a run's set, the one list that continued wait watches. `run_linea
 passing ending page before the optional-run matching. Records are the ordinary success's: no event
 type, payload member or enum value is added.
 
-**A task without an ending** is admitted, run and recorded as before: its plan's endings are empty,
+**A task without an ending** is run and recorded as before: its plan's endings are empty,
 `candidates` computes the lists it computed, `run_set` is true exactly where the list was a run's of
-more than one page (the old routing and the old budget check), and the details are the same.
-`terminal_page_duplicate` refuses only declarations refused before: an `on_empty` page in two
-mappings written two ways was `select_on_empty_terminal` at admission, and the target page written
-so failed every run at its end (`contained_task_outcome_mapping_conflict`).
+more than one page (the old routing and the old budget check), every arrival confirms its
+operation's adjustments as before, and the details are the same. Its admission changes in two
+declarations, both one detector page written with and without the game prefix in two mappings:
+the target page so written was admitted and failed every run at its end with
+`contained_task_outcome_mapping_conflict`, and is now refused at admission
+(`terminal_page_duplicate`); an `on_empty` page so written was refused `select_on_empty_terminal`,
+and is now refused `terminal_page_duplicate`.
 
-**Known limit** (a question for the coordinator, not decided here): the last operation's resource
-adjustments (Workflow #384 D2-S3) are confirmed on the frame it arrived on, an ending page included,
-as the design's place of the ending check (after the confirmation, before the optional-run matching)
-gives; a package whose last press may end without its effect declares no adjustment on it.
+**Resource adjustments** (fix round 1, item 1, the coordinator's ruling; this replaces the known
+limit the first round left as a question): an operation that arrives on an ending page confirms no
+adjustment. `run_linear_steps` asks `is_ending` of the page that passed before the confirmation and
+does not call `confirm_resource_adjustments` for an ending; the frame is handed to recognition
+before that, as on every arrival, so the ending page's own readings are joined and published. The
+rule is the page the operation arrived on, not its declared destination: after a run of optional
+steps the operation before the run may arrive on the target page, which is not its destination,
+and is confirmed there as before. The host's join check before `Finalizing` (every handed-off frame
+joined, every confirmation joined) holds with no confirmation, as after a select step's empty end.
+A reader of the ledger sees the run Completed on the ending page with its key, no adjustment record
+of that operation, and the adjusted key's earlier record unchanged. The page-graph path is
+untouched.
+
+**Known limit** (fix round 1, item 4, read only; [linear-steps.md](linear-steps.md), "Endings"): a
+rule's `consumes` and `produces` have no condition by outcome key. The policy settles no run's
+effects into a pool, whose amount is its latest reading; until a reading of the pool observed after
+a task's latest dispatch, the reserve gate (step 3), its spend allowance and a capped pool's lines
+count the task's declared consumption as consumption the reading does not show yet
+(`unshown_consumption` in `resource_targets.rs`, `capped.rs`), whatever the run's end. A run that
+finished on an ending is so held as one consumption until the pool's next reading, which corrects
+it; `produces` enters only the expectations of later decisions (net benefit, forward projection).
 
 **Interface: `package` 15**, by row 13's reasoning ([component-interfaces.md](component-interfaces.md),
 "What a range means": a bundle's maximum is the revision its packs need). The Runtime declares
@@ -25606,10 +25637,17 @@ bundle whose packs declare an ending and that declares less than 15, and an earl
 that package at every run (`reason=terminal_page`). `ledger`, `runtime-client`, `actingd-config` and
 `runtime-outcomes` do not move.
 
-**At deploy.** Nothing installed changes: no installed `linear_steps` package names a terminal page
-other than its target page or an `on_empty` page (an earlier build refused one). The Runtime declares
-`package` [3, 15]; a bundle that declares 15 is placed only by this build's installer or a later one.
-The recording side that adds endings is a later slice.
+**At deploy.** No installed `linear_steps` package names a terminal page other than its target page
+or an `on_empty` page (an earlier build refused one), so none gains an ending. Two declarations
+change their answer, each one detector page written with and without the game prefix in two
+mappings: a target page so written was admitted and failed every run at its end with
+`contained_task_outcome_mapping_conflict`, and is now refused at admission
+(`contained_task_linear_invalid`, `reason=terminal_page_duplicate`); an `on_empty` page so written
+was `select_on_empty_terminal` and is now `terminal_page_duplicate`. A package that declares
+`store_update` and an ending page could not be admitted before either (`reason=terminal_page`), so
+`store_update_endings` refuses nothing that was admitted. The Runtime declares `package` [3, 15]; a
+bundle that declares 15 is placed only by this build's installer or a later one. The recording side
+that adds endings is a later slice.
 
 **Rollback** (below 0.12.61). No record shape changes; a build below refuses a linear package with
 an ending page at admission (`reason=terminal_page`), before any lease, and its installer refuses a
@@ -25634,6 +25672,19 @@ the target page the usual key. Adapted because the requirement changes what it p
 `install::gate_463_v1::v1_the_build_declares_package_through_revision_14` holds [3, 15] and 14 within
 it (its gate row gains the incident `#463 K2`), and the architecture pin. No golden changes; no test
 leaves the gate map.
+
+Fix round 1 (`rd-1115/brief-1727-fix1.md`), new tests: kernel `gate_463_k2.rs` (a new exec gate
+row, incident `#463 K2`): `ending_page` for an ending page that the last operation's confirmation adds as a
+loading page and for one that is its wait page; `store_update_endings` for a control that declares
+`store_update` beside the two endings, the same control with the usual ending alone admitted by
+linear admission; a select step's empty end in a package that also maps an ending, Completed on its
+page with its `on_empty` key and no tap of its own. Host `gate_463_k2.rs` (a new host gate row,
+incident `#463 K2`), on a fresh host and its own clock as the D2-S3 host gate runs adjustments: the last
+press declares an adjustment with an amount; arriving on the ending page the run is Completed on
+it, the adjusted key keeps its earlier record and the ending page's reading is published; arriving
+on the target page the adjustment is written as before. Comments that still named this build's
+installer [3, 14] (`install::gate_455_gr1`, `install::gate_463_v1`, the G-R1 row of `apps.toml`)
+now name the tests' installer [3, 14] and this build's [3, 15]; no test changes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

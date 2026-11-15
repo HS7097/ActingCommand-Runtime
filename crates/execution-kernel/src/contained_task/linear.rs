@@ -1139,6 +1139,12 @@ impl TaskProgram {
                     }
                 }
             }
+            // Workflow #463 K2 fix round 1: any success of a package that declares `store_update`
+            // clears the instance's update requirement (UPD-1), and a run that finished on an
+            // ending page is a success, so such a package declares no ending page.
+            if control.store_update.is_some() && !endings.is_empty() {
+                return Err(invalid("store_update_endings", None));
+            }
             // Workflow #463 K1: the host derives a run's key from the page it finished on, and
             // the page-graph coverage check that gives an `on_empty` page its key is not run
             // here: by the one keyed-terminal rule, exactly one mapping lists the step's page,
@@ -1406,15 +1412,21 @@ impl PreparedContainedTask {
                 RememberedOcrObservations::default(),
                 run.timing.pace(),
             )?;
-            // Workflow #384 D2-S3 (model §3.6): the step's operation is confirmed on the frame
-            // it arrived on.
-            self.confirm_resource_adjustments(runtime, ocr_collector, &operation.id, &reached)?;
-            dispatched = dispatched.checked_add(1).ok_or_else(state_invalid)?;
             // Workflow #463 K2 (`contracts/linear-steps.md`, "Endings"): an ending page passed, a
-            // candidate only where the target page ends the path. The run finishes Completed on
-            // it, every operation dispatched counted; the kernel gives no key of its own, and the
-            // host keys the run by the one mapping of that page, as it keys the target page.
-            if plan.is_ending(&reached.page_label) {
+            // candidate only where the target page ends the path.
+            let ending = plan.is_ending(&reached.page_label);
+            // Workflow #384 D2-S3 (model §3.6): the step's operation is confirmed on the frame
+            // it arrived on. Workflow #463 K2 fix round 1 (the coordinator's ruling): an operation
+            // that arrives on an ending page confirms no adjustment, so the key's earlier record
+            // stands; the frame's own readings were handed off above.
+            if !ending {
+                self.confirm_resource_adjustments(runtime, ocr_collector, &operation.id, &reached)?;
+            }
+            dispatched = dispatched.checked_add(1).ok_or_else(state_invalid)?;
+            // Workflow #463 K2: the run finishes Completed on the ending page, every operation
+            // dispatched counted; the kernel gives no key of its own, and the host keys the run by
+            // the one mapping of that page, as it keys the target page.
+            if ending {
                 return self.finish_success(
                     runtime,
                     ocr_collector,

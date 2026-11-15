@@ -10,7 +10,10 @@
 // await the same list, then the step's own page: a late ending continues a retried attempt and
 // still fails under the closing decision; a still screen that shows none of them is U1's code with
 // the endings in its `awaited=`. A package with an ending is no prerequisite and no return-home
-// package (`linear_endings`); a package without one awaits and fails as before.
+// package (`linear_endings`); a package without one awaits and fails as before. Fix round 1
+// (`rd-1115/brief-1727-fix1.md`, items 3 and 6): an ending page a confirmation adds as a loading
+// page or waits on is `ending_page`, a `store_update` package declares no ending page
+// (`store_update_endings`), and a select step's empty end keeps its `on_empty` key beside an ending.
 //
 // Every expected value comes from those lines and the package values below, never from the code.
 // The packages are synthetic `neutral` packages, admitted by the kernel's own admission
@@ -697,6 +700,62 @@ fn k2_linear_admission_refuses_each_ending_rule_with_its_reason() {
     }
 }
 
+// Fix round 1 (`rd-1115/brief-1727-fix1.md`, item 6), B.1 as above: an ending page that `buy`'s
+// confirmation adds as a loading page (`expect_after.loading.add`), and one that is `buy`'s wait
+// page (`expect_after.wait_page`), is a page `buy`'s waits evaluate apart from its candidates, so
+// linear admission refuses it `ending_page`, as it refuses an operation's intermediate page.
+#[test]
+fn k2_an_ending_page_that_a_confirmation_adds_or_waits_on_is_refused_ending_page() {
+    for (case, member, declared) in [
+        (
+            "a loading page buy's confirmation adds",
+            "loading",
+            json!({"add": ["short"], "max_ms": 60_000}),
+        ),
+        (
+            "buy's wait page",
+            "wait_page",
+            json!({"page_id": "short", "max_ms": 10_000}),
+        ),
+    ] {
+        let mut adding = buy_task(endings());
+        adding["operations"][1]["expect_after"][member] = declared;
+        let error = linear_admission(control(2), adding)
+            .err()
+            .unwrap_or_else(|| panic!("{case}: admitted"));
+        assert_eq!(error.code().as_str(), LINEAR_INVALID, "{case}: {error}");
+        assert_eq!(
+            error.detail(),
+            Some("reason=ending_page"),
+            "{case}: {error}"
+        );
+    }
+}
+
+// Fix round 1 (`rd-1115/brief-1727-fix1.md`, item 3): any success of a package that declares
+// `store_update` clears the instance's update requirement (UPD-1), a run that finished on an
+// ending page included, so linear admission refuses an ending page in such a package
+// (`store_update_endings`); the same package without its endings passes linear admission.
+#[test]
+fn k2_a_store_update_package_that_declares_an_ending_page_is_refused() {
+    let mut store = control(2);
+    store["store_update"] = json!({
+        "store_application_id": "test.store.alpha",
+        "store_operations": [{"operation": "buy", "proof": ["page/list"]}]
+    });
+    let error = linear_admission(store.clone(), buy_task(endings()))
+        .err()
+        .unwrap_or_else(|| panic!("a store update package with endings: admitted"));
+    assert_eq!(error.code().as_str(), LINEAR_INVALID, "{error}");
+    assert_eq!(
+        error.detail(),
+        Some("reason=store_update_endings"),
+        "{error}"
+    );
+    linear_admission(store, buy_task(vec![mapping(DONE_KEY, "done")]))
+        .unwrap_or_else(|error| panic!("a store update package without endings: refused: {error}"));
+}
+
 // One admission case: the task changed in one declaration, and the refusal's code and detail.
 struct Refusal {
     case: &'static str,
@@ -1050,5 +1109,55 @@ fn k2_a_select_step_whose_tap_reaches_an_ending_completes_the_run_on_it() {
     assert_eq!(
         device.awaited_after("pick"),
         [pages_of(&[SHORT_PAGE, DONE_PAGE])]
+    );
+}
+
+// Fix round 1 (`rd-1115/brief-1727-fix1.md`, item 6), Workflow #463 K1's empty end in a package
+// that also names an ending: the same task as above, both cards closed and both read, so `pick`'s
+// policy (`none_allowed`) decides `empty` with nothing unknown. `pick` declares `on_empty`: it taps
+// nothing, its `StepFinished` names the list and the run is Completed on the list with its
+// `on_empty` key `NOT_FOUND`, both steps counted, as without an ending; the ending is no candidate
+// of an end that taps nothing.
+#[test]
+fn k2_a_select_steps_empty_end_in_a_package_with_an_ending_keeps_its_key() {
+    let mut select = task(
+        vec![tap("open", "home", "list"), pick()],
+        vec![
+            mapping(DONE_KEY, "done"),
+            mapping(NOT_FOUND, "list"),
+            mapping(SHORT_KEY, "short"),
+        ],
+    );
+    select["candidate_layouts"] = json!([cards_layout()]);
+    let task = admitted("a select step and an ending", &control(2), &select);
+    let mut device = Device::new(vec![
+        vec![plain(HOME)],
+        vec![list((ALPHA, false), (BRAVO, false))],
+        vec![plain(DONE)],
+    ]);
+
+    let outcome = task
+        .run(&mut device)
+        .unwrap_or_else(|error| panic!("expected a normal end, got {error:?}"));
+
+    assert_eq!(
+        outcome,
+        ContainedTaskOutcome {
+            outcome: TaskOutcome::Success,
+            final_page: Some(LIST_PAGE.to_owned()),
+            executed_steps: 2,
+            selected_scheduling_outcome: Some(NOT_FOUND.to_owned()),
+            designated_effect_caps: Vec::new(),
+        }
+    );
+    let records = device.records();
+    let [(1, record)] = records.as_slice() else {
+        panic!("one decision record of step 1, got {}", records.len());
+    };
+    assert_eq!(record.selection_result, TaskSelectionOutcome::Empty);
+    assert_eq!(device.inputs().len(), 1, "{:?}", device.inputs());
+    assert_eq!(
+        device.finished(),
+        [(0, "open", LIST_PAGE), (1, "pick", LIST_PAGE)]
     );
 }
