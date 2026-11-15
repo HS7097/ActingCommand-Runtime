@@ -669,7 +669,8 @@ const RECORD_ONLY_FLAGS: [&str; 5] = [
 /// #463 S1-1: the flags `tap`, `swipe` and `long-tap` take with `--record` only: the wait before
 /// the screen after the press and (#463 S1-2) how its captures repeat until the screen is still.
 /// `--interval-ms`, which other commands take for their own, is refused only on these three
-/// ([`PRESS_COMMANDS`]).
+/// ([`PRESS_COMMANDS`]) and (the train of stage one, #463 S1-3) on `session app`, which takes the
+/// four with `--record` for the screen after an application operation.
 const PRESS_RECORD_ONLY_FLAGS: [&str; 4] = [
     "--after-ms",
     "--interval-ms",
@@ -686,8 +687,9 @@ const PRESS_COMMANDS: [&str; 3] = ["tap", "swipe", "long-tap"];
 /// `long-tap`; `observe`, `do`, `session app` and the three device commands refuse it with
 /// `--dry-run`. `--tap-rect` exists only with it, and so (#463 L1) do the flags of the one-call
 /// form, [`RECORD_ONLY_FLAGS`], and (#463 S1-1) the wait of a recorded press and (#463 S1-2) its
-/// captures after it, [`PRESS_RECORD_ONLY_FLAGS`]. FlagArgs accepts unknown flags, so without this
-/// gate they would be silently ignored.
+/// captures after it, [`PRESS_RECORD_ONLY_FLAGS`], which (the train of stage one) a recorded
+/// `session app` takes too: refused without `--record`, the refusal names the command that takes
+/// them. FlagArgs accepts unknown flags, so without this gate they would be silently ignored.
 fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
     let args = &invocation.args;
     if !args.iter().any(|arg| arg == "--record") {
@@ -707,13 +709,27 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
             invocation.command.as_slice(),
             [cmd] if PRESS_COMMANDS.contains(&cmd.as_str())
         );
+        // The train of stage one: `session app` (and `session instance app`) take the four with
+        // `--record` too (#463 S1-3), and the refusal names that command.
+        let application = match invocation.command.as_slice() {
+            [group, sub] if group == "session" && sub == "app" => true,
+            [group, sub] if group == "session" && sub == "instance" => {
+                args.first().is_some_and(|word| word == "app")
+            }
+            _ => false,
+        };
         if let Some(flag) = PRESS_RECORD_ONLY_FLAGS
             .iter()
-            .filter(|flag| press || **flag != "--interval-ms")
+            .filter(|flag| press || application || **flag != "--interval-ms")
             .find(|flag| args.iter().any(|arg| arg == **flag))
         {
+            let commands = if application {
+                "session app <launch|restart|stop|force-stop>"
+            } else {
+                "tap, swipe or long-tap"
+            };
             return Err(CliError::usage(format!(
-                "{flag} is accepted only with tap, swipe or long-tap --record"
+                "{flag} is accepted only with {commands} --record"
             ))
             .with_details(serde_json::json!({
                 "argument": flag.trim_start_matches("--").replace('-', "_"),

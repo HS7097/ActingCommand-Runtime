@@ -2116,6 +2116,41 @@ fn check_after_capture(after: &AfterCapture) -> LabResult<()> {
     Ok(())
 }
 
+/// #463 S1-3 (the train of stage one, which joins S1-2's captures after a press with S1-3's
+/// application operations): how the screen after an effect is to be taken, checked before anything
+/// is captured, pressed or sent: the wait `after_ms` 0 to 60000 (`validation_failed`,
+/// `details{argument: "after_ms", reason: "range", after_ms, max_after_ms}`, S1-1's words), then the
+/// ranges and the bound of 120 intervals (`check_after_capture`). [`record_press`] checks a press's
+/// so, and `session app <verb> --record` its operation's before it sends the operation.
+pub fn record_after_capture_check(after: &AfterCapture) -> LabResult<()> {
+    let after_ms = after.after_ms;
+    if after_ms > LAB_RECORDING_MAX_NEXT_FRAME_MS {
+        return Err(LabError::usage(format!(
+            "--after-ms (MCP after_ms) must be in 0..={LAB_RECORDING_MAX_NEXT_FRAME_MS}, got \
+             {after_ms}"
+        ))
+        .with_details(json!({
+            "argument": "after_ms",
+            "reason": "range",
+            "after_ms": after_ms,
+            "max_after_ms": LAB_RECORDING_MAX_NEXT_FRAME_MS
+        })));
+    }
+    check_after_capture(after)
+}
+
+/// #463 S1-2: the words an answer's `record.warnings` holds for how the screen after its effect was
+/// taken (`record`): `after_not_still` when the stillness test reached its bound without a still
+/// screen, none otherwise. #463 S1-3 (the train of stage one): a press's answer ([`record_press`])
+/// and an application operation's (`session app <verb> --record`) read them here.
+pub fn record_after_warnings(record: &AfterCaptureRecord) -> Vec<String> {
+    if record.still == Some(false) {
+        vec![AFTER_NOT_STILL.to_owned()]
+    } else {
+        Vec::new()
+    }
+}
+
 /// #463 S1-2: the frame-change digest of a whole frame (`frame_change_digest`, called as the
 /// kernel's still waits call it); a frame it cannot digest is `record_frame_unreadable`.
 fn change_digest(frame: &LoadedFrame, label: &str) -> LabResult<ColorDigest> {
@@ -2418,19 +2453,9 @@ pub fn record_press(
     ports: &mut impl RecordFramePorts,
 ) -> LabResult<RecordPressOutcome> {
     let after_ms = request.after.after_ms;
-    if after_ms > LAB_RECORDING_MAX_NEXT_FRAME_MS {
-        return Err(LabError::usage(format!(
-            "--after-ms (MCP after_ms) must be in 0..={LAB_RECORDING_MAX_NEXT_FRAME_MS}, got \
-             {after_ms}"
-        ))
-        .with_details(json!({
-            "argument": "after_ms",
-            "reason": "range",
-            "after_ms": after_ms,
-            "max_after_ms": LAB_RECORDING_MAX_NEXT_FRAME_MS
-        })));
-    }
-    check_after_capture(&request.after)?;
+    // The train of stage one: S1-1's check of the wait and S1-2's of the rest, in that order, in
+    // the one function `session app <verb> --record` calls too.
+    record_after_capture_check(&request.after)?;
     {
         let session = open_session(lock)?;
         if open_step(&session.recording).is_some() {
@@ -2471,9 +2496,7 @@ pub fn record_press(
     } = capture_after_press(lock, ports, &request.after)
         .map_err(|error| after_frame_failed(error, &outcome, after_ms))?;
     // #463 S1-2: a stillness test that reached its bound without a still screen says so.
-    if record.still == Some(false) {
-        outcome.warnings.push(AFTER_NOT_STILL.to_owned());
-    }
+    outcome.warnings.extend(record_after_warnings(&record));
     // The click as recorded now: its execution names the frame after it and how it was taken.
     if let Some(execution) = outcome.click.click.execution.as_mut() {
         execution.after_frame = Some(frame.frame.frame_id.clone());

@@ -896,8 +896,8 @@ fn run_recorded_touch(
 
 /// #463 S1-1: `--after-ms <ms>`, a whole number of milliseconds (the recording checks its bound,
 /// 0 to 60000); anything else is `validation_failed` with `details{argument: "after_ms", reason:
-/// "range"}`.
-fn parse_after_ms(value: &str) -> CliOutcome<u64> {
+/// "range"}`. The train of stage one: `session app <verb> --record` reads its `--after-ms` so too.
+pub(crate) fn parse_after_ms(value: &str) -> CliOutcome<u64> {
     value.parse::<u64>().map_err(|_| {
         CliError::usage(format!(
             "--after-ms takes a whole number of milliseconds from 0 to \
@@ -909,8 +909,13 @@ fn parse_after_ms(value: &str) -> CliOutcome<u64> {
 
 /// #463 S1-2: `flag` (`--interval-ms`, `--still-ms` or `--still-max-ms`) when it is given, a whole
 /// number of milliseconds (the recording checks its range and the bound of the captures it allows);
-/// anything else is `validation_failed` with `details{argument, reason: "range"}`.
-fn after_capture_ms(flags: &FlagArgs, flag: &str, argument: &str) -> CliOutcome<Option<u64>> {
+/// anything else is `validation_failed` with `details{argument, reason: "range"}`. The train of
+/// stage one: `session app <verb> --record` reads the three so too.
+pub(crate) fn after_capture_ms(
+    flags: &FlagArgs,
+    flag: &str,
+    argument: &str,
+) -> CliOutcome<Option<u64>> {
     flags
         .optional(flag)
         .map(|value| {

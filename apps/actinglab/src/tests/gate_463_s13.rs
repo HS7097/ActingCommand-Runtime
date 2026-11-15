@@ -35,10 +35,29 @@
 // - `s13_a_press_after_an_operation_replaces_the_frame_its_screen_after_opened_the_step_with`: a tap
 //   after `restart --record`: its capture before replaces the frame the restart's screen after
 //   opened the step with, and the restart's `after_frame` is not rewritten.
+// The train of stage one (S1-1, S1-2 and S1-3 joined): the screen after an operation, and after a
+// tap, is captured until it is still (#463 S1-2), on the fake's clock, which moves only by its
+// waits. No test switches the loop off. What each now captures, the fake's captures repeating
+// their last screen: a tap of `Bench::tap` (every 100 ms, still after 300 ms) one capture before
+// it and four after it; an operation with `AfterCapture::for_application` one capture before it
+// (none on the entry step) and three after it (after 2000 ms, then every 1000 ms, still after
+// 2000 ms). So:
+// - the restart in the middle of a business: the tap's after loop is f0002 to f0005 (its
+//   `after_frame` f0005), the capture before the restart f0006 (`before_frame`), its after loop
+//   f0007 to f0009 in step 3 (`after_frame` f0009, `after_capture {2000, 1000, 2000, 30000, true,
+//   4000, 3, 2}`), the answer's `record.warnings` empty;
+// - the entry launch: no capture for it; the tap after it, one before (f0001) and four after;
+// - the operation declared offline: no capture;
+// - the waits: the four flags of a press, the application's own interval and stillness by
+//   default, and a bound of more than 120 intervals refused before anything is sent;
+// - the operation on a marked step: one capture before it (not stored), three after it (f0002 to
+//   f0004, the last the `after_frame`);
+// - two operations in a row: a tap (one and four), then each operation one before it and three
+//   after it;
+// - a press after an operation: a tap (one and four), the restart (one and three), the tap (one
+//   and four).
 // Frames are synthetic 1280x720 (a square of one colour at the top left on gray); no Runtime, no
-// device; the tests read no clock and never sleep. The fake's captures repeat their last screen,
-// and the assertions read what the operation hands the screen after, not how many captures it
-// takes.
+// device; the tests read no clock and never sleep.
 
 use crate::FlagArgs;
 use crate::flag_args::reads;
@@ -156,18 +175,26 @@ fn completed() -> ApplicationExecution {
 
 /// The fake Runtime's capture and the caller's clock: the screens its captures take, in order, the
 /// last one again once they run out, and what it was asked, in the log it shares with the
-/// operation.
+/// operation. The train of stage one: the clock (`now`) moves only by the waits, so that the after
+/// loop of #463 S1-2 ends when the repeated screen has stood for `still_ms`; a capture takes no
+/// time.
 struct FakeDevice<'a> {
     screens: Vec<usize>,
     taken: usize,
     log: &'a RefCell<Vec<String>>,
+    now: Duration,
 }
 
 impl RecordFramePorts for FakeDevice<'_> {
     fn wait(&mut self, duration: Duration) {
+        self.now += duration;
         self.log
             .borrow_mut()
             .push(format!("wait {}", duration.as_millis()));
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        self.now
     }
 
     fn capture(&mut self) -> LabResult<CapturedFrame> {
@@ -248,6 +275,7 @@ impl Bench {
             screens: screens.to_vec(),
             taken: 0,
             log: &log,
+            now: Duration::ZERO,
         };
         let mut press = |_: &ClickPlan, _: InputFrameReference| -> LabResult<CommitClickRequest> {
             Ok(performed_tap())
@@ -286,6 +314,7 @@ impl Bench {
                     screens: screens.to_vec(),
                     taken: 0,
                     log: &log,
+                    now: Duration::ZERO,
                 })
             },
             |plan: &ApplicationPlan| -> LabResult<Operated> {
@@ -387,7 +416,9 @@ const SCREEN_MEMBERS: [&str; 3] = ["before_frame", "after_frame", "after_capture
 #[test]
 fn s13_a_restart_in_the_middle_of_a_business_is_the_open_steps_effect_with_both_screens() {
     let bench = Bench::new();
-    // A tap: screen 0 opens step 1, screen 1 after it opens step 2, which has no mark.
+    // A tap: screen 0 opens step 1, screen 1 after it opens step 2, which has no mark. The train
+    // of stage one: the tap's after loop (#463 S1-2, every 100 ms, still after 300 ms) takes screen
+    // 1 four times, f0002 to f0005, the last its `after_frame`.
     bench.tap(100, 200, [0, 1]);
     // `session app restart --record`, without its waits: the defaults are handed on.
     let after = parsed(&["--record"]).expect("the waits");
@@ -395,16 +426,29 @@ fn s13_a_restart_in_the_middle_of_a_business_is_the_open_steps_effect_with_both_
         after,
         AfterCapture {
             after_ms: 2_000,
+            interval_ms: Some(1_000),
+            still_ms: Some(2_000),
             still_max_ms: 30_000
         }
     );
     let (result, log) = bench.application("restart", &after, [2, 0]);
     let data = the_answer(result);
     // Round 2: a capture immediately before the operation, which lands on step 2; after it, the
-    // wait handed and a capture.
+    // wait handed and a capture. The train of stage one: then one capture every 1000 ms until
+    // screen 0 has stood for 2000 ms: three captures after the operation.
     assert_eq!(
-        log.iter().take(5).map(String::as_str).collect::<Vec<_>>(),
-        ["frames", "capture", "operate 2", "wait 2000", "capture"],
+        log,
+        [
+            "frames",
+            "capture",
+            "operate 2",
+            "wait 2000",
+            "capture",
+            "wait 1000",
+            "capture",
+            "wait 1000",
+            "capture"
+        ],
         "{log:?}"
     );
 
@@ -425,27 +469,56 @@ fn s13_a_restart_in_the_middle_of_a_business_is_the_open_steps_effect_with_both_
     let executed = &application["executed"];
     assert_eq!(executed["request_id"], "request-s13", "{step}");
     // The screen before: the capture before the operation, the step's live primary frame; the
-    // frame the tap's screen after opened the step with stays in it, superseded, and is still the
-    // tap's `after_frame`.
+    // frames the tap's screen after took stay in it, superseded, and the last of them (the train of
+    // stage one: f0005, the tap's after loop's last) is still the tap's `after_frame`.
     let before = live_primary(step);
-    assert_eq!(before["frame_id"], "f0003", "{step}");
-    assert_eq!(executed["before_frame"], "f0003", "{step}");
-    assert_eq!(step["frames"][0]["frame_id"], "f0002", "{step}");
-    assert_eq!(step["frames"][0]["superseded"], true, "{step}");
+    assert_eq!(before["frame_id"], "f0006", "{step}");
+    assert_eq!(executed["before_frame"], "f0006", "{step}");
+    let frames = step["frames"].as_array().expect("step 2's frames");
     assert_eq!(
-        steps[0]["click"]["execution"]["after_frame"], "f0002",
+        frames
+            .iter()
+            .map(|frame| (frame["frame_id"].clone(), frame["superseded"].clone()))
+            .collect::<Vec<_>>(),
+        [
+            (json!("f0002"), json!(true)),
+            (json!("f0003"), json!(true)),
+            (json!("f0004"), json!(true)),
+            (json!("f0005"), json!(true)),
+            (json!("f0006"), json!(false))
+        ],
+        "{step}"
+    );
+    assert_eq!(
+        steps[0]["click"]["execution"]["after_frame"], "f0005",
         "{recording}"
     );
-    // The screen after: the frame that opened step 3.
+    // The screen after: the train of stage one: the three captures after the operation are the
+    // frames of step 3, which the first opened (f0007, f0008, f0009), the last its live primary
+    // frame and the operation's `after_frame`.
     let next = &steps[2];
     assert_eq!(next["index"], 3, "{next}");
     assert_eq!(next["closed"], false, "{next}");
     assert!(next["click"].is_null(), "{next}");
     assert!(next["application"].is_null(), "{next}");
+    assert_eq!(next["frames"].as_array().map(Vec::len), Some(3), "{next}");
     let after_frame = live_primary(next);
-    assert!(after_frame["frame_id"].is_string(), "{next}");
+    assert_eq!(after_frame["frame_id"], "f0009", "{next}");
     assert_eq!(executed["after_frame"], after_frame["frame_id"], "{step}");
-    assert_eq!(executed["after_capture"]["after_ms"], 2_000, "{step}");
+    assert_eq!(
+        executed["after_capture"],
+        json!({
+            "after_ms": 2_000,
+            "interval_ms": 1_000,
+            "still_ms": 2_000,
+            "still_max_ms": 30_000,
+            "still": true,
+            "waited_ms": 4_000,
+            "captures": 3,
+            "kept": 2
+        }),
+        "{step}"
+    );
 
     // The answer: the plain command's, with the operation as recorded and the screen after it.
     assert_eq!(data["status"], "completed", "{data}");
@@ -466,6 +539,10 @@ fn s13_a_restart_in_the_middle_of_a_business_is_the_open_steps_effect_with_both_
     assert_eq!(record["after"]["path"], after_frame["path"], "{record}");
     assert_eq!(record["after"]["sha256"], after_frame["sha256"], "{record}");
     assert_eq!(record["after"]["after_ms"], 2_000, "{record}");
+    // The train of stage one: the screen was found still, so no warning, in the member a press's
+    // answer carries `after_not_still` in.
+    assert_eq!(record["after"]["still"], true, "{record}");
+    assert_eq!(record["warnings"], json!([]), "{record}");
 }
 
 #[test]
@@ -575,10 +652,14 @@ fn s13_an_application_operation_declared_offline_needs_no_mark() {
 
 #[test]
 fn s13_the_waits_handed_to_the_screen_after_are_the_flags_or_the_defaults() {
+    // The train of stage one: the application's own interval and stillness (#463 S1-2 fix round
+    // 3: after 2000 ms, every 1000 ms, still after 2000 ms unchanged, at most 30000 ms).
     assert_eq!(
         AfterCapture::for_application(None),
         AfterCapture {
             after_ms: 2_000,
+            interval_ms: Some(1_000),
+            still_ms: Some(2_000),
             still_max_ms: 30_000
         }
     );
@@ -590,6 +671,8 @@ fn s13_the_waits_handed_to_the_screen_after_are_the_flags_or_the_defaults() {
         parsed(&["--record", "--after-ms", "500", "--still-max-ms", "0"]).expect("both waits"),
         AfterCapture {
             after_ms: 500,
+            interval_ms: Some(1_000),
+            still_ms: Some(2_000),
             still_max_ms: 0
         }
     );
@@ -597,13 +680,28 @@ fn s13_the_waits_handed_to_the_screen_after_are_the_flags_or_the_defaults() {
         parsed(&["--still-max-ms", "60000", "--record"]).expect("the bound only"),
         AfterCapture {
             after_ms: 2_000,
+            interval_ms: Some(1_000),
+            still_ms: Some(2_000),
             still_max_ms: 60_000
+        }
+    );
+    // The train of stage one: the interval and the stillness as a press takes them.
+    assert_eq!(
+        parsed(&["--record", "--interval-ms", "500", "--still-ms", "0"]).expect("the loop's"),
+        AfterCapture {
+            after_ms: 2_000,
+            interval_ms: Some(500),
+            still_ms: Some(0),
+            still_max_ms: 30_000
         }
     );
     for (words, argument) in [
         (["--record", "--after-ms", "60001"], "after_ms"),
         (["--record", "--still-max-ms", "60001"], "still_max_ms"),
         (["--record", "--after-ms", "soon"], "after_ms"),
+        // The train of stage one: 30000 ms at 100 ms is more than 120 intervals, refused before
+        // the operation is sent, as a press's bound is.
+        (["--record", "--interval-ms", "100"], "still_max_ms"),
     ] {
         let error = parsed(&words).expect_err("a wait outside its range");
         assert_eq!(
@@ -638,10 +736,21 @@ fn s13_an_operation_on_a_marked_step_keeps_the_stored_frame() {
     bench.mark(1, "first_square", None);
     let (result, log) = bench.application("restart", &AfterCapture::for_application(None), [1, 2]);
     let data = the_answer(result);
-    // The capture before the operation is taken all the same, immediately before it.
+    // The capture before the operation is taken all the same, immediately before it. The train of
+    // stage one: after it, three captures of screen 2 (still after 2000 ms).
     assert_eq!(
-        log.iter().take(5).map(String::as_str).collect::<Vec<_>>(),
-        ["frames", "capture", "operate 1", "wait 2000", "capture"],
+        log,
+        [
+            "frames",
+            "capture",
+            "operate 1",
+            "wait 2000",
+            "capture",
+            "wait 1000",
+            "capture",
+            "wait 1000",
+            "capture"
+        ],
         "{log:?}"
     );
 
@@ -657,9 +766,11 @@ fn s13_an_operation_on_a_marked_step_keeps_the_stored_frame() {
     assert_eq!(step["closed_by"], "application", "{step}");
     let executed = &step["application"]["executed"];
     assert_eq!(executed["before_frame"], "f0001", "{step}");
-    // The screen after takes the next frame id: the capture before took none.
+    // The screen after takes the next frame id: the capture before took none. The train of stage
+    // one: its three captures are step 2's frames, f0002 to f0004, the last the `after_frame`.
     let next = &steps[1];
     assert_eq!(next["frames"][0]["frame_id"], "f0002", "{next}");
+    assert_eq!(live_primary(next)["frame_id"], "f0004", "{next}");
     assert_eq!(
         executed["after_frame"],
         live_primary(next)["frame_id"],
@@ -684,22 +795,23 @@ fn s13_two_operations_in_a_row_each_capture_the_screen_before_them() {
     let restarted = the_answer(first);
     let (second, second_log) = bench.application("stop", &after, [1, 2]);
     let stopped = the_answer(second);
+    // The train of stage one: after each operation, three captures (still after 2000 ms).
+    let after_each = [
+        "wait 2000",
+        "capture",
+        "wait 1000",
+        "capture",
+        "wait 1000",
+        "capture",
+    ];
     assert_eq!(
-        first_log
-            .iter()
-            .take(5)
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        ["frames", "capture", "operate 2", "wait 2000", "capture"],
+        first_log.iter().map(String::as_str).collect::<Vec<_>>(),
+        [&["frames", "capture", "operate 2"][..], &after_each[..]].concat(),
         "{first_log:?}"
     );
     assert_eq!(
-        second_log
-            .iter()
-            .take(5)
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        ["frames", "capture", "operate 3", "wait 2000", "capture"],
+        second_log.iter().map(String::as_str).collect::<Vec<_>>(),
+        [&["frames", "capture", "operate 3"][..], &after_each[..]].concat(),
         "{second_log:?}"
     );
     let restart_after = restarted["record"]["after"]["frame_id"].clone();

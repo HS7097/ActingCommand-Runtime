@@ -1,4 +1,6 @@
-use crate::commands::device_commands::{LEGACY_ROUTING_READS, capture_for_command};
+use crate::commands::device_commands::{
+    LEGACY_ROUTING_READS, after_capture_ms, capture_for_command, parse_after_ms,
+};
 use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::instance_resolution::resolve_instance_id_for_flags;
 use crate::runtime_slice_cli;
@@ -15,13 +17,14 @@ use actingcommand_contract::{
 use actingcommand_lab::{
     AfterCapture, AfterFrame, ApplicationAttempt, ApplicationExecution, ApplicationPlan,
     AttachFrameRequest, CapturedFrame, CommitApplicationOutcome, CommitApplicationRequest,
-    LAB_RECORDING_MAX_NEXT_FRAME_MS, LabStatus, OpaqueJson, PlanApplicationRequest,
-    RecordFramePorts, RecordingLock, record_after_frame, record_application_append_failed,
-    record_before_frame, record_commit_application, record_plan_application, record_status,
+    LabStatus, OpaqueJson, PlanApplicationRequest, RecordFramePorts, RecordingLock,
+    record_after_capture_check, record_after_frame, record_after_warnings,
+    record_application_append_failed, record_before_frame, record_commit_application,
+    record_plan_application, record_status,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeFlowOutput};
 use serde_json::{Map, Value, json};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(super) fn run_session_monitor_policy(
     global: &GlobalOptions,
@@ -244,9 +247,15 @@ pub(crate) const SESSION_APP_READS: FlagReads = FlagReads {
 };
 
 /// #463 S1-3 (`contracts/lab-recording.md`, "Application steps"): the flags `session app <action>`
-/// takes with `--record` only: the wait before the screen after the operation and the bound of the
-/// wait for a still screen (`application_after_capture`).
-const APPLICATION_RECORD_ONLY_FLAGS: [&str; 2] = ["--after-ms", "--still-max-ms"];
+/// takes with `--record` only: how the screen after the operation is taken
+/// (`application_after_capture`). The train of stage one: the four a recorded press takes, the wait
+/// before the first capture and (#463 S1-2) how the captures repeat until the screen is still.
+const APPLICATION_RECORD_ONLY_FLAGS: [&str; 4] = [
+    "--after-ms",
+    "--interval-ms",
+    "--still-ms",
+    "--still-max-ms",
+];
 
 pub(super) fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let action = args
@@ -367,9 +376,12 @@ pub(super) fn run_session_app_or_recorded(
 /// operation (returned as the plain command returns it, nothing recorded); any other error
 /// may have run it (one attempt recorded, `record_application_indeterminate`). #463 S1-3: the
 /// operation is a step with the screen before it and the screen after it, each taken as `capture
-/// --record` takes it ([`record_application_operation`]); `--after-ms` and `--still-max-ms` say how
-/// the screen after it is taken ([`application_after_capture`]).
+/// --record` takes it ([`record_application_operation`]); `--after-ms`, `--interval-ms`,
+/// `--still-ms` and `--still-max-ms` say how the screen after it is taken, checked before anything
+/// is captured or sent ([`application_after_capture`]). The train of stage one: the captures' clock
+/// starts with the command (`ApplicationFrames::origin`).
 fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let started = Instant::now();
     let verb = args
         .first()
         .map(String::as_str)
@@ -400,7 +412,12 @@ fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutco
     )?;
     // The device configuration of the captures, resolved before anything is captured or sent; the
     // entry step takes no frame and asks for none.
-    let frames = || device_config(global, &config).map(|device| ApplicationFrames { device });
+    let frames = || {
+        device_config(global, &config).map(|device| ApplicationFrames {
+            device,
+            origin: started,
+        })
+    };
     let operate = |plan: &ApplicationPlan| -> CliOutcome<Operated> {
         let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
             .map_err(runtime_slice_cli::map_runtime_error)?;
@@ -429,37 +446,29 @@ fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutco
 }
 
 /// #463 S1-3 (`contracts/lab-recording.md`, "Application steps"): how the screen after a recorded
-/// application operation is taken, as `record_after_frame` is handed it: `--after-ms` and
-/// `--still-max-ms` as given, each a whole number of milliseconds from 0 to 60000, else
-/// `validation_failed` with `details{argument, reason: "range"}`; without them
-/// `AfterCapture::for_application`'s 2000 and 30000.
+/// application operation is taken, as `record_after_frame` is handed it: the flags as given,
+/// without them `AfterCapture::for_application`'s (after 2000 ms, every 1000 ms, still after
+/// 2000 ms unchanged, at most 30000 ms). The train of stage one: the four flags of a recorded press,
+/// read and checked as a press's are, before anything is captured or sent: each a whole number of
+/// milliseconds (`parse_after_ms`, `after_capture_ms`), then their ranges and the bound of 120
+/// intervals (`record_after_capture_check`), `validation_failed` with `details{argument, reason:
+/// "range"}` and the other members of a press's refusal.
 pub(crate) fn application_after_capture(flags: &FlagArgs) -> CliOutcome<AfterCapture> {
-    let after_ms = wait_flag(flags, "--after-ms")?;
-    let still_max_ms = wait_flag(flags, "--still-max-ms")?;
-    let after = AfterCapture::for_application(after_ms);
-    Ok(AfterCapture {
-        still_max_ms: still_max_ms.unwrap_or(after.still_max_ms),
-        ..after
-    })
-}
-
-/// #463 S1-3: the milliseconds of the flag `flag`, when it is given.
-fn wait_flag(flags: &FlagArgs, flag: &str) -> CliOutcome<Option<u64>> {
-    let Some(value) = flags.optional(flag) else {
-        return Ok(None);
+    let after_ms = flags
+        .optional("--after-ms")
+        .map(|value| parse_after_ms(&value))
+        .transpose()?;
+    let defaults = AfterCapture::for_application(after_ms);
+    let after = AfterCapture {
+        interval_ms: after_capture_ms(flags, "--interval-ms", "interval_ms")?
+            .or(defaults.interval_ms),
+        still_ms: after_capture_ms(flags, "--still-ms", "still_ms")?.or(defaults.still_ms),
+        still_max_ms: after_capture_ms(flags, "--still-max-ms", "still_max_ms")?
+            .unwrap_or(defaults.still_max_ms),
+        ..defaults
     };
-    match value.parse::<u64>() {
-        Ok(ms) if ms <= LAB_RECORDING_MAX_NEXT_FRAME_MS => Ok(Some(ms)),
-        _ => Err(CliError::usage(format!(
-            "{flag} takes a whole number of milliseconds from 0 to \
-             {LAB_RECORDING_MAX_NEXT_FRAME_MS}, got {value}"
-        ))
-        .with_details(json!({
-            "argument": flag.trim_start_matches("--").replace('-', "_"),
-            "reason": "range",
-            "value": value
-        }))),
-    }
+    record_after_capture_check(&after)?;
+    Ok(after)
 }
 
 /// #463 S1-3: an application operation with a completed receipt: its execution as the recording
@@ -490,13 +499,17 @@ pub(crate) struct Operated {
 /// Then the operation; its completed receipt recorded, naming the step's live primary frame as its
 /// `before_frame` (none on an entry step, retried too); then, only for a receipt that names its
 /// `before_frame`, the screen after it ([`record_after_frame`] with `after`), which opens the next
-/// step and is the execution's `after_frame`, with its `after_capture`. A screen after that cannot
-/// be taken answers its own code and class, and the operation and its closed step stand: its
-/// details begin with `record` (the operation as recorded), `after: {after_ms, taken: false}` and
-/// `operation`, then the capture's own members.
+/// step and is the execution's `after_frame`, with its `after_capture`. The train of stage one: the
+/// screen after is captured until it is still, as after a press (#463 S1-2), every capture kept in
+/// the step the first opens, the last the `after_frame`. A first capture after that cannot be taken
+/// answers its own code and class, and the operation and its closed step stand: its details begin
+/// with `record` (the operation as recorded), `after: {after_ms, taken: false}` and `operation`,
+/// then the capture's own members; a later one keeps what the loop took and its details keep the
+/// loop's `after: {after_ms, taken: true, captures}` in that place.
 ///
-/// The answer is the plain command's with `record`: the operation as recorded and `after`, the
-/// screen after it (`null` on the entry step).
+/// The answer is the plain command's with `record`: the operation as recorded, `after`, the screen
+/// after it (`null` on the entry step), and (the train of stage one) `warnings`, which holds
+/// `after_not_still` as a press's answer does (`record_after_warnings`).
 pub(crate) fn record_application_operation<P: RecordFramePorts>(
     lock: &RecordingLock,
     request: &PlanApplicationRequest,
@@ -562,8 +575,14 @@ pub(crate) fn record_application_operation<P: RecordFramePorts>(
             })
         }
     };
+    // The train of stage one: `after_not_still` in the member a press's answer carries it in.
+    let warnings = after_frame
+        .as_ref()
+        .map(|taken| record_after_warnings(&taken.record))
+        .unwrap_or_default();
     let mut record = record_json(&outcome)?;
     record["after"] = record_json(&after_frame)?;
+    record["warnings"] = json!(warnings);
     data["record"] = record;
     Ok(data)
 }
@@ -599,7 +618,9 @@ fn with_operation(mut error: CliError, data: Value) -> CliError {
 /// #463 S1-3: the error of a screen after an application operation that could not be taken: the
 /// capture's own code and class, its message saying that the operation stands, its details
 /// beginning with `record` (the operation as recorded), `after: {after_ms, taken: false}` and
-/// `operation` (the plain command's answer), then the capture's own members.
+/// `operation` (the plain command's answer), then the capture's own members. The train of stage
+/// one: when the after loop's first capture was taken and a later one failed (#463 S1-2), the
+/// loop's own `after: {after_ms, taken: true, captures}` stands in that place.
 fn after_frame_failed(
     mut error: CliError,
     outcome: &CommitApplicationOutcome,
@@ -611,17 +632,20 @@ fn after_frame_failed(
          closed: take the screen after it with capture --record, do not run the operation again",
         error.message, outcome.step
     );
+    let own = error.details.take();
+    let after = own
+        .as_ref()
+        .and_then(|own| own.get("after"))
+        .cloned()
+        .unwrap_or_else(|| json!({"after_ms": after_ms, "taken": false}));
     let mut details = Map::new();
     details.insert(
         "record".to_owned(),
         serde_json::to_value(outcome).unwrap_or(Value::Null),
     );
-    details.insert(
-        "after".to_owned(),
-        json!({"after_ms": after_ms, "taken": false}),
-    );
+    details.insert("after".to_owned(), after);
     details.insert("operation".to_owned(), data);
-    match error.details.take() {
+    match own {
         Some(Value::Object(members)) => {
             for (name, value) in members {
                 details.entry(name).or_insert(value);
@@ -638,14 +662,21 @@ fn after_frame_failed(
 /// #463 S1-3: the caller's clock and the Runtime's capture of `session app <verb> --record`: each
 /// frame is taken as `capture --record` takes it, on the device configuration of the command's
 /// instance; round 2: with the reference of the frame the Runtime committed for it, as a press's
-/// capture carries it (`record_before_frame` asks for it; the operation names none).
+/// capture carries it (`record_before_frame` asks for it; the operation names none). The train of
+/// stage one: the clock's readings are the time since `origin`, the command's start (a monotonic
+/// clock, as `wait` sleeps on it), so that the after loop of #463 S1-2 times its captures.
 struct ApplicationFrames {
     device: DeviceRuntimeConfig,
+    origin: Instant,
 }
 
 impl RecordFramePorts for ApplicationFrames {
     fn wait(&mut self, duration: Duration) {
         std::thread::sleep(duration);
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        self.origin.elapsed()
     }
 
     fn capture(&mut self) -> CliOutcome<CapturedFrame> {

@@ -28937,10 +28937,10 @@ round's.
 
 **At deploy.** Nothing to do: the answer gains its members, and nothing on disk changes.
 
-### 1.402 Slice #463 S1-1 (0.12.63): a press is recorded by the command that makes it, `tap`, `swipe` and `long-tap --record` (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, A1, A2.1, A3, A5 and A6.1, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s11-press-record.md`, read on main `44cbab53`)
+### 1.402 Slice #463 S1-1 (0.12.64): a press is recorded by the command that makes it, `tap`, `swipe` and `long-tap --record` (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, A1, A2.1, A3, A5 and A6.1, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s11-press-record.md`, read on main `44cbab53`)
 
 The coordinator gave this slice 1.402: main `44cbab53` holds the sections up to §1.400, and 1.401
-is #469 D4b. The slice ships in 0.12.63.
+is #469 D4b. The slice ships in 0.12.64 (release 0.12.63 was cut without it).
 
 **Why.** A press reached a recording only through `do --capture --record`, which needs a rectangle
 and a carrier package, and `tap`, `swipe` and `long-tap` refused `--record`
@@ -29120,7 +29120,7 @@ item and the coordinator's ruling on one retry; coordinator work order
   application when the test asks). Adapted: the step with marks asserts the execution's
   `sent_on_unstored_capture`, the two presses in a row its absence. No test leaves the gate map.
 
-### 1.403 Slice #463 S1-2 (0.12.64): after a recorded press the screen is captured until it is still, and every capture is kept (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and the owner's words on board #463 on the evening of 11-15 on what stage one hands over and on the captures after a press; the coordinator's rulings in the work orders, not the owner's words; coordinator work orders `rd-1115/brief-463-s12-still-after.md`, `rd-1115/brief-463-s12-fix2.md`, which replaces its rulings where they differ, and `rd-1115/brief-463-s12-fix3.md`, fix round 3 after the independent review; built on S1-1's branch at `24e48b47cd4b` (§1.402))
+### 1.403 Slice #463 S1-2 (0.12.64): after a recorded press the screen is captured until it is still, and every capture is kept (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and the owner's words on board #463 on the evening of 11-15 on what stage one hands over and on the captures after a press; the coordinator's rulings in the work orders, not the owner's words; coordinator work orders `rd-1115/brief-463-s12-still-after.md`, `rd-1115/brief-463-s12-fix2.md`, which replaces its rulings where they differ, and `rd-1115/brief-463-s12-fix3.md`, fix round 3 after the independent review; built on S1-1's branch at `24e48b47cdac` (§1.402))
 
 The coordinator gave this slice 1.403, after S1-1 (§1.402), on whose code it stands. The slice
 ships in 0.12.64 (release 0.12.63 was cut without it).
@@ -29250,9 +29250,10 @@ byte.
 **At deploy.** Nothing to configure. Recordings already on disk load as before; a press S1-1's build
 recorded keeps `after_capture` without `interval_ms` and `still_ms` and reads as not tested.
 
-### 1.404 Slice #463 S1-3 (0.12.63): an application operation in the middle of a business is a step like a press, with the screens before and after it (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, the row S1-3 of A6, A4's row of the rule "an application operation needs a marked open step", A1's parts on application operations and A2.1's row of `steps[].application.executed`, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s13-app-steps.md`, built on the branch of #463 S1-1 at `486f5ce7`)
+### 1.404 Slice #463 S1-3 (0.12.64): an application operation in the middle of a business is a step like a press, with the screens before and after it (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, the row S1-3 of A6, A4's row of the rule "an application operation needs a marked open step", A1's parts on application operations and A2.1's row of `steps[].application.executed`, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s13-app-steps.md`, built on the branch of #463 S1-1 at `486f5ce7`)
 
-The coordinator gave this slice 1.404. It stands on #463 S1-1 (§1.402) and ships in 0.12.63.
+The coordinator gave this slice 1.404. It stands on #463 S1-1 (§1.402) and ships in 0.12.64 (release 0.12.63 was cut without
+it).
 
 **Why.** A business sometimes launches, restarts or stops the application in its middle (a restart
 after an update prompt, for one). `session app <verb> --record` took such an operation only on a
@@ -29382,6 +29383,40 @@ is the owner's to do.
   its `before_frame`, the restart's `after_frame` as its answer named it); a tap after an operation
   (its capture before supersedes the frame the operation's screen after opened the step with, the
   operation's `after_frame` not rewritten). No test leaves the gate map.
+
+**Joined in the train of stage one** (0.12.64; coordinator work order `rd-1115/brief-463-train-s1.md`,
+which merges S1-1, S1-2 and S1-3 in that order on main `abf08ced`, and the list (g) of the
+independent review of S1-2; the coordinator's rulings, not the owner's words).
+- *The screen after.* S1-2's `awaiting_after_frame` and `name_after_frame`
+  (`crates/lab/src/recording/steps.rs`) take a step closed by an application operation as this
+  slice's `note_after_frame` did: the step's click when it has one, else the completed receipt of
+  its application operation, chosen in one place (`after_members`), which `note_after_capture` uses
+  too; `note_after_frame` is gone. The screen after an operation is S1-2's loop with
+  `AfterCapture::for_application` (after 2000 ms, every 1000 ms, still after 2000 ms unchanged, at
+  most 30000 ms: at most 31 captures), every capture kept; `ApplicationFrames::elapsed` reads a
+  monotonic clock started with the command.
+- *The flags.* `session app <verb> --record` takes the four of a recorded press, `--after-ms`,
+  `--interval-ms`, `--still-ms` and `--still-max-ms`, read by the press's own functions
+  (`parse_after_ms`, `after_capture_ms`) and checked, the bound of 120 intervals included, by
+  `record_after_capture_check` (`crates/lab/src/recording_api.rs`; `record_press` calls it too, for
+  S1-1's check of the wait and S1-2's of the rest) before the recording lock is taken. A refusal of
+  `--after-ms` names the value as `after_ms`, as S1-1's does (this slice wrote `value`). Without
+  `--record` the gate of `apps/actinglab/src/main.rs` refuses each of the four, its text naming
+  `session app`. The rows `app launch|restart|stop` take `interval_ms` and `still_ms` beside
+  `after_ms` and `still_max_ms`, with their bounds; their `help` is unchanged.
+- *The answer.* `record.warnings` holds `after_not_still` as a press's answer does
+  (`record_after_warnings`); when a later capture of the loop failed, the error keeps the loop's
+  `after: {after_ms, taken: true, captures}` in its details.
+- *Texts.* The hints of `plan_application` and of `record_application_entry_invalid` no longer ask
+  for a mark. The contract and the rows' notes say that the Lab's MCP server writes the command
+  line from the rows itself and that `apps::App::recorded` has no caller in the product; the
+  function stays.
+- *Tests.* `apps/actinglab/src/tests/gate_463_s13.rs` is adapted, because the screen after now
+  repeats until it is still: the fake's clock moves with its waits, the initializers name
+  `interval_ms` and `still_ms`, and the logs and frame ids are those of the loop (a tap of the gate
+  takes one capture before it and four after it, an operation one before it and three after it).
+  The waits test adds the loop's flags and a bound of more than 120 intervals. No test switches the
+  loop off, and none leaves the gate map.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

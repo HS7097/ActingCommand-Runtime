@@ -345,11 +345,13 @@ pub struct ApplicationExecution {
     /// build recorded, as are the two members below.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_frame: Option<String>,
-    /// #463 S1-3: the id of the first frame that arrived after the operation: what the screen
-    /// became.
+    /// #463 S1-3: the id of the frame after the operation: what the screen became. The train of
+    /// stage one (with #463 S1-2): the last capture of the operation's own after loop, written once
+    /// when the loop ends; the first frame that opens a step after it only when the loop kept
+    /// nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_frame: Option<String>,
-    /// #463 S1-3: how the frame after the operation was taken.
+    /// #463 S1-3: how the frame after the operation was taken (#463 S1-2's record of the loop).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_capture: Option<AfterCaptureRecord>,
 }

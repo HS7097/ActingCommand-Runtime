@@ -121,7 +121,7 @@ command deletes nothing and names the files it already wrote.
   recorded step an optional step inserted after the stop runs after ("Inserting an optional step
   after stop"), is absent on every other step, so a recording without one is byte-identical to one
   written before; the frames of such a step may carry `scaled_from` as an ending's do. #463 S1-1
-  (since 0.12.63): a click execution's `before_frame`, `after_frame` and `after_capture` are absent
+  (since 0.12.64): a click execution's `before_frame`, `after_frame` and `after_capture` are absent
   on every press but one recorded by the command that makes it ("Recording while playing"), and its
   `sent_on_unstored_capture` on every press but such a press sent on a capture its command did not
   store (fix round 3), so a recording without such a press is byte-identical to one an earlier
@@ -1262,7 +1262,7 @@ playing") accept `--record`; every other command or combination is refused befor
 | `dry_run_unsupported` | `capture --record --dry-run` and its `session capture` alias, global or after the command |
 | `record_flag_takes_no_value` | `--record <value>` |
 | `record_state_dir_unsupported` | `--record` with `--state-dir`; `--record` uses `ACTINGLAB_SESSION_STATE_DIR` or the default state root |
-| `validation_failed` | `--tap-rect` without `--record`; #463 L1: so are `--mark-request`, `--mark-request-json`, `--next-frame-after-ms` and `--next-frame-out` ("One call per step"); #463 S1-1: and `--after-ms`, `details{argument: "after_ms", reason: "record_only"}` ("Recording while playing"); #463 S1-2: and `--still-ms` and `--still-max-ms`, and on `tap`, `swipe` and `long-tap` `--interval-ms` (other commands take a flag of that name for their own), `argument` `still_ms`, `still_max_ms` or `interval_ms` |
+| `validation_failed` | `--tap-rect` without `--record`; #463 L1: so are `--mark-request`, `--mark-request-json`, `--next-frame-after-ms` and `--next-frame-out` ("One call per step"); #463 S1-1: and `--after-ms`, `details{argument: "after_ms", reason: "record_only"}` ("Recording while playing"); #463 S1-2: and `--still-ms` and `--still-max-ms`, and on `tap`, `swipe` and `long-tap` `--interval-ms` (other commands take a flag of that name for their own), `argument` `still_ms`, `still_max_ms` or `interval_ms`; the train of stage one (#463 S1-3): on `session app` and `session instance app` `--interval-ms` too, the text naming `session app <launch\|restart\|stop\|force-stop> --record` where it names `tap, swipe or long-tap --record` on every other command |
 
 The record instance (`--instance` or the instance configuration) and the command instance
 must be the same (`record_instance_mismatch`, exit 3); a missing or inactive session is
@@ -1544,7 +1544,7 @@ names on both servers).
 
 ## Recording while playing
 
-#463 S1-1 (0.12.63; the owner approved the three-stage blueprint of package making on board #463:
+#463 S1-1 (0.12.64; the owner approved the three-stage blueprint of package making on board #463:
 stage one starts recording, plays the business normally and ends recording, and asks nothing else
 of the agent while it plays; the rules here are the coordinator's). A press is recorded by the
 command that makes it: no rectangle, no carrier package, nothing marked. Each press is a step of
@@ -1776,7 +1776,7 @@ the field is `"application": null | {"action": "restart"}`.
   separate field; `record status` shows `entry:"any"`). It can only be the first effective
   step; its package operation starts `from:"any"`. `coordinate_space` is set by the first
   frame after it.
-- #463 S1-3 (since 0.12.63): on a step with a frame the operation is recorded with the screen
+- #463 S1-3 (since 0.12.64): on a step with a frame the operation is recorded with the screen
   before it and the screen after it, as a press is ("In the middle of a business" below). The
   entry step has no screen before it and takes none after it: its arrival screen comes from the
   next press's screen before or the next `capture --record`.
@@ -1857,8 +1857,9 @@ the field is `"application": null | {"action": "restart"}`.
   `record_append_failed_after_input` mean the application operation may have run or did
   run; every other error means it did not run and the recording is unchanged. #463 S1-3: but
   for two things: the screen before, when the command took it, stays recorded; and an error
-  whose details carry `after: {after_ms, taken: false}` is a screen after that was not taken,
-  the operation having run and been recorded. Several of
+  whose details carry `after: {after_ms, taken: false}` is a screen after that was not taken
+  (the train of stage one: `taken: true` with `captures`, a screen after whose loop a later
+  capture stopped, what it took kept), the operation having run and been recorded. Several of
   these errors exit with 4 (also the Runtime refusals mapped to `device_error`): tell them
   apart by the error code.
 - The v0.9.0 ActingLab ignores `--record` on `session app` and runs the operation without
@@ -1867,7 +1868,7 @@ the field is `"application": null | {"action": "restart"}`.
 
 ### In the middle of a business
 
-#463 S1-3 (0.12.63; the owner approved the three-stage blueprint of package making on board #463,
+#463 S1-3 (0.12.64; the owner approved the three-stage blueprint of package making on board #463,
 whose stage one plays the business normally, and a business sometimes launches, restarts or stops
 the application in its middle; the rules here are the coordinator's). An application operation in
 the middle of a business is the open step's effect, as a press is ("Recording while playing"): the
@@ -1875,17 +1876,20 @@ step needs no mark, and the operation is recorded with the screen before it and 
 it.
 
 ```
-session app <launch|restart|stop|force-stop> --record [--after-ms <0..60000>] [--still-max-ms <0..60000>]
+session app <launch|restart|stop|force-stop> --record [--after-ms <0..60000>] [--interval-ms <20..1000>]
+                                             [--still-ms <0..5000>] [--still-max-ms <0..60000>]
 ```
 
 All with the global `--json --instance <i>`; `session instance app` the same. Through the Lab's MCP
 server (`actinglab-mcp`) they are the tools of the rows `app launch`, `app restart` and `app stop`
-with `record`, `after_ms` and `still_max_ms` ([lab-operations.json](lab-operations.json)): these
-core rows take `record`, the slice's ruling replacing the coordinator's ruling of 2026-11-11
-(L5C-7) that kept it off the core rows, so no flag of `session app` is an exception to its rows;
-`lab_ops::apps::App::recorded` passes them on its actinglab child's line. Today's server
-(`actingctl mcp-serve`) is unchanged. The launch of a game is the application launch only: nothing
-here presses a launcher icon or reads the home screen but for the frame.
+with `record`, `after_ms`, `interval_ms`, `still_ms` and `still_max_ms`
+([lab-operations.json](lab-operations.json)): these core rows take `record`, the slice's ruling
+replacing the coordinator's ruling of 2026-11-11 (L5C-7) that kept it off the core rows, so no flag
+of `session app` is an exception to its rows. The Lab's MCP server writes the actinglab command line
+from the rows' parameters itself; `lab_ops::apps::App::recorded` (which puts `--record`,
+`--after-ms` and `--still-max-ms` on its actinglab child's line) has no caller in the product.
+Today's server (`actingctl mcp-serve`) is unchanged. The launch of a game is the application launch
+only: nothing here presses a launcher icon or reads the home screen but for the frame.
 
 - **The screen before** (round 2 of S1-3, after fix round 2 of S1-1). When the recording has an
   effective step, the screen before is a press's ("Recording while playing"): one frame captured
@@ -1906,30 +1910,46 @@ here presses a launcher icon or reads the home screen but for the frame.
   (or the next `capture --record`) is the business's first screen: it opens the step after the
   entry step and is no screen after it.
 - **The screen after.** After a completed receipt that names its `before_frame` (not on the entry
-  step, the entry launch run again after an indeterminate one included) the command waits
-  `--after-ms` (2000 without it) and takes the screen after it as a press's, `--still-max-ms`
-  (30000 without it) being the bound of the wait for a still screen (slice S1-2); it opens the
-  next step. A receipt without completion is recorded as before (`record_application_indeterminate`,
-  exit 4) and no screen after it is taken; a denied one records nothing. A screen after that cannot
-  be taken answers its own code and class, and the operation and its closed step stand: its details
-  begin with `record` (the operation as recorded), `after: {after_ms, taken: false}` and `operation`
-  (the `session app` output), then the capture's own members; take the screen with `capture
-  --record`, do not run the operation again.
+  step, the entry launch run again after an indeterminate one included) the command captures the
+  screen until it is still and keeps every capture, as after a press ("Recording while playing",
+  "The screen after", the train of stage one): the first capture `--after-ms` after the operation
+  (2000 without it), then one every `--interval-ms` (1000 without it), still when the screen has
+  not changed for `--still-ms` (2000 without it; 0: the first capture, untested), at most
+  `--still-max-ms` after the first (30000 without it), so at most 31 captures by default. Every
+  capture is a frame of the step the first opens, the last its live primary frame and the
+  operation's `after_frame`; at the bound `still` is `false` and the answer's `record.warnings`
+  holds `after_not_still` (the operation recorded, exit 0). A receipt without completion is
+  recorded as before (`record_application_indeterminate`, exit 4) and no screen after it is taken;
+  a denied one records nothing. A first capture after it that cannot be taken answers its own code
+  and class, and the operation and its closed step stand: its details begin with `record` (the
+  operation as recorded), `after: {after_ms, taken: false}` and `operation` (the `session app`
+  output), then the capture's own members; take the screen with `capture --record`, do not run
+  the operation again. A later capture that cannot be taken keeps what the loop took
+  (`after_capture.unfinished`), and `after` in that place is the loop's `{after_ms, taken: true,
+  captures}`.
 - **Refused before anything is sent** (exit 2): `validation_failed` with `details{argument,
-  reason}`: `--after-ms` or `--still-max-ms` outside 0..=60000 or no whole number (`after_ms` or
-  `still_max_ms`, `range`); either without `--record` (`record_only`: `--after-ms` by the gate of
-  "`--record` on device commands", `--still-max-ms` by `session app` itself). `--dry-run` stays
-  `record_flag_unsupported`.
+  reason}`, the same refusals as a press's (the train of stage one: the flags are read and checked
+  as a press's are): `--after-ms` outside 0..=60000 or no whole number (`after_ms`, `range`, the
+  value as `after_ms`), `--interval-ms` outside 20..=1000, `--still-ms` outside 0..=5000 and
+  `--still-max-ms` outside 0..=60000 (`interval_ms`, `still_ms`, `still_max_ms`, `range`; a value
+  that is no whole number too), and a bound of more than 120 intervals, `still_max_ms` above 120
+  times `interval_ms` (`still_max_ms`, `range`, with `max` and `interval_ms` in the details), all
+  before the recording lock is taken; each of the four without `--record` (`record_only`, by the
+  gate of "`--record` on device commands", whose text names `session app`, and by `session app`
+  itself). `--dry-run` stays `record_flag_unsupported`.
 - **In `recording.json`** (every member absent on the entry step and on every operation an earlier
   build recorded, so that a recording without such an operation is byte-identical to one an earlier
   build wrote): the completed receipt `steps[].application.executed` names `before_frame`, the id of
-  the step's live primary frame when it was recorded (what was on the screen); `after_frame`, the id
-  of the first frame that arrived after it; and `after_capture: {after_ms, still_max_ms, still,
-  waited_ms, captures, kept}`, how the screen after was taken, as a press's.
+  the step's live primary frame when it was recorded (what was on the screen); `after_frame`, the
+  last capture of its own after loop (when that loop stored nothing, the first frame that opens a
+  step after it); and `after_capture: {after_ms, interval_ms, still_ms, still_max_ms, still,
+  waited_ms, captures, kept}` (and `unfinished` as a press's), how the screen after was taken, as a
+  press's.
 - **The answer.** The `session app` output with `record: {status: "application_recorded",
   record_id, record_started_at_unix_ms, step, step_opened, step_closed, application, after: {step,
-  frame_id, path, sha256, after_ms, still_max_ms, still, waited_ms, captures, kept} | null}`
-  (`null` on the entry step). `path` is the stored frame: the agent reads the next screen there.
+  frame_id, path, sha256, after_ms, interval_ms, still_ms, still_max_ms, still, waited_ms,
+  captures, kept} | null, warnings: [] | ["after_not_still"]}` (`after` `null` on the entry step).
+  `path` is the stored frame: the agent reads the next screen there.
 - **`record stop`** still requires a recognition mark on every effective step but the entry step
   (`record_step_without_recognition`, "Pre-checks"): the steps are marked afterwards with `record
   mark --step k`, as a press's are.
