@@ -1210,7 +1210,7 @@ purpose is to evaluate an OCR target:
 
 ### Drawing a box
 
-#463 S2-5 (0.12.64; [v012-register.md](v012-register.md) §1.427; the design of board #471 and the
+#463 S2-5 (0.12.65; [v012-register.md](v012-register.md) §1.427; the design of board #471 and the
 owner's answer to it: a box is drawn on one state of one screen, its base images are the frames of
 the action that drew it whose similarity reaches 0.95, and a picture with boxes on it is only a
 preview, the stored image has no box; and stage two of package making on board #463, in which the
@@ -2353,7 +2353,7 @@ $lab = 'C:\ActingCommand\tools\actinglab.exe'
 
 ## The frames around a press: `record frames`
 
-#463 S2-13 (0.12.64; the owner on board #463: in stage two the Lab may need to give an agent that
+#463 S2-13 (0.12.65; the owner on board #463: in stage two the Lab may need to give an agent that
 asks the several, or several dozen, frames before and after a press; the rules here are the
 coordinator's). `record frames --step <k> [--before <0..100>] [--after <0..100>] [--record-id
 <id>]` (MCP `ac_record_frames` with `step`, `before`, `after` and `record_id`) reads the recording
@@ -2383,7 +2383,11 @@ recorded after the press's time (one recorded between them, a mark's sample or a
 frame, is `before`); `--before` or `--after` outside 0..=100 (`details{argument, reason:
 "range", value, min, max}`), not a whole number or given twice (`details{argument, reason: "range",
 value}`) is `validation_failed`, and a step that does not exist, is dropped or was converted is
-`record_step_not_found`.
+`record_step_not_found`. A frame a box admits as a step's sample on a draft (#463 S2-5, `source:
+recording_frame`, the file and sha256 of the capture it was taken from, which keeps its own place)
+is a frame of the step table like any other and enters the sequence when the mark admits it, after
+every frame stored before that mark: on a recording marked after its presses it stands among the
+`after` of its own step's press, its `captured_at_unix_ms` the moment of the mark.
 
 ```json
 {"record_id": "…", "step": 3, "artifact_step": 3, "kind": "tap",
@@ -2916,7 +2920,7 @@ Makes an archived recording of the instance its active recording again:
 record ready [--record-id <id>] [--state-dir <dir>]
 ```
 
-#463 S2-1 (0.12.64; the owner approved the three-stage blueprint of package making on board #463:
+#463 S2-1 (0.12.65; the owner approved the three-stage blueprint of package making on board #463:
 stage two turns the recorded material into a package offline; the rules here are the
 coordinator's). `record stop` refuses at the first pre-check a recording fails ("Pre-checks"), so an
 agent would learn what a recording lacks one refusal at a time; `record ready` lists all of it at

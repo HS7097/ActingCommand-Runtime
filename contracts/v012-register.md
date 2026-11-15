@@ -30375,10 +30375,10 @@ reconnect meets another owner epoch), `s17_fix_a_stop_whose_release_fails_names_
 status read `s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so` (`instance_hold_unread`).
 No code or word is added; no test leaves the gate map.
 
-### 1.425 Slice #463 S2-1 (0.12.64): `record ready` lists everything a recording still lacks before `record stop` can make its package (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two turns the recorded material into a package offline; the design `rd-1115/pack-stage12-design.md`, B2.1, B2.2 and the row S2-1 of B5, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s21-record-ready.md`, built on the branch of the stage-one train (#1757) at `5706d568`)
+### 1.425 Slice #463 S2-1 (0.12.65): `record ready` lists everything a recording still lacks before `record stop` can make its package (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two turns the recorded material into a package offline; the design `rd-1115/pack-stage12-design.md`, B2.1, B2.2 and the row S2-1 of B5, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s21-record-ready.md`, built on the branch of the stage-one train (#1757) at `5706d568`)
 
 The coordinator gave this slice 1.425. It stands on the train of stage one (§1.402 to §1.404) and
-ships in 0.12.64.
+ships in 0.12.65.
 
 **Why.** `record stop` refused at the first pre-check a recording failed, so an agent working a
 recording in stage two learned what it lacked one refusal at a time. `record ready` is the one read
@@ -30502,10 +30502,26 @@ own members, and `ending_mark_missing` the ending's outcome key (`Lack::outcome_
 tests added (exec gate map "#463 S2-1"); the first and third tests adapted (their identity items
 now show `details.missing`). No code, word or key added.
 
-### 1.426 Slice #463 S2-13 (0.12.64): `record frames` lists the stored frames just before and just after one press (Workflow #463; the owner's words of 11-15 on board #463 that in the second stage of recording the Lab may need to accept an agent's request to hand back the several, or several dozen, frames before and after a press, and that after a press the screen may change quickly; the rules are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s213-record-frames.md`, read on the head `5706d568` of the train of stage one, #1757)
+**Stage two, train 1** (0.12.65; coordinator work order `rd-1115/brief-463-train-s2.md`). Pull
+request #1766 carries this slice, #463 S2-13 (§1.426) and #463 S2-5 (§1.427), merged on main (the
+stage-one train with its last fix round) in that order. Release 0.12.64 was cut without the three,
+so their labels say 0.12.65. Kept whole on every side: the register (main's sections, then §1.425,
+§1.426 and §1.427), the exec gate map, the operation table's rows `record ready` and `record
+frames`, the capability table, the dry-run declarations and their contract row, the Lab's MCP
+manual, and the lists the three append to: `engine::COMMANDS` is 70, `own_flags::READ_LIST_ROWS`
+29 (so `gate_434_lab5b4`'s commands are 33), `words::BUILT_SLICES` and the MCP server's
+`ACTINGLAB_SLICES` 14 each. `record ready` meets S2-5's boxes in two tests of this gate, on the
+recording S2-5's test of the whole of stage two makes, with that gate's bench:
+`s21_train_a_press_box_ends_the_press_point_only_of_its_step` (the three recorded taps are
+`press_point_only`; a press box on step 2 ends step 2's alone) and
+`s21_train_the_draft_boxed_on_every_step_is_ready_and_material_before` (archived and reopened,
+`material`; boxed on every step as that test boxes it, `ready` with nothing missing and every
+self-check run). No code, word or key added.
+
+### 1.426 Slice #463 S2-13 (0.12.65): `record frames` lists the stored frames just before and just after one press (Workflow #463; the owner's words of 11-15 on board #463 that in the second stage of recording the Lab may need to accept an agent's request to hand back the several, or several dozen, frames before and after a press, and that after a press the screen may change quickly; the rules are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s213-record-frames.md`, read on the head `5706d568` of the train of stage one, #1757)
 
 The coordinator gave this slice 1.426. It stands on the train of stage one (§1.402, §1.403, §1.404;
-fix round 2 merged its head `32f71ea6`, which adds §1.406 and §1.424) and ships in 0.12.64.
+fix round 2 merged its head `32f71ea6`, which adds §1.406 and §1.424) and ships in 0.12.65.
 
 **Why.** Stage one keeps every capture it takes: the frame each recorded press is sent on and every
 capture of the loop after it. Stage two works on the frame each press happened on and the final
@@ -30611,9 +30627,17 @@ without a press split at the step with `offset_ms` `null`. Through MCP the tool 
 `ac_record_frames` of the Lab's MCP server (`actinglab-mcp`); a client registered with today's
 server has no such tool until its registration moves, which is the owner's to do.
 
-### 1.427 Slice #463 S2-5 (0.12.64): boxes on a draft: the recognition region and the press region of any recorded step (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two hands the agent the frame and where the press went and lets the agent set the recognition region and the press region; the owner's words of 11-15 on the design of board #471: a box is drawn on one state of one screen, its base images are the frames of the action whose similarity reaches 0.95, a picture with boxes is only a preview; the design `rd-1115/471-box-design.md`, its English part, and its first implementation, slices B1 to B3, paused before stage one and ported here by hand; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s25-record-boxes.md`, stacked on the stage-one train #1757 at `32f71ea6291c`)
+**Stage two, train 1** (0.12.65; §1.425). A frame a box admits as a step's sample on a draft
+(§1.427, `source: recording_frame`, the file and sha256 of the capture it was taken from) is a
+frame of the step table and enters the sequence when the mark admits it, after every frame stored
+before that mark; the contract's section says so in one sentence, and S2-5's
+`s25_a_recognize_box_takes_the_settled_capture_and_lists_the_animation` asserts it (`record frames`
+of step 2 lists the sample `f0007` after step 2's press, after step 3's `f0006`). No behaviour
+changes.
 
-The coordinator gave this slice 1.427. It ships in 0.12.64, after the stage-one train (§1.402 to
+### 1.427 Slice #463 S2-5 (0.12.65): boxes on a draft: the recognition region and the press region of any recorded step (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two hands the agent the frame and where the press went and lets the agent set the recognition region and the press region; the owner's words of 11-15 on the design of board #471: a box is drawn on one state of one screen, its base images are the frames of the action whose similarity reaches 0.95, a picture with boxes is only a preview; the design `rd-1115/471-box-design.md`, its English part, and its first implementation, slices B1 to B3, paused before stage one and ported here by hand; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s25-record-boxes.md`, stacked on the stage-one train #1757 at `32f71ea6291c`)
+
+The coordinator gave this slice 1.427. It ships in 0.12.65, after the stage-one train (§1.402 to
 §1.406, §1.424).
 
 **Why.** A press recorded while playing is an executed click of one pixel, and until now the only
@@ -30740,6 +30764,13 @@ review of `8379a03b89af`; nothing merged).
 
 **At deploy.** Nothing to configure: no key, no ledger record, no package revision. Recordings on
 disk load as before; a request without boxes is byte for byte what it was.
+
+**Stage two, train 1** (0.12.65; §1.425). In `gate_463_s25_draft.rs` the bench (`Bench`, its
+`new`, `state`, `header`, `press` and `marked`, its lock and its OCR), the instance, the screens,
+the points pressed, `tap_at`, `one_capture_after` and `button_box` are `pub(crate)`, so that S2-1's
+gate builds the recording of this gate's test of the whole of stage two; and
+`s25_a_recognize_box_takes_the_settled_capture_and_lists_the_animation` asserts where `record
+frames` lists the sample the box admitted (§1.426). Nothing else changes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

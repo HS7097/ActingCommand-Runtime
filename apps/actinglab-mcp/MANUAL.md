@@ -221,7 +221,7 @@ naming this file.
   behind, from its own step table, and leaves the session header, another recording's, as it is
   (`lab.session_header`).
   `ac_record_reopen` makes an archived recording active again, so that `ac_record_mark` and
-  `ac_record_stop` can build its package later. #463 S2-1 (0.12.64; `contracts/lab-recording.md`,
+  `ac_record_stop` can build its package later. #463 S2-1 (0.12.65; `contracts/lab-recording.md`,
   "What a recording still lacks"): `ac_record_ready` (`record_id`, `state_dir`) lists at once
   everything a recording (the instance's, or the active, archived or stopped one `record_id`
   names) still lacks before `ac_record_stop` can make its package: every pre-check it fails, each
@@ -255,12 +255,12 @@ naming this file.
   `record archive` with `record_id`), never an unconditional resume. A press with `record` on an
   instance that is not held is made and recorded with `record.warnings` `instance_not_held`
   (`instance_hold_unread` when the status read got no answer); `ac_record_status` shows the hold.
-  #463 S2-13 (0.12.64; `contracts/lab-recording.md`, "The frames around a press"):
+  #463 S2-13 (0.12.65; `contracts/lab-recording.md`, "The frames around a press"):
   `ac_record_frames` (`step`, `before` 0 to 100, default 3, `after` 0 to 100, default 10,
   `record_id`) lists the stored frames captured just before the frame a step's press was sent on
   and just after the press, with their paths, capture times and offsets from the press; it reads
   only and takes no lock.
-  #463 S2-5 (0.12.64; `contracts/lab-recording.md`, "Drawing a box"): stage two marks a draft with
+  #463 S2-5 (0.12.65; `contracts/lab-recording.md`, "Drawing a box"): stage two marks a draft with
   boxes: `ac_record_mark` with `box` (`recognize=x1,y1:x2,y2` or `press=x1,y1:x2,y2`, two opposite
   corners in the frame's pixels; or `boxes` in `request_json`) on any step. A recognize box is a
   template mark of its own (`box/<nn>/<x>_<y>_<w>_<h>`), whose base images are the step's frames

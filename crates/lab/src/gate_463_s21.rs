@@ -41,16 +41,25 @@
 //   frame of the click's last attempt.
 // The bench's press is `press` (it was `tap`, a name the architecture guard reads as an input
 // port's method); it goes through `record_press` as the parent's gates send theirs.
+// #463 stage two, train 1 (`record ready` meets S2-5's boxes), on the recording S2-5's test of the
+// whole of stage two makes, with its bench (`gate_463_s25_draft`: 160x90 screens of gray noise):
+// - `s21_train_a_press_box_ends_the_press_point_only_of_its_step`: the three recorded taps are
+//   `press_point_only`; a press box on step 2 ends step 2's alone.
+// - `s21_train_the_draft_boxed_on_every_step_is_ready_and_material_before`: archived and reopened,
+//   `material`; boxed on every step as that test boxes it, `ready` with nothing missing, every
+//   self-check run and no `press_point_only`.
 // Frames are synthetic 1280x720 (a square of one colour at the top left on gray); no Runtime, no
 // device; the tests read no clock and never sleep.
 
+use crate::gate_463_s25_draft as draft;
 use crate::recording::store::{lab_dir, old_record_path, recording_path};
 use crate::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, ClickSpec,
     CommitClickRequest, LAB_RECORD_MARK_SCHEMA, LabOcr, MarkFamily, MarkRequest, MarkSpec,
-    OpaqueJson, PlanClickRequest, PointPress, RecordFramePorts, RecordPoint, RecordPressOutcome,
-    RecordPressRequest, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock,
-    StepAction, StepActionKind, record_mark, record_press, record_ready, record_start, record_stop,
+    OpaqueJson, PlanClickRequest, PointPress, RecordArchiveOptions, RecordFramePorts, RecordPoint,
+    RecordPressOutcome, RecordPressRequest, RecordRect, RecordReopenOptions, RecordStartOptions,
+    RecordStopOptions, RecordingLock, StepAction, StepActionKind, record_archive, record_mark,
+    record_press, record_ready, record_reopen, record_start, record_stop,
 };
 use actingcommand_contract::{InputFrameReference, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
@@ -58,7 +67,7 @@ use serde_json::{Value, json};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -312,20 +321,7 @@ impl Bench {
 
     // `record ready`, read as the command reads it: the instance's recording, no option.
     fn ready(&self) -> Value {
-        let outcome = record_ready(
-            &self.state(),
-            INSTANCE,
-            None,
-            &RecordStopOptions::default(),
-            &self.ocr,
-        )
-        .unwrap_or_else(|error| {
-            panic!(
-                "record ready: {}: {} {:?}",
-                error.code, error.message, error.details
-            )
-        });
-        serde_json::to_value(outcome).expect("the answer as JSON")
+        read_ready(&self.state(), INSTANCE, &self.ocr)
     }
 
     // `record stop` with `options`.
@@ -374,6 +370,19 @@ impl Bench {
         files.sort();
         files
     }
+}
+
+// `record ready` of the recording the session header of `instance` names under `state`, read as the
+// command reads it: no option. #463 stage two, train 1: S2-5's bench reads it so too.
+fn read_ready(state: &Path, instance: &str, ocr: &LabOcr) -> Value {
+    let outcome = record_ready(state, instance, None, &RecordStopOptions::default(), ocr)
+        .unwrap_or_else(|error| {
+            panic!(
+                "record ready: {}: {} {:?}",
+                error.code, error.message, error.details
+            )
+        });
+    serde_json::to_value(outcome).expect("the answer as JSON")
 }
 
 // The refusal of `record stop`, or the test's panic with what it answered instead.
@@ -772,6 +781,93 @@ fn s21_a_reopened_last_step_names_the_frame_of_its_last_attempt() {
     assert_eq!(
         ready["warnings"],
         json!([point_only(1, "f0001"), point_only(2, "f0003")]),
+        "{ready}"
+    );
+}
+
+// #463 stage two, train 1: the recording S2-5's test of the whole of stage two makes
+// (`gate_463_s25_draft`): three taps recorded by their points on its first three screens, each
+// screen after one capture, and the fourth screen the final one. Steps 1 to 3 are sent on f0001,
+// f0003 and f0005.
+fn draft_recording() -> draft::Bench {
+    let bench = draft::Bench::new();
+    for (index, point) in draft::POINTS.into_iter().enumerate() {
+        bench.press(
+            &draft::tap_at(point, draft::one_capture_after()),
+            vec![draft::screen(index), draft::screen(index + 1)],
+        );
+    }
+    bench
+}
+
+// #463 stage two, train 1: `record ready` meets S2-5's boxes. Each recorded tap is
+// `press_point_only`; a press box drawn on the middle step (S2-5: the click's rectangle becomes the
+// box, the press stays as recorded) ends that step's warning, and only that one.
+#[test]
+fn s21_train_a_press_box_ends_the_press_point_only_of_its_step() {
+    let bench = draft_recording();
+    let pressed = read_ready(&bench.state(), draft::INSTANCE, &bench.ocr);
+    assert_eq!(
+        pressed["warnings"],
+        json!([
+            point_only(1, "f0001"),
+            point_only(2, "f0003"),
+            point_only(3, "f0005")
+        ]),
+        "{pressed}"
+    );
+
+    bench.marked(json!({"step": 2, "boxes": [draft::button_box("press", 1)]}));
+    let boxed = read_ready(&bench.state(), draft::INSTANCE, &bench.ocr);
+    assert_eq!(
+        boxed["warnings"],
+        json!([point_only(1, "f0001"), point_only(3, "f0005")]),
+        "{boxed}"
+    );
+}
+
+// #463 stage two, train 1: the draft of S2-5's test of the whole of stage two. Archived and
+// reopened, before any mark, it is `material`; marked as that test marks it (on each step a page
+// name, a recognize box and, on the three taps, a press box), it is `ready`: nothing missing, every
+// self-check run, no press left on one pixel.
+#[test]
+fn s21_train_the_draft_boxed_on_every_step_is_ready_and_material_before() {
+    let bench = draft_recording();
+    record_archive(
+        &bench.lock,
+        &RecordArchiveOptions {
+            record_id: None,
+            copy_to: None,
+            written_by: "gate_463_s21".to_owned(),
+        },
+    )
+    .unwrap_or_else(|error| panic!("record archive: {}: {:?}", error.code, error.details));
+    bench.header("archived");
+    record_reopen(&bench.lock, &RecordReopenOptions::default())
+        .unwrap_or_else(|error| panic!("record reopen: {}: {:?}", error.code, error.details));
+    bench.header("active");
+
+    let material = read_ready(&bench.state(), draft::INSTANCE, &bench.ocr);
+    assert_eq!(material["status"], "material", "{material}");
+
+    for (index, page) in ["first", "second", "third", "done"].into_iter().enumerate() {
+        let step = u32::try_from(index + 1).expect("step");
+        let mut boxes = vec![draft::button_box("recognize", index)];
+        if index < 3 {
+            boxes.push(draft::button_box("press", index));
+        }
+        bench.marked(json!({"step": step, "page": page, "boxes": boxes}));
+    }
+    let ready = read_ready(&bench.state(), draft::INSTANCE, &bench.ocr);
+    assert_eq!(ready["status"], "ready", "{ready}");
+    assert_eq!(ready["missing"], json!([]), "{ready}");
+    assert_eq!(ready["missing_total"], 0, "{ready}");
+    assert_eq!(ready["checks_after"], json!([]), "{ready}");
+    let warnings = ready["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning["what"] != "press_point_only"),
         "{ready}"
     );
 }

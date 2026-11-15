@@ -41,10 +41,10 @@ use crate::recording::store::{hex_sha256, lab_dir, old_record_path, recording_pa
 use crate::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
     LAB_RECORD_MARK_SCHEMA, LabOcr, MarkOutcome, MarkRequest, PlanClickRequest, PlannedSwipe,
-    PointPress, RecordArchiveOptions, RecordFramePorts, RecordPoint, RecordPressOutcome,
-    RecordPressRequest, RecordRect, RecordReopenOptions, RecordStartOptions, RecordStopOptions,
-    RecordingLock, record_archive, record_mark, record_press, record_reopen, record_start,
-    record_stop,
+    PointPress, RecordArchiveOptions, RecordFramePorts, RecordFramesRequest, RecordPoint,
+    RecordPressOutcome, RecordPressRequest, RecordRect, RecordReopenOptions, RecordStartOptions,
+    RecordStopOptions, RecordingLock, record_archive, record_frames, record_mark, record_press,
+    record_reopen, record_start, record_stop,
 };
 use actingcommand_contract::{InputFrameReference, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
@@ -59,7 +59,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tempfile::TempDir;
 
-const INSTANCE: &str = "neutral.instance";
+// #463 stage two, train 1: the instance, the screens, the points pressed, the boxes and the bench
+// are `pub(crate)`, so that S2-1's gate (`gate_463_s21`) builds the recording this gate's test of
+// the whole of stage two builds.
+pub(crate) const INSTANCE: &str = "neutral.instance";
 const RECORD_ID: &str = "record_s25_draft";
 const TASK_ID: &str = "neutral_task";
 const STARTED_AT: u64 = 1_700_000_000_000;
@@ -87,7 +90,7 @@ const SEEDS: [u64; 4] = [0x0463_2511, 0x0463_2512, 0x0463_2513, 0x0463_2514];
 // Two moments of an animation on the second screen: its button's square shows other noise.
 const ANIMATION_SEEDS: [u64; 2] = [0x0463_2521, 0x0463_2522];
 // The point pressed on each of the first three screens, inside its button.
-const POINTS: [(i32, i32); 3] = [(28, 28), (78, 48), (128, 28)];
+pub(crate) const POINTS: [(i32, i32); 3] = [(28, 28), (78, 48), (128, 28)];
 // The bottom-right pixel of a screen, by its index row after row.
 const LAST_PIXEL: usize = (WIDTH * HEIGHT) as usize - 1;
 // Fix round 2: the gray of the screen before the second one, which shows the second screen's
@@ -150,7 +153,7 @@ fn backdrop(background: u8, squares: &[(RecordRect, u64)], dots: &[usize]) -> Ve
 }
 
 // Screen `index`: its button.
-fn screen(index: usize) -> Vec<u8> {
+pub(crate) fn screen(index: usize) -> Vec<u8> {
     painted(BUTTONS[index], SEEDS[index], false)
 }
 
@@ -164,7 +167,7 @@ fn corners(index: usize) -> ((i32, i32), (i32, i32)) {
 }
 
 // A box of `usage` over button `index`.
-fn button_box(usage: &str, index: usize) -> Value {
+pub(crate) fn button_box(usage: &str, index: usize) -> Value {
     let (from, to) = corners(index);
     boxed(usage, from, to)
 }
@@ -257,7 +260,7 @@ impl RecordFramePorts for Screens {
 }
 
 // The screen after a press as one capture 800 ms after it, without a stillness test.
-fn one_capture_after() -> AfterCapture {
+pub(crate) fn one_capture_after() -> AfterCapture {
     AfterCapture {
         still_ms: Some(0),
         ..AfterCapture::for_press(Some(800))
@@ -265,7 +268,7 @@ fn one_capture_after() -> AfterCapture {
 }
 
 // `tap <x> <y> --record`, the screen after it taken as `after` says.
-fn tap_at(point: (i32, i32), after: AfterCapture) -> RecordPressRequest {
+pub(crate) fn tap_at(point: (i32, i32), after: AfterCapture) -> RecordPressRequest {
     RecordPressRequest {
         click: PlanClickRequest::default(),
         point_press: Some(PointPress::Tap {
@@ -333,14 +336,14 @@ fn rect_click(index: usize) -> Value {
 // A state directory with an active session of `INSTANCE` (the header `record start` writes) and its
 // Lab recording, before any step, without an OCR model. The lock is held as one command holds it
 // and dropped before the directory.
-struct Bench {
-    lock: RecordingLock,
-    ocr: LabOcr,
+pub(crate) struct Bench {
+    pub(crate) lock: RecordingLock,
+    pub(crate) ocr: LabOcr,
     temp: TempDir,
 }
 
 impl Bench {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let temp = TempDir::new().expect("temporary directory");
         let state = temp.path().join("state");
         fs::create_dir_all(&state).expect("state directory");
@@ -365,12 +368,12 @@ impl Bench {
         bench
     }
 
-    fn state(&self) -> PathBuf {
+    pub(crate) fn state(&self) -> PathBuf {
         self.temp.path().join("state")
     }
 
     // The session header with `status`, as the `record` command writes it.
-    fn header(&self, status: &str) {
+    pub(crate) fn header(&self, status: &str) {
         fs::write(
             old_record_path(&self.state(), INSTANCE),
             serde_json::to_vec(&json!({
@@ -387,7 +390,11 @@ impl Bench {
 
     // `record_press` of `request`, the fake Runtime performing the input and its captures taking
     // `shots` in order; the press must be recorded.
-    fn press(&self, request: &RecordPressRequest, shots: Vec<Vec<u8>>) -> RecordPressOutcome {
+    pub(crate) fn press(
+        &self,
+        request: &RecordPressRequest,
+        shots: Vec<Vec<u8>>,
+    ) -> RecordPressOutcome {
         let mut device = Screens {
             shots: shots.into(),
             taken: 0,
@@ -409,7 +416,7 @@ impl Bench {
     }
 
     // `record mark` of `value`, which must stand.
-    fn marked(&self, value: Value) -> MarkOutcome {
+    pub(crate) fn marked(&self, value: Value) -> MarkOutcome {
         self.mark(value).unwrap_or_else(|error| {
             panic!(
                 "record mark: {}: {} {:?}",
@@ -747,6 +754,26 @@ fn s25_a_recognize_box_takes_the_settled_capture_and_lists_the_animation() {
     assert_eq!(sample["superseded"], false, "{stored}");
     assert_eq!(sample["sha256"], hex_sha256(&settled), "{stored}");
     assert_eq!(sample["path"], capture["path"], "{stored}");
+    // #463 stage two, train 1: the sample is a frame of the step table, entered when the mark
+    // admitted it: `record frames` lists it after step 2's press, after step 3's frame.
+    let around = record_frames(
+        &bench.state(),
+        INSTANCE,
+        &RecordFramesRequest {
+            step: 2,
+            ..RecordFramesRequest::default()
+        },
+    )
+    .unwrap_or_else(|error| panic!("record frames: {}: {:?}", error.code, error.details));
+    assert_eq!(
+        around
+            .after
+            .iter()
+            .map(|frame| (frame.frame_id.as_str(), frame.stored_under_step))
+            .collect::<Vec<_>>(),
+        [("f0006", 3), ("f0007", 2)],
+        "{around:?}"
+    );
 }
 
 // The work order's test after the stop: a stopped recording whose tap was recorded by its point
