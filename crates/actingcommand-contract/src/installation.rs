@@ -2,7 +2,7 @@
 
 //! Installation inputs (Workflow #352). Only acsetup commits the selection. Running processes
 //! retain the selection they started with; these documents contain no Runtime state and are never
-//! a substitute for the ledger. Workflow #434 LAB-6S4a (0.12.62): the non-persistent Host
+//! a substitute for the ledger. Workflow #434 LAB-6S4a (0.12.63): the non-persistent Host
 //! installation protocol (`install-control` revision 1, the transition and the held start) is gone;
 //! `install-control` is [0, 0].
 
@@ -507,7 +507,7 @@ impl InstallSelection {
 }
 
 /// The phases of the installer's transition, the vocabulary `install_phase` of the outcome key
-/// `phase`. Workflow #434 LAB-6S4a (0.12.62): the transition itself is gone with the request kinds
+/// `phase`. Workflow #434 LAB-6S4a (0.12.63): the transition itself is gone with the request kinds
 /// `InstallTransition`, `UpgradeState` and `UpgradeStateStatus` and actingd's held start
 /// (`install-control` [0, 0]); the vocabulary stays, since the released codes that carry the key
 /// keep their signature.

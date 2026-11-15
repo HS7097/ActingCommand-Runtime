@@ -2,7 +2,7 @@
 
 // #382 C-2 (test plan v2.2 C-2), each over `ScriptedRuntime` (inventory-contract I1). G4,
 // inventory key R4 (the installation request's receipt matching) left with `InstallTransition`
-// (Workflow #434 LAB-6S4a, 0.12.62).
+// (Workflow #434 LAB-6S4a, 0.12.63).
 // - G5, inventory key R2: the latch table (Workflow #376 M2: a non-fatal rejection does not
 //   latch, only fatal errors do; input-receipt-wait.md: a timeout or a disconnected transport
 //   stays latched and authorizes no replay; client-interactions.md: a latched connection is not

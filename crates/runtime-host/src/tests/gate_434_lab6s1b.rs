@@ -4,7 +4,7 @@
 // `RuntimeRequest::validate()` judges no request by its origin. A (Lab, Lab) connection's global
 // and instance pause are taken as a (Cli, Cli) connection's are (completed, revision 1, the
 // connection's channel on the receipt), held with their reason, recorded so that a restart
-// restores both, and resumed from the same envelope. Workflow #434 LAB-6S4a (0.12.62): the host's
+// restores both, and resumed from the same envelope. Workflow #434 LAB-6S4a (0.12.63): the host's
 // own checks of the governance and installation kinds went with those kinds, and with them this
 // gate's test of those checks.
 

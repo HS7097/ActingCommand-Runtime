@@ -20,7 +20,7 @@
 //!   own (`begin_interaction`). Until Workflow #434 LAB-6S4a it went after the provenance today's
 //!   server recorded before a write (the identity card `{client: "actingctl-mcp"}`, then
 //!   `RecordClientAction{surface_id: "mcp", control_id: <tool>, kind: command}` naming the
-//!   instance it resolved by one status read on the kept connection); since LAB-6S4a (0.12.62;
+//!   instance it resolved by one status read on the kept connection); since LAB-6S4a (0.12.63;
 //!   the coordinator's ruling N8 on board #434) the write is the first request after the
 //!   handshake, the initiator `Lab-MCP` its binding carries naming where it came from. Workflow
 //!   #434 LAB-5G4b, second part: the client action after a capture, its value the Lab request's
@@ -173,11 +173,11 @@ impl Runtime {
     }
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): `Runtime::alias`, the status read that named a write's
+// Workflow #434 LAB-6S4a (0.12.63): `Runtime::alias`, the status read that named a write's
 // instance in its client action, went with that client action.
 
 /// A connection of its own to the Runtime of `state_root` for one write, under a correlation of
-/// its own (`begin_interaction`). Workflow #434 LAB-6S4a (0.12.62; the coordinator's ruling N8 on
+/// its own (`begin_interaction`). Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8 on
 /// board #434): the identity card and the client action that came before the write are gone, the
 /// initiator `Lab-MCP` the connection's binding carries names where it came from, so the write is
 /// the first request after the handshake. A connection that fails ends the call with its line,
@@ -215,7 +215,7 @@ impl NotRecorded {
 /// The client action after a capture (Workflow #434 LAB-5G4b, second part; today's
 /// `record_action`), on a connection of its own to the Runtime of `state_root`:
 /// `begin_interaction`, then the client action of the tool `tool` naming `instance_alias` and
-/// carrying `value` when given (the Lab request's id). Workflow #434 LAB-6S4a (0.12.62): no
+/// carrying `value` when given (the Lab request's id). Workflow #434 LAB-6S4a (0.12.63): no
 /// identity card is declared before it. A failure is the step's ([`NotRecorded`]), and nothing
 /// more is sent.
 pub(crate) fn record_capture_action(

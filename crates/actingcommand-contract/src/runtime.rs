@@ -4784,7 +4784,7 @@ impl RuntimeRequest {
         // transition, authoring, signatures, debugging, governance, emulator control, scheduling
         // pause, the agent wake test, fact publication by family, the agent dispatcher's kinds,
         // the player hold) are gone; the host's own checks of the governance and installation
-        // kinds went with those kinds (Workflow #434 LAB-6S4a, 0.12.62).
+        // kinds went with those kinds (Workflow #434 LAB-6S4a, 0.12.63).
         if !valid_client_origin(self.actor, self.source) {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidClientOrigin,
@@ -6704,7 +6704,7 @@ pub fn validate_instance_alias(value: &str) -> RuntimeContractResult<()> {
 /// client said who it was instead of presenting a shared secret. The Runtime verified the card
 /// against its governance policy and recorded every declaration, accepted or refused, as a
 /// `governance.identity_declared` event. Actor and source are the request envelope's and are
-/// never repeated here. Workflow #434 LAB-6S4a (0.12.62): the request that declared it is gone;
+/// never repeated here. Workflow #434 LAB-6S4a (0.12.63): the request that declared it is gone;
 /// the card stays as the shape of the records a ledger already holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

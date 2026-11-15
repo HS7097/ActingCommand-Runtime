@@ -7,7 +7,7 @@
 //!
 //! - MCP `ac_evidence_confirm_read` records one `client.action` with the agent's origin (Agent,
 //!   Adapter), and `actingctl evidence confirm-read` one with the command line's (Cli, Cli),
-//!   since Workflow #434 LAB-6S4a (0.12.62) with no identity card before it (the ledger holds no
+//!   since Workflow #434 LAB-6S4a (0.12.63) with no identity card before it (the ledger holds no
 //!   `governance.identity_declared` record). Each names a frame or a run with the
 //!   controls R's frame index takes (`evidence_read_frame`, `evidence_read_run`), and each has its
 //!   frame index row (`('artifact'|'run', id, 'read_confirmed')` at the record's sequence).
@@ -151,7 +151,7 @@ fn ln7c_c_mcp_and_the_cli_each_record_one_client_action_with_its_frame_index_row
         "each call records exactly its one client.action, with the caller's origin"
     );
 
-    // Workflow #434 LAB-6S4a (0.12.62): the CLI declares no identity card before a confirmation
+    // Workflow #434 LAB-6S4a (0.12.63): the CLI declares no identity card before a confirmation
     // any more, so the ledger holds no `governance.identity_declared` record.
     assert!(
         !events.iter().any(|event| matches!(

@@ -409,7 +409,7 @@ fn record_policy_approval(host: &RuntimeHost, intent: &DispatchIntent) {
     record_policy_approval_disposition(host, intent, ApprovalDisposition::Approved);
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): the approval request is gone; an approval is recorded by the
+// Workflow #434 LAB-6S4a (0.12.63): the approval request is gone; an approval is recorded by the
 // host's in-process transcription, the way actingd records the approvals its configuration
 // holds, which writes the same approval record (provenance (Governance, User, Ui)).
 fn record_policy_approval_disposition(

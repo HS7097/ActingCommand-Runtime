@@ -381,7 +381,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The client's install_transition went with the request kind InstallTransition. Was: A runtime client call failed: install transition receipt unconfirmed.",
       "common_causes": "TBD",
       "handling": "TBD"

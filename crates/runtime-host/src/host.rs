@@ -384,7 +384,7 @@ use requests::{
 };
 use state_control::reconcile_runtime_state;
 
-/// Workflow #434 LAB-6S4a (0.12.62): the stages of the installer's transition and the held start
+/// Workflow #434 LAB-6S4a (0.12.63): the stages of the installer's transition and the held start
 /// (`install_drain`, `install_held`, `install_release`) went with them; the records that name
 /// them stay readable, since the ledger keeps the stage as its location's spelling.
 #[derive(Clone, Copy)]
@@ -512,7 +512,7 @@ fn fail_policy_execution_append_for_test() -> RuntimeHostResult<()> {
 /// Workflow #318 cfg4: which governance identity cards the host accepted. `None` accepted any
 /// well-formed card; a set accepted only a card whose `client` it contains. Nothing here is a
 /// secret: a card was a declaration the host verified and recorded, not a credential. Workflow
-/// #434 LAB-6S4a (0.12.62): the identity card is gone, so the host checks nothing against the
+/// #434 LAB-6S4a (0.12.63): the identity card is gone, so the host checks nothing against the
 /// policy any more; the configuration still reads, checks and reports it (`actingd-config` does
 /// not move in this slice).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -7111,7 +7111,7 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         let Some(_work) = work else {
             continue;
         };
-        // Workflow #434 LAB-6S4a (0.12.62): the install drain's cancellation of the waiting
+        // Workflow #434 LAB-6S4a (0.12.63): the install drain's cancellation of the waiting
         // entries (Workflow #369 §5.2) went with the install transition; a stop cancels them at
         // the close (`cancel_all_queues_for_shutdown`).
         // Workflow #403: every new resource fence goes to a recovery ladder or a person before

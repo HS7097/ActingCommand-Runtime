@@ -8,7 +8,7 @@ actingcommand_contract::outcome_codes! {
     /// The codes only this server emits.
     pub enum McpCode {
         OperationUnsupported => "mcp_operation_unsupported": error / none,
-        // Workflow #434 LAB-6S4a: `mcp_identity_declaration_refused` is retired in 0.12.62 with
+        // Workflow #434 LAB-6S4a: `mcp_identity_declaration_refused` is retired in 0.12.63 with
         // the identity card declared before a write.
         // Workflow #434 LAB-5G3: the call goes on as a job of this server, named by its handle.
         JobStarted => "mcp_job_started": info / none,

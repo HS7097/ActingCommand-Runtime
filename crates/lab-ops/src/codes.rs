@@ -160,7 +160,7 @@ actingcommand_contract::outcome_codes! {
         RuntimeShutdownRequested => "runtime_shutdown_requested": success / none,
         RuntimeShutdownCompleted => "runtime_shutdown_completed": success / none,
         // Workflow #434 LAB-6S4a: `install_transition_reported`, `install_transition_failed` and
-        // `install_transition_aborted` are retired in 0.12.62 with `actingctl install-transition`.
+        // `install_transition_aborted` are retired in 0.12.63 with `actingctl install-transition`.
         InstanceResetDone => "instance_reset_done": success / none,
         InstanceObserved => "instance_observed": success / none,
         RuntimeStatusReported => "runtime_status_reported": success / none,
@@ -220,7 +220,7 @@ actingcommand_contract::outcome_codes! {
         McpFileTooLarge => "mcp_file_too_large": error / none,
         McpConfigProgramUnresolved => "mcp_config_program_unresolved": error / none,
         McpConfigProgramUnsupported => "mcp_config_program_unsupported": error / none,
-        // Workflow #434 LAB-6S4a: `mcp_identity_card_refused` is retired in 0.12.62 with the
+        // Workflow #434 LAB-6S4a: `mcp_identity_card_refused` is retired in 0.12.63 with the
         // identity card MCP declared before a write.
         WatchdogStartDue => "watchdog_start_due": info / none,
         WatchdogStartPending => "watchdog_start_pending": info / none,

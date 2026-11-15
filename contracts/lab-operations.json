@@ -710,7 +710,7 @@
       "source": ["actingctl evidence confirm-read", "MCP ac_evidence_confirm_read"],
       "slice": "LAB-1",
       "status": "planned",
-      "notes": "LAB-6S1b: requests added DeclareGovernanceIdentity, the identity card the row declared before its confirmation (crates/lab-ops evidence_read), which the row's code sent since LAB-1 and the table left out; the kind therefore left not_exposed. Workflow #434 LAB-6S4a (0.12.62) deletes the kind and takes it off this row: the row sends no identity card, the confirmation is the first request of its interaction"
+      "notes": "LAB-6S1b: requests added DeclareGovernanceIdentity, the identity card the row declared before its confirmation (crates/lab-ops evidence_read), which the row's code sent since LAB-1 and the table left out; the kind therefore left not_exposed. Workflow #434 LAB-6S4a (0.12.63) deletes the kind and takes it off this row: the row sends no identity card, the confirmation is the first request of its interaction"
     },
     {
       "name": "emu start",

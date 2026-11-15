@@ -2222,7 +2222,7 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "StopInstanceRun",
     "SubscribeEvents",
     "UnloadPack",
-    // Workflow #434 LAB-6S4a (0.12.62): `DeclareGovernanceIdentity`, `InstallTransition`,
+    // Workflow #434 LAB-6S4a (0.12.63): `DeclareGovernanceIdentity`, `InstallTransition`,
     // `RecordApprovalDecision`, `UpgradeState` and `UpgradeStateStatus` left the list with their
     // kinds.
 ];
@@ -2314,7 +2314,7 @@ fn b3_every_runtime_operation_has_an_explicit_origin_category() {
     );
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): the test
+// Workflow #434 LAB-6S4a (0.12.63): the test
 // `b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection` went
 // with `DeclareGovernanceIdentity` and `RecordApprovalDecision`, the two kinds whose one gate it
 // held (the card's origin predicate, the approval's first refusal and the accepted governance

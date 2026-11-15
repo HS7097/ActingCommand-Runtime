@@ -207,7 +207,7 @@ fn load_pack() -> RuntimeOperation {
     }
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): the pure read off the list (`UpgradeStateStatus` until the
+// Workflow #434 LAB-6S4a (0.12.63): the pure read off the list (`UpgradeStateStatus` until the
 // kind went) and the second kind the host answers `not_implemented` on every other channel.
 fn policy_input_identity() -> RuntimeOperation {
     RuntimeOperation::ProjectPolicyInputIdentity {

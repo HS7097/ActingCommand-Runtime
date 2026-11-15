@@ -76,7 +76,7 @@ actingcommand_contract::outcome_codes! {
         /// status fact (Workflow #381 A R3′). A restart may succeed: the watchdog considers a
         /// start (R5′).
         InstallStartupStopped => "install_startup_stopped": error / none,
-        // Workflow #434 LAB-6S4a: `held_timeout` and `release_timeout` are retired in 0.12.62 with
+        // Workflow #434 LAB-6S4a: `held_timeout` and `release_timeout` are retired in 0.12.63 with
         // the five request kinds of LAB-6S4a, which were their only emitters, and so is
         // `install_startup_shut_down`: a shutdown request is answered busy while a start prepares,
         // so the accepted shutdown of a held start was its only cause.
@@ -232,7 +232,7 @@ actingcommand_contract::outcome_codes! {
         /// #372 K4).
         ClockSlotSuperseded => "clock_slot_superseded": warning / none,
         // INST-1 (Workflow #390) begin
-        // Workflow #434 LAB-6S4a: `install_preparation_instance_unavailable` is retired in 0.12.62
+        // Workflow #434 LAB-6S4a: `install_preparation_instance_unavailable` is retired in 0.12.63
         // with the five request kinds of LAB-6S4a, which were their only emitters.
         // INST-1 (Workflow #390) end
         // Workflow #403 begin
@@ -393,7 +393,7 @@ actingcommand_contract::outcome_codes! {
         ApprovalProjectionQueryFailed => "approval_projection_query_failed": error / none,
         ApprovalReadIdsExceeded => "approval_read_ids_exceeded": error / none,
         // Workflow #434 LAB-6S4a: `approval_replay_conflict` and `approval_replay_payload_mismatch`
-        // are retired in 0.12.62 with the five request kinds of LAB-6S4a, which were their only
+        // are retired in 0.12.63 with the five request kinds of LAB-6S4a, which were their only
         // emitters.
         ArtifactEvictionRecoveryDeadline => "artifact_eviction_recovery_deadline": error / none,
         ArtifactEvictionRecoveryDeferred => "artifact_eviction_recovery_deferred": error / none,
@@ -622,7 +622,7 @@ actingcommand_contract::outcome_codes! {
         // (R-7a §2.6 O-1, the contract's `ControlGateCode`); R-7a2 and R-7b first emit them.
         DispatchPlayerHeld => "dispatch_player_held": info / none,
         DispatchResourceFenced => "dispatch_resource_fenced": info / none,
-        // Workflow #434 LAB-6S4a: `drain_timeout` is retired in 0.12.62 with the five request kinds
+        // Workflow #434 LAB-6S4a: `drain_timeout` is retired in 0.12.63 with the five request kinds
         // of LAB-6S4a, which were their only emitters.
         DuplicateEmulatorCapabilityRequirement => "duplicate_emulator_capability_requirement": error / none,
         DuplicateInstanceAlias => "duplicate_instance_alias": error / none,
@@ -721,7 +721,7 @@ actingcommand_contract::outcome_codes! {
         FixtureExecutionScopeForbidden => "fixture_execution_scope_forbidden": error / none,
         FixtureMonitorScopeForbidden => "fixture_monitor_scope_forbidden": error / none,
         // Workflow #434 LAB-6S4a: `governance_authority_required` and
-        // `governance_connection_state_conflict` are retired in 0.12.62 with the five request kinds
+        // `governance_connection_state_conflict` are retired in 0.12.63 with the five request kinds
         // of LAB-6S4a, which were their only emitters.
         HostKeyRequestInvalid => "host_key_request_invalid": error / none,
         HostPackageLeaseIdentityMismatch => "host_package_lease_identity_mismatch": error / none,
@@ -744,7 +744,7 @@ actingcommand_contract::outcome_codes! {
         // `install_previous_shutdown_unverified`, `install_previous_transition_invalid`,
         // `install_previous_transition_missing`, `install_previous_verification_timeout`,
         // `install_release_state_invalid`, `install_ticket_mismatch`, `install_transition_conflict`
-        // and `install_transition_unknown` are retired in 0.12.62 with the five request kinds of
+        // and `install_transition_unknown` are retired in 0.12.63 with the five request kinds of
         // LAB-6S4a, which were their only emitters.
         /// Error (ISO-M #419, R8). A lock of one instance alone that guards no data (its admission
         /// guard, its queue-order lock) was left poisoned by a panic: its poison is cleared, the
@@ -1450,7 +1450,7 @@ actingcommand_contract::outcome_codes! {
         LabModuleOptionDisabled => "lab_module_option_disabled": error / none,
         // Workflow #434 LAB-6S4a: `upgrade_state_entered`, `upgrade_state_cancelled`,
         // `upgrade_state_released`, `upgrade_state_requester_disconnected` and
-        // `upgrade_state_aborted` are retired in 0.12.62 with `UpgradeState`, which answered
+        // `upgrade_state_aborted` are retired in 0.12.63 with `UpgradeState`, which answered
         // `not_implemented` and so never emitted them.
         /// Success. LoadPack (keys `package_id`). Emitted from U-3, as are the five codes below.
         PackRegistryLoaded => "pack_registry_loaded": success / none,

@@ -113,10 +113,10 @@
       "review": "settled",
       "status": "retired",
       "since": "0.11.6",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: A held start (actingd --install-held) received no release before its deadline; the transition fails with admission closed and the start ends with it. The operation is install_transition.",
       "common_causes": "The installer stopped, timed out or lost its connection before it released the new Runtime.",
-      "handling": "None in 0.12.62 and later: the code is no longer emitted."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "install_startup_shut_down": {
       "category": "info",
@@ -134,10 +134,10 @@
       "review": "settled",
       "status": "retired",
       "since": "0.11.6",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): actingd's held start went, and a shutdown request sent while a start prepares is refused runtime_shutdown_denied (runtime_busy), so no accepted shutdown can stop a start and nothing emits this code; a record that carries it stays readable. Was: A held start (actingd --install-held) ended because a shutdown request for its owner was accepted before it was released; the operation is install_transition. It is a requested stop: actingd ends with runtime_stopped and this code as its caused_by link, the transition reads failed with this failure_code, and the watchdog takes the close as formal and never restarts it.",
       "common_causes": "An installer, the console or actingctl request-shutdown stopped an owner that waited for its release.",
-      "handling": "None in 0.12.62 and later: the code is no longer emitted."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "install_startup_stopped": {
       "category": "error",
@@ -405,10 +405,10 @@
       "review": "settled",
       "status": "retired",
       "since": "0.11.6",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: A released start did not finish preparing before its release deadline; the transition fails with admission closed and the start ends with it. The operation is install_transition.",
       "common_causes": "A slow preparation, such as the startup recovery of a long ledger or slow devices, against a short release timeout.",
-      "handling": "None in 0.12.62 and later: the code is no longer emitted."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "strategic_evidence_unavailable": {
       "category": "error",
@@ -831,10 +831,10 @@
       "review": "settled",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes.",
       "common_causes": "The instance's device did not answer while the new build prepared it.",
-      "handling": "None in 0.12.62 and later: the code is no longer emitted."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "instance_resources_fenced": {
       "category": "error",
@@ -1929,7 +1929,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): RecordApprovalDecision went; approvals come only from the configuration's transcription, which never emits this code; a record that carries it stays readable. Was: The Runtime host reports approval replay conflict.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -1950,7 +1950,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): RecordApprovalDecision went; approvals come only from the configuration's transcription, which never emits this code; a record that carries it stays readable. Was: The Runtime host reports approval replay payload mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7605,7 +7605,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): DeclareGovernanceIdentity and RecordApprovalDecision went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports governance authority required.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7626,7 +7626,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): DeclareGovernanceIdentity and RecordApprovalDecision went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports governance connection state conflict.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7807,7 +7807,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install abort state invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7828,7 +7828,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install fact clock overflow.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7849,7 +7849,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install fact field invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7870,7 +7870,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install identity encode failed.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7891,7 +7891,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install identity required.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7912,7 +7912,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install not drained.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7933,7 +7933,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install owner mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7954,7 +7954,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install owner stopping.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7975,7 +7975,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install pause scope mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -7996,7 +7996,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install preparation not authorized.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8017,10 +8017,10 @@
       "review": "settled",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: An install start (a held start released by the installer) whose daemon-start preparation self-checks all failed: at least one instance was prepared and none passed, so the new build reached no device. The start ends under this code during install_transition and the transition fails (INST-1).",
       "common_causes": "Every device stopped or unreachable while the new build prepared, or a new build that cannot capture or touch on this machine.",
-      "handling": "None in 0.12.62 and later: the code is no longer emitted."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "install_previous_drain_unverified": {
       "category": "error",
@@ -8038,7 +8038,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous drain unverified.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8059,7 +8059,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous owner invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8080,7 +8080,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause identity mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8101,7 +8101,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause identity missing.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8122,7 +8122,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause not settled.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8143,7 +8143,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause revision invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8164,7 +8164,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause scope invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8185,7 +8185,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause time invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8206,7 +8206,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pauses invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8227,7 +8227,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pauses missing.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8248,7 +8248,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous shutdown unverified.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8269,7 +8269,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous transition invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8290,7 +8290,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous transition missing.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8311,7 +8311,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous verification timeout.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8332,7 +8332,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install release state invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8353,7 +8353,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install ticket mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8374,7 +8374,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install transition conflict.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -8395,7 +8395,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install transition unknown.",
       "common_causes": "TBD",
       "handling": "TBD"
@@ -19984,7 +19984,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A stuck-recovery rung ended because the Runtime's admission was stopping at the ladder's holding check while the ladder held its instance: a Runtime shutdown was accepted after the check read the shutdown request and before it read the admission (Workflow #434 LAB-6S4a, 0.12.62: the install drain that raised it until 0.12.61 went with InstallTransition; a shutdown the check sees first is recovery_ladder_shutdown_requested).",
+      "description": "A stuck-recovery rung ended because the Runtime's admission was stopping at the ladder's holding check while the ladder held its instance: a Runtime shutdown was accepted after the check read the shutdown request and before it read the admission (Workflow #434 LAB-6S4a, 0.12.63: the install drain that raised it until 0.12.62 went with InstallTransition; a shutdown the check sees first is recovery_ladder_shutdown_requested).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -20116,10 +20116,10 @@
       "review": "settled",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: An install transition's drain did not finish before its deadline: the transition aborts and admission reopens on the old owner. The operation is install_transition; the status reports phase aborted with this failure code.",
       "common_causes": "Work in flight that takes longer than the drain's timeout.",
-      "handling": "None in 0.12.62 and later: the code is no longer emitted."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "dispatch_paused_global": {
       "category": "info",
@@ -20549,7 +20549,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. Was: UpgradeState enter succeeded (#389 U-4): the Runtime closed admission, drained, recorded its scheduling pause, accepted its own close while the requesting connection was still open, and closes with the upgrade-state marker on its owner-journal close record.",
       "common_causes": "acsetup entered the upgrade state before it replaces or restarts the Runtime.",
       "handling": "Nothing to repair. The installer goes on; if it fails after this point, the watchdog, when its task is registered, starts the selected generation again once the installer has released install\\writer.lock."
@@ -20566,7 +20566,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. Was: UpgradeState cancel took effect while the transition was still draining: admission reopened, the transition is recorded as aborted and the Runtime keeps running.",
       "common_causes": "An interrupted installer run again, or a person or a script withdrew the upgrade.",
       "handling": "Nothing to repair."
@@ -20583,7 +20583,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. Was: UpgradeState leave succeeded: the Runtime that acsetup started with --install-held prepared its provider, restored the pause recorded by the transition and opened admission.",
       "common_causes": "acsetup released the Runtime it started held, after it checked the process id and the request id.",
       "handling": "Nothing to repair."
@@ -20605,7 +20605,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. Was: The connection that sent UpgradeState enter closed before the Runtime accepted its own close. The Runtime handles it as cancel: admission reopens, the transition is recorded as aborted with this code as its failure_code, and the Runtime keeps running. No request receives this code as its reply.",
       "common_causes": "The installer process ended or was killed while the Runtime was draining.",
       "handling": "Run the installer again; the Runtime is unchanged and running."
@@ -20627,7 +20627,7 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.62",
+      "retired_in": "0.12.63",
       "description": "Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. Was: The reply to an UpgradeState enter that was still waiting for the drain when an UpgradeState cancel withdrew the transition. The Runtime keeps running.",
       "common_causes": "A second installer run or a script sent cancel during the drain.",
       "handling": "Nothing to repair; enter the upgrade state again when the upgrade should go on."

@@ -144,7 +144,7 @@ pub(super) enum LadderInvariant {
     Shutdown,
     /// A4: the ladder no longer holds its instance's key.
     KeyLost,
-    /// A3: the host's admission is stopping. Workflow #434 LAB-6S4a (0.12.62): with the install
+    /// A3: the host's admission is stopping. Workflow #434 LAB-6S4a (0.12.63): with the install
     /// drain gone, only a shutdown accepted after the holding check read the shutdown request.
     Drain,
     /// A6: a scheduling pause holds the instance (a person's input comes first).

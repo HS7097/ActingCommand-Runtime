@@ -666,7 +666,7 @@ const GATE_WAIT: &str = "GATE_WAIT";
 /// admission budget that `describe_path` takes and no test reaches. The third is the first's form
 /// for Workflow #434 LAB-5G3 (the coordinator's ruling of 2026-11-13): the deadline that
 /// `Job::wait_until` of the new MCP server, copied from the first's, takes and no test reaches.
-/// Workflow #434 LAB-6S4a (0.12.62): the entry of the #672 ruling itself, the run client's
+/// Workflow #434 LAB-6S4a (0.12.63): the entry of the #672 ruling itself, the run client's
 /// deadline of `actingctl install-transition` (`apps/actingctl/src/gate_381a.rs`), went with that
 /// subcommand.
 const DETERMINISM_ALLOWLIST: &[(&str, &str, &str)] = &[

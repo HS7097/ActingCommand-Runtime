@@ -482,7 +482,7 @@ fn run_daemon(arguments: Vec<std::ffi::OsString>) -> Category {
         Err(error) => return start_refused(&ActingdError::config(error.code()), None),
     };
     let install_root = installation.map(actingcommand_contract::InstalledProcess::root);
-    // Workflow #434 LAB-6S4a (0.12.62): a starting Runtime answers a shutdown request busy, so no
+    // Workflow #434 LAB-6S4a (0.12.63): a starting Runtime answers a shutdown request busy, so no
     // start ends as a requested stop any more (`install_startup_shut_down`, retired).
     let (host, policy) = match start_daemon(arguments) {
         Ok(started) => started,
@@ -1535,7 +1535,7 @@ fn run_policy_monitor(
         if driver.is_finished() {
             return Err(ActingdError::process(ActingdCode::PolicyDriverStopped));
         }
-        // Workflow #434 LAB-6S4a (0.12.62): the install drain the monitor waited out (#376 M1)
+        // Workflow #434 LAB-6S4a (0.12.63): the install drain the monitor waited out (#376 M1)
         // went with the install transition; only an accepted shutdown (the check above) ends it.
         forward_policy_wakes(control, wakes, Duration::from_millis(POLICY_EVENT_WAIT_MS))?;
     }

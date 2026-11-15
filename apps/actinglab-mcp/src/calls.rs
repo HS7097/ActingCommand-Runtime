@@ -199,7 +199,7 @@ impl Service {
 
     /// A row that writes to the Runtime: the row on a connection of its own
     /// (`runtime::begin_write`). A connection that fails ends the call with its line, and the row
-    /// is not served. Workflow #434 LAB-6S4a (0.12.62): no provenance is recorded before it.
+    /// is not served. Workflow #434 LAB-6S4a (0.12.63): no provenance is recorded before it.
     fn write(
         &self,
         operation: &Operation,
@@ -279,7 +279,7 @@ fn rescue_line(operation: &Operation, _params: &Map<String, Value>) -> Exit {
     cli_line::failure(&tools::unsupported(&tools::tool_name(operation)), None)
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): `instance_of`, the instance a write's client action named, and
+// Workflow #434 LAB-6S4a (0.12.63): `instance_of`, the instance a write's client action named, and
 // `with_warnings`, which joined the provenance's warnings to a write's line, went with that
 // provenance.
 
@@ -644,7 +644,7 @@ fn not_served(exit: Option<Exit>) -> Exit {
 }
 
 /// Workflow #434 LAB-5G3: a run prepared for `ac_run_start` on a connection of its own, and not
-/// yet submitted (Workflow #434 LAB-6S4a, 0.12.62: with no provenance before it, so with no
+/// yet submitted (Workflow #434 LAB-6S4a, 0.12.63: with no provenance before it, so with no
 /// warnings of its own).
 pub(crate) struct StartedRun {
     client: RuntimeClient,
@@ -787,7 +787,7 @@ impl Service {
     /// start` prepared and not submitted: a connection of its own (`runtime::begin_write`), then
     /// the run read as `run start` reads it and prepared on that connection
     /// (`core_ops::run_start_prepared`), named by its request id. A step that fails ends the call
-    /// with its line, and nothing of the run is sent. Workflow #434 LAB-6S4a (0.12.62): no
+    /// with its line, and nothing of the run is sent. Workflow #434 LAB-6S4a (0.12.63): no
     /// provenance is recorded before it, so no status read on the kept connection names its
     /// instance first.
     pub(crate) fn run_start(

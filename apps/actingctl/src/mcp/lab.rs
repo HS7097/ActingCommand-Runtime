@@ -1219,7 +1219,7 @@ fn run_job(
 
 /// The client.action of a Lab request this call made, after its child returned. Its warnings:
 /// `client_action_without_req_id`, or `client_action_not_recorded` caused by the recording's
-/// failure (the Lab command is not run again). Workflow #434 LAB-6S4a (0.12.62): no identity card
+/// failure (the Lab command is not run again). Workflow #434 LAB-6S4a (0.12.63): no identity card
 /// is declared before it, so the card's refusal is no warning of it any more.
 fn record_action(
     state_root: &Result<PathBuf, Outcome>,

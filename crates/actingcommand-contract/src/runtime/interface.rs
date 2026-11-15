@@ -269,7 +269,7 @@ pub enum InterfaceBlock {
     General,
     /// What one Lab option opens, on the Lab channel only.
     Lab(LabOption),
-    // Workflow #434 LAB-6S4a (0.12.62): the blocks `Retired` (the approval request) and `Compat`
+    // Workflow #434 LAB-6S4a (0.12.63): the blocks `Retired` (the approval request) and `Compat`
     // (`InstallTransition`) went with their last kinds.
 }
 

@@ -258,7 +258,7 @@ impl HostShared {
     /// `since`; a pause of an alias no longer registered is dropped. The restored rows are
     /// recorded again with `restored_from_owner_epoch`, which is the ledger record of the restore
     /// and of every dropped row. A ledger without the fact restores nothing. Workflow #434
-    /// LAB-6S4a (0.12.62): the installer-held start, which kept the pauses its transition
+    /// LAB-6S4a (0.12.63): the installer-held start, which kept the pauses its transition
     /// restored, is gone; every start reads the fact.
     pub(super) fn restore_scheduling_pauses(
         &self,

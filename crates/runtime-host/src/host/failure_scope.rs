@@ -272,7 +272,7 @@ pub(crate) const GLOBAL_CODES: &[GlobalCode] = &[
         GlobalFamily::Configuration,
         SharedCode::PolicyCatalogApprovalInvalid.code(),
     ),
-    // Workflow #434 LAB-6S4a (0.12.62): `approval_replay_conflict` and
+    // Workflow #434 LAB-6S4a (0.12.63): `approval_replay_conflict` and
     // `approval_replay_payload_mismatch` left the list, retired with `RecordApprovalDecision`.
     global(
         GlobalFamily::Configuration,
@@ -571,7 +571,7 @@ pub(crate) const GLOBAL_CODES: &[GlobalCode] = &[
         GlobalFamily::Installer,
         HostCode::RuntimeComponentAlreadyPrepared.code(),
     ),
-    // Workflow #434 LAB-6S4a (0.12.62): `install_abort_state_invalid` and
+    // Workflow #434 LAB-6S4a (0.12.63): `install_abort_state_invalid` and
     // `install_release_state_invalid` left the list, retired with `InstallTransition`.
 ];
 

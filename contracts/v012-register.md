@@ -12303,7 +12303,7 @@ each program is served by that Runtime's own rules (fix 1: the connections count
 
 **LAB-6S2-B2 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
 
-#### Slice LAB-6S4a (0.12.62): the five request kinds are deleted, with the identity card and the held start
+#### Slice LAB-6S4a (0.12.63): the five request kinds are deleted, with the identity card and the held start
 
 Coordinator work order `rd-1115/brief-434-lab6s4a-five-kinds.md`, after the survey
 `rd-1113/lab6-step0-survey.md` (its sections A and B.4, its row S4a and its open points N4,
@@ -12393,7 +12393,7 @@ machine that runs 0.12.61, and that its ledger and state root load).
   connection sends `Health`, `BindChannel` (`lab`, `Lab-MCP`), then the write; a capture's client
   action is its connection's first request after the handshake.
 
-**Codes.** Retired in 0.12.62 (status `retired`, `retired_in` 0.12.62; the descriptions say why;
+**Codes.** Retired in 0.12.63 (status `retired`, `retired_in` 0.12.63; the descriptions say why;
 the release files keep the released ones): contract `request_install_transition_completed`,
 `request_declare_governance_identity_completed`, `request_record_approval_decision_completed`,
 `invalid_approval_decision`, `invalid_install_transition_receipt`,

@@ -14,7 +14,7 @@
 // releases its key once (model-369 H-3 holding checks, ruling Q8, §5.2, §5.5). The pause row is
 // `instance_workers::`
 // `a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release`. Workflow #434
-// LAB-6S4a (0.12.62): the install drain rows left with the install transition.
+// LAB-6S4a (0.12.63): the install drain rows left with the install transition.
 //
 // G9's manual-clock row (test plan v2.2 §3.10 H-1-rest; host key 22): since HOST-I2 the
 // readiness window, its backoff and every poll's verdict read the Runtime clock. On a manual

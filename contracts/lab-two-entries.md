@@ -42,7 +42,7 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-6S2-B1 | Runtime | the Lab's own programs (`actinglab`, its `serve`, `actinglab-mcp`, the rescue module, `actingwatch`) bind `lab` with their word and keep the envelope they sent on 0.12.58; LAB-6S2-M in the same Runtime build. Built, 0.12.59 (register §1.287, "Slice LAB-6S2-B1"): `actinglab`'s core rows (`Front::Actinglab`, (Lab, Lab)) and its own commands ((Lab, Lab)) with the process's word, `Lab-CLI` or the `Lab-制包` / `Lab-救急` of `ACTINGCOMMAND_INITIATOR`; `serve --stdio` the same, and with `--front mcp` `Lab-MCP`; MCP's `--via mcp` actinglab child `Lab-MCP` without `via` (`--via ui`, which no word names, binds as before); `actinglab-mcp` in its own process (`Front::Mcp`, (Cli, Cli)) `Lab-MCP`; the rescue module's own client ((Cli, Cli)) with the module's word, `Lab-MCP` for `actinglab-mcp`, `serve --front mcp` and the detached run; the watchdog's probe ((Cli, Cli), `Health` and `BindChannel` only) `Lab-看门狗` in `actingwatch`, else the word of the Lab program that reads the watchdog's status or starts the Runtime. `actingctl install` (the rescue module as `actingctl` calls it) and `actingctl`'s other paths through the code it shares with the Lab (`start`, `restart`, `watchdog` and the overview's `watchdog` block) declare no word in this slice and bind as on 0.12.58, `cli` without a word; LAB-6S2-B2 moves them, with the rest of `actingctl` and today's MCP server, which keep their binding until then. Way back: yes |
 | LAB-6S2-B2 | Runtime | `actingctl` and today's MCP server (`actingctl mcp-serve`) the same: `lab` with `Lab-CLI` or `Lab-MCP`, the envelope they sent on 0.12.58; after LAB-6S2-M. Built, 0.12.59 (register §1.287, "Slice LAB-6S2-B2"): every connection of `actingctl`'s command lines declares `Lab-CLI`: its own commands ((Cli, Cli); (Agent, Adapter) for `agent-publish-facts` and `agent-apply-resource-targets`), the operation layer's commands (`Front::Actingctl`, (Cli, Cli)) and the code it shares with the Lab, (Cli, Cli): `install` (the rescue module as `actingctl` calls it; its journals still record no initiator), `start`, `restart`, `watchdog` and the overview's `watchdog` block; every connection of today's MCP server declares `Lab-MCP`: the kept one and each write's ((Cli, Cli); (Agent, Adapter) for the resource targets, the remedy choices and the evidence read confirmation), and its overview's `watchdog` block (the server says it is `Front::Mcp`); its actinglab children (`--via mcp`) bind `Lab-MCP` without `via` since LAB-6S2-B1. The Runtime records and answers every request of theirs on `cli` and `mcp` as on 0.12.58 (section 2.4, the map M; section 4.3, the receipt rule R). Since this slice no program of this repository binds `cli` or `mcp`; a `lab` binding without a word is left only where LAB-6S2-B1 keeps one (`--via ui`, and actinglab's own commands under a variable that names no word). Way back: yes |
 | LAB-6S3 | Runtime | the UI list on `ui` (section 3, `ui_allows`; section 2.3 step 5): a `ui` connection is refused, `channel_request_refused`, every kind off the list and a setting outside the console's tiers; every other connection as before. Way back: yes |
-| LAB-6S4a | Runtime | the five kinds deleted; `install-control` [0, 0]. Built, 0.12.62 (register §1.287, "Slice LAB-6S4a"): `DeclareGovernanceIdentity`, `RecordApprovalDecision`, `InstallTransition`, `UpgradeState` and `UpgradeStateStatus` with their results, the host's handlers, the client's methods and the codes only they emitted (retired in 0.12.62); `actingctl install-transition` and actingd's `--install-held` start; the identity card and the client action the two MCP servers sent before a write, and the card of `evidence read` (the coordinator's ruling N8 on board #434: the initiator the binding carries replaces them; the client action after a capture stays). A request of a deleted kind does not decode: the connection is dropped without a receipt and `runtime_protocol_invalid` recorded once. Way back: yes |
+| LAB-6S4a | Runtime | the five kinds deleted; `install-control` [0, 0]. Built, 0.12.63 (register §1.287, "Slice LAB-6S4a"): `DeclareGovernanceIdentity`, `RecordApprovalDecision`, `InstallTransition`, `UpgradeState` and `UpgradeStateStatus` with their results, the host's handlers, the client's methods and the codes only they emitted (retired in 0.12.63); `actingctl install-transition` and actingd's `--install-held` start; the identity card and the client action the two MCP servers sent before a write, and the card of `evidence read` (the coordinator's ruling N8 on board #434: the initiator the binding carries replaces them; the client action after a capture stays). A request of a deleted kind does not decode: the connection is dropped without a receipt and `runtime_protocol_invalid` recorded once. Way back: yes |
 | LAB-6S4b | Runtime | `cli`, `mcp` and a `lab` without a word refused; `via` off the wire; `runtime-client` [8, 8]; `actingd-config` 30. Way back: yes |
 | LAB-6S5 | Runtime | the initiator in the ledger and in the settings rows; `ledger` 9. Way back: **no** |
 | LAB-6S2-E | Runtime | the envelope becomes the channel's (section 2.4: `lab` → `(Lab, Lab)`), and the map M and the receipt rule R end; with it the host's evidence-read confirmation and its index take `(Lab, Lab)`, the senders' identity card step having gone with LAB-6S4a, and the kept frames of CLI and MCP reads are decided. What a person then sees change comes with it, each the owner's to accept: the console's ledger page and Lab tab show the requests of `actingctl` and of both MCP servers as the Lab's, its settings page says "via Lab" for the rows they set, the runs they start have the origin `lab`, and the frames they read are kept as Lab frames. LAB-6S4b, which takes `via` off the wire, ends M's `via` cell with it. Way back: settled with the slice |
@@ -197,7 +197,7 @@ capture, pacing, host shutdown handling) is no request and never passes the gate
   `(Cli, Cli)` (`invalid_governance_origin`), an approval decision only from `(User, Ui)` on a
   connection whose card was accepted (`governance_authority_required`), an install transition
   other than its Query only on such a connection (`install_identity_required`); LAB-6S4a
-  (0.12.62) deletes them with the kinds and retires the three codes. So since
+  (0.12.63) deletes them with the kinds and retires the three codes. So since
   LAB-6S1b the Runtime takes from the Lab's `(Lab, Lab)` envelope what it refused before:
   `actinglab`'s `pause`, `resume`, `shutdown`, `discover`, `emu start|stop|restart`,
   `emu selfcheck`, `drill`, `wake-test`, `facts publish`, `offset`, `remedy set|lift` and
@@ -214,7 +214,7 @@ capture, pacing, host shutdown handling) is no request and never passes the gate
 ### 2.5 What LAB-6 deletes
 
 - The kinds `DeclareGovernanceIdentity`, `RecordApprovalDecision`, `InstallTransition`,
-  `UpgradeState` and `UpgradeStateStatus`, with their results (built by LAB-6S4a, 0.12.62).
+  `UpgradeState` and `UpgradeStateStatus`, with their results (built by LAB-6S4a, 0.12.63).
 - `ChannelVia` and every `via` member.
 - The Lab options' part in the gate: `lab_module_debugging` retires and `lab_module_authoring`
   means only "listed by default" (section 8.3). The host then emits neither
@@ -1029,7 +1029,7 @@ sentence fails that test.
       provenance today's server records before a write: the identity card `actingctl-mcp`, then
       the client action `{surface_id: mcp, control_id: <tool>, kind: command}` naming the
       instance, under the write's correlation (rulings 11 and 12: until LAB-6 the new server
-      looks like today's on the wire and in the ledger). Since LAB-6S4a (0.12.62; the
+      looks like today's on the wire and in the ledger). Since LAB-6S4a (0.12.63; the
       coordinator's ruling N8 on board #434) neither server records that provenance: the write
       is the first request after the handshake, under a correlation of its own, the binding's
       initiator `Lab-MCP` naming where it came from, and its instance is resolved by the serving
@@ -1065,7 +1065,7 @@ sentence fails that test.
       `governance_client_not_allowed`, the client action and the write go ahead as today's
       server lets them, and the line carries the warning `mcp_identity_declaration_refused`
       (caused by the refusal), where today's server answers `mcp_identity_card_refused` with
-      `mcp_blocker`, until LAB-6 removes the step. LAB-6S4a removed it (0.12.62), and both
+      `mcp_blocker`, until LAB-6 removes the step. LAB-6S4a removed it (0.12.63), and both
       warnings are retired.
     - *Every call runs to its end*, since Workflow #434 LAB-5G3 as a job (below).
   - **Jobs, handles and waits** (Workflow #434 LAB-5G3, 0.12.57, its first part; register
@@ -1197,7 +1197,7 @@ sentence fails that test.
         failure (the state root not located, the Runtime's or the client's failure) when it was
         not recorded. The call's answer stands, and the Lab command is never run again. A call no
         child answered (refused past `--children`, or a child that gave no answer) records
-        nothing. Since LAB-6S4a (0.12.62) no identity card comes before the client action, which
+        nothing. Since LAB-6S4a (0.12.63) no identity card comes before the client action, which
         is the connection's first request after the handshake, and its warnings are the two
         others (`mcp_identity_declaration_refused` is retired); the client action itself stays.
       - *The Lab overflow rule* (today's `finish`, `fits_as_job` and `keep_frame_parts`): a
@@ -1338,7 +1338,7 @@ initiator of section 2.2 on `BindChannel`, `ChannelBound` and the receipt
 `EditGoal`, with their results. Planned, not in force:
 the same file, "Planned: Workflow #434". The numbers this contract first planned for LAB-6
 (`runtime-client` 7, `ledger` 8, `actingd-config` 28) were taken by other slices: LAB-6S4a
-declares `install-control` [0, 0] (Runtime 0.12.62, in force), LAB-6S4b raises `runtime-client`'s `min` to 8 and
+declares `install-control` [0, 0] (Runtime 0.12.63, in force), LAB-6S4b raises `runtime-client`'s `min` to 8 and
 `actingd-config` to 30, LAB-6S5 `ledger` to 9; LAB-7 `install-cli` to 2. `install-control`
 retires, `tools-layout` becomes 5 as that section plans it,
 `install-selection` does not move, and the MCP entry's second generation, a program of its own
@@ -1368,7 +1368,7 @@ Two new codes of the owner `actinglab-mcp`: `mcp_operation_unsupported` (`mcp_to
 a call of an offered row the MCP server does not serve (since LAB-6S0 no offered row is one; the
 code stays registered with the server's check, section 9.3), and `mcp_identity_declaration_refused`
 (warning; LAB-5G2b), the Runtime refused the identity card declared before a write (section
-9.3), retired by LAB-6S4a (0.12.62) with the card. LAB-5G2b adds the word `not_absolute` to the vocabulary `argument_problem` and reuses
+9.3), retired by LAB-6S4a (0.12.63) with the card. LAB-5G2b adds the word `not_absolute` to the vocabulary `argument_problem` and reuses
 today's codes for the rest. The codes this contract uses:
 
 - `channel_request_refused` (`operation`, `channel`), with `config_key` for a refused setting: an
@@ -1397,7 +1397,7 @@ once its origin gates are gone: `invalid_shutdown_origin`, `invalid_install_tran
 `invalid_agent_wake_test_origin`, `invalid_agent_dispatcher_origin` and
 `invalid_player_hold_origin` (each `retired_in` 0.12.58, no `replaced_by`: the Runtime takes the
 request). `invalid_governance_origin` stayed active: the host's own check of the identity card
-emitted it until LAB-6S4a deleted the kind and retired it (0.12.62), with the other codes only
+emitted it until LAB-6S4a deleted the kind and retired it (0.12.63), with the other codes only
 the five kinds emitted (register §1.287, "Slice LAB-6S4a"). `invalid_client_origin` and `fact_origin_mixed` stay.
 
 ## 13 Open points

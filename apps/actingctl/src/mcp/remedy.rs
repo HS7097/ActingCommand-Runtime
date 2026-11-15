@@ -4,7 +4,7 @@
 //! sides of `actingctl remedy set|lift` and `remedy get` (`crate::remedy`). Both are general
 //! tools (observer until U-3, always on: an agent writes the instance's target record). The
 //! write goes on its own (Agent, Adapter) connection, the origin the Runtime records on the
-//! `fact.published` event (since Workflow #434 LAB-6S4a, 0.12.62, with no `client.action` before
+//! `fact.published` event (since Workflow #434 LAB-6S4a, 0.12.63, with no `client.action` before
 //! it, the coordinator's ruling N8); what the rows may name is the Runtime's
 //! answer, passed on unchanged (`session_remedy_choices_invalid` on top of a refusal). The scope
 //! is an instance or a game; `server` is no argument (`arguments_invalid`, `unknown`), since a

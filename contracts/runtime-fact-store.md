@@ -151,8 +151,8 @@ The target of [Ledger observer](ledger-observer.md) for this store (LEDG §3.1�
    ([ledger-observer.md §11](ledger-observer.md#11-tags-and-the-index-table-ao-2-maintains-ao-5-rules-and-seeding-ao-6-loads)):
    the four settlement keys `task.*.last_duration_ms`, `.last_outcome`, `.failure_streak`,
    `.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition` and its `.pauses`
-   (since Workflow #434 LAB-6S4a, 0.12.62, loaded only so that a start invalidates what a ledger of
-   0.12.61 or earlier holds of them; nothing writes them any more),
+   (since Workflow #434 LAB-6S4a, 0.12.63, loaded only so that a start invalidates what a ledger of
+   0.12.62 or earlier holds of them; nothing writes them any more),
    `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`,
    `host.contained_settlement` (#411 A65), `host.idle_state` (#405 IDLE-1P), `host.agent_wake`
    (#432 AGT-1b, [agent-wake.md](agent-wake.md)), `host.capped_episodes` (#428 SCHED-C1d,

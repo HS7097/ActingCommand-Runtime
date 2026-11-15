@@ -4,7 +4,7 @@
 // that no log covers (R5b). Test plan A-2 G3a, G3c and G3d read fixture state roots with fixed
 // times. Workflow #378 A6a: the logs hold actingd's daemon lines, and the last `OUTCOME` line,
 // the terminal outcome, decides by its category (it was the FATAL line's top code). Workflow #434
-// LAB-6S4a (0.12.62): the held start is gone, so H-1 G2, which read the state root a real held
+// LAB-6S4a (0.12.63): the held start is gone, so H-1 G2, which read the state root a real held
 // start left, went with it; the fixtures stay, as the logs and journals a 0.12.61 Runtime left
 // are read by this build's watchdog.
 

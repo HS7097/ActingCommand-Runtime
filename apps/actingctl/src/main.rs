@@ -375,7 +375,7 @@ fn print_agent_channel(answer: agent_channel::Answer) -> ExitCode {
 /// The client configuration of one run. Workflow #434 LAB-6S2-B2: the Lab channel with this
 /// program's word ([`WORD`]), where it was the CLI channel, and the envelope of 0.12.58
 /// ([`Command::origin`]: (Cli, Cli), or (Agent, Adapter) for `agent-publish-facts` and
-/// `agent-apply-resource-targets`). Workflow #434 LAB-6S4a (0.12.62): `install-transition`, the
+/// `agent-apply-resource-targets`). Workflow #434 LAB-6S4a (0.12.63): `install-transition`, the
 /// one command whose run had its own budget, is gone.
 fn client_config(state_root: &Path, command: &Command) -> RuntimeClientConfig {
     let (actor, source) = command.origin();

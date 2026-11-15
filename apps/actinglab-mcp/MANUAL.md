@@ -66,7 +66,7 @@ naming this file.
   `{outcome}`, but a command `actinglab` serves itself keeps its result's own warnings, each
   `{code, values}`. A success with warnings says what it lacks or what was done beside it
   (`answer_exported`, `client_action_not_recorded`; `mcp_identity_declaration_refused` until
-  Runtime 0.12.62, which retires it with the identity card): report them with it.
+  Runtime 0.12.63, which retires it with the identity card): report them with it.
 - **`lab_operation_check_failed`**: the Runtime answered a Lab operation and a check after it
   failed. The operation may have taken effect: read its effect before you send it again.
 
@@ -191,7 +191,7 @@ naming this file.
 
 - **In the server's process**: the rows `actinglab`'s CLI module serves itself (most core rows,
   and `run start`, `run stop`, `reset`, `drill`), on one Runtime connection the server keeps (a
-  write on a connection of its own, the write first after the handshake: since Runtime 0.12.62
+  write on a connection of its own, the write first after the handshake: since Runtime 0.12.63
   neither server sends the identity card or the client action before a write, the binding's
   `Lab-MCP` naming where it came from); and, on Windows, the rescue module's rows, for the root the
   server runs from, their journals recording `Lab-MCP` (`deploy` and `rollback` start a detached

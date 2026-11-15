@@ -4,7 +4,7 @@
 //! #434 LAB-1b: the wait itself moved to `crates/lab-ops` (`actingcommand_lab_ops::shutdown_wait`),
 //! which serves the operation `shutdown`; this gives its failure as `ActingctlError::ShutdownWait`,
 //! as the G11 gate reads it. `start`, `restart` and `install` (in `crates/lab-rescue` since LAB-3)
-//! take the crate's wait directly. Workflow #434 LAB-6S4a (0.12.62): `install-transition --wait`,
+//! take the crate's wait directly. Workflow #434 LAB-6S4a (0.12.63): `install-transition --wait`,
 //! the one product caller of the wait here, is gone, so only the gate mounts this module.
 
 use crate::ActingctlError;

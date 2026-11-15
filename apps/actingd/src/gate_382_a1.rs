@@ -5,7 +5,7 @@
 // list before they read any file, each with its own registered code (contracts/outcome-codes,
 // the actingd fragment; Workflow #378 A2a), and the refusal is an error: one report line with
 // its outcome and exit 1 (Workflow #378 model §7.4, §7.6). The registry half of the
-// ledger-maintenance row is `gate_a2a`. Workflow #434 LAB-6S4a (0.12.62): `--install-held` went
+// ledger-maintenance row is `gate_a2a`. Workflow #434 LAB-6S4a (0.12.63): `--install-held` went
 // with the held start; the start's arguments that name it are a usage error.
 //
 // G15 (inventory-apps key 39): `check-config` refuses each vision root of
@@ -218,7 +218,7 @@ fn gate_each_subcommand_refuses_its_malformed_arguments_with_its_code_and_exit_1
     }
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): the held start is gone. `--install-held` is no option of the
+// Workflow #434 LAB-6S4a (0.12.63): the held start is gone. `--install-held` is no option of the
 // start any more: in every place, with or without its value, the start's arguments are a usage
 // error, exit 1, before any file is read.
 #[test]

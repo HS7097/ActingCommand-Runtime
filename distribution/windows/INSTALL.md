@@ -162,7 +162,7 @@ parent directory as their base. The launcher only resolves the root config alias
 an explicit candidate path is preserved. Running processes use `Running` and
 require the configuration selected by their pinned snapshot.
 
-Installation control is the cold protocol only since Runtime 0.12.62 (Workflow
+Installation control is the cold protocol only since Runtime 0.12.63 (Workflow
 #434 LAB-6S4a; `contracts/v012-register.md` §1.287, "Slice LAB-6S4a"): the Runtime
 declares `install-control` [0, 0], so an installer that speaks [0, 1] takes revision
 0 with it. The Host installation transition (`InstallTransition`, its actions
@@ -180,14 +180,14 @@ exact owner, waits for the owner's close and process exit (`actingctl
 request-shutdown --wait <seconds>`, or `actingctl install`'s own wait), starts the
 selected daemon plainly with `actingcommand-actingd --config <selected-config>`, and
 after its readiness resumes the pauses it made. A start restores the persisted
-scheduling pauses (`host.scheduling_pause`); a ledger written by 0.12.61 or earlier
+scheduling pauses (`host.scheduling_pause`); a ledger written by 0.12.62 or earlier
 may still hold the transition's facts `host.install_transition` and
 `host.install_transition.pauses`, which a start invalidates and nothing reads. A
 start that stops before it finished preparing because a Runtime failure latched
 meanwhile ends as `install_startup_stopped`, an error the watchdog restarts. A
 `RequestShutdown` sent while a start prepares is refused `runtime_shutdown_denied`
 (`runtime_busy`), so no start ends as a requested stop: `install_startup_shut_down`,
-which the accepted shutdown of a held start raised, is retired in 0.12.62.
+which the accepted shutdown of a held start raised, is retired in 0.12.63.
 
 ### Standalone configuration
 
@@ -426,10 +426,10 @@ crash, a closed console window, an end in Task Manager, a reboot), or when its l
 start ended in an error. The start's terminal outcome is the last `OUTCOME actingd:`
 or `OUTCOME acforward:` line of its `actingd-*.log`, and only its category counts
 (Workflow #378 A6a): an error, such as a start that stopped with
-`install_startup_stopped` (and, in the log of a Runtime before 0.12.62, a held start's
+`install_startup_stopped` (and, in the log of a Runtime before 0.12.63, a held start's
 `held_timeout` or `release_timeout`; also behind a later formal close that no log
 covers; Workflow #381 A R5′, R5b), is started again. It never starts a Runtime that was
-closed formally (`request-shutdown`, before 0.12.62 an acsetup transition, an accepted
+closed formally (`request-shutdown`, before 0.12.63 an acsetup transition, an accepted
 shutdown of a start that had not finished: each ends in `runtime_stopped`),
 that is alive, while acsetup holds `install\writer.lock`, or whose terminal outcome
 is fatal; that last case stays down loudly (`watchdog_fatal_hold`). At most 3 starts

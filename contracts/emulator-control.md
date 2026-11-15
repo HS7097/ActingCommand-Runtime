@@ -883,7 +883,7 @@ within `host_claims.renewal_slack_ms` of a step's bound is not renewed:
   across Stop, Start and the first attempt, and released while waiting. The waits stop at the
   next poll on shutdown (`recovery_ladder_shutdown_requested`; a shutdown accepted while the
   holding check runs, `recovery_ladder_drain_requested`, which an install drain raised until
-  0.12.61), a scheduling pause or a capacity refusal
+  0.12.62), a scheduling pause or a capacity refusal
   (`recovery_admission_denied`) or a lost key (`recovery_ladder_key_lost`). Not ready within the
   window fails the rung `recovery_environment_not_ready`, or `recovery_android_not_booted` when
   the boot check never passed and so no preparation ran. The ladder runs on its instance's
@@ -1099,7 +1099,7 @@ probe (#411 A35) checks that it
 still holds the key and that no
 scheduling pause or capacity refusal (`recovery_admission_denied`) or shutdown
 (`recovery_ladder_shutdown_requested`; one accepted while the check runs is
-`recovery_ladder_drain_requested`, which an install drain raised until 0.12.61) intervenes; a key it no longer holds is `recovery_ladder_key_lost` (its continuation is
+`recovery_ladder_drain_requested`, which an install drain raised until 0.12.62) intervenes; a key it no longer holds is `recovery_ladder_key_lost` (its continuation is
 cancelled). Such an interruption fails the current rung (`recovery_ladder_interrupted`, caused
 by that reason) and ends the ladder `exhausted` at warning, followed by its one release. A
 superseded preparation trigger records `preparation_superseded`; these two reasons use

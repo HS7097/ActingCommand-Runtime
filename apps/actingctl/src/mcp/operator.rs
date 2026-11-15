@@ -2,7 +2,7 @@
 
 //! Operator tools (#338 §四 工具表, S2) and the two R5 observer tools. Every write goes on its
 //! own connection under one correlation of its own (`begin_interaction`), the formal operation
-//! first: since Workflow #434 LAB-6S4a (0.12.62; the coordinator's ruling N8 on board #434) it
+//! first: since Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8 on board #434) it
 //! declares no identity card and records no `client.action` before it, the initiator `Lab-MCP`
 //! its connection's binding carries names where it came from. What a run is, whether it may
 //! run, whether a pause or a target policy is accepted: all of it is the Runtime's answer,
@@ -51,7 +51,7 @@ fn begin_write(
 }
 
 /// The correlation of one write on `connection` (`begin_interaction`). Workflow #434 LAB-6S4a
-/// (0.12.62): the identity card and the `client.action` that came before the write are gone (the
+/// (0.12.63): the identity card and the `client.action` that came before the write are gone (the
 /// coordinator's ruling N8), so its first request is the write itself.
 pub(super) fn write_interaction(connection: &RuntimeClient) -> Result<RuntimeClient, ToolError> {
     connection
@@ -61,7 +61,7 @@ pub(super) fn write_interaction(connection: &RuntimeClient) -> Result<RuntimeCli
 
 /// On `connection`, under a correlation of its own: the `client.action` of `tool` after a Lab
 /// call's capture, carrying `value` when given (the call's req_id). Workflow #434 LAB-6S4a
-/// (0.12.62): it declares no identity card before it.
+/// (0.12.63): it declares no identity card before it.
 pub(super) fn record_capture_action(
     connection: &RuntimeClient,
     tool: &str,

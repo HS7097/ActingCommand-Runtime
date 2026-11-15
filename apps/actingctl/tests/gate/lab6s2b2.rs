@@ -13,7 +13,7 @@
 //!   server's kept connection (`ac_schedule`'s Status) and a write's connection with (Cli, Cli)
 //!   (`ac_config_set`) and with (Agent, Adapter) (`ac_remedy_set`), each refused: each binds `lab`
 //!   with `Lab-MCP` and no `via`, every request with its envelope of 0.12.58. Workflow #434
-//!   LAB-6S4a (0.12.62; the coordinator's ruling N8 on board #434): a write's connection sends
+//!   LAB-6S4a (0.12.63; the coordinator's ruling N8 on board #434): a write's connection sends
 //!   the write itself after the handshake (`ConfigureSettings`, `PublishFacts`), where it sent
 //!   the identity card and the client action first.
 //! - `lab6s2b2_actingctl_records_as_on_0_12_58` and `lab6s2b2_mcp_serve_records_as_on_0_12_58`
@@ -28,7 +28,7 @@
 //!   names the CLI channel without `via` and without `initiator`, as on 0.12.58. `--wait`, which
 //!   the helper adds to the shutdown, only adds a member beside `receipt`; the test host runs in
 //!   this process, whose exit no wait would see, so it is left out. Workflow #434 LAB-6S4a
-//!   (0.12.62): `install-control` is [0, 0], so the helper takes this cold path only, and the
+//!   (0.12.63): `install-control` is [0, 0], so the helper takes this cold path only, and the
 //!   gate of the transition's receipts went with `install-transition`:
 //!   `lab6s2b2_install_transition_receipts_decode_as_the_released_helper_decodes`.
 //! - `lab6s2b2_a_runtime_that_drops_the_word_leaves_actingctl_unbound_once` (scripted Runtime): a

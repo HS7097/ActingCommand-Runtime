@@ -271,7 +271,7 @@ impl Drop for ScriptedRuntime {
 }
 
 // Answers one client's requests until it hangs up: the handshake, Status with the one instance,
-// and the drill. Workflow #434 LAB-6S4a (0.12.62; the coordinator's ruling N8 on board #434): a
+// and the drill. Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8 on board #434): a
 // write's provenance (the identity card and the client action) is no longer sent, so this Runtime
 // answers neither and any other request fails the gate.
 fn serve(mut stream: TcpStream, script: &Script) {

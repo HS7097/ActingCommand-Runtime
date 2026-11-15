@@ -5,7 +5,7 @@
 //! accepted, the pause's scope naming that alias byte-for-byte. Until Workflow #434 LAB-6S4a the
 //! ledger held the `client.action` record of each with that alias, and the gate was
 //! `gate_mcp_pause_and_resume_record_the_client_action_of_an_upper_case_alias`; since LAB-6S4a
-//! (0.12.62; the coordinator's ruling N8 on board #434) no write of the server records one, which
+//! (0.12.63; the coordinator's ruling N8 on board #434) no write of the server records one, which
 //! the gate reads too. The Runtime is the c4 fake child process (`tests/support/c4_runtime.rs`);
 //! the MCP server is the real binary over pipes. Every wait returns as soon as its message
 //! arrives; `GATE_WAIT` only bounds a broken run.
@@ -93,7 +93,7 @@ fn gate_mcp_pause_and_resume_take_an_upper_case_alias() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    // Workflow #434 LAB-6S4a (0.12.62; the coordinator's ruling N8 on board #434): a write of the
+    // Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8 on board #434): a write of the
     // MCP server records no `client.action` before it any more (the initiator `Lab-MCP` its
     // binding carries names where it came from), so none names the alias.
     assert!(

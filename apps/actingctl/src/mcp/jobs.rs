@@ -39,7 +39,7 @@ pub(super) struct Outstanding {
     pub(super) kinds: Vec<&'static str>,
 }
 
-/// Workflow #434 LAB-6S4a (0.12.62): a job no longer keeps the instance alias a run job
+/// Workflow #434 LAB-6S4a (0.12.63): a job no longer keeps the instance alias a run job
 /// submitted to, which only the stop's provenance read, nor warnings it starts with, which only
 /// the provenance before a write gave.
 pub(super) struct Job {

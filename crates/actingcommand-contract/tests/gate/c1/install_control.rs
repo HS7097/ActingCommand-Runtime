@@ -2,7 +2,7 @@
 
 //! G2, inventory key K8: the install-control inputs (Workflow #352 §4 and its I3 interface
 //! comment; `distribution/windows/INSTALL.md`, "A/B installation inputs"). The requirement names no
-//! refusal code, so the rows assert only acceptance or refusal. Workflow #434 LAB-6S4a (0.12.62):
+//! refusal code, so the rows assert only acceptance or refusal. Workflow #434 LAB-6S4a (0.12.63):
 //! the installer's transition and the held start are gone (`install-control` [0, 0]), and with
 //! them the rows of its phases and its 600 s bound; the selection's row stays.
 

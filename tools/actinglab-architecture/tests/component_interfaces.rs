@@ -95,7 +95,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   Workflow #437 ORD-1c (0.12.60, register §1.373) raises it to 32: the member
 ///   `device_group.max_queue_wait_ms` of the `scheduling` section; revisions 5 to 31 are still
 ///   read, so [5, 32].
-/// - `install-control` was [0, 1] (model-378 §16 A-7). Workflow #434 LAB-6S4a (0.12.62, register
+/// - `install-control` was [0, 1] (model-378 §16 A-7). Workflow #434 LAB-6S4a (0.12.63, register
 ///   §1.287, "Slice LAB-6S4a") lowers it to [0, 0]: the request kind `InstallTransition` and
 ///   actingd's `--install-held` start, which revision 1 named, are gone; an installer that speaks
 ///   [0, 1] meets [0, 0] and takes its cold path (revision 0).

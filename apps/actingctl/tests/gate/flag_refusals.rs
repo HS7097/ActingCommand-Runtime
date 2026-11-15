@@ -94,7 +94,7 @@ const CLIENT: &[Subcommand] = &[
         &["--max-frames", "2"],
         &["--wait", "60"],
     ),
-    // Workflow #434 LAB-6S4a (0.12.62): `install-transition`'s row went with the subcommand.
+    // Workflow #434 LAB-6S4a (0.12.63): `install-transition`'s row went with the subcommand.
     result(
         &[
             "observe",

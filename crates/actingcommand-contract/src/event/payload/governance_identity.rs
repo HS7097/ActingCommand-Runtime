@@ -70,6 +70,6 @@ impl PayloadDetail for GovernanceIdentityDeclaredPayload {
     }
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): no card is declared any more, so nothing writes this record;
+// Workflow #434 LAB-6S4a (0.12.63): no card is declared any more, so nothing writes this record;
 // its draft and constructor went, and the records a ledger already holds decode and validate as
 // before.

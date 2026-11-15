@@ -224,7 +224,7 @@ closed formally ends in `runtime_stopped` (info), so it stays `watchdog_formal_c
 A held start whose shutdown was accepted ended in `runtime_stopped` too, with
 `install_startup_shut_down` (info, Workflow #378 A7-R) as its link, and actingd exited
 0: a formal close (row 6) that the watchdog never restarts. Since Workflow #434 LAB-6S4a
-(0.12.62) no start is held and a starting Runtime refuses a shutdown request as busy, so
+(0.12.63) no start is held and a starting Runtime refuses a shutdown request as busy, so
 nothing raises that code any more (retired); a log of 0.12.61 that carries it reads as before. A process probe that fails
 is `watchdog_start_failed` caused by `process_probe_failed`.
 

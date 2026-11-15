@@ -3,7 +3,7 @@
 //! The Host lifecycle owner's admission: which work may begin, the idle test a shutdown request
 //! is decided by, and the checks of a start's preparation. Admission is closed while the start
 //! prepares, opens once it is ready and closes for good once a shutdown is accepted. Workflow
-//! #434 LAB-6S4a (0.12.62): the installer's transition (`InstallTransition`, `install-control`
+//! #434 LAB-6S4a (0.12.63): the installer's transition (`InstallTransition`, `install-control`
 //! revision 1, and the upgrade state planned beside it) and actingd's held start are gone; every
 //! start is cold, and nothing of installation control is durable any more.
 
@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Instant;
 
-/// The two runtime facts the installer's transition recorded until 0.12.61. A ledger written by
+/// The two runtime facts the installer's transition recorded until 0.12.62. A ledger written by
 /// such a build may still hold them (a transition that drained and committed its shutdown leaves
 /// both); a start invalidates them once, as those builds' starts did, and nothing writes them any
 /// more.
@@ -413,7 +413,7 @@ impl HostShared {
         }
     }
 
-    /// The start's one conversion of what a ledger of 0.12.61 or earlier may hold of the
+    /// The start's one conversion of what a ledger of 0.12.62 or earlier may hold of the
     /// installer's transition (Workflow #434 LAB-6S4a): each of its two runtime facts still in the
     /// store is invalidated as a takeover, as every start of those builds did on a new epoch.
     /// Nothing reads them; a store without them is left as it is.
@@ -435,7 +435,7 @@ impl HostShared {
 
     /// The error that stops a start, if anything stops it: a latched failure ends it as
     /// `install_startup_stopped` with that condition named (Workflow #381 A R3′), a halt a
-    /// restart may fix. Workflow #434 LAB-6S4a (0.12.62): a shutdown request is answered busy
+    /// restart may fix. Workflow #434 LAB-6S4a (0.12.63): a shutdown request is answered busy
     /// while the start prepares (`shutdown_under_gate`), so no accepted shutdown can stop it, and
     /// `install_startup_shut_down`, which that stop of a held start raised, is retired.
     fn install_start_stopped(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {

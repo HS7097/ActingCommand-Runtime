@@ -6,7 +6,7 @@
 // is global only without --instance; --reason and --drain-timeout-ms are checked against their
 // bounds, 1..=64 bytes of [a-z0-9_.-] and 1000..=600000, before any request is sent);
 // contracts/emulator-control.md (status, start, stop and restart require --instance; discover
-// takes none); README.md (`selfcheck <alias>`). Workflow #434 LAB-6S4a (0.12.62):
+// takes none); README.md (`selfcheck <alias>`). Workflow #434 LAB-6S4a (0.12.63):
 // `install-transition` is gone, so each of its forms, the one it took included, is now a usage
 // error before any connection, as a word no subcommand is. The state root has no Runtime: a form
 // the grammar takes meets the client's connection failure, and a usage error is
@@ -206,7 +206,7 @@ fn gate_a_refused_request_of_these_subcommands_exits_1_with_the_receipts_outcome
     let unknown = || SchedulingPauseScope::Instance {
         instance_alias: UNKNOWN.to_owned(),
     };
-    // Workflow #434 LAB-6S4a (0.12.62): `install-transition`'s row went with the subcommand.
+    // Workflow #434 LAB-6S4a (0.12.63): `install-transition`'s row went with the subcommand.
     let rows: [(&[&str], String); 4] = [
         (
             &["pause", "--instance", UNKNOWN],

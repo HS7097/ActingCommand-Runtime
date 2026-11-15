@@ -10,7 +10,7 @@
 //!
 //! The Runtime records it with the connection's origin: the CLI's (Cli, Cli), or MCP's (Agent,
 //! Adapter); until Workflow #434 LAB-6S4a the CLI declared the identity card `actingctl` in the
-//! same correlation first, since LAB-6S4a (0.12.62) the confirmation is the interaction's only
+//! same correlation first, since LAB-6S4a (0.12.63) the confirmation is the interaction's only
 //! request, the binding's initiator naming where it came from. It refuses a
 //! target the ledger does not hold (`client_action_invalid`) and records nothing then. The
 //! ledger's frame index links the record to its target (`read_confirmed`); nothing is removed in
@@ -359,7 +359,7 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, Target), Outcome> {
 }
 
 /// Connects with the CLI's (Cli, Cli) origin, begins an interaction and records the confirmation,
-/// its `covers` counted on `state_root`. Workflow #434 LAB-6S4a (0.12.62): the identity card
+/// its `covers` counted on `state_root`. Workflow #434 LAB-6S4a (0.12.63): the identity card
 /// `actingctl` it declared in the interaction first is gone; the initiator its connection's
 /// binding carries names where it came from.
 fn run(

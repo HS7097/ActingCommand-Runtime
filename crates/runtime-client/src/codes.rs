@@ -32,7 +32,7 @@ actingcommand_contract::outcome_codes! {
         RuntimeResultMissing => "runtime_result_missing": error / none,
         RuntimeResultUnexpected => "runtime_result_unexpected": error / none,
         RuntimeShutdownReceiptUnconfirmed => "runtime_shutdown_receipt_unconfirmed": error / none,
-        // Workflow #434 LAB-6S4a: `install_transition_receipt_unconfirmed` is retired in 0.12.62
+        // Workflow #434 LAB-6S4a: `install_transition_receipt_unconfirmed` is retired in 0.12.63
         // with the client's `install_transition`.
         MaterialReadReceiptSelectionMismatch => "material_read_receipt_selection_mismatch": error / none,
         RuntimeSchedulingResumeUnconfirmed => "runtime_scheduling_resume_unconfirmed": error / none,

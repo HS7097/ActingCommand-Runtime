@@ -4,7 +4,7 @@
 //! `ledger-maintenance` arguments carries an active registered code of category `error` (test
 //! plan A-1, the registry half), and an ignored environment override is warned about as the fixed
 //! code `env_override_ignored` with the variable as a value (decision D6). Workflow #434 LAB-6S4a
-//! (0.12.62): the `--install-held` input is gone, and with it its half of T1.
+//! (0.12.63): the `--install-held` input is gone, and with it its half of T1.
 
 use super::{ActingdError, config, ledger_maintenance};
 use actingcommand_contract::outcome::Category;

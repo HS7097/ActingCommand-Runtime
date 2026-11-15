@@ -1894,7 +1894,7 @@ fn c4_operations_round_trip_without_generic_payloads() {
     );
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): the approval request is gone; the client action stays.
+// Workflow #434 LAB-6S4a (0.12.63): the approval request is gone; the client action stays.
 #[test]
 fn client_action_operations_are_closed_typed_contracts() {
     let client_action = ClientActionRecord::new(
@@ -1917,7 +1917,7 @@ fn client_action_operations_are_closed_typed_contracts() {
     assert!(serde_json::from_value::<RuntimeRequest>(smuggled).is_err());
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): the request that declared the card is gone; the card stays
+// Workflow #434 LAB-6S4a (0.12.63): the request that declared the card is gone; the card stays
 // the shape of the `governance.identity_declared` records a ledger holds, and its own check is
 // what reading such a record runs.
 #[test]

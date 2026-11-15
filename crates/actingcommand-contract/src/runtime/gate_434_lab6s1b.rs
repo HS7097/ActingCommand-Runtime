@@ -9,7 +9,7 @@
 // refused among them, is built, encoded, decoded and validated. An envelope outside the client
 // set is still `invalid_client_origin`, and an observation that mixes two fact key families is
 // still `fact_origin_mixed`, from every envelope: the shape rule of the envelope and the content
-// rule stay. Workflow #434 LAB-6S4a (0.12.62): the install transition and governance families
+// rule stay. Workflow #434 LAB-6S4a (0.12.63): the install transition and governance families
 // left with their kinds (`InstallTransition`, `DeclareGovernanceIdentity`,
 // `RecordApprovalDecision`); every other family stays.
 

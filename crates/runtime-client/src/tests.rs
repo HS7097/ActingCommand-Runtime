@@ -2764,7 +2764,7 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): the identity card and the approval request are gone; the
+// Workflow #434 LAB-6S4a (0.12.63): the identity card and the approval request are gone; the
 // client action stays.
 #[test]
 fn typed_client_records_client_actions_through_runtime() {

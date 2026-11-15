@@ -40,7 +40,7 @@ pub fn pause_scope(instance_alias: Option<String>) -> SchedulingPauseScope {
     }
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): `scope_alias`, the instance MCP's provenance and its jobs
+// Workflow #434 LAB-6S4a (0.12.63): `scope_alias`, the instance MCP's provenance and its jobs
 // named, went with the provenance before a write.
 
 /// `pause`: scheduling paused on `scope` for `reason`, an instance's runs drained within

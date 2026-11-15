@@ -16,7 +16,7 @@
 //!   whatever its `dry_run` says (the coordinator's ruling 2 of 2026-11-13: as today's server
 //!   records it), one `RecordClientAction{surface mcp, control_id the tool, kind command, value
 //!   the envelope's req_id}` on a connection of its own (`runtime::record_capture_action`; until
-//!   Workflow #434 LAB-6S4a after the identity card, since LAB-6S4a, 0.12.62, without it). Its
+//!   Workflow #434 LAB-6S4a after the identity card, since LAB-6S4a, 0.12.63, without it). Its
 //!   warnings: `client_action_without_req_id` when the envelope carries no `req_id` (recorded all
 //!   the same, without a value) and `client_action_not_recorded` caused by the failure when the
 //!   recording fails (the card's refusal, `mcp_identity_declaration_refused`, went with the

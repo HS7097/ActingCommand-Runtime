@@ -14,7 +14,7 @@
 // `: probe unknown: <reason>`, and is never read as dead.
 //
 // G4 (inventory-host key 10), a subscription during an install drain, left with the install
-// transition (Workflow #434 LAB-6S4a, 0.12.62).
+// transition (Workflow #434 LAB-6S4a, 0.12.63).
 //
 // G11 (no inventory key; host key 79; req-basis-ha H-5 G11, coordinator 10-09 on
 // input-receipt-wait.md): the ledger writer stalls past a client's I/O budget, with the stall

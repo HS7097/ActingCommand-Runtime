@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #434 LAB-6S4a (0.12.62; register §1.287, "Slice LAB-6S4a"; contracts/runtime-interface.md,
+// Workflow #434 LAB-6S4a (0.12.63; register §1.287, "Slice LAB-6S4a"; contracts/runtime-interface.md,
 // "Old Runtimes"): the five request kinds are gone from the contract. A request of one of them in
 // the complete shape 0.12.61 decoded (its tag `install_transition`, `declare_governance_identity`,
 // `record_approval_decision`, `upgrade_state` or `upgrade_state_status`, with every member that

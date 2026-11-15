@@ -412,7 +412,7 @@ fn typed_client_action_is_idempotent_and_public_projection_hides_the_value() {
     host.close().expect("close host");
 }
 
-// Workflow #434 LAB-6S4a (0.12.62): the approval request, the other client fact a request id
+// Workflow #434 LAB-6S4a (0.12.63): the approval request, the other client fact a request id
 // could have crossed into, is gone; the correlation boundary stays.
 #[test]
 fn client_fact_request_id_cannot_cross_correlations() {
@@ -474,7 +474,7 @@ fn client_fact_request_id_cannot_cross_correlations() {
 fn concurrent_approval_targets_commit_exactly_one_authoritative_fact() {
     let root = TempDir::new().expect("tempdir");
     let host = host_with_state(&root, "fixture-instance-a", Arc::new(FakeState::default()));
-    // Workflow #434 LAB-6S4a (0.12.62): the approval request is gone; the two writers are the
+    // Workflow #434 LAB-6S4a (0.12.63): the approval request is gone; the two writers are the
     // host's transcription, and the governance write gate still lets exactly one of them commit.
     let decision = |marker: char| {
         ApprovalDecisionRecord::new(

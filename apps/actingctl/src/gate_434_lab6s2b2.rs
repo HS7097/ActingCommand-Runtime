@@ -12,7 +12,7 @@
 //   `pause` (PauseScheduling), `resume` (ResumeScheduling) and `task-offset` (its Status read),
 //   each with (Cli, Cli), and `agent-apply-resource-targets` (ApplyResourceTargets) and
 //   `agent-publish-facts` (PublishFacts), each with (Agent, Adapter). Workflow #434 LAB-6S4a
-//   (0.12.62): `install-transition`'s two rows (its query, InstallTransition, and its drain's
+//   (0.12.63): `install-transition`'s two rows (its query, InstallTransition, and its drain's
 //   identity card, DeclareGovernanceIdentity) left with the command.
 // - `lab6s2b2_operation_layer_commands_bind_lab_with_lab_cli`: actingctl never says which program
 //   it is, so the commands of the operation layer connect as `Front::Actingctl`, whose word is

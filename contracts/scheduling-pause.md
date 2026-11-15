@@ -341,7 +341,7 @@ restart. The held pauses are the runtime fact `host.scheduling_pause` (scope `Ru
   (`scheduling_pause_fact_invalid`).
 - **Installer-held starts** kept the pauses their install transition carried
   (`host.install_transition.pauses`) and recorded them as `host.scheduling_pause`, until Workflow
-  #434 LAB-6S4a (0.12.62) deleted the held start: since then a start invalidates the two
+  #434 LAB-6S4a (0.12.63) deleted the held start: since then a start invalidates the two
   transition facts a 0.12.61 state root may still hold (`host.install_transition` and its
   `.pauses`, once, as a takeover) and restores only the persisted pauses above; an installer
   pauses each instance itself before it stops the Runtime and resumes it after the new start.

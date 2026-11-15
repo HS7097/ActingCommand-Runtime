@@ -13,7 +13,7 @@
 //!   core write (`pause`) on a connection of its own, each refused by the scripted Runtime: each
 //!   answer's text is the line the command line's code (`lab_ops::core_ops`) gives for the same
 //!   parameters, the ids each run issues masked, `structuredContent` repeats it and `isError` is
-//!   true exactly when that line exits non-zero. Workflow #434 LAB-6S4a (0.12.62): the write's
+//!   true exactly when that line exits non-zero. Workflow #434 LAB-6S4a (0.12.63): the write's
 //!   connection sends the write first after the handshake, as the read's does (it carried today's
 //!   provenance before the write until then). The second part, on Windows: a rescue
 //!   row that needs no Runtime (`leftovers`), answered by a copy of the program in a made-up root,
@@ -35,7 +35,7 @@
 //!   Cli). Workflow #434 LAB-6S2-B1 (adapted): but for the binding, which this server declares as
 //!   `lab` with `Lab-MCP` and no `via`, and today's server as the MCP channel until LAB-6S2-B2.
 //!   Workflow #434 LAB-6S2-B2 (adapted): today's server declares `lab` with `Lab-MCP` and no
-//!   `via` too. Workflow #434 LAB-6S4a (adapted, 0.12.62; the coordinator's ruling N8 on board
+//!   `via` too. Workflow #434 LAB-6S4a (adapted, 0.12.63; the coordinator's ruling N8 on board
 //!   #434): the identity card `actingctl-mcp` and the client action of `ac_pause` on surface
 //!   `mcp`, which both sent between the binding and the pause, are gone; the binding's initiator
 //!   is the write's provenance.
@@ -110,7 +110,7 @@
 //! - `mcp_capture_records_client_action`: after the child of `ac_lab_observe` or `ac_do` with
 //!   `capture` true answered, the scripted Runtime receives on a connection of its own the client
 //!   action (surface `mcp`, the tool, kind `command`, the call's instance, the envelope's `req_id`
-//!   as its value), from (Cli, Cli), first after the handshake (Workflow #434 LAB-6S4a, 0.12.62:
+//!   as its value), from (Cli, Cli), first after the handshake (Workflow #434 LAB-6S4a, 0.12.63:
 //!   the identity card before it is gone); without a request id it is recorded
 //!   without a value and the line carries `client_action_without_req_id`; a recording the Runtime
 //!   refuses gives `client_action_not_recorded` caused by the refusal and the call's answer stands;
@@ -352,7 +352,7 @@ fn operation_of(request: &RuntimeRequest) -> String {
 }
 
 /// The connection of one write: the pause, the first request after the handshake, refused.
-/// Workflow #434 LAB-6S4a (0.12.62; the coordinator's ruling N8 on board #434): the identity card
+/// Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8 on board #434): the identity card
 /// and the client action that came before it are gone.
 fn write_connection() -> ScriptedConnection {
     ScriptedConnection::new().request(denied_one("pause_scheduling"))
@@ -518,7 +518,7 @@ fn mcp_stdio_one_row_per_kind() {
         ["health", "bind_channel", "discover_instances"],
         "the read: on the kept connection"
     );
-    // Workflow #434 LAB-6S4a (0.12.62): no identity card and no client action before the write.
+    // Workflow #434 LAB-6S4a (0.12.63): no identity card and no client action before the write.
     assert_eq!(
         operations(written),
         ["health", "bind_channel", "pause_scheduling"],
@@ -691,7 +691,7 @@ fn mcp_write_provenance_as_todays_server() {
         without_binding(&todays_sent),
         "the new server sends what today's server sends for the same write, its binding apart"
     );
-    // Workflow #434 LAB-6S4a (0.12.62; the coordinator's ruling N8 on board #434): neither server
+    // Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8 on board #434): neither server
     // sends the identity card or the client action before the write any more; the binding's
     // initiator `Lab-MCP` is the write's provenance.
     for sent_on in [&connection, &todays_connection] {
@@ -907,7 +907,7 @@ fn recorded_action(request: &RuntimeRequest) -> ScriptedAnswer {
 }
 
 /// A capture's own connection whose client action the Runtime records. Workflow #434 LAB-6S4a
-/// (0.12.62; the coordinator's ruling N8 on board #434): a write's own connection no longer opens
+/// (0.12.63; the coordinator's ruling N8 on board #434): a write's own connection no longer opens
 /// with today's provenance (the identity card and the client action), so this script, `provenance`
 /// until then, serves the client action after a capture alone.
 fn recorded_capture() -> ScriptedConnection {
@@ -1061,7 +1061,7 @@ fn mcp_jobs_handles_entry_status() {
         let submitted = submit.clone();
         vec![
             // The server's kept connection: the held read; a pack schedule far past the budget.
-            // Workflow #434 LAB-6S4a (0.12.62): no status read names the run's instance here any
+            // Workflow #434 LAB-6S4a (0.12.63): no status read names the run's instance here any
             // more, since no client action names it.
             ScriptedConnection::new()
                 .request(move |request| {
@@ -2513,7 +2513,7 @@ fn mcp_lab_overflow_rule_keeps_next_frame_inline() {
 }
 
 /// A capture's own connection whose client action the Runtime refuses (Workflow #434 LAB-6S4a,
-/// 0.12.62: the first request after the handshake, with no identity card before it).
+/// 0.12.63: the first request after the handshake, with no identity card before it).
 fn refused_recording() -> ScriptedConnection {
     ScriptedConnection::new().request(|request| {
         assert!(
@@ -2629,7 +2629,7 @@ fn mcp_capture_records_client_action() {
     assert_eq!(answered_as(&planned), acted, "capture with dry_run");
 
     // The scripted Runtime: one connection of its own per capture that a child answered, carrying
-    // the client action, nothing else (Workflow #434 LAB-6S4a, 0.12.62: the identity card that
+    // the client action, nothing else (Workflow #434 LAB-6S4a, 0.12.63: the identity card that
     // came before it is gone).
     let record = runtime.finish();
     assert!(
@@ -2701,7 +2701,7 @@ fn goal_request_denied(
 // reads on the kept connection, the instance resolved by one status read each time; each write on
 // a connection of its own, where the serving code resolves its instance by one status read (the
 // order every write that names an instance takes, `ac_run_start`'s in
-// `mcp_jobs_handles_entry_status`). Workflow #434 LAB-6S4a (0.12.62; the coordinator's ruling N8
+// `mcp_jobs_handles_entry_status`). Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8
 // on board #434): a write's instance is no longer resolved first on the kept connection for its
 // client action, and no identity card and no client action come before the write (fix round 4's
 // order until then). `package variables` of a package that is not there, served by a `serve`
