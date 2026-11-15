@@ -213,6 +213,10 @@ mod gate_463_s34;
 // command line of the placement's plan; `build.json` does not change.
 #[path = "gate_463_s37.rs"]
 mod gate_463_s37;
+// Workflow #463 S3-10: `standard-pack trial` answers only with `--plan`, the plan of a trial, and
+// sends nothing.
+#[path = "gate_463_s310.rs"]
+mod gate_463_s310;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

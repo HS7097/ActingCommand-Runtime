@@ -212,6 +212,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `standard-pack compose` | refused | `dry_run_unsupported` | flag parsing only (ROUT-L RL-1a: it writes a new directory); alternative `standard-pack check` |
 | `standard-pack build` | refused | `dry_run_unsupported` | flag parsing (Workflow #464 P2: it writes its product and its work into `--out`); no alternative |
 | `standard-pack ready` | no_effect | | reads a game root only (Workflow #464 P3) |
+| `standard-pack trial` | no_effect | | its one form in this release, `--plan`, reads the package directory, `--root` and the state directory's place only, writes nothing and sends nothing (Workflow #463 S3-10) |
 | `runtime reset` | refused | `dry_run_unsupported` | positional arguments, Runtime flags, `--state-root`, instance; no alternative; no capability entry |
 | `runtime observe` | no_effect | | |
 | `ledger show` | no_effect | | retired |

@@ -145,7 +145,8 @@ fn write_bundle_with(path: &Path, package: [u64; 2], control: &[u8], goals: Opti
 }
 
 /// `place` of the bundle `zip` on `root`, as [`WORD`], only its plan when `plan_only`; its one
-/// line and exit code.
+/// line and exit code. Workflow #463 S3-2: a placement with the authorization it names
+/// (`fixture::authorized`).
 fn place(host: &FakeHost, root: &Path, zip: &Path, plan_only: bool) -> (Value, u8) {
     let config = root.join("actingd.config.json");
     let state_root = actingcommand_lab_ops::locate::configured_state_root(&config)
@@ -159,7 +160,7 @@ fn place(host: &FakeHost, root: &Path, zip: &Path, plan_only: bool) -> (Value, u
     let params = if plan_only {
         json!({"bundle": word(zip), "plan": true})
     } else {
-        json!({"bundle": word(zip)})
+        super::fixture::authorized(host, root, zip, json!({"bundle": word(zip)}))
     };
     let params = match params {
         Value::Object(params) => params,

@@ -140,6 +140,11 @@ mod gate_463_v1;
 #[cfg(test)]
 mod gate_463_s36;
 
+// Workflow #463 S3-10 (register §1.417): the plan of a trial, its refusals, and the trial record's
+// writer and reader.
+#[cfg(test)]
+mod gate_463_s310;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;
@@ -160,6 +165,8 @@ mod standard_pack_goals;
 mod standard_pack_schedule;
 // Workflow #464 P3: `standard-pack ready`, the one function that judges a pack's readiness.
 mod standard_pack_ready;
+// Workflow #463 S3-10: `standard-pack trial`, its plan, its refusals and its record.
+mod standard_pack_trial;
 
 pub use adopt::{
     AdoptClass, AdoptCoverage, AdoptDecision, AdoptSource, AdoptWorktree, DerivedDrift,
@@ -206,4 +213,16 @@ pub use standard_pack_ready::{
 };
 pub use standard_pack_schedule::{
     StandardPackComposeRequest, StandardPackComposeResponse, compose_standard_packs,
+};
+// Workflow #463 S3-10: the trial's plan and refusals, and the record's writer and reader; fix
+// round 2: the one test of an installed root along a path, `installed_root_containing`; fix round
+// 3: the record's own plan type and the writer's answer.
+pub use codes::{TrialRecordProblem, TrialStatePlace};
+pub use standard_pack_trial::{
+    CONTENT_PREFIX_DIGITS, MAX_AUTHORIZATION_BYTES, PACK_TRIAL_SCHEMA, PackTrialRecord,
+    StandardPackTrialAnswer, StandardPackTrialRequest, TRIALS_DIRECTORY, TrialDeclaredEnd,
+    TrialEndKind, TrialIrreversible, TrialIrreversibleBasis, TrialPlan, TrialRecordPlan,
+    TrialRunEnd, TrialRunRequirement, TrialValueSource, TrialVariable, WrittenTrialRecord,
+    check_trial_state_dir, installed_root_containing, latest_trial_record,
+    plan_standard_pack_trial, trial_record_path, trial_records, write_trial_record,
 };
