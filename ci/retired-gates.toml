@@ -1861,7 +1861,7 @@ fragment = "apps"
 test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_387_d1b::rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
 reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl, MCP and the watchdog speak outcomes: one result line per exit with its exit code by category, MCP errors {class, outcome}, watchd)."
-covered_by = "Two halves: actingcommand-runtime-host::lib::tests::gate_387_d1b::d1_m5_a_key_read_only_at_start_and_an_unknown_key_are_refused (the Runtime denies a change of an unknown key whole, its receipt's top config_key_unknown, and changes nothing) and actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind (a write the Runtime refuses is the Lab's MCP tool's answer as the command line's line, the receipt's top its outcome)."
+covered_by = "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab7_config_set_of_an_unknown_key_is_refused_whole (LAB-7 pass 4: the Lab's config set row with a declared key and a misspelt one is refused whole, config_key_unknown with only declared values beside the denied receipt and its request id, the declared key unchanged), with actingcommand-runtime-host::lib::tests::gate_387_d1b::d1_m5_a_key_read_only_at_start_and_an_unknown_key_are_refused (the Runtime's own refusal of an unknown key) and actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind (a write the Runtime refuses is the Lab's MCP tool's answer as the command line's line, the receipt's top its outcome)."
 
 [[retired]]
 fragment = "apps"
@@ -2841,7 +2841,7 @@ fragment = "apps"
 test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_ac_get_run_shows_the_terminal_values_in_full"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
 reason = "A test of apps/actingctl that Workflow #469 F1 added on main after LAB-7's base, merged into LAB-7, which deletes the program: it ran on actingctl's own fake Runtime (A42's) and MCP tools, both gone (row: Workflow #469 F1 (0.12.62; register §1.387): the run reads show failure_values beside the code)."
-covered_by = "actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome (the full status's terminal carries failure_values, in the struct and in its JSON), which lab_ops::run_show answers verbatim to the Lab's run show and ac_run_show."
+covered_by = "actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome (the full status's terminal carries failure_values, in the struct and in its JSON), which lab_ops::run_show answers verbatim to the Lab's run show and ac_run_show: actingcommand-lab-ops::lib::run_show::f1_tests::f1_run_show_answers_the_run_status_as_it_is (the answer is the status's JSON whole, failure_code and failure_values among it; LAB-7 pass 4)."
 
 [[retired]]
 fragment = "apps"
