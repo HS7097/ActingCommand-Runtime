@@ -3344,3 +3344,14 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_464_p1::s34_the_held_reason_on_a_scheduled_package_keeps_its_rule_and_writes_its_hold",
 ]
 incident = ["#463 S3-4"]
+
+# Workflow #463 S3-5 (0.12.63; register §1.412; brief rd-1115/brief-463-s35-adopt-readiness.md; design rd-1115/pack-stage3-design.md §4.2 "S3-5"; contracts/standard-pack-authoring.md, "The answer"), standard-pack adopt on P1's made-up resource repository answers readiness, the adopted pack's row of judge_standard_pack_readiness on the check tree's installed/<game>/ with no installation, judged after every check passed: each case adopted first under --dry-run, then for real, both answering the same row (package_id, server) and no readiness_not_judged. A package not run through adopted held by S3-4's --held-reason: waiting, S2 classified failing alone, package_dispatch_waiting with readiness_problem held, S3 not judged with no_rule (1); a business rule with "pending" alone: waiting, S3 valued failing alone with value_undeclared, task_id the rule's id, caused by standard_pack_benefit_undeclared, S2 by scheduled (2); a business rule with its value: ready_to_place, the seven items of the game root holding and none failing, S2 by scheduled, S3 by complete (3); a maintenance decision by its uses alone (startup), no rule: not_scheduled, roles [startup], the seven root items holding, S2 by maintenance_role, S3 by maintenance_tier (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_464_p1::s35_a_held_adoption_answers_its_pack_waiting_for_its_hold",
+    "actingcommand-resource-tooling::lib::gate_464_p1::s35_a_business_rule_with_pending_alone_answers_its_pack_waiting_for_its_value",
+    "actingcommand-resource-tooling::lib::gate_464_p1::s35_a_business_rule_with_its_value_answers_its_pack_ready_to_place",
+    "actingcommand-resource-tooling::lib::gate_464_p1::s35_a_maintenance_entry_by_its_uses_answers_its_pack_not_scheduled_with_its_role",
+]
+incident = ["#463 S3-5"]

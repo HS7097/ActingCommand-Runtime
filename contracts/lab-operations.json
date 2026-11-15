@@ -2651,7 +2651,7 @@
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
       "help": "Makes a recorded package a member of its game's standard pack in a resource repository's checkout, with a rule the Runtime's composer accepts.",
-      "output": "the adoption: the package, its class, the rule, held entry or maintenance entry as written, the entries removed or replaced so that the package has one role, the members given and derived (each with where it came from), whether the task waits for its value, every warning of the check, what was written and where the replaced directory was kept",
+      "output": "the adoption: the package, its class, the rule, held entry or maintenance entry as written, the entries removed or replaced so that the package has one role, the members given and derived (each with where it came from), whether the task waits for its value, every warning of the check, what was written and where the replaced directory was kept, and the adopted pack's readiness row of the check tree's game root (as standard-pack ready answers it there), or why it was not judged",
       "writes": true,
       "irreversible": false,
       "runtime": "offline",
@@ -2661,7 +2661,7 @@
       "new": "#464",
       "slice": "SP-ADOPT",
       "status": "planned",
-      "notes": "Workflow #464 P1 (0.12.61; contracts/standard-pack-authoring.md): it writes only inside repo and under the state directory, every check before the first write (refusals adopt_refused, adopt_problem naming the check), nothing deleted; the readiness of the package is another slice's. Workflow #463 S3-4 (0.12.63; register §1.411; A held decision by two flags): held_reason and held_reference are the decision of the class held without a document, built as that document and read by the document's reader, so every check and every byte written is the document's; decide beside either is refused validation_failed naming the held parameter, argument_problem conflicting, and held_reference without held_reason the same, before anything is read; they only hold, nothing here lifts a hold"
+      "notes": "Workflow #464 P1 (0.12.61; contracts/standard-pack-authoring.md): it writes only inside repo and under the state directory, every check before the first write (refusals adopt_refused, adopt_problem naming the check), nothing deleted. Workflow #463 S3-4 (0.12.63; register §1.411; A held decision by two flags): held_reason and held_reference are the decision of the class held without a document, built as that document and read by the document's reader, so every check and every byte written is the document's; decide beside either is refused validation_failed naming the held parameter, argument_problem conflicting, and held_reference without held_reason the same, before anything is read; they only hold, nothing here lifts a hold. Workflow #463 S3-5 (0.12.63; register §1.412; The answer): readiness is the adopted pack's row of judge_standard_pack_readiness on the check tree's installed/<game>/, called with no installation (ready_to_place at best), judged after every check passed and the same under dry_run; when that function refuses the root or answers no row of the pack, readiness_not_judged (outcome, text) instead, and the adoption is not changed by it; readiness on an installation stays another slice's"
     },
     {
       "name": "standard-pack ready",

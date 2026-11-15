@@ -27968,6 +27968,71 @@ golden changes, no test leaves the gate map.
 
 **At deploy.** Nothing to do.
 
+### 1.412 Slice #463 S3-5 (0.12.63): adoption answers the adopted pack's readiness (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making, board #463, whose third stage checks a package for readiness once it is adopted; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-5" and §2.1 "Missing" item 3; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s35-adopt-readiness.md`, built on the head `8169acf4` of S3-4's branch, §1.411)
+
+The coordinator gave this slice 1.412; it stands on S3-4 (§1.411) and ships with it in 0.12.63.
+
+**What it is.** `standard-pack adopt` already lays out the game root the build would produce, in
+its check tree (`<state>/adopt-check/<checkout>/installed/<game>/`), and checks it with
+`standard-pack check`. After every check of the adoption passed, and by the same path under
+`--dry-run`, it now calls the readiness function (`judge_standard_pack_readiness`, called, not
+copied) on that directory with no installation and no declared `package` range, and answers the
+adopted pack's row as `readiness` ([standard-pack-authoring.md](standard-pack-authoring.md), "The
+answer"): `package_id`, `server`, `readiness`, `roles` and the thirteen `items`, the row
+`standard-pack ready --root` answers for that directory. The five items an installation tells are
+`not_judged` (`installation_not_read`) and I3 is information, so the pack answers `ready_to_place`
+at best. A refused adoption answers no readiness. The question "held, waiting for a value, ready to
+place?" no longer needs a build and a second command on a copied path.
+
+**Where it is judged.** `crates/resource-tooling/src/adopt.rs`: the check tree's `Checked` keeps
+the directory it laid out (`installed`); `standard_pack_adopt` judges the readiness after the
+writes (or, under `--dry-run`, after the list of what it would write), immediately before the
+answer is built (`adopted_readiness`). The readiness function only reads; the tree is the one the
+checks read, and nothing the adoption checks, writes or refuses changes.
+
+**When the function refuses.** The adoption's own result is not changed: the answer carries
+`readiness_not_judged` in place of `readiness`, `{outcome, text}`, as `waits_for_value` carries a
+secondary finding (a registered outcome and the same in words): `outcome` is the function's refusal
+with its code as the function answered it (the outcome its error carries, else its code relayed),
+`text` the same in words. A row of the pack missing from the function's answer is answered so too,
+with `package_invalid` "is no package of the bundle", the function's own code for that case. No
+code, word or key is added; the outcome catalog and its index do not change.
+
+**Where the design and the code differ.** The design names S3 `value_pending` for a business rule
+with `"pending"` alone. The readiness function answers `value_undeclared` there: adopt writes no
+fixed value and no entry for `"pending"`, and the composer counts such a rule undeclared (adopt's
+own `coverage` says `undeclared`); `value_pending` is a rule that reads an entry or a pool with the
+pending marker. The tests take the function's words (the coordinator's ruling 4).
+
+**Texts.** [standard-pack-authoring.md](standard-pack-authoring.md): its opening paragraph (the
+answer says how far the laid-out root makes the package ready; readiness on an installation stays
+another slice's), "`--dry-run`" and "The answer" (the members and the part "The adopted pack's
+readiness"). [lab-operations.json](lab-operations.json): the row `standard-pack adopt`'s `output`
+names the readiness row; its `notes` lose P1's clause "the readiness of the package is another
+slice's" and gain the sentence of this slice. The sentence of
+[standard-pack-schedule.md](standard-pack-schedule.md), "Readiness", that adopt's answer, the
+build's `build.json` and the placement plan "are to call it" is not this slice's file and stays.
+
+**Tests.** `crates/resource-tooling/src/gate_464_p1.rs`, on P1's fixtures, gate map `exec.toml`
+"#463 S3-5": each case adopted first under `--dry-run`, then for real, both answering the same row
+and no `readiness_not_judged`:
+`s35_a_held_adoption_answers_its_pack_waiting_for_its_hold` (adopted by S3-4's `--held-reason`:
+`waiting`, S2 `classified` failing alone with `held`, S3 not judged `no_rule`),
+`s35_a_business_rule_with_pending_alone_answers_its_pack_waiting_for_its_value` (`waiting`, S3
+`valued` failing alone with `value_undeclared` naming the rule, caused by
+`standard_pack_benefit_undeclared`),
+`s35_a_business_rule_with_its_value_answers_its_pack_ready_to_place` (`ready_to_place`, the seven
+items of the game root holding, S2 by `scheduled`, S3 by `complete`) and
+`s35_a_maintenance_entry_by_its_uses_answers_its_pack_not_scheduled_with_its_role`
+(`not_scheduled`, `roles` `startup`, S2 by `maintenance_role`, S3 by `maintenance_tier`). The tests
+assert only members the readiness row has on this branch. No test is adapted, no golden changes,
+no test leaves the gate map.
+
+**What is not changed.** What adopt checks, writes and refuses; the readiness function
+(`standard_pack_ready.rs`); `standard-pack build`; the placement.
+
+**At deploy.** Nothing to do.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

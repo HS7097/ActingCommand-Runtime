@@ -80,8 +80,8 @@ use crate::codes::{AdoptProblem, ResourceToolingCode};
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{check_standard_pack_root_with_catalog, root_issue_outcome};
 use crate::{
-    PackageBundleRequest, StandardPackCheckRequest, StandardPackCheckResponse,
-    StandardPackRootFiles, package_bundle,
+    PackReadiness, PackageBundleRequest, StandardPackCheckRequest, StandardPackCheckResponse,
+    StandardPackReadyRequest, StandardPackRootFiles, judge_standard_pack_readiness, package_bundle,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, OutcomeEnvelope};
@@ -460,6 +460,17 @@ pub struct RecordingReview {
     pub run_through: bool,
 }
 
+/// Workflow #463 S3-5: the readiness function refused the check tree's game root (or answered no
+/// row of the adopted pack), so the pack's readiness was not judged; the adoption is the same
+/// without it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadinessNotJudged {
+    /// The function's refusal, with its code as the function answered it.
+    pub outcome: Outcome,
+    /// The same in words.
+    pub text: String,
+}
+
 /// The answer of `standard-pack adopt`.
 #[derive(Debug, Clone, Serialize)]
 pub struct StandardPackAdoptResponse {
@@ -526,6 +537,16 @@ pub struct StandardPackAdoptResponse {
     /// The checkout's check tree, `<state>/adopt-check/<checkout>/`, kept until the next call on
     /// the checkout empties it.
     pub check_tree: String,
+    /// Workflow #463 S3-5: the adopted pack's row of the readiness of the check tree's game root
+    /// `installed/<game>/`, as the readiness function answers it there with no installation (the
+    /// row `standard-pack ready` answers for that root), judged after every check passed, under
+    /// `--dry-run` too; absent only beside `readiness_not_judged`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readiness: Option<PackReadiness>,
+    /// Workflow #463 S3-5: why the readiness was not judged, when the readiness function refused
+    /// the check tree's game root or answered no row of the pack; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readiness_not_judged: Option<ReadinessNotJudged>,
     /// The repository's own items adopt does not write (a regression case, the census row, the
     /// catalog section), each by its path when the checkout holds it.
     pub next: Vec<String>,
@@ -944,6 +965,13 @@ pub fn standard_pack_adopt(
             moved.map(|path| path.display().to_string()),
         )
     };
+    // Workflow #463 S3-5: every check passed (a refused adoption answers no readiness); the
+    // adopted pack's readiness on the game root the check tree laid out, by the same path under
+    // `--dry-run`. It changes nothing of the adoption.
+    let (readiness, readiness_not_judged) = match adopted_readiness(&check.installed, &package_id) {
+        Ok(row) => (Some(row), None),
+        Err(why) => (None, Some(why)),
+    };
     Ok(StandardPackAdoptResponse {
         status: if request.dry_run {
             "validated".to_owned()
@@ -977,7 +1005,42 @@ pub fn standard_pack_adopt(
         would_write,
         kept,
         check_tree: check.tree.display().to_string(),
+        readiness,
+        readiness_not_judged,
         next: next_items(&repo, &root.game),
+    })
+}
+
+/// Workflow #463 S3-5: the row of the adopted pack `package_id` of the readiness of the check
+/// tree's game root `installed` (`<tree>/installed/<game>/`), judged by the readiness function,
+/// called as it is, with no installation, so `ready_to_place` at best. When that function refuses
+/// the root, or answers no row of the pack (the function's own `package_invalid`, "is no package
+/// of the bundle"), why it was not judged: the refusal's outcome and the same in words.
+fn adopted_readiness(
+    installed: &Path,
+    package_id: &str,
+) -> Result<PackReadiness, ReadinessNotJudged> {
+    let not_judged = |error: &LabError| ReadinessNotJudged {
+        outcome: cause_of(error),
+        text: format!(
+            "the readiness of {package_id} was not judged on the check tree's game root {}: \
+             {error}; the adoption is answered without it",
+            installed.display()
+        ),
+    };
+    judge_standard_pack_readiness(&StandardPackReadyRequest {
+        root: installed.to_path_buf(),
+        declared_package: None,
+        installation: None,
+    })
+    .map_err(|error| not_judged(&error))?
+    .packs
+    .into_iter()
+    .find(|pack| pack.package_id == package_id)
+    .ok_or_else(|| {
+        not_judged(&LabError::package_invalid(format!(
+            "{package_id} is no package of the bundle"
+        )))
     })
 }
 
@@ -3600,6 +3663,9 @@ fn value_wait(rule: &Map<String, Value>, pools: &[ScheduleItem]) -> Option<Value
 /// The check tree and what its checks answered.
 struct Checked {
     tree: PathBuf,
+    /// Workflow #463 S3-5: its game root `installed/<game>/`, the bundle's installed layout the
+    /// check read.
+    installed: PathBuf,
     answer: StandardPackCheckResponse,
     /// The bundle's warnings, which the check of the installed layout does not repeat (the
     /// recognition packages its maintenance declarations leave undeclared).
@@ -3985,11 +4051,13 @@ fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
             copy_tree(&source, &installed.join(&name))?;
         }
     }
-    let (answer, compiled) =
-        check_standard_pack_root_with_catalog(StandardPackCheckRequest { root: installed })
-            .map_err(|error| composed(error, &tree))?;
+    let (answer, compiled) = check_standard_pack_root_with_catalog(StandardPackCheckRequest {
+        root: installed.clone(),
+    })
+    .map_err(|error| composed(error, &tree))?;
     Ok(Checked {
         tree,
+        installed,
         answer,
         bundle_warnings: bundle.warnings,
         compiled,

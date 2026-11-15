@@ -9,8 +9,9 @@ the Runtime's composer accepts and its evaluator dispatches
 ([standard-pack-schedule.md](standard-pack-schedule.md)). It writes only inside the checkout it is
 given and under the Lab's own state directory, runs every check before its first write, deletes
 nothing in the checkout, and answers every member it derives with where the value came from. Its
-answer never says more than is true, and a call that cannot finish fails before it writes. Whether
-a package is ready to be scheduled on an installation is another slice's.
+answer never says more than is true, and a call that cannot finish fails before it writes. Its
+answer says how far the game root it lays out makes the package ready ("The answer", Workflow #463
+S3-5); whether the package is ready to be scheduled on an installation is another slice's.
 
 ## The operation
 
@@ -467,8 +468,9 @@ with the written and the derived value, and never written.
 ## `--dry-run`
 
 Every check runs, the check tree under `<state>/adopt-check/` included; the answer is `validated`
-with `written` empty and `would_write` what an adoption would write; nothing is written in the
-repository and no copy is kept ([actinglab-dry-run.md](actinglab-dry-run.md)).
+with `written` empty and `would_write` what an adoption would write, and its `readiness` judged as
+an adoption's is ("The answer"); nothing is written in the repository and no copy is kept
+([actinglab-dry-run.md](actinglab-dry-run.md)).
 
 ## The answer
 
@@ -481,7 +483,29 @@ repository and no copy is kept ([actinglab-dry-run.md](actinglab-dry-run.md)).
 `undeclared` or `follower`, as the composer counts the file's judged rules), `waits_for_value` and
 `value_not_judged` (`because` `follower` or `manual_request`, and `text`; "A pending value"),
 `warnings` (every warning of the check, the game's included, each once), `written` (in the order
-it was renamed into place), `would_write`, `kept`, `check_tree` and `next`.
+it was renamed into place), `would_write`, `kept`, `check_tree`, `readiness` or
+`readiness_not_judged` (below) and `next`.
+
+**The adopted pack's readiness** (Workflow #463 S3-5, Runtime 0.12.63;
+[v012-register.md](v012-register.md) §1.412). `readiness` is the adopted pack's row of the
+readiness of the game root the check tree laid out,
+`<state>/adopt-check/<checkout>/installed/<game>/`
+([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness"): `package_id`, `server`,
+`readiness` (one of its four words), `roles` and the thirteen `items`, the row `standard-pack ready
+--root` answers for that directory. It is the answer of that one function, called as it is, on the
+tree as adopt composed it, after every check passed, and by the same path under `--dry-run`; a
+refused adoption answers none. No installation is handed to it, so the five items an installation
+tells are `not_judged` (`installation_not_read`), I3 is information, and the pack answers
+`ready_to_place` at best, never `dispatchable`. So a package adopted as held answers `waiting` with
+S2 `classified` failing `held`; a business rule with `"pending"` alone, `waiting` with S3 `valued`
+failing `value_undeclared` (the composer counts a rule with no fixed value and no `produces` or
+`consumes` entry undeclared; readiness's `value_pending` is a rule that reads an entry or a pool
+with the pending marker, "A pending value"); a business rule with its value, `ready_to_place` when the other items of the game
+root hold too; a package adopted as maintenance by its `uses` alone, no rule naming it,
+`not_scheduled` with that role in `roles`. When the function refuses that root, or answers no row
+of the pack, the answer carries `readiness_not_judged` instead: `outcome`, the function's refusal
+with its code as the function answered it, and `text`, the same in words. Nothing else of the
+answer changes by it, and the call does not fail by it.
 
 ## The canonical form
 

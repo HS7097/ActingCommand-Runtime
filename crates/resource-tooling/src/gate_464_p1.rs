@@ -57,11 +57,14 @@
 // on Windows `mklink`, to make a junction).
 
 use crate::adopt::CHECK_TREE_MARKER;
-use crate::codes::AdoptProblem;
+use crate::codes::{
+    AdoptProblem, ReadinessItem, ReadinessProblem, ReadinessRole, ReadinessState, ReadinessUnjudged,
+};
 use crate::{
-    AdoptClass, AdoptCoverage, AdoptDecision, AdoptSource, AdoptWorktree, DerivedFrom,
-    PackageBundleRequest, ResourceToolingCode, RootEntryChange, StandardPackAdoptRequest,
-    StandardPackAdoptResponse, StandardPackRootFiles, package_bundle, standard_pack_adopt,
+    AdoptClass, AdoptCoverage, AdoptDecision, AdoptSource, AdoptWorktree, DerivedFrom, ItemState,
+    PackReadiness, PackageBundleRequest, ReadinessBasis, ResourceToolingCode, RootEntryChange,
+    StandardPackAdoptRequest, StandardPackAdoptResponse, StandardPackRootFiles, package_bundle,
+    standard_pack_adopt,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
@@ -2682,5 +2685,237 @@ fn s34_the_held_reason_on_a_scheduled_package_keeps_its_rule_and_writes_its_hold
     assert_eq!(
         written[0], written[1],
         "the reason writes what the document writes"
+    );
+}
+
+// Workflow #463 S3-5 (register §1.412; contracts/standard-pack-authoring.md, "The answer";
+// coordinator work order `rd-1115/brief-463-s35-adopt-readiness.md`, the design
+// `rd-1115/pack-stage3-design.md` §4.2 "S3-5"): the answer carries `readiness`, the adopted pack's
+// row of the readiness function on the check tree's game root `installed/<game>/` with no
+// installation, judged after every check passed: the same row under `--dry-run` as in the
+// adoption, and no `readiness_not_judged`. The design's four cases, in the readiness function's
+// own words:
+// - held (by S3-4's reason, a package not run through): `waiting`, S2 `classified` failing alone
+//   with `held`, S3 not judged (`no_rule`);
+// - a business rule with `pending` alone: `waiting`, S3 `valued` failing alone with
+//   `value_undeclared` naming the rule, the composer's `standard_pack_benefit_undeclared` its
+//   cause (the composer counts a rule with no fixed value and no effect undeclared; its
+//   `value_pending` is a `pending` amount or valuation);
+// - a business rule with its value: `ready_to_place`, the seven items of the game root holding,
+//   S2 by `scheduled` and S3 by `complete`;
+// - a `maintenance.json` entry by its uses: `not_scheduled` with its role `startup`, S2 by
+//   `maintenance_role` and S3 by `maintenance_tier`.
+
+/// The seven items of a game root, in the order a row answers them.
+const ROOT_ITEMS: [ReadinessItem; 7] = [
+    ReadinessItem::Admitted,
+    ReadinessItem::Classified,
+    ReadinessItem::Valued,
+    ReadinessItem::Composed,
+    ReadinessItem::EntryReachable,
+    ReadinessItem::ModelsNamed,
+    ReadinessItem::RootChecked,
+];
+
+/// Workflow #463 S3-5: `source` adopted on `fixture` by `decision`, first under `--dry-run`, then
+/// for real; holds that both answer the adopted pack's readiness row, the same row, and answers
+/// the adoption's.
+fn readiness_of(fixture: &Fixture, source: AdoptSource, decision: AdoptDecision) -> PackReadiness {
+    let mut dry_run = request_with(fixture, source.clone(), decision.clone(), false, FIRST);
+    dry_run.dry_run = true;
+    let validated = standard_pack_adopt(dry_run, &Committed)
+        .unwrap_or_else(|error| panic!("the dry run: {error}"));
+    let adopted = standard_pack_adopt(
+        request_with(fixture, source, decision, false, SECOND),
+        &Committed,
+    )
+    .unwrap_or_else(|error| panic!("the adoption: {error}"));
+    assert_eq!(validated.status, "validated");
+    assert_eq!(adopted.status, "adopted");
+    for answer in [&validated, &adopted] {
+        assert!(
+            answer.readiness_not_judged.is_none(),
+            "{}: {:?}",
+            answer.status,
+            answer.readiness_not_judged
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(&validated.readiness).expect("the readiness serializes"),
+        serde_json::to_value(&adopted.readiness).expect("the readiness serializes"),
+        "the dry run answers the row the adoption answers"
+    );
+    let row = adopted
+        .readiness
+        .expect("the adoption answers its pack's readiness");
+    assert_eq!(row.package_id, ADOPTED, "{row:?}");
+    assert_eq!(row.server, SERVER, "{row:?}");
+    row
+}
+
+/// The items of `row` in `state`, in its order.
+fn items_in(row: &PackReadiness, state: ItemState) -> Vec<ReadinessItem> {
+    row.items
+        .iter()
+        .filter(|answer| answer.state == state)
+        .map(|answer| answer.item)
+        .collect()
+}
+
+/// The basis `item` of `row` holds by.
+fn basis_of(row: &PackReadiness, item: ReadinessItem) -> Option<ReadinessBasis> {
+    row.item(item).and_then(|answer| answer.basis)
+}
+
+/// Holds that `row` waits with `item` failing alone, `package_dispatch_waiting` naming the adopted
+/// pack, the item and `problem`; its outcome.
+fn fails_alone(row: &PackReadiness, item: ReadinessItem, problem: ReadinessProblem) -> Outcome {
+    assert_eq!(row.readiness, ReadinessState::Waiting, "{row:?}");
+    assert_eq!(items_in(row, ItemState::Fails), [item], "{row:?}");
+    let outcome = row
+        .item(item)
+        .and_then(|answer| answer.outcome.clone())
+        .unwrap_or_else(|| panic!("{} carries its outcome: {row:?}", item.as_str()));
+    assert!(
+        outcome.is(ResourceToolingCode::PackageDispatchWaiting),
+        "{outcome:?}"
+    );
+    for (key, value) in [
+        ("package_id", ADOPTED),
+        ("readiness_item", item.as_str()),
+        ("readiness_problem", problem.as_str()),
+    ] {
+        assert_eq!(
+            outcome.value(key),
+            Some(&json!(value)),
+            "{key}: {outcome:?}"
+        );
+    }
+    outcome
+}
+
+#[test]
+fn s35_a_held_adoption_answers_its_pack_waiting_for_its_hold() {
+    let fixture = Fixture::new();
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(
+            ADOPTED,
+            SERVER,
+            "Not run through",
+            &provenance("partially_evaluated"),
+        ),
+    );
+
+    let row = readiness_of(&fixture, source, held_by_flags(HELD_REASON, None));
+
+    fails_alone(&row, ReadinessItem::Classified, ReadinessProblem::Held);
+    let valued = row.item(ReadinessItem::Valued).expect("S3 is answered");
+    assert_eq!(valued.state, ItemState::NotJudged, "{valued:?}");
+    let why = valued
+        .outcome
+        .as_ref()
+        .expect("S3 says why it is not judged");
+    assert!(
+        why.is(ResourceToolingCode::PackageReadinessUnjudged),
+        "{why:?}"
+    );
+    assert_eq!(
+        why.value("readiness_unjudged"),
+        Some(&json!(ReadinessUnjudged::NoRule.as_str())),
+        "{why:?}"
+    );
+    assert!(row.roles.is_empty(), "{row:?}");
+}
+
+#[test]
+fn s35_a_business_rule_with_pending_alone_answers_its_pack_waiting_for_its_value() {
+    let fixture = Fixture::new();
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(ADOPTED, SERVER, "Adopted", &provenance("passed")),
+    );
+    let decision = decide(&fixture, "pending", &business(&json!("pending")));
+
+    let row = readiness_of(&fixture, source, AdoptDecision::Document(decision));
+
+    let outcome = fails_alone(
+        &row,
+        ReadinessItem::Valued,
+        ReadinessProblem::ValueUndeclared,
+    );
+    assert_eq!(
+        outcome.value("task_id"),
+        Some(&json!(ADOPTED)),
+        "{outcome:?}"
+    );
+    assert!(
+        outcome
+            .causes()
+            .first()
+            .is_some_and(|link| link.outcome().is(SharedCode::StandardPackBenefitUndeclared)),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        basis_of(&row, ReadinessItem::Classified),
+        Some(ReadinessBasis::Scheduled)
+    );
+}
+
+#[test]
+fn s35_a_business_rule_with_its_value_answers_its_pack_ready_to_place() {
+    let fixture = Fixture::new();
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(ADOPTED, SERVER, "Adopted", &provenance("passed")),
+    );
+    let decision = decide(&fixture, "decision", &business(&fixed(9_000)));
+
+    let row = readiness_of(&fixture, source, AdoptDecision::Document(decision));
+
+    assert_eq!(row.readiness, ReadinessState::ReadyToPlace, "{row:?}");
+    assert_eq!(items_in(&row, ItemState::Holds), ROOT_ITEMS, "{row:?}");
+    assert!(items_in(&row, ItemState::Fails).is_empty(), "{row:?}");
+    assert_eq!(
+        basis_of(&row, ReadinessItem::Classified),
+        Some(ReadinessBasis::Scheduled)
+    );
+    assert_eq!(
+        basis_of(&row, ReadinessItem::Valued),
+        Some(ReadinessBasis::Complete)
+    );
+    assert!(row.roles.is_empty(), "{row:?}");
+}
+
+#[test]
+fn s35_a_maintenance_entry_by_its_uses_answers_its_pack_not_scheduled_with_its_role() {
+    let fixture = Fixture::new();
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(ADOPTED, SERVER, "Adopted", &provenance("passed")),
+    );
+    let decision = decide(
+        &fixture,
+        "uses",
+        &json!({"schema_version": DECISION_SCHEMA, "class": "maintenance", "uses": "startup"}),
+    );
+
+    let row = readiness_of(&fixture, source, AdoptDecision::Document(decision));
+
+    assert_eq!(row.readiness, ReadinessState::NotScheduled, "{row:?}");
+    assert_eq!(row.roles, [ReadinessRole::Startup], "{row:?}");
+    assert_eq!(items_in(&row, ItemState::Holds), ROOT_ITEMS, "{row:?}");
+    assert!(items_in(&row, ItemState::Fails).is_empty(), "{row:?}");
+    assert_eq!(
+        basis_of(&row, ReadinessItem::Classified),
+        Some(ReadinessBasis::MaintenanceRole)
+    );
+    assert_eq!(
+        basis_of(&row, ReadinessItem::Valued),
+        Some(ReadinessBasis::MaintenanceTier)
     );
 }
