@@ -26846,6 +26846,88 @@ declare an ending page declares [15, 15], which an installer of [3, 14] refuses 
 
 **Rollback** (below 0.12.61). Nothing is persisted; an earlier Tools has no `standard-pack build`.
 
+### 1.388 Slice #463 R4 and #464 P4 (0.12.62): a stopped recording takes an optional step after one of its steps from a frame; `record stop` keeps its earlier output, refuses an installed root and answers the adoption's skeleton (Workflow #463; the owner's rule two on board #463, that only the main path is recorded and that what a run meets later is added from that run's frame without recording again, with the owner's agreement of 11-15 that a stopped recording takes an optional step too; Workflow #464, the design `rd-1114/464-pack-build-design.md`, sections A and B and the slice row P4 with its tests, and the coordinator's ruling 5 on board #464, not the owner's words; coordinator work orders `rd-1115/brief-463-nb-common.md` and `rd-1115/brief-463-r4p4-after-stop.md`, read on main `1a962a54` (#463 R2 merged))
+
+1.388 is the number the coordinator assigned this section (the numbers between are slices
+dispatched with this one). The slice ships in 0.12.62 (release 0.12.61 is cut without it).
+
+**What it is.** R4: a `record mark` request's `optional_after {step, frame, samples, page, add,
+reuse, click, settle_ms}` (command `record mark --optional-after <k>`) inserts, on a stopped
+recording, a pop-up a run met after step k's press, after which the path goes on, as an optional
+step from its frame; `remove_inserted` (`--remove-inserted <n>`) gives it up. `record stop`
+generates it in its place and checks it as every optional step. P4: `record stop` keeps the output
+an earlier stop wrote, refuses a `--lab-dir` inside an installed root and answers
+`adoption_example`. Contract: [lab-recording.md](lab-recording.md), "Inserting an optional step
+after stop", "Writing" and "Output". Nothing of the kernel changes: an optional step is already
+what it runs.
+
+**Where, by reading.**
+- The order of the steps came from their serial numbers alone (`steps.rs` `effective_indices`,
+  `generate.rs` `effective_steps`: sorted by `index`). One function, `path_order`, now gives it:
+  the steps recorded on the path by serial number, each followed by the steps inserted after it,
+  by theirs; `effective_indices`, `effective_steps` and `record status` read it, so the package's
+  numbering, its pages, the runs of optional steps (`optional_runs`) and self-check item 7 see the
+  inserted step in its place without change.
+- The frame is admitted as R2 admits an ending's (`apply_ending`: `scaled_to_recording`,
+  `admit_frame`, `scaled_from`); the step's marks, click, page and `optional` go through
+  `apply_marks` with a request naming the new step, so every mark rule and self-test, the click
+  rules and `apply_optional` (not the first step, no application) hold unchanged. The step is
+  closed as `--close-step` closes a step whose click was declared and never executed.
+- Giving it up drops the step as `--drop-step` does: serial and frame numbers are never reused,
+  and a dropped step is no step of the package, so the package generated before comes back but
+  for its generation time.
+- `record_frame_size_mismatch` (a frame of another size that is no pure scale) and
+  `record_optional_settle_invalid` (a settle above 60000) say exactly what they say for a step and
+  an ending, and are reused. `record_mark_in_use` refuses giving up a step whose mark another step,
+  a transition or an ending reuses, or another page forbids, as `--drop-step` refuses it.
+- P4: `replace_in_place` (`container.rs`) deleted the set-aside file after the rename; it keeps it
+  and finds a free `.old-<ms>` name first. `preflight_lab_dir` gains the installed-root check
+  (the directory made absolute, and its nearest existing part with links resolved), which every
+  `--lab-dir` path reaches before anything is written, `--dry-run` and the `already_generated`
+  copy included.
+- `binding_example` is read by `record draft` (`apps/actinglab/src/record_draft.rs`) and by
+  `ac_binding_draft` (`apps/actingctl/src/mcp/lab.rs`), each taking the package path from its
+  `scheduled_execution.package_path`, and `lab-operations.json`'s `record stop` row says it gives
+  "the binding parts record draft takes"; the slice therefore adds `adoption_example` beside it
+  and keeps it, the removal the work order asks for being left to the coordinator.
+
+**The request members** `optional_after` and `remove_inserted` (new members of
+`actingcommand.lab-record-mark.v1`), two flags (rows `optional_after` and `remove_inserted` of
+`lab-operations.json` `record mark`). A member beside either is refused (`with_other_change`),
+never dropped. `recording.json`: a step's `inserted_after`, absent on every other step, so a
+recording without one is byte-identical to one written before. `record status`, `step_state`
+and the step provenance of the package carry `inserted_after` on such a step only; `record status`
+lists the steps in the order they run. The answer's statuses `optional_step_inserted` and
+`optional_step_removed`. `record stop`'s answer: `kept` (present only when a file was set aside)
+and `adoption_example {command, decision}`.
+
+**Codes and words** (`contracts/outcome-codes/lab.json`; catalog key `optional_after_problem`,
+vocabulary `optional_after_problem`): `record_optional_after_invalid` (error, exit 3, value
+`optional_after_problem`, refuses, nothing written): `recording_active`, `with_other_change`,
+`step_unknown`, `step_last`, `step_application`, `no_marks`, `no_click` (the work order's
+situations) and, one situation each, `clears_optional` (`--not-optional` on an inserted step,
+which would make a step never recorded on the path required) and `not_inserted`
+(`remove_inserted` naming no inserted step). `record_lab_dir_invalid` (exit 2) gains the reason
+`inside_installed_root` with `details.installed_root`. The catalog's `handling` of
+`contained_task_linear_unrecorded_screen` (a text; nothing its released snapshot fixes) and the
+row `record mark` of [lab-operations.json](lab-operations.json) say the way that now exists for a
+pop-up after which the path goes on.
+
+Tests: Lab `gate_463_r4.rs` (exec gate row "#463 R4", ten tests): an inserted pop-up generated in
+its place, regenerated with another content hash and admitted; the kernel's interpreter pressing
+it when it shows and going on without it; every `optional_after_problem` word and the frame of
+another ratio; item 7's two refusals on an inserted step; giving it up giving back the package
+generated before but for its generation time; a recording without one; a frame of a pure scale
+converted; P4's three: the kept `.old-<ms>`, the installed root refused, a first stop writing as
+before with `adoption_example`. Adapted: `gate_336_pkgs5::s5_t3_…` pinned that no set-aside file
+is left beside a replaced `--lab-dir` package; the requirement keeps it, so the test now asserts it
+is there with the earlier bytes. No golden changes, no test leaves the gate map.
+
+**At deploy.** A second `record stop` of a recording leaves `<name>.old-<ms>` beside its package,
+in the recording's `lab/out/` and in `--lab-dir`; nothing deletes them. A `--lab-dir` under an
+installed root (for example `<install root>\packages\<game>\`) is refused: a recording reaches the
+schedule through `standard-pack adopt`, which `adoption_example` spells for it.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

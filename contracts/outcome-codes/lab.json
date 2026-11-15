@@ -185,6 +185,22 @@
       "description": "#463 R2: record stop's self-check item 9 found an ending's page passing on recorded frames of a screen the run may show instead of it, where the run, which evaluates the endings before the usual ending, would end on the ending; against says which: previous the frames of a step after whose press the run awaits the endings (its page, or its page transition's frames when it has one: the screen before the result of that press showed), usual the frames of the last step, other_ending the frames of another ending. Nothing is written (exit 3; actinglab details outcome_key, page, frames, and step or other_outcome_key).",
       "common_causes": "The ending's marks hold on the screen before the last press, on the usual ending's screen or on another ending's screen too: a mark reused from a step, a color of a background the screens share, or a template that is no part of the ending's own message.",
       "handling": "Give up the ending with record mark --remove-ending <key> and take it again with a mark that holds on its screen only, such as a template of its message or a button; check with record stop --dry-run."
+    },
+    "record_optional_after_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "optional_after_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.62",
+      "description": "#463 R4: an optional step a stopped Lab recording inserts after the effect of one of its steps (record mark --optional-after <k> or a request's optional_after: a pop-up after which the path goes on, taken from a frame), or gives up again (record mark --remove-inserted <n>, a request's remove_inserted), cannot be inserted or given up; optional_after_problem says why. record mark is refused (exit 3) and nothing is written. recording_active a step inserted on an active recording; with_other_change another change beside optional_after or remove_inserted, or both; step_unknown, step_last and step_application the step k names: none (or a dropped or converted one), the last step, a step whose effect is an application operation; no_marks an inserted step without a mark; no_click one without a click; clears_optional a request that clears optional on an inserted step; not_inserted remove_inserted naming no inserted step that is not given up yet (actinglab details step, and members for with_other_change).",
+      "common_causes": "The recording was not stopped yet; the request also names a step, a frame, marks of a step, an ending or another change; k names a step that is not there, the last step (nothing is pressed after it) or an application step; the pop-up's request gives no mark or no click; --not-optional names an inserted step; --remove-inserted names a recorded step or a step given up already.",
+      "handling": "Run record stop first and insert the pop-up on the stopped recording, alone in its request: --optional-after <k> with the step after whose press the run met it, --frame of the pop-up (the pinned frame of the run, as material writes it), a mark of the pop-up's own (such as a template of its title) and the click that closes it; read record status for the steps in the order they run; give up an inserted step with record mark --remove-inserted <n>, its own serial number. Then run record stop, which checks it as every optional step."
     }
   },
   "locations": {

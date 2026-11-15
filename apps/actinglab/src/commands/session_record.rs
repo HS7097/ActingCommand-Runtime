@@ -13,11 +13,11 @@ use crate::{
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ClickRetry, ClickSpec, EndingSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily,
-    MarkRequest, MarkSpec, RecordArchiveOptions, RecordRect, RecordReopenOptions,
-    RecordStartOptions, RecordStopOptions, RecordingLock, StepAction, StepActionKind,
-    TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive, record_archive_copy,
-    record_instance_check, record_mark, record_reopen, record_start, record_start_defaults,
-    record_status, record_stop, record_stop_close,
+    MarkRequest, MarkSpec, OptionalAfterSpec, RecordArchiveOptions, RecordRect,
+    RecordReopenOptions, RecordStartOptions, RecordStopOptions, RecordingLock, StepAction,
+    StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive,
+    record_archive_copy, record_instance_check, record_mark, record_reopen, record_start,
+    record_start_defaults, record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -2894,6 +2894,9 @@ pub(crate) const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--ending",
     "--outcome-key",
     "--remove-ending",
+    // #463 R4: an optional step a stopped recording inserts after a step, and one to give up.
+    "--optional-after",
+    "--remove-inserted",
 ];
 
 /// Workflow #434 LAB-5B2: the other flags `record mark` takes besides its shortcut flags: the
@@ -3248,6 +3251,8 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         clear_select: false,
         ending: None,
         remove_ending: record_flag_value(flags, "--remove-ending")?,
+        optional_after: None,
+        remove_inserted: number("--remove-inserted")?,
     };
     // #463 R2: `--ending` makes `--frame`, `--sample`, `--page`, the marks (`--template`,
     // `--color`) and `--reuse` the ending's, with `--outcome-key`, as the request form's `ending`
@@ -3270,6 +3275,29 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         });
     } else if outcome_key.is_some() {
         return Err(CliError::usage("--outcome-key needs --ending"));
+    }
+    // #463 R4: `--optional-after <k>` makes `--frame`, `--sample`, `--page`, the marks, `--reuse`,
+    // the click (`--click`, `--click-from`, `--click-follow` and the gestures) and `--settle-ms`
+    // the inserted step's, as the request form's `optional_after` holds them. Every other flag
+    // stays the request's own, which the Lab refuses beside it (`record_optional_after_invalid`,
+    // `with_other_change`): nothing is dropped.
+    if let Some(step) = number("--optional-after")? {
+        if request.ending.is_some() {
+            return Err(CliError::usage("give one of --ending and --optional-after"));
+        }
+        let Some(frame) = request.frame.take() else {
+            return Err(CliError::usage("--optional-after needs --frame <png>"));
+        };
+        request.optional_after = Some(OptionalAfterSpec {
+            step,
+            frame,
+            samples: std::mem::take(&mut request.samples),
+            page: request.page.take(),
+            add: std::mem::take(&mut request.add),
+            reuse: std::mem::take(&mut request.reuse),
+            click: request.click.take(),
+            settle_ms: request.optional_settle_ms.take(),
+        });
     }
     let timeout_ms = millis("--transition-timeout-ms")?;
     let min_ms = millis("--min-ms")?;

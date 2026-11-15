@@ -181,6 +181,8 @@ outcome_keys! {
     // passes on.
     ending_problem: vocab(ending_problem),
     against: vocab(ending_against),
+    // #463 R4: why an optional step a stopped recording inserts after one of its steps cannot hold.
+    optional_after_problem: vocab(optional_after_problem),
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),
