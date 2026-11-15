@@ -860,4 +860,11 @@ outcome_keys! {
     // was refused; kept in codes mode. ----
     goal_name: token,
     goal_problem: vocab(goal_problem),
+    // ---- Workflow #469 V0 (register §1.386; the owner's option A on board #469): the reason
+    // words of the most mixed codes, optional values beside the code, never in the detail text;
+    // kept in codes mode. ----
+    confirmation_problem: vocab(confirmation_problem),
+    guard_problem: vocab(guard_problem),
+    availability_source: vocab(availability_source),
+    pause_cause: vocab(pause_cause),
 }

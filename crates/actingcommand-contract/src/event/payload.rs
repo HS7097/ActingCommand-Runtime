@@ -3075,7 +3075,8 @@ pub fn is_severe_policy_failure(code: &crate::outcome::CodeStr) -> bool {
 /// frame commit or resolve the session refused (`input_frame_capture_mismatch`,
 /// `input_frame_not_committed`, `input_frame_session_missing`): since ISO-2 a run's capture,
 /// frame commit or frame resolve that meets one fails only that run, non-fatal, so it counts
-/// toward the task's failure pause as any failure does.
+/// toward the task's failure pause as any failure does. Workflow #469 V0 (D2): nor is
+/// `nemu_app_index_requires_paired_input`, retired in 0.12.39 and raised nowhere since.
 fn severe_policy_failure_codes() -> &'static [&'static str] {
     &[
         "action_id_issue_failed",
@@ -3154,7 +3155,6 @@ fn severe_policy_failure_codes() -> &'static [&'static str] {
         "monitor_state_invalid",
         "monotonic_clock_overflow",
         "nemu_app_index_missing",
-        "nemu_app_index_requires_paired_input",
         "nemu_application_identity_invalid",
         "nemu_close_instance_missing",
         "nemu_input_deadline_overflow",
