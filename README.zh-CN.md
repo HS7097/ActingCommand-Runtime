@@ -38,7 +38,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 | zip | 布局 | 内容 |
 | --- | --- | --- |
-| `actingcommand-runtime-<sha>.zip` | `distribution-v1` | `actingcommand-actingd.exe`、`actingctl.exe`、`actingd.config.example.json`、`actingd.config.first.json`（v0.12.60 起：首份配置的模板，Lab 的 `new` 填写它）、`actingd.defaults.json`（程序内嵌的默认值；配置里只写要改的键）、`INSTALL.md`、`RELEASE-NOTES.md` |
+| `actingcommand-runtime-<sha>.zip` | `distribution-v1` | `actingcommand-actingd.exe`、`actingd.config.example.json`、`actingd.config.first.json`（v0.12.60 起：首份配置的模板，Lab 的 `new` 填写它）、`actingd.defaults.json`（程序内嵌的默认值；配置里只写要改的键）、`INSTALL.md`、`RELEASE-NOTES.md` |
 | `actingcommand-tools-<sha>.zip` | `platform-tools-v3` | `actinglab.exe`、`actingledger.exe`、`actingcommand-vision-provider-check.exe`、看门狗 `actingwatch.exe`（v0.12.47 起自己跑看门狗的 tick），以及 `platform-tools/` 下 Google 官方 Android platform-tools 37.0.1（`adb.exe`、`AdbWinApi.dll`、`AdbWinUsbApi.dll`、`NOTICE.txt`、`source.properties`） |
 
 视觉模型与 ONNX Runtime 从不随发布：OCR/NN 引擎链接进 `actingcommand-actingd.exe`，模型从 `<vision root>\models\<model_ref>\` 读取；没有模型时，需要 OCR 的识别目标会明确失败。`actingcommand-actingd.exe` 还带着官方 scrcpy server 5.0.1 与 OpenH264，供真机截图后端使用；它们的许可声明在 RELEASE-NOTES.md 里。
@@ -60,7 +60,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 **升级**
 
-- 0.12 系列内原地升级：替换 `runtime\` 和 `tools\`，配置和账本不动。装了看门狗时，替换期间要独占 `install\writer.lock`（或先停掉它的计划任务）；停 Runtime 只用 `actingctl request-shutdown`。
+- 0.12 系列内原地升级：替换 `runtime\` 和 `tools\`，配置和账本不动。装了看门狗时，替换期间要独占 `install\writer.lock`（或先停掉它的计划任务）；停 Runtime 只用 Lab 的 `shutdown`（`<root>\tools\actinglab.exe shutdown --wait 60s`）。
 - v0.12.10 是第一个账本修订 4 的版本。更早的 Runtime 拒绝修订 4 新增的记录，所以从 v0.12.10 退回 v0.12.9 或更早不受支持。
 - 配置里写了较新 `actingd-config` 修订的键时，较旧的 Runtime 会拒收这份配置；回退前先删掉这些键。
 
@@ -112,13 +112,13 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ## 调度与恢复
 
-- **调度器。** 策略派发按已批准的目录（目录与其批准 id 写在 `actingd` 配置的 `policy` 段）运行任务包，既可按时钟槽，也可按目录里的条件，例如 `fact_time_reached`（从实例事实里读到的时刻）。每个实例一个请求队列、一个工作线程；实例被占用时，候选推迟并记下理由，不算失败。其他输入：手动优先级偏移（`actingctl task-offset`）、实例资源目标（`actingctl agent-apply-resource-targets`，`contracts/resource-targets.md`）、磁盘容量准入，以及可选的按实例随机延迟（`scheduling.random_delay`，默认关）。模拟器启动后，实例配置的 `startup_package` 作为受限任务运行。
-- **为什么没跑。** 每个没派出去的候选都记下原因。Runtime 在内存里保留每个实例最近一次评估：`actingctl schedule [--instance <alias>]` 与 MCP `ac_schedule` 读它，`ac_overview` 与 `ac_diagnose` 也给出每个实例的「不跑」行。
-- **事实、挂起与补救。** 候选所需的实例事实未知或过期时，候选推迟，由读数包去刷新这些事实（`actingctl fact-refresh`）。准入被拒的包按 `package_id` 挂起，内容变了才解除（`actingd suspended`，`contracts/policy-suspension.md`）。包可以为被挡住的结果声明补救；调度器先派提供补救的包，再把被挡的任务重试一次（`contracts/remedies.md`、`actingctl remedy`、MCP `ac_remedy_set` / `ac_remedy_get`）。
-- **暂停与恢复。** `actingctl pause` 全局或按实例（先排空其在途运行）停止策略派发。暂停没有过期时间，熬过重启；只有 `actingctl resume` 才解除（`contracts/scheduling-pause.md`）。
-- **恢复阶梯。** 调度运行以某个配置的触发条件所指的结果失败时，实例按配置的各级走；默认是回主页（运行绑定的恢复包或配置的回主页包）→ 重启应用 → 重启模拟器（再等 ADB、截图、输入与安卓就绪最多 120 s，然后跑启动包），真机用的档只到第二级。配置的 `recovery_ladder` 节写着触发条件（按结果码或类别，例如短时间内多次稳定性警告，或不符合包逻辑的行为）、各级及其时限、冷却与抑制规则；Runtime 运行中可用 `actingctl config set` 或 MCP `ac_config_set` 修改。从命令行、控制台或 MCP 直接跑的任务失败从不启动阶梯，由发起方凭回执决定。实例配置 `stuck_recovery: false` 即对它关闭阶梯。回主页停在包标为「忙」的画面上，或者画面还在变化时，阶梯等一阵再试，而不是升级。围栏后等人的实例按 `recovery_ladder.fence_recheck` 定时自检，通过就解除。`actingctl ladder-drill`（MCP `ac_ladder_drill`）按需演练阶梯（`contracts/emulator-control.md`，「Stuck-recovery ladder」与「Drills」）。
+- **调度器。** 策略派发按已批准的目录（目录与其批准 id 写在 `actingd` 配置的 `policy` 段）运行任务包，既可按时钟槽，也可按目录里的条件，例如 `fact_time_reached`（从实例事实里读到的时刻）。每个实例一个请求队列、一个工作线程；实例被占用时，候选推迟并记下理由，不算失败。其他输入：手动优先级偏移（Lab 的 `offset`）、实例资源目标（Lab 的 `targets set`，`contracts/resource-targets.md`）、磁盘容量准入，以及可选的按实例随机延迟（`scheduling.random_delay`，默认关）。模拟器启动后，实例配置的 `startup_package` 作为受限任务运行。
+- **为什么没跑。** 每个没派出去的候选都记下原因。Runtime 在内存里保留每个实例最近一次评估：Lab 的 `schedule [<instance>]`（MCP `ac_schedule`）读它，`ac_overview` 与 `ac_diagnose` 也给出每个实例的「不跑」行。
+- **事实、挂起与补救。** 候选所需的实例事实未知或过期时，候选推迟，由读数包去刷新这些事实（Lab 的 `status` 里看得到刷新）。准入被拒的包按 `package_id` 挂起，内容变了才解除（`actingd suspended`，`contracts/policy-suspension.md`）。包可以为被挡住的结果声明补救；调度器先派提供补救的包，再把被挡的任务重试一次（`contracts/remedies.md`、Lab 的 `remedy`、`remedy set` 与 `remedy lift`）。
+- **暂停与恢复。** Lab 的 `pause` 全局或按实例（先排空其在途运行）停止策略派发。暂停没有过期时间，熬过重启；只有恢复（Lab 的 `resume`）才解除（`contracts/scheduling-pause.md`）。
+- **恢复阶梯。** 调度运行以某个配置的触发条件所指的结果失败时，实例按配置的各级走；默认是回主页（运行绑定的恢复包或配置的回主页包）→ 重启应用 → 重启模拟器（再等 ADB、截图、输入与安卓就绪最多 120 s，然后跑启动包），真机用的档只到第二级。配置的 `recovery_ladder` 节写着触发条件（按结果码或类别，例如短时间内多次稳定性警告，或不符合包逻辑的行为）、各级及其时限、冷却与抑制规则；Runtime 运行中可用 Lab 的 `config set`（MCP `ac_config_set`）修改。从命令行、控制台或 MCP 直接跑的任务失败从不启动阶梯，由发起方凭回执决定。实例配置 `stuck_recovery: false` 即对它关闭阶梯。回主页停在包标为「忙」的画面上，或者画面还在变化时，阶梯等一阵再试，而不是升级。围栏后等人的实例按 `recovery_ladder.fence_recheck` 定时自检，通过就解除。Lab 的 `drill`（MCP `ac_drill`）按需演练阶梯（`contracts/emulator-control.md`，「Stuck-recovery ladder」与「Drills」）。
 - **重启结算。** 被重启留下的调度运行在下次启动时结算（按终态，或按「中断」一次）；结算不了的运行只暂停它的实例，并报 Error。
-- **性能。** 影子测量持续观察宿主负载与每个实例的响应率（`actingctl perf-status`）。`performance.pacing.mode` 为 `observe` 时只测量；为 `pace`（0.12.31 起的默认值）或 `full` 时，运行内的等待按该实例的节奏系数拉长（`contracts/performance-control.md`）。`actingctl perf-preset get|set <档名>`（MCP `ac_perf_preset`）读取或套用 `standard`、`adaptive`、`light` 三个预设（`contracts/runtime-config.md`，“Presets”）。
+- **性能。** 影子测量持续观察宿主负载与每个实例的响应率（Lab 的 `status`）。`performance.pacing.mode` 为 `observe` 时只测量；为 `pace`（0.12.31 起的默认值）或 `full` 时，运行内的等待按该实例的节奏系数拉长（`contracts/performance-control.md`）。Lab 的 `preset` 与 `preset set <档名>`（MCP `ac_preset`、`ac_preset_set`）读取或套用 `standard`、`adaptive`、`light` 三个预设（`contracts/runtime-config.md`，“Presets”）。
 
 ## 证据面
 
@@ -134,7 +134,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 **离线读取**由 `actingledger` 提供，它只开只读证据快照，从不写入。子命令为：`open`、`events`、`chain --req <request-id>`、`tail`、`repairs`、`export`（可加 `--performance` / `--stability` / `--task-evidence`）、`views`（账本终态视图的一页，与运行时提供的页相同）、`material --request <json>`（一件已提交工件的一段已校验字节）、`signatures`、`frames`（已存截图的只读列表）、`facts --at <sequence>`（按账本位置重放程序事实库）、`replay`、`codes`（本构建内嵌码目录里的结果码）。除裸 `export` 输出人类可读的多行文本报告外，其余报告都是单行 JSON；证据存在缺口时先打印报告再以 `signature_replay_incomplete`、`stability_export_incomplete`、`task_evidence_export_incomplete`、`ledger_view_source_incomplete` 非零退出；`facts` 不可用时以 `runtime_facts_not_available` 或失败码非零退出。
 
-**结果码。** 已登记的结果码放在 `contracts/outcome-codes/` 下的分片里，每个所属包或程序一片（共 31 片，从 `contract`、`ledger`、`runtime-host` 到 `actingctl`、`actingd`、`actinglab`、`actingledger`），共用的键与词表在 `catalog.json`；构建时把它们合并成码目录并嵌入程序（`outcome-guard merge` 输出的是同一份内容；合并后的文件不提交进仓库）。回执、账本记录、`actingctl`、`actingd`、看门狗与 MCP 工具错误都以 outcome 的形式携带这些码；`actingctl codes`、`actingledger codes` 与 MCP `ac_outcome_code` 可以查码。每个版本都带一份快照 `contracts/outcome-codes/released/<版本>.json`（v0.12.10：3,766 个码，其中 172 个已定稿；1,647 个位置），缺了快照的发布构建会停下。守卫仍豁免 Lab 的 `apps/actinglab` 与 `crates/lab`。
+**结果码。** 已登记的结果码放在 `contracts/outcome-codes/` 下的分片里，每个所属包或程序一片（共 31 片，从 `contract`、`ledger`、`runtime-host` 到 `actingctl`、`actingd`、`actinglab`、`actingledger`），共用的键与词表在 `catalog.json`；构建时把它们合并成码目录并嵌入程序（`outcome-guard merge` 输出的是同一份内容；合并后的文件不提交进仓库）。回执、账本记录、Lab 的程序、`actingd`、看门狗与 MCP 工具错误都以 outcome 的形式携带这些码；Lab 的 `codes`（MCP `ac_codes`）与 `actingledger codes` 可以查码。每个版本都带一份快照 `contracts/outcome-codes/released/<版本>.json`（v0.12.10：3,766 个码，其中 172 个已定稿；1,647 个位置），缺了快照的发布构建会停下。守卫仍豁免 Lab 的 `apps/actinglab` 与 `crates/lab`。
 
 ## 不变式与守卫
 
@@ -175,8 +175,8 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 | crates/execution-kernel | actingcommand-execution-kernel | 守护进程拥有的执行会话与纯任务/探测决策规划 |
 | crates/host-metrics | actingcommand-host-metrics | 平台性能计数器的安全边界（仅 cfg(windows) 依赖 windows-sys） |
 | crates/lab | actingcommand-lab | 可选的创作与调试适配层；排除后生产仍可构建可运行 |
-| crates/lab-ops | actingcommand-lab-ops | Lab 的操作层（Workflow #434 LAB-1、LAB-1b）：把操作表 `contracts/lab-operations.json` 读成带类型的行、发起者的词和默认位置，以及每个核心操作的代码（发请求、整理回答），actingctl、它的 MCP 服务和 actinglab 的 CLI 模块都从这里调用 |
-| crates/lab-rescue | actingcommand-lab-rescue | Lab 的救急与安装模块（Workflow #434 LAB-3；只在 Windows 上）：从 actingctl 原样搬来的安装工具（`install`、`mcp-entry`）、`start`、`restart` 和 `agent-channel`，LAB-7 之前 actingctl 从这里回答；以及 actinglab 在它们之上提供的救急行（日志记 `initiator`、没有确认参数、守卫只报不拦、只交还自己的暂停，组合操作 `deploy`、`config replace`、`instance add`、`place`、`alive`） |
+| crates/lab-ops | actingcommand-lab-ops | Lab 的操作层（Workflow #434 LAB-1、LAB-1b）：把操作表 `contracts/lab-operations.json` 读成带类型的行、发起者的词和默认位置，以及每个核心操作的代码（发请求、整理回答），actinglab 的 CLI 模块和 Lab 的 MCP 服务都从这里调用 |
+| crates/lab-rescue | actingcommand-lab-rescue | Lab 的救急与安装模块（Workflow #434 LAB-3；只在 Windows 上）：从 actingctl 原样搬来的安装工具（`install`、`mcp-entry`）、`start`、`restart` 和 `agent-channel`（LAB-7 起 actingctl 已删除）；以及 actinglab 在它们之上提供的救急行（日志记 `initiator`、没有确认参数、守卫只报不拦、只交还自己的暂停，组合操作 `deploy`、`config replace`、`instance add`、`place`、`alive`） |
 | crates/ledger | actingcommand-ledger | 全局运行时事件账本的可恢复单写者存储 |
 | crates/ledger-forensics | actingcommand-ledger-forensics | 基于 GlobalLedger 与已验证证据归档的只读取证 |
 | crates/onnx-provider-support | actingcommand-onnx-provider-support | 引擎侧 ORT 生命周期：幂等初始化、可取消看门狗 |
@@ -194,7 +194,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 | crates/scheduler | actingcommand-scheduler | 按实例的写入准入、租约生命周期与围栏权限 |
 | crates/selection-policy | actingcommand-selection-policy | 纯选择策略求值器：输入声明文档、有界候选与显式事实，输出确定性选择及理由；另带离线调试 bin `selection-eval` |
 | crates/vision-ffi | actingcommand-vision-ffi | 进程内 OCR/NN 引擎的边界类型、模型文件夹规则与加载器契约 |
-| crates/watchdog | actingcommand-watchdog | Runtime 的看门狗（Workflow #434 LAB-4；只在 Windows 上）：观察和判定、启动、`state.json`、`watchdog.log` 和计划任务，由 `actingwatch.exe` 的 tick 和 `actingctl watchdog …` 运行 |
+| crates/watchdog | actingcommand-watchdog | Runtime 的看门狗（Workflow #434 LAB-4；只在 Windows 上）：观察和判定、启动、`state.json`、`watchdog.log` 和计划任务，由 `actingwatch.exe` 和 Lab 的 `watchdog install`、`watchdog uninstall`、`alive` 运行 |
 
 ### providers（1）
 
@@ -211,9 +211,9 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ## 设备与识别
 
-模拟器集成面向 MuMu：Nemu IPC 截图与输入，MuMuManager 实例发现与启停（`actingctl emulator status|start|stop|restart|discover`）；显式配置的实例也可以按 ADB 主机与端口寻址。启动时实例发现不可用会有限次重试（`startup_discovery`）；实例配置了 `start_emulator`（默认关）时，Runtime 启动时会自己开启它的模拟器，暂停中的实例除外。采集后端按名称存在：`fixture_simulation`、`adb_screencap`、`adb_screencap_encode`、`adb_screencap_raw_gzip`、`droidcast_raw`、`nemu_ipc`、`scrcpy`，可选值为 `auto`、`auto-fastest`、`adb`、`droidcast_raw`、`nemu_ipc`、`scrcpy`。输入后端为 `nemu_ipc`、`maatouch`、`minitouch`、`adb_shell_input`，可选值为 `auto`、`auto-fastest`、`nemu_ipc`、`maatouch`、`minitouch`、`adb_shell_input`。Nemu IPC 采集与输入后端都在 crate 内实现，采集后端带独立工作线程。厂商 stdio 以有界、显式关闭的会话捕获，并报告资源静默状态。在安装根里，除非实例写了别的 `adb_path`，ADB 用自带的 adb 37.0.1。
+模拟器集成面向 MuMu：Nemu IPC 截图与输入，MuMuManager 实例发现与启停（Lab 的 `status`、`emu start`、`emu stop`、`emu restart` 与 `discover`）；显式配置的实例也可以按 ADB 主机与端口寻址。启动时实例发现不可用会有限次重试（`startup_discovery`）；实例配置了 `start_emulator`（默认关）时，Runtime 启动时会自己开启它的模拟器，暂停中的实例除外。采集后端按名称存在：`fixture_simulation`、`adb_screencap`、`adb_screencap_encode`、`adb_screencap_raw_gzip`、`droidcast_raw`、`nemu_ipc`、`scrcpy`，可选值为 `auto`、`auto-fastest`、`adb`、`droidcast_raw`、`nemu_ipc`、`scrcpy`。输入后端为 `nemu_ipc`、`maatouch`、`minitouch`、`adb_shell_input`，可选值为 `auto`、`auto-fastest`、`nemu_ipc`、`maatouch`、`minitouch`、`adb_shell_input`。Nemu IPC 采集与输入后端都在 crate 内实现，采集后端带独立工作线程。厂商 stdio 以有界、显式关闭的会话捕获，并报告资源静默状态。在安装根里，除非实例写了别的 `adb_path`，ADB 用自带的 adb 37.0.1。
 
-实例也可以是一台 USB 连接的安卓真机（`"device": {"kind": "handset"}`）。它按 adb 序列号用 `actingctl devices list|bind|unbind` 绑定（MCP `ac_devices`、`ac_device_bind`、`ac_device_unbind`）；序列号只存在状态根的私有绑定文件里，记录、日志与账本里只出现指纹和标签。真机的截图只能选 `adb` 或 `scrcpy`，输入只能选 `adb_shell_input`、`maatouch` 或 `minitouch`；`scrcpy` 从不自动选用，模拟器上选它会被拒（`contracts/device-binding.md`）。
+实例也可以是一台 USB 连接的安卓真机（`"device": {"kind": "handset"}`）。它按 adb 序列号用 Lab 的 `devices`、`devices bind` 与 `devices unbind` 绑定（MCP `ac_devices`、`ac_devices_bind`、`ac_devices_unbind`）；序列号只存在状态根的私有绑定文件里，记录、日志与账本里只出现指纹和标签。真机的截图只能选 `adb` 或 `scrcpy`，输入只能选 `adb_shell_input`、`maatouch` 或 `minitouch`；`scrcpy` 从不自动选用，模拟器上选它会被拒（`contracts/device-binding.md`）。
 
 在框里点击时，落点按以框中心为均值的正态分布抽取（σ 是框宽、高的 25%），并从四个候选点里取这台实例在这个框上还没用过的一个，都用过就取最久以前用的那个（`touch` 节）。包可以在框内声明多拐弯的路径拖动（`single_touch_path_drag_v1`）：一次按下、按顺序经过各拐点、一次抬起，由 `nemu_ipc`、`maatouch`、`minitouch` 执行，`adb_shell_input` 从 Android SDK 23 起也能执行；做不到的后端直接拒绝，绝不退成直线滑动。
 
@@ -236,7 +236,7 @@ Windows 准确 SHA 工件包含两份 Runtime exe、待填写配置模板、默�
 
 `apps/actinglab` 的 `build.rs` 会读取 Git 元数据确定 HEAD。当 Git 元数据可用时，若同时设置了 `ACTINGCOMMAND_RUNTIME_HEAD`，它必须是 40 位十六进制且与仓库 HEAD 一致，否则构建 panic；当 Git 元数据不可用（例如无 `.git` 的源码树）时，该变量为必填。
 
-`actingd` 的正常调用接受 `--config <path>`，安装事务时可再加 `--install-held <json>`（见[宿主安装控制](distribution/windows/INSTALL.md#ab-installation-inputs-and-host-control)）；第一个参数也可以改为 `ledger-maintenance`、`check-config`、`unlock-owner` 或 `suspended` 子命令，其余一律 `usage_invalid`。配置 schema 为 `actingcommand.actingd.config.v1`，上限 1 MiB，拒绝未知字段；`bind_host` 必须能解析为 IP **且**必须是环回地址，`secret_fingerprint_salt` 必须是 16..=1024 字节。`actingd` 启动时会把驻内存的运行配置清单（所运行的子系统，以及每个生效参数及其来源；盐只记字节长度）记为程序事实 `config.subsystems`、`config.selection` 与每节一条 `config.parameters.<section>`，可用 `actingctl facts --program` 读取，`check-config` 也会打印。`actingctl` 与 `actingledger` 的 `--state-root` 都指运行时状态根，而不是 `ledger` 目录。
+`actingd` 的正常调用接受 `--config <path>`，安装事务时可再加 `--install-held <json>`（见[宿主安装控制](distribution/windows/INSTALL.md#ab-installation-inputs-and-host-control)）；第一个参数也可以改为 `ledger-maintenance`、`check-config`、`unlock-owner` 或 `suspended` 子命令，其余一律 `usage_invalid`。配置 schema 为 `actingcommand.actingd.config.v1`，上限 1 MiB，拒绝未知字段；`bind_host` 必须能解析为 IP **且**必须是环回地址，`secret_fingerprint_salt` 必须是 16..=1024 字节。`actingd` 启动时会把驻内存的运行配置清单（所运行的子系统，以及每个生效参数及其来源；盐只记字节长度）记为程序事实 `config.subsystems`、`config.selection` 与每节一条 `config.parameters.<section>`，可用 Lab 的 `facts --program` 读取，`check-config` 也会打印。`actingledger` 的 `--state-root` 指运行时状态根，而不是 `ledger` 目录。
 
 输出与退出码（`ACTINGCOMMAND_DETAIL=codes` 时 outcome 只保留登记过的名称；不设则为完整 outcome）：
 
@@ -301,7 +301,7 @@ actingledger replay --zip <evidence.zip> --expected-sha256 <hex>
 actingledger codes [--code <code>] [--json|--markdown]     # 内嵌码目录里的结果码（contracts/runtime-outcomes.md）；不需要状态根
 
 # Lab 录制成 linear_steps 包（contracts/lab-recording.md）；actinglab 经 ACTINGCOMMAND_RUNTIME_STATE_ROOT 找到守护进程
-actingctl pause --state-root <state-root> --instance <alias>     # 先暂停：两条录制命令之间不能有调度任务操作该实例
+actinglab pause <alias>     # 先暂停：两条录制命令之间不能有调度任务操作该实例
 actinglab --json --instance <alias> record start --task-id <task_id>
 actinglab --json --instance <alias> capture --record     # 下一步的画面；也可用 observe --capture --record，或离线 record mark --frame <png>
 actinglab --json --instance <alias> record mark --page <name> --template <id>=x,y,w,h --color <id>=x,y,w,h --click x,y,w,h
@@ -316,7 +316,7 @@ actinglab --json --instance <alias> do --capture --record --swipe x1,y1,x2,y2,ms
 actinglab --json --instance <alias> record archive [--copy-to <空目录的绝对路径>]     # 只为留素材的录制：在帧旁写 archive-manifest-<n>.json，文件一个不动，会话结束（archived）；不需要标记
 actinglab --json --instance <alias> record archive --record-id <id>     # 被 record start --force 丢下的录制：按它自己的步骤表写清单；会话头（属于另一个录制）不动
 actinglab --json --instance <alias> record reopen [--record-id <id>]     # 已归档的录制重新成为活动录制，之后可以标记、record stop
-actingctl resume --state-root <state-root> --instance <alias>
+actinglab resume <alias>
 
 # 离线账本维护（不装配提供者、IPC 与设备）
 actingcommand-actingd ledger-maintenance backup  --config runtime.json --backup frozen-backup
@@ -346,7 +346,7 @@ actingcommand-vision-provider-check --state-root <state-root> --limit 256
 actingcommand-vision-provider-check --models-root <vision root>\models --hash
 ```
 
-注意：cargo 产出的守护进程二进制名为 `actingcommand-actingd`；短名有 `actingctl`、`actinglab`、`actingledger`。
+注意：cargo 产出的守护进程二进制名为 `actingcommand-actingd`；短名有 `actinglab`、`actingledger`。
 
 ## 开发状态
 
@@ -362,7 +362,7 @@ actingcommand-vision-provider-check --models-root <vision root>\models --hash
 - 工件保留：保留类有 DebugFull / Adaptive / Light 三个取值，各工件种类默认 Adaptive。采集帧按类别到期：截图清理器跑在主机的性能监视循环上，至多每 10 分钟清扫一遍，每轮在 1 秒内至多处理 16 帧。除非配置把 `frame_retention_enabled` 设为 `false`，它就是开启的。近似重复帧在其运行结束后删除，资源读数帧在运行结束 7 天后、其他帧在运行结束 1 天后删除；每次错误前 30 秒的帧和 Lab 帧移入 `<state root>\kept\<日期>\<叶目录>\`，由人删除；清理不往账本写任何记录。读取方仍能按工件 ID 找到被移走的帧，被删的帧读作缺失，被占用的帧留到后面一遍再处理。`frame_retention_dedup_error`（默认开）和 `frame_retention_dedup_lab`（默认关）决定错误窗口内与 Lab 输出里的近似重复帧是否也删除。其他工件种类不会被自动回收。
 - UI 在独立仓：一个在线 / 离线安装向导，以及一个可启动守护进程的只读监控台。它只经运行时 API 或账本的官方读取面与运行时交互，不拥有运行时生命周期。
 - 资源：实例配置的 `resource_package` 会被校验（`check-config` 与启动时）并在运行时状态里显示，但调度仍运行 `actingd` 配置里钉住的包（`policy.procedure_manifest[]` 的 `scheduled_execution.package_path`）。资源自动更新尚未建成。
-- 代理面只建成了守护进程一侧：`runtime-host` 有 `AgentDispatcher`，把唤醒请求记进账本（`agent.wake_requested`，来自策略的时间线与漂移信号）并管理有界的代理会话，可由 `actingd` 配置的 `agent_dispatcher` 段启用；`actingctl agent-publish-facts` 是已有的 Agent/Adapter 来源入口。智能体经 MCP 服务接入；这条路不会启动外部会话，自主探索与完整的自维护回路尚未建成。另一条路（`contracts/agent-wake.md`，`agent_wake` 段）是 Runtime 自己给已登记的会话发一条短消息：配置了带规则的段之后，恢复阶梯用尽、实例隔离后等人处理、规则列出错误码的运行失败这三类记录会自动唤起规则指定的频道（同一实例的一阵记录合并成一条，另有冷却和按本机日计的每日上限），`daily_summary` 规则每天到点发一份汇总（正文带每个实例的 `RoutineSummary` 回答）；人手动的 `actingctl agent-wake-test` 走同一条路。发送通道有 Claude Code（会话已停时可以先经 Claude Desktop 把它唤起）、Codex 和 DSH，其他客户端的频道会等待并在期满时报失败。生产配置里还没有这一段，所以目前什么也不会被唤起。
+- 代理面只建成了守护进程一侧：`runtime-host` 有 `AgentDispatcher`，把唤醒请求记进账本（`agent.wake_requested`，来自策略的时间线与漂移信号）并管理有界的代理会话，可由 `actingd` 配置的 `agent_dispatcher` 段启用；Lab 的 `facts publish` 是 Agent/Adapter 来源入口。智能体经 MCP 服务接入；这条路不会启动外部会话，自主探索与完整的自维护回路尚未建成。另一条路（`contracts/agent-wake.md`，`agent_wake` 段）是 Runtime 自己给已登记的会话发一条短消息：配置了带规则的段之后，恢复阶梯用尽、实例隔离后等人处理、规则列出错误码的运行失败这三类记录会自动唤起规则指定的频道（同一实例的一阵记录合并成一条，另有冷却和按本机日计的每日上限），`daily_summary` 规则每天到点发一份汇总（正文带每个实例的 `RoutineSummary` 回答）；人手动的 `wake-test`（Lab 的行）走同一条路。发送通道有 Claude Code（会话已停时可以先经 Claude Desktop 把它唤起）、Codex 和 DSH，其他客户端的频道会等待并在期满时报失败。生产配置里还没有这一段，所以目前什么也不会被唤起。
 - 未建成：时段黑名单（`contracts/scheduling-blackout.md` 先于代码写成）；按通道或按 Lab 选项拒绝（两个选项 `lab_module_authoring` 与 `lab_module_debugging` 会被读取并报告，默认都是关，但不拒绝任何请求，所以 Tools 里仍带着 Lab）；升级态与包加载 / 卸载请求（回答 `not_implemented`）。
 
 ## 参与
