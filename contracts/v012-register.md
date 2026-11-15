@@ -27358,6 +27358,95 @@ category but D3's two; no interface revision, record shape or configuration key.
 changes reach no trigger under the defaults, and the removed list entry names a code no build
 since 0.12.39 raises.
 
+### 1.387 Slice #469 F1 (0.12.62): a run's reads carry the values of its terminal outcome (Workflow #469; the owner's decision of 11-15 on board #469 that the most mixed codes carry a reason word, a value of a closed vocabulary beside the code; the design `rd-1115/status-codes-a-design.md`, Part 2's three facts, place 1's table "How the word reaches a reader" (the rows for `ac_get_run`, the run list, the overview and the diagnosis) and the slice row F1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-f1-run-reads.md`, read on main `d32d4d6c`)
+
+The coordinator gave this slice 1.387: main `d32d4d6c` holds the sections up to §1.385, and 1.386
+belongs to a slice dispatched with this one. The slice ships in 0.12.62 (release 0.12.61 is cut
+without it).
+
+**Why.** A reason word travels in an outcome's values, never in its detail text. The reads a
+person or an agent looks at first showed the terminal's code alone: a run's status
+(`ContainedRunTerminal`, the read of `ac_get_run`, the overview's `run` and the diagnosis's
+`runs`) kept `failure_code` and nothing of the outcome it was read from, and the run list's row
+took that code. Every word the other slices add would have been invisible there.
+
+**What it is.** One optional member of `ContainedRunTerminal`
+(`crates/actingcommand-contract/src/run_summary.rs`), `failure_values`: what codes mode keeps
+of the terminal outcome's own values, `Outcome::codes_only`'s top node (the values whose type is
+a registered name: a code, a location, a word of a vocabulary, and lists of them), as a map by
+key, the shape an outcome envelope's `values` has. An id, a name, a number, a duration, a path
+and every other type is dropped there, and so are the outcome's causes. It is absent when the
+outcome carries none (`skip_serializing_if` on an empty map), so such a terminal serializes byte
+for byte as before. `RunFold` takes it from the `TerminalCommitted` fact it takes `failure_code`
+from: no record is read for it and no query is added. It knows no code and no word.
+
+**Readers** (every reader of `ContainedRunTerminal` and `RunBriefStatus` in this repository, all
+on the same contract crate, none kept for an earlier shape; the owner's ruling of 11-15 that
+nothing is kept compatible with earlier builds):
+- the contract crate: `RunFold::brief` and `RunBriefStatus`, and a `QueryRuns` row's status
+  (`QueryRunsRow`, `QueryRunsPage::validate`, which reads only whether a terminal is there);
+- runtime-client: `ContainedRunStatus.terminal` (`contained_run_status`, `latest_runs`,
+  `list_contained_runs`, `window_run_status`), brief and full, which carry the fold's terminal as
+  it is;
+- lab-ops: `run_show` (MCP `ac_get_run`, actinglab `run show`, the problem report's `run` part),
+  `overview::run_block` (the instance row's `run`) and the diagnosis's `runs`, which put the status
+  into their answer as it is, so they carry the member without a line of their own;
+  `run_list::row` (`actingctl runs`, MCP `ac_runs`, actinglab `run list`), which builds its row and
+  now adds `failure_values` beside `failure_code`; the diagnosis's `runs_grouped`, which keeps
+  grouping by (policy task, failure code, final page) and reads the code alone; the problem
+  report's run row (`report::source::row_of`), which keeps the code as `ended_with` (its `run`
+  part, the run's status, carries the member);
+- the MCP servers: actingctl's `ac_get_run`, `ac_runs`, `ac_overview`, `ac_diagnose` (above) and
+  `ac_stop_run`, which reads the state and the instance only; actinglab-mcp's `ac_run_show`, which
+  reads the line's `state` only; `run evidence`, which reads the status's state and identity only;
+- a runtime-host gate (`gate_411_a34`), which reads the terminal's code.
+
+**Interfaces.** `runtime-client` does not move. Its revisions are of the exchange between the
+console and actingd ([component-interfaces.md](component-interfaces.md)), and no answer of that
+exchange changes: a run's status is the client's projection of `QueryEvents` pages, which keep
+their shape, and `QueryRuns`, whose rows carry `RunBriefStatus`, is carried by no operation yet
+([global-ledger-query.md](global-ledger-query.md), the P32 B-1 note;
+[runtime-interface.md](runtime-interface.md), "New request kinds"). `ledger` does not move: no
+record changes. A console built on an earlier runtime-client folds runs itself from the same
+pages and meets nothing: its terminal has no `failure_values` and refuses nothing. A console that
+decodes a terminal this build serialized (an `ac_get_run`, overview or diagnosis answer) with an
+earlier contract crate's `ContainedRunTerminal` refuses it, since the type denies unknown members;
+it reads the member once it is built on this contract crate.
+
+**Faces.** `ac_get_run` and actinglab `run show`: `terminal {outcome, failure_code,
+failure_values?, final_page?, executed_steps?, cancellation_reason?, sequence, event_id}`; the
+overview's `run` and the diagnosis's `runs` rows: the same terminal of the brief status; the run
+list's row: `failure_values` beside `failure_code`, as `{<key>: <value>}`. `ac_runs`'s result
+schema gains the row member, and the tool texts of `ac_get_run` and `ac_runs` name it; the
+operation table's rows `status`, `runs`, `run show` and `diagnose` note it
+([lab-operations.json](lab-operations.json)).
+
+**Counts.** One member of `ContainedRunTerminal` (eight from seven); one member of a run list row
+and of `ac_runs`'s row schema; `gate_c2.rs` holds 14 tests (13 before); the new gate file
+`gate_469_f1.rs` holds 4; two new gate map rows (`contract.toml`, `apps.toml`).
+
+**Tests.** `crates/runtime-client/src/tests/gate_c2.rs`,
+`f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome` (gate map `contract.toml`,
+"#469 F1"), on the ScriptedRuntime ledger of the run-status gates: in brief and in full, a failed
+run whose terminal outcome (`contained_task_deadline_exceeded`) carries `receipt_state` `failed`,
+`lease_id` and `retry_after_ms` has `failure_values` `{receipt_state: failed}` alone, in the
+struct and in the status's JSON; a succeeded run without an outcome and a failed one whose outcome
+carries only an id and a boolean have none, and their terminal's JSON text is the text of the
+members a terminal had before, in their order. `apps/actingctl/src/mcp/tests/gate_469_f1.rs`
+(gate map `apps.toml`, "#469 F1"), on A42's fake Runtime with one such failed run: the
+`ac_get_run` tool's full status, the `ac_runs` tool's row, the overview's run block and the
+diagnosis's `runs` row each show `{receipt_state: failed}` beside the code; `runs_grouped` keeps
+its group by code without the member. No existing test changes, no golden changes, no test leaves
+the gate map.
+
+**What is not changed.** The fold's anomaly rules and what makes a run's state; the ledger's
+records; every code's registration, key and word; the detail texts; the grouped reads; the
+outcome code index (no fragment changes). No code, key, word, configuration key, interface
+revision or record shape is added.
+
+**At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
+0.12.62 shows the values its terminal outcome recorded.
+
 ### 1.398 Slice #469 H2 (0.12.62): a paused pair says why it was paused (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, place 4 of A-1 and the row H2 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after #1738, V0, §1.386))
 
 The coordinator gave this slice 1.398: main `b6fe6ec2` holds the sections up to §1.386, and the
