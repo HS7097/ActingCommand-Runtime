@@ -29472,6 +29472,909 @@ readiness, the placement, every interface revision and record shape.
 
 **At deploy.** Nothing to do: the row only reads, and nothing writes a trial record yet.
 
+### 1.402 Slice #463 S1-1 (0.12.64): a press is recorded by the command that makes it, `tap`, `swipe` and `long-tap --record` (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, A1, A2.1, A3, A5 and A6.1, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s11-press-record.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.402: main `44cbab53` holds the sections up to §1.400, and 1.401
+is #469 D4b. The slice ships in 0.12.64 (release 0.12.63 was cut without it).
+
+**Why.** A press reached a recording only through `do --capture --record`, which needs a rectangle
+and a carrier package, and `tap`, `swipe` and `long-tap` refused `--record`
+(`record_flag_unsupported`), so an agent could not simply play. Now `record start`, the presses
+each with `--record`, and `record archive` record a business: each press a step with the screen
+before it and the screen after it ([lab-recording.md](lab-recording.md), "Recording while
+playing").
+
+**Established by reading.**
+- *A box of one pixel.* The kernel admits a `rect` click of width and height 1: `ClickRect`'s
+  `validate_shape` and `validate` (`crates/execution-kernel/src/contained_task.rs`) ask width and
+  height of at least 1 and both corners inside the resolution, and its draw's
+  `InputSamplingRegion::validate` (`crates/actingcommand-contract/src/event/payload.rs`) the same;
+  `record stop` writes a point click as that `rect` (`click_json`,
+  `crates/lab/src/recording/generate.rs`, unchanged). The gate's ninth test generates it and the
+  dry run's admission takes it.
+- *Coordinates* (the coordinator's ruling 3). The input proxy's tap, long tap and swipe reach the
+  instance's input backend with the coordinates they were given: the kernel's `prepare_input`
+  (`crates/execution-kernel/src/kernel.rs`) converts nothing. The ADB shell input takes the display's
+  coordinates in its current rotation (`connect_with_steps`, `crates/device/src/touch.rs`); a
+  DroidCast frame is turned to the display (`crates/device/src/capture.rs`); a MuMu IPC frame carries
+  `rotation: NotProvidedBySource` and an unproven ADB display mapping (the same file). So a recorded
+  point and the frames agree where both backends see the display alike, and the code proves nothing
+  more; no conversion is built and nothing new is refused. An instance whose input needs the
+  frame's reference (`nemu_input_frame_required`, `crates/runtime-host/src/host/input.rs`) presses
+  since fix round 2 (below): every recorded press names the frame of the capture just before it.
+- *The after frame.* A performed press closes its step (`commit_click`), so the next frame finds no
+  open step and closes none (`plan_arrival`): the design's "`arrive` when it closes a step by click"
+  never runs for such a press. The after frame is noted where a frame opens a step, on the step
+  before it, when that step's press names its `before_frame` and has no after frame yet
+  (`note_after_frame`).
+- *What the model could not take in this slice.* `ApplicationExecution` is built member by member in
+  `apps/actinglab/src/session_management.rs` and `PlanClickRequest` in
+  `apps/actinglab/src/lab2_cli/operation.rs`, two files the work order keeps out of this slice: a
+  member added to either does not compile there. The application execution's three members come
+  with S1-3, which touches that file; the point press is a member of `RecordPressRequest`.
+- *The capture's request.* One frame taken as `capture --record` takes it (`capture_for_command`
+  without `--require-fresh`) is the `ObserveReadonly` read (`capture_runtime_sequence` of one
+  frame), not a `CaptureSequence`: the three rows name `ObserveReadonly`. No request kind is new.
+- *Interface revisions.* None moves: no request kind, wire shape, record, ledger member,
+  configuration key or outcome code is added, and `actingcommand.lab-recording.v1` keeps its name
+  (every new member is absent on every other press).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The model | `ClickExecution` gains `before_frame`, `after_frame` and `after_capture` (`AfterCaptureRecord {after_ms, still_max_ms, still, waited_ms, captures, kept}`), each `serde(default, skip_serializing_if)`; `PointPress`, `AfterCapture` (`for_press` 800 and 5000, `for_application` 2000 and 30000), `RecordPressRequest {click, point_press, after}`, `BeforeFrame`, `AfterFrame`, `RecordPressOutcome {click, before, after, warnings}` (`crates/lab/src/recording/model.rs`) |
+| The steps | `plan_press` (refusals, then `plan_point`: `rect {x, y, 1, 1}`, `source: "point"`, a long press's `gesture`; a swipe through `plan_click`), `commit_click` naming the step's live primary frame with `names_frames`, `note_after_frame` in `arrive`, `note_after_capture` (`crates/lab/src/recording/steps.rs`) |
+| The recording API | `RecordFramePorts {wait, capture}`, `record_before_frame` (one capture when no step is open), `record_after_frame` (the wait, the preflight, one capture, its arrival with `after_capture`), `record_press`, `record_press_input` (the input of a plan); `record_commit_click`'s recording part shared as `commit_recorded`, its two exit-4 errors as functions, its answers unchanged (`crates/lab/src/recording_api.rs`) |
+| The command | `tap`, `swipe` and `long-tap` take `--record` and `--after-ms` (`DIRECT_TOUCH_FLAGS`, `DIRECT_TOUCH_SWITCHES`, parsed by `FlagArgs::parse_switches`); `run_recorded_touch`: the lock (`record_flag_begin`), the Runtime's capture endpoint (fix round 3: no local device configuration), `record_press` with the input sent through `RuntimeInputProxy` (`send_recorded_press`: a receipt performed; fix round 2, below: a denied usage or safety refusal not performed, any other error indeterminate) and the captures as `capture --record` takes them (`PressFrames`) (`apps/actinglab/src/commands/device_commands.rs`); `record_flag_gate` takes the three without `--dry-run` and refuses `--after-ms` without `--record` (`PRESS_RECORD_ONLY_FLAGS`, `apps/actinglab/src/main.rs`); `dry_run_gate.rs` declares the three forms refused, and the record policy's `record_flag` (`session_contracts.rs`) lists them |
+| The table | the rows `tap`, `swipe`, `long-tap`: `record` (switch), `after_ms` (integer), their help, output and notes, `ObserveReadonly` beside `Input`; `own_flags.rs` reads the switch from the command's constant |
+| Texts | [lab-recording.md](lab-recording.md): "Recording while playing", the opening paragraph, the members' paragraph of `recording.json`, "`--record` on device commands" (its first sentence, its table, nine forms); [actinglab-dry-run.md](actinglab-dry-run.md): the three forms |
+
+**Codes and words.** No outcome code is added and no fragment changes. New words of existing codes,
+each in the details of the refusal or the answer, never in a text: `validation_failed` with
+`details{argument, reason}`, `reason` one of `outside_frame` (the point, of a tap or a long press,
+outside the frame), `duration_range` (a long press outside 1..=60000 ms), `range` (`--after-ms`
+outside 0..=60000 or no whole number), `record_only` (`--after-ms` without `--record`), each
+refusing, exit 2; the answer's `record.status` `press_recorded`, and `press_indeterminate` in
+`record_click_indeterminate`'s `details.record` (exit 4); `after.taken: false` in the details of a
+frame after that was not taken (the capture's own code). No decision reads a code.
+
+**Tests.** `crates/lab/src/gate_463_s11.rs` (exec gate map "#463 S1-1"; fake Runtime, fake clock,
+synthetic 1280x720 frames): a tap on a new recording (one capture, the input, the wait, one capture;
+`rect {100, 200, 1, 1}`, `source "point"`, `before_frame` f0001, `after_frame` f0002,
+`after_capture`, the answer); a long press; a swipe; an uncertain answer (indeterminate, the step
+open, no frame after); a press not performed (every file byte for byte); refusals before the press
+(`outside_frame`, `duration_range`, `range`); a declared click (`record_click_exists`); a frame after
+that cannot be taken (details `record`, then `after`); marked afterwards, `record stop --dry-run`
+validated and the generated click the `rect` of one pixel; a press of `do --capture --record` and
+its next frame with none of the new members. `apps/actinglab/src/tests/gate_463_s11.rs`: the three
+commands with `--record --dry-run` and `key back --record` are `record_flag_unsupported`, `tap 1 2
+--after-ms 5` is `validation_failed` `record_only`. `apps/actinglab-mcp/src/gate_463_s11.rs`:
+`ac_tap`, `ac_swipe` and `ac_long_tap` list `record` and `after_ms`. No test is adapted, no golden
+changes, no test leaves the gate map.
+
+**What is not changed.** `do --capture --record`, its answers and what it records; `capture --record`;
+`session app --record`; the package generator and the kernel; today's MCP server (`actingctl
+mcp-serve`); every recording without a press of the three commands, byte for byte. Not built here (the
+design's later slices): the refresh of an old frame before and the stillness test after (S1-2), the
+frames of application operations (S1-3), `record frame` and the warning of an unrecorded input
+(S1-4), the manifest (S1-5), notes (S1-6).
+
+**At deploy.** Nothing to configure. Recordings already on disk load as before. Through MCP the
+three tools take `record` on the Lab's MCP server (`actinglab-mcp`); a client registered with
+today's server has no such tool until its registration moves, which is the owner's to do.
+
+**Fix round 2** (the independent review's two must-change items and the coordinator's B0;
+coordinator work order `rd-1115/brief-463-s11-fix2.md`, on the branch's head `61caa484`, main
+`b7c47129`).
+- *Every recorded press is sent on a frame captured immediately before it, and names it.* The
+  first round sent the press with no frame, so an instance whose input is the emulator's own
+  refused it (`nemu_input_frame_required`) and nothing was recorded. Now each `tap`, `swipe` and
+  `long-tap --record` takes one `ObserveReadonly` capture right before its press, a step open or
+  not, and sends the input with that observation's frame reference, built by the one function
+  `do`'s scene uses (`runtime_capture_backend::input_frame_reference`, shared with
+  `lab2_cli.rs`). Kept of it: no step open, it opens the step; an open step without marks, it
+  arrives as `capture --record`'s does there (the older frame superseded); an open step with marks,
+  it is not stored (`record.before.sent_on_unstored_capture`, `refreshed` false), checked to be of
+  the recording's size. The step's own refusals come before the capture. An observation without a
+  frame id (refused already by the client's receipt check, `ReadonlyObservation::validate`) is
+  `device_error` before anything is stored or pressed.
+- *Established by reading: the frame reference on every backend.* The host resolves a given
+  reference whatever the backend (`host/input.rs`, the block after the frame requirement; the
+  kernel's `ResolveFrame` finds the committed frame of either owner) and only the Nemu input reads
+  it (`execute_input`, `crates/execution-kernel/src/session.rs`; every other backend's `*_in_frame`
+  is not called). So it is passed on every instance; no backend refuses it.
+- *A press that may have landed is indeterminate.* Not performed is now only a usage or safety
+  refusal the Runtime denied (`input_not_sent`, `device_commands.rs`: the class of
+  `RuntimeClientError::disposition` and the received receipt's state); every other error (a device
+  failure of the backend, which the Runtime records `indeterminate` on a physical instance, a
+  Runtime failure, an input its check stopped, an unread answer) records the press indeterminate,
+  `record_click_indeterminate`, as `do --capture --record` records every press the Runtime did not
+  record as not performed.
+- *Signatures.* `RecordFramePorts::capture` returns `CapturedFrame {frame, input_frame}`;
+  `record_before_frame` always captures and returns `BeforeCapture {input_frame, arrived}`;
+  `record_press`'s press closure is `FnMut(&ClickPlan, InputFrameReference)`; `BeforeFrame` gains
+  `sent_on_unstored_capture`; `CaptureCommandResult` gains `input_frame`; `steps::has_marks` is
+  `pub(crate)`.
+- *Smaller points.* Capability entries `tap --record`, `swipe --record`, `long-tap --record`
+  (`capabilities.rs`), so the three dry-run declarations annotate them; a swipe's refusals carry
+  `details{argument, reason}` as a tap's (`point`/`outside_frame`, `duration_ms`/`duration_range`);
+  `FlagArgs::reject_flags` names what the command takes; the rows' `help` within 160 bytes (the
+  check `lab_ops_table_complete`), the rest in their `notes`.
+- *Tests.* Four new in `crates/lab/src/gate_463_s11.rs` (two presses in a row, a failed after
+  capture then a press, a step with marks, an observation without a frame id) and two in
+  `apps/actinglab/tests/runtime_input_proxy.rs` on the fake Runtime host (`tap --record` on an
+  instance whose input is `nemu_ipc`: the ledger's capture, the input naming its frame, the capture
+  after; a backend failure of the tap recorded indeterminate). Adapted: the press not performed runs
+  on a step with a mark (its capture is not stored, so every file still keeps its bytes); the
+  refusals before the press add a swipe's two. No test leaves the gate map.
+
+**Fix round 3** (CI's two red tests of fix round 2, the second independent review's must-change
+item and the coordinator's ruling on one retry; coordinator work order
+`rd-1115/brief-463-s11-fix3.md`, on the branch's head `24e48b47`, main `b7c47129`).
+- *No local device configuration.* The two tests of `runtime_input_proxy.rs` failed with
+  `device_error` "ADB path is not configured" before anything ran: `run_recorded_touch` resolved
+  `device_config` (the ADB path, `effective_adb_path_for_instance`) and its captures used only its
+  Runtime capture endpoint (`capture_for_command` ignores the capture backend it is given). `tap`
+  without `--record` resolves none (`open_cli_runtime_input_proxy`). Now the command builds the
+  endpoint from the instance and the Runtime's state root, and `PressFrames` captures through
+  `capture_observation_for_command`, which `capture_for_command` without `--require-fresh` calls
+  too: the tests are unchanged.
+- *The recording says when a press was sent on a capture it did not store.* `ClickExecution`
+  gains `sent_on_unstored_capture` (`serde(default, skip_serializing_if = Not::not)`: every
+  existing recording and every press on a step without marks byte for byte as before), handed by
+  `record_press` through `commit_recorded` to `commit_click`, written beside `before_frame`.
+- *One retry when the frame is gone before the press.* An input the Runtime denies
+  `input_frame_unavailable` sent nothing: the command captures once more and sends the press once
+  more on the new capture; a second refusal of any kind is answered as before. The refusal is
+  told from every other in one place, `input_frame_unavailable` in `device_commands.rs` (the
+  denied receipt's state and the receipt outcome's code; the code's category and ladder class,
+  `error`/`none`, are those of other input refusals and the outcome carries no word that
+  separates it, so this decision names the code, by the coordinator's ruling), which marks the
+  refusal (`record_press_frame_unavailable`); `record_press` retries on the mark only and takes
+  the mark away before it answers. Kept: the first capture, if stored, stays superseded by the
+  second, which the press is committed on; on a step with marks neither is stored. The answer's
+  `record.before.captured_twice` says so.
+- *Wording.* "Not performed" leaves the capture before the press in the step (except on a step
+  with marks); the frame reference is built as `do --capture`'s online scene builds one (the
+  recorded `do` presses inside the Runtime's own operation).
+- *Signatures.* `commit_click` and the private `commit_recorded` take `sent_on_unstored_capture`
+  after `names_frames` (every other caller passes `false`); `BeforeFrame` gains
+  `captured_twice`; new public `record_press_frame_unavailable`; `PressFrames` holds the endpoint
+  in place of the device configuration. `record_before_frame`, `record_after_frame`,
+  `RecordFramePorts`, `CapturedFrame`, `BeforeCapture`, the press closure, `note_after_frame` and
+  `note_after_capture` are unchanged.
+- *Codes and words.* No outcome code is added and no fragment changes. One decision now reads a
+  code (above). New members: `sent_on_unstored_capture` of an execution, `captured_twice` of the
+  answer's `before`.
+- *Tests.* Two new in `crates/lab/src/gate_463_s11.rs` (a press refused for its frame and sent
+  once more, on a new recording and on a step with marks; a second refusal, of the frame or
+  another, answered as it is, no press recorded, both captures kept) and one in
+  `runtime_input_proxy.rs` (an input denied for the foreground: `device_error`, one capture, no
+  click, the capture before it kept as step 1's frame; the fake device reports another
+  application when the test asks). Adapted: the step with marks asserts the execution's
+  `sent_on_unstored_capture`, the two presses in a row its absence. No test leaves the gate map.
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 4, 5 and 7, after the two independent reviews of the
+whole train of stage one; the coordinator's rulings, not the owner's words). The wait `after_ms`
+is checked where the other three parameters of the screen after are, in one function
+(`record_after_capture_check`), and its refusal carries their keys, `value`, `min` and `max` (it
+carried `after_ms` and `max_after_ms`); `--after-ms` that is no whole number answers `wrong_type`
+with `value` (`parse_after_ms`), the word the Lab's other flags answer for it, and `range` is
+left to a value outside the bounds. The texts of `record_before_frame`, which takes the frame
+before a press and before an application operation, name both. The answer's `record.warnings`
+is listed whole in the contract, `after_not_still`, then `instance_not_held` or
+`instance_hold_unread`. No code or word is added; `wrong_type` is the Lab's own.
+
+### 1.403 Slice #463 S1-2 (0.12.64): after a recorded press the screen is captured until it is still, and every capture is kept (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and the owner's words on board #463 on the evening of 11-15 on what stage one hands over and on the captures after a press; the coordinator's rulings in the work orders, not the owner's words; coordinator work orders `rd-1115/brief-463-s12-still-after.md`, `rd-1115/brief-463-s12-fix2.md`, which replaces its rulings where they differ, and `rd-1115/brief-463-s12-fix3.md`, fix round 3 after the independent review; built on S1-1's branch at `24e48b47cdac` (§1.402))
+
+The coordinator gave this slice 1.403, after S1-1 (§1.402), on whose code it stands. The slice
+ships in 0.12.64 (release 0.12.63 was cut without it).
+
+**Why.** The owner (board #463, 11-15 evening): what stage one hands over of a recording is, for
+each press, the frame it happened on and the last result frame; stage two must be able to give an
+agent that asks the several, or several dozen, frames before and after a press; and since the
+screen may change quickly after a press, the captures after it must be closer together. S1-1 took
+one capture a fixed time after a press. Now the screen after a press is captured until it is still
+and every capture is kept ([lab-recording.md](lab-recording.md), "Recording while playing", "The
+screen after").
+
+**Established by reading.**
+- *The measure* (the first work order's ruling 1). The Runtime's one frame-change measure is
+  `frame_change_digest` and `frame_change_milli`, still at most `FRAME_CHANGE_MAX_MILLI`, in
+  `actingcommand-recognition` (`crates/recognition/src/color_digest.rs`), which the kernel's still
+  waits use; the Lab crate already depends on it. The recording API calls it on the whole frame;
+  nothing is copied and no dependency is added.
+- *The frame before.* S1-1's fix round 2 captures a frame immediately before every press and stores
+  it by its own rule (§1.402). This slice's first round, which re-captured an old frame and stored
+  it only when it had changed, is gone; `record_before_frame` is S1-1's as S1-1 wrote it.
+- *The clock.* A capture starts `interval_ms` after the start of the one before it, or at once when
+  that one took longer, so the loop reads the time a capture took: `RecordFramePorts` gains
+  `elapsed`, the caller's clock (actinglab: a monotonic clock from the command's start; a gate: a
+  fake clock moved by its waits and its scripted captures). No gate reads a clock.
+- *`after_frame` in one place* (the coordinator's ruling 3; a change in `steps.rs`). S1-1's
+  `note_after_frame` named the first frame that opens a step after a press. It is split into
+  `awaiting_after_frame` (the press such a frame follows) and `name_after_frame`, the one write.
+  `arrive` names the frame that opens the step as before; `arrive_after_press`, the arrival of the
+  loop's captures, names none, and the loop names its last capture once it ends. So a frame that
+  arrives later (a `capture --record`, the next press's capture before it) never rewrites it, and
+  when the loop stored nothing (its first capture failed) the first frame that opens a step after
+  the press is named, as in S1-1.
+- *Memory.* The loop's frames are written once, when it ends; each capture's decoded pixels leave
+  the session's cache as soon as it arrived, its PNG staying in the pending writes (at most 121).
+- *The bound wherever the loop is entered* (fix round 3, the review's first item). The neighbouring
+  slice S1-3 calls `record_after_frame` directly after an application operation, so the loop
+  checks its own parameters (`check_after_capture`, which `record_press` also calls before the
+  press) and ends by count as well as by time.
+- *`--interval-ms` is taken by other commands* (`stream`, the session monitor, `session` lines):
+  `record_flag_gate` refuses it without `--record` on `tap`, `swipe` and `long-tap` only
+  (`PRESS_COMMANDS`, `apps/actinglab/src/main.rs`).
+- *Interface revisions.* None moves: `after_capture` gains three optional members, `interval_ms`
+  and `still_ms` (absent on a record S1-1's build wrote, which loads as one whose screen after was
+  not tested, `still` `null`) and `unfinished` (fix round 3, absent but on a loop a failed capture
+  ended); no request kind, configuration key or outcome code is added, and each capture is the
+  `ObserveReadonly` read the rows name.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The model | `AfterCapture` gains `interval_ms` and `still_ms` (`None` for the recording API's defaults); `AfterCaptureRecord` gains `interval_ms` and `still_ms`, each `serde(default, skip_serializing_if)`, and (fix round 3) `unfinished`, `serde(default, skip_serializing_if = "std::ops::Not::not")`; `LAB_RECORDING_PRESS_AFTER_MS` is 100; fix round 3: `AfterCapture::for_application` takes its own interval and stillness, `LAB_RECORDING_APPLICATION_INTERVAL_MS` 1000 and `LAB_RECORDING_APPLICATION_STILL_MS` 2000 (after 2000 ms, bound 30000 ms: at most 31 captures) (`crates/lab/src/recording/model.rs`) |
+| The steps | `awaiting_after_frame`, `name_after_frame` (the one write of `after_frame`), `arrive` through `arrive_naming`, `arrive_after_press` (`crates/lab/src/recording/steps.rs`) |
+| The recording API | `RecordFramePorts::elapsed`; `check_after_capture` (the ranges and the bound of 120 intervals, called by `record_press` after the wait's bound and, fix round 3, by the loop itself); `record_after_frame` over `capture_after_press`: the check, the wait, the device-arrival check, the first capture (`take_after_capture`), then `capture_until_still` (`AfterTiming`, `AfterLoop`: the next capture's start, the end by time and by count, the stillness test `unchanged_for` on `change_digest`), one write of the frames, `after_frame` and `after_capture`, and (fix round 3) the error of a later capture that failed after what it took is written (`AfterTaken`, `after_loop_stopped`, `after_loop_stopped_press`); `record_press` adds `after_not_still`; `record_attach_frame` without S1-1's `after` branch (`DeviceFrame`, `frame_recorded`) (`crates/lab/src/recording_api.rs`) |
+| The command | `tap`, `swipe` and `long-tap` take `--interval-ms`, `--still-ms` and `--still-max-ms` (`DIRECT_TOUCH_FLAGS`, `after_capture_ms`); `PressFrames::elapsed` (`apps/actinglab/src/commands/device_commands.rs`); `record_flag_gate` refuses the three without `--record` (`PRESS_RECORD_ONLY_FLAGS`, `PRESS_COMMANDS`, `apps/actinglab/src/main.rs`) |
+| The table | the rows `tap`, `swipe`, `long-tap`: `interval_ms`, `still_ms`, `still_max_ms` (integers), `after_ms`'s default 100, their notes; `help` unchanged |
+| Texts | [lab-recording.md](lab-recording.md): in "Recording while playing" the synopsis, the MCP parameters, the refusals, "The screen after", the members of `recording.json` and the answer; the members' paragraph of `recording.json`; the `validation_failed` row of "`--record` on device commands" |
+
+**Still** (fix round 3, the coordinator's ruling, which replaces the window of the second round:
+"still" must not depend on how fast a capture is). The screen is still when it has not changed for
+at least `still_ms`: the newest capture and the unbroken run of captures before it that are each
+within the frame-change bound of the newest hold at least one earlier capture, and the newest
+started at least `still_ms` after the run's first. With captures every 100 ms and `still_ms` 300
+it takes four unchanged captures; with a capture cycle of 400 ms two. There is no other condition
+on the time since the loop's first capture.
+
+**Choices the work orders left.** The loop ends when the next capture would start more than
+`still_max_ms` after the first, and (fix round 3) at `1 + still_max_ms / interval_ms` captures
+whatever the caller's clock says; `waited_ms` runs from the press to the start of the last capture;
+`kept` is `captures - 1`; the four parameters are recorded as the press took them, with
+`--still-ms 0` too; the defaults (100, 300) are constants of the recording API, as S1-1's are
+(`--still-max-ms` 5000), not configuration keys, and so are the application's (fix round 3); a
+first capture that fails stores nothing of the loop, so that S1-1's rule for an after frame that
+could not be taken stands, and (fix round 3, the review's first "good to change"; the owner asked
+that every capture be kept) a later one that fails keeps what the loop took, its last the frame
+after, `after_capture` with `still` `null` and `unfinished` true, and answers the capture's own
+error with `after: {after_ms, taken: true, captures}` in its details; the reason word of a bound of
+more than 120 intervals is (fix round 3, the review's third item) `range`, a value out of the range
+the interval allows, with that range's `max` and `interval_ms` in the details, as the precedent of
+a bound that depends on another value (the path drag's `duration_ms`).
+
+**Codes and words.** No outcome code is added and no fragment changes. Words, each in the answer or
+the details, never in a text:
+
+| word | the one situation | refuses or warns | exit |
+|---|---|---|---|
+| `after_not_still` (`record.warnings`) | the loop reached `--still-max-ms` without a still screen; the last capture is the frame after | warns | 0 |
+| `validation_failed` `details{argument, reason: "range"}`, `argument` `interval_ms`, `still_ms` or `still_max_ms` | the value is outside its range (20..=1000, 0..=5000, 0..=60000) or no whole number | refuses | 2 |
+| `validation_failed` `details{argument, reason: "record_only"}`, the same three | the flag without `--record` | refuses | 2 |
+| `validation_failed` `details{argument: "still_max_ms", reason: "range", value, min: 0, max, interval_ms}`, `max` 120 times `interval_ms` | `still_max_ms` above 120 times `interval_ms` | refuses | 2 |
+| `unfinished: true` (`after_capture`) | a capture after the first could not be taken; the loop kept what it took and the command answers that capture's own error | the capture's own error | the capture's own |
+
+No decision reads a code.
+
+**Tests.** `crates/lab/src/gate_463_s12.rs` (exec gate map "#463 S1-2"; fake Runtime and clock,
+synthetic 160x90 screens of one colour): an animation that settles, captures every 100 ms (four
+unchanged needed: six captures, all kept in order, the last the frame after, `after_capture {100,
+100, 300, 5000, true, 600, 6, 5}`); captures of 400 ms each (two unchanged suffice: three
+captures, `waited_ms` 900); a change in the middle of a run (the run starts again, and the screen
+before the change does not count: eight captures); a screen that never settles for six bounds and
+intervals (exactly `1 + still_max_ms / interval_ms` captures, 121 at the last, `still` false,
+`after_not_still`); a caller's clock that does not advance (the loop ends by count at 11 captures,
+`still` false); a capture slower than the interval (the next at once, five captures); the same
+screen four times (four entries, one file); two taps (step 2's frames in time order: the first
+tap's loop, then the frame the second tap was sent on; step 1's `after_frame` not rewritten);
+`still_ms 0` (one capture, `still` null); a capture that fails midway (the two taken kept, the
+last the after frame, `unfinished`, the capture's own `device_error` with `after {100, true, 2}`);
+each parameter out of its range (`range` with `min` and `max`); a bound of more than 120 intervals
+(`range`, `max` 120 times `interval_ms`, `interval_ms`; nothing captured, pressed or written).
+`apps/actinglab/src/tests/gate_463_s12.rs`: the three flags without `--record` on the three
+commands; the three flags given a value that is no whole number (`range`). **Adapted**, because
+this slice deliberately changes what they pin: the tests of `crates/lab/src/gate_463_s11.rs`
+(S1-1) that take the frame after a press ask for one capture with no stillness test (`--after-ms
+800 --still-ms 0`) and pin `after_capture` with `interval_ms` and `still_ms`, their fake gains its
+clock; `apps/actinglab/tests/runtime_input_proxy.rs`'s `tap --record --after-ms 0` gains
+`--still-ms 0`. Fix round 3 adapts this slice's own tests: the capture slower than the interval
+now ends at its fifth capture (the new definition), the bound of 120 intervals answers `range`;
+the fake gains a failing capture and a clock that can stand still. No golden changes; no test
+leaves the gate map (the first round's tests never reached main).
+
+**What is not changed.** `record_before_frame` and the press (S1-1's), `archive.rs`,
+`session_management.rs`, the kernel, the Runtime; `do --capture --record`; `capture --record`,
+whose one frame arrives as before; every recording without a press of the three commands, byte for
+byte.
+
+**At deploy.** Nothing to configure. Recordings already on disk load as before; a press S1-1's build
+recorded keeps `after_capture` without `interval_ms` and `still_ms` and reads as not tested.
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 1, 3, 4 and 5; the coordinator's rulings, not the
+owner's words). One function checks the four parameters of the screen after
+(`record_after_capture_check`, `check_after_capture` is gone): `after_ms`, then the three of this
+slice, then the bound of 120 intervals, each refusal `range` with `value`, `min` and `max`; the
+after loop checks them wherever it is entered. A value of `--interval-ms`, `--still-ms` or
+`--still-max-ms` that is no whole number is `wrong_type` with `value` (`after_capture_ms`; it was
+`range`), the word the Lab's other flags answer for it. The loop's typed result is public,
+`AfterTaken {frame, record, stopped_by}`: `record_after_frame` (the screen after an application
+operation) answers it whatever the loop kept, its `stopped_by` worded for the effect (the
+captures after the press or the application operation stopped there, how many were kept), and
+`Err` only when nothing was kept; `record_press` runs the same loop for a press. Tests: new,
+`s12_fix_record_after_frame_refuses_a_bound_out_of_range_before_anything` (a direct call, nothing
+waited for or captured); adapted, actinglab's
+`s12_the_flags_of_the_captures_after_a_press_take_whole_numbers` now pins `wrong_type`, as the
+requirement changes the word. No test leaves the gate map.
+
+### 1.404 Slice #463 S1-3 (0.12.64): an application operation in the middle of a business is a step like a press, with the screens before and after it (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, the row S1-3 of A6, A4's row of the rule "an application operation needs a marked open step", A1's parts on application operations and A2.1's row of `steps[].application.executed`, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s13-app-steps.md`, built on the branch of #463 S1-1 at `486f5ce7`)
+
+The coordinator gave this slice 1.404. It stands on #463 S1-1 (§1.402) and ships in 0.12.64 (release 0.12.63 was cut without
+it).
+
+**Why.** A business sometimes launches, restarts or stops the application in its middle (a restart
+after an update prompt, for one). `session app <verb> --record` took such an operation only on a
+step that already carried marks (`record_application_step_marks_missing`), so the agent had to stop
+playing and describe the screen first, and the step had no screen before it and none after it in
+the material. Now the operation is the open step's effect, with both screens, as a press is
+([lab-recording.md](lab-recording.md), "Application steps", "In the middle of a business").
+
+**Established by reading** (the code's facts where the work order's notes or the design said
+otherwise first).
+- *Where the screen after is written.* `record_after_frame` writes the capture's record through
+  `attach_frame`, which asks the arrival's `pressed_step` (`note_after_frame`) and then writes
+  `after_capture` with `note_after_capture`; S1-1's `note_after_capture` knew only a click's
+  execution and would answer `record_step_not_found` for an application step. So both functions
+  (`crates/lab/src/recording/steps.rs`) read the completed receipt of an application operation as
+  they read a press's execution: the first frame that opens a step after it is its `after_frame`
+  when the receipt names its `before_frame` and has none yet. The work order named the first one;
+  the second is the smallest change that lets `record_after_frame` run as it is.
+- *The entry step.* `record_before_frame` takes a frame whenever no step is open, an empty recording
+  too; taken there it would make the launch the effect of a step with a frame, and the package
+  would no longer start `from: "any"`. So `session app --record` asks the plan first whether the
+  operation opens the entry step, and only otherwise takes the screen before and plans again (a
+  refusal of the first plan is the second's). The entry step's receipt names no `before_frame`, so
+  the frame after it is noted on nothing and opens the next step, as before; no screen after the
+  entry step is taken and no device configuration is read for it.
+- *Where the rule stood.* `plan_application` (the device, `session app --record`) and
+  `apply_application` (offline, `record mark --application`) refused an open step without marks
+  through `application_marks_missing`; both refusals and the function are gone, and
+  `apply_application` no longer takes the mark batch it read only for them. No test pinned the
+  code, and no fragment registers it. The generator's own check stays as it is: `record stop`
+  refuses a step but the entry step without an own or reused mark
+  (`record_step_without_recognition`, `crates/lab/src/recording/generate.rs`, the first loop over
+  the effective steps after the effect checks).
+- *The rows and the core module.* The coordinator's ruling of 2026-11-11 (L5C-7, "Slice LAB-5C")
+  kept `record` off the core rows `app launch|restart|stop`; this slice's ruling 4 gives them
+  `record`, `after_ms` and `still_max_ms`, so `own_flags::DECLARED_EXCEPTIONS` loses its one entry
+  (`session app`'s `--record`). Each screen is one capture as `capture --record` takes it, the
+  `ObserveReadonly` read, a kind of the UI list, so the rows keep `entries` `lab`, `ui`.
+- *The stillness test.* `AfterCapture::for_application` (S1-1) gives 2000 and 30000; the command
+  hands `record_after_frame` both numbers, the flags' or those, and the loop that reads
+  `still_max_ms` is slice S1-2's. S1-1's `record_after_frame` records `still_max_ms` 0.
+- *Interface revisions.* None moves: no request kind, wire shape, record, ledger member,
+  configuration key or outcome code is added, and `actingcommand.lab-recording.v1` keeps its name
+  (every new member is absent on the entry step and on every other operation).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The model | `ApplicationExecution` gains `before_frame`, `after_frame` (frame ids) and `after_capture` (`AfterCaptureRecord`), each `serde(default, skip_serializing_if)` (`crates/lab/src/recording/model.rs`, that struct only) |
+| The steps | `plan_application` and `apply_application` without the marks rule; `commit_application` names the step's live primary frame as the receipt's `before_frame`; `note_after_frame` and `note_after_capture` read an application operation's receipt (`crates/lab/src/recording/steps.rs`) |
+| The command | `session app <verb> --record [--after-ms] [--still-max-ms]`: `application_after_capture` (the waits, their range, `AfterCapture::for_application`'s defaults), `record_application_operation` (the entry plan, else `record_before_frame` and the plan; the operation; the commit; then `record_after_frame`; the answer's `after`), `ApplicationFrames` (each capture as `capture --record` takes it); the plain `session app` refuses the waits without `--record` (`apps/actinglab/src/session_management.rs`); `SESSION_APP_READS` reads them |
+| lab-ops | `apps::App::recorded(after_ms, still_max_ms)`: the child's line ends with `--record` and the waits given (`crates/lab-ops/src/apps.rs`) |
+| The table | the rows `app launch`, `app restart`, `app stop`: `record` (switch), `after_ms`, `still_max_ms` (integers), their help, output and notes, `ObserveReadonly` beside `ApplicationLifecycle`; `own_flags::DECLARED_EXCEPTIONS` empty |
+| Texts | [lab-recording.md](lab-recording.md): "Application steps" (the screens' bullet, "Where the operation lands", the bullet of `--frame` and `--step`, the order and the error codes of `session app … --record`, the new "In the middle of a business"), "Error codes" (the removed code) |
+
+**Codes and words.** No outcome code is added and no fragment changes. `record_application_step_marks_missing`
+is no longer produced (it was in no fragment; the contract's tables drop it). New words of existing
+codes, each in the details, never in a text: `validation_failed` with `details{argument, reason}`,
+`argument` `after_ms` or `still_max_ms`, `reason` `range` (outside 0..=60000 or no whole number) or
+`record_only` (`--still-max-ms` without `--record` on `session app`; `--after-ms` without it stays
+the shared gate's, §1.402), each refusing, exit 2; `after: {after_ms, taken: false}` in the details
+of a screen after that was not taken (the capture's own code and class). The answer's `record.after`
+is a member, not a word. No decision reads a code.
+
+**Tests.** `apps/actinglab/src/tests/gate_463_s13.rs` (exec gate map "#463 S1-3"; fake Runtime,
+fake clock, captures repeating their last screen, synthetic 1280x720 frames): a tap, then `restart
+--record` on the unmarked step it opened (nothing captured before, the step's executed effect with
+`before_frame` its frame, the handed wait 2000 and a capture opening step 3, `after_frame` and
+`after_capture`, the answer with `after`); `launch --record` on an empty recording (the entry step
+without a frame, no device asked for, none of the three members; the next tap's screen before opens
+step 2 and is no screen after the entry step; marked afterwards, `record stop --dry-run` validated
+and the package's entry `from: "any"`); `record mark --application` on an open step without marks;
+the waits handed (none, both, the bound alone, and `range` refusals).
+`crates/lab-ops/src/gate_463_s13.rs`: `App`'s line with and without `recorded`, for each action.
+The assertions read what the command hands the screen after and the frames the step table names,
+not how many captures the screen after takes (slice S1-2's loop). No test is adapted, no golden
+changes, no test leaves the gate map.
+
+**What is not changed.** The entry launch (its step, its package's `from: "any"`); the indeterminate
+and denied answers of `session app --record`; `tap`, `swipe`, `long-tap --record` and their frames;
+`record_before_frame`, `record_after_frame` and `RecordFramePorts` (called as they are); the package
+generator and its marks check; the kernel and the Runtime; today's MCP server (`actingctl
+mcp-serve`); every recording without such an operation, byte for byte.
+
+**At deploy.** Nothing to configure. Recordings already on disk load as before. Through MCP the
+three tools take `record`, `after_ms` and `still_max_ms` on the Lab's MCP server (`actinglab-mcp`);
+a client registered with today's server has no such parameter until its registration moves, which
+is the owner's to do.
+
+**Round 2** (coordinator work order `rd-1115/brief-463-s13-fix2.md`, after #463 S1-1's fix round 2,
+§1.402; the parent's branch merged at `24e48b47`).
+- *The screen before an application operation follows a press's.* On an open step the plan comes
+  first (its refusals capture and send nothing), then S1-1's `record_before_frame` captures one
+  frame immediately before the operation, always, and keeps it as a press's: no step open, it
+  opens the step; an open step without marks, it is the step's live primary frame (the older one
+  superseded); an open step with marks, it is not stored. The frame reference it answers is not
+  used (an application operation names no frame); no second capture path is written. The entry
+  launch on an empty recording still captures nothing and asks for no device.
+- *Established by reading: a step that already declares the operation.* `plan_application` sends
+  the same action again on an open step that declares it without a completed receipt (an earlier
+  attempt, or `record mark --application`), the documented way on after
+  `record_application_indeterminate`; but such a step refuses a device frame
+  (`application_arrival`, `record_step_click_not_executed`), so a capture stored there would
+  refuse the operation. Such a step takes no frame before it (the frame it was declared on stands);
+  the command reads whether the open step declares one as `record status` reads it
+  (`record_status`). Only a completed receipt that names its `before_frame` takes a screen after
+  it, so an entry launch run again after an indeterminate one takes none either (the first round
+  would have answered `record_step_not_found` after the operation there).
+- *An uncertain outcome* is recorded as before and takes no screen after it. The classification
+  stays `session app`'s (`application_not_completed`, `apps/actinglab/src/session_management.rs`):
+  a denied receipt did not run; a failed receipt or no receipt may have run. It agrees with
+  S1-1's for a press on what may have run; S1-1 counts a denied receipt as not performed only
+  with a usage or safety class, the application path on the receipt's state alone, as it did.
+- *Merged functions.* `note_after_frame` and `note_after_capture` hold S1-1's code for a press as
+  it is and read an application's completed receipt beside it; the application arm of
+  `note_after_frame` returns early through `?` (clippy's `question_mark` on the first round's
+  head). `DECLARED_EXCEPTIONS` stays empty and `declared_rows_match_their_commands` passed with it
+  on the first round's head; the rows' notes and "In the middle of a business" say that the three
+  `app` rows take `record`. The rows' `help` is 128, 138 and 135 bytes.
+- *Tests* (`apps/actinglab/src/tests/gate_463_s13.rs`, exec gate map "#463 S1-3"). Adapted, as the
+  requirement changes what it pins: the restart after a tap now captures before the operation
+  (step 2's live primary f0003 and its `before_frame`, f0002 superseded and still the tap's
+  `after_frame`); the fakes take S1-1's new signatures (`CapturedFrame`, the press closure's frame
+  reference). New: an operation on a marked step (the capture not stored, `before_frame` the
+  stored f0001, the screen after the next frame id); two operations in a row (each capture before
+  its `before_frame`, the restart's `after_frame` as its answer named it); a tap after an operation
+  (its capture before supersedes the frame the operation's screen after opened the step with, the
+  operation's `after_frame` not rewritten). No test leaves the gate map.
+
+**Joined in the train of stage one** (0.12.64; coordinator work order `rd-1115/brief-463-train-s1.md`,
+which merges S1-1, S1-2 and S1-3 in that order on main `abf08ced`, and the list (g) of the
+independent review of S1-2; the coordinator's rulings, not the owner's words).
+- *The screen after.* S1-2's `awaiting_after_frame` and `name_after_frame`
+  (`crates/lab/src/recording/steps.rs`) take a step closed by an application operation as this
+  slice's `note_after_frame` did: the step's click when it has one, else the completed receipt of
+  its application operation, chosen in one place (`after_members`), which `note_after_capture` uses
+  too; `note_after_frame` is gone. The screen after an operation is S1-2's loop with
+  `AfterCapture::for_application` (after 2000 ms, every 1000 ms, still after 2000 ms unchanged, at
+  most 30000 ms: at most 31 captures), every capture kept; `ApplicationFrames::elapsed` reads a
+  monotonic clock started with the command.
+- *The flags.* `session app <verb> --record` takes the four of a recorded press, `--after-ms`,
+  `--interval-ms`, `--still-ms` and `--still-max-ms`, read by the press's own functions
+  (`parse_after_ms`, `after_capture_ms`) and checked, the bound of 120 intervals included, by
+  `record_after_capture_check` (`crates/lab/src/recording_api.rs`; `record_press` calls it too, for
+  S1-1's check of the wait and S1-2's of the rest) before the recording lock is taken. A refusal of
+  `--after-ms` names the value as `after_ms`, as S1-1's does (this slice wrote `value`). Without
+  `--record` the gate of `apps/actinglab/src/main.rs` refuses each of the four, its text naming
+  `session app`. The rows `app launch|restart|stop` take `interval_ms` and `still_ms` beside
+  `after_ms` and `still_max_ms`, with their bounds; their `help` is unchanged.
+- *The answer.* `record.warnings` holds `after_not_still` as a press's answer does
+  (`record_after_warnings`); when a later capture of the loop failed, the error keeps the loop's
+  `after: {after_ms, taken: true, captures}` in its details.
+- *Texts.* The hints of `plan_application` and of `record_application_entry_invalid` no longer ask
+  for a mark. The contract and the rows' notes say that the Lab's MCP server writes the command
+  line from the rows itself and that `apps::App::recorded` has no caller in the product; the
+  function stays.
+- *Tests.* `apps/actinglab/src/tests/gate_463_s13.rs` is adapted, because the screen after now
+  repeats until it is still: the fake's clock moves with its waits, the initializers name
+  `interval_ms` and `still_ms`, and the logs and frame ids are those of the loop (a tap of the gate
+  takes one capture before it and four after it, an operation one before it and three after it).
+  The waits test adds the loop's flags and a bound of more than 120 intervals. No test switches the
+  loop off, and none leaves the gate map.
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 1, 3, 5, 6 and 7; the review of the train's first half
+asked for item 1 before merging; the coordinator's rulings, not the owner's words). An application
+operation whose after loop a capture after its first stops says what was recorded:
+`record_application_operation` takes the loop's typed result (`AfterTaken`), names the last
+capture as the execution's `after_frame` with `after_capture.unfinished`, and answers the
+capture's own error with `record` (the operation as recorded, with `after` and `warnings`), the
+loop's `after: {after_ms, taken: true, captures}` built from that result and `operation`; its
+message says the captures after the operation stopped and how many were kept, and asks for no
+screen after it (`after_loop_stopped`; the error of a first capture that cannot be taken is as
+before). The captures take their frames through the Runtime's capture endpoint of the instance, as
+a recorded press does (`runtime_captured_frame`, which `PressFrames` uses too): `session app <verb>
+--record` reads no local device configuration (no ADB path); the operation itself was the
+Runtime's already. The refusals of the four flags are a press's (`range` outside the bounds,
+`wrong_type` for a value that is no whole number, `after_ms` with `value`, `min` and `max`). The
+contract's answer names `warnings` in both places. Tests: new
+`s13_fix_a_capture_after_an_operation_that_fails_midway_keeps_what_was_taken`,
+`s13_fix_a_screen_that_never_settles_after_an_operation_is_warned` and
+`s13_fix_the_waits_without_record_name_the_command_that_takes_them` (the first join's point 7);
+adapted, the waits test (`wrong_type`, and `value`, `min`, `max` of `after_ms`) and its fake, which
+can fail a capture. No test leaves the gate map.
+
+### 1.406 Slice #463 S1-5 (0.12.64): the archive's manifest names each step's screens, the presses of the material and the final screen (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one hands over the recorded material of a business, and the owner's words of the 11-15 evening that stage one hands over, for each press, the frame the click happened on with where it was pressed, and the last result frame; the design `rd-1115/pack-stage12-design.md`, A2.2, the row S1-5 of A6, A3 and A5's row `final_frame_missing`, read on main `44cbab53`; the coordinator's rulings in the work order and in its dispatch, not the owner's words; coordinator work order `rd-1115/brief-463-s15-manifest-v2.md`, built on the branch of #463 S1-3 at `d5b0825e`)
+
+The coordinator gave this slice 1.406. It stands on #463 S1-3 (§1.404), which stands on #463 S1-1
+(§1.402), and ships in 0.12.64 (release 0.12.63 was cut without it).
+
+**Why.** `record archive` is how stage one ends and hands the material over. Its manifest (v1) listed
+a step's frames and its press as a rectangle; it did not say which frame was on the screen when the
+press was made, which frame the screen became or where the business ended, and it could not describe
+a press made at a point. A reader without a Runtime now reconstructs the business from the manifest
+and the files alone ([lab-recording.md](lab-recording.md), "Archiving", "The manifest").
+
+**Established by reading** (the code's facts where the design or the work order's notes said
+otherwise first).
+- *Where the switch and the warning go.* `RecordArchiveOptions` and `RecordArchiveOutcome` are in
+  `crates/lab/src/recording/model.rs`, which the work order keeps closed but for the one member
+  below. So `--all-frames` is a parameter of `record_archive_copy` (`ArchiveCopyFrames`, beside it
+  in `archive.rs`), read by the `record` command (`RECORD_ARCHIVE_READS` gains the switch, the row
+  the parameter `all_frames`), and the answer's `lab.warnings` is `record_archive_warnings`, which
+  reads the manifest the outcome names and which the command adds to `lab`.
+- *The v2 schema's name* is a constant of `archive.rs`, beside its use of
+  `LAB_RECORDING_ARCHIVE_SCHEMA`, which keeps naming v1 (the design's line was model.rs 1738, now
+  1909). `read_manifest` reads the schema a manifest names first and decodes exactly the v1 or the
+  v2 document by it; nothing else reads a manifest's content: `record reopen` reads only the latest
+  manifest's file name (`latest_manifest`), so it takes either.
+- *A press sent on a capture that was not stored* (S1-1's fix round: an open step with marks) is said
+  only by the press's answer (`record.before.sent_on_unstored_capture`); the step table records
+  nothing of it, and the execution's `before_frame` names the stored frame. The manifest cannot know
+  and claims nothing: `material.clicks[].sent_on_unstored_capture` (`Option<bool>`, fix round 2) is
+  `null` on every press, written and not left out ("the step table does not say"), until the step
+  table's own member is read, which the join with S1-1's third round does (that round adds
+  `ClickExecution.sent_on_unstored_capture`; its head is no ancestor of this branch). `false`, as
+  the first round wrote it, said something wrong of two kinds of press (the review of #1763): a
+  press of `do --capture --record`, sent on the Runtime's own capture, which the recording does not
+  hold, and a point press on an open step with marks, whose capture before is not stored.
+- *An application operation had no time.* `ClickExecution` carries `executed_at_unix_ms`;
+  `ApplicationExecution` did not. On the coordinator's word in the dispatch this slice adds
+  `executed_at_unix_ms: Option<u64>` to `ApplicationExecution`
+  (`serde(default, skip_serializing_if)`), stamped by `commit_application` on the clock that stamps
+  a click's execution, named `None` in its initializers (`session_management.rs`'s
+  `performed_execution`, `gate_463_s13.rs`'s `completed`). A row's `at_unix_ms` of an application
+  step is that time; for an operation an earlier build recorded it is `null`, and none is derived.
+- *The design's rule for derived frames.* Its frame after is "the first frame of the next effective
+  step when it was recorded at or after `executed_at_unix_ms`"; an application operation recorded
+  before S1-3 has no time, so the rule finds none there (`null`). The rule's frame before applies
+  also to an application operation without a completed receipt (attempts only), whose step table
+  names no frame; such a row is `derived: true`. The entry step has no frame and names none.
+- *The material's final screen* is `material.final_frame` (the coordinator's ruling (i)), not a
+  member of the header as the design drew it; a member in two places would be one fact twice.
+- *Outcomes.* A click's is its execution's word; an application operation's is `performed` with a
+  completed receipt (attempts may stand beside it), `indeterminate` with attempts and none
+  (the review of S1-3), `null` without either.
+- *Interface revisions.* None moves: no request kind, wire shape, ledger member, configuration key or
+  outcome code is added; `actingcommand.lab-recording.v1` keeps its name (the new member is absent
+  on every operation an earlier build recorded).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The manifest | `ArchiveManifest` is v2: the header's `locale`, `coordinate_space`, `note`, `archive_note`, `material` and `copy`; each row's `dropped`, `converted_to_transition`, frames with `superseded` and `recorded_at_unix_ms`, `before_frame`, `after_frame` (`{step, frame_id}`), `after_capture`, `derived`, `outcome`, `tap` with `source` (`rect` `null` for a point), `long_press`, `application_op`, `note`; `material.clicks` (`frame`, `derived`, `sent_on_unstored_capture`, `entry`, `point`, `to`, `duration_ms`, `action`, `outcome`) and `material.final_frame` (`crates/lab/src/recording/archive.rs`: `manifest_of`, `row_of`, `relation`, `outcome_of`, `click_of`, `final_frame`) |
+| Reading | `ArchiveManifestV1` (the v1 document, read only) and `read_manifest` by the schema named; `ReadManifest` |
+| The copy | `record_archive_copy(…, ArchiveCopyFrames)`: the step table, the manifest and the material's frames, or every listed frame; the copy's manifest is the recording's with `copy: {frames}`, checked against itself as written; a v1 manifest's copy as before |
+| The warning | `record_archive_warnings`: `final_frame_missing` on a v2 manifest whose `material.final_frame` is `null` |
+| The step table | `ApplicationExecution.executed_at_unix_ms` (`model.rs`), stamped in `commit_application` (`steps.rs`) |
+| The command | `record archive --all-frames` (`RECORD_ARCHIVE_READS`), refused without `--copy-to`; `lab.warnings` in the answer (`apps/actinglab/src/commands/session_record.rs`) |
+| The table | the row `record archive`: `all_frames` (switch), `copy_to`'s note, `help` (149 bytes, "Ends a recording as material (stage one) …"), `output`, `notes` |
+| Texts | [lab-recording.md](lab-recording.md): "Files", the `recording.json` members, "Archiving" (the usage, "The manifest" with the material, the rows, the rule for derived frames, what a reader reconstructs, the frames around a press, the manifests written before 0.12.64, "The copy", "Named again", "The answer", the refusals) |
+
+**Codes and words.** No outcome code is added and no fragment changes. New words, none decided on
+by any code:
+
+| word | the one situation | refuses or warns | exit |
+|---|---|---|---|
+| `final_frame_missing` (in `record archive`'s `lab.warnings`) | the manifest the answer names (v2) has `material.final_frame` `null`: the last effective step is not a screen that arrived after an effect on record | warns, the archive stands | 0 |
+| `copy_to_only` (`validation_failed`, `details{argument: "all_frames", reason}`) | `--all-frames` without `--copy-to` | refuses, before the session is read | 1 (2 under `--via`; the train of stage one) |
+
+The manifest's own vocabularies are members, not outcome words: `copy.frames` `material` or `all`,
+`outcome` `performed` or `indeterminate` (a click execution's words).
+
+**Tests.** `crates/lab/src/gate_449_rec_arch.rs` (the existing gate, apps gate map; new tests "#463
+S1-5"; fake Runtime and clock through `RecordFramePorts`, synthetic 16x9 frames):
+- `s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_screen`: a launch on
+  the empty recording, a tap, a long press, a swipe and a restart as stage one records them: each row
+  equals the step table's (the stored frames, `derived` false, `tap.rect` and `long_press.rect`
+  `null`, the superseded frames in order, the launch's and the restart's time); `material` each press
+  with its frame (the entry's `null`, `entry` true) and where it was pressed, and `final_frame` the
+  screen after the restart; no warning.
+- `s15_a_recording_made_with_do_archives_with_derived_frames`: presses of `do --capture --record`:
+  `before_frame` the live primary frame (not the step's first), `after_frame` the next step's first
+  frame or `null`, `derived` true in the rows and the material; `final_frame` `null` and
+  `final_frame_missing`.
+- `s15_a_v1_manifest_on_disk_is_named_again_copied_as_it_is_and_reopened`: a v1 manifest written as
+  0.12.59 to 0.12.63 wrote it: named again read, verified (a changed frame
+  `record_archive_verify_failed`, `checked: "recording"`), no warning, nothing written; copied byte
+  for byte with every file it lists; reopened; the next archive writes `archive-manifest-2.json` as
+  v2, whose tap row's `after_frame` names a frame since superseded, the first manifest as it was.
+- `s15_without_a_screen_after_the_last_press_there_is_no_final_frame`: two taps whose screens after
+  fail: the first's `after_frame` the second's capture before, `after_capture` `null`; the archive
+  stands, `final_frame` `null`, `final_frame_missing`.
+- `s15_the_copy_holds_the_material_unless_every_frame_is_asked_for`: the copy holds the step table,
+  the manifest and the material's frames, not the superseded one, its manifest `copy.frames`
+  `material`; with every frame the superseded one too and `all`; that frame changed fails the
+  archive named again.
+
+Adapted, as the requirement changes what they pin: `rec_arch_steps_of_several_callers_archive_and_the_rows_equal_the_step_table`
+and `rec_arch_a_step_table_written_by_0_12_54_archives` (Lab) assert the v2 rows (their presses'
+frames derived) and the copy's manifest saying `material`;
+`rec_arch_the_copy_goes_only_into_a_new_or_an_empty_directory`,
+`rec_arch_a_copy_that_does_not_verify_names_the_file_and_the_retry_by_id_copies` and
+`rec_arch_a_recording_record_start_force_left_behind_is_archived_by_its_id` (actinglab) compare each
+copy with the recording but for its manifest, which says `copy: {frames: "material"}`, and two of them
+the answer's `lab.warnings` (`[]`; `["final_frame_missing"]`); `gate_463_s13.rs`'s receipt names the
+new member. No golden changes, no test leaves the gate map.
+
+**What is not changed.** The manifest's file series and its writer; `record reopen` but that it takes
+either manifest; the step table's other members and every recording without an application
+operation, byte for byte; `recording_api.rs`, the generator, the kernel and the Runtime; today's MCP
+server (`actingctl mcp-serve`) but the text of one parameter (fix round 2).
+
+**At deploy.** Nothing to configure. v1 manifests on disk are read, verified, copied and reopened as
+before; the next archive of such a recording writes v2. A build before 0.12.64 refuses a v2 manifest
+(`record_state_io_failed`): not owed. Through MCP `ac_record_archive` takes `all_frames` on the Lab's
+MCP server (`actinglab-mcp`).
+
+**Fix round 2** (coordinator work order `rd-1115/brief-463-s15-fix2.md`, after the independent
+review of #1763 at `bebf984e`).
+- *Claims.* `material.clicks[].sent_on_unstored_capture` is `Option<bool>`, `null` on every press
+  ("A press sent on a capture that was not stored" above; contract "The manifest").
+- *The copy's manifest is written last* (`record_archive_copy`, with `copy_failed`): the step table
+  and the frames are copied and hashed first, then the manifest is written and hashed against
+  itself; a copy that fails before it holds no manifest naming files it does not hold.
+- *Texts.* The manual of the Lab's MCP server (`ac_record_archive`: the manifest v2, the warning,
+  what the copy holds, `all_frames` and `copy_to_only`); the first-generation server's `copy_to`
+  says what the copy holds and that every frame is copied with the Lab's `record archive
+  --all-frames` or the Lab's MCP server's `all_frames` (no parameter is added: that server is not
+  extended, the coordinator's ruling); the contract names the server that takes `all_frames`, the
+  order of the copy and two more cases without a final screen (fewer than two effective steps; the
+  effective step before the last without an effect on record); `LAB_RECORDING_ARCHIVE_SCHEMA`'s
+  comment says v1 is only read; every version of this slice is 0.12.64.
+- *Tests* (the slice's gate, registered in its entry): `crates/lab/src/gate_449_rec_arch.rs`
+  `s15_fix2_a_copy_that_fails_after_its_first_frame_leaves_no_manifest` (the copies' seam, a
+  stored frame that no longer holds its sha256, on the second frame the copy takes),
+  `s15_fix2_an_application_operation_recorded_the_old_way_is_derived`,
+  `s15_fix2_an_indeterminate_press_is_in_the_material`,
+  `s15_fix2_dropped_and_converted_steps_are_listed_and_not_in_the_material`,
+  `s15_fix2_a_step_table_without_executed_at_is_written_back_byte_for_byte`;
+  `apps/actinglab/src/tests/gate_449_rec_arch.rs`
+  `s15_fix2_all_frames_needs_copy_to_and_copies_every_frame`. Adapted, as the requirement changes
+  what they pin: the tests that compare `material.clicks` (`material_click`) expect
+  `sent_on_unstored_capture` `null`. No test leaves the gate map; no code or word is added.
+- *Not here:* the fakes' capture scripts for S1-2's stillness loop, which is not on this branch;
+  the join lengthens them.
+
+**Joined in the train of stage one** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1b.md`, which merges this slice at `8031b17f` and #463 S1-7 into the
+branch of S1-1, S1-2 and S1-3 on main `3581a8af`; the coordinator's rulings, not the owner's words).
+- *The step table's own member is read* (a). `material.clicks[].sent_on_unstored_capture` of a press
+  whose execution names its own frame before (`derived: false`) is the execution's
+  `sent_on_unstored_capture` (§1.402, fix round 3; absent there, so `false`, unless the press was
+  sent on a capture that was not stored); a press whose frame the manifest derives (`derived: true`:
+  `do --capture --record`, a press recorded the old way) carries `null`, and so does an application
+  operation, whose receipt records no such member (`click_of`, `archive.rs`).
+- *The screen after* (with §1.403). A row's `after_frame` is the last capture after its effect, the
+  captures before it superseded in the step the first opened; the contract's "frames after press
+  k" are the frames of that row recorded at or after the press's `at_unix_ms`, so the loop's earlier
+  captures are among them.
+- *`--all-frames` without `--copy-to`* (h). The refusal is `validation_failed`, and actinglab's own
+  command line answers every failure with exit 1 (`cli_module::own_line`), the Lab's other refusals
+  of a flag without the flag it needs included; the class's 2 is a `--via` line's. The contract and
+  the codes table above say so; the test pins 1.
+- *Tests.* The gate's fake (`Screens`) has a clock moved by its waits; each point press now takes
+  one capture before it and four after it, each application operation (`Bench::operated`) one and
+  three, and the tests that press or operate expect the loop's frame ids, superseded frames, final
+  frames and the press's default wait of 100 ms; none switches the loop off. New:
+  `s15_train_the_material_says_what_the_step_table_says_of_the_capture_a_press_was_sent_on`
+  (`false` on a stored capture, `true` on a marked step whose capture was not stored, `null` for a
+  `do` press), in this slice's gate entry.
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, item 7; text only). The contract's section on the copy says
+that the exit codes it gives (2 for an absolute path refused, 3 for a target that is not empty, 5
+for a copy that fails) are those of a `--via` line's envelope, and that actinglab's own command
+line exits 1 on every failure, as its refusal of `--all-frames` without `--copy-to` already said.
+No code, test or behaviour changes.
+
+### 1.424 Slice #463 S1-7 (0.12.64): a recording holds its instance (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one asks nothing of the agent but to start recording, play and end recording; the read-only investigation `rd-1115/record-hold-investigation.md`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s17-record-hold.md`, stacked on #463 S1-1, §1.402, cut from its head `24e48b47cd` on main `b7c47129`, its fix round 3 `124e2b4de2` merged; fix round 2 by the coordinator's work order `rd-1115/brief-463-s17-fix2.md` after the independent review `rd-1115/review-1762.md`)
+
+The coordinator gave this slice 1.424. It ships in 0.12.64 (release 0.12.63 was cut without it), after S1-1.
+
+**Why.** An agent's presses are separate commands with seconds or minutes between them, each
+holding the instance's input lease for its press alone, and a recording was only files of the
+Lab's state directory: nothing kept the scheduler from dispatching a scheduled task to the instance
+between two presses, whose screen then became a press's screen after it and opened the next step,
+silently. The contract's "pause the instance first" was a second thing the agent had to remember,
+and no tool checked it. Now `record start` holds the instance and the end of the recording releases
+the hold ([lab-recording.md](lab-recording.md), "A recording holds its instance").
+
+**Established by reading.**
+- *A press under the recording's own pause.* A pause gates only routine claims; client leases,
+  Lab operations and observations are operator claims (`ClaimKind::class`,
+  `crates/scheduler/src/lib.rs`), so a press is admitted under it. An instance outside the
+  multi-Nemu gate closes its device session at the pause's stage (c) (`release_paused_instance`,
+  `crates/runtime-host/src/host/policy_dispatch.rs`), as it closes it at every lease end
+  (`keeps_device_session`, `host/resource_close.rs`); after a confirmed close the kernel starts a
+  new session at the next operation (`ExecutionKernel::session`,
+  `crates/execution-kernel/src/kernel.rs`; only an unconfirmed close refuses), whose input and
+  capture open lazily (`SessionBackends`, `crates/execution-kernel/src/session.rs`). So the press
+  works on every path; the slice builds on it.
+- *What the end costs.* An instance resume reconnects the device and runs its self-check: up to
+  33 000 ms plus the IO timeout ([scheduling-pause.md](scheduling-pause.md), "Resume"). The archive's
+  manifest, the session header and the copy, or the stop's package, are written before it.
+- *A deploy* (fix round 2, as the review found it). The deploy's guard `foreign_pauses` (`guards
+  --for stop`, `crates/lab-rescue/src/install/guards.rs`) reports a recording's pause as another
+  party's (the guard fails on it); the rescue module records that report and goes on without
+  touching the pause ([lab-two-entries.md](lab-two-entries.md) §6: its hold takes only the
+  instances not paused or paused with its own reason, `held_instances`, `install/hold.rs`), so the
+  recording's pause is neither taken again nor resumed; and the restarted Runtime restores it (a
+  new owner epoch, revision 1, stage `released`).
+- *Today's MCP server holds too* (the work order's "keeps starting recordings without a hold" is
+  not what the code does): its `ac_record_start`, `ac_record_stop` and `ac_record_archive` run the
+  installation's `actinglab.exe` with the command's words (`apps/actingctl/src/mcp/lab.rs`,
+  `Program::locate`, `author`), so they take and release the hold as the command line does. Fix
+  round 2 changes their texts to say so (the coordinator's ruling: an author-tier session holding
+  and releasing its own recording's instance is intended); no behaviour of that server changes.
+- *Another party's pause is told by the status, not by a code.* `record start` reads the status
+  first and sends no pause to an instance it shows paused; no decision names
+  `scheduling_already_paused` or any other code. A pause refused for any reason, the rare race
+  with another party's pause included, fails the start.
+- *Fix round 2: a refusal is told by the receipt, nothing listening by a connection, neither by a
+  code.* A pause the Runtime refused is one whose own receipt arrived carrying the failure
+  (`scheduling::pause_refused`, the received receipt the client keeps); by the pause's rules
+  ([scheduling-pause.md](scheduling-pause.md)) a denied pause changes nothing and a failed one
+  lifts the gate it closed, so the header is put back; every other end (no receipt) leaves it. The
+  client's connect reads the runtime-info, opens the connection and shakes hands in one call, and
+  its failures (a refused connection and an owner epoch that `Health` answered differently both
+  at `connect_runtime`) do not tell whether anything listened; so after a failed connect one plain
+  connection to the runtime-info's address, opened and closed at once with nothing sent
+  (`record_hold::listening`; the Runtime's IPC takes a close before the first frame as an
+  ordinary close), tells them apart: accepted, the start fails as the Lab's commands answer the
+  connect's failure (`runtime_slice_cli::map_runtime_error`); refused, or no runtime-info naming an
+  address, `no_runtime_listening`. The only race is a Runtime that starts or stops between the two
+  attempts: one that starts fails the start loudly, one that stops dispatches nothing.
+- *Interface revisions.* None moves: no request kind, wire shape, outcome code, configuration key
+  or record of the Runtime is added; the session header's `hold` is absent on a header without one.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The facts | `RecordingHold {reason, own, kept}` (the session header's `hold`), `RecordingHoldFound` (what `record start` met: `Paused`, `Shown`, `NoRuntime`), `RecordingHold::reason_for` (`lab-record-<ms>`), `at_start` (own, foreign, taken over, carried over with nothing listening), `taken_over`, `ended`; `RecordingHoldView {state, reason}` with `RecordingHoldState` `own`, `foreign`, `none`, `kept`, and `record_hold_status`; the four warning words (fix round 2: `no_runtime_listening` in place of `runtime_not_answering`, and `replaced_header_unread`) (`crates/lab/src/recording/hold.rs`); the header view reads `hold` (`OldRecordView`, `store.rs`) |
+| The Runtime requests | `instance_pause_reason` (one `Status`: the reason of the pause the instance shows), `pause_for_recording` (`PauseScheduling` as the `pause` row, `LAB_PAUSE_DRAIN_TIMEOUT_MS` 300000, which `core_ops`' `pause` default now names), `pause_refused` (fix round 2: the pause's own receipt arrived and carries the failure, so no pause was made), `release_recording_hold` (one `Status`; the pause that shows the reason resumed by `resume_expected` with the status's owner epoch and that pause's revision; the client's failure keeps the hold), `instance_scheduling_paused` (one `Status`: the instance's pause or the global pause) (`crates/lab-ops/src/scheduling.rs`) |
+| The command | `record start` reads the replaced header (with `--force` over one that cannot be read: the warning `replaced_header_unread`, fix round 2) and its bytes; `record_hold::take` connects and reads the status, then writes the header naming the hold (`SessionRecordContext.hold`) before it sends `PauseScheduling` (fix round 2), puts the header back when the Runtime refuses the pause, and leaves it, the hold in the failure's details, on any other end of the pause; `reach` tells nothing listening (`no_runtime_listening`) from a handshake that does not complete (the start fails, `runtime_slice_cli::map_runtime_error`) by one plain connection to the runtime-info's address after a failed connect; a failure after the header names the hold carries it; `record status` adds `hold`; `record stop` (no dry run) and `record archive` write the header with the hold kept, then release (`record_hold::end`) and write it without; a release that fails answers `Kept::answer` with `next.release`, `record stop` again or `record archive --record-id <id>` (`release_again`; fix round 2: never an unconditional `resume`); `record reopen` carries an own pause the replaced header kept (`apps/actinglab/src/commands/record_hold.rs`, `session_record.rs`); `tap`, `swipe` and `long-tap --record` (`send_recorded_press`, `device_commands.rs`), `do --capture --record` (`lab2_cli/operation.rs`, fix round 2) and `session app --record` (`session_management.rs`) read the hold before the press or the operation, each on a connection of its own (`hold_warning_read`; fix round 2 for the presses, whose read shared the press's connection), so that a read that fails cannot make the press `not_submitted` or the operation look indeterminate, the word in `record.warnings` |
+| The table | the rows `record start` (`runtime` `optional`, `requests` `Status`, `PauseScheduling`, its help, output and notes), `record stop` (`optional`, `Status`, `ResumeScheduling`, help, output, notes), `record archive` (`optional`, `Status`, `ResumeScheduling`, output, notes); fix round 2: `tap`, `swipe`, `long-tap` and the three `app` rows list the `Status` read they send with `--record` (`requests`, notes), the `record start`, `record stop` and `record archive` notes name the new words and `next.release` |
+| Texts | [lab-recording.md](lab-recording.md): "A recording holds its instance", the opening paragraphs, `record start`, `record status`, `record stop`, the four sentences that asked the agent to pause first, "Archiving" (what it asks the Runtime, the answer); `README.md`'s recording lines; `apps/actinglab-mcp/MANUAL.md`, "Recordings"; fix round 2: the contract's start (the header before the pause, the two cases of no hold, the wait up to 335 s, `--force` over an unreadable header), `next.release`, the deploy sentence and today's MCP server; the manual's wait; actinglab's capabilities (`record start`, `record stop`, `record archive` and their `session record` aliases need `offline` and `runtime_optional`) and its Lab2 contracts (`hold` in the output fields); today's MCP server's `ac_record_start`, `ac_record_stop` and `ac_record_archive` descriptions (`apps/actingctl/src/mcp/tools.rs`, texts only, the coordinator's ruling: an author-tier session holding and releasing its own recording's instance is intended) and their row in [runtime-interface.md](runtime-interface.md) |
+
+**Codes and words.** No outcome code is added and no fragment changes. New answer words, each in
+an answer or in the details of a failure, never in a text, and none read by a decision:
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `hold.warnings` `no_runtime_listening` (`record start`; fix round 2, in place of `runtime_not_answering`, a word of `install_needs_person` with another meaning) | no connection to the installation's Runtime could be opened at all (no state root located, no runtime-info naming an address, nothing accepting a connection there), so the recording holds nothing of its own | warns | 0 |
+| `hold.warnings` `replaced_header_unread` with `hold.replaced_header {path, error}` (`record start --force`; fix round 2) | the session header `--force` replaced could not be read, so a pause the earlier recording took, if any, is not released by this recording | warns | 0 |
+| `record.warnings` `instance_not_held` (a `--record` press or application operation) | the status read before it showed the instance's scheduling not paused | warns | 0 |
+| `record.warnings` `instance_hold_unread` | that status read got no answer | warns | 0 |
+| `hold.state` `own`, `foreign`, `none`, `kept` (`record start`, `record status`) | the recording runs under its own pause; under another party's; under none; ended with its own pause kept | — | 0 |
+| `hold.release` `resumed`, `already_gone`, `not_own` (`record stop`, `record archive`) | the own pause found by its reason and resumed; no pause showed the reason; another party's pause left alone | — | 0 |
+| `hold.kept: true` with `next.release` (fix round 2, the command that tries the release again) in the details of the release's failure (`runtime_not_running` or `device_error`) | the end's work stands and its own pause stays: the release failed or no Runtime answered | refuses | 1 (the class's 5 or 4 under `--via`) |
+
+**Tests.** `crates/lab/src/gate_463_s17.rs` (exec gate map "#463 S1-7"; temporary state directories,
+no Runtime): the Lab's reading of the header carries the hold, the Lab recording starts on it and
+`record status` shows it; the four states; what `record start` met gives the hold; what keeps a
+header without a hold as it was (`{state: none}` without `reason`, `kept` written only when true).
+`apps/actinglab/src/tests/gate_463_s17.rs` (the runtime client's scripted Runtime, every
+request of every connection in order): the start's `status`, `pause_scheduling` with the
+recording's reason and the drain 300000; another party's pause, `status` only, and an archive that
+makes no connection (`not_own`); nothing listening (`no_runtime_listening`, a header with
+exactly the members it had before the slice); a denied pause starts nothing (fix round 2: the
+header written before the pause does not stay, an earlier one is put back byte for byte); after a
+restart (a second scripted Runtime, the pause at revision 1 in its epoch, another instance paused
+beside it) one `resume_scheduling` expecting that epoch and revision
+1; a denied resume keeps the hold with `next.release`, `record status` `kept`, and named
+again with no Runtime `runtime_not_running`; a refused `record stop` makes no connection and keeps
+the hold; `record start --force` takes the pause over with one pause in all. Fix round 2: a
+connection lost after `pause_scheduling` leaves the header naming the hold, the failure
+carrying it, and the next `record stop` sends `status` and one `resume_scheduling` and
+answers `release: resumed`; `record reopen` carries an own kept hold that its end resumes; a
+start without `--force` after an end that kept its hold takes it over; the status read
+before a press answers `instance_not_held`, nothing, or `instance_hold_unread` (a status
+without an answer, no Runtime).
+`apps/actinglab/tests/runtime_input_proxy.rs` (the fake Runtime host):
+`s17_record_start_and_archive_hold_and_release_the_instance_on_the_runtime`, the host's status
+shows the recording's pause, a tap under it warns nothing, the archive resumes it; and
+`s17_a_press_on_an_instance_that_is_not_held_says_so`, a recording started with no Runtime, then a
+tap on the unpaused instance pressed and recorded with `instance_not_held`, one under another
+party's pause with no warning, and an archive that leaves that pause; fix round 2:
+`s17_an_application_operation_on_an_instance_that_is_not_held_says_so`, `session app launch
+--record` on the unpaused instance recorded with `instance_not_held`. Fix round 2 adapted
+this slice's own tests only (the review's (j)): the library's first and fourth now fail when
+the behaviour is taken away (their assertions that held without it are gone), and the
+scripted-Runtime tests assert that no connection beyond the scripted ones came. No golden
+changes; no test leaves the gate map. The parent's tests that start a recording on the fake host
+now run under the recording's pause, which gates none of their requests.
+
+**What is not changed.** The behaviour of `apps/actingctl` (fix round 2 changed only the texts of
+its three recording tools); the scheduler, the pause's own rules and the Runtime's crates; the
+rescue module; the parent's press path beyond the status read and the warning; `generate.rs`, `crosscheck.rs`, `select.rs`; the step
+table (`recording.json`) and the manifest; `capture --record` and `observe --capture
+--record`, which take no hold and read none; an alias the running Runtime does not know still
+makes the start fail (fix round 2 leaves it as built).
+
+**At deploy.** Nothing to configure. Recordings and session headers already on disk load as
+before and hold nothing; a recording active across the deploy holds nothing until it ends. Through
+MCP the hold is taken by both servers, which run the installation's actinglab; `record start`
+waits as the pause waits, up to 335 s, so a caller must give it that time.
+
+**Joined in the train of stage one** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1b.md`, which merges this slice at `b67eaa7e` after #463 S1-5, §1.406,
+into the branch of S1-1, S1-2 and S1-3 on main `3581a8af`; the coordinator's rulings, not the
+owner's words).
+- *One press path* (c). A `tap`, `swipe` or `long-tap --record` press does, under the recording
+  lock: the planned press's refusals; S1-1's capture before it; this slice's status read on a
+  connection of its own (`hold_warning_read`, in `send_recorded_press`, immediately before each
+  press is sent, so twice when S1-1's retry sends it again on a second capture, the second read's
+  word answered); the press on that capture's frame reference; S1-2's captures until still on the
+  command's clock, its bounds checked first. The word follows `after_not_still` in
+  `record.warnings`, of the answer and of a failure whose details carry `record`. `do --capture
+  --record` reads it before its one Lab operation, as built.
+- *Application operations* (d). `session app <verb> --record` reads the status inside the
+  operation's closure, after the plan and S1-3's capture before it, immediately before the
+  operation's connection; the word joins `record.warnings` beside `after_not_still`, in the answer
+  and in a failure whose details carry `record`. The three `app` rows list `ApplicationLifecycle`,
+  `ObserveReadonly` and `Status`, with the train's parameters.
+- *`record archive`* (e). S1-5's manifest; the session header archived, an own hold written `kept`;
+  S1-5's copy (its manifest written last), an own hold named `kept` in a copy's failure; the
+  answer's `lab.warnings`; then the release, last. Named again by `--record-id`, it reads the
+  manifest S1-5's rules name and tries the release again; `record reopen` carries an own hold as
+  built, and the next archive writes the next manifest, v2.
+- *Tests* (i). In this slice's gate entry:
+  `s17_train_nothing_listening_at_the_runtime_address_starts_holding_nothing` (a runtime-info whose
+  address no longer listens: `no_runtime_listening`, no hold),
+  `s17_train_force_over_a_header_that_cannot_be_read_says_so` (`replaced_header_unread` with the
+  header's path), and on the fake Runtime host
+  `s17_train_do_capture_record_on_an_instance_that_is_not_held_says_so` (`instance_not_held` in
+  `record.warnings` of `do --capture --record`).
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 2, 3 and 7; the review of the train's second half
+suggested item 2 and the coordinator made it a must: a recording never starts unheld because the
+Lab could not tell; the coordinator's rulings, not the owner's words). `record start`
+(`record_hold::reach`) fails before anything is written when the installation's state root cannot
+be resolved (an empty or white-space `ACTINGCOMMAND_RUNTIME_STATE_ROOT`, neither `LOCALAPPDATA`
+nor `APPDATA`), with `validation_failed`, as the Lab's other commands answer it; and when, after
+the client's failed connect, the plain connection to the runtime-info's address times out, fails
+otherwise than by a refusal, or the runtime-info cannot be read or names no address, as a
+handshake that does not complete fails it (`not_reached`, one path and one code,
+`runtime_not_running` when no receipt said otherwise). `no_runtime_listening` is left with one
+cause, no Runtime listening at the state root: the address the runtime-info names refuses the
+connection, or (kept as built, the question put to the coordinator) no runtime-info is there,
+which a Runtime writes when it starts and removes when it stops. The decision reads the plain
+connection's IO error kind (`Probed`), no outcome code. The contract, the Lab's MCP manual, the
+first-generation MCP server's module text (`apps/actingctl/src/mcp/lab.rs`) and the actinglab
+table of `runtime-interface.md` no longer say that the recording commands open no Runtime
+connection; the press and application answers list `warnings` whole. Tests, in this slice's gate
+entry: `s17_fix_an_unresolved_state_root_starts_nothing`,
+`s17_fix_a_probe_that_times_out_fails_the_start_as_a_failed_handshake`,
+`s17_fix_a_handshake_that_fails_starts_nothing` (the scripted Runtime drops the `BindChannel`, the
+reconnect meets another owner epoch), `s17_fix_a_stop_whose_release_fails_names_the_retry`
+(`next.release` is `record stop`), and on the fake Runtime host behind a relay that closes the
+status read `s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so` (`instance_hold_unread`).
+No code or word is added; no test leaves the gate map.
+
 ### 1.418 Slice #463 S3-11 (0.12.64): `standard-pack trial` sends its one run and records the business end (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization, and the owner's ruling of 11-15 that a trial of a held package, on the instance and application it was recorded on, is within her standing authorization, recorded as a reference; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-11"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s311-trial-run.md`, built on the branch of #1758, which holds S3-10)
 
 The coordinator gave this slice 1.418; it stands on S3-10 (§1.417) and ships with it in 0.12.64.

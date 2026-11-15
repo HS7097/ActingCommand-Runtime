@@ -38,8 +38,15 @@
 # the inspector asks the system directly. FLK-09 is not used here: the register keeps that number
 # for a test of 11-02 that has not failed again, so it has no mirror entry.
 #
-# FLK-08 and FLK-10 are the two entries. With an empty table every module job's `CI_SKIP` is `''`
-# and the `flaky` job's `FLAKY_TESTS` is `''`: that job runs nothing and passes.
+# FLK-14 (`ln7c_q_teq_the_query_decides_the_live_frames_of_a_production_shaped_history_as_the_full_view`,
+# the ledger's `gate_ln7c_q`, ledger) entered after one red on PR #1757 (run 43729027791, job
+# 132857154049, 2026-11-16 JST): the test panicked with the ledger's `writer_response_timeout`
+# during `append_event`, a writer reply that did not arrive within its wait on a loaded runner.
+# PR #1757 does not touch the ledger, and the same code passed that job in run 43729591421. Its
+# cause is not located.
+#
+# FLK-08, FLK-10 and FLK-14 are the three entries. With an empty table every module job's
+# `CI_SKIP` is `''` and the `flaky` job's `FLAKY_TESTS` is `''`: that job runs nothing and passes.
 #
 # Every module job of `.github/workflows/ci.yml` passes `--skip <libtest path>` for its entries
 # (its `CI_SKIP` line), and the non-gating `flaky` job runs exactly these tests, once per
@@ -78,3 +85,12 @@ job = "host-lab"
 features = ["actingcommand-runtime-host/fixture-backends"]
 register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6764779352"
 status = "cause located (the PowerShell process inspector's 30 s limit on a slow runner): first failed in run 42793213181 (PR #1562, host-lab, 2026-11-10 JST), the same code passed in run 42786729275; skipped until the inspector asks the system directly"
+
+[[test]]
+id = "FLK-14"
+name = "actingcommand-ledger::lib::global::tests::gate_ln7c_q::ln7c_q_teq_the_query_decides_the_live_frames_of_a_production_shaped_history_as_the_full_view"
+crate = "actingcommand-ledger"
+job = "ledger"
+features = [""]
+register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6897201176"
+status = "cause not located (a writer reply that did not arrive within its wait on a loaded runner, writer_response_timeout in append_event): first failed in run 43729027791 (PR #1757, ledger, 2026-11-16 JST), the same code passed in run 43729591421; skipped until it is"

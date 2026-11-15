@@ -1348,17 +1348,9 @@ fn load_runtime_lab2_scene(
     let png = frame.original_png.clone();
     let scene = scene_from_frame(&frame)?;
     // #411 Lab L3: the frame reference the Runtime committed for this observation, as the host
-    // names an online `do`'s before frame.
-    let input_frame =
-        observation
-            .artifact()
-            .frame_id()
-            .copied()
-            .map(|frame_id| InputFrameReference {
-                frame_id,
-                width: observation.width(),
-                height: observation.height(),
-            });
+    // names an online `do`'s before frame (#463 S1-1 fix round 2: the one function the device
+    // commands' `--record` builds theirs with).
+    let input_frame = runtime_capture_backend::input_frame_reference(observation);
     let loaded = Lab2Scene {
         scene,
         samples: Vec::new(),
@@ -2628,7 +2620,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
         },
         Lab2CommandContract {
             name: "record start",
-            summary: "start a recording session and its Lab recording",
+            summary: "start a recording session and its Lab recording, holding the instance: its scheduling paused through the Runtime with the recording's own reason (#463 S1-7)",
             required: &["--task-id <id>"],
             optional: &[
                 "--locale <locale>",
@@ -2647,6 +2639,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "lab_recording",
                 "record_flag_state_dir",
                 "record_flag_reachable",
+                "hold",
             ],
             requires_lease: false,
         },
@@ -2717,7 +2710,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
         },
         Lab2CommandContract {
             name: "record stop",
-            summary: "stop the recording session and generate its linear-steps package",
+            summary: "stop the recording session and generate its linear-steps package, then resume the recording's own scheduling pause (#463 S1-7)",
             required: &[],
             optional: &[
                 "--lab-dir <dir>",
@@ -2732,15 +2725,15 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--dry-run",
                 "--state-dir <dir>",
             ],
-            output_fields: &["status", "dry_run", "record", "path", "lab"],
+            output_fields: &["status", "dry_run", "record", "path", "lab", "hold"],
             requires_lease: false,
         },
         Lab2CommandContract {
             name: "record status",
-            summary: "show the recording session and its Lab recording steps",
+            summary: "show the recording session, its Lab recording steps and what it holds",
             required: &[],
             optional: &["--state-dir <dir>"],
-            output_fields: &["status", "instance", "record", "path", "lab"],
+            output_fields: &["status", "instance", "record", "path", "lab", "hold"],
             requires_lease: false,
         },
         Lab2CommandContract {

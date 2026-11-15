@@ -2,6 +2,7 @@
 
 //! Paths, clock, file IO and error helpers of the Lab recording state.
 
+use super::hold::RecordingHold;
 use super::model::{LAB_RECORDING_SCHEMA, LabRecording};
 use actingcommand_contract::{LabError, LabErrorClass, LabResult};
 use serde::{Deserialize, Serialize};
@@ -189,6 +190,9 @@ pub(crate) struct OldRecordView {
     pub(crate) instance: String,
     pub(crate) status: String,
     pub(crate) started_at_unix_ms: u64,
+    /// #463 S1-7: what the recording holds (`super::hold`); absent on a header without a hold.
+    #[serde(default)]
+    pub(crate) hold: Option<RecordingHold>,
 }
 
 pub(crate) fn read_old_record(

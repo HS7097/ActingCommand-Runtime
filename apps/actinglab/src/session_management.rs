@@ -1,6 +1,9 @@
-use crate::commands::device_commands::LEGACY_ROUTING_READS;
+use crate::commands::device_commands::{
+    LEGACY_ROUTING_READS, after_capture_ms, parse_after_ms, runtime_captured_frame,
+};
 use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::instance_resolution::resolve_instance_id_for_flags;
+use crate::runtime_capture_backend::RuntimeCaptureEndpoint;
 use crate::runtime_slice_cli;
 use crate::session_backend::RuntimeBackendRead;
 use crate::state_roots::runtime_state_root;
@@ -13,12 +16,15 @@ use actingcommand_contract::{
     ApplicationLifecycleAction, EventType, LabErrorClass, RuntimeReceiptState, RuntimeResult,
 };
 use actingcommand_lab::{
-    ApplicationAttempt, ApplicationExecution, ApplicationPlan, CommitApplicationRequest,
-    PlanApplicationRequest, RecordingLock, record_application_append_failed,
-    record_commit_application, record_plan_application,
+    AfterCapture, AfterFrame, AfterTaken, ApplicationAttempt, ApplicationExecution,
+    ApplicationPlan, CapturedFrame, CommitApplicationOutcome, CommitApplicationRequest, LabStatus,
+    PlanApplicationRequest, RecordFramePorts, RecordingLock, record_after_capture_check,
+    record_after_frame, record_after_warnings, record_application_append_failed,
+    record_before_frame, record_commit_application, record_plan_application, record_status,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeFlowOutput};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use std::time::{Duration, Instant};
 
 pub(super) fn run_session_monitor_policy(
     global: &GlobalOptions,
@@ -220,7 +226,8 @@ pub(crate) const SESSION_INSTANCE_READS: FlagReads = FlagReads {
 /// Workflow #434 LAB-5B5: the flags `session app` (and `session instance app`) reads after its
 /// action word, on its plain and its `--record` path: the legacy routing and `--package`, which
 /// it refuses, the instance (actinglab's global option) and `--record` (which the command finds
-/// among its words, `run_session_app_or_recorded`); no positional after the action.
+/// among its words, `run_session_app_or_recorded`); no positional after the action. #463 S1-3: and
+/// the waits of the screen after a recorded operation, `APPLICATION_RECORD_ONLY_FLAGS`.
 pub(crate) const SESSION_APP_READS: FlagReads = FlagReads {
     row: "session app",
     parts: &[
@@ -230,9 +237,25 @@ pub(crate) const SESSION_APP_READS: FlagReads = FlagReads {
             switches: &["--record"],
             refused: &["--package"],
         },
+        &ReadPart {
+            options: &APPLICATION_RECORD_ONLY_FLAGS,
+            switches: &[],
+            refused: &[],
+        },
     ],
     positionals: &[],
 };
+
+/// #463 S1-3 (`contracts/lab-recording.md`, "Application steps"): the flags `session app <action>`
+/// takes with `--record` only: how the screen after the operation is taken
+/// (`application_after_capture`). The train of stage one: the four a recorded press takes, the wait
+/// before the first capture and (#463 S1-2) how the captures repeat until the screen is still.
+const APPLICATION_RECORD_ONLY_FLAGS: [&str; 4] = [
+    "--after-ms",
+    "--interval-ms",
+    "--still-ms",
+    "--still-max-ms",
+];
 
 pub(super) fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let action = args
@@ -290,6 +313,19 @@ pub(super) fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOut
         .ok_or_else(|| CliError::usage("session app requires launch|stop|force-stop|restart"))?;
     let flags = FlagArgs::parse_reading(&args[1..], &SESSION_APP_READS)?;
     reject_legacy_session_routing(&flags)?;
+    // #463 S1-3: the waits of the screen after the operation come with `--record` only.
+    if let Some(flag) = APPLICATION_RECORD_ONLY_FLAGS
+        .into_iter()
+        .find(|flag| flags.given(flag))
+    {
+        return Err(CliError::usage(format!(
+            "{flag} is accepted only with session app <launch|restart|stop|force-stop> --record"
+        ))
+        .with_details(json!({
+            "argument": flag.trim_start_matches("--").replace('-', "_"),
+            "reason": "record_only"
+        })));
+    }
     if flags.optional("--package").is_some() {
         return Err(CliError::usage(
             "--package is not accepted by ActingLab; application identity is owned by Runtime configuration",
@@ -338,8 +374,14 @@ pub(super) fn run_session_app_or_recorded(
 /// before the request until the result is recorded, and the step is planned before anything
 /// is sent. The branches read the raw `RuntimeClientError`: a denied receipt never ran the
 /// operation (returned as the plain command returns it, nothing recorded); any other error
-/// may have run it (one attempt recorded, `record_application_indeterminate`).
+/// may have run it (one attempt recorded, `record_application_indeterminate`). #463 S1-3: the
+/// operation is a step with the screen before it and the screen after it, each taken as `capture
+/// --record` takes it ([`record_application_operation`]); `--after-ms`, `--interval-ms`,
+/// `--still-ms` and `--still-max-ms` say how the screen after it is taken, checked before anything
+/// is captured or sent ([`application_after_capture`]). The train of stage one: the captures' clock
+/// starts with the command (`ApplicationFrames::origin`).
 fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let started = Instant::now();
     let verb = args
         .first()
         .map(String::as_str)
@@ -351,6 +393,7 @@ fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutco
             "--package is not accepted by ActingLab; application identity is owned by Runtime configuration",
         ));
     }
+    let after = application_after_capture(&flags)?;
     let config = read_user_config()?;
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
     let action = match verb {
@@ -367,49 +410,368 @@ fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutco
         &instance_id,
         &format!("session app {verb} --record"),
     )?;
-    let plan = record_plan_application(
+    // The Runtime's capture endpoint of the command's instance, resolved before anything is
+    // captured or sent; the entry step takes no frame and asks for none. The fix round after the
+    // train's review: the Runtime captures, as for a recorded press, so no local device
+    // configuration (no ADB path) is read; the operation itself is the Runtime's too.
+    let frames = || -> CliOutcome<ApplicationFrames> {
+        Ok(ApplicationFrames {
+            endpoint: RuntimeCaptureEndpoint::new(instance_id.clone(), runtime_state_root()?),
+            origin: started,
+        })
+    };
+    // #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): whether the
+    // instance is held, one status read before the operation, on a connection of its own, so that a
+    // read that fails never stands in the operation's way. The train of stage one: read where the
+    // operation is sent, after its plan and its screen before, as a press reads it before it is
+    // sent.
+    let mut hold_warning = None;
+    let operate = |plan: &ApplicationPlan| -> CliOutcome<Operated> {
+        hold_warning = crate::commands::hold_warning_read(&instance_id);
+        let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
+            .map_err(runtime_slice_cli::map_runtime_error)?;
+        let output = client
+            .control_application(&instance_id, action)
+            .map_err(|error| application_not_completed(&lock, plan, &error))?;
+        performed_execution(&output)
+            .and_then(|execution| {
+                serde_json::to_value(&output)
+                    .map(|data| Operated { execution, data })
+                    .map_err(|error| {
+                        CliError::usage(format!("failed to serialize Runtime receipt: {error}"))
+                    })
+            })
+            .map_err(|error| record_application_append_failed(plan, "performed", error))
+    };
+    let recorded = record_application_operation(
         &lock,
         &PlanApplicationRequest {
             verb: verb.to_string(),
         },
-    )?;
-    let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
-        .map_err(runtime_slice_cli::map_runtime_error)?;
-    let output = match client.control_application(&instance_id, action) {
-        Ok(output) => output,
-        Err(error) => return Err(application_not_completed(&lock, &plan, &error)),
-    };
-    let performed = performed_execution(&output).and_then(|execution| {
-        serde_json::to_value(&output)
-            .map(|data| (execution, data))
-            .map_err(|error| {
-                CliError::usage(format!("failed to serialize Runtime receipt: {error}"))
-            })
-    });
-    let (execution, mut data) =
-        performed.map_err(|error| record_application_append_failed(&plan, "performed", error))?;
-    match record_commit_application(
-        &lock,
-        &plan,
-        &CommitApplicationRequest::Performed(execution),
-    ) {
-        Ok(outcome) => {
-            data["record"] = serde_json::to_value(outcome).map_err(|error| {
-                CliError::usage(format!("failed to encode the record: {error}"))
-            })?;
+        &after,
+        frames,
+        operate,
+    );
+    // #463 S1-7: the word of the status read in `record.warnings`, beside `after_not_still`, as a
+    // press's answer carries it: of the answer, and of a failure whose details carry `record` (the
+    // operation performed and recorded, its screen after not taken).
+    match recorded {
+        Ok(mut data) => {
+            crate::commands::add_hold_warning(&mut data["record"], hold_warning);
             Ok(data)
         }
         Err(mut error) => {
-            let mut details = error.details.take().unwrap_or_else(|| json!({}));
-            if let Some(object) = details.as_object_mut() {
-                object.insert("operation".to_string(), data);
-            }
-            Err(error.with_details(details))
+            crate::commands::add_hold_warning_to_failure(&mut error, hold_warning);
+            Err(error)
         }
     }
 }
 
-/// The completed receipt of the application operation, as the recording stores it.
+/// #463 S1-3 (`contracts/lab-recording.md`, "Application steps"): how the screen after a recorded
+/// application operation is taken, as `record_after_frame` is handed it: the flags as given,
+/// without them `AfterCapture::for_application`'s (after 2000 ms, every 1000 ms, still after
+/// 2000 ms unchanged, at most 30000 ms). The train of stage one: the four flags of a recorded press,
+/// read and checked as a press's are, before anything is captured or sent: each a whole number of
+/// milliseconds (`parse_after_ms`, `after_capture_ms`: the fix round after the train's review,
+/// `validation_failed` with `details{argument, reason: "wrong_type", value}` otherwise), then their
+/// ranges and the bound of 120 intervals (`record_after_capture_check`), `validation_failed` with
+/// `details{argument, reason: "range", value, min, max}` as a press's refusal.
+pub(crate) fn application_after_capture(flags: &FlagArgs) -> CliOutcome<AfterCapture> {
+    let after_ms = flags
+        .optional("--after-ms")
+        .map(|value| parse_after_ms(&value))
+        .transpose()?;
+    let defaults = AfterCapture::for_application(after_ms);
+    let after = AfterCapture {
+        interval_ms: after_capture_ms(flags, "--interval-ms", "interval_ms")?
+            .or(defaults.interval_ms),
+        still_ms: after_capture_ms(flags, "--still-ms", "still_ms")?.or(defaults.still_ms),
+        still_max_ms: after_capture_ms(flags, "--still-max-ms", "still_max_ms")?
+            .unwrap_or(defaults.still_max_ms),
+        ..defaults
+    };
+    record_after_capture_check(&after)?;
+    Ok(after)
+}
+
+/// #463 S1-3: an application operation with a completed receipt: its execution as the recording
+/// stores it, and the answer of the plain `session app`.
+pub(crate) struct Operated {
+    pub(crate) execution: ApplicationExecution,
+    pub(crate) data: Value,
+}
+
+/// #463 S1-3 (`contracts/lab-recording.md`, "Application steps"): what `session app <verb>
+/// --record` does under the recording lock. `operate` sends the operation once: a completed
+/// receipt is [`Operated`], any other answer its error (the attempt already recorded where the
+/// operation may have run). `frames` gives the caller's clock and captures.
+/// - An empty recording: the operation opens the application entry step, with no screen before it
+///   and none after it (the next press's or capture's frame opens the step after it); `frames` is
+///   never asked.
+/// - An open step: the plan on it first, whose refusals capture and send nothing. Round 2: then
+///   the screen before as a press takes it, captured immediately before the operation
+///   ([`record_before_frame`], its frame reference unused: an application operation names no
+///   frame): on a step without marks it is the step's live primary frame, the older one
+///   superseded; on a step with marks it is not stored and the stored frame stands. A step that
+///   already declares the operation (an earlier attempt without a completed receipt, or `record
+///   mark --application`) takes no frame, since it refuses a device frame
+///   (`record_step_click_not_executed`): the frame it was declared on stands.
+/// - No open step after a closed one: the screen before, which opens the step the operation
+///   lands on, then the plan on that step.
+///
+/// Then the operation; its completed receipt recorded, naming the step's live primary frame as its
+/// `before_frame` (none on an entry step, retried too); then, only for a receipt that names its
+/// `before_frame`, the screen after it ([`record_after_frame`] with `after`), which opens the next
+/// step and is the execution's `after_frame`, with its `after_capture`. The train of stage one: the
+/// screen after is captured until it is still, as after a press (#463 S1-2), every capture kept in
+/// the step the first opens, the last the `after_frame`. A first capture after that cannot be taken
+/// answers its own code and class, and the operation and its closed step stand: its details begin
+/// with `record` (the operation as recorded), `after: {after_ms, taken: false}` and `operation`,
+/// then the capture's own members. The fix round after the train's review: a later one that
+/// cannot be taken leaves what the loop took kept and recorded (`AfterTaken`, the loop's typed
+/// result, as `record_press` takes a press's): the execution names the last capture as its
+/// `after_frame` and `after_capture` with `unfinished`, and the capture's own error is answered,
+/// its message saying the captures after the operation stopped and what was kept, its details
+/// beginning with `record` (the operation as recorded, with `after` and `warnings` as the answer
+/// would carry them), the loop's `after: {after_ms, taken: true, captures}` and `operation`.
+///
+/// The answer is the plain command's with `record`: the operation as recorded, `after`, the screen
+/// after it (`null` on the entry step), and (the train of stage one) `warnings`, which holds
+/// `after_not_still` as a press's answer does (`record_after_warnings`).
+pub(crate) fn record_application_operation<P: RecordFramePorts>(
+    lock: &RecordingLock,
+    request: &PlanApplicationRequest,
+    after: &AfterCapture,
+    frames: impl FnOnce() -> CliOutcome<P>,
+    operate: impl FnOnce(&ApplicationPlan) -> CliOutcome<Operated>,
+) -> CliOutcome<Value> {
+    let (plan, mut ports) = match record_plan_application(lock, request) {
+        Ok(plan) if plan.opens_entry_step => (plan, None),
+        planned => match (planned, open_step_declares(lock)?) {
+            (Ok(plan), Some(true)) => (plan, Some(frames()?)),
+            (Ok(plan), Some(false)) => {
+                let mut ports = frames()?;
+                record_before_frame(lock, &mut ports)?;
+                (plan, Some(ports))
+            }
+            (Err(error), Some(_)) => return Err(error),
+            // A refusal without an open step is the next plan's, after the screen before.
+            (_, None) => {
+                let mut ports = frames()?;
+                record_before_frame(lock, &mut ports)?;
+                (record_plan_application(lock, request)?, Some(ports))
+            }
+        },
+    };
+    let Operated {
+        execution,
+        mut data,
+    } = operate(&plan)?;
+    let mut outcome = match record_commit_application(
+        lock,
+        &plan,
+        &CommitApplicationRequest::Performed(execution),
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => return Err(with_operation(error, data)),
+    };
+    let names_before = outcome
+        .application
+        .executed
+        .as_ref()
+        .is_some_and(|execution| execution.before_frame.is_some());
+    // The fix round after the train's review: the loop's typed result, as `record_press` takes a
+    // press's: what it kept is the operation's screen after, and a capture after the first that
+    // stopped it is answered once that is recorded (`stopped`).
+    let mut stopped = None;
+    let after_frame = match ports.as_mut().filter(|_| names_before) {
+        None => None,
+        Some(device) => {
+            let AfterTaken {
+                frame,
+                record,
+                stopped_by,
+            } = match record_after_frame(lock, device, after) {
+                Ok(taken) => taken,
+                Err(error) => {
+                    return Err(after_frame_failed(error, &outcome, after.after_ms, data));
+                }
+            };
+            // The operation as recorded now: its execution names the screen after it.
+            if let Some(execution) = outcome.application.executed.as_mut() {
+                execution.after_frame = Some(frame.frame.frame_id.clone());
+                execution.after_capture = Some(record.clone());
+            }
+            stopped = stopped_by.map(|error| {
+                (
+                    error,
+                    json!({
+                        "after_ms": record.after_ms,
+                        "taken": true,
+                        "captures": record.captures
+                    }),
+                )
+            });
+            Some(AfterFrame {
+                step: frame.step,
+                frame_id: frame.frame.frame_id,
+                path: frame.frame.path,
+                sha256: frame.frame.sha256,
+                record,
+            })
+        }
+    };
+    // The train of stage one: `after_not_still` in the member a press's answer carries it in.
+    let warnings = after_frame
+        .as_ref()
+        .map(|taken| record_after_warnings(&taken.record))
+        .unwrap_or_default();
+    let mut record = record_json(&outcome)?;
+    record["after"] = record_json(&after_frame)?;
+    record["warnings"] = json!(warnings);
+    if let Some((error, taken)) = stopped {
+        return Err(after_loop_stopped(error, outcome.step, record, taken, data));
+    }
+    data["record"] = record;
+    Ok(data)
+}
+
+/// #463 S1-3 round 2: whether a step of the recording is open (`None` when none is) and, when one
+/// is, whether it already declares an application operation, read as `record status` reads it.
+fn open_step_declares(lock: &RecordingLock) -> CliOutcome<Option<bool>> {
+    let Some(LabStatus::Recording(view)) = record_status(lock.state_dir(), lock.instance())? else {
+        return Ok(None);
+    };
+    Ok(view.open_step.map(|index| {
+        view.steps
+            .iter()
+            .any(|step| step.index == index && step.application.is_some())
+    }))
+}
+
+/// The JSON of what the recording answered, for the command's `record`.
+fn record_json<T: serde::Serialize>(value: &T) -> CliOutcome<Value> {
+    serde_json::to_value(value)
+        .map_err(|error| CliError::usage(format!("failed to encode the record: {error}")))
+}
+
+/// `error` with the plain command's answer `data` as the member `operation` of its details.
+fn with_operation(mut error: CliError, data: Value) -> CliError {
+    let mut details = error.details.take().unwrap_or_else(|| json!({}));
+    if let Some(object) = details.as_object_mut() {
+        object.insert("operation".to_string(), data);
+    }
+    error.with_details(details)
+}
+
+/// #463 S1-3: the error of a screen after an application operation that could not be taken (the
+/// fix round after the train's review: its after loop's first capture; nothing of the loop was
+/// kept): the capture's own code and class, its message saying that the operation stands, its
+/// details beginning with `record` (the operation as recorded), `after: {after_ms, taken: false}`
+/// and `operation` (the plain command's answer), then the capture's own members.
+fn after_frame_failed(
+    mut error: CliError,
+    outcome: &CommitApplicationOutcome,
+    after_ms: u64,
+    data: Value,
+) -> CliError {
+    error.message = format!(
+        "{}; the application operation of step {} was performed and recorded and the step is \
+         closed: take the screen after it with capture --record, do not run the operation again",
+        error.message, outcome.step
+    );
+    let record = serde_json::to_value(outcome).unwrap_or(Value::Null);
+    with_operation_record(
+        error,
+        record,
+        json!({"after_ms": after_ms, "taken": false}),
+        data,
+    )
+}
+
+/// The fix round after the train's review (#463 S1-2's loop after #463 S1-3's operation): the
+/// error of an application operation whose after loop a capture after its first stopped, as
+/// `record_press` answers a press's (`after_loop_stopped_press`): the capture's own code and class,
+/// its message saying that the captures after the operation stopped and what was kept (the
+/// recording's wording, `AfterTaken::stopped_by`) and that the operation of `step` stands, without
+/// asking for a screen after it, which was taken; its details beginning with `record` (the
+/// operation as recorded, its execution naming the last capture as its `after_frame` and
+/// `after_capture` with `unfinished`, `after` that capture, `warnings`), `after` (`taken`, the
+/// loop's own `{after_ms, taken: true, captures}`) and `operation` (the plain command's answer),
+/// then the capture's own members.
+fn after_loop_stopped(
+    mut error: CliError,
+    step: u32,
+    record: Value,
+    taken: Value,
+    data: Value,
+) -> CliError {
+    error.message = format!(
+        "{}; the application operation of step {step} was performed and recorded and the step is \
+         closed: take a later screen with capture --record when one is needed, do not run the \
+         operation again",
+        error.message
+    );
+    with_operation_record(error, record, taken, data)
+}
+
+/// `error` with its details beginning with `record`, `after` and `operation`, then the members of
+/// its own details (an object's members it does not name already, any other value as `details`).
+fn with_operation_record(
+    mut error: CliError,
+    record: Value,
+    after: Value,
+    data: Value,
+) -> CliError {
+    let own = error.details.take();
+    let mut details = Map::new();
+    details.insert("record".to_owned(), record);
+    details.insert("after".to_owned(), after);
+    details.insert("operation".to_owned(), data);
+    match own {
+        Some(Value::Object(members)) => {
+            for (name, value) in members {
+                details.entry(name).or_insert(value);
+            }
+        }
+        Some(other) => {
+            details.entry("details".to_owned()).or_insert(other);
+        }
+        None => {}
+    }
+    error.with_details(Value::Object(details))
+}
+
+/// #463 S1-3: the caller's clock and the Runtime's capture of `session app <verb> --record`: each
+/// frame is taken as `capture --record` takes it; round 2: with the reference of the frame the
+/// Runtime committed for it, as a press's capture carries it (`record_before_frame` asks for it;
+/// the operation names none). The train of stage one: the clock's readings are the time since
+/// `origin`, the command's start (a monotonic clock, as `wait` sleeps on it), so that the after
+/// loop of #463 S1-2 times its captures. The fix round after the train's review: on the Runtime's
+/// capture endpoint of the command's instance (`endpoint`), as a recorded press takes its frames
+/// (`runtime_captured_frame`), so no local device configuration is read.
+struct ApplicationFrames {
+    endpoint: RuntimeCaptureEndpoint,
+    origin: Instant,
+}
+
+impl RecordFramePorts for ApplicationFrames {
+    fn wait(&mut self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        self.origin.elapsed()
+    }
+
+    fn capture(&mut self) -> CliOutcome<CapturedFrame> {
+        runtime_captured_frame(&self.endpoint)
+    }
+}
+
+/// The completed receipt of the application operation, as the recording stores it. #463 S1-3: its
+/// screens before and after are the recording's to name (`commit_application`, the frame after
+/// it), none here; #463 S1-5: so is its time, stamped where it is committed as a click's is.
 fn performed_execution(output: &RuntimeFlowOutput) -> CliOutcome<ApplicationExecution> {
     let receipt = output.receipt();
     let Some(RuntimeResult::ApplicationLifecycleCompleted { action_id, .. }) = receipt.result()
@@ -437,6 +799,10 @@ fn performed_execution(output: &RuntimeFlowOutput) -> CliOutcome<ApplicationExec
         action_id: runtime_text(action_id)?,
         receipt_state: runtime_text(&receipt.state())?,
         application_event_ids,
+        before_frame: None,
+        after_frame: None,
+        after_capture: None,
+        executed_at_unix_ms: None,
     })
 }
 

@@ -208,11 +208,18 @@ naming this file.
   entered (`record_id`, `record_started_at_unix_ms`) and the `step` it became. `ac_do` with
   `record` and `swipe` on a step without a click records that swipe as the step's. A recording kept
   only as material is ended with `ac_record_archive`: no marks are needed; it writes
-  `archive-manifest-<n>.json` beside the frames and the step table, keeps every file and ends the
-  session (`archived`), and with `copy_to` (the absolute path of a directory that does not exist
-  or is empty; a relative or empty one is `not_absolute`) copies them and checks every copy. With
-  `record_id` it also archives a recording `record start --force` left behind, from its own step
-  table, and leaves the session header, another recording's, as it is (`lab.session_header`).
+  `archive-manifest-<n>.json` beside the frames and the step table (#463 S1-5, 0.12.64:
+  `actingcommand.lab-recording-archive.v2`, whose `material` names each press with the frame it
+  happened on and where it was pressed, and the final screen; `lab.warnings` holds
+  `final_frame_missing` when it names none), keeps every file and ends the session (`archived`),
+  and with `copy_to` (the absolute path of a directory that does not exist or is empty; a relative
+  or empty one is `not_absolute`) copies the step table, the manifest and the frames `material`
+  names, or with `all_frames` every frame the manifest lists, and checks every copy; the copy's
+  manifest says which (`copy.frames`, `material` or `all`), a v1 manifest is copied as it is with
+  every file it lists, and `all_frames` without `copy_to` is `validation_failed`
+  (`copy_to_only`). With `record_id` it also archives a recording `record start --force` left
+  behind, from its own step table, and leaves the session header, another recording's, as it is
+  (`lab.session_header`).
   `ac_record_reopen` makes an archived recording active again, so that `ac_record_mark` and
   `ac_record_stop` can build its package later. #463 L1 (0.12.60; `contracts/lab-recording.md`,
   "One call per step"): `ac_do` with `capture` and `record` records a whole step in one call:
@@ -222,7 +229,24 @@ naming this file.
   transition, another step or a frame file, is `validation_failed`: send it with `ac_record_mark`),
   and `next_frame_after_ms` (0 to 60000) takes the next frame after
   a press performed without a failure, as `capture --record` takes it, opening the next step
-  (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command.
+  (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command. #463 S1-7
+  (0.12.64; `contracts/lab-recording.md`, "A recording holds its instance"): a recording holds its
+  instance, so no pause is asked of the agent: `ac_record_start` pauses the instance's scheduling
+  with the recording's own reason `lab-record-<ms>` (an instance already paused by another party is
+  held by that pause, which the recording never resumes; with nothing listening where the Runtime
+  would, it starts holding nothing, `hold.warnings` `no_runtime_listening`; a Runtime that listens
+  but does not complete the handshake fails the start, and so do a state root that cannot be
+  resolved and a connection that times out). **`ac_record_start` waits until the
+  instance's running task has ended**: up to the pause's drain (300 s), its checkpoint grace (30 s)
+  and the IO timeout (5 s), 335 s in all; a caller with a shorter time limit must give it that time.
+  Should the start end before the pause answers,
+  the session header already names the hold and `ac_record_stop` releases it. `ac_record_archive`
+  and `ac_record_stop` resume only the recording's own pause, found by its reason. A release that
+  fails keeps the hold: the archive or the stop stands, and the answer is the failure with
+  `hold.kept` and `next.release`, the call that tries the release again (`record stop` again, or
+  `record archive` with `record_id`), never an unconditional resume. A press with `record` on an
+  instance that is not held is made and recorded with `record.warnings` `instance_not_held`
+  (`instance_hold_unread` when the status read got no answer); `ac_record_status` shows the hold.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any

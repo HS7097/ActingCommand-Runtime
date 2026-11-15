@@ -232,6 +232,13 @@ const DECLARATIONS: &[(&str, Mode)] = &[
         "do --capture --record",
         Mode::Refused("record_flag_unsupported"),
     ),
+    // #463 S1-1: a press recorded by the command that makes it has no dry run.
+    ("tap --record", Mode::Refused("record_flag_unsupported")),
+    ("swipe --record", Mode::Refused("record_flag_unsupported")),
+    (
+        "long-tap --record",
+        Mode::Refused("record_flag_unsupported"),
+    ),
     ("session app", UNSUPPORTED),
     ("session app launch", UNSUPPORTED),
     ("session app stop", UNSUPPORTED),

@@ -182,6 +182,21 @@ mod gate_449_rec_arch;
 // `--record`.
 #[path = "gate_463_l1.rs"]
 mod gate_463_l1;
+// #463 S1-1: `tap`, `swipe` and `long-tap --record` refuse a dry run, and `--after-ms` needs
+// `--record`.
+#[path = "gate_463_s11.rs"]
+mod gate_463_s11;
+// #463 S1-2: the flags of the captures after a recorded press need `--record`.
+#[path = "gate_463_s12.rs"]
+mod gate_463_s12;
+// #463 S1-3: an application operation in the middle of a business is the open step's effect with
+// the screens before and after it; the entry launch is as before.
+#[path = "gate_463_s13.rs"]
+mod gate_463_s13;
+// #463 S1-7: a recording holds its instance: `record start` pauses its scheduling with a reason of
+// its own, and the end of the recording resumes only that pause.
+#[path = "gate_463_s17.rs"]
+mod gate_463_s17;
 // Workflow #464 P2: `standard-pack build` builds a game's standard pack from one commit on the
 // steps of `resource verify`, whose report is as before.
 #[path = "gate_464_p2.rs"]

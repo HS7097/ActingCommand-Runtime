@@ -119,28 +119,48 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("session recover", ["device"], "available"),
         command_cap("session recover --stale-capture", ["device"], "available"),
         command_cap("session record", ["offline"], "available"),
-        command_cap("session record start", ["offline"], "available"),
+        // #463 S1-7 (0.12.64; `contracts/lab-recording.md`, "A recording holds its instance"):
+        // `record start` pauses the instance's scheduling through the Runtime when one listens,
+        // and `record stop` and `record archive` resume the recording's own pause; with nothing
+        // listening they work offline (`runtime_optional`, as `device_optional` says of a device).
+        command_cap(
+            "session record start",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("session record status", ["offline"], "available"),
-        command_cap("session record stop", ["offline"], "available"),
+        command_cap(
+            "session record stop",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("session record mark", ["offline"], "available"),
         command_cap("session record step", ["offline", "device"], "available"),
         command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
         // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
-        command_cap("session record archive", ["offline"], "available"),
+        command_cap(
+            "session record archive",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("session record reopen", ["offline"], "available"),
         command_cap("record", ["offline"], "available"),
-        command_cap("record start", ["offline"], "available"),
+        command_cap("record start", ["offline", "runtime_optional"], "available"),
         command_cap("record status", ["offline"], "available"),
-        command_cap("record stop", ["offline"], "available"),
+        command_cap("record stop", ["offline", "runtime_optional"], "available"),
         command_cap("record mark", ["offline"], "available"),
         command_cap("record step", ["offline", "device"], "available"),
         command_cap("record candidates", ["offline"], "available"),
         command_cap("record amend", ["offline"], "available"),
         // Workflow #434 LAB-5G4c: the binding draft of a `record stop` answer; it changes nothing.
         command_cap("record draft", ["offline", "read_only"], "available"),
-        // Workflow #449 REC-ARCH.
-        command_cap("record archive", ["offline"], "available"),
+        // Workflow #449 REC-ARCH; #463 S1-7: the archive resumes the recording's own pause.
+        command_cap(
+            "record archive",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("record reopen", ["offline"], "available"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
@@ -156,6 +176,11 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             ["running_runtime", "device", "lab_lease"],
             "available",
         ),
+        // #463 S1-1: a press recorded by the command that makes it (its dry run is refused,
+        // `dry_run_gate`); the needs are the command's own.
+        command_cap("tap --record", ["device"], "available"),
+        command_cap("swipe --record", ["device"], "available"),
+        command_cap("long-tap --record", ["device"], "available"),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
         command_cap("locate", ["device"], "available"),
