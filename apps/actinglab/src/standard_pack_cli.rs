@@ -50,7 +50,9 @@
 //! tooling's writer; an end not read is answered with the run's request id and the line that reads
 //! it later, `--collect <request_id>`, which sends nothing. A result that is not known is answered
 //! as that; nothing is ever sent again. A passed trial is not an authorization to enable; a trial
-//! counts nothing toward a break-in; a trial is one run, sent once.
+//! counts nothing toward a break-in; a trial is one run, sent once. Fix round 2: `--collect` takes
+//! only a run sent by hand on the Lab's channel; a run has one record, whatever content the
+//! package directory holds when it is collected; a run is answered by its end state.
 
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::codes::{ContractCode, ContractLocation};
@@ -67,10 +69,11 @@ use actingcommand_resource_tooling::{
     StandardPackReadyRequest, StandardPackTrialAnswer, StandardPackTrialRequest,
     TrialCollectProblem, TrialRecordPlan, TrialRunEnd, check_standard_pack_root, check_trial_run,
     compose_standard_packs, judge_standard_pack_readiness, plan_standard_pack_trial,
-    standard_pack_adopt, write_trial_record,
+    standard_pack_adopt, trial_record_of_run, write_trial_record,
 };
 use actingcommand_runtime_client::{
-    ContainedRunState, ContainedRunStatus, RunKey, RuntimeClient, RuntimeClientError,
+    ContainedRunState, ContainedRunStatus, RunDispatch, RunKey, RunOrigin, RuntimeClient,
+    RuntimeClientError,
 };
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -544,7 +547,11 @@ impl TrialRun<'_> {
     /// Workflow #463 S3-11: `--collect <request_id>`: sends nothing; reads the run `request_id` as
     /// `run show` reads it, after one status read that resolves the trial's instance; a run whose
     /// facts do not name the trial's package or its instance is `trial_collect_mismatch`; then its
-    /// end is answered and recorded as a sent run's is ([`Self::ended`]).
+    /// end is answered and recorded as a sent run's is ([`Self::ended`]). Fix round 2: so is a run
+    /// that this command cannot have sent ([`sent_otherwise`]): the scheduler's, one whose request's
+    /// origin is not recorded, or one sent by hand on another channel than the Lab's. An ordinary
+    /// `run start` of the same package on the Lab's channel is not told apart: nothing the run's
+    /// facts hold names the command that sent it.
     fn collect(
         &self,
         client: &RuntimeClient,
@@ -581,7 +588,7 @@ impl TrialRun<'_> {
             } else if run.instance_id != Some(instance.instance_id()) {
                 Some(TrialCollectProblem::OtherInstance)
             } else {
-                None
+                sent_otherwise(run.dispatch, run.origin)
             };
             if let Some(problem) = problem {
                 return Err(refusal(
@@ -589,8 +596,8 @@ impl TrialRun<'_> {
                         .request_id(id)
                         .trial_collect_problem(problem),
                     format!(
-                        "the run {id} is not a run of {} on {} ({}): give --collect the request \
-                         id this trial's own answer named",
+                        "the run {id} is not a trial's run of {} on {} ({}): give --collect the \
+                         request id this trial's own answer named",
                         plan.package_id,
                         plan.instance,
                         problem.as_str()
@@ -612,8 +619,15 @@ impl TrialRun<'_> {
     /// normally succeeds (another end than `--expect` named is `matched` false with the warning
     /// `trial_end_unexpected`); a failed or cancelled run is refused with its own code and values
     /// beside the same members, as `run start` answers a failed run. Without a terminal, or
-    /// without its record, nothing is written: `trial_end_unread`. A refused write answers the
-    /// writer's code beside the same members.
+    /// without its record, nothing is written ([`Self::no_end`], [`Self::terminal_unrecorded`]).
+    /// A refused write answers the writer's code beside the same members.
+    ///
+    /// Fix round 2: one run, one record: before the writer, a record of the run `id` among the
+    /// package's records, whatever content it names, is `trial_record_exists` naming it, and
+    /// nothing is written. A refusal of that reading or of the writer carries `next`, since the run
+    /// happened and only its record is missing. Whether the run failed is read from its end state as
+    /// `run show` names it, never from whether its terminal names a code: a failed or cancelled run
+    /// whose terminal names none is `trial_end_uncoded`, its record written.
     fn ended(
         &self,
         client: &RuntimeClient,
@@ -624,7 +638,7 @@ impl TrialRun<'_> {
     ) -> CliOutcome<Value> {
         let state = run.state;
         let Some(terminal) = run.terminal else {
-            return Err(self.end_unread(id, state, sent));
+            return Err(self.no_end(id, state, sent));
         };
         let recorded = client
             .query_events(
@@ -642,7 +656,7 @@ impl TrialRun<'_> {
             .find(|event| event.sequence == terminal.sequence)
             .map(|event| event.timestamp_unix_ms)
         else {
-            return Err(self.end_unread(id, state, sent));
+            return Err(self.terminal_unrecorded(id, state, sent));
         };
         let record = PackTrialRecord::of_run(
             self.kept.clone(),
@@ -669,9 +683,26 @@ impl TrialRun<'_> {
             members.insert("matched".to_owned(), json!(matched));
         }
         let mut warnings = record.unexpected_end().into_iter().collect::<Vec<_>>();
-        let written = match write_trial_record(&self.request.state_dir, &record) {
+        let state_dir = &self.request.state_dir;
+        match trial_record_of_run(state_dir, &record.plan.package_id, id) {
+            Ok(None) => {}
+            Ok(Some(kept)) => {
+                return Err(refusal(
+                    &Outcome::new(ResourceToolingCode::TrialRecordExists).path(&kept),
+                    format!(
+                        "the run {id} is recorded already, in {}: a run has one record, whatever \
+                         the package directory holds now; nothing was written",
+                        kept.display()
+                    ),
+                    members,
+                    ErrorKind::UsageValidation,
+                ));
+            }
+            Err(error) => return Err(self.not_recorded(error, members, id)),
+        }
+        let written = match write_trial_record(state_dir, &record) {
             Ok(written) => written,
-            Err(error) => return Err(beside(error, members)),
+            Err(error) => return Err(self.not_recorded(error, members, id)),
         };
         members.insert(
             "record".to_owned(),
@@ -687,8 +718,24 @@ impl TrialRun<'_> {
         if !warnings.is_empty() {
             members.insert("warnings".to_owned(), json!(warnings));
         }
-        let Some(failed) = &record.end.failure_code else {
+        if state == ContainedRunState::Succeeded {
             return Ok(Value::Object(members));
+        }
+        let Some(failed) = &record.end.failure_code else {
+            let word = run_state_word(state);
+            return Err(refusal(
+                &Outcome::new(ResourceToolingCode::TrialEndUncoded)
+                    .request_id(id)
+                    .run_state(word),
+                format!(
+                    "the trial's run {id} ended {} and its terminal names no failure code; its \
+                     record is {}",
+                    word.as_str(),
+                    written.path.display()
+                ),
+                members,
+                ErrorKind::DeviceInstance,
+            ));
         };
         members.insert(
             "outcome".to_owned(),
@@ -731,25 +778,72 @@ impl TrialRun<'_> {
         refusal(outcome, message, members, ErrorKind::DeviceInstance)
     }
 
-    /// `trial_end_unread`: the run `id` read in `state` shows no end a record can keep.
-    fn end_unread(&self, id: &str, state: ContainedRunState, sent: bool) -> CliError {
+    /// The run `id` read in `state` without a terminal, so that no record was written (fix round 2:
+    /// each cause its own code, as the next step differs). A run interrupted by a later Runtime
+    /// start or takeover (`interrupted_unterminated`) is `trial_run_interrupted`, without `next`:
+    /// it has no end to record, and nothing this command does gives it one. Any other state
+    /// (`not_found`, `admitted`, `running`) is a run that has not ended yet, or has no fact yet:
+    /// `trial_end_unread` with `run_state` and `next`, the line that reads it again later.
+    fn no_end(&self, id: &str, state: ContainedRunState, sent: bool) -> CliError {
         let word = run_state_word(state);
-        let outcome = Outcome::new(ResourceToolingCode::TrialEndUnread)
-            .request_id(id)
-            .run_state(word);
-        let mut error = self.unread(
-            &outcome,
-            format!(
-                "the run {id} reads {} and shows no end a record can keep: no record was written",
-                word.as_str()
+        let mut error = match state {
+            ContainedRunState::InterruptedUnterminated => refusal(
+                &Outcome::new(ResourceToolingCode::TrialRunInterrupted).request_id(id),
+                format!(
+                    "the run {id} was interrupted: the Runtime started or took over after its first \
+                     fact and it has no terminal, so it has no end to record; no record was written"
+                ),
+                self.members(sent, Some(id)),
+                ErrorKind::DeviceInstance,
             ),
-            id,
-            sent,
-        );
+            _ => self.unread(
+                &Outcome::new(ResourceToolingCode::TrialEndUnread)
+                    .request_id(id)
+                    .run_state(word),
+                format!(
+                    "the run {id} reads {} and has not ended yet: no record was written; read it \
+                     again later with the line in next",
+                    word.as_str()
+                ),
+                id,
+                sent,
+            ),
+        };
         if let Some(Value::Object(details)) = error.details.as_mut() {
             details.insert("end".to_owned(), json!({"state": state}));
         }
         error
+    }
+
+    /// Fix round 2: `trial_terminal_unrecorded`: the run `id` read in `state` names its terminal,
+    /// but the read of the ledger's record of that terminal, by its request and its sequence, did
+    /// not find it, so no record was written; the next step is to look at the run's facts in the
+    /// ledger, so the answer carries no `next`.
+    fn terminal_unrecorded(&self, id: &str, state: ContainedRunState, sent: bool) -> CliError {
+        let word = run_state_word(state);
+        let mut members = self.members(sent, Some(id));
+        members.insert("end".to_owned(), json!({"state": state}));
+        refusal(
+            &Outcome::new(ResourceToolingCode::TrialTerminalUnrecorded)
+                .request_id(id)
+                .run_state(word),
+            format!(
+                "the run {id} reads {} with a terminal, but the ledger's record of that terminal was \
+                 not found at its sequence: no record was written; look at the run's facts in the \
+                 ledger",
+                word.as_str()
+            ),
+            members,
+            ErrorKind::DeviceInstance,
+        )
+    }
+
+    /// Fix round 2: the refusal `error` of the reading of the package's records or of the writer,
+    /// beside `members` and `next`, the line that records the run `id` later: the run happened and
+    /// only its record is missing.
+    fn not_recorded(&self, error: CliError, mut members: Map<String, Value>, id: &str) -> CliError {
+        members.insert("next".to_owned(), self.collect_line(id));
+        beside(error, members)
     }
 
     /// The refusal of a run that was not sent: the line `run start`'s own function answered
@@ -862,6 +956,19 @@ fn end_answer(state: ContainedRunState, end: &TrialRunEnd) -> Value {
         );
     }
     Value::Object(answer)
+}
+
+/// Workflow #463 S3-11 fix round 2: why a run of the trial's package on its instance was not sent by
+/// this command, as far as its facts tell (`dispatch` and `origin`, which its request's origin
+/// record gives); `None` for a run sent by hand on the Lab's channel, as a trial's run is sent. An
+/// ordinary `run start` on the Lab's channel answers `None` too: its facts name no command.
+fn sent_otherwise(dispatch: RunDispatch, origin: RunOrigin) -> Option<TrialCollectProblem> {
+    match (dispatch, origin) {
+        (RunDispatch::Manual, RunOrigin::Lab) => None,
+        (RunDispatch::Scheduled, _) => Some(TrialCollectProblem::Scheduled),
+        (RunDispatch::Unknown, _) => Some(TrialCollectProblem::OriginUnknown),
+        (RunDispatch::Manual, _) => Some(TrialCollectProblem::OtherChannel),
+    }
 }
 
 /// Workflow #463 S3-11: a run's state as the word of the vocabulary `run_state`, which names the

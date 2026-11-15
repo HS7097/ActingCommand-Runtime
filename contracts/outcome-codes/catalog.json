@@ -2866,7 +2866,7 @@
     },
     "trial_collect_problem": {
       "type": "vocab:trial_collect_problem",
-      "description": "Why the run a trial's --collect names is not a run of the trial: its facts do not name the trial's package, or the instance the trial is for (Workflow #463 S3-11, since 0.12.64)."
+      "description": "Why the run a trial's --collect names is not a trial's run: its facts do not name the trial's package or the instance the trial is for, or (fix round 2) do not show a run sent by hand on the Lab's channel (Workflow #463 S3-11, since 0.12.64)."
     }
   },
   "vocabularies": {
@@ -10601,6 +10601,15 @@
         },
         "other_instance": {
           "description": "The run's facts do not name the instance the trial is for: they name another one, or none."
+        },
+        "scheduled": {
+          "description": "Fix round 2: the run is the scheduler's (dispatch scheduled); a trial's run is sent by hand."
+        },
+        "origin_unknown": {
+          "description": "Fix round 2: the run's facts hold no record of its request's origin (dispatch unknown), so whether it was sent by hand is not known."
+        },
+        "other_channel": {
+          "description": "Fix round 2: the run was sent by hand on another channel than the Lab's (origin cli or ui); a trial's run is sent on the Lab's channel."
         }
       }
     }

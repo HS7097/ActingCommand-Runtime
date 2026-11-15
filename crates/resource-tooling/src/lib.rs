@@ -224,7 +224,8 @@ pub use standard_pack_schedule::{
 // 3: the record's own plan type and the writer's answer.
 pub use codes::{TrialRecordProblem, TrialStatePlace};
 // Workflow #463 S3-11: the run's offline parts: its own refusals and the record of its end; the
-// word of a collected run that is not the trial's.
+// word of a collected run that is not the trial's; fix round 2: the record of a run, whatever its
+// content.
 pub use codes::TrialCollectProblem;
 pub use standard_pack_trial::{
     CONTENT_PREFIX_DIGITS, MAX_AUTHORIZATION_BYTES, PACK_TRIAL_SCHEMA, PackTrialRecord,
@@ -232,5 +233,6 @@ pub use standard_pack_trial::{
     TrialEndKind, TrialIrreversible, TrialIrreversibleBasis, TrialPlan, TrialRecordPlan,
     TrialRunEnd, TrialRunRequirement, TrialValueSource, TrialVariable, WrittenTrialRecord,
     check_trial_run, check_trial_state_dir, installed_root_containing, latest_trial_record,
-    plan_standard_pack_trial, trial_record_path, trial_records, write_trial_record,
+    plan_standard_pack_trial, trial_record_of_run, trial_record_path, trial_records,
+    write_trial_record,
 };

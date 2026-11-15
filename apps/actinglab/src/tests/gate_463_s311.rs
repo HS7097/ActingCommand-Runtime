@@ -32,16 +32,33 @@
 //   `--collect` of it is `trial_record_exists`, one record in the directory;
 // - `s311_collect_of_another_packages_run_is_refused`: `trial_collect_mismatch` `other_package`,
 //   no record.
+// Fix round 2 (rd-1115/brief-463-s311-fix2.md; every made-up ledger now records its request's
+// origin, the Lab's channel unless a test says otherwise, so the terminal is the third record):
+// - `s311_collect_refuses_a_run_this_command_did_not_send`: a run of the trial's package on its
+//   instance that the scheduler sent (`scheduled`), whose origin is not recorded
+//   (`origin_unknown`) or that the command line's own channel sent (`other_channel`) is
+//   `trial_collect_mismatch` with that word, read and not recorded;
+// - `s311_a_second_collect_after_the_content_changed_is_trial_record_exists`: the run recorded,
+//   the package directory changed, a second `--collect` is `trial_record_exists` naming the first
+//   record, without `next`, one record in the directory;
+// - `s311_a_failed_run_whose_terminal_names_no_code_is_no_success`: a failed terminal without a
+//   failure code is `trial_end_uncoded` (`run_state` `failed`), exit 4, the record written;
+// - `s311_an_end_not_read_is_named_by_its_cause`: a run not ended yet is `trial_end_unread` with
+//   `next`, an interrupted run `trial_run_interrupted` and a terminal whose record is not found
+//   `trial_terminal_unrecorded`, both without `next`; no record;
+// - `s311_a_refused_write_names_the_line_that_records_the_run_later`: a `.part` of the record's
+//   name left there: the writer's `trial_record_exists` naming it, with `next`.
 // No device, no clock read, no sleep: temporary directories, a made-up package, made-up ledgers.
 
 use super::*;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    AuditInput, CorrelationId, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventQuery,
-    EventSeverity, EventSource, IdentifierIssuer, InstanceId, IssuedInstanceId, OriginModule,
-    OwnerEpoch, ProjectedEvent, ProjectionPayload, RequestId, RuntimeControlPlaneStatus,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryPage, RuntimeInstanceStatus,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    AuditInput, ClientPayloadDraft, CommandPayloadDraft, CorrelationId, EventAction, EventActor,
+    EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft, EventQuery, EventSeverity,
+    EventSource, IdentifierIssuer, InstanceId, IssuedInstanceId, OriginModule, OwnerEpoch,
+    ProjectedEvent, ProjectionPayload, RequestId, RuntimeControlPlaneStatus, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeEventQueryPage, RuntimeInstanceStatus, RuntimeOperation,
+    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
     SanitizationError, SchedulingDisposition, SchedulingEffectEvidence, SecretField,
     SecretFingerprinter, Sha256Fingerprint, TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
     TerminalEvent,
@@ -64,6 +81,9 @@ const SHORT_KEY: &str = "task_short";
 /// The made-up ledgers' first time, 2100-01-01, and one record a second from there on.
 const START_UNIX_MS: u64 = 4_102_444_800_000;
 const SPACING_MS: u64 = 1_000;
+/// The time of a made-up run's terminal, its third record (its request's origin, its admission,
+/// its terminal), which names its trial record.
+const TERMINAL_UNIX_MS: u64 = START_UNIX_MS + 2 * SPACING_MS;
 /// The requests of every connection's handshake.
 const HANDSHAKE: [&str; 2] = ["health", "bind_channel"];
 
@@ -350,6 +370,20 @@ impl SecretFingerprinter for NoSecrets {
     }
 }
 
+/// Who sent a made-up run: the record of its request's origin, or none.
+#[derive(Clone, Copy)]
+enum Sender {
+    /// A request on the Lab's channel (`lab.request`), as a trial's run is sent, and as
+    /// actinglab's own `run start` is.
+    Lab,
+    /// A command on the command line's own channel (`cli.command`): a manual run, not the Lab's.
+    Cli,
+    /// The scheduler's command (`command.received` from the scheduler): a scheduled run.
+    Scheduler,
+    /// No record of the request's origin.
+    Unrecorded,
+}
+
 /// How a made-up run ends.
 #[derive(Clone, Copy)]
 enum End {
@@ -357,27 +391,86 @@ enum End {
     Keyed(&'static str, &'static str),
     /// Failed: its deadline exceeded, on `neutral/home`.
     Failed,
+    /// Failed on `neutral/home`, its terminal naming no failure code, as a ledger may hold one
+    /// (the sanitizer requires the code of a terminal written today, so the recorded fact's
+    /// `outcome` is taken out after it).
+    FailedUncoded,
+    /// Not ended: its admission and nothing after it.
+    Unended,
+    /// Interrupted: its admission, then a Runtime start, and no terminal.
+    Interrupted,
 }
 
-/// The ledger of one run of `package_id` on `instance` that ended `end`: its admission and its
-/// terminal, one second apart from [`START_UNIX_MS`]. Its request id, and its correlation when
-/// given, are `ids` (the client's: the links are rewritten to them, since the client mints its
-/// own); else minted here.
+/// The ledger of one run of `package_id` on `instance` sent by `sender` that ended `end`: the
+/// record of its request's origin (none for [`Sender::Unrecorded`]), its admission, and its
+/// terminal or the Runtime start that interrupted it, at [`START_UNIX_MS`] and one and two seconds
+/// later (the terminal at [`TERMINAL_UNIX_MS`]). Its request id, and its correlation when given,
+/// are `ids` (the client's: the links are rewritten to them, since the client mints its own);
+/// else minted here.
 fn run_ledger(
+    sender: Sender,
     instance: IssuedInstanceId,
     package_id: &str,
     end: End,
     ids: Option<(RequestId, Option<CorrelationId>)>,
 ) -> Vec<ProjectedEvent> {
     let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    let request = issuer.mint_request_id().expect("request id");
     let links = EventLinksDraft::default()
         .with_instance_id(instance)
-        .with_request_id(issuer.mint_request_id().expect("request id"))
+        .with_request_id(request)
         .with_correlation_id(issuer.mint_correlation_id().expect("correlation id"))
         .with_task_id(issuer.mint_task_id().expect("task id"))
         .with_run_id(issuer.mint_run_id().expect("run id"));
+    let runtime = EventOrigin::new(
+        EventSource::Runtime,
+        OriginModule::Runtime,
+        EventActor::Runtime,
+    );
+    let semantic = |fact: TaskSemanticFact| -> EventPayloadDraft {
+        TaskPayloadDraft::semantic(fact, AuditInput::new()).into()
+    };
+    let origin: Option<(EventOrigin, EventPayloadDraft)> = match sender {
+        Sender::Lab => Some((
+            EventOrigin::new(EventSource::Lab, OriginModule::Actinglab, EventActor::Lab),
+            ClientPayloadDraft::lab_request(EventAction::RuntimeTaskRun, AuditInput::new()).into(),
+        )),
+        Sender::Cli => Some((
+            EventOrigin::new(EventSource::Cli, OriginModule::Actingctl, EventActor::Cli),
+            ClientPayloadDraft::cli_command(EventAction::RuntimeTaskRun, AuditInput::new()).into(),
+        )),
+        Sender::Scheduler => Some((
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Scheduler,
+                EventActor::Scheduler,
+            ),
+            CommandPayloadDraft::received(EventAction::RuntimeTaskRun, AuditInput::new()).into(),
+        )),
+        Sender::Unrecorded => None,
+    };
+    // Each record: its time (seconds after the first), origin, links and payload.
+    let mut records = Vec::new();
+    if let Some((origin, payload)) = origin {
+        records.push((
+            0_u64,
+            origin,
+            EventLinksDraft::default().with_request_id(request),
+            payload,
+        ));
+    }
+    records.push((
+        1,
+        runtime.clone(),
+        links.clone(),
+        semantic(TaskSemanticFact::PackageAdmitted {
+            package_label: package_id.to_owned(),
+            task_label: "task".to_owned(),
+            response_deadline_monotonic_ms: None,
+        }),
+    ));
     let terminal = match end {
-        End::Keyed(key, page) => TaskSemanticFact::TerminalCommitted {
+        End::Keyed(key, page) => Some(TaskSemanticFact::TerminalCommitted {
             task_result: TaskOutcome::Success,
             final_page: Some(page.to_owned()),
             executed_steps: Some(1),
@@ -388,8 +481,8 @@ fn run_ledger(
                     .expect("a disposition"),
             ),
             task_timing: None,
-        },
-        End::Failed => TaskSemanticFact::TerminalCommitted {
+        }),
+        End::Failed | End::FailedUncoded => Some(TaskSemanticFact::TerminalCommitted {
             task_result: TaskOutcome::Failure,
             final_page: Some("neutral/home".to_owned()),
             executed_steps: Some(0),
@@ -400,29 +493,29 @@ fn run_ledger(
             failure_severe: false,
             scheduling_disposition: None,
             task_timing: None,
-        },
+        }),
+        End::Unended | End::Interrupted => None,
     };
-    let facts = [
-        TaskSemanticFact::PackageAdmitted {
-            package_label: package_id.to_owned(),
-            task_label: "task".to_owned(),
-            response_deadline_monotonic_ms: None,
-        },
-        terminal,
-    ];
+    if let Some(terminal) = terminal {
+        records.push((2, runtime.clone(), links.clone(), semantic(terminal)));
+    }
+    if matches!(end, End::Interrupted) {
+        records.push((
+            2,
+            runtime,
+            EventLinksDraft::default(),
+            RuntimePayloadDraft::started(EventAction::RuntimeStart, AuditInput::new()).into(),
+        ));
+    }
     let mut events = Vec::new();
-    for (index, fact) in (0_u64..).zip(facts) {
+    for (sequence, (seconds, origin, links, payload)) in (1_u64..).zip(records) {
         let sanitized = EventDraft::new(
             issuer.mint_event_id().expect("event id"),
-            START_UNIX_MS + index * SPACING_MS,
+            START_UNIX_MS + seconds * SPACING_MS,
             EventSeverity::Info,
-            EventOrigin::new(
-                EventSource::Runtime,
-                OriginModule::Runtime,
-                EventActor::Runtime,
-            ),
-            links.clone(),
-            TaskPayloadDraft::semantic(fact, AuditInput::new()).into(),
+            origin,
+            links,
+            payload,
         )
         .sanitize(&NoSecrets)
         .expect("sanitize a made-up ledger event");
@@ -430,7 +523,7 @@ fn run_ledger(
             views: Vec::new(),
             artifact_evictions: Vec::new(),
             schema_version: sanitized.schema_version().to_owned(),
-            sequence: index + 1,
+            sequence,
             event_id: *sanitized.event_id(),
             timestamp_unix_ms: sanitized.timestamp_unix_ms(),
             event_type: sanitized.event_type(),
@@ -443,16 +536,54 @@ fn run_ledger(
             artifacts: Vec::new(),
         };
         if let Some((request_id, correlation_id)) = ids {
+            // Only the links a record carries are rewritten: the origin record links its request
+            // alone, a Runtime start nothing.
             let mut relinked = serde_json::to_value(&event.links).expect("links as JSON");
-            relinked["request_id"] = json!(request_id);
-            if let Some(correlation_id) = correlation_id {
+            if relinked.get("request_id").is_some() {
+                relinked["request_id"] = json!(request_id);
+            }
+            if let Some(correlation_id) = correlation_id
+                && relinked.get("correlation_id").is_some()
+            {
                 relinked["correlation_id"] = json!(correlation_id);
             }
             event.links = serde_json::from_value(relinked).expect("links from JSON");
         }
         events.push(event);
     }
+    if matches!(end, End::FailedUncoded)
+        && let Some(terminal) = events.last_mut()
+    {
+        without_failure_code(terminal);
+    }
     events
+}
+
+/// Takes the `outcome` out of the terminal fact `event` records, so that its terminal names no
+/// failure code.
+fn without_failure_code(event: &mut ProjectedEvent) {
+    let ProjectionPayload::Full(payload) = &event.payload else {
+        panic!("a made-up record carries its full payload")
+    };
+    let mut value = serde_json::to_value(payload.as_ref()).expect("the payload as JSON");
+    strip_terminal_outcome(&mut value);
+    event.payload = ProjectionPayload::Full(Box::new(
+        serde_json::from_value(value).expect("the payload from JSON"),
+    ));
+}
+
+/// Removes `outcome` from every object of `value` that holds a `task_result` (a terminal fact).
+fn strip_terminal_outcome(value: &mut Value) {
+    match value {
+        Value::Object(members) => {
+            if members.contains_key("task_result") {
+                members.remove("outcome");
+            }
+            members.values_mut().for_each(strip_terminal_outcome);
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_terminal_outcome),
+        _ => {}
+    }
 }
 
 /// The request id of the run of `events`, as text.
@@ -535,6 +666,7 @@ fn run_answered(
             request.operation()
         );
         let events = run_ledger(
+            Sender::Lab,
             instance,
             PACKAGE_ID,
             end,
@@ -571,6 +703,9 @@ fn run_answered(
                 )
                 .expect("a failed receipt"),
             )),
+            End::FailedUncoded | End::Unended | End::Interrupted => {
+                unreachable!("a sent run of these tests ends keyed or failed")
+            }
         }
     }
 }
@@ -627,15 +762,59 @@ fn record_at(path: &Value) -> Value {
     serde_json::from_slice(&fs::read(path).expect("the record file")).expect("the record reads")
 }
 
-/// The record's file name of the plan `plan` for a run whose terminal was recorded second.
+/// The record's file name of the plan `plan` for a made-up run, whose terminal was recorded at
+/// [`TERMINAL_UNIX_MS`].
 fn record_name(plan: &Value) -> String {
     format!(
         "{}-{}.json",
         plan["content_hash_prefix"]
             .as_str()
             .expect("the content prefix"),
-        START_UNIX_MS + SPACING_MS
+        TERMINAL_UNIX_MS
     )
+}
+
+/// Answers one event query with no record, at the snapshot `snapshot`: a ledger that does not
+/// answer the record the query names.
+fn no_record(snapshot: u64) -> impl FnOnce(&RuntimeRequest) -> ScriptedAnswer + Send + 'static {
+    move |request| {
+        let RuntimeOperation::QueryEvents { page, .. } = request.operation() else {
+            panic!("an event query, got {:?}", request.operation())
+        };
+        let page = RuntimeEventQueryPage::new(Vec::new(), snapshot, page.limit(), false, None)
+            .expect("an event page");
+        ScriptedAnswer::completed(request, RuntimeResult::EventPage { page })
+    }
+}
+
+/// The connection of one `--collect` whose Runtime answers its status and every event query from
+/// `ledger`.
+fn collected(
+    owner_epoch: OwnerEpoch,
+    instance_id: InstanceId,
+    ledger: Vec<ProjectedEvent>,
+) -> ScriptedConnection {
+    ScriptedConnection::new()
+        .request(status(owner_epoch, instance_id))
+        .ledger(ledger)
+}
+
+/// The last two words of the line the member `next` of `details` names (`--collect` and the
+/// request id, when it is the line that records the run later).
+fn next_tail(details: &Value) -> Vec<Value> {
+    let next = details["next"]["collect"]
+        .as_array()
+        .cloned()
+        .expect("the line that reads the end later");
+    next[next.len() - 2..].to_vec()
+}
+
+/// The names in the trial records' directory `trials`.
+fn names_in(trials: &Path) -> Vec<String> {
+    fs::read_dir(trials)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect()
 }
 
 #[test]
@@ -772,7 +951,7 @@ fn s311_a_run_ending_on_the_target_page_records_its_key_and_matched() {
 
     let kept = record_at(&data["record"]);
     assert_eq!(kept["schema_version"], "actingcommand.pack-trial.v1");
-    assert_eq!(kept["at_unix_ms"], START_UNIX_MS + SPACING_MS);
+    assert_eq!(kept["at_unix_ms"], TERMINAL_UNIX_MS);
     assert_eq!(kept["plan"]["authorization"], AUTHORIZATION);
     assert_eq!(kept["plan"]["expect"], DONE_KEY);
     assert_eq!(kept["request_id"], request_id.as_str());
@@ -998,6 +1177,7 @@ fn s311_a_wait_that_runs_out_writes_no_record_and_collect_records_it_once() {
 
     // The Runtime's ledger of that run: `next`, twice.
     let ledger = run_ledger(
+        Sender::Lab,
         instance,
         PACKAGE_ID,
         End::Keyed(DONE_KEY, "neutral/done"),
@@ -1083,6 +1263,7 @@ fn s311_collect_of_another_packages_run_is_refused() {
         .expect("instance id");
     let instance_id = *instance.transport();
     let ledger = run_ledger(
+        Sender::Lab,
         instance,
         OTHER_PACKAGE,
         End::Keyed(DONE_KEY, "neutral/done"),
@@ -1115,4 +1296,360 @@ fn s311_collect_of_another_packages_run_is_refused() {
     );
     assert_eq!(details["sent"], false, "{details}");
     assert!(!context.trials().exists(), "a record was written");
+}
+
+#[test]
+fn s311_collect_refuses_a_run_this_command_did_not_send() {
+    let context = Context::new();
+    let instance = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id");
+    let instance_id = *instance.transport();
+    // Runs of the trial's own package on its own instance that ended on the target page, each
+    // sent otherwise than a trial's run is: by the scheduler, by a sender the ledger does not
+    // record, by hand on the command line's own channel. (An ordinary `run start` on the Lab's
+    // channel is not told apart from a trial's run: its facts name no command.)
+    let cases = [
+        (Sender::Scheduler, "scheduled"),
+        (Sender::Unrecorded, "origin_unknown"),
+        (Sender::Cli, "other_channel"),
+    ];
+    let ledgers = cases.map(|(sender, _)| {
+        run_ledger(
+            sender,
+            instance,
+            PACKAGE_ID,
+            End::Keyed(DONE_KEY, "neutral/done"),
+            None,
+        )
+    });
+    let request_ids = ledgers
+        .each_ref()
+        .map(|ledger| request_id_of(ledger.as_slice()));
+    let runtime = ScriptedRuntime::start(&context.runtime_root(), |owner_epoch| {
+        ledgers
+            .into_iter()
+            .map(|ledger| collected(owner_epoch, instance_id, ledger))
+            .collect()
+    });
+    let answers = request_ids.each_ref().map(|request_id| {
+        context.line(&[
+            "--authorization",
+            AUTHORIZATION,
+            "--collect",
+            request_id.as_str(),
+        ])
+    });
+    let record = runtime.finish();
+    assert_eq!(record.connections.len(), cases.len());
+    for connection in &record.connections {
+        assert_eq!(
+            operations(connection),
+            frames(&["status", "query_events", "query_events", "query_events"])
+        );
+    }
+    assert!(record.unscripted.is_empty());
+
+    for ((answered, request_id), (_, word)) in answers.iter().zip(&request_ids).zip(cases) {
+        let details = refused(answered, "trial_collect_mismatch", 2);
+        assert_eq!(
+            details["outcome"]["values"],
+            json!({"request_id": request_id, "trial_collect_problem": word}),
+            "{details}"
+        );
+        assert_eq!(details["sent"], false, "{details}");
+    }
+    assert!(!context.trials().exists(), "a record was written");
+}
+
+#[test]
+fn s311_a_second_collect_after_the_content_changed_is_trial_record_exists() {
+    let context = Context::new();
+    let instance = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id");
+    let instance_id = *instance.transport();
+    let ledger = run_ledger(
+        Sender::Lab,
+        instance,
+        PACKAGE_ID,
+        End::Keyed(DONE_KEY, "neutral/done"),
+        None,
+    );
+    let request_id = request_id_of(&ledger);
+    let runtime = ScriptedRuntime::start(&context.runtime_root(), |owner_epoch| {
+        vec![
+            collected(owner_epoch, instance_id, ledger.clone()),
+            collected(owner_epoch, instance_id, ledger),
+        ]
+    });
+    let collect = || {
+        context.line(&[
+            "--authorization",
+            AUTHORIZATION,
+            "--collect",
+            request_id.as_str(),
+        ])
+    };
+    let first = collect();
+    // The package directory changes after the run was recorded: its content is another.
+    let task = context
+        .package()
+        .join("resources/operations/task/task.json");
+    let mut changed: Value = serde_json::from_slice(&fs::read(&task).unwrap()).unwrap();
+    changed["goal"] = json!("S3-11 fixture, changed after its run");
+    fs::write(&task, serde_json::to_vec_pretty(&changed).unwrap()).unwrap();
+    let second = collect();
+    let record = runtime.finish();
+    let reads = frames(&[
+        "status",
+        "query_events",
+        "query_events",
+        "query_events",
+        "query_events",
+    ]);
+    assert_eq!(operations(&record.connections[0]), reads);
+    assert_eq!(operations(&record.connections[1]), reads);
+    assert!(record.unscripted.is_empty());
+
+    let shown = first.envelope_json();
+    assert_eq!(first.exit_code(), 0, "{shown}");
+    let data = first.envelope.data.clone().expect("the answer");
+    let name = record_name(&data["plan"]);
+    let place = context.trials().join(&name);
+    assert_eq!(
+        data["record"],
+        place.display().to_string().as_str(),
+        "{shown}"
+    );
+
+    let details = refused(&second, "trial_record_exists", 2);
+    assert_ne!(
+        details["plan"]["content_hash_prefix"], data["plan"]["content_hash_prefix"],
+        "{details}"
+    );
+    assert_eq!(
+        details["outcome"]["values"],
+        json!({"path": place.display().to_string()}),
+        "{details}"
+    );
+    assert_eq!(details["request_id"], request_id.as_str(), "{details}");
+    assert!(details.get("next").is_none(), "{details}");
+    assert_eq!(names_in(&context.trials()), vec![name]);
+}
+
+#[test]
+fn s311_a_failed_run_whose_terminal_names_no_code_is_no_success() {
+    let context = Context::new();
+    let instance = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id");
+    let instance_id = *instance.transport();
+    let ledger = run_ledger(Sender::Lab, instance, PACKAGE_ID, End::FailedUncoded, None);
+    let request_id = request_id_of(&ledger);
+    let runtime = ScriptedRuntime::start(&context.runtime_root(), |owner_epoch| {
+        vec![collected(owner_epoch, instance_id, ledger)]
+    });
+    let answered = context.line(&[
+        "--authorization",
+        AUTHORIZATION,
+        "--collect",
+        request_id.as_str(),
+    ]);
+    let record = runtime.finish();
+    assert_eq!(
+        operations(&record.connections[0]),
+        frames(&[
+            "status",
+            "query_events",
+            "query_events",
+            "query_events",
+            "query_events"
+        ])
+    );
+    assert!(record.unscripted.is_empty());
+
+    let details = refused(&answered, "trial_end_uncoded", 4);
+    assert_eq!(
+        details["outcome"]["values"],
+        json!({"request_id": request_id, "run_state": "failed"}),
+        "{details}"
+    );
+    assert_eq!(
+        details["end"],
+        json!({"state": "failed", "final_page": "neutral/home"}),
+        "{details}"
+    );
+    let kept = record_at(&details["record"]);
+    assert_eq!(
+        kept["end"],
+        json!({"outcome": "failure", "final_page": "neutral/home"})
+    );
+    assert_eq!(kept["request_id"], request_id.as_str());
+}
+
+#[test]
+fn s311_an_end_not_read_is_named_by_its_cause() {
+    let context = Context::new();
+    let instance = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id");
+    let instance_id = *instance.transport();
+    let unended = run_ledger(Sender::Lab, instance, PACKAGE_ID, End::Unended, None);
+    let interrupted = run_ledger(Sender::Lab, instance, PACKAGE_ID, End::Interrupted, None);
+    let unrecorded = run_ledger(
+        Sender::Lab,
+        instance,
+        PACKAGE_ID,
+        End::Keyed(DONE_KEY, "neutral/done"),
+        None,
+    );
+    let [unended_id, interrupted_id, unrecorded_id] =
+        [&unended, &interrupted, &unrecorded].map(|ledger| request_id_of(ledger.as_slice()));
+    let snapshot = unrecorded.last().map_or(0, |event| event.sequence);
+    // The third ledger answers the run's facts and the two restart reads, but not the read of its
+    // terminal's record.
+    let shared = Arc::new(Mutex::new(unrecorded));
+    let runtime = ScriptedRuntime::start(&context.runtime_root(), |owner_epoch| {
+        vec![
+            collected(owner_epoch, instance_id, unended),
+            collected(owner_epoch, instance_id, interrupted),
+            ScriptedConnection::new()
+                .request(status(owner_epoch, instance_id))
+                .request(page_from(Arc::clone(&shared)))
+                .request(page_from(Arc::clone(&shared)))
+                .request(page_from(Arc::clone(&shared)))
+                .request(no_record(snapshot)),
+        ]
+    });
+    let collect = |request_id: &str| {
+        context.line(&["--authorization", AUTHORIZATION, "--collect", request_id])
+    };
+    let not_ended = collect(unended_id.as_str());
+    let cut_off = collect(interrupted_id.as_str());
+    let unfound = collect(unrecorded_id.as_str());
+    let record = runtime.finish();
+    let three = frames(&["status", "query_events", "query_events", "query_events"]);
+    assert_eq!(operations(&record.connections[0]), three);
+    assert_eq!(operations(&record.connections[1]), three);
+    assert_eq!(
+        operations(&record.connections[2]),
+        frames(&[
+            "status",
+            "query_events",
+            "query_events",
+            "query_events",
+            "query_events"
+        ])
+    );
+    assert!(record.unscripted.is_empty());
+
+    // Not ended yet: read it again later.
+    let details = refused(&not_ended, "trial_end_unread", 4);
+    assert_eq!(
+        details["outcome"]["values"],
+        json!({"request_id": unended_id, "run_state": "admitted"}),
+        "{details}"
+    );
+    assert_eq!(details["end"], json!({"state": "admitted"}), "{details}");
+    assert_eq!(
+        next_tail(&details),
+        [json!("--collect"), json!(unended_id)],
+        "{details}"
+    );
+    // Interrupted: nothing to collect.
+    let details = refused(&cut_off, "trial_run_interrupted", 4);
+    assert_eq!(
+        details["outcome"]["values"],
+        json!({"request_id": interrupted_id}),
+        "{details}"
+    );
+    assert_eq!(
+        details["end"],
+        json!({"state": "interrupted_unterminated"}),
+        "{details}"
+    );
+    assert!(details.get("next").is_none(), "{details}");
+    // A terminal whose record is not found: look at the ledger.
+    let details = refused(&unfound, "trial_terminal_unrecorded", 4);
+    assert_eq!(
+        details["outcome"]["values"],
+        json!({"request_id": unrecorded_id, "run_state": "succeeded"}),
+        "{details}"
+    );
+    assert_eq!(details["end"], json!({"state": "succeeded"}), "{details}");
+    assert!(details.get("next").is_none(), "{details}");
+    assert!(!context.trials().exists(), "a record was written");
+}
+
+#[test]
+fn s311_a_refused_write_names_the_line_that_records_the_run_later() {
+    let context = Context::new();
+    let instance = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id");
+    let instance_id = *instance.transport();
+    let ledger = run_ledger(
+        Sender::Lab,
+        instance,
+        PACKAGE_ID,
+        End::Keyed(DONE_KEY, "neutral/done"),
+        None,
+    );
+    let request_id = request_id_of(&ledger);
+    // The plan names the content; the `.part` of the run's record is left there, so that the
+    // writer refuses.
+    let plan = context.line(&["--plan"]);
+    assert_eq!(plan.exit_code(), 0, "{}", plan.envelope_json());
+    let planned = plan.envelope.data.clone().expect("the plan");
+    let part = context
+        .trials()
+        .join(format!("{}.part", record_name(&planned["plan"])));
+    fs::create_dir_all(context.trials()).unwrap();
+    fs::write(&part, b"left by an interrupted write").unwrap();
+    let runtime = ScriptedRuntime::start(&context.runtime_root(), |owner_epoch| {
+        vec![collected(owner_epoch, instance_id, ledger)]
+    });
+    let answered = context.line(&[
+        "--authorization",
+        AUTHORIZATION,
+        "--collect",
+        request_id.as_str(),
+    ]);
+    let record = runtime.finish();
+    assert_eq!(
+        operations(&record.connections[0]),
+        frames(&[
+            "status",
+            "query_events",
+            "query_events",
+            "query_events",
+            "query_events"
+        ])
+    );
+    assert!(record.unscripted.is_empty());
+
+    let details = refused(&answered, "trial_record_exists", 2);
+    assert_eq!(
+        details["outcome"]["values"],
+        json!({"path": part.display().to_string()}),
+        "{details}"
+    );
+    assert_eq!(details["request_id"], request_id.as_str(), "{details}");
+    assert_eq!(
+        next_tail(&details),
+        [json!("--collect"), json!(request_id)],
+        "{details}"
+    );
+    let part_name = part
+        .file_name()
+        .expect("the part's name")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(names_in(&context.trials()), vec![part_name]);
 }

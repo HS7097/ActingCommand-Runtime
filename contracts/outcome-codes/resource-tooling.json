@@ -1324,9 +1324,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.64",
-      "description": "Workflow #463 S3-10 fix round 2 (contracts/standard-pack-trial.md, \"The record\"): a trial record of that name, or the .part of one, is there already (path, the file that is there) and is never replaced: the writer writes a record under its name with .part added, a file created anew, and links it to its name, which fails when the name is taken (fix round 3: or, where the link cannot be made, creates the name exclusively, which fails the same way). Nothing was replaced or removed; when the link or the exclusive create found the record there, the .part this call wrote is left beside it.",
-      "common_causes": "Two trials of one content recorded in the same millisecond, or a .part an interrupted write left.",
-      "handling": "Look at the file the path names: a record there is kept, and a .part an interrupted write left may be moved away by hand; then write the record again."
+      "description": "Workflow #463 S3-10 fix round 2 (contracts/standard-pack-trial.md, \"The record\"): a trial record of that name, or the .part of one, is there already (path, the file that is there) and is never replaced: the writer writes a record under its name with .part added, a file created anew, and links it to its name, which fails when the name is taken (fix round 3: or, where the link cannot be made, creates the name exclusively, which fails the same way). Nothing was replaced or removed; when the link or the exclusive create found the record there, the .part this call wrote is left beside it. Workflow #463 S3-11 fix round 2: before the writer, standard-pack trial looks for a record of the run it records among the package's records (trial_record_of_run); one there, whatever content it names, is this code with path that record, and nothing is written: a run has one record. The answer then carries no next (the run is recorded); a refusal of the writer carries next, the line that records the run later.",
+      "common_causes": "A second --collect of a run already recorded (the package directory changed since or not), two trials of one content recorded in the same millisecond, or a .part an interrupted write left.",
+      "handling": "Look at the file the path names: a record there is kept, and a .part an interrupted write left may be moved away by hand; then, when the run has no record yet, write it again with the answer's next line."
     },
     "trial_record_write_failed": {
       "category": "error",
@@ -1456,9 +1456,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.64",
-      "description": "Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"The end\"): the read of the trial's run (request_id), as run show reads it, shows no end a record can keep, and no record was written: run_state not_found, admitted or running (no terminal yet, or no fact of the run), interrupted_unterminated (a later Runtime start without a terminal), or an end (succeeded, failed, cancelled) whose terminal record a read at its own sequence did not find. Nothing is sent again.",
-      "common_causes": "The run had not ended when its end was read (a --collect too early), or the Runtime restarted during the run.",
-      "handling": "When run_state says the run goes on, read it again later with the answer's next line (--collect); an interrupted run has no end to record."
+      "description": "Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"The end\"): the read of the trial's run (request_id), as run show reads it, shows that it has not ended yet, and no record was written: run_state not_found (no fact of the run yet), admitted or running (no terminal yet). The answer carries next, the line that reads it again later (--collect). Nothing is sent again. Fix round 2: its one cause; an interrupted run is trial_run_interrupted, and a terminal whose ledger record was not found is trial_terminal_unrecorded.",
+      "common_causes": "The run had not ended when its end was read (a --collect too early, or a --wait that ended first), or the request id names no run of this Runtime's ledger.",
+      "handling": "Read it again later with the answer's next line (--collect); when run_state stays not_found, check the request id."
     },
     "trial_collect_mismatch": {
       "category": "error",
@@ -1473,9 +1473,59 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.64",
-      "description": "Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"Reading the end later\"): standard-pack trial --collect named the run request_id, whose facts do not show a run of the trial's package on its instance: trial_collect_problem other_package (another package, or none) or other_instance (another instance, or none). Nothing was sent and nothing was written.",
-      "common_causes": "The request id of another trial, or the same trial's line with another --package or --instance.",
+      "description": "Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"Reading the end later\"): standard-pack trial --collect named the run request_id, whose facts do not show a trial's run of the trial's package on its instance: trial_collect_problem other_package (another package, or none) or other_instance (another instance, or none); fix round 2: scheduled (the scheduler's run), origin_unknown (no record of its request's origin, so whether it was sent by hand is not known) or other_channel (sent by hand through the command line's or the interface's own channel, not the Lab's, on which a trial's run is sent). An ordinary run start of the same package on the Lab's channel is not told apart: no fact of a run names the command that sent it. Nothing was sent and nothing was written.",
+      "common_causes": "The request id of another trial, of a scheduled run or of a run another client sent, or the same trial's line with another --package or --instance.",
       "handling": "Give --collect the request_id the trial's own answer named, beside the same arguments."
+    },
+    "trial_run_interrupted": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "request_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.64",
+      "description": "Workflow #463 S3-11 fix round 2 (contracts/standard-pack-trial.md, \"The end\"): the read of the trial's run (request_id), as run show reads it, is interrupted_unterminated: the Runtime started or took over after the run's first fact and the run has no terminal, so it has no end to record. No record was written, the answer carries no next (nothing is there to collect), and nothing is sent again.",
+      "common_causes": "The Runtime restarted, or another Runtime took over, while the trial's run was going on.",
+      "handling": "Nothing to collect: read the run's facts (run show) to see how far it got, and try the package again under the owner's authorization when that is wanted."
+    },
+    "trial_terminal_unrecorded": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "request_id": "required",
+        "run_state": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.64",
+      "description": "Workflow #463 S3-11 fix round 2 (contracts/standard-pack-trial.md, \"The end\"): the read of the trial's run (request_id), as run show reads it, names its terminal (run_state succeeded, failed or cancelled), but the read of the ledger's record of that terminal, by the run's request at the terminal's sequence, which gives the time that names the record, did not find it. No record was written and the answer carries no next; nothing is sent again.",
+      "common_causes": "Not told by the reads: the ledger answered the run's facts with a terminal, and then not that terminal's record at its sequence.",
+      "handling": "Look at the run's facts in the ledger (run show, the ledger's events at the terminal's sequence); collect the run again only once its terminal's record is found there."
+    },
+    "trial_end_uncoded": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "request_id": "required",
+        "run_state": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.64",
+      "description": "Workflow #463 S3-11 fix round 2 (contracts/standard-pack-trial.md, \"The end\"): the trial's run (request_id) ended failed or cancelled (run_state, the end state as run show names it) and its terminal names no failure code, so no code of its own can stand on top. Whether a run failed is read from its end state, never from whether a code is there: the record is written with the end (no failure_code) and the command fails as for a failed run.",
+      "common_causes": "A terminal recorded without its failure outcome, as a ledger written before the outcome was required may hold one.",
+      "handling": "Read the run's facts and evidence (run show, run evidence) for why it ended; the record keeps the end as read."
     }
   }
 }

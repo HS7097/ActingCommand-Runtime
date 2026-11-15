@@ -29581,6 +29581,33 @@ the Runtime's crates; adopt, readiness, build and the placement but the two test
 **At deploy.** Nothing to do on the root. The trial's run reaches the running Runtime as `run start`
 does; its records go to the Lab's state directory.
 
+**Fix round 2** (coordinator work order `rd-1115/brief-463-s311-fix2.md`, after the independent
+review of #1767: a record must not say more than what was tried). `--collect` takes only a run its
+facts show sent by hand on the Lab's channel: the scheduler's run, a run whose request's origin is
+not recorded and a manual run of another channel are `trial_collect_mismatch` with the new words
+`scheduled`, `origin_unknown` and `other_channel` of `trial_collect_problem`; an ordinary `run
+start` of the same package on the Lab's channel is not told apart (the request is the same, by the
+same function and initiator, and no fact names the command), and the contract says so. The run's
+facts record no content digest (option 丙), so a `--collect` records the package directory as read
+then, which the contract states as a limit; what holds is one run, one record: before the writer the
+package's records are read (`trial_record_of_run`, new in the resource tooling) and a record of the
+run's request id, whatever content it names, is `trial_record_exists` naming it, without `next`. A
+refusal of that reading or of the writer carries `next`. Whether a run failed is read from its end
+state, never from whether a code is there: a failed or cancelled run whose terminal names no code
+is the new `trial_end_uncoded` (`request_id`, `run_state`), its record written. `trial_end_unread`
+keeps one cause, a run not ended yet (`not_found`, `admitted`, `running`) with `next`; an
+interrupted run is the new `trial_run_interrupted` (`request_id`) and a terminal whose record the
+second read did not find the new `trial_terminal_unrecorded` (`request_id`, `run_state`), both
+without `next`: a code each, since the next step differs (read again later; nothing to collect;
+look at the ledger). The four codes refuse, exit 1 on the command line and 4 in a `--via` envelope
+(`device_instance`); the mismatch and `trial_record_exists` stay 1 and 2. No decision reads a
+code: the branches read the run's state, its `dispatch` and `origin`, a terminal there or not, a
+record found or not. Five tests in `apps/actinglab/src/tests/gate_463_s311.rs`, gate map
+`exec.toml` "#463 S3-11"; the made-up ledgers now record their request's origin (the Lab's channel
+unless a test says otherwise), so a made-up terminal is the third record: the tests that pin the
+record's time read it from one constant (`s311_a_run_ending_on_the_target_page_records_its_key_and_matched`
+adapted); the index is regenerated.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

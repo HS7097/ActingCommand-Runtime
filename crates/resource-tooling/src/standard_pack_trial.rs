@@ -11,7 +11,8 @@
 //! nothing only the run needs; what the run will require that the plan was not given, it says.
 //! [`write_trial_record`] writes the record of a trial,
 //! `actingcommand.pack-trial.v1` under `<state>/trials/<package_id>/<content12>-<ms>.json`, and
-//! [`trial_records`] and [`latest_trial_record`] read them back.
+//! [`trial_records`] and [`latest_trial_record`] read them back; S3-11 fix round 2:
+//! [`trial_record_of_run`] finds the record of one run, whatever content it names.
 //!
 //! Workflow #463 S3-11 (register §1.418; `contracts/standard-pack-trial.md`, "The run"): the run
 //! itself is actinglab's (it sends one request through the Lab's operation layer and reads the
@@ -1388,6 +1389,30 @@ pub fn latest_trial_record(
         .into_iter()
         .rev()
         .find(|record| record.plan.content_hash_prefix == content_hash_prefix))
+}
+
+/// Workflow #463 S3-11 fix round 2 (one run, one record): the file of the record of the run
+/// `request_id` among the trial records of the package `package_id` under `state_dir`
+/// ([`trial_records`], whose refusal of a file it answers), whatever content that record names;
+/// `None` when the run has none. The run reads it before it calls the writer, so that a run whose
+/// package directory changed since it ran is not recorded a second time under another content.
+pub fn trial_record_of_run(
+    state_dir: &Path,
+    package_id: &str,
+    request_id: &str,
+) -> LabResult<Option<PathBuf>> {
+    let state = absolute(state_dir)?;
+    Ok(trial_records(&state, package_id)?
+        .into_iter()
+        .find(|record| record.request_id == request_id)
+        .map(|record| {
+            trial_record_path(
+                &state,
+                package_id,
+                &record.plan.content_hash_prefix,
+                record.at_unix_ms,
+            )
+        }))
 }
 
 /// The content prefix and the time a record's file name `name` says, `<content12>-<ms>.json`;
