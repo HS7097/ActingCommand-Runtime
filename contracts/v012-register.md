@@ -28071,7 +28071,7 @@ revision.
 the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
 `device_locked` or the update code shows no group in the errors view either.
 
-### 1.414 Slice #463 S3-7 (0.12.63): `standard-pack build` answers its packs' readiness and names the placement's plan as the next command (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making as a whole, board #463; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-7", with §1.1 rows W6, W7, W10 and §1.2 H10, H13; the coordinator's rulings in the work order, not the owner's words, its ruling 1 changing the design; coordinator work order `rd-1115/brief-463-s37-build-readiness.md`, read on main `44cbab53`)
+### 1.414 Slice #463 S3-7 (0.12.63): `standard-pack build` answers its packs' readiness and names the placement's plan as the next command (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making as a whole, board #463; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-7", with §1.1 rows W6, W7, W10 and §1.2 H10, H13; the coordinator's rulings in the work order, not the owner's words, its ruling 1 changing the design; coordinator work order `rd-1115/brief-463-s37-build-readiness.md`, read on main `44cbab53`; main `326ae285` (#1744, LAB-6S4a) merged before the push)
 
 The coordinator gave this slice 1.414: main `44cbab53` holds the sections up to §1.400, and the
 numbers between them and this one belong to slices dispatched with it. The slice ships in 0.12.63.
