@@ -25296,7 +25296,9 @@ shape or interface revision.
 entries `lab`, slice `464-P3`, which actinglab's `BUILT_SLICES` and the MCP server's
 `ACTINGLAB_SLICES` name); served by actinglab's own command, as `standard-pack check` is (the
 engine's commands 64, the core strict rows 2, the command inventory 103 commands, the census's
-refusing commands 62; with #464 P1 and P2 beside it, in the train 0.12.61b, 66, 2, 105 and 64), so
+refusing commands 62; with #464 P1 and P2 beside it, in the train 0.12.61b, 66, 2, 105 and 64;
+with #467 RPT-1 too, which removed the placeholder `report export`, in the train 0.12.61c, 66, 2,
+104 and 64), so
 `lab_ops::core_ops` does not serve it and MCP serves it through a `serve`
 child. Its capability entry is `offline`, `read_only`; under `--dry-run` it has no effect
 ([actinglab-dry-run.md](actinglab-dry-run.md)).
@@ -25567,7 +25569,9 @@ refused `ui.json` is `standard_pack_root_invalid`. The outcome code index is reg
 strict rows 31, the census's group (a) 62, the commands of actinglab's own rows
 (`engine::COMMANDS`) 64; the built slices 7. With #464 P1 and P3 beside it, in the train
 0.12.61b: 105 commands, 47 arms; the strict rows 32; group (a) 64; `engine::COMMANDS` 66; the built
-slices 9.
+slices 9. With #467 RPT-1 too, in the train 0.12.61c: 104 commands, 46 arms (its placeholder
+`report export` and the group `report` removed); the strict rows 32; group (a) 64;
+`engine::COMMANDS` 66; the built slices 10.
 
 **Tests.** `apps/actinglab/src/tests/gate_464_p2.rs` (gate map `apps.toml`, "#464 P2", "#464 P2
 fix round 1", "#464 P2 fix round 2" and "#464 P2 revisions 13 and 14"; 59 tests), on a neutral fixture repository made with git (RV-1's
@@ -25718,7 +25722,7 @@ No code, word or key is added or removed: the vocabulary `adopt_problem` keeps i
 | The operation (repository, recording, package and decision read; the checks; the plan; the check tree; the writes) | `crates/resource-tooling/src/adopt.rs`, `standard_pack_adopt` |
 | The canonical form of a JSON document, shared | `crates/actingcommand-contract/src/standard_pack_schedule.rs`, `canonical_json_bytes` |
 | The command line, the version control's answer (`git status --porcelain=v1 -z --untracked-files=all`, `GIT_OPTIONAL_LOCKS=0`, the redirecting variables removed) | `apps/actinglab/src/standard_pack_cli.rs`, `run_adopt`, `GitWorktree` |
-| The row `standard-pack adopt` (authoring, slice `SP-ADOPT`, built: actinglab's `BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`), its command, its strict flag lists, its census group, its capability, its options in `help`, its dry-run mode (preview `dry_run`), the inventory (103 commands; 105 with #464 P2 and P3, in the train 0.12.61b) | `contracts/lab-operations.json`; `apps/actinglab/src/cli_module/{words,engine,own_flags}.rs`; `apps/actinglab-mcp/src/tools.rs`; `apps/actinglab/src/{commands/capabilities,cli_information,dry_run_gate}.rs`; `ratchet/actinglab_commands.json` |
+| The row `standard-pack adopt` (authoring, slice `SP-ADOPT`, built: actinglab's `BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`), its command, its strict flag lists, its census group, its capability, its options in `help`, its dry-run mode (preview `dry_run`), the inventory (103 commands; 105 with #464 P2 and P3, in the train 0.12.61b; 104 in the train 0.12.61c, whose #467 RPT-1 removed the placeholder `report export`) | `contracts/lab-operations.json`; `apps/actinglab/src/cli_module/{words,engine,own_flags}.rs`; `apps/actinglab-mcp/src/tools.rs`; `apps/actinglab/src/{commands/capabilities,cli_information,dry_run_gate}.rs`; `ratchet/actinglab_commands.json` |
 | Two codes, one value key and its vocabulary | below |
 
 **The value's origin (the coordinator's ruling).** A decided value is `"pending"` or a number of
@@ -26117,7 +26121,7 @@ Lab's half of the errors view: one archive, with a page a person reads first.
 | the row | `contracts/lab-operations.json`: `report export`, module `core`, slice `RPT-1`, eight parameters, `runtime` `required`, `entries` `["lab", "ui"]`, `Status`, `QueryEvents`, `ReadMaterial`; served by `core_ops` (`report_line`), its parameters in `core_reads::READ_HERE`; actinglab offers it (`BUILT_SLICES`), and so does the Lab's MCP server (`ACTINGLAB_SLICES`; `tools::SUPPLIED` gives `out` the export directory, ruling Q7) |
 | the codes | `crates/lab-ops/src/codes.rs` and [outcome-codes/actingctl.json](outcome-codes/actingctl.json): `report_exported`, `report_output_refused`, `report_write_failed`, `report_part_missing`, `report_trimmed` (`report_` is a prefix of the owner `actingctl`) |
 | the dependency | `zip` (the workspace's 0.6, already in the lock file) for `crates/lab-ops` |
-| the placeholder | deleted (above); the inventory is 46 dispatch arms and 101 commands; the help lists 35 own commands of the inventory |
+| the placeholder | deleted (above); the inventory is 46 dispatch arms and 101 commands (104 with #464 P1, P2 and P3 beside it, in the train 0.12.61c); the help lists 35 own commands of the inventory |
 | the texts | [problem-report.md](problem-report.md) (new, in [README.md](README.md)); [lab-two-entries.md](lab-two-entries.md) §9.3 and the MCP front's own members; [actinglab-dry-run.md](actinglab-dry-run.md); `apps/actinglab-mcp/MANUAL.md`; the inventory's counts in both READMEs |
 
 **What a report holds** (the contract has every member): the summary page, its data, the
@@ -26224,7 +26228,11 @@ contract's sections 2, 5, 6, 7 and 9 say each point.
   names an entry of the archive. A name of five characters or more is replaced wherever it
   stands; a shorter one only where it stands alone; the `Users` folder's segment whatever its
   length. The summary page masks each value as it writes it, by the same rule; before, it was
-  masked whole, labels and codes included.
+  masked whole, labels and codes included. Fix round 3 (`rd-1115/brief-1725-fix3.md`) narrows
+  the shorter names, so that the rule has three tiers, as [problem-report.md](problem-report.md)
+  section 7 states them: a name of five characters or more is replaced wherever it stands, inside
+  a longer word too; one of three or four characters only where it stands alone; one of one or
+  two characters only as the segment after a `Users` folder.
 - *The entries' names* are built from masked text (an instance's folder from its masked alias,
   `<user>` written `_user_`; a run's from its id, which the masks keep), and the manifest, the
   summary's data and the page name each entry as the archive does.
@@ -26410,11 +26418,12 @@ rows 13 and 14, [package-variables.md](package-variables.md) and
 declared). A pack without an ending page keeps its revision; a bundle whose packs declare one
 declares [15, 15], which the `package` edge of an earlier installer refuses in the plan, before the
 hold and any write. **Nobody checks the 15**: it is written by the resource repository's packaging
-(the bundle's `interfaces.json`; `record stop` generates no ending yet), and `place` holds a bundle's
-maximum to its own range and asks 10 only of a bundle with the notices directory and 14 only of one
-with `goals.json` or one whose packs declare `variables` (`crates/lab-rescue/src/install/place.rs`,
-`check_notices`, `check_goals_declared`, `check_variables_declared`), never 15 of an ending, and the
-Runtime does not check a package's declared range at admission. So an earlier installer places a
+(the bundle's `interfaces.json`; `record stop` generates no ending yet, and the Lab's
+`standard-pack build`, §1.376, does not compute it: its revision table has no row for 15 yet),
+and `place` holds a bundle's maximum to its own range and asks 10 only of a bundle with the
+notices directory and 14 only of one with `goals.json` or one whose packs declare `variables`
+(`crates/lab-rescue/src/install/place.rs`, `check_notices`, `check_goals_declared`,
+`check_variables_declared`), never 15 of an ending, and the Runtime does not check a package's declared range at admission. So an earlier installer places a
 bundle whose packs declare an ending and that declares less than 15, and an earlier Runtime refuses
 that package at every run (`reason=terminal_page`). `ledger`, `runtime-client`, `actingd-config` and
 `runtime-outcomes` do not move.
