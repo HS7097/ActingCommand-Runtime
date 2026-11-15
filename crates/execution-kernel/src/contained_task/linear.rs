@@ -33,7 +33,10 @@
 //! decision: it observes for the step timeout, never inputs and never hands a frame to the shared
 //! interrupt pages. Only a screen that stayed one the package never recorded for the whole
 //! decision changes the end, to `contained_task_linear_unrecorded_screen` with the same detail
-//! and timing; every other end, an error of the decision included, is the one it had.
+//! and timing; every other end, an error of the decision included, is the one it had. Workflow
+//! #463 U1b: the runtime tells the run at its start which code that verdict ends with
+//! ([`super::UnrecordedScreenEnd`]); past its package's break-in a scheduled run ends with
+//! `page_confirmation_failed` as that end gives it. The decision is made and judged the same way.
 //!
 //! Workflow #463 K1 (`contracts/linear-steps.md`, "Select steps"): an operation's effect may be a
 //! select step. Its attempt is the page graph's ([`PreparedContainedTask::select_attempt`]): it
@@ -61,9 +64,9 @@ use super::{
     ExtraRounds, InputRecheck, MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS,
     MAX_TASK_TIMEOUT_MS, PaceClock, PageCandidates, PageObservation, PostAdmissionOcrCollector,
     PreparedContainedTask, RecheckedInput, SampleRetries, StepPacing, TaskControl, TaskOperation,
-    TaskProgram, budget_elapsed_since, budget_now, budget_observation_now, invariant_broken,
-    is_geometry_change, pace_pause, paced_step, resolve_page_reference, runtime_touch_choice,
-    sample_budget_invalid, selection, step_point_draw,
+    TaskProgram, UnrecordedScreenEnd, budget_elapsed_since, budget_now, budget_observation_now,
+    invariant_broken, is_geometry_change, pace_pause, paced_step, resolve_page_reference,
+    runtime_touch_choice, sample_budget_invalid, selection, step_point_draw,
 };
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::{InputFrameContext, RunOperationPolicy};
@@ -511,6 +514,10 @@ pub(super) struct LinearRun {
     /// [`ContainedTaskRuntime::host_started_run`]); only such a run ends on a screen its package
     /// never recorded with `contained_task_linear_unrecorded_screen`.
     pub(super) own_task_run: bool,
+    /// Workflow #463 U1b: the code a closing decision that found a screen the package never
+    /// recorded ends the run with, as the runtime told it at the run's start
+    /// ([`ContainedTaskRuntime::unrecorded_screen_end`]).
+    pub(super) unrecorded_end: UnrecordedScreenEnd,
     /// Workflow #463 U1 (R25-1, `contracts/policy-suspension.md`, "Which failures accumulate"):
     /// the run made a `launch` or `restart` effect and no step after it arrived on the main
     /// interface yet; false at the run's start.
@@ -645,16 +652,31 @@ fn page_confirmation_failed(
 /// recorded on `pages` (the pages the failed wait awaited, then the step's own page). The detail
 /// and the timing are those `page_confirmation_failed` gives the same end; the values name the
 /// operation, the pages and the attempts, and the host adds the frame of the run's `Failure` pin
-/// (`artifact_id`).
+/// (`artifact_id`). Workflow #463 U1b: with `end` [`UnrecordedScreenEnd::PageConfirmation`] (the
+/// runtime's answer at the run's start) the run ends instead with `page_confirmation_failed`
+/// exactly as that end gives it (detail, values and timing); either failure carries the verdict
+/// ([`ContainedTaskError::closing_found_unrecorded`]).
 fn unrecorded_screen(
     operation: &TaskOperation,
     step: &LinearStep,
     (attempt, intermediate_seen): (u32, bool),
-    awaited: &str,
+    (awaited, end): (&str, UnrecordedScreenEnd),
     pages: &[&str],
     elapsed: Duration,
     limit: Duration,
 ) -> ContainedTaskError {
+    if end == UnrecordedScreenEnd::PageConfirmation {
+        return page_confirmation_failed(
+            operation,
+            step,
+            attempt,
+            intermediate_seen,
+            awaited,
+            elapsed,
+            limit,
+        )
+        .with_closing_unrecorded();
+    }
     let values = Outcome::new(UNRECORDED_SCREEN)
         .pack_operation_id(operation.id.as_str())
         .page_ids(pages.iter().copied())
@@ -665,6 +687,7 @@ fn unrecorded_screen(
     )
     .with_values(values)
     .with_timing(postcondition_timing(elapsed, limit))
+    .with_closing_unrecorded()
 }
 
 /// An application step whose next page did not pass (§5.3 h): never retried. Workflow #407
@@ -1655,7 +1678,7 @@ impl PreparedContainedTask {
                         operation,
                         step,
                         (attempt, miss.kind == LinearMissKind::AfterIntermediate),
-                        &awaited,
+                        (awaited.as_str(), run.unrecorded_end),
                         &pages,
                         miss.elapsed,
                         miss.limit,
@@ -1791,7 +1814,7 @@ impl PreparedContainedTask {
                                     operation,
                                     step,
                                     (attempt, intermediate_seen),
-                                    &awaited,
+                                    (awaited.as_str(), run.unrecorded_end),
                                     &pages,
                                     miss.elapsed,
                                     miss.limit,
@@ -1859,7 +1882,7 @@ impl PreparedContainedTask {
                             operation,
                             step,
                             (attempt, false),
-                            &candidates.awaited(false),
+                            (candidates.awaited(false).as_str(), run.unrecorded_end),
                             &pages,
                             elapsed,
                             run.step_timeout,

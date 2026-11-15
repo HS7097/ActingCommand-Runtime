@@ -249,6 +249,9 @@ mod gate_458_close_isolates;
 // Workflow #463 U1 (0.12.60; register §1.372): a linear step on a screen its package never
 // recorded ends with its own code, names its frame and pauses only its own pair, at once.
 mod gate_463_u1;
+// Workflow #463 U1b (0.12.62; register §1.389): the unrecorded-screen code only during a pair's
+// break-in of its package's content; after it `page_confirmation_failed`, its frame still named.
+mod gate_463_u1b;
 // Workflow #463 K1 (0.12.61; register §1.374): a linear select step that ends empty gets its
 // `on_empty` key from the host's scheduling disposition.
 mod gate_463_k1;

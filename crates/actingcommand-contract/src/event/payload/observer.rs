@@ -462,6 +462,20 @@ pub struct PolicyConditionReruns {
     pub expires_at_unix_ms: u64,
 }
 
+/// Workflow #463 U1b (register §1.389; `contracts/policy-suspension.md`, "A failure that pauses at
+/// its first occurrence"): a dispatch pair's break-in for the content of the `linear_steps` package
+/// it runs: `content_hash` the first 12 hex digits of the main package's content hash its runs
+/// were prepared with (as the failure identity's `m` segment names it), `runs` the runs of that
+/// content settled as a success or a failure, and `first_settled_at_unix_ms` the settlement time
+/// of the first of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyBreakInRecord {
+    pub content_hash: String,
+    pub runs: u32,
+    pub first_settled_at_unix_ms: u64,
+}
+
 /// `policy.control_state_recorded` (register L7): one dispatch pair's complete decision memory.
 /// `task_id` is a catalog task or the reserved identity of a fact-refresh recognition package.
 /// `active_window` is the `window_id` of the task's activity profile that `window_counts` and
@@ -498,6 +512,11 @@ pub struct PolicyControlStateRecord {
     /// latest runs. Empty while the pair has none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dispatches: Vec<PolicyJournalDispatchRecord>,
+    /// Workflow #463 U1b (register §1.389): the pair's break-in for the content of its package;
+    /// absent until a scheduled run of a `linear_steps` package whose content was measured settles
+    /// as a success or a failure, and in every record written before the slice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub break_in: Option<PolicyBreakInRecord>,
 }
 
 impl PolicyControlStateRecord {
@@ -572,6 +591,17 @@ impl PolicyControlStateRecord {
             if reruns.count == 0 || reruns.expires_at_unix_ms == 0 {
                 return Err(invalid_policy_record("condition_reruns"));
             }
+        }
+        if let Some(break_in) = &self.break_in
+            && (break_in.runs == 0
+                || break_in.first_settled_at_unix_ms == 0
+                || break_in.content_hash.len() != 12
+                || !break_in
+                    .content_hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        {
+            return Err(invalid_policy_record("break_in"));
         }
         Ok(())
     }

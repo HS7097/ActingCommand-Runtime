@@ -1342,6 +1342,21 @@ impl RuntimeHostConfig {
         self.standard_packs_root.as_deref()
     }
 
+    /// Workflow #463 U1b: `scheduling.suspension.break_in_runs` and
+    /// `scheduling.suspension.break_in_ms` as this configuration's manifest gives them (the
+    /// defaults file's without one), which `actingd suspended` judges a pair's break-in by.
+    pub(crate) fn break_in_settings(
+        &self,
+    ) -> Result<(u32, u64), actingcommand_runtime_config::ConfigFailure> {
+        match &self.config_manifest {
+            Some(manifest) => {
+                actingcommand_runtime_config::EffectiveConfig::from_manifest(manifest)?
+            }
+            None => actingcommand_runtime_config::EffectiveConfig::default(),
+        }
+        .break_in()
+    }
+
     /// The installed procedure bindings, if any.
     pub const fn procedure_manifest(&self) -> Option<&ProcedureManifest> {
         self.procedure_manifest.as_ref()

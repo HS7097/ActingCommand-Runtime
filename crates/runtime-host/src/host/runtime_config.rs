@@ -1147,6 +1147,21 @@ impl HostShared {
         ))
     }
 
+    /// Workflow #463 U1b: `scheduling.suspension.break_in_runs` and
+    /// `scheduling.suspension.break_in_ms` in effect, read before each scheduled run executes.
+    pub(super) fn break_in_settings(&self) -> RuntimeHostResult<(u32, u64)> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .break_in()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, read
     /// at each suspension lift check.
     pub(super) fn lift_check_min_interval_ms(&self) -> RuntimeHostResult<u64> {

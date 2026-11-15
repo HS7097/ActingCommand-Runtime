@@ -26,9 +26,10 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::{
     FailureIdentity, IdentityFrame, IdentityLayer, IdentityPackage, MISSING_HASH,
-    RERUN_ONLY_BACKEND_FAILURES, encode_failure_base, entry_checked, failure_accumulates,
-    failure_detail_fingerprint, failure_key, failure_rows, failure_step, identifier_text,
-    in_restart_segment, locate_error_frame, navigation_failure_code, navigation_layer_failure,
+    RERUN_ONLY_BACKEND_FAILURES, content_hash_prefix, encode_failure_base, entry_checked,
+    failure_accumulates, failure_detail_fingerprint, failure_key, failure_rows, failure_step,
+    identifier_text, in_restart_segment, locate_error_frame, navigation_failure_code,
+    navigation_layer_failure,
 };
 use crate::suspension_lift::{
     LiftCheckTime, SuspensionLiftView, measure_package_hash, standard_pack_root_hash,
@@ -67,6 +68,10 @@ struct ScheduledMain {
     layers: Vec<ResolvedLayer>,
     /// Whether the whole prerequisite chain was resolved and admitted.
     resolved: bool,
+    /// Workflow #463 U1b: the first 12 hex digits of a `linear_steps` package's content hash,
+    /// measured when the run was prepared, at the path the run read it from; `None` for a
+    /// page-graph package and for one that could not be measured.
+    content: Option<String>,
 }
 
 /// A scheduled run's admitted package, its prerequisite chain, its load and (Workflow #373
@@ -165,13 +170,25 @@ impl HostShared {
             ),
             Err(_) => Ok(Vec::new()),
         };
+        let linear = prepared.execution_mode() == "linear_steps";
+        // Workflow #463 U1b (`contracts/policy-suspension.md`, "Content hash"): a `linear_steps`
+        // package's content, the one its pair's break-in counts, measured once here, read-only,
+        // at the path the run reads it from; a package that cannot be measured has none.
+        let content = if linear {
+            measure_package_hash(task_request.package_path())
+                .ok()
+                .map(|hash| content_hash_prefix(&hash))
+        } else {
+            None
+        };
         let main = ScheduledMain {
-            linear: prepared.execution_mode() == "linear_steps",
+            linear,
             package_id: prepared.package_label().to_owned(),
             package_path: task_request.package_path().to_owned(),
             game: prepared.game().to_owned(),
             layers,
             resolved: chain.is_ok(),
+            content,
         };
         lock(
             &self.scheduled_resolutions,
@@ -251,6 +268,45 @@ impl HostShared {
         .get(decision_id)
         .and_then(|resolution| resolution.main.as_ref())
         .map(|main| main.package_id.clone()))
+    }
+
+    /// Workflow #463 U1b: the content of the `linear_steps` main package a scheduled run's
+    /// preparation admitted and measured, while its resolution is held; `None` for a page-graph
+    /// package, one that could not be measured, a run whose preparation admitted none, and a
+    /// dispatch no scheduled path ran (a run a start or an abandoned worker's reconciliation
+    /// settles).
+    pub(super) fn scheduled_main_content(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<String>> {
+        Ok(lock(
+            &self.scheduled_resolutions,
+            HostLocation::ReadScheduledResolution,
+        )?
+        .get(decision_id)
+        .and_then(|resolution| resolution.main.as_ref())
+        .and_then(|main| main.content.clone()))
+    }
+
+    /// Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
+    /// occurrence"): whether the scheduled run of the dispatch `decision_id`, about to execute, is
+    /// past its pair's break-in: its package content measured, the pair's break-in of that
+    /// content holding at least `scheduling.suspension.break_in_runs` settled runs, and at least
+    /// `scheduling.suspension.break_in_ms` passed on the Runtime clock since the first of them.
+    pub(super) fn scheduled_past_break_in(&self, decision_id: &str) -> RuntimeHostResult<bool> {
+        let Some(content) = self.scheduled_main_content(decision_id)? else {
+            return Ok(false);
+        };
+        let settings = self.break_in_settings()?;
+        let break_in = lock(self.policy()?, HostLocation::RunScheduledContainedTask)?
+            .pair_break_in(decision_id)?;
+        let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
+        Ok(crate::policy_control::break_in_over(
+            break_in.as_ref(),
+            Some(content.as_str()),
+            settings,
+            now_unix_ms,
+        ))
     }
 
     /// Drops a decision's resolution once its execution record is written.
@@ -769,6 +825,8 @@ mod tests {
                 },
             ],
             resolved: true,
+            // Workflow #463 U1b: the settlement's identity does not read it.
+            content: None,
         };
         let (main_package, layers) = settled_packages(&main);
         assert_eq!(

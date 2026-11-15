@@ -695,6 +695,10 @@ pub(super) struct ContainedRunControl {
     /// own time reaches the largest runtime that budget still admits; fix round 3 (item 4): or
     /// that the budget's end could not be read.
     runtime_budget_end: std::sync::OnceLock<RuntimeBudgetEnd>,
+    /// Workflow #463 U1b: set once, before a scheduled run executes, when its pair is past the
+    /// break-in of the package content it runs: a linear step's closing decision that finds a
+    /// screen the package never recorded ends that run with `page_confirmation_failed`.
+    past_break_in: std::sync::OnceLock<()>,
 }
 
 /// Workflow #463 U1, fix round 3 (item 4): what a scheduled run noted, before it executed, of the
@@ -929,6 +933,7 @@ impl ContainedRunControl {
             stop_reset: std::sync::OnceLock::new(),
             borrowed_key: std::sync::OnceLock::new(),
             runtime_budget_end: std::sync::OnceLock::new(),
+            past_break_in: std::sync::OnceLock::new(),
         }
     }
 
@@ -1101,6 +1106,23 @@ impl ContainedRunControl {
     /// Workflow #463 U1, fix round 2: what [`Self::note_runtime_budget_end`] noted.
     fn runtime_budget_end(&self) -> Option<RuntimeBudgetEnd> {
         self.runtime_budget_end.get().copied()
+    }
+
+    /// Workflow #463 U1b: notes, before a scheduled run executes, that its pair is past the
+    /// break-in of the package content it runs.
+    fn note_past_break_in(&self) {
+        let _ = self.past_break_in.set(());
+    }
+
+    /// Workflow #463 U1b: the code an unrecorded verdict of a linear step's closing decision ends
+    /// the run with: `page_confirmation_failed` for a scheduled run noted past its break-in, the
+    /// dedicated code for every other run (a run in its break-in, a direct run, a Lab run).
+    fn unrecorded_screen_end(&self) -> actingcommand_execution_kernel::UnrecordedScreenEnd {
+        if self.past_break_in.get().is_some() {
+            actingcommand_execution_kernel::UnrecordedScreenEnd::PageConfirmation
+        } else {
+            actingcommand_execution_kernel::UnrecordedScreenEnd::Dedicated
+        }
     }
 
     /// Workflow #437 MAPP-2a: marks the run as one on a borrowed key, before it executes.
@@ -4646,6 +4668,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     /// Workflow #463 U1, fix round 2 (rule 5): a startup package's or a ladder rung's run.
     fn host_started_run(&self) -> bool {
         self.control.is_host_package()
+    }
+
+    /// Workflow #463 U1b: what the run's scheduled path noted of its pair's break-in.
+    fn unrecorded_screen_end(&self) -> actingcommand_execution_kernel::UnrecordedScreenEnd {
+        self.control.unrecorded_screen_end()
     }
 
     /// Workflow #463 U1, fix round 2 (rule 6): the Runtime-clock time left before the earlier of
@@ -8554,6 +8581,16 @@ impl HostShared {
                 .control
                 .note_runtime_budget_end(RuntimeBudgetEnd::Unread),
         }
+        // Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
+        // occurrence"): a pair past the break-in of the package content this run was prepared
+        // with ends an unrecorded verdict with `page_confirmation_failed`; the keys are read now,
+        // so a value set while the Runtime runs counts from the next run.
+        if self
+            .scheduled_past_break_in(context.decision_id())
+            .map_err(RequestFailure::poison_without_terminal)?
+        {
+            active_run.control.note_past_break_in();
+        }
         // Workflow #429 R-0b (register §1.238): the policy run shows while it executes, with the
         // request it runs as (the one `contained_runs` tracks) and its package; its guard drops
         // however the run returns.
@@ -9413,20 +9450,23 @@ impl HostShared {
                 // Workflow #386 SR-1: a kernel failure that carries the values its code declares (a
                 // sampling timeout's `attempts`, `timeout_ms` and `stage`; a sampling budget's
                 // `required_ms` and `remaining_ms`) keeps them on the terminal and the receipt.
-                if error.has_values() {
+                // Workflow #463 U1b: a closing decision that found a screen the package never
+                // recorded names its frame whichever code the run ends with, so the failure's
+                // outcome gains `artifact_id` also where the code carries no values of its own.
+                if error.has_values() || error.closing_found_unrecorded() {
                     let values = error.outcome();
                     // #411 A15: an unconfirmed step also names the frame of the run's `Failure`
                     // pin, and so (Workflow #463 U1) does a linear step that met a screen its
                     // package never recorded: the run's last frame, the decision's; #411 A30: a
                     // guard refusal names the frame the guard judged on, its `GuardRejection` pin.
-                    // Each is read before the summary moves into the terminal's draft.
-                    let frame_pin = if spelled(
-                        error.code().as_str(),
-                        &[
-                            ExecutionKernelCode::ContainedTaskStepUnconfirmed.code(),
-                            ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.code(),
-                        ],
-                    ) {
+                    // Each is read before the summary moves into the terminal's draft. Workflow
+                    // #463 U1b: the linear step's pin follows the closing decision's verdict, not
+                    // the code (`contained_task_linear_unrecorded_screen` in its break-in,
+                    // `page_confirmation_failed` after it).
+                    let frame_pin = if error.closing_found_unrecorded()
+                        || error.code().as_str()
+                            == ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str()
+                    {
                         Some(PinnedFrameReason::Failure)
                     } else if error.code().as_str()
                         == ExecutionKernelCode::ContainedTaskGuardRefused.as_str()

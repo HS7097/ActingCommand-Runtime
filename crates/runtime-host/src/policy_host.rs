@@ -3346,6 +3346,49 @@ impl PolicyHost {
         crate::policy_control::runtime_budget_allowance_ms(&intent, admission)
     }
 
+    /// Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
+    /// occurrence"): the break-in of the pair the dispatch `decision_id` dispatched to, as the
+    /// decision memory holds it.
+    pub(crate) fn pair_break_in(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<actingcommand_contract::PolicyBreakInRecord>> {
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::RunScheduledContainedTask,
+            )
+        })?;
+        Ok(self
+            .control
+            .break_in(&dispatch.data.task_id, &dispatch.data.instance_id)
+            .cloned())
+    }
+
+    /// Workflow #463 U1b: the run of the dispatch `decision_id`, prepared with the package
+    /// content `content`, settled now as a success or a failure, at `settled_at_unix_ms`: its
+    /// pair's break-in counts it. The pair's next value record carries the change.
+    pub(crate) fn note_break_in_run(
+        &mut self,
+        decision_id: &str,
+        content: &str,
+        settled_at_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::RecordPolicyDispatchOutcome,
+            )
+        })?;
+        let (task_id, instance_id) = (
+            dispatch.data.task_id.clone(),
+            dispatch.data.instance_id.clone(),
+        );
+        self.control
+            .note_break_in_run(&task_id, &instance_id, content, settled_at_unix_ms);
+        Ok(())
+    }
+
     pub(crate) fn pending_dispatch_completions(&self) -> Vec<String> {
         self.seen_dispatches
             .iter()

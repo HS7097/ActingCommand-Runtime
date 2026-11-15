@@ -789,6 +789,7 @@ fn incomplete_report(inputs: &ReportInputs<'_>, mut warnings: Vec<String>) -> Va
         "remedies": [],
         "reruns": [],
         "held": [],
+        "break_ins": [],
     })
 }
 
@@ -1150,6 +1151,15 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
     let (remedies, remedies_total) = remedies(&snapshot)?;
     let reruns = reruns(&snapshot)?;
     let (held, held_total) = held(&snapshot)?;
+    // Workflow #463 U1b: the pairs' break-ins, judged by the configuration the report loaded.
+    let break_in_settings = host.break_in_settings().map_err(|failure| {
+        SuspensionReportError::new(
+            failure.failure_code(),
+            ContractLocation::ReadSuspensionConfig,
+        )
+        .with_outcome(|outcome| failure.with_values(outcome))
+    })?;
+    let break_ins = break_ins(&snapshot, break_in_settings)?;
     // RL-1c fix 1 (#411 H1): a run the budget left unread is shown without its step and frames.
     if snapshot.incomplete.get() {
         warnings.push(LEDGER_READ_INCOMPLETE.to_owned());
@@ -1169,6 +1179,7 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
         "remedies": remedies,
         "reruns": reruns,
         "held": held,
+        "break_ins": break_ins,
     });
     if let Some(total) = clock_slots_total {
         report["clock_slots_total"] = json!(total);
@@ -1256,6 +1267,70 @@ fn reruns(snapshot: &Snapshot<'_>) -> Result<Vec<Value>, SuspensionReportError> 
             }))
         })
         .collect())
+}
+
+/// Workflow #463 U1b (`contracts/policy-suspension.md`, "`actingd suspended`"): `break_ins`, one
+/// row per pair whose latest value record (register L7) carries a break-in, ordered by task, then
+/// instance: the content it counts, its settled runs of `runs_needed`, the first's settlement time
+/// and the time since it at the ledger's latest time (`since_first_ms`, `null` without one) of
+/// `ms_needed`, and `in_break_in`, `false` once both are reached. `runs_needed` and `ms_needed`
+/// are the configuration's the report loaded (`settings`); a value set while the Runtime runs is
+/// not seen here. The report measures no package: a changed package starts a new break-in at its
+/// first settled run, which the row shows from then on.
+fn break_ins(
+    snapshot: &Snapshot<'_>,
+    (runs_needed, ms_needed): (u32, u64),
+) -> Result<Vec<Value>, SuspensionReportError> {
+    let mut latest = BTreeMap::new();
+    for event in snapshot.query(EventQuery {
+        event_type: Some(EventType::PolicyControlStateRecorded),
+        ..EventQuery::default()
+    })? {
+        if let EventPayload::Policy(PolicyPayload::ControlStateRecorded(payload)) = event.payload()
+        {
+            let state = payload.state();
+            latest.insert(
+                (state.task_id.clone(), state.instance_id.clone()),
+                state.break_in.clone(),
+            );
+        }
+    }
+    let reference_unix_ms = snapshot.latest_time();
+    Ok(latest
+        .into_iter()
+        .filter_map(|((task_id, instance_id), break_in)| {
+            let break_in = break_in?;
+            let since_first_ms = reference_unix_ms
+                .map(|reference| reference.saturating_sub(break_in.first_settled_at_unix_ms));
+            let in_break_in =
+                break_in.runs < runs_needed || since_first_ms.is_none_or(|since| since < ms_needed);
+            Some(wire(&BreakInRow {
+                task_id,
+                instance_id,
+                content_hash_prefix: break_in.content_hash,
+                runs: break_in.runs,
+                runs_needed,
+                first_settled_at_unix_ms: break_in.first_settled_at_unix_ms,
+                since_first_ms,
+                ms_needed,
+                in_break_in,
+            }))
+        })
+        .collect())
+}
+
+/// One `break_ins` row (Workflow #463 U1b).
+#[derive(Serialize)]
+struct BreakInRow {
+    task_id: String,
+    instance_id: String,
+    content_hash_prefix: String,
+    runs: u32,
+    runs_needed: u32,
+    first_settled_at_unix_ms: u64,
+    since_first_ms: Option<u64>,
+    ms_needed: u64,
+    in_break_in: bool,
 }
 
 /// One `reruns` row (Workflow #386 SR-2b-2).

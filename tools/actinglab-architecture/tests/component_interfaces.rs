@@ -94,7 +94,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   the member `start_paused` of an instance entry; revisions 5 to 30 are still read, so [5, 31].
 ///   Workflow #437 ORD-1c (0.12.60, register §1.373) raises it to 32: the member
 ///   `device_group.max_queue_wait_ms` of the `scheduling` section; revisions 5 to 31 are still
-///   read, so [5, 32].
+///   read, so [5, 32]. Workflow #463 U1b (0.12.62, register §1.389) raises it to 33: the members
+///   `suspension.break_in_runs` and `suspension.break_in_ms` of the `scheduling` section; revisions
+///   5 to 32 are still read, so [5, 33].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
@@ -163,7 +165,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   it, so [3, 8].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 32]),
+    ("actingd-config", [5, 33]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),

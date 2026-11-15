@@ -26846,6 +26846,66 @@ declare an ending page declares [15, 15], which an installer of [3, 14] refuses 
 
 **Rollback** (below 0.12.61). Nothing is persisted; an earlier Tools has no `standard-pack build`.
 
+### 1.389 Slice #463 U1b (0.12.62): the unrecorded-screen code only during a package's break-in (Workflow #463; the owner's ruling on board #463 that the code and its pause at once hold only within a period after a package is first run, the ordinary failure handling otherwise; the numbers and the scope are the coordinator's proposal the owner agreed to; the rest are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-u1b-break-in.md`, read on main `1a962a54`)
+
+1.389 is the number the coordinator assigned this section; the numbers before it are other slices
+dispatched with this one. The slice ships in 0.12.62 (release 0.12.61 is cut without it): its keys'
+`since`, this section, its rows of the gate map and its contract sentences say 0.12.62.
+
+**What it is.** `contained_task_linear_unrecorded_screen` (§1.372) ends a scheduled run, and pauses
+its pair at once, only while the pair (catalog task, instance) is in the break-in of the content of
+the package it runs ([policy-suspension.md](policy-suspension.md), "A failure that pauses at its
+first occurrence", "Only during a package's break-in"):
+
+- the content is the main package's content hash, 12 hex digits as the failure identity's `m`
+  segment, measured once when a scheduled run of a `linear_steps` main package is prepared
+  (`ScheduledMain::content`, `host/failure_settlement.rs`); a page-graph package or one that cannot
+  be measured has none, and its run is inside and counts nothing;
+- the break-in starts at the first run of that content on the pair settled as a success or a
+  failure, counts each such run (never a stop or a condition end: the live settlement decides it
+  from the record it writes, `host/policy_outcome.rs`), and ends when at least
+  `scheduling.suspension.break_in_runs` (default 20) have settled and at least
+  `scheduling.suspension.break_in_ms` (default 604 800 000) have passed since the first; another
+  content starts a new one;
+- before a scheduled run executes the host judges it on the Runtime clock
+  (`HostShared::scheduled_past_break_in`) and notes it on the run's control; the kernel asks once at
+  the run's start (`ContainedTaskRuntime::unrecorded_screen_end`, as it asks `host_started_run`) and
+  keeps the answer in `LinearRun::unrecorded_end`. The closing decision, its conditions and its
+  control flow are unchanged; only its "unrecorded" verdict ends with `page_confirmation_failed`
+  (exactly that end's detail, values and timing) past the break-in. Either failure carries the
+  verdict (`ContainedTaskError::closing_found_unrecorded`), and the host names the frame of the
+  run's `Failure` pin as `artifact_id` by that verdict, not by the code (`page_confirmation_failed`
+  gains the optional value `artifact_id`). The pause stays the code's (`pauses_task`, unchanged), so
+  past the break-in the failure follows `on_failure`. Direct and Lab runs keep the dedicated code.
+
+**Persisted.** One optional member of the pair's value record `policy.control_state_recorded`
+(register L7, `PolicyControlStateRecord::break_in`, `{content_hash, runs,
+first_settled_at_unix_ms}`), written by the settlement that counts a run and loaded with the
+decision memory at a start. What 0.12.60 and 0.12.61 recorded does not name the content a
+successful run ran, so a ledger written before this slice gives every pair no break-in: such a pair
+is inside until its first settled run of this build starts one (what 0.12.61 did, for one break-in).
+No `ledger` revision is declared (the owner's ruling of 11-15 on compatibility).
+
+**Keys** (`actingd-config` revision 33, [component-interfaces.md](component-interfaces.md)):
+`scheduling.suspension.break_in_runs` (integer `1..=4294967295`, default `20`) and
+`scheduling.suspension.break_in_ms` (milliseconds, default `604800000`), settable, read before each
+scheduled run executes, no per-instance form.
+
+**Where a person sees it.** `actingd suspended`'s list `break_ins`: per pair whose latest value
+record carries a break-in, its content, `runs` of `runs_needed`, the first's time, `since_first_ms`
+of `ms_needed` and `in_break_in`, judged by the configuration the report loads.
+
+**Codes.** None added. `page_confirmation_failed` gains the optional value `artifact_id`; the two
+codes' descriptions say when each is raised.
+
+**Tests.** Gate `host.toml` "#463 U1b", `tests/gate_463_u1b.rs`, eight tests: inside, after, one of
+the two reached, a condition end and a stop, a new content, a restart, a direct run, the keys set
+while running. gate_463_u1's tests stand unchanged (a new package has no break-in, so its pair is
+inside). Adapted only where a struct gained a member: `gate_422_ln3` names `break_in: None`, and
+the `failure_settlement` unit test `content: None`.
+
+**At deploy.** Nothing to do; a pair that ran before starts its break-in at its first settled run.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

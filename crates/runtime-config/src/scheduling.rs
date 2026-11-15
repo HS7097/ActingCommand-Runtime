@@ -63,6 +63,11 @@
 //! `1800000`), the longest time a task of a member of a device group of several waits in its
 //! device's queue when its task declares no `max_queue_wait_ms`; read by the host at every policy
 //! cycle of a host with a device of several. No per-instance form.
+//! Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
+//! occurrence"; `actingd-config` revision 33): `suspension.break_in_runs` (`1..=4294967295`,
+//! default `20`) and `suspension.break_in_ms` (default `604800000`), how long a pair's break-in of
+//! one package content lasts at least; read by the host before each scheduled run executes. No
+//! per-instance form.
 //! BX-1 (Workflow #429, register §1.273, since 0.12.39): a blackout entry's parser and shape as a
 //! client surface ([`BlackoutListKey`], [`BlackoutEntry::parse`], [`BlackoutEntry::parse_list`],
 //! [`BlackoutEntry::to_json`], [`BlackoutEntry::list_json`]): the console builds and checks the
@@ -180,6 +185,13 @@ pub const FACT_REFRESH_OVERDUE_MS: &str = "scheduling.fact_refresh.overdue_ms";
 /// package's content hash by the suspension lift checks.
 pub const SUSPENSION_LIFT_CHECK_MIN_INTERVAL_MS: &str =
     "scheduling.suspension.lift_check_min_interval_ms";
+/// Workflow #463 U1b (`actingd-config` revision 33; `contracts/policy-suspension.md`, "A failure
+/// that pauses at its first occurrence"): the settled runs of one package content a pair's
+/// break-in lasts at least.
+pub const SUSPENSION_BREAK_IN_RUNS: &str = "scheduling.suspension.break_in_runs";
+/// Workflow #463 U1b: how long, in milliseconds since the first of those runs settled, a pair's
+/// break-in lasts at least.
+pub const SUSPENSION_BREAK_IN_MS: &str = "scheduling.suspension.break_in_ms";
 
 /// Workflow #386 SR-3 (§2.4 item 2): whether `check-config` admits every package of
 /// `policy.procedure_manifest` with this Runtime's kernel.
@@ -480,9 +492,14 @@ file_struct!(
     }
 );
 file_struct!(
-    /// Workflow #336 PKG-S3: the suspension lift checks.
+    /// Workflow #336 PKG-S3: the suspension lift checks. Workflow #463 U1b: and the break-in of a
+    /// pair's package content.
     SuspensionFile {
-        lift_check_min_interval_ms
+        lift_check_min_interval_ms,
+        // Interface anchor `actingd-config` revision 33 (contracts/component-interfaces.md;
+        // Workflow #463 U1b).
+        break_in_runs,
+        break_in_ms,
     }
 );
 file_struct!(
@@ -640,6 +657,12 @@ pub(crate) const SWITCH_FAILURE_COOLDOWN_RANGE: KeyRange = KeyRange::Integer {
 pub(crate) const MAX_QUEUE_WAIT_RANGE: KeyRange = KeyRange::Integer {
     min: 60_000,
     max: 86_400_000,
+};
+/// Workflow #463 U1b: the settled runs a break-in lasts at least, one or more: the first settled
+/// run of a content starts it. A range, not a threshold.
+pub(crate) const BREAK_IN_RUNS_RANGE: KeyRange = KeyRange::Integer {
+    min: 1,
+    max: MAX_COUNT,
 };
 
 /// Workflow #438 HELD-1: a key of the held records, read by the host from the release that joins
@@ -916,6 +939,27 @@ pub(crate) static ROWS: &[KeyRow] = &[
             ValueType::DurationMs,
             MAX_QUEUE_WAIT_RANGE,
             "ORD-1c",
+        )
+    },
+    // Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
+    // occurrence"): read by the host before each scheduled run executes, so an instruction counts
+    // from the next run.
+    KeyRow {
+        since: "0.12.62",
+        ..row(
+            SUSPENSION_BREAK_IN_RUNS,
+            ValueType::Integer,
+            BREAK_IN_RUNS_RANGE,
+            "U1b",
+        )
+    },
+    KeyRow {
+        since: "0.12.62",
+        ..row(
+            SUSPENSION_BREAK_IN_MS,
+            ValueType::DurationMs,
+            KeyRange::Any,
+            "U1b",
         )
     },
 ];
@@ -2294,4 +2338,17 @@ pub(crate) fn lift_check_min_interval_ms(
     value: &dyn Fn(&str) -> Option<FactScalar>,
 ) -> Result<u64, ConfigFailure> {
     Reader { value }.duration(SUSPENSION_LIFT_CHECK_MIN_INTERVAL_MS)
+}
+
+/// Workflow #463 U1b: `scheduling.suspension.break_in_runs` and
+/// `scheduling.suspension.break_in_ms` in effect, read alone (the host reads them before each
+/// scheduled run executes).
+pub(crate) fn break_in(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+) -> Result<(u32, u64), ConfigFailure> {
+    let reader = Reader { value };
+    Ok((
+        reader.count(SUSPENSION_BREAK_IN_RUNS)?,
+        reader.duration(SUSPENSION_BREAK_IN_MS)?,
+    ))
 }

@@ -4027,3 +4027,18 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_k2::k2_an_operation_that_arrives_on_an_ending_page_confirms_no_adjustment",
 ]
 incident = ["#463 K2"]
+
+# Workflow #463 U1b (0.12.62; register §1.389; brief rd-1115/brief-463-u1b-break-in.md; contracts/policy-suspension.md, "A failure that pauses at its first occurrence"; contracts/linear-steps.md, "A screen the package never recorded"), on the manual clock and a fake device, gate_463_u1's linear_steps package of one tap from home to list attempted twice, the fixture catalog's task hourly under the recommended on_failure, the expected runtime off: inside the break-in (one settled run of two, an hour of an hour and a half) the run on a screen the package never recorded fails contained_task_linear_unrecorded_screen after one tap, its pair paused at once (paused_task, severe), the failure the break-in's second run, its content and first time kept (1); after it (two settled runs, two hours), on a device instance, the same screen fails page_confirmation_failed after one tap with no page_ids, its recorded failure and its terminal naming a Failure pin's frame as artifact_id, recoverable, retry_scheduled, consecutive 1, and after the ladder the pair is not paused (2); two runs of two but two hours of three, and two hours of an hour and a half but two runs of three, still get the dedicated code and the pause (3); a run whose swallowed tap fails and settles by a condition, and a run stopped at its checkpoint on a device instance (contained_task_cancelled), leave the break-in as it was (4); the package changed in place starts a new break-in: the dedicated code, the pause, the new content's first run (5); a restart between the first and the second run loads the break-in as written and counts on, and the screen after the second run fails page_confirmation_failed (6); a direct run on a device instance past the break-in fails the dedicated code, its receipt naming its one Failure pin's frame (7); with the defaults, ConfigureSettings of break_in_runs 1 and break_in_ms 1000 after one settled run makes the next run's screen fail page_confirmation_failed, retry_scheduled (8)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t1_inside_the_break_in_the_code_pauses_its_pair_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t2_after_the_break_in_the_same_screen_is_an_ordinary_failure_naming_its_frame",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t3_one_of_the_two_reached_is_still_inside",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t4_a_condition_end_and_a_stop_count_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t5_a_new_content_starts_a_new_break_in",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t6_a_restart_keeps_the_count_and_the_first_time",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t7_a_direct_run_after_the_break_in_keeps_the_dedicated_code",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t8_the_keys_set_while_running_count_from_the_next_run",
+]
+incident = ["#463 U1b"]
