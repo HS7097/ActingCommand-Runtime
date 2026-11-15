@@ -1887,7 +1887,7 @@
       "module": "authoring",
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
-        {"name": "request", "form": "option", "type": "file", "required": false, "note": "an actingcommand.lab-record-mark.v1 request file; only a request declares a located-text mark (an OCR mark with locate), which a click may then follow, and (#463 R1) a select, the step's choice in a list of fixed slots by the name read in each, and clear_select, which takes it off again"},
+        {"name": "request", "form": "option", "type": "file", "required": false, "note": "an actingcommand.lab-record-mark.v1 request file; only a request declares a located-text mark (an OCR mark with locate), which a click may then follow, and (#463 R1) a select, the step's choice in a list of fixed slots by the name read in each, and clear_select, which takes it off again; (#463 R2) its ending and remove_ending are what --ending and --remove-ending give"},
         {"name": "request_json", "form": "option", "type": "string", "required": false, "note": "the same request as JSON text"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"},
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
@@ -1925,7 +1925,10 @@
         {"name": "drag_to", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
         {"name": "long_press", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
         {"name": "duration_ms", "form": "option", "type": "integer", "required": false},
-        {"name": "brake_corner", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"}
+        {"name": "brake_corner", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
+        {"name": "ending", "form": "switch", "type": "boolean", "required": false, "note": "#463 R2: on a stopped recording, an ending after the last press: --frame, --sample, --page, --template, --color and --reuse are the ending's, with --outcome-key. From a run that ended contained_task_linear_unrecorded_screen: its artifact_id is no material ref by itself; run evidence <request_id> lists the run's frames, and the ref whose last part is that artifact_id is the pinned frame; material <ref> --out <dir> writes it as a PNG, the file --frame takes (a pure scale of the recording's size is converted by the Lab); then record stop regenerates the package. A pop-up after which the path goes on is still a new recording"},
+        {"name": "outcome_key", "form": "option", "type": "string", "required": false, "note": "the ending's key; only with --ending"},
+        {"name": "remove_ending", "form": "option", "type": "string", "required": false, "note": "the key of an ending the stopped recording gives up"}
       ],
       "help": "Adds marks, a click, samples or a transition to a recorded step and self-tests every mark on its frames; a click may follow a template or a name it finds.",
       "output": "as today's command",

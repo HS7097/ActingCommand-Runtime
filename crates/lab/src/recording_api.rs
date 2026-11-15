@@ -11,8 +11,10 @@ use crate::recording::container::{
     write_lab_dir,
 };
 use crate::recording::crosscheck::{
-    FrameCache, admit, cross_check, evaluator_bundle, first_decision, round_trip, select_checks,
+    FrameCache, admit, cross_check, ending_checks, evaluator_bundle, first_decision, round_trip,
+    select_checks,
 };
+use crate::recording::ending::{remove_ending, validate_ending_request};
 use crate::recording::generate::{
     DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, Plan, StopSettings,
     application_steps_summary, optional_steps_summary, plan as generate_plan, render,
@@ -32,11 +34,11 @@ use crate::recording::model::{
 };
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
-    ArrivalMode, FrameMeta, Session, application_action, application_with_click, apply_marks,
-    apply_step_action, apply_transition, arrive, check_device_arrival, commit_application,
-    commit_click, default_recording_defaults, effective_indices, new_recording, not_active,
-    open_session, open_session_for_marks, open_step, plan_application, plan_click, save,
-    stopped_change, to_json,
+    ArrivalMode, FrameMeta, Session, application_action, application_with_click, apply_ending,
+    apply_marks, apply_step_action, apply_transition, arrive, check_device_arrival,
+    commit_application, commit_click, default_recording_defaults, effective_indices, new_recording,
+    not_active, open_session, open_session_for_marks, open_step, plan_application, plan_click,
+    save, stopped_change, to_json,
 };
 use crate::recording::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -155,6 +157,7 @@ pub fn record_status(state_dir: &Path, instance: &str) -> LabResult<Option<LabSt
                 steps,
                 artifact: recording.artifact.clone(),
                 amended_at_unix_ms: recording.amended_at_unix_ms,
+                endings: recording.endings.clone(),
             }))))
         }
     }
@@ -314,6 +317,19 @@ fn generate_and_write(
     // Workflow #396 REC-4: the evaluator gives the box a followed template matches on a frame.
     let decision = first_decision(&first_prepared, &plan, &cache, ocr, evaluator)?;
     let mut checks = cross_check(&plan, evaluator, &cache, ocr)?;
+    // #463 R2, self-check item 9, before item 8: every ending's page passes on its own frames and
+    // on no frame of a screen the run may show instead (an ending page that passes on a select
+    // step's frames before its last press is the ending's refusal, not the select's); the result
+    // is part of the cross-check, present only when the recording has an ending.
+    let endings = ending_checks(&plan, evaluator, &cache, ocr)?;
+    if let Some(cross) = checks.cross_check.as_object_mut()
+        && !endings.endings.is_empty()
+    {
+        cross.insert("endings".to_string(), json!(endings.endings));
+        if endings.partial {
+            cross.insert("status".to_string(), json!("partially_evaluated"));
+        }
+    }
     // #463 R1, self-check item 8: every select step decides on its own frames as recorded; the
     // result is part of the cross-check, present only when the package has a select step.
     let selects = select_checks(&first_prepared, &plan, &cache, ocr)?;
@@ -332,6 +348,7 @@ fn generate_and_write(
     let mut warnings = plan.warnings.clone();
     warnings.extend(decision.warning.clone());
     warnings.extend(checks.warnings.clone());
+    warnings.extend(endings.warnings.clone());
     let mut provenance = Map::new();
     provenance.insert("warnings".to_string(), json!(warnings));
     provenance.insert(
@@ -506,10 +523,12 @@ fn generate_and_write(
         "application_steps".to_string(),
         json!(application_steps_summary(&plan)),
     );
+    // #463 R2: the endings' pages after the steps' and the transitions'.
     let pages = plan
         .steps
         .iter()
         .flat_map(|step| step.page.iter().chain(step.transition_page.iter()))
+        .chain(plan.endings.iter().map(|ending| &ending.page))
         .cloned()
         .collect::<Vec<_>>();
     lab.insert("pages".to_string(), json!(pages));
@@ -522,6 +541,10 @@ fn generate_and_write(
     // package has one.
     if !selects.selects.is_empty() {
         lab.insert("selects".to_string(), json!(selects.selects));
+    }
+    // #463 R2: the endings with item 9's results, present only when the recording has one.
+    if !endings.endings.is_empty() {
+        lab.insert("endings".to_string(), json!(endings.endings));
     }
     lab.insert(
         "timeouts".to_string(),
@@ -592,6 +615,15 @@ fn load_package_inputs(plan: &Plan) -> LabResult<(FrameCache, BTreeMap<String, V
             check_frame_size(Some(plan.size), &loaded, &frame.frame_id)?;
             cache.insert(frame.sha256.clone(), loaded);
         }
+    }
+    // #463 R2: and every live frame of an ending.
+    for frame in plan.endings.iter().flat_map(|ending| ending.live_frames()) {
+        if cache.contains_key(&frame.sha256) {
+            continue;
+        }
+        let loaded = read_stored_frame(frame)?;
+        check_frame_size(Some(plan.size), &loaded, &frame.frame_id)?;
+        cache.insert(frame.sha256.clone(), loaded);
     }
     let mut crops = BTreeMap::new();
     for (id, _asset) in plan.template_assets() {
@@ -771,6 +803,17 @@ fn binding_requires(plan: &Plan) -> Vec<String> {
              them: a pop-up later than its settle_ms, a pop-up shown more often than the copies \
              recorded, or a pop-up never recorded makes this package fail loudly; it is not \
              handled automatically."
+                .to_string(),
+        );
+    }
+    // #463 R2: a package with an ending may end short of its target page.
+    if !plan.endings.is_empty() {
+        items.push(
+            "This package declares endings: a run that ends on one is a success with its key, and \
+             its message is left on the screen for the next task's start. Such a package is no \
+             prerequisite and no return-home package (contained_task_prerequisite_incompatible, \
+             reason=linear_endings), and it needs a Runtime that admits ending pages (package \
+             revision 15)."
                 .to_string(),
         );
     }
@@ -969,6 +1012,10 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
             "validation_failed",
             format!("record mark requests use schema_version {LAB_RECORD_MARK_SCHEMA}"),
         ));
+    }
+    // #463 R2: an ending, or the key of one to give up, stands alone in its request.
+    if request.ending.is_some() || request.remove_ending.is_some() {
+        return validate_ending_request(request);
     }
     if let Some(page) = &request.page
         && !page_name_valid(page)
@@ -1174,7 +1221,31 @@ fn mark_session(
         forbidden: Vec::new(),
         after_stop: session.stopped,
         select: None,
+        ending: None,
+        removed_ending: None,
     };
+    // #463 R2: an ending of the stopped recording, taken from its frame or given up; it is no
+    // step, so the answer names none.
+    if let Some(spec) = &request.ending {
+        let applied = apply_ending(session, spec, ocr)?;
+        if !dry_run {
+            outcome.status = "ending_recorded".to_string();
+        }
+        outcome.frame = Some(applied.frame);
+        outcome.samples = applied.samples;
+        outcome.marks = applied.added;
+        outcome.reused = applied.reused;
+        outcome.ending = Some(applied.ending);
+        return Ok(outcome);
+    }
+    if let Some(key) = &request.remove_ending {
+        let removed = remove_ending(session, key)?;
+        if !dry_run {
+            outcome.status = "ending_removed".to_string();
+        }
+        outcome.removed_ending = Some(removed);
+        return Ok(outcome);
+    }
     let step = if let Some(action) = &request.step_action {
         let (status, step) = apply_step_action(session, action)?;
         outcome.status = status.to_string();

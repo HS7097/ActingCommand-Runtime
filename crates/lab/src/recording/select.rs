@@ -105,8 +105,9 @@ fn name_id_valid(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
 }
 
-/// `^[a-z0-9][a-z0-9_]{0,127}$`: the grammar of a declared `on_empty` key.
-fn on_empty_key_valid(value: &str) -> bool {
+/// `^[a-z0-9][a-z0-9_]{0,127}$`: the grammar of a declared `on_empty` key; #463 R2: and of an
+/// ending's outcome key.
+pub(crate) fn on_empty_key_valid(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= 128
@@ -451,11 +452,19 @@ pub(crate) fn declare_select(step: &mut RecordingStep, request: &MarkRequest) ->
 /// (`click_before`), so the step is the one recorded before the select; the select's own click
 /// without an outcome goes with it, with its click guard, and the step has no effect again. The
 /// select's own press, executed, is no click of its own to give back: `record_click_executed`
-/// (reopen the step first). A step without a select is left as it is.
+/// (reopen the step first). #463 R2: a step without a select has nothing to take off, and is
+/// refused with `no_select`, so that the answer never says something was taken off.
 pub(crate) fn clear_select(step: &mut RecordingStep) -> LabResult<()> {
     let index = step.index;
     let Some(select) = &step.select else {
-        return Ok(());
+        return Err(select_invalid(
+            Some(index),
+            SelectProblem::NoSelect,
+            format!(
+                "step {index} has no select, so clear_select has nothing to take off; nothing was \
+                 written"
+            ),
+        ));
     };
     let executed = step
         .click
@@ -562,11 +571,11 @@ pub(crate) struct SelectProbe {
 
 /// The self-test of the select of `probe.step` on its live `frames`: the rules that need the
 /// recording (`slot_outside_frame`, `on_final_step`, `on_empty_key_reserved`,
-/// `on_empty_key_taken`, `wanted_name_taken`), then the probe package admitted by the kernel
-/// (`guard_missing`, `kernel_refused`), then, with an OCR model, the kernel's dry run on every
-/// frame, each frame's decisions reported by their kind. `fresh` says the step had no press to
-/// keep a click box from (see [`declare_select`]); without an OCR model such a select is refused
-/// `lab_ocr_unavailable`, every other one is `not_evaluated`.
+/// `on_empty_key_taken`, `wanted_name_taken`, #463 R2 fix 1: `on_empty_key_of_ending`), then the
+/// probe package admitted by the kernel (`guard_missing`, `kernel_refused`), then, with an OCR
+/// model, the kernel's dry run on every frame, each frame's decisions reported by their kind.
+/// `fresh` says the step had no press to keep a click box from (see [`declare_select`]); without an
+/// OCR model such a select is refused `lab_ocr_unavailable`, every other one is `not_evaluated`.
 pub(crate) fn check_step_select(
     recording: &LabRecording,
     stopped: bool,
@@ -651,6 +660,21 @@ pub(crate) fn check_step_select(
                 ),
             );
         }
+    }
+    // #463 R2 fix 1: the key is no ending's, also for a select declared after the ending; the
+    // ending's own check at record stop (`key_of_select`) would refuse it there otherwise.
+    if recording
+        .endings
+        .iter()
+        .any(|ending| ending.outcome_key == key)
+    {
+        return refuse(
+            SelectProblem::OnEmptyKeyOfEnding,
+            format!(
+                "the on_empty key '{key}' is the outcome key of an ending of the recording; give \
+                 the select an on_empty_key of its own"
+            ),
+        );
     }
 
     // The probe package: the step as `record stop` generates it, admitted by the kernel.

@@ -2057,4 +2057,8 @@ mod tests {
     // #463 L1: the recording family's new tools reach their commands and answer their envelope;
     // ac_lab_do hands the one-call form to actinglab as its flags.
     mod gate_463_l1;
+
+    // #463 R2: ac_record_mark hands an ending request, and one that gives an ending up, to
+    // actinglab unchanged.
+    mod gate_463_r2;
 }
