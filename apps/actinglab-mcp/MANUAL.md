@@ -230,10 +230,11 @@ naming this file.
   child: the pack directory, its rule (or held entry, or maintenance entry) and the `requires`
   words, each derived member answered with where it came from. `held_reason` and `held_reference`
   (Workflow #463 S3-4, 0.12.63) are the decision of the class `held` without a document, read as a
-  document given by `decide` is; not with `decide`, and `held_reference` only with `held_reason`. Every check runs before the first write; a refusal is `adopt_refused`, its
-  `adopt_problem` naming the check, and wrote nothing; with `dry_run` nothing is written in the
-  checkout. Its `value` is `"pending"` or a number of the pack's own: a decision that names the
-  origin `model` is refused (`value_origin_model`).
+  document given by `decide` is; not with `decide`, and `held_reference` only with `held_reason`.
+  Every check runs before the first write; a refusal is `adopt_refused`, its `adopt_problem` naming
+  the check, and wrote nothing; with `dry_run` nothing is written in the checkout. Its `value` is
+  `"pending"` or a number of the pack's own: a decision that names the origin `model` is refused
+  (`value_origin_model`).
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

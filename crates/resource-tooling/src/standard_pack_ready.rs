@@ -5,9 +5,9 @@
 //! and fix round 1 after the independent review): for every pack of one game root, what the
 //! scheduler can do with it, or every reason it waits. One function judges the thirteen items,
 //! [`judge_standard_pack_readiness`]; `actinglab standard-pack ready --root <game root>` answers
-//! it; `standard-pack build`'s answer calls it on the installed root its steps laid out, as
-//! `ready --root` does (#463 S3-7; `build.json` does not carry it); adopt's answer and the
-//! placement plan are to call it with what each of them holds.
+//! it, and two answers call it as `ready --root` does: `standard-pack adopt`'s on the game root its
+//! check tree laid out (#463 S3-5) and `standard-pack build`'s on the installed root its steps laid
+//! out (#463 S3-7; `build.json` does not carry it). The placement plan does not call it yet.
 //!
 //! The game root is an installed one, `<standard_packs.root>/<game>/`, or a bundle laid out as one
 //! (`package bundle`'s output in a directory named as its game). Its root files are read by the one

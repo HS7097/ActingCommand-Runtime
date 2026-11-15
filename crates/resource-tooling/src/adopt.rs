@@ -1253,8 +1253,8 @@ fn interrupted(repo: &Path, leftovers: &[String]) -> String {
     said.push(format!(
         "to run that adoption again instead: move the root .part files out of the checkout; {}; \
          then run adopt with --replace and the decision that call was given (--decide, or \
-         --held-reason with its --held-reference), if any, which writes the package's one role \
-         from the root files as they are; to undo it: move the root .part \
+         --held-reason, with --held-reference when that call had one), if any, which writes the \
+         package's one role from the root files as they are; to undo it: move the root .part \
          files out, put packs/<package_id> back as it was, and restore with the version control \
          a root file that call renamed (to its last commit: a change not committed before that \
          call is not in it)",
@@ -1897,8 +1897,8 @@ impl Existing {
                  directory with changes, and moves a committed one only to a state directory on \
                  the checkout's volume), so nothing comes before: to finish that adoption, run \
                  adopt again with --replace, this --state-dir and the decision that call was given \
-                 (--decide, or --held-reason with its --held-reference), which writes one role. To \
-                 undo it: put {pack} back as it was before \
+                 (--decide, or --held-reason, with --held-reference when that call had one), which \
+                 writes one role. To undo it: put {pack} back as it was before \
                  that call (absent, or as its earlier commit) and restore schedule.json and \
                  maintenance.json with the version control. Nothing was written"
             ),
@@ -4312,8 +4312,9 @@ fn unchanged(
         format!(
             "written or moved before: {listed:?}; nothing is removed: compare with the version \
              control; move the root .part files this call wrote out of the checkout; {}; then run \
-             adopt again with --replace and this call's decision (--decide, or --held-reason with \
-             its --held-reference), if any, which reads the root files as they are now",
+             adopt again with --replace and this call's decision (--decide, or --held-reason, with \
+             --held-reference when this call had one), if any, which reads the root files as they \
+             are now",
             new_directory_step(pack, "this call")
         )
     };

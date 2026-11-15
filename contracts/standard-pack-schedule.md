@@ -951,11 +951,14 @@ outcome) is carried by the pack it names (its `package_id`, else the pack whose 
 `package_invalid` of a pack it names, under S4 when it is `standard_pack_root_invalid` of
 `schedule.json`, otherwise under S7. Its warnings stay warnings, the answer's `warnings` (ruling 7:
 a recorded entry page the page list does not name is accepted with its
-`package_bundle_entry_page_unlisted`). `standard-pack build`'s answer calls it on the installed
-root its steps laid out, `<out>/work/installed/<game>/`, as `standard-pack ready --root` calls it
+`package_bundle_entry_page_unlisted`). Two answers call it, each as `standard-pack ready --root`
+calls it (no declared range, no installation): `standard-pack adopt`'s, on the game root its check
+tree laid out, `<state>/adopt-check/<checkout>/installed/<game>/` (#463 S3-5, since 0.12.63;
+[standard-pack-authoring.md](standard-pack-authoring.md), "The answer"), and
+`standard-pack build`'s, on the installed root its steps laid out, `<out>/work/installed/<game>/`
 (#463 S3-7, since 0.12.63; [resource-verify.md](resource-verify.md), "`standard-pack build`");
-`build.json` does not carry it. Adopt's answer and the placement plan are to call it with what
-each of them holds (a follow-up of P3); `place --plan` does not answer it yet.
+`build.json` does not carry it. The placement plan does not call it yet (a follow-up of P3):
+`place --plan` does not answer it.
 
 **The items.** Each item of each pack, in this order, is judged by the function that judges it
 elsewhere, and answered `holds` (with its `basis` where more than one way exists), `fails` (with

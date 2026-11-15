@@ -497,10 +497,10 @@ it was renamed into place), `would_write`, `kept`, `check_tree`, `readiness` or
 [v012-register.md](v012-register.md) §1.412). `readiness` is the adopted pack's row of the
 readiness of the game root the check tree laid out,
 `<state>/adopt-check/<checkout>/installed/<game>/`
-([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness"): `package_id`, `server`,
-`readiness` (one of its four words), `roles` and the thirteen `items`, the row `standard-pack ready
---root` answers for that directory. It is the answer of that one function, called as it is, on the
-tree as adopt composed it, after every check passed, and by the same path under `--dry-run`; a
+([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness"): the row `standard-pack ready
+--root` answers for that pack on that directory, member for member. It is the answer of that one
+function, called as it is, on the tree as adopt composed it, after every check passed, and by the
+same path under `--dry-run`; a
 refused adoption answers none. No installation is handed to it, so the five items an installation
 tells are `not_judged` (`installation_not_read`), I3 is information, and the pack answers
 `ready_to_place` at best, never `dispatchable`. So a package adopted as held answers `waiting` with
@@ -511,8 +511,10 @@ with the pending marker, "A pending value"); a business rule with its value, `re
 root hold too; a package adopted as maintenance by its `uses` alone, no rule naming it,
 `not_scheduled` with that role in `roles`. When the function refuses that root, or answers no row
 of the pack, the answer carries `readiness_not_judged` instead: `outcome`, the function's refusal
-with its code as the function answered it, and `text`, the same in words. Nothing else of the
-answer changes by it, and the call does not fail by it.
+with its code as the function answered it, or, when the function answered and the pack's row is
+not in its answer, adoption's own `package_invalid` (the pack is no package of the bundle); and
+`text`, the same in words. Nothing else of the answer changes by it, and the call does not fail by
+it.
 
 ## The canonical form
 
