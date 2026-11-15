@@ -150,11 +150,12 @@ pub(crate) struct OwnCommand {
     pub(crate) sentence: &'static str,
 }
 
-/// Every own command of actinglab without a row (the 36 commands of the inventory,
+/// Every own command of actinglab without a row (the 35 commands of the inventory,
 /// `ratchet/actinglab_commands.json`, that no offered row names, serves or replaces: the survey's
-/// 34 and, since Workflow #434 CLI-COMP, `completion` and `__complete`), and `serve`, the CLI
-/// module's resident mode, which is no command of the inventory.
-pub(crate) static OWN_WITHOUT_ROW: [OwnCommand; 37] = [
+/// 34 less `report export`, whose placeholder Workflow #467 RPT-1 removed for the table's row of
+/// those words, and, since Workflow #434 CLI-COMP, `completion` and `__complete`), and `serve`,
+/// the CLI module's resident mode, which is no command of the inventory.
+pub(crate) static OWN_WITHOUT_ROW: [OwnCommand; 36] = [
     OwnCommand {
         words: "help",
         usage: "help [<command words>]",
@@ -349,12 +350,8 @@ pub(crate) static OWN_WITHOUT_ROW: [OwnCommand; 37] = [
         usage: "run export <run-id> --out <path>",
         sentence: "Writes a placeholder archive for one run to the path it names; it reads no run.",
     },
-    OwnCommand {
-        words: "report export",
-        usage: "report export --last-error --out <path>",
-        sentence: "Writes a placeholder last-error report archive to the path it names; it reads \
-                   no error data.",
-    },
+    // Workflow #467 RPT-1: `report export` is the operation table's row since that slice; its
+    // placeholder of actinglab's own is gone.
     // Workflow #434 CLI-COMP (register §1.318): the completion script of a shell, and its
     // callback.
     OwnCommand {

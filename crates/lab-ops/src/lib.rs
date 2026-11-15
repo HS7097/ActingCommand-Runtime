@@ -137,6 +137,10 @@ pub mod core_ops;
 // per row, which that code reads them through and builds a row's command line from.
 pub mod core_reads;
 
+// Workflow #467 RPT-1: `report export`, one problem report archive of the errors view (the newest
+// failed and unfinished runs, the ledger's errors view, the versions), which `core_ops` serves.
+pub mod report;
+
 // Test-only: Workflow #434 LAB-1, the slice's named tests (`lab_ops_table_complete`,
 // `lab_ops_locate_defaults`).
 #[cfg(test)]
@@ -168,6 +172,11 @@ mod gate_434_lab6s1a;
 // (`lab_ops_ui_allows_is_the_tables_ui_kinds`).
 #[cfg(test)]
 mod gate_434_lab6s3;
+// Test-only: Workflow #467 RPT-1, the slice's named tests of `report export` (the summary from
+// made-up evidence, the stream filter, the frames, the output's refusals, the secrets and masks,
+// the reads, no frames, the size bound, the errors view and the table's row).
+#[cfg(test)]
+mod gate_467_rpt1;
 // Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
 #[cfg(test)]
 #[path = "../../../tests/support/standard_pack_schedule.rs"]

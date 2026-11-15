@@ -41,7 +41,8 @@ use windows_sys::Win32::System::ProcessStatus::{
     K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
 };
 use windows_sys::Win32::System::SystemInformation::{
-    ComputerNameDnsHostname, GetComputerNameExW, GlobalMemoryStatusEx, MEMORYSTATUSEX,
+    COMPUTER_NAME_FORMAT, ComputerNameDnsFullyQualified, ComputerNameDnsHostname,
+    GetComputerNameExW, GlobalMemoryStatusEx, MEMORYSTATUSEX,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, GetProcessInformation, GetProcessIoCounters,
@@ -630,10 +631,22 @@ pub(super) fn probe_process_creation(pid: u32) -> super::ProcessCreationProbe {
 /// Workflow #71 FLK-10: `GetComputerNameExW` with `ComputerNameDnsHostname`, asked once for the
 /// length the name needs and once for the name.
 pub(super) fn dns_host_name() -> std::io::Result<String> {
+    computer_name(ComputerNameDnsHostname)
+}
+
+/// Workflow #467 RPT-1 fix round 1: `GetComputerNameExW` with `ComputerNameDnsFullyQualified`,
+/// asked as [`dns_host_name`] asks.
+pub(super) fn dns_full_name() -> std::io::Result<String> {
+    computer_name(ComputerNameDnsFullyQualified)
+}
+
+/// `GetComputerNameExW` with `format`, asked once for the length the name needs and once for the
+/// name.
+fn computer_name(format: COMPUTER_NAME_FORMAT) -> std::io::Result<String> {
     let mut length = 0u32;
     // SAFETY: a null buffer of length zero only asks for the length the name needs, its
     // terminating NUL included.
-    if unsafe { GetComputerNameExW(ComputerNameDnsHostname, null_mut(), &mut length) } != 0 {
+    if unsafe { GetComputerNameExW(format, null_mut(), &mut length) } != 0 {
         // Nothing was too long for no buffer: the name is empty.
         return Ok(String::new());
     }
@@ -646,9 +659,7 @@ pub(super) fn dns_host_name() -> std::io::Result<String> {
     let mut written = length;
     // SAFETY: the buffer is writable for `written` UTF-16 units, the length the first call
     // asked for.
-    if unsafe { GetComputerNameExW(ComputerNameDnsHostname, buffer.as_mut_ptr(), &mut written) }
-        == 0
-    {
+    if unsafe { GetComputerNameExW(format, buffer.as_mut_ptr(), &mut written) } == 0 {
         return Err(std::io::Error::last_os_error());
     }
     // On success `written` is the name's length without its terminating NUL.

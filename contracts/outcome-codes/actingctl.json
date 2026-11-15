@@ -3134,6 +3134,98 @@
       "description": "Workflow #434 LAB-2: an operation of actinglab's CLI module (or of actinglab serve --stdio) whose source has no success code of its own ran to its end: an operation whose only source was an MCP tool (run show, material, targets, run stop), and since Workflow #434 LAB-2b every one of actinglab's own commands (resource validate, package preflight, observe, do and the rest) that succeeded. The line carries the answer beside this outcome, its members flat at the top level (a result that is no JSON object under result; the two results whose top level has a member named outcome whole, resource verify's under report and run summary's under summary); warnings a result carries stay its member warnings in their own shape {code, values}, the category stays success; exit 0. A command line with --via (MCP's actinglab child) still answers the envelope, not this code, until LAB-5.",
       "common_causes": "The operation succeeded.",
       "handling": "None."
+    },
+    "report_exported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "Workflow #467 RPT-1: report export wrote one problem report archive of the errors view (the newest failed and unfinished runs of the window with their steps, scores, frames and display map, the newest rows of the ledger's errors view of each instance, the versions) into the directory it was given; path is the archive. The line names its sha256 and size, whether it is within its size bound (within_bound), the instances, the window, the runs, the frames and what was left out; warnings name the parts that could not be read. Nothing was sent anywhere. Exit 0.",
+      "common_causes": "The report was written.",
+      "handling": "Send the archive to whoever asked for it; its first entry, report/SUMMARY.md, is the page to read first."
+    },
+    "report_output_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "report_output_root": "required",
+        "install_root": "optional",
+        "state_root": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "Workflow #467 RPT-1: report export refused its output directory path because it lies inside the installation root or the Runtime's state root, junctions and letter case resolved; report_output_root says which, and install_root or state_root is that root. Nothing was read and nothing was written. Exit 1.",
+      "common_causes": "An output directory chosen inside the installation, such as its tools or state folder.",
+      "handling": "Name a directory outside the installation root and the state root, for example a folder in the user's documents."
+    },
+    "report_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "report_write_step": "required",
+        "from_path": "optional",
+        "retained": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "Workflow #467 RPT-1: report export could not write its archive; report_write_step says at which step: pack (the archive packed in memory; path the output directory), create_directory (path the directory), name_exists (path the archive, which is never replaced), write_partial (path the partial file), rename (path the archive, from_path the partial file). A partial file the export created and could not finish or move is left behind and named in retained. The operating system's failure is the caused_by link. Exit 1.",
+      "common_causes": "A directory that cannot be written, a full disk, or a file of the same name.",
+      "handling": "Fix the cause, or name another directory, and run the export again."
+    },
+    "report_part_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "report_part": "required",
+        "report_part_reason": "required",
+        "file": "optional",
+        "alias": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "Workflow #467 RPT-1: a part of the problem report could not be read, or not to its end, and is missing from the archive or incomplete in it: report_part names the part (an instance's run listing or its errors view with alias, a run's status, steps, geometry, scores, excerpt or frame with request_id and the archive entry file, the versions), report_part_reason why (not_read_to_end, budget_spent, runtime_refused, read_failed, not_recorded, too_large, unreadable, and for an errors view whose search read its largest window without reaching the window's start search_windows_spent). The read's own failure is the caused_by link when there is one (material_too_large, call_budget_exhausted, the Runtime's or the client's outcome); a run without a diagnostic stream and a listing cut short have none. The rest of the report was written; a listing that was not read to its end never says that the window holds no run.",
+      "common_causes": "A frame the Runtime's cleaner already removed, a long run's large diagnostic stream, a run whose stream was abandoned, or a slow Runtime.",
+      "handling": "Read the rest of the report; export again soon after a failure to keep its frames."
+    },
+    "report_trimmed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "limit_bytes": "required",
+        "count": "required",
+        "report_fit": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "Workflow #467 RPT-1: the problem report's size bound limit_bytes, measured on the archive's packed bytes, left count parts out, in order: frames of the older runs, then the newest run's, then stream excerpts, then errors view files; the summary, the manifest, the versions and the runs' statuses, steps, scores and geometry are never left out. report_fit says whether the archive fits the bound after that (fits) or is still over it with everything left out that may be (still_over; count may then be 0). The manifest's left_out names each part, and the manifest, the summary and the answer say whether the archive is within its bound.",
+      "common_causes": "Many large frames; still over: very many long runs, or a bound that is too small.",
+      "handling": "Raise max_mib, or name fewer runs, and export again when the parts left out are needed."
     }
   },
   "locations": {

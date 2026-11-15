@@ -26063,6 +26063,212 @@ module's `gate_455_gr1` goal bytes), `goals_reader_is_strict`'s "another version
 read `GOALS_PACKAGE_REVISION`, so their installer declares [3, 14] and their goals bundle [14, 14]
 (the gate row gains the incident `#463 V1`). No golden changes; no test leaves the gate map.
 
+### 1.379 Slice #467 RPT-1 (0.12.61): `report export`, one problem report archive of the errors view (Workflow #467; the owner's words on board #467, as the work order quotes them, are the requirement, with her answers of 11-14 to the design's first page as the coordinator recorded them; the rulings are the coordinator's, not the owner's words; the design `rd-1114/problem-report-export-design.md`, its row RPT-1 of section G; coordinator work orders `rd-1114/brief-467-rpt1-report-export.md`, read on main `1e67d1c5`, and `rd-1115/brief-467-rpt1-cont.md`, its continuation after the first implementer stopped, main `2eaf9b7e` (release 0.12.60) merged)
+
+1.379 is the number the coordinator gave this slice; 1.374 to 1.378 belong to pull requests open
+when it was given. The slice ships in 0.12.61 (release 0.12.60 is cut without it): its codes'
+`since` is 0.12.61. The contract is [problem-report.md](problem-report.md).
+
+**Why.** A tester's task failed, and what he could send (the console's task cards, a window of
+ledger rows, two process logs) did not hold the failure; the evidence was in the Runtime's ledger
+and artifacts and took several Lab commands of someone who knows the Lab to get out. The owner
+asked for one action that exports the error log, in the console and in the Lab, and later that it
+follow the ledger's views (the errors view now, the package view next, RPT-2). This slice is the
+Lab's half of the errors view: one archive, with a page a person reads first.
+
+**Established by reading** (the work order's points, before any code).
+- *The placeholder.* actinglab's own `report export --last-error --out <path>` wrote an archive
+  that held no error data (`apps/actinglab/src/resource_runtime_support.rs`, `run_report` and
+  `REPORT_EXPORT_READS`; the group `report` of `main.rs`'s dispatch and `OWN_GROUPS`; its help in
+  `cli_help.rs`; its read list in `cli_module/own_flags.rs`'s work list; two lines of
+  `gate_434_lab5b5`'s corpus and its line of `LINES`; the inventory `ratchet/actinglab_commands.json`;
+  [lab-two-entries.md](lab-two-entries.md) §9.3, LAB-5B5's list; [actinglab-dry-run.md](actinglab-dry-run.md)).
+  No console code and nothing in `distribution/` but a past release note names it. Deleted here
+  (ruling Q6); the words are the row's.
+- *The reads it calls.* `runs`' listing (`list_contained_runs`: one listing a window and instance,
+  one brief status read a run), `run show`'s and `run evidence`'s reads by request id (every
+  step: one `QueryEvents` page sequence over the run's eight record types), `events`' row shape,
+  `material`'s `resolve` (one page at the reference's sequence) and `read_whole` (verified
+  ranges); a run of a hundred steps costs one evidence read of a few pages. Every read of the
+  module that selects a record names a request id, or an instance with the report's window (a
+  time-bounded page starts at the window's first record, [ledger-observer.md](ledger-observer.md),
+  "LN-WS"); none reads without an instance, none from the ledger's first record. The one read that
+  selects none, the errors view's search's read of the ledger's head (fix round 1; a page whose
+  range starts past every sequence, with no other condition), carries no instance (fix round 2
+  says so). No row's answer changes: the module calls their code, it extracts nothing.
+- *Ruling Q4.* `task.recognition_completed` holds for each target matched or not (`passed`) and
+  its box, and since ledger revision 4 `candidate_scores`: for each candidate page `passed`,
+  `best_score_milli` and `first_failed_target_id` (at most 16 pages, `omitted` the rest); no
+  target's score and no threshold. So both readings were partly right: the scores come from the
+  diagnostic stream (8 MiB at most), else as far as that record holds them.
+- *The roots.* The installation root is the program's own place (`core_ops::Place::root`), the
+  state root the module's located one. No function compared resolved paths; `report.rs`'s
+  `refuse_output` resolves the longest existing part of a path (`fs::canonicalize`: junctions,
+  links, letter case), keeps the rest as written, takes out `.` and `..`, and compares without
+  regard to ASCII case.
+- *The Runtime.* The row is `runtime: required` in this slice: without a Runtime it answers the
+  Runtime client's failure; the part that needs none comes with RPT-3.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| the module | `crates/lab-ops/src/report.rs` (the request, the runs chosen, the failing step, the frames chosen, the parts, the size bound, the archive's manifest, the answer), `report/source.rs` (the trait `Source`, every method a read, and `RuntimeSource`, which reads through the rows' code within one deadline), `report/scores.rs` (the stream's records, the failing step's span, the scores from the stream or the recognition record, `no_frames`' text removal), `report/summary.rs` (`SUMMARY.md`, `summary.json`, the display line), `report/archive.rs` (the masks, the zip, the write through a partial file) |
+| the row | `contracts/lab-operations.json`: `report export`, module `core`, slice `RPT-1`, eight parameters, `runtime` `required`, `entries` `["lab", "ui"]`, `Status`, `QueryEvents`, `ReadMaterial`; served by `core_ops` (`report_line`), its parameters in `core_reads::READ_HERE`; actinglab offers it (`BUILT_SLICES`), and so does the Lab's MCP server (`ACTINGLAB_SLICES`; `tools::SUPPLIED` gives `out` the export directory, ruling Q7) |
+| the codes | `crates/lab-ops/src/codes.rs` and [outcome-codes/actingctl.json](outcome-codes/actingctl.json): `report_exported`, `report_output_refused`, `report_write_failed`, `report_part_missing`, `report_trimmed` (`report_` is a prefix of the owner `actingctl`) |
+| the dependency | `zip` (the workspace's 0.6, already in the lock file) for `crates/lab-ops` |
+| the placeholder | deleted (above); the inventory is 46 dispatch arms and 101 commands; the help lists 35 own commands of the inventory |
+| the texts | [problem-report.md](problem-report.md) (new, in [README.md](README.md)); [lab-two-entries.md](lab-two-entries.md) §9.3 and the MCP front's own members; [actinglab-dry-run.md](actinglab-dry-run.md); `apps/actinglab-mcp/MANUAL.md`; the inventory's counts in both READMEs |
+
+**What a report holds** (the contract has every member): the summary page, its data, the
+manifest, the versions (each member's build manifest, each game root's bundle source), and for
+each failed or unfinished run of the window (at most `max_runs`, five by default, two at most of
+one package that ended with one code) its status, its steps, its scores, its geometry, the failing
+step's stream excerpt and at most three frames; for each instance the newest 200 rows of its
+errors view. The summary names for each run its terminal code with the catalog's description, the
+step it ended in, the page that step and the run started from, the last page recognised, the
+targets with matched, last and best score, threshold and margin (an OCR target's text and its
+confidence), and one display line ("device 1920×1080, package 1280×720, scale 3/2, recognition
+on the reduced frame", or "… not scaled"); the run that ended normally before the newest on its
+instance is listed in one line. The owner's defaults: frames in unless `no_frames` (which takes
+the text OCR read out too, ruling Q5), 24 hours, five runs, 24 MiB (frames left out first, then
+the stream excerpts, then the errors files; the summary, the manifest and each run's status,
+steps and scores never). What is never in it, whatever the switches: the configuration's salt,
+the state root's key file, a device serial; a path's `\Users\<name>\` segment and the user's and
+computer's names are masked in every text part.
+
+**Tests** (`crates/lab-ops/src/gate_467_rpt1.rs`, a made-up `Source` and temporary folders, no
+Runtime, no clock; `apps/actinglab/src/tests/gate_467_rpt1.rs`; the contract and apps gate maps):
+the summary of two failed runs (the code and its description, the step and its pages, a template
+below its threshold with its last and best score and margin, an OCR target's text, the display
+line of a scaled run and of one of the package's size, the run before the newest, the frames,
+the versions; the archive's name, order and digests; a second export never replaces the first);
+the stream filtered to the failing step, and the scores from the recognition record when the
+stream is above 8 MiB; the frames chosen, each once, a removed frame named missing; the output
+refused inside either root (letter case, `..`, the root itself) and through the row before the
+Runtime is reached; no salt, key, serial or unmasked name in any entry; only reads, no
+confirmation, client action or capture in the module's code; `no_frames`; the size bound's order
+and what it says; each instance's errors view with its counts; every read in order with its
+request id or its instance and window; the table's row; and actinglab's placeholder gone (the
+words are the module's, `--last-error` refused by name, an output inside the state root refused,
+nothing written without a Runtime). Adapted (the requirement changes what they pin): the help's
+own commands (35, `gate_434_cli_help`), LAB-5B5's lines and corpus (`gate_434_lab5b5`), the MCP
+front's own members (`gate_434_lab5g2b`).
+
+**Fix round 1** (coordinator brief `rd-1115/brief-1725-fix1.md`, after the slice's independent
+review, which found every read bounded, nothing of the configuration or a secret written and the
+output refusals holding; still 0.12.61, nothing of it shipped in 0.12.60).
+- *CI.* The test fake sorts with `sort_by_key` (lint); the secrets test has the private bindings
+  written by their one writer, `devices bind` from a made-up adb listing, so that no file but the
+  binding reader and writer names the file (architecture guard T10, untouched).
+- *A listing not read to its end* (`runs`' listing answers no run for an incomplete listing) is
+  `report_part_missing` naming its instance; the summary and its data say for each instance
+  whether its listing was read to its end, and "no failed or unfinished run" is said only when
+  every listing was. The same for the run before the newest.
+- *Still over the bound* with every part that may be left out left out: the archive is written,
+  and `report_trimmed` (`report_fit` `still_over`), the manifest's and the summary's data's
+  `within_bound`, the summary's size line and the answer's `within_bound` say so.
+- *`no_frames`* leaves out every member that holds text or a value read from a frame, in the
+  stream's records and the errors view's rows (the table of [problem-report.md](problem-report.md)
+  section 6: OCR text, derived and matched expected text, an OCR block's text, the neural
+  recognition's labels, a colour digest's observed cells, a value test's read texts and values,
+  `raw_text` evidence at any depth); what measures a frame without showing it stays.
+- *The manifest's `secrets`* says what is true: the configuration is read whole for its
+  `standard_packs.root` and nothing of it is written.
+- *The codes* (the coordinator's ruling, provisional while the owner refines the status codes on
+  board #469): `report_part_missing` requires `report_part` and `report_part_reason`
+  (`file`, `alias`, `request_id` where they apply; before, `file` alone was required and a
+  listing's failure named `summary.json`), `report_write_failed` requires `report_write_step`
+  (and names a partial file it leaves behind in `retained`), `report_trimmed` requires
+  `report_fit`, `report_output_refused` requires `report_output_root`. Five keys and five
+  vocabularies are new in [outcome-codes/catalog.json](outcome-codes/catalog.json) and the key
+  table (`crates/actingcommand-contract/src/outcome/keys.rs`), each vocabulary an enum of
+  `crates/lab-ops/src/codes.rs`: `report_part` (10 tokens), `report_part_reason` (7; 8 since fix
+  round 2), `report_write_step` (5), `report_fit` (2), `report_output_root` (2); `since` 0.12.61,
+  pending; the index is regenerated. No code is added.
+- *The reads.* The runs are read before the errors views, and an errors view is its newest 200
+  rows found by `events`' search for the newest records (CLI-EV, §1.306; `events::newest_in_window`
+  calls the search's own parts, with the window's first record as its floor, and changes no
+  answer of `events`), not the window read from its start; no total is counted, and a search
+  that stopped above the window's start is a part missing.
+- *The size* is measured in packed bytes (each part zipped alone, less the end record, plus the
+  rendered summary, data and manifest), not the unpacked sum with a reserve.
+- *A failed write* names the partial file it left behind (`retained`).
+- *The summary page* says the screenshots can show a player's name and numbers and that the
+  export can be made without them (`--no-frames`).
+- *The masks* replace the user's and the computer's names (its NetBIOS name, its DNS host name
+  and its full DNS name, the last two from `actingcommand-host-metrics`, whose `dns_full_name` is
+  new beside `dns_host_name`) wherever they stand, inside longer words and without regard to case,
+  when at least three characters long, and a `Users` folder's segment behind one or more
+  separators (a doubly escaped path too); [problem-report.md](problem-report.md) section 7 says
+  what is and is not replaced.
+- *Tests.* New: `rpt1_fix1_a_listing_not_read_to_its_end_never_says_none`,
+  `rpt1_fix1_still_over_the_bound_is_said_in_the_manifest_the_summary_and_the_answer`,
+  `rpt1_fix1_no_frames_leaves_out_every_text_and_value_read_from_a_frame`,
+  `rpt1_fix1_the_masks_replace_names_inside_words_escaped_paths_and_dns_names`, in the row's gate.
+  Adapted (the items change what they pin): the errors view's summary lines and data (no total,
+  item 7), the reads' order (item 7), the size bound's fixture (incompressible excerpts within
+  1 MiB of packed bytes, item 8), the part named missing for a stream above 8 MiB (the run's
+  excerpt, `too_large`), the fake source's error type, and the secrets fixture (above).
+
+**Fix round 2** (coordinator brief `rd-1115/brief-1725-fix2.md`, after the review of fix round 1,
+which found its items done, every read bounded, the vocabularies registered and required, the
+packed size measured as written and the tests failing when the behaviour breaks; main
+`60c28e64` (the train 0.12.61a, #463 K1 §1.374 and V1 §1.378) merged; still 0.12.61). The
+contract's sections 2, 5, 6, 7 and 9 say each point.
+- *The masks* (the coordinator's ruling, which replaces round 1's item 11) never search a
+  member's name, a number, a hash, an id the Runtime gave, a code or a word of a closed
+  vocabulary: by the member that holds a string (the report's own list of id, hash, code and word
+  members; in an outcome's `values`, the outcome key table's type of the key), by its shape
+  (`sha256:…`, 40 or 64 hexadecimal digits, a typed id, a material reference), or because it
+  names an entry of the archive. A name of five characters or more is replaced wherever it
+  stands; a shorter one only where it stands alone; the `Users` folder's segment whatever its
+  length. The summary page masks each value as it writes it, by the same rule; before, it was
+  masked whole, labels and codes included.
+- *The entries' names* are built from masked text (an instance's folder from its masked alias,
+  `<user>` written `_user_`; a run's from its id, which the masks keep), and the manifest, the
+  summary's data and the page name each entry as the archive does.
+- *The search's floor carries the instance*: `events::window_start` reads the instance's first
+  record of the window (the instance beside the time bound); the head's read selects no row and
+  carries none, which the contract, this register and [lab-two-entries.md](lab-two-entries.md)
+  §9.3 now say. No answer of `events` changes.
+- *The deadline.* The errors view's search is held to its step's 20 s and the report's deadline:
+  `events::newest_in_window` reads its pages through `EventPages` (the Runtime client, or a test's
+  made-up Runtime) and starts none once its time is spent (`EventPages::late`, false for the
+  client, so `events` itself is unchanged); a search so cut is `report_part_missing`
+  (`errors_view`, `not_read_to_end` at the step's limit, `budget_spent` at the deadline) and writes
+  no row. `report::errors_view` is the composition the Runtime source and the tests share.
+- *One word, one cause*: a search that read its largest window is `search_windows_spent`, new in
+  `report_part_reason` (8 tokens; catalog, enum and the code's description), apart from
+  `not_read_to_end` (the Runtime cut a read short); `summary.json` says which (`stopped`). The
+  index is regenerated.
+- *The masks say what they could not learn*: a name not set or that the system cannot be asked
+  for (`user_name`, `netbios_name`, `dns_host_name`, `dns_full_name`) is named in the manifest's
+  `names_not_looked_for`.
+- *A run the Runtime does not find* (`run evidence`'s `run_unknown`) is `runtime_refused`.
+- *The summary page* names the command's own option `--no-frames`, not a console control that
+  does not exist yet.
+- *`no_frames`' rule*: no text and no game quantity read from a frame; recognition's own measures
+  (a match score, a mean colour, a brightness ratio) and an identity a package defines
+  (`observed_identity` of the `selection_*` codes) stay.
+- *The scheduler's readings* (`basis_readings`, `pool_reading`, `maximum`): checked in the code,
+  their codes are `info` reasons of a decision's reason chain, never a record's own outcome, and
+  an errors view row carries only that; the contract says why they never reach the report.
+- *Tests.* New: `rpt1_fix2_the_masks_keep_member_names_hashes_and_ids_and_replace_a_short_name_alone`,
+  `rpt1_fix2_an_alias_holding_the_name_names_its_entry_as_the_manifest_does`,
+  `rpt1_fix2_every_read_of_the_errors_search_carries_the_instance`,
+  `rpt1_fix2_the_deadline_cuts_the_errors_search_and_the_part_says_so`, in the row's gate.
+  Adapted (the items change what they pin): round 1's masks test (short names alone, the ruling
+  replacing item 11), the reads' code (`errors_view`), the fake's errors view (`stopped`).
+
+**At deploy.** Nothing to configure: the Lab programs of 0.12.61 have the row
+(`actinglab report export --out <dir>`, `ac_report_export` on `actinglab-mcp`). A script that
+called the placeholder gets `actingctl_usage_invalid` for `--last-error`. `actingctl mcp-serve`
+has no tool for it yet (RPT-4); the console's button is the UI repository's (UI-RPT-1).
+
+**Rollback** (below 0.12.61). Nothing is persisted: no ledger record, configuration key, fact or
+interface revision is added. An older actinglab answers the words with its placeholder again.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

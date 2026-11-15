@@ -822,4 +822,12 @@ outcome_keys! {
     // Workflow #464 P3 fix round 1: the pack whose problem keeps another waiting (a follower's
     // head, a refused layer of a prerequisite chain, the pack the root check refused at).
     blocking_package_id: name,
+    // ---- Workflow #467 RPT-1 fix round 1 (contracts/problem-report.md section 9): the closed
+    // values of `report export`'s codes: which part is missing and why, the write's step, whether
+    // the archive fits its bound, and the root a refused output lies in. ----
+    report_part: vocab(report_part),
+    report_part_reason: vocab(report_part_reason),
+    report_write_step: vocab(report_write_step),
+    report_fit: vocab(report_fit),
+    report_output_root: vocab(report_output_root),
 }
