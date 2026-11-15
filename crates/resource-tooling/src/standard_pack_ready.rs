@@ -5,8 +5,9 @@
 //! and fix round 1 after the independent review): for every pack of one game root, what the
 //! scheduler can do with it, or every reason it waits. One function judges the thirteen items,
 //! [`judge_standard_pack_readiness`]; `actinglab standard-pack ready --root <game root>` answers
-//! it, and adopt's answer, the build's `build.json` and the placement plan are to call it with what
-//! each of them holds.
+//! it; `standard-pack build`'s answer calls it on the installed root its steps laid out, as
+//! `ready --root` does (#463 S3-7; `build.json` does not carry it); adopt's answer and the
+//! placement plan are to call it with what each of them holds.
 //!
 //! The game root is an installed one, `<standard_packs.root>/<game>/`, or a bundle laid out as one
 //! (`package bundle`'s output in a directory named as its game). Its root files are read by the one
@@ -60,13 +61,14 @@
 //! installation itself.
 //!
 //! Workflow #463 S3-6 (register §1.413): a pack's row says why it waits and what is wrong with it.
-//! S2's `held` carries the hold as the pack's `held` entry of `schedule.json` writes it,
-//! `held_reason` its reason and `held_reference` its reference where the entry writes one: text
-//! for a reader, carried as written and never evaluated. And each row's `warnings` lists the
-//! warnings of `standard-pack check` that name the pack, in the check's order, by their
-//! `package_id`, else by a `path` in the pack's directory (the root check of the variables names
-//! the declaring pack's `control.json` and no package id); the answer's `warnings` lists every
-//! warning as before. Nothing the items decide changes.
+//! A pack whose S2 fails `held` answers `held`, `{reason, reference?}` as the pack's `held` entry
+//! of `schedule.json` writes them (the shape of that entry and of adoption's decision), without
+//! `reference` where the entry writes none: text for a reader, carried as written and never
+//! evaluated; S2's outcome is what it was (`readiness_problem` `held`). And each row's `warnings`
+//! lists the warnings of `standard-pack check` that name the pack, in the check's order, by their
+//! `package_id`, else by a `path` that is the pack's directory or lies under it (the root check of
+//! the variables names the declaring pack's `control.json` and no package id); the answer's
+//! `warnings` lists every warning as before. Nothing the items decide changes.
 
 use crate::StandardPackCheckRequest;
 use crate::codes::{
@@ -235,13 +237,28 @@ pub struct PackReadiness {
     /// parts, which other packs' runs use); absent when it plays none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<ReadinessRole>,
+    /// Workflow #463 S3-6 (fix round 2): the pack's hold as its `held` entry of `schedule.json`
+    /// writes it, present only when its S2 fails `held`; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held: Option<ReadinessHold>,
     /// Workflow #463 S3-6: the warnings of `standard-pack check` that name the pack, in the
     /// check's order (the answer's `warnings` lists them too): by their `package_id`, else by a
-    /// `path` in the pack's directory; absent when none does, as `roles`.
+    /// `path` that is the pack's directory or lies under it; absent when none does, as `roles`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Outcome>,
     /// The thirteen items, S1 to S7, then I1 to I6.
     pub items: Vec<ReadinessAnswer>,
+}
+
+/// Workflow #463 S3-6 (fix round 2): a held pack's `{reason, reference?}`, the two texts of its
+/// `held` entry of `schedule.json` as written: text for a reader, never evaluated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReadinessHold {
+    /// The entry's `reason`.
+    pub reason: String,
+    /// The entry's `reference`; absent where it writes none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
 }
 
 impl PackReadiness {
@@ -726,7 +743,9 @@ struct CheckWarning {
 impl CheckWarning {
     /// The warning `outcome` of the game root `root` at `directory`: the pack its `package_id`
     /// names, else the pack whose directory holds its `path` (the root check of the variables
-    /// names the declaring pack's `control.json` and no package id), else none.
+    /// names the declaring pack's `control.json` and no package id) or whose directory, as the
+    /// registry names it, its `path` is (fix round 2: the refusals' comparison,
+    /// [`CheckRefusal::read`]), else none.
     fn read(outcome: &Outcome, root: &StandardPackRoot, directory: &Path) -> Self {
         let text = |key: &str| outcome.value(key).and_then(serde_json::Value::as_str);
         let package_id = text("package_id")
@@ -737,9 +756,10 @@ impl CheckWarning {
                 root.registry
                     .package_ids()
                     .find(|package_id| {
-                        root.registry
-                            .get(package_id)
-                            .is_some_and(|entry| path.starts_with(directory.join(&entry.directory)))
+                        root.registry.get(package_id).is_some_and(|entry| {
+                            Path::new(&entry.directory) == path
+                                || path.starts_with(directory.join(&entry.directory))
+                        })
                     })
                     .map(str::to_owned)
             });
@@ -894,27 +914,6 @@ impl ComposedRules {
         }
         first
     }
-
-    /// Workflow #463 S3-6: `outcome` with the hold of the pack `package_id` as its `held` entry
-    /// of `schedule.json` writes it (a held pack always has one: the classification reads the
-    /// same list): `held_reason` its reason, and `held_reference` its reference where the entry
-    /// writes one, absent where it writes none. Text for a reader, carried as written and never
-    /// evaluated (the contract: nothing evaluates it by machine).
-    fn with_hold(&self, package_id: &str, outcome: Outcome) -> Outcome {
-        let Some(hold) = self
-            .schedule
-            .held
-            .iter()
-            .find(|hold| hold.package_id == package_id)
-        else {
-            return outcome;
-        };
-        let reasoned = outcome.held_reason(hold.rationale.as_str());
-        match &hold.reference {
-            Some(reference) => reasoned.held_reference(reference.as_str()),
-            None => reasoned,
-        }
-    }
 }
 
 /// One pack of the registry and what its admission gave.
@@ -1012,9 +1011,40 @@ impl Context<'_> {
             server: pack.server.to_owned(),
             readiness: self.answer(pack.package_id, &items),
             roles: self.roles(pack.package_id),
+            held: self.held(pack.package_id, &items),
             warnings: self.warnings_of(pack.package_id),
             items,
         }
+    }
+
+    /// Workflow #463 S3-6 (fix round 2): the hold of the pack `package_id` as its `held` entry of
+    /// the composer-accepted `schedule.json` writes it, only when its S2 among `items` fails
+    /// `held` (the classification reads that list, whose package ids are distinct); `None`
+    /// otherwise. Its texts are copied as written and decide nothing.
+    fn held(&self, package_id: &str, items: &[ReadinessAnswer]) -> Option<ReadinessHold> {
+        let Rules::Composed(rules) = self.rules else {
+            return None;
+        };
+        let fails_held = items
+            .iter()
+            .find(|answer| answer.item == ReadinessItem::Classified)
+            .filter(|answer| answer.state == ItemState::Fails)
+            .and_then(|answer| answer.outcome.as_ref())
+            .and_then(|outcome| outcome.value("readiness_problem"))
+            .and_then(serde_json::Value::as_str)
+            == Some(ReadinessProblem::Held.as_str());
+        if !fails_held {
+            return None;
+        }
+        rules
+            .schedule
+            .held
+            .iter()
+            .find(|hold| hold.package_id == package_id)
+            .map(|hold| ReadinessHold {
+                reason: hold.rationale.clone(),
+                reference: hold.reference.clone(),
+            })
     }
 
     /// Workflow #463 S3-6: the warnings of `standard-pack check` that name the pack `package_id`,
@@ -1218,7 +1248,7 @@ impl Context<'_> {
                 ReadinessAnswer::holds(ITEM, Some(ReadinessBasis::Scheduled))
             }
             Rules::Composed(rules) if rules.held.contains(id) => {
-                ReadinessAnswer::fails(ITEM, rules.with_hold(id, failed(ReadinessProblem::Held)))
+                ReadinessAnswer::fails(ITEM, failed(ReadinessProblem::Held))
             }
             Rules::Composed(_) => ReadinessAnswer::fails(
                 ITEM,

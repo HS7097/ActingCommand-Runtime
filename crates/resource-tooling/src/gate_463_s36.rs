@@ -4,17 +4,22 @@
 // design rd-1115/pack-stage3-design.md §4.2 "S3-6"; coordinator work order
 // rd-1115/brief-463-s36-ready-held-reason.md): the readiness says why a pack is held, and lists
 // on each pack's row the warnings of `standard-pack check` that name it.
-// - `s36_a_held_pack_s2_names_its_reason_and_reference`: a pack held with a reason and a reference
-//   fails S2 `held` with `held_reason` and `held_reference` as its `held` entry writes them; a
-//   pack held with a reason only (longer than a name key takes, within the file's 1024 bytes)
-//   carries that reason byte for byte and no `held_reference` member at all;
+// - `s36_a_held_pack_s2_names_its_reason_and_reference` (fix round 2: the hold is a member of
+//   the row): a pack held with a reason and a reference fails S2 `held` alone, and its row's
+//   `held` is `{reason, reference}` as its `held` entry writes them; a pack held with a reason
+//   only, longer than 256 bytes within the file's 1024, and one held with a reason in Chinese
+//   carry that reason byte for byte and no `reference` member at all; S2's outcome carries no
+//   `held_*` value; a pack not held answers no `held`;
 // - `s36_a_variable_that_does_not_apply_is_listed_on_the_declaring_pack_s_row`: two packs that
 //   declare one variable differently each list, on their own row and in the check's order, the
 //   check's `standard_pack_package_unclassified` naming them by `package_id` and its
 //   `standard_pack_root_invalid` `variable_conflict` naming their `control.json` by `path`; the
 //   answer's `warnings` is the check's, unchanged; a pack no warning names answers no `warnings`;
 // - `s36_a_root_without_warnings_answers_as_before`: a root the check warns nothing of answers no
-//   `warnings` member on any pack's row, each row with the members it had before.
+//   `warnings` member on any pack's row, each row with the members it had before;
+// - `s36_a_warning_that_names_no_pack_is_on_no_row` (fix round 2): the composer's hint of a rule
+//   that declares no value, by its `task_id` and without a `package_id` or a `path`, stays in the
+//   answer's `warnings`, the check's own, and is on no pack's row.
 // Made-up packs only; no device, no Runtime, no clock read, no sleep.
 
 use crate::codes::{ReadinessItem, ReadinessProblem, ResourceToolingCode};
@@ -39,6 +44,8 @@ const CLAIM: &str = "neutral.test.claim";
 const HOME: &str = "neutral.test.home";
 /// A pack held with a reason only.
 const HELD: &str = "neutral.test.held";
+/// Fix round 2: a pack held with a reason in Chinese only.
+const HELD_NON_ASCII: &str = "neutral.test.held_non_ascii";
 /// Two packs that declare the variable `extra` differently.
 const DECLARES_A: &str = "neutral.test.declares_a";
 const DECLARES_B: &str = "neutral.test.declares_b";
@@ -49,6 +56,8 @@ const VALUED: &str = "pool.valued";
 /// The reason and the reference the business pack is held with.
 const REASON: &str = "waits for its first trial on a real application";
 const REFERENCE: &str = "fixture reference 1";
+/// Fix round 2: a reason in Chinese ("waits until its first trial on a real application passes").
+const REASON_IN_CHINESE: &str = "等它在真实应用上第一次试跑通过后再放行";
 
 fn write_json(path: &Path, value: &Value) {
     fs::create_dir_all(path.parent().expect("a parent")).expect("directory");
@@ -247,7 +256,8 @@ fn members(readiness: &StandardPackReadiness, package_id: &str) -> BTreeSet<Stri
         .collect()
 }
 
-/// Holds that S2 of `row` fails `held`, alone among the root's items that fail; its outcome.
+/// Holds that S2 of `row` fails `held`, alone among the root's items that fail, its outcome
+/// carrying no `held_*` value (fix round 2: what it carried before the slice); its outcome.
 fn held_outcome(row: &PackReadiness) -> Outcome {
     let failing = row
         .items
@@ -274,6 +284,10 @@ fn held_outcome(row: &PackReadiness) -> Outcome {
         Some(&json!(row.package_id)),
         "{outcome:?}"
     );
+    assert!(
+        !outcome.values().keys().any(|key| key.starts_with("held_")),
+        "{outcome:?}"
+    );
     outcome
 }
 
@@ -291,44 +305,48 @@ fn s36_a_held_pack_s2_names_its_reason_and_reference() {
         &[
             json!({"package_id": CLAIM, "reason": REASON, "reference": REFERENCE}),
             json!({"package_id": HELD, "reason": long}),
+            json!({"package_id": HELD_NON_ASCII, "reason": REASON_IN_CHINESE}),
         ],
-        &[(HELD, None)],
+        &[(HELD, None), (HELD_NON_ASCII, None)],
     );
 
     let readiness = judge(&root);
 
-    let claimed = held_outcome(pack(&readiness, CLAIM));
-    assert_eq!(
-        claimed.value("held_reason"),
-        Some(&json!(REASON)),
-        "{claimed:?}"
-    );
-    assert_eq!(
-        claimed.value("held_reference"),
-        Some(&json!(REFERENCE)),
-        "{claimed:?}"
-    );
-
-    let held = held_outcome(pack(&readiness, HELD));
-    assert_eq!(held.value("held_reason"), Some(&json!(long)), "{held:?}");
-    assert_eq!(held.value("held_reference"), None, "{held:?}");
-    let answered = serde_json::to_value(pack(&readiness, HELD)).expect("the row");
-    let classified = answered["items"]
-        .as_array()
-        .and_then(|items| items.iter().find(|item| item["id"] == "S2"))
-        .cloned()
-        .unwrap_or_else(|| panic!("S2 is answered: {answered}"));
-    assert_eq!(
-        classified.pointer("/outcome/values/held_reason"),
-        Some(&json!(long)),
-        "{classified}"
-    );
-    assert!(
-        classified
-            .pointer("/outcome/values/held_reference")
-            .is_none(),
-        "{classified}"
-    );
+    for (package_id, reason, reference) in [
+        (CLAIM, REASON, Some(REFERENCE)),
+        (HELD, long.as_str(), None),
+        (HELD_NON_ASCII, REASON_IN_CHINESE, None),
+    ] {
+        let row = pack(&readiness, package_id);
+        held_outcome(row);
+        let hold = row
+            .held
+            .as_ref()
+            .unwrap_or_else(|| panic!("{package_id} answers its hold: {row:?}"));
+        assert_eq!(hold.reason.as_bytes(), reason.as_bytes(), "{row:?}");
+        assert_eq!(hold.reference.as_deref(), reference, "{row:?}");
+        let answered = serde_json::to_value(row).expect("the row");
+        let written = match reference {
+            Some(entry_reference) => json!({"reason": reason, "reference": entry_reference}),
+            None => json!({"reason": reason}),
+        };
+        assert_eq!(answered["held"], written, "{answered}");
+        let classified = answered["items"]
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["id"] == "S2"))
+            .cloned()
+            .unwrap_or_else(|| panic!("S2 is answered: {answered}"));
+        let values = classified
+            .pointer("/outcome/values")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("S2 carries values: {classified}"));
+        assert!(
+            !values.keys().any(|key| key.starts_with("held_")),
+            "{classified}"
+        );
+    }
+    assert!(pack(&readiness, HOME).held.is_none());
+    assert!(!members(&readiness, HOME).contains("held"));
 }
 
 #[test]
@@ -414,6 +432,39 @@ fn s36_a_root_without_warnings_answers_as_before() {
         members(&readiness, HOME),
         names(&["package_id", "server", "readiness", "roles", "items"])
     );
+}
+
+#[test]
+fn s36_a_warning_that_names_no_pack_is_on_no_row() {
+    let temp = TempDir::new().expect("temporary directory");
+    let root = write_root(&temp, &[], &[]);
+    // The business pack's rule produces nothing: it declares no value, and the composer's hint
+    // names the rule by its `task_id` (as `gate_464_p3`'s undeclared value does).
+    let schedule = root.join("schedule.json");
+    let mut written: Value =
+        serde_json::from_slice(&fs::read(&schedule).expect("schedule.json")).expect("JSON");
+    written["rules"][0]["produces"] = json!([]);
+    write_json(&schedule, &written);
+
+    let readiness = judge(&root);
+
+    let checked = check_standard_pack_root(StandardPackCheckRequest { root: root.clone() })
+        .unwrap_or_else(|error| panic!("the root is checked: {}: {}", error.code, error.message));
+    assert_eq!(readiness.warnings, checked.warnings);
+    assert_eq!(readiness.warnings.len(), 1, "{:?}", readiness.warnings);
+    let hint = &readiness.warnings[0];
+    assert!(
+        hint.is(SharedCode::StandardPackBenefitUndeclared),
+        "{hint:?}"
+    );
+    assert_eq!(hint.value("task_id"), Some(&json!(RULE)), "{hint:?}");
+    assert_eq!(hint.value("package_id"), None, "{hint:?}");
+    assert_eq!(hint.value("path"), None, "{hint:?}");
+    assert_eq!(readiness.packs.len(), 2, "{readiness:?}");
+    for row in &readiness.packs {
+        assert!(row.warnings.is_empty(), "{row:?}");
+        assert!(!members(&readiness, &row.package_id).contains("warnings"));
+    }
 }
 
 /// `list` as a set of owned names.

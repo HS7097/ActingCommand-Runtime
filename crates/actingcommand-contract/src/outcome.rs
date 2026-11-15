@@ -57,9 +57,6 @@ const VERSION_MAX_BYTES: usize = 64;
 /// Workflow #463 V2 fix round 1: the longest text of a `json` key, the longest value text the
 /// goal store keeps for an entry (`contracts/resource-targets.md`, `entries[i].value`).
 pub const JSON_MAX_BYTES: usize = 1024;
-/// Workflow #463 S3-6: the longest text of a `text` key, the longest `held` reason or reference
-/// `schedule.json` takes (`MAX_SCHEDULE_TEXT_BYTES`).
-const TEXT_MAX_BYTES: usize = crate::standard_pack_schedule::MAX_SCHEDULE_TEXT_BYTES;
 const RAW_TEXT_KEY: &str = "raw_text";
 const RAW_TEXT_TRUNCATED_KEY: &str = "raw_text_truncated";
 
@@ -303,7 +300,6 @@ macro_rules! outcome_keys {
     (@kind commit) => { $crate::outcome::KeyKind::Commit };
     (@kind version) => { $crate::outcome::KeyKind::Version };
     (@kind json) => { $crate::outcome::KeyKind::Json };
-    (@kind text) => { $crate::outcome::KeyKind::Text };
     (@kind evidence) => { $crate::outcome::KeyKind::Evidence };
     (@kind list($($item:tt)*)) => {
         $crate::outcome::KeyKind::List(&outcome_keys!(@kind $($item)*))
@@ -922,10 +918,6 @@ pub enum KeyKind {
     /// Workflow #463 V2 fix round 1: the compact JSON text of a value, at most
     /// [`JSON_MAX_BYTES`] bytes, without a control character (`value_json`).
     Json,
-    /// Workflow #463 S3-6: text a person wrote for a reader, carried as written and never
-    /// evaluated, at most `TEXT_MAX_BYTES` bytes, without a control character (`held_reason`,
-    /// `held_reference`).
-    Text,
     /// `raw_text` only.
     Evidence,
     List(&'static KeyKind),
@@ -1451,7 +1443,6 @@ fn text_rule_broken(kind: KeyKind, text: &str) -> Option<&'static str> {
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'-'))
         }
         KeyKind::Json => text.len() > JSON_MAX_BYTES || text.chars().any(char::is_control),
-        KeyKind::Text => text.len() > TEXT_MAX_BYTES || text.chars().any(char::is_control),
         _ => false,
     };
     broken.then_some(kind_name(kind))
@@ -1469,7 +1460,6 @@ fn kind_name(kind: KeyKind) -> &'static str {
         KeyKind::Commit => "commit",
         KeyKind::Version => "version",
         KeyKind::Json => "json",
-        KeyKind::Text => "text",
         _ => "value",
     }
 }

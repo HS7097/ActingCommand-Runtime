@@ -349,12 +349,12 @@ fn stands_alone(text: &str, start: usize, end: usize) -> bool {
 }
 
 /// Whether a value of the outcome key table's type `kind` is free text the masks search: a
-/// name, a path, a URL, foreign text kept as evidence, (Workflow #463 S3-6) text a person wrote
-/// for a reader (or a list of them). Every other type is an id, a hash, a commit, a version, a
-/// code, a location, a word of a vocabulary, a token, a pointer, a number, a time or a boolean.
+/// name, a path, a URL, foreign text kept as evidence (or a list of them). Every other type is
+/// an id, a hash, a commit, a version, a code, a location, a word of a vocabulary, a token, a
+/// pointer, a number, a time or a boolean.
 fn free_text(kind: KeyKind) -> bool {
     match kind {
-        KeyKind::Name | KeyKind::Path | KeyKind::Url | KeyKind::Text | KeyKind::Evidence => true,
+        KeyKind::Name | KeyKind::Path | KeyKind::Url | KeyKind::Evidence => true,
         KeyKind::List(item) => free_text(*item),
         _ => false,
     }
