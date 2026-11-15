@@ -46,10 +46,28 @@
 //   table, the manifest and the frames the material names, not a superseded frame, its manifest
 //   `copy.frames` `material`; with every frame asked for, the superseded one too and `all`; a
 //   superseded frame that no longer holds its sha256 fails the archive named again.
+// #463 S1-5 fix round 2 (rd-1115/brief-463-s15-fix2.md, after the review of #1763): every
+// `material.clicks[].sent_on_unstored_capture` is `null` (adapted: `material_click`).
+// - `s15_fix2_a_copy_that_fails_after_its_first_frame_leaves_no_manifest`: the second frame the
+//   copy takes no longer holds its sha256: the copy fails `record_archive_verify_failed` and holds
+//   the step table and the frames, and no manifest, which is written last.
+// - `s15_fix2_an_application_operation_recorded_the_old_way_is_derived`: a completed receipt
+//   without frames and time: `before_frame` the live primary frame, `derived: true`, `after_frame`
+//   and `at_unix_ms` `null`; the material's press derived, with its action.
+// - `s15_fix2_an_indeterminate_press_is_in_the_material`: `outcome: "indeterminate"` in the row and
+//   in `material.clicks`; no final screen.
+// - `s15_fix2_dropped_and_converted_steps_are_listed_and_not_in_the_material`: both rows listed (the
+//   converted step's frame in the transition of the step before it), neither a press of the
+//   material, though the dropped step's press was performed.
+// - `s15_fix2_a_step_table_without_executed_at_is_written_back_byte_for_byte`: receipts without
+//   `executed_at_unix_ms`, as the layer below writes them, load and are written back byte for byte.
 // Frames are synthetic (16x9, a coloured square on gray); no Runtime, no device, no clock read by
 // the tests themselves; the session header is written as `record start` writes it.
 
-use crate::recording::store::{hex_sha256, lab_dir, old_record_path, recording_path};
+use crate::recording::store::{
+    LabFile, hex_sha256, lab_dir, load_lab, old_record_path, read_old_record, recording_path,
+    save_recording,
+};
 use crate::{
     AfterCapture, ApplicationExecution, ArchiveCopyFrames, AttachFrameOutcome, AttachFrameRequest,
     CapturedFrame, ClickEffect, ClickPlan, CommitApplicationRequest, CommitClickOutcome,
@@ -57,10 +75,10 @@ use crate::{
     OpaqueJson, PlanApplicationRequest, PlanClickRequest, PlannedSwipe, PointPress,
     RecordArchiveOptions, RecordFramePorts, RecordPoint, RecordPressOutcome, RecordPressRequest,
     RecordRect, RecordReopenOptions, RecordStartOptions, RecordStopOptions, RecordingLock,
-    record_after_frame, record_archive, record_archive_copy, record_archive_warnings,
-    record_attach_frame, record_before_frame, record_commit_application, record_commit_click,
-    record_mark, record_plan_application, record_plan_click, record_press, record_reopen,
-    record_start, record_stop,
+    StepAction, StepActionKind, record_after_frame, record_archive, record_archive_copy,
+    record_archive_warnings, record_attach_frame, record_before_frame, record_commit_application,
+    record_commit_click, record_mark, record_plan_application, record_plan_click, record_press,
+    record_reopen, record_start, record_stop,
 };
 use actingcommand_contract::{InputFrameReference, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
@@ -465,6 +483,44 @@ impl Bench {
             .unwrap_or_else(|error| panic!("after: {}: {:?}", error.code, error.details));
     }
 
+    // #463 S1-5 fix round 2: `record mark --drop-step <step>` or `--to-transition <step>`.
+    fn step_action(&self, kind: StepActionKind, step: u32) {
+        let request = MarkRequest {
+            schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+            step_action: Some(StepAction {
+                kind,
+                step: Some(step),
+            }),
+            ..MarkRequest::default()
+        };
+        record_mark(&self.lock("Lab-CLI"), &request, false, &self.ocr)
+            .unwrap_or_else(|error| panic!("{kind:?} {step}: {}: {:?}", error.code, error.details));
+    }
+
+    // #463 S1-5 fix round 2: the step table loaded as the Lab loads it, `change` applied to each
+    // completed application receipt, and written back as the Lab writes it; with `change` taking
+    // out what a later build added, the step table as an earlier build wrote it.
+    fn rewrite_receipts(&self, change: impl Fn(&mut ApplicationExecution)) {
+        let state = self.state();
+        let header = read_old_record(&state, INSTANCE)
+            .expect("the session header")
+            .expect("a session header");
+        let LabFile::Ready(mut recording) = load_lab(&state, &header).expect("the step table")
+        else {
+            panic!("the step table does not load");
+        };
+        for step in &mut recording.steps {
+            if let Some(executed) = step
+                .application
+                .as_mut()
+                .and_then(|application| application.executed.as_mut())
+            {
+                change(executed);
+            }
+        }
+        save_recording(&state, &recording).expect("the step table written");
+    }
+
     fn recording_bytes(&self) -> Vec<u8> {
         fs::read(recording_path(&self.state(), RECORD_ID)).expect("step table")
     }
@@ -676,7 +732,8 @@ fn named_frame(recording: &Value, step: u64, frame_id: &str) -> Value {
 
 // #463 S1-5: a press of the manifest's material: its step and kind, its frame and whether it was
 // derived, whether it opened the entry step, where it was pressed (`point`, `to`, `duration_ms`,
-// `action`) and its outcome, `performed`.
+// `action`) and its outcome, `performed`. Fix round 2: `sent_on_unstored_capture` `null`, since
+// the step table this build reads does not say it.
 fn material_click(
     step: u64,
     kind: &str,
@@ -691,7 +748,7 @@ fn material_click(
         ("kind", json!(kind)),
         ("frame", frame),
         ("derived", json!(derived)),
-        ("sent_on_unstored_capture", json!(false)),
+        ("sent_on_unstored_capture", Value::Null),
         ("entry", json!(entry)),
         ("point", point),
         ("to", to),
@@ -1769,4 +1826,349 @@ fn s15_the_copy_holds_the_material_unless_every_frame_is_asked_for() {
         error.message
     );
     assert_eq!(error.details.expect("details")["file"], superseded.as_str());
+}
+
+// #463 S1-5 fix round 2 (the review of #1763, a): the copy's manifest is written last. A copy that
+// fails after its first frame (the copies' tests' seam: a stored frame that no longer holds its
+// sha256, here the second frame the copy takes) keeps the step table and the frames it copied, and
+// holds no manifest.
+#[test]
+fn s15_fix2_a_copy_that_fails_after_its_first_frame_leaves_no_manifest() {
+    let bench = Bench::new();
+    bench.pressed(&tap_at(3, 4), [Some(0), Some(1)]);
+    bench.pressed(&tap_at(5, 6), [Some(2), Some(3)]);
+    let archived = bench.archived(None);
+    let manifest = manifest_of(&archived);
+    // The frames the copy takes, in its order: each press's, then the final screen.
+    let material = &manifest["material"];
+    let taken = [
+        &material["clicks"][0]["frame"],
+        &material["clicks"][1]["frame"],
+        &material["final_frame"],
+    ]
+    .map(|frame| frame["file"].as_str().expect("a frame file").to_owned());
+    let second = taken[1].strip_prefix("frames/").expect("a frame file");
+    fs::write(
+        lab_dir(&bench.state(), RECORD_ID)
+            .join("frames")
+            .join(second),
+        b"not the recorded frame",
+    )
+    .expect("edited frame");
+
+    let target = bench.temp.path().join("failed-copy");
+    let error = record_archive_copy(
+        &bench.lock("Lab-CLI"),
+        &archived,
+        &target.display().to_string(),
+        ArchiveCopyFrames::Material,
+    )
+    .expect_err("a frame that does not hold its sha256");
+    assert_eq!(
+        error.code, "record_archive_verify_failed",
+        "{}",
+        error.message
+    );
+    let details = error.details.expect("details");
+    assert_eq!(details["checked"], "copy", "{details}");
+    assert_eq!(details["file"], taken[1].as_str(), "{details}");
+    assert_eq!(
+        details["copied"],
+        json!(["recording.json", taken[0], taken[1], taken[2]]),
+        "{details}"
+    );
+    // What was copied stays; no manifest names a file the copy does not hold.
+    let names = files_under(&target)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect::<Vec<_>>();
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.starts_with("archive-manifest-")),
+        "{names:?}"
+    );
+    let mut held = taken.to_vec();
+    held.push("recording.json".to_owned());
+    held.sort();
+    assert_eq!(names, held);
+}
+
+// #463 S1-5 fix round 2 (review d): an application operation recorded the old way, its completed
+// receipt naming no frame and no time (as before #463 S1-3 and S1-5): its row's `before_frame` is
+// the step's live primary frame by the rule and `derived: true`, its `after_frame` and
+// `at_unix_ms` `null`; the material names that frame, derived, with the operation's action.
+#[test]
+fn s15_fix2_an_application_operation_recorded_the_old_way_is_derived() {
+    let bench = Bench::new();
+    bench.operated("restart", 0, 1);
+    bench.rewrite_receipts(|executed| {
+        executed.before_frame = None;
+        executed.after_frame = None;
+        executed.after_capture = None;
+        executed.executed_at_unix_ms = None;
+    });
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 2, "{recording}");
+    let receipt = &steps[0]["application"]["executed"];
+    assert!(receipt.is_object(), "{recording}");
+    for member in [
+        "before_frame",
+        "after_frame",
+        "after_capture",
+        "executed_at_unix_ms",
+    ] {
+        assert!(receipt.get(member).is_none(), "{member}: {receipt}");
+    }
+
+    let archived = bench.archived(None);
+    assert!(
+        record_archive_warnings(&archived)
+            .expect("warnings")
+            .is_empty()
+    );
+    let manifest = manifest_of(&archived);
+    let rows = manifest["steps"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2, "{manifest}");
+    assert_eq!(
+        rows[0],
+        expected_row(
+            &steps[0],
+            "application",
+            [json!("f0001"), Value::Null, json!(true)]
+        )
+    );
+    assert_eq!(rows[0]["after_frame"], Value::Null);
+    assert_eq!(rows[0]["at_unix_ms"], Value::Null);
+    assert_eq!(
+        manifest["material"],
+        object([
+            (
+                "clicks",
+                Value::Array(vec![material_click(
+                    1,
+                    "application",
+                    named_frame(&recording, 1, "f0001"),
+                    true,
+                    false,
+                    [Value::Null, Value::Null, Value::Null, json!("restart")],
+                )]),
+            ),
+            ("final_frame", named_frame(&recording, 2, "f0002")),
+        ])
+    );
+}
+
+// #463 S1-5 fix round 2 (review d): a press whose outcome is indeterminate (`do --capture
+// --record` with an indeterminate answer: recorded, its step left open) is in `material.clicks`
+// with `outcome: "indeterminate"`, after the performed press before it; the last step has an
+// effect, so there is no final screen.
+#[test]
+fn s15_fix2_an_indeterminate_press_is_in_the_material() {
+    let bench = Bench::new();
+    bench.observe("Lab-CLI", RED);
+    bench.commit_tap("Lab-CLI", "request-tap");
+    bench.observe("Lab-CLI", GREEN);
+    let lock = bench.lock("Lab-CLI");
+    let plan = record_plan_click(
+        &lock,
+        &PlanClickRequest {
+            tap_rect: Some(TAP),
+            ..PlanClickRequest::default()
+        },
+    )
+    .unwrap_or_else(|error| panic!("plan: {}: {}", error.code, error.message));
+    let error = record_commit_click(
+        &lock,
+        &plan,
+        &CommitClickRequest {
+            effect: ClickEffect::Indeterminate,
+            ..performed("request-indeterminate")
+        },
+    )
+    .expect_err("an indeterminate press");
+    assert_eq!(
+        error.code, "record_click_indeterminate",
+        "{}",
+        error.message
+    );
+    drop(lock);
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 2, "{recording}");
+    assert_eq!(
+        steps[1]["click"]["execution"]["effect"], "indeterminate",
+        "{recording}"
+    );
+
+    let archived = bench.archived(None);
+    assert_eq!(
+        record_archive_warnings(&archived).expect("warnings"),
+        ["final_frame_missing"]
+    );
+    let manifest = manifest_of(&archived);
+    let rows = manifest["steps"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2, "{manifest}");
+    assert_eq!(
+        rows[1],
+        expected_row(&steps[1], "tap", [json!("f0002"), Value::Null, json!(true)])
+    );
+    assert_eq!(rows[1]["outcome"], "indeterminate");
+    let point = json!({"x": 10, "y": 4});
+    let mut indeterminate = material_click(
+        2,
+        "tap",
+        named_frame(&recording, 2, "f0002"),
+        true,
+        false,
+        [point.clone(), Value::Null, Value::Null, Value::Null],
+    );
+    indeterminate["outcome"] = json!("indeterminate");
+    assert_eq!(
+        manifest["material"],
+        object([
+            (
+                "clicks",
+                Value::Array(vec![
+                    material_click(
+                        1,
+                        "tap",
+                        named_frame(&recording, 1, "f0001"),
+                        true,
+                        false,
+                        [point, Value::Null, Value::Null, Value::Null],
+                    ),
+                    indeterminate,
+                ]),
+            ),
+            ("final_frame", Value::Null),
+        ])
+    );
+}
+
+// #463 S1-5 fix round 2 (review d): a step converted into the transition of the step before it
+// (`--to-transition`) and a dropped step that had a performed press are listed as rows, the
+// converted step's frame in the row of the step it became the transition of, and neither is a
+// press of the material; the final screen is the step after them.
+#[test]
+fn s15_fix2_dropped_and_converted_steps_are_listed_and_not_in_the_material() {
+    let bench = Bench::new();
+    bench.observe("Lab-CLI", RED);
+    bench.commit_tap("Lab-CLI", "request-first");
+    bench.observe("Lab-CLI", GREEN);
+    bench.mark(2, "green_color");
+    bench.step_action(StepActionKind::ToTransition, 2);
+    bench.observe("Lab-CLI", BLUE);
+    bench.commit_tap("Lab-CLI", "request-dropped");
+    bench.step_action(StepActionKind::DropStep, 3);
+    bench.observe("Lab-CLI", GRAY);
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 4, "{recording}");
+    assert_eq!(steps[1]["converted_to_transition"], true, "{recording}");
+    assert_eq!(steps[2]["dropped"], true, "{recording}");
+
+    let archived = bench.archived(None);
+    assert!(
+        record_archive_warnings(&archived)
+            .expect("warnings")
+            .is_empty()
+    );
+    let manifest = manifest_of(&archived);
+    let rows = manifest["steps"].as_array().expect("rows");
+    assert_eq!(rows.len(), 4, "{manifest}");
+    let first = rows[0]["frames"]
+        .as_array()
+        .expect("frames")
+        .iter()
+        .map(|frame| (frame["frame_id"].clone(), frame["role"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        first,
+        [
+            (json!("f0001"), json!("primary")),
+            (json!("f0002"), json!("transition"))
+        ]
+    );
+    assert_eq!(
+        rows[1],
+        expected_row(&steps[1], "none", [Value::Null, Value::Null, json!(false)])
+    );
+    assert_eq!(
+        rows[2],
+        expected_row(
+            &steps[2],
+            "tap",
+            [
+                json!("f0003"),
+                json!({"step": 4, "frame_id": "f0004"}),
+                json!(true)
+            ]
+        )
+    );
+    assert_eq!(rows[2]["outcome"], "performed");
+    assert_eq!(
+        manifest["material"],
+        object([
+            (
+                "clicks",
+                Value::Array(vec![material_click(
+                    1,
+                    "tap",
+                    named_frame(&recording, 1, "f0001"),
+                    true,
+                    false,
+                    [
+                        json!({"x": 10, "y": 4}),
+                        Value::Null,
+                        Value::Null,
+                        Value::Null
+                    ],
+                )]),
+            ),
+            ("final_frame", named_frame(&recording, 4, "f0004")),
+        ])
+    );
+}
+
+// #463 S1-5 fix round 2 (review d): a step table as the layer below (#463 S1-3) writes it, its
+// completed application receipts without `executed_at_unix_ms`, loads and is written back byte for
+// byte: the member stays absent where it is `None`.
+#[test]
+fn s15_fix2_a_step_table_without_executed_at_is_written_back_byte_for_byte() {
+    let bench = Bench::new();
+    bench.entry_launch();
+    bench.operated("restart", 0, 1);
+    let receipts = |recording: &Value| -> Vec<Value> {
+        recording["steps"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .map(|step| step["application"]["executed"].clone())
+            .filter(|executed| !executed.is_null())
+            .collect()
+    };
+    let stamped = receipts(&bench.recording());
+    assert_eq!(stamped.len(), 2, "{stamped:?}");
+    assert!(
+        stamped
+            .iter()
+            .all(|executed| executed["executed_at_unix_ms"].is_u64()),
+        "{stamped:?}"
+    );
+    bench.rewrite_receipts(|executed| executed.executed_at_unix_ms = None);
+    let below = bench.recording_bytes();
+    let unstamped = receipts(&bench.recording());
+    assert_eq!(unstamped.len(), 2, "{unstamped:?}");
+    assert!(
+        unstamped
+            .iter()
+            .all(|executed| executed.get("executed_at_unix_ms").is_none()),
+        "{unstamped:?}"
+    );
+
+    // Loaded and written back as it is.
+    bench.rewrite_receipts(|_| {});
+    assert_eq!(bench.recording_bytes(), below);
 }

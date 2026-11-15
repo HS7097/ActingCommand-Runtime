@@ -17,7 +17,8 @@
 //!   manifest into a directory that does not exist or is empty, named by an absolute path (fix 1:
 //!   an empty, blank or relative one is refused `validation_failed`), checked before anything is
 //!   written, and hashes every copy against the manifest. A failure names the file and the reason;
-//!   what was copied stays, and the recording stays archived.
+//!   what was copied stays, and the recording stays archived. #463 S1-5 fix round 2: the copy's
+//!   manifest is written last, once the step table and the frames are copied and checked.
 //! - `record reopen` ([`record_reopen`]) finds the archived recording the `record` command makes
 //!   the instance's active one again by writing its session header; the Lab writes nothing.
 //! - #463 S1-5 ("The manifest"): the manifest written is `actingcommand.lab-recording-archive.v2`,
@@ -149,9 +150,12 @@ pub(crate) struct ArchiveClick {
     pub(crate) frame: Option<ArchiveFrameRef>,
     /// `frame` was derived by the rule (the row's `derived`).
     pub(crate) derived: bool,
-    /// The press was sent on a capture that was not stored (a step with marks), so that `frame` is
-    /// the stored frame the step stood on. The step table does not record it yet: `false`.
-    pub(crate) sent_on_unstored_capture: bool,
+    /// Whether the press was sent on a capture that was not stored (an open step with marks), so
+    /// that `frame` is the stored frame the step stood on. Fix round 2: the step table this build
+    /// reads does not say it, so every press is `None` (`null`, "the step table does not say"),
+    /// never a claim; the step table's own member (#463 S1-1's third round) is read once the two
+    /// are joined.
+    pub(crate) sent_on_unstored_capture: Option<bool>,
     /// The operation opened the application entry step: there was no screen before it.
     pub(crate) entry: bool,
     /// Where it was pressed: the point of a tap or a long press, where a swipe began.
@@ -502,16 +506,18 @@ pub fn record_archive(
     }
 }
 
-/// The copy of an archived recording into `target` (`record archive --copy-to`): its step table,
-/// its manifest and its frames, each hashed against the manifest once all are copied. `target`
-/// must be an absolute path (fix 1) and must not exist or must be empty. A file that cannot be
-/// copied is `record_state_io_failed`, a copy that does not hold its sha256
-/// `record_archive_verify_failed`; both name the file, and nothing is deleted. #463 S1-5: of a
-/// manifest of the schema this build writes, the frames are those its material names
-/// ([`ArchiveCopyFrames::Material`]) or every frame it lists ([`ArchiveCopyFrames::All`]), and
-/// the copy's manifest is that manifest saying which (`copy.frames`), checked against itself as
-/// written; a v1 manifest an earlier build wrote names no material, so its copy holds every file it
-/// lists and the manifest byte for byte, as before. The recording's directory keeps every file.
+/// The copy of an archived recording into `target` (`record archive --copy-to`): its step table
+/// and its frames, each hashed against the manifest once all are copied, then its manifest, written
+/// last and hashed (#463 S1-5 fix round 2: a copy that fails before the manifest holds none, so no
+/// manifest in the target names a file the target does not hold). `target` must be an absolute
+/// path (fix 1) and must not exist or must be empty. A file that cannot be copied is
+/// `record_state_io_failed`, a copy that does not hold its sha256 `record_archive_verify_failed`;
+/// both name the file, and nothing is deleted. #463 S1-5: of a manifest of the schema this build
+/// writes, the frames are those its material names ([`ArchiveCopyFrames::Material`]) or every frame
+/// it lists ([`ArchiveCopyFrames::All`]), and the copy's manifest is that manifest saying which
+/// (`copy.frames`), checked against itself as written; a v1 manifest an earlier build wrote names
+/// no material, so its copy holds every file it lists and the manifest byte for byte, as before.
+/// The recording's directory keeps every file.
 pub fn record_archive_copy(
     lock: &RecordingLock,
     archived: &RecordArchiveOutcome,
@@ -525,7 +531,7 @@ pub fn record_archive_copy(
     preflight_copy_target(target)?;
     let dir = Path::new(&archived.path);
     let (read, _) = read_manifest(Path::new(&archived.manifest.path), &archived.record_id)?;
-    let (mut files, manifest_copy) = match read.current {
+    let (files, manifest_copy) = match read.current {
         Some(manifest) => {
             let held = match frames {
                 ArchiveCopyFrames::Material => manifest.material_files(),
@@ -540,12 +546,6 @@ pub fn record_archive_copy(
         }
         None => (read.files, None),
     };
-    // The manifest's copy is checked against the manifest as it was written or verified, or (#463
-    // S1-5) as the copy's own manifest was written.
-    let manifest_sha256 = manifest_copy
-        .as_deref()
-        .map_or_else(|| archived.manifest.sha256.clone(), hex_sha256);
-    files.insert(1, (archived.manifest.file.clone(), manifest_sha256));
     let frames_dir = target.join(FRAMES_DIR);
     fs::create_dir_all(&frames_dir).map_err(|error| {
         with_details(
@@ -556,37 +556,34 @@ pub fn record_archive_copy(
             json!({"path": display(&frames_dir), "copied": []}),
         )
     })?;
-    let mut copied = Vec::new();
+    // #463 S1-5 fix round 2: the step table and the frames first, checked, and only then the
+    // manifest, so that a copy that fails before it leaves no manifest in the target.
+    let mut copied: Vec<String> = Vec::new();
     for (file, _) in &files {
         let from = under(dir, file);
         let to = under(target, file);
-        let written = match manifest_copy
-            .as_deref()
-            .filter(|_| *file == archived.manifest.file)
-        {
-            Some(bytes) => fs::write(&to, bytes),
-            None => fs::copy(&from, &to).map(|_bytes| ()),
-        };
-        written.map_err(|error| {
-            with_details(
-                state_io(format!(
-                    "failed to copy {} to {}: {error}; nothing was deleted and the recording \
-                     stays archived",
-                    from.display(),
-                    to.display()
-                )),
-                json!({
-                    "file": file,
-                    "path": display(&from),
-                    "target": display(&to),
-                    "reason": "copy_failed",
-                    "copied": copied
-                }),
-            )
-        })?;
+        fs::copy(&from, &to).map_err(|error| copy_failed(file, &from, &to, error, &copied))?;
         copied.push(file.clone());
     }
     let failures = check_files(target, &files);
+    if !failures.is_empty() {
+        return Err(verify_failed("copy", failures, &copied));
+    }
+    let manifest_file = archived.manifest.file.as_str();
+    let from = under(dir, manifest_file);
+    let to = under(target, manifest_file);
+    let written = match manifest_copy.as_deref() {
+        Some(bytes) => fs::write(&to, bytes),
+        None => fs::copy(&from, &to).map(|_bytes| ()),
+    };
+    written.map_err(|error| copy_failed(manifest_file, &from, &to, error, &copied))?;
+    copied.push(manifest_file.to_owned());
+    // The manifest's copy is checked against the manifest as it was written or verified, or (#463
+    // S1-5) as the copy's own manifest was written.
+    let manifest_sha256 = manifest_copy
+        .as_deref()
+        .map_or_else(|| archived.manifest.sha256.clone(), hex_sha256);
+    let failures = check_files(target, &[(manifest_file.to_owned(), manifest_sha256)]);
     if !failures.is_empty() {
         return Err(verify_failed("copy", failures, &copied));
     }
@@ -1187,7 +1184,7 @@ fn click_of(
             .as_deref()
             .and_then(|frame_id| frame_ref(index, frame_id)),
         derived: row.derived,
-        sent_on_unstored_capture: false,
+        sent_on_unstored_capture: None,
         entry: step.is_application_entry(),
         point: execution.map(|execution| execution.point),
         to: execution
@@ -1411,6 +1408,33 @@ fn check_files(dir: &Path, files: &[(String, String)]) -> Vec<Value> {
         }
     }
     failures
+}
+
+/// The copy's file `file` could not be copied (or, for the copy's own manifest, written) from
+/// `from` to `to`: `record_state_io_failed`, naming it and the files copied before it (`copied`);
+/// nothing is deleted.
+fn copy_failed(
+    file: &str,
+    from: &Path,
+    to: &Path,
+    error: std::io::Error,
+    copied: &[String],
+) -> LabError {
+    with_details(
+        state_io(format!(
+            "failed to copy {} to {}: {error}; nothing was deleted and the recording stays \
+             archived",
+            from.display(),
+            to.display()
+        )),
+        json!({
+            "file": file,
+            "path": display(from),
+            "target": display(to),
+            "reason": "copy_failed",
+            "copied": copied
+        }),
+    )
 }
 
 /// The files `failures` names do not hold what the manifest gives, in the copy (`checked`

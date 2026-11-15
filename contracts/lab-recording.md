@@ -116,7 +116,7 @@ command deletes nothing and names the files it already wrote.
   every frame the Lab did not convert. #463 S1-1 (since 0.12.63): a click execution's
   `before_frame`, `after_frame` and `after_capture` are absent on every press but one recorded by
   the command that makes it ("Recording while playing"), so a recording without such a press is
-  byte-identical to one an earlier build wrote. #463 S1-5 (since 0.12.63): an application
+  byte-identical to one an earlier build wrote. #463 S1-5 (since 0.12.64): an application
   operation's completed receipt keeps `executed_at_unix_ms`, when it was recorded (the Lab's clock,
   as a click execution's), absent on every operation an earlier build recorded ("Archiving", "The
   manifest", `at_unix_ms`).
@@ -1961,7 +1961,7 @@ record archive [--record-id <id>] [--copy-to <dir> [--all-frames]] [--state-dir 
 record reopen [--record-id <id>] [--state-dir <dir>]
 ```
 
-#463 S1-5 (0.12.63): `record archive` is how stage one of package making ends: it hands over the
+#463 S1-5 (0.12.64): `record archive` is how stage one of package making ends: it hands over the
 recorded material of the business ("The manifest" below), asks nothing of the steps, and needs no
 device.
 
@@ -1997,7 +1997,7 @@ started it and whoever added its steps:
   `active`); it asks the Runtime nothing and reads no frame's pixels: it reads the step table and
   the session header, and hashes files only to check them.
 
-**The manifest** (#463 S1-5, since 0.12.63: `actingcommand.lab-recording-archive.v2`, the only
+**The manifest** (#463 S1-5, since 0.12.64: `actingcommand.lab-recording-archive.v2`, the only
 schema written; the rules are the coordinator's, on board #463) holds only what the step table and
 the session header hold, and states the material stage one hands over: each press with the frame it
 happened on and where it was pressed, and the screen the business ended on. A reader without a
@@ -2013,7 +2013,7 @@ files alone.
  "material":{
    "clicks":[{"step":1,"kind":"tap",
      "frame":{"step":1,"frame_id":"f0001","file":"frames/<sha256>.png","sha256":"…"},
-     "derived":false,"sent_on_unstored_capture":false,"entry":false,
+     "derived":false,"sent_on_unstored_capture":null,"entry":false,
      "point":{"x":962,"y":658},"to":null,"duration_ms":null,"action":null,"outcome":"performed"}],
    "final_frame":{"step":2,"frame_id":"f0002","file":"frames/<sha256>.png","sha256":"…"}},
  "copy":null,
@@ -2048,20 +2048,23 @@ files alone.
     happened on (the row's `before_frame`) with the step of the row that lists it, its `file` and
     its `sha256`, `null` when no frame was stored for it (the application entry step, which has no
     frame); `derived`, the row's (the frame was given by the rule below); `sent_on_unstored_capture`,
-    the press was sent on a capture that was not stored (an open step with marks, "Recording while
-    playing"), so that `frame` is the stored frame the step stood on: the step table does not record
-    that yet, so it is `false`; `entry`, the operation opened the application entry step (there
-    was no screen before it); where it was pressed: `point` (a tap's or a long press's point, where
-    a swipe began), `to` (where a swipe ended), `duration_ms` (a swipe's or a long press's),
-    `action` (an application operation's, in place of a point: a force stop is `stop`, the row's
-    `application_op.cli_verb` keeping `force-stop`), each `null` where it does not apply; and
-    `outcome`, the row's.
+    whether the press was sent on a capture that was not stored (an open step with marks,
+    "Recording while playing"), so that `frame` is the stored frame the step stood on: `null` on
+    every entry ("the step table does not say"; the member is written, never left out) until the
+    step table's own member is read, which the join with #463 S1-1's third round does; the
+    manifest claims nothing the step table does not say; `entry`, the operation opened the
+    application entry step (there was no screen before it); where it was pressed: `point` (a tap's
+    or a long press's point, where a swipe began), `to` (where a swipe ended), `duration_ms` (a
+    swipe's or a long press's), `action` (an application operation's, in place of a point: a force
+    stop is `stop`, the row's `application_op.cli_verb` keeping `force-stop`), each `null` where it
+    does not apply; and `outcome`, the row's.
   - `final_frame`: the screen the business ended on, the live primary frame of the last effective
     step (with its step, file and sha256) when that step has no effect and the effective step
     before it has its effect on record (the step that effect's screen after opened); `null`
-    otherwise: no effect on record, or the last effective step has an effect (its screen after
-    could not be taken, its outcome is indeterminate, or the step after it was dropped or became
-    its transition and no frame came after). Then the answer's `lab.warnings` holds
+    otherwise: fewer than two effective steps; the effective step before the last has no effect on
+    record (as when no effect is on record at all); or the last effective step has an effect (its
+    screen after could not be taken, its outcome is indeterminate, or the step after it was dropped
+    or became its transition and no frame came after). Then the answer's `lab.warnings` holds
     `final_frame_missing`; the archive stands either way, since ending a recording asks nothing.
 - One row per step of the step table, in its order, dropped and converted steps included:
   - `step`, the step's serial number; `kind`: `tap` (a click without a gesture), `swipe` (a drag: a
@@ -2106,7 +2109,7 @@ files alone.
     step table has them; `note`, `null` without one.
   - `at_unix_ms`: when the input was executed, a click's `executed_at_unix_ms` and an application
     operation's completed receipt's (`steps[].application.executed.executed_at_unix_ms`, recorded
-    since 0.12.63; `null` for an operation an earlier build recorded and for one without a completed
+    since 0.12.64; `null` for an operation an earlier build recorded and for one without a completed
     receipt: none is derived); for a step without an input, when its first frame was recorded;
     `request_id`, the input's request id (an application step's), `null` without one.
 - **What a reader reconstructs.** What was on the screen at each press: `material.clicks[].frame`
@@ -2121,7 +2124,7 @@ files alone.
   recorded, each with `recorded_at_unix_ms` and `superseded`, and its effect is at `at_unix_ms`, so
   either run can be cut by time as well, however many captures a step holds.
 
-**Manifests written before 0.12.63** (`actingcommand.lab-recording-archive.v1`, Workflow #449
+**Manifests written before 0.12.64** (`actingcommand.lab-recording-archive.v1`, Workflow #449
 REC-ARCH: the header without `locale`, `coordinate_space`, `note`, `archive_note`, `material` and
 `copy`; rows of `step`, `kind`, `frames` of `{frame_id, role, file, sha256}`, `before`, `after`,
 `page`, `package`, `tap` `{rect, point}`, `swipe`, `at_unix_ms` and `request_id`) are read and never
@@ -2146,15 +2149,19 @@ other); no flag writes v1.
   `not_a_directory`) before anything is written: no manifest, the session as it was.
 - Once the manifest is written and the session archived, `recording.json`, the manifest and (#463
   S1-5) the frame files the manifest's `material` names are copied under the same relative names;
-  with `--all-frames` (MCP `all_frames`) every frame file the manifest lists, superseded ones
-  included. The copy's manifest is the recording's saying which, `copy: {frames: "material" |
-  "all"}`; then every copy is hashed against it (the manifest's own copy against itself as
-  written). A frame a row lists that the copy does not hold is not missing to a reader that reads
-  `copy`: it stays in the recording's own directory, which keeps every file; an archive deletes
-  nothing. The copy of a v1 manifest holds every file it lists and the manifest byte for byte, with
-  or without `--all-frames`. `--all-frames` without `--copy-to` is `validation_failed` (exit 2,
-  `details{argument: "all_frames", reason: "copy_to_only"}`) before the session is read and
-  before anything is written.
+  with `--all-frames` (the Lab's MCP server, `actinglab-mcp`: `all_frames`; the first-generation
+  server's `ac_record_archive`, `actingctl mcp-serve`, has no such parameter and copies the
+  material) every frame file the manifest lists, superseded ones included. The copy's manifest is
+  the recording's saying which, `copy: {frames: "material" | "all"}`. The step table and the
+  frames are copied first and each hashed against the manifest; the copy's manifest is written
+  last, once they hold their sha256, and hashed against itself as written (#463 S1-5 fix round
+  2): a copy that fails before it leaves no manifest in the directory, so no manifest there names
+  a file the copy does not hold. A frame a row lists that the copy does not hold is not missing
+  to a reader that reads `copy`: it stays in the recording's own directory, which keeps every
+  file; an archive deletes nothing. The copy of a v1 manifest holds every file it lists and the
+  manifest byte for byte, with or without `--all-frames`. `--all-frames` without `--copy-to` is
+  `validation_failed` (exit 2, `details{argument: "all_frames", reason: "copy_to_only"}`) before
+  the session is read and before anything is written.
 - A file that cannot be copied is `record_state_io_failed` (exit 5, `details{file, path, target,
   reason: "copy_failed", copied}`); a copy that cannot be read or does not hold its sha256 is
   `record_archive_verify_failed` (exit 5, `details{file, path, checked: "copy", reason:

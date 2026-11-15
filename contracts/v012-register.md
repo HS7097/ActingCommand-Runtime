@@ -28516,10 +28516,10 @@ is the owner's to do.
   (its capture before supersedes the frame the operation's screen after opened the step with, the
   operation's `after_frame` not rewritten). No test leaves the gate map.
 
-### 1.406 Slice #463 S1-5 (0.12.63): the archive's manifest names each step's screens, the presses of the material and the final screen (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one hands over the recorded material of a business, and the owner's words of the 11-15 evening that stage one hands over, for each press, the frame the click happened on with where it was pressed, and the last result frame; the design `rd-1115/pack-stage12-design.md`, A2.2, the row S1-5 of A6, A3 and A5's row `final_frame_missing`, read on main `44cbab53`; the coordinator's rulings in the work order and in its dispatch, not the owner's words; coordinator work order `rd-1115/brief-463-s15-manifest-v2.md`, built on the branch of #463 S1-3 at `d5b0825e`)
+### 1.406 Slice #463 S1-5 (0.12.64): the archive's manifest names each step's screens, the presses of the material and the final screen (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one hands over the recorded material of a business, and the owner's words of the 11-15 evening that stage one hands over, for each press, the frame the click happened on with where it was pressed, and the last result frame; the design `rd-1115/pack-stage12-design.md`, A2.2, the row S1-5 of A6, A3 and A5's row `final_frame_missing`, read on main `44cbab53`; the coordinator's rulings in the work order and in its dispatch, not the owner's words; coordinator work order `rd-1115/brief-463-s15-manifest-v2.md`, built on the branch of #463 S1-3 at `d5b0825e`)
 
 The coordinator gave this slice 1.406. It stands on #463 S1-3 (§1.404), which stands on #463 S1-1
-(§1.402), and ships in 0.12.63.
+(§1.402), and ships in 0.12.64 (release 0.12.63 was cut without it).
 
 **Why.** `record archive` is how stage one ends and hands the material over. Its manifest (v1) listed
 a step's frames and its press as a rectangle; it did not say which frame was on the screen when the
@@ -28543,9 +28543,13 @@ otherwise first).
 - *A press sent on a capture that was not stored* (S1-1's fix round: an open step with marks) is said
   only by the press's answer (`record.before.sent_on_unstored_capture`); the step table records
   nothing of it, and the execution's `before_frame` names the stored frame. The manifest cannot know
-  and claims nothing: `material.clicks[].sent_on_unstored_capture` is `false` for every press until
-  the step table records it (the coordinator's dispatch: the next fix round of S1-1 adds that
-  member to `ClickExecution`, and the final merge connects the two).
+  and claims nothing: `material.clicks[].sent_on_unstored_capture` (`Option<bool>`, fix round 2) is
+  `null` on every press, written and not left out ("the step table does not say"), until the step
+  table's own member is read, which the join with S1-1's third round does (that round adds
+  `ClickExecution.sent_on_unstored_capture`; its head is no ancestor of this branch). `false`, as
+  the first round wrote it, said something wrong of two kinds of press (the review of #1763): a
+  press of `do --capture --record`, sent on the Runtime's own capture, which the recording does not
+  hold, and a point press on an open step with marks, whose capture before is not stored.
 - *An application operation had no time.* `ClickExecution` carries `executed_at_unix_ms`;
   `ApplicationExecution` did not. On the coordinator's word in the dispatch this slice adds
   `executed_at_unix_ms: Option<u64>` to `ApplicationExecution`
@@ -28578,7 +28582,7 @@ otherwise first).
 | The step table | `ApplicationExecution.executed_at_unix_ms` (`model.rs`), stamped in `commit_application` (`steps.rs`) |
 | The command | `record archive --all-frames` (`RECORD_ARCHIVE_READS`), refused without `--copy-to`; `lab.warnings` in the answer (`apps/actinglab/src/commands/session_record.rs`) |
 | The table | the row `record archive`: `all_frames` (switch), `copy_to`'s note, `help` (149 bytes, "Ends a recording as material (stage one) …"), `output`, `notes` |
-| Texts | [lab-recording.md](lab-recording.md): "Files", the `recording.json` members, "Archiving" (the usage, "The manifest" with the material, the rows, the rule for derived frames, what a reader reconstructs, the frames around a press, the manifests written before 0.12.63, "The copy", "Named again", "The answer", the refusals) |
+| Texts | [lab-recording.md](lab-recording.md): "Files", the `recording.json` members, "Archiving" (the usage, "The manifest" with the material, the rows, the rule for derived frames, what a reader reconstructs, the frames around a press, the manifests written before 0.12.64, "The copy", "Named again", "The answer", the refusals) |
 
 **Codes and words.** No outcome code is added and no fragment changes. New words, none decided on
 by any code:
@@ -28604,7 +28608,7 @@ S1-5"; fake Runtime and clock through `RecordFramePorts`, synthetic 16x9 frames)
   frame or `null`, `derived` true in the rows and the material; `final_frame` `null` and
   `final_frame_missing`.
 - `s15_a_v1_manifest_on_disk_is_named_again_copied_as_it_is_and_reopened`: a v1 manifest written as
-  0.12.59 to 0.12.62 wrote it: named again read, verified (a changed frame
+  0.12.59 to 0.12.63 wrote it: named again read, verified (a changed frame
   `record_archive_verify_failed`, `checked: "recording"`), no warning, nothing written; copied byte
   for byte with every file it lists; reopened; the next archive writes `archive-manifest-2.json` as
   v2, whose tap row's `after_frame` names a frame since superseded, the first manifest as it was.
@@ -28629,12 +28633,41 @@ new member. No golden changes, no test leaves the gate map.
 **What is not changed.** The manifest's file series and its writer; `record reopen` but that it takes
 either manifest; the step table's other members and every recording without an application
 operation, byte for byte; `recording_api.rs`, the generator, the kernel and the Runtime; today's MCP
-server (`actingctl mcp-serve`).
+server (`actingctl mcp-serve`) but the text of one parameter (fix round 2).
 
 **At deploy.** Nothing to configure. v1 manifests on disk are read, verified, copied and reopened as
-before; the next archive of such a recording writes v2. A build before 0.12.63 refuses a v2 manifest
+before; the next archive of such a recording writes v2. A build before 0.12.64 refuses a v2 manifest
 (`record_state_io_failed`): not owed. Through MCP `ac_record_archive` takes `all_frames` on the Lab's
 MCP server (`actinglab-mcp`).
+
+**Fix round 2** (coordinator work order `rd-1115/brief-463-s15-fix2.md`, after the independent
+review of #1763 at `bebf984e`).
+- *Claims.* `material.clicks[].sent_on_unstored_capture` is `Option<bool>`, `null` on every press
+  ("A press sent on a capture that was not stored" above; contract "The manifest").
+- *The copy's manifest is written last* (`record_archive_copy`, with `copy_failed`): the step table
+  and the frames are copied and hashed first, then the manifest is written and hashed against
+  itself; a copy that fails before it holds no manifest naming files it does not hold.
+- *Texts.* The manual of the Lab's MCP server (`ac_record_archive`: the manifest v2, the warning,
+  what the copy holds, `all_frames` and `copy_to_only`); the first-generation server's `copy_to`
+  says what the copy holds and that every frame is copied with the Lab's `record archive
+  --all-frames` or the Lab's MCP server's `all_frames` (no parameter is added: that server is not
+  extended, the coordinator's ruling); the contract names the server that takes `all_frames`, the
+  order of the copy and two more cases without a final screen (fewer than two effective steps; the
+  effective step before the last without an effect on record); `LAB_RECORDING_ARCHIVE_SCHEMA`'s
+  comment says v1 is only read; every version of this slice is 0.12.64.
+- *Tests* (the slice's gate, registered in its entry): `crates/lab/src/gate_449_rec_arch.rs`
+  `s15_fix2_a_copy_that_fails_after_its_first_frame_leaves_no_manifest` (the copies' seam, a
+  stored frame that no longer holds its sha256, on the second frame the copy takes),
+  `s15_fix2_an_application_operation_recorded_the_old_way_is_derived`,
+  `s15_fix2_an_indeterminate_press_is_in_the_material`,
+  `s15_fix2_dropped_and_converted_steps_are_listed_and_not_in_the_material`,
+  `s15_fix2_a_step_table_without_executed_at_is_written_back_byte_for_byte`;
+  `apps/actinglab/src/tests/gate_449_rec_arch.rs`
+  `s15_fix2_all_frames_needs_copy_to_and_copies_every_frame`. Adapted, as the requirement changes
+  what they pin: the tests that compare `material.clicks` (`material_click`) expect
+  `sent_on_unstored_capture` `null`. No test leaves the gate map; no code or word is added.
+- *Not here:* the fakes' capture scripts for S1-2's stillness loop, which is not on this branch;
+  the join lengthens them.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

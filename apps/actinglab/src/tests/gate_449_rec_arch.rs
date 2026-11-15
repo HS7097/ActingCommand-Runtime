@@ -47,6 +47,11 @@
 // material names) and the manifest saying `copy: {frames: "material"}`; the answer's
 // `lab.warnings` is empty after a step without an effect and `["final_frame_missing"]` when the
 // last step has a tap.
+// #463 S1-5 fix round 2 (rd-1115/brief-463-s15-fix2.md, after the review of #1763):
+// - `s15_fix2_all_frames_needs_copy_to_and_copies_every_frame`: `record archive --all-frames`
+//   without `--copy-to` is refused `validation_failed` (`details{argument: "all_frames", reason:
+//   "copy_to_only"}`) and writes nothing; with `--copy-to` the copy holds every file of the
+//   recording, the superseded frame too, and its manifest says `copy: {frames: "all"}`.
 // Temporary roots only; no Runtime, no device, no sleep.
 
 use super::env_lock;
@@ -866,4 +871,48 @@ fn rec_arch_a_recording_record_start_force_left_behind_is_archived_by_its_id() {
         table_bytes,
         "the step table keeps its bytes"
     );
+}
+
+// #463 S1-5 fix round 2 (review d): `--all-frames` on the command line. Step 1 holds a frame the
+// next one superseded, which the material does not name.
+#[test]
+fn s15_fix2_all_frames_needs_copy_to_and_copies_every_frame() {
+    let _guard = env_lock();
+    let isolated = Isolated::new();
+    let state = isolated.path("session");
+    let instance = start(&state, "rec_a");
+    step(&state, &instance, "Lab-CLI", RED, None);
+    step(&state, &instance, "Lab-CLI", GREEN, Some("request-a"));
+    step(&state, &instance, "Lab-CLI", BLUE, None);
+    let dir = lab_dir(&state, "rec_a");
+    let table = read_json(&dir.join("recording.json"));
+    assert_eq!(
+        table["steps"][0]["frames"][0]["superseded"], true,
+        "{table}"
+    );
+
+    // Without `--copy-to`: refused before the session is read; nothing written.
+    let before = session_files(&state);
+    let (code, refused) = record(&state, "archive", &["--all-frames"]);
+    assert_ne!(code, 0, "{refused}");
+    assert_eq!(refused["outcome"]["code"], "validation_failed", "{refused}");
+    assert_eq!(refused["details"]["argument"], "all_frames", "{refused}");
+    assert_eq!(refused["details"]["reason"], "copy_to_only", "{refused}");
+    assert_eq!(session_files(&state), before, "nothing was written");
+    assert!(manifests(&dir).is_empty(), "no manifest");
+    let (_, status) = record(&state, "status", &[]);
+    assert_eq!(status["record"]["status"], "active", "{status}");
+
+    // With it: every frame the manifest lists, the superseded one too, and the manifest says so.
+    let copy = isolated.path("copies/every-frame");
+    let (code, archived) = record(
+        &state,
+        "archive",
+        &["--copy-to", copy.as_str(), "--all-frames"],
+    );
+    assert_eq!(code, 0, "{archived}");
+    assert_eq!(archived["status"], "archived", "{archived}");
+    assert_copied(&dir, Path::new(&copy), "archive-manifest-1.json", "all");
+    let copied = archived["lab"]["copy"]["files"].as_array().expect("files");
+    assert_eq!(copied.len(), 5, "{archived}");
 }
