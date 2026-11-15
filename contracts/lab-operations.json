@@ -3001,7 +3001,7 @@
       "source": ["script rd-1031/deploy-v01244/deploy.ps1"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "always detached through MCP (it replaces the programs MCP runs). LAB-6S0: served by actinglab-mcp on Windows; the front gives detach true, the answer is at once (detached, the run's pid and log, next op status) and the detached run journals Lab-MCP (the marker of lab-two-entries.md section 4.2); since LAB-7 (0.12.62), which deleted actingctl, production deploys through this row (contracts/install-cli.md, A deploy since LAB-7). LAB-3: --dir's release-facts.json is passed when present; without --dir the target names a kept build (a commit prefix of 8 hex digits or more, or a recorded tag); without a running Runtime only stage, plan and the files; the hold's reason is lab-deploy-<ms> (LAB-3 fix 1: no --reason, as section 7's form; the release hands back only what its own pause step paused)"
+      "notes": "always detached through MCP (it replaces the programs MCP runs). LAB-6S0: served by actinglab-mcp on Windows; the front gives detach true, the answer is at once (detached, the run's pid and log, next op status) and the detached run journals Lab-MCP (the marker of lab-two-entries.md section 4.2); since LAB-7 (0.12.64), which deleted actingctl, production deploys through this row (contracts/install-cli.md, A deploy since LAB-7). LAB-3: --dir's release-facts.json is passed when present; without --dir the target names a kept build (a commit prefix of 8 hex digits or more, or a recorded tag); without a running Runtime only stage, plan and the files; the hold's reason is lab-deploy-<ms> (LAB-3 fix 1: no --reason, as section 7's form; the release hands back only what its own pause step paused)"
     },
     {
       "name": "rollback",
@@ -3020,7 +3020,7 @@
       "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "always detached through MCP. LAB-6S0: served by actinglab-mcp on Windows; the front gives detach true, the answer is at once (detached, the run's pid and log, next op status) and the detached run journals Lab-MCP (the marker of lab-two-entries.md section 4.2); since LAB-7 (0.12.62), which deleted actingctl, production rolls back through this row. LAB-3: without --to the build the live one replaced; without a running Runtime only the plan and the files"
+      "notes": "always detached through MCP. LAB-6S0: served by actinglab-mcp on Windows; the front gives detach true, the answer is at once (detached, the run's pid and log, next op status) and the detached run journals Lab-MCP (the marker of lab-two-entries.md section 4.2); since LAB-7 (0.12.64), which deleted actingctl, production rolls back through this row. LAB-3: without --to the build the live one replaced; without a running Runtime only the plan and the files"
     },
     {
       "name": "convert",

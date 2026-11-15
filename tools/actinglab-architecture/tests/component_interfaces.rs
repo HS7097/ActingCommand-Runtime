@@ -99,7 +99,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   §1.287, "Slice LAB-6S4a") lowers it to [0, 0]: the request kind `InstallTransition` and
 ///   actingd's `--install-held` start, which revision 1 named, are gone; an installer that speaks
 ///   [0, 1] meets [0, 0] and takes its cold path (revision 0).
-/// - `install-cli` [2, 2]: Workflow #434 LAB-7 (since 0.12.62, register §1.287, "Slice LAB-7")
+/// - `install-cli` [2, 2]: Workflow #434 LAB-7 (since 0.12.64, register §1.287, "Slice LAB-7")
 ///   declares it: the installer's face is the Lab's rescue module (revision 2), and revision 1,
 ///   `actingctl install`, is deleted with actingctl. An installed installer keeps an interface it
 ///   does not know and checks none, so the build stays deployable.

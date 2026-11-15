@@ -19,7 +19,7 @@ actingcommand_contract::outcome_codes! {
         ShutdownWaitTimeout => "shutdown_wait_timeout": error / none,
         ShutdownWaitJournalUnreadable => "shutdown_wait_journal_unreadable": error / none,
         ArgumentsInvalid => "arguments_invalid": error / none,
-        // `tier_not_enabled` is retired in 0.12.62 (Workflow #434 LAB-7): the first MCP server's
+        // `tier_not_enabled` is retired in 0.12.64 (Workflow #434 LAB-7): the first MCP server's
         // tiers left with it.
         OutputBudgetExceeded => "output_budget_exceeded": error / none,
         JobCapacityExhausted => "job_capacity_exhausted": error / none,
@@ -165,7 +165,7 @@ actingcommand_contract::outcome_codes! {
         InstanceResetDone => "instance_reset_done": success / none,
         InstanceObserved => "instance_observed": success / none,
         // `runtime_status_reported`, `monitor_status_reported` and `instance_status_reported` are
-        // retired in 0.12.62 (Workflow #434 LAB-7): actingctl's `status`, `monitor-status` and
+        // retired in 0.12.64 (Workflow #434 LAB-7): actingctl's `status`, `monitor-status` and
         // `emulator status` left with it (the Lab's `status` answers `runtime_overview_reported`).
         RuntimeConfigReported => "runtime_config_reported": success / none,
         ConfigSettingsChanged => "config_settings_changed": success / none,
@@ -194,7 +194,7 @@ actingcommand_contract::outcome_codes! {
         AgentWakeTestQueued => "agent_wake_test_queued": success / none,
         // `runtime_performance_reported` (Workflow #385 P-m: `perf-status`) and
         // `runtime_fact_refresh_reported` (Workflow #384 D2-S5: `fact-refresh`) are retired in
-        // 0.12.62 (Workflow #434 LAB-7): the two actingctl commands left with it.
+        // 0.12.64 (Workflow #434 LAB-7): the two actingctl commands left with it.
         // Workflow #386 SR-6b, MCP-19 (registered by MCP-19a, emitted from MCP-19b on):
         // `schedule`.
         RuntimeScheduleReported => "runtime_schedule_reported": success / none,
@@ -219,7 +219,7 @@ actingcommand_contract::outcome_codes! {
         McpInputFailed => "mcp_input_failed": error / none,
         McpFileTooLarge => "mcp_file_too_large": error / none,
         // `mcp_config_program_unresolved` and `mcp_config_program_unsupported` are retired in
-        // 0.12.62 (Workflow #434 LAB-7): actingctl's `mcp-config` left with it.
+        // 0.12.64 (Workflow #434 LAB-7): actingctl's `mcp-config` left with it.
         // Workflow #434 LAB-6S4a: `mcp_identity_card_refused` is retired in 0.12.63 with the
         // identity card MCP declared before a write.
         WatchdogStartDue => "watchdog_start_due": info / none,

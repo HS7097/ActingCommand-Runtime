@@ -12474,21 +12474,22 @@ failure). Unmapped tests of the drain and the held start left with them.
 **LAB-6S4a rollback** (to v0.12.62). Two-way: no persisted shape changes, and nothing this build
 writes is new to v0.12.62.
 
-#### Slice LAB-7 (0.12.62): `actingctl` and the first MCP server deleted; production deploys through the Lab
+#### Slice LAB-7 (0.12.64): `actingctl` and the first MCP server deleted; production deploys through the Lab
 
 Coordinator work order `rd-1115/brief-434-l7-delete-actingctl.md`, with the plan
 `rd-1115/434-lab-series-refresh.md` (its section 1.2, "L7", section 2, section 6 and the slice
 table's row L7), based on main `d32d4d6c`; board #434 (the command line and MCP are shells around
 the Lab, and actingctl with the MCP server inside it are the older shells) and the owner's ruling
-of 11-15 that nothing is kept compatible with earlier builds. Ships in 0.12.62 or the release after
-it.
+of 11-15 that nothing is kept compatible with earlier builds. Ships in 0.12.64: it is merged only
+after the owner has switched the four clients' MCP registrations to the new server, which follows
+release 0.12.63.
 
 | Id | Item | Kind | What it is now |
 |---|---|---|---|
 | L7-1 | `apps/actingctl`, `apps/mcp-entry` | deleted | the programs `actingctl` (its commands, `mcp-serve`, `mcp-config`, `mcp-entry plan\|list`, its tests) and the first MCP entry `actingcommand-mcp-entry` (with its fake child) leave the workspace, the lock file and CI's `apps` job |
 | L7-2 | the build | build | the exact-SHA build builds and stages neither; the Runtime half is `actingcommand-actingd.exe` and its files (layout `distribution-v1`), the Tools half loses `actingcommand-mcp-entry.exe` (layout `platform-tools-v3`, actinglab still in `tools\`); the boot smoke reads `actinglab --json status` and stops the Runtime with `actinglab --json shutdown --wait 60s`, the watchdog smoke reads `actingwatch.exe status` and ticks only through the launcher; the artifact downloader and its tests expect the same files |
 | L7-3 | interfaces | declaration | `install-cli` [2, 2] joins `speaks` (component-interfaces.md, the LAB-7 row); `install-control` stays declared and `tools-layout` stays 3, since every installed installer requires the six v1 interfaces and one layout name per half |
-| L7-4 | outcome codes | catalog | `actingctl.json` stays the fragment of `crates/lab-ops` (owner `actingctl` since LAB-1); eight codes only actingctl raised are retired in 0.12.62 (`tier_not_enabled`, `runtime_status_reported`, `monitor_status_reported`, `instance_status_reported`, `runtime_performance_reported`, `runtime_fact_refresh_reported`, `mcp_config_program_unresolved`, `mcp_config_program_unsupported`); the first entry's three codes are retired into `mcp-entry-g2.json`, each `replaced_by` its second-generation code, and the domain `mcp_entry_` is that owner's; the owners `actingctl-app` and `mcp-entry` leave the header; the vocabulary `mcp_tier` keeps its tokens without a source enum |
+| L7-4 | outcome codes | catalog | `actingctl.json` stays the fragment of `crates/lab-ops` (owner `actingctl` since LAB-1); eight codes only actingctl raised are retired in 0.12.64 (`tier_not_enabled`, `runtime_status_reported`, `monitor_status_reported`, `instance_status_reported`, `runtime_performance_reported`, `runtime_fact_refresh_reported`, `mcp_config_program_unresolved`, `mcp_config_program_unsupported`); the first entry's three codes are retired into `mcp-entry-g2.json`, each `replaced_by` its second-generation code, and the domain `mcp_entry_` is that owner's; the owners `actingctl-app` and `mcp-entry` leave the header; the vocabulary `mcp_tier` keeps its tokens without a source enum |
 | L7-5 | the watchdog | behaviour | `watchdog install` checks the Runtime's fixed entry `runtime\actingcommand-actingd.exe` (and the launcher), no longer `runtime\actingctl.exe`; the task's description names `actingwatch.exe` |
 | L7-6 | the rescue module | answer members | a running `actingctl.exe` is no longer renamed aside by a plan (`RENAMABLE_IMAGES` is `actinglab-mcp.exe` alone); the first generation's plan and list commands are gone (the rows `mcp plan` and `mcp entries` stay); `next` of a kept hold names `release_hold`, `resume` (`resume <alias>`) and `resume_global` (`resume`) in place of `actingctl_release_hold`, `actingctl_resume` and `actingctl_resume_global`, and `instance add`'s `pause_added` is `pause <alias> --reason instance.added`; `unlock` passes no `--confirm-resources-released` |
 | L7-7 | actingd `unlock-owner` | command line | takes `--config` and `--actor` only; running it confirms; `--confirm-resources-released` is refused as an unknown option (`unlock_owner_option_invalid`) |
@@ -12496,10 +12497,25 @@ it.
 | L7-9 | the operation table | contract | the rows' `source` keeps every `actinglab …` entry (they decide which commands the authoring module's listing leaves out and what help prints as `replaces`) and the `actingd …`, `acui: …`, `acsetup: …` and script entries, and drops the `actingctl …` entries, the `MCP ac_…` entries and the reads through an actingctl child; `lab_ops::table::Operation::source` is `#[serde(default)]` (absent is none: a row whose only sources were actingctl's has none); `lab_ops_table_complete` no longer asks for `source` or `new` |
 | L7-10 | `new`'s ways out | answer members | an interrupted `new` whose configuration is written: `next` names `resume` (`<new_root>\tools\actinglab.exe op resume <id>`) and `undo` (`… undo <id>`) in place of `actingctl_resume` and `actingctl_undo`; one whose configuration is not written yet (every rescue row but `new` locates its root from its configuration, and a second `new` into the folder is refused `root_not_empty`), and a check-config refusal of the first configuration: no `next`, but `move_aside` (`folder`, the new root, and `note`: the state root is created only after the configuration is written, everything written so far into the new root is inside that folder, a release's work folder named as `work_dir` apart from it, move it aside and run `new` again); the coordinator's decision: no Lab row is built for it, since nothing of an installation exists at that point |
 
-**At deploy** (what an installation in use meets). The build before this one deploys it as before
-(its `actinglab deploy`, or its kept `actingctl install`): the target's plan lists the live
-`runtime\actingctl.exe` and `tools\actingcommand-mcp-entry.exe` under `extra` and leaves them in
-place. The watchdog's task keeps running `tools\actingwatch.exe`; its first tick on this build
+**At deploy** (what an installation in use meets). The installer that deploys this build is the
+rescue module of the live build, 0.12.63 or later: its `<root>\tools\actinglab.exe release stage
+<dir>` and `deploy <commit> [--dir <dir>]`, `op status` to follow it. Its edges pass
+(`install-control` [0, 0] on both sides; `install-cli` is a declaration it keeps and checks
+nothing of), and its file plan lists the live `runtime\actingctl.exe` and
+`tools\actingcommand-mcp-entry.exe` under `extra` and leaves them in place: from this build on no
+build carries `actingctl`, and no deploy deletes the leftover file. Running images
+(`crates/lab-rescue/src/install/plan.rs`, the running state of a plan): the deploy stops actingd
+under its hold; a running `actinglab-mcp.exe` (and, in the live 0.12.63's list,
+`actingctl.exe`) and the deploying `actinglab.exe` itself are renamed aside and keep running; any
+other running image under the root whose file the target replaces (a second `tools\actinglab.exe`,
+such as a console's or an MCP server's `serve --stdio` child, or `tools\actingwatch.exe` during
+its tick) blocks the plan with `running_image_blocks`; the leftovers, which nothing replaces, never
+block. The way back from this deploy, the one that removes `actingctl`: the Lab's `undo <id>` of
+the deploy (`crates/lab-rescue/src/install/undo.rs`: each swapped file's `.old-<ms>` put back,
+judged by the rollback gate once a Runtime of this build started) or `rollback` (to the build the
+live one replaced, kept in `install\builds\<commit>`; `rescue.rs`, `rollback`), run from the
+root's `tools\actinglab.exe`, now this build's, or from the kept previous build's own
+`install\builds\<commit>\tools\actinglab.exe`. The watchdog's task keeps running `tools\actingwatch.exe`; its first tick on this build
 decides as before, and `watchdog install` of this build checks the daemon. An MCP client still
 registered with the first entry (`mcp-entry\g1\`, which no deploy touches) keeps starting
 `runtime\actingctl.exe`, now the build before's file left in place, until a person removes it;

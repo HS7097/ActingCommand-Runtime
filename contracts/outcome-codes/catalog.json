@@ -6436,10 +6436,10 @@
       },
       "tokens": {
         "cli": {
-          "description": "The CLI channel: actingctl and what ran it until Workflow #434 LAB-7 (0.12.62); since then no program of this repository binds it."
+          "description": "The CLI channel: actingctl and what ran it until Workflow #434 LAB-7 (0.12.64); since then no program of this repository binds it."
         },
         "mcp": {
-          "description": "The MCP channel: actingctl mcp-serve until Workflow #434 LAB-7 (0.12.62); since then no program of this repository binds it."
+          "description": "The MCP channel: actingctl mcp-serve until Workflow #434 LAB-7 (0.12.64); since then no program of this repository binds it."
         },
         "ui": {
           "description": "The console."

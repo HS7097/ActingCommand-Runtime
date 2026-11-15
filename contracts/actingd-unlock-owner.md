@@ -64,7 +64,7 @@ Options may appear in any order. `--config` names the daemon configuration; only
 `ledger-maintenance`. `--actor` names the operator and must be a path-safe
 string: 1 to 256 bytes, no `/`, `\`, `:`, `..` or control character, not `.`
 and not an absolute path. Running the command is the operator's statement that the device
-resources of the retained epoch are released (Workflow #434 LAB-7, since 0.12.62: the flag
+resources of the retained epoch are released (Workflow #434 LAB-7, since 0.12.64: the flag
 `--confirm-resources-released` that said it is gone, and is refused as an unknown option).
 Argument errors print the report with their outcome alone (no `stage`, no
 `journal_appended`; see "Result"): `unlock_owner_usage_invalid` (more than

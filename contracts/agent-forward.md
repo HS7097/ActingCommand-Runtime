@@ -24,7 +24,7 @@ actinglab agent notice
 ```
 
 The rescue module's rows (`crates/lab-rescue`, `agent_channel`), which run the commands
-`actingctl agent-channel` ran until Workflow #434 LAB-7 (0.12.62) deleted it, on the state root of
+`actingctl agent-channel` ran until Workflow #434 LAB-7 (0.12.64) deleted it, on the state root of
 the root they run from.
 
 - None of them needs the Runtime or an installation slot, and none is an MCP tool. They touch only

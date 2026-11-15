@@ -1658,7 +1658,7 @@ file.
 **Channels.** The Lab's `config set instance.<id>.touch_backend=… instance.<id>.capture_backend=…`
 and `config clear` (the command line); MCP `ac_config_set` (the Lab's MCP server has no tiers; the
 first MCP server's operator tier for a backend key and its refusal `tier_not_enabled` are retired
-with it since 0.12.62, Workflow #434 LAB-7); the console's
+with it since 0.12.64, Workflow #434 LAB-7); the console's
 settings page ("The console's device backends group" below); the Lab's `session backend` (HS-L,
 below). There is one state per instance: no backend holds for a Lab session only.
 
@@ -2107,7 +2107,7 @@ the one new code and the words above.
   | `backend_switch_refused`, `restore_failed` | 新的没打开，原来的也没恢复，这台暂时不可用, with both failures; suggest a self-check |
   | `host_config_overrides_persist_failed` | 没写进记录，已回退 |
 
-  (`tier_not_enabled`, the first MCP server's refusal, is retired since 0.12.62 with that server,
+  (`tier_not_enabled`, the first MCP server's refusal, is retired since 0.12.64 with that server,
   Workflow #434 LAB-7: no request meets it.)
 
 - **A wait that ran out** (#402 HS-2b). `runtime_receipt_timeout` on such a request is an

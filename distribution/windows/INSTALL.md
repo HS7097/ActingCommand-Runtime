@@ -46,7 +46,7 @@ the download. Keep the manifest and original source/run identity with the files.
 
 The Runtime manifest declares `runtime_payload_layout: "distribution-v1"`.
 The artifact root contains exactly these seven files (Workflow #434 LAB-7, from
-v0.12.62: `actingctl.exe` is no file of it; the Tools artifact's `actinglab.exe`
+v0.12.64: `actingctl.exe` is no file of it; the Tools artifact's `actinglab.exe`
 does its work):
 
 - `actingcommand-actingd.exe`
@@ -75,7 +75,7 @@ launcher `actingwatch.exe` (see "Runtime watchdog"), the Lab's MCP server
 `platform-tools` holds the official Android platform-tools 37.0.1 files `adb.exe`,
 `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`. The
 manifest binds all eleven payload files (paths use `/`); the first MCP entry
-`actingcommand-mcp-entry.exe` is no file of it from v0.12.62 (Workflow #434 LAB-7). The OCR engine is linked
+`actingcommand-mcp-entry.exe` is no file of it from v0.12.64 (Workflow #434 LAB-7). The OCR engine is linked
 into `actingcommand-actingd.exe`, so no vision provider DLL ships (Workflow #360).
 The device-test probe `actingcommand-device-test.exe` was retired in Runtime
 v0.11.6; `platform-tools-v3` Tools artifacts built before that release also hold
@@ -455,7 +455,7 @@ that replaces `runtime\` or `tools\` of a single-location root holds
 The Lab's `up` and `restart`, run by `<root>\tools\actinglab.exe`, start such a
 root with `<root>\actingd.config.json`.
 
-From v0.12.62 (Workflow #434 LAB-7) the Lab's rows of the root's own
+From v0.12.64 (Workflow #434 LAB-7) the Lab's rows of the root's own
 `tools\actinglab.exe` do what `actingctl watchdog` did, for the root they lie in:
 
 ```powershell

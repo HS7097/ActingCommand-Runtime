@@ -428,7 +428,7 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
     answer and the journal; `release-hold` hands back only the operation's own hold;
   - `--ack-guard` (section 6).
 - **`unlock`** passes no confirmation from its caller; it runs `actingd unlock-owner` and records
-  the initiator. Since LAB-7 (0.12.62) actingd's `--confirm-resources-released` is gone: running
+  the initiator. Since LAB-7 (0.12.64) actingd's `--confirm-resources-released` is gone: running
   `unlock-owner` is the confirmation, and the flag is refused as an unknown option
   ([actingd-unlock-owner.md](actingd-unlock-owner.md)), so a console that still passes it must
   stop doing so at that deploy.
@@ -444,7 +444,7 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   with `op`). The detached run journals `Lab-MCP`; until LAB-6 its requests to a running Runtime
   go on the CLI channel, as every request of the module does (section 7). Until 0.12.62 production
   deployed through `actingctl install`, not through the rescue module and not through this server;
-  since 0.12.62 it deploys through the rescue module's own rows, and since LAB-7 (0.12.62), which
+  since 0.12.62 it deploys through the rescue module's own rows, and since LAB-7 (0.12.64), which
   deletes `actingctl`, through them alone ([install-cli.md](install-cli.md), "A deploy since
   LAB-7").
 
@@ -521,7 +521,7 @@ Alice's answer 4. From LAB-3, in the rescue module:
   files of both generations side by side, each with its generation; and `mcp config --client <c>
   [--list <modules>]`, the second generation's registration snippet, which writes no client file.
   The first generation's plan, list and registration were actingctl's (`mcp-entry plan|list`,
-  `mcp-config --entry`) and went with it (LAB-7, 0.12.62).
+  `mcp-config --entry`) and went with it (LAB-7, 0.12.64).
 - **"Only the operation's own hold"** (§5), as LAB-3 fix 1 and 2 build it
   ([install-cli.md](install-cli.md), "The Lab's rescue module"): `release-hold <reason>` hands back
   only a hold that a journal of the module in this root recorded in its pause step, only the
@@ -535,7 +535,7 @@ Alice's answer 4. From LAB-3, in the rescue module:
   pauses back at once. An answer whose own pauses stay says `kept: true` and names in `next` only
   ways out that work today: the module's `release-hold <reason>`, and until LAB-7 `actingctl
   install release-hold --root <r> --reason <r>` and `actingctl resume` of each instance it paused;
-  since LAB-7 (0.12.62) the module's `release-hold` and the Lab's core `resume <instance>` (and
+  since LAB-7 (0.12.64) the module's `release-hold` and the Lab's core `resume <instance>` (and
   `resume` for its global pause), named `resume` and `resume_global` in `next`.
   A global pause is kept and listed (§6). `deploy` takes no `--reason` (its form above has none).
   Until 0.12.62 production deployed through `actingctl install`, because an installer of v0.12.47
@@ -562,7 +562,7 @@ The table's `modules` lists them with the module id each operation names (`core`
 The second generation is a second program with its own file name, `actingcommand-mcp-entry-g2.exe`,
 whose child is `actinglab-mcp.exe`; it goes only into `<root>\mcp-entry\g2\`. `g1\` only ever held
 the first program, `actingcommand-mcp-entry.exe`, generation 1 in every build until LAB-7
-(0.12.62) deleted it with actingctl (its child `actingctl mcp-serve`, its plan `actingctl
+(0.12.64) deleted it with actingctl (its child `actingctl mcp-serve`, its plan `actingctl
 mcp-entry plan --entry-protocol 1`), after the owner's registrations moved. Why two programs: no installer
 code writes under `<root>\mcp-entry\`; placing `g1` is a copy of `tools\actingcommand-mcp-entry.exe`
 by hand, as the documents of every earlier build say, so a second generation under that file name
@@ -715,7 +715,7 @@ LAB-5 the MCP tools, and LAB-1's test `lab_ops_table_complete` reads the file it
 | `entries` | `["lab"]`, or `["lab", "ui"]` for a `core` operation whose every request kind is on the UI list (not counting the transitional one) |
 | `requests` | the request kinds it sends, as read from its source; the slice that moves it corrects the row from the code it moves and says so |
 | `planned_requests` | kinds it will send that the contract does not have yet |
-| `source` | optional (since LAB-7, 0.12.62; absent is none): the commands, console reads and scripts it replaces (`actinglab …`, `actingd …`, `acui: …`, `acsetup: …`, `script <coordinator workspace path>`). Its `actinglab …` entries (the words up to a note in parentheses) are not only history: they say which of actinglab's own commands are the row's, which the authoring module's listing leaves out with the row (section 8.3) and help's `replaces` names (section 9.3). Since LAB-7 no entry names `actingctl …`, a first MCP server's tool (`MCP ac_…`) or a read through an actingctl child: those programs are deleted, and a row whose only sources were theirs has none |
+| `source` | optional (since LAB-7, 0.12.64; absent is none): the commands, console reads and scripts it replaces (`actinglab …`, `actingd …`, `acui: …`, `acsetup: …`, `script <coordinator workspace path>`). Its `actinglab …` entries (the words up to a note in parentheses) are not only history: they say which of actinglab's own commands are the row's, which the authoring module's listing leaves out with the row (section 8.3) and help's `replaces` names (section 9.3). Since LAB-7 no entry names `actingctl …`, a first MCP server's tool (`MCP ac_…`) or a read through an actingctl child: those programs are deleted, and a row whose only sources were theirs has none |
 | `new` | for an operation no program has today: the board item it comes from |
 | `slice` | the slice that builds it |
 | `status` | `planned` (built by `slice`) or `reserved` (a position only: it opens with `opens_with`) |
@@ -1384,7 +1384,7 @@ today's codes for the rest. The codes this contract uses:
   authoring option, whose key only lists (section 8.3; LAB-5F fix 2): the design's
   `lab_module_not_installed` is a host code, and the host no longer judges modules;
 - `actingctl_usage_invalid` (`argument`, `variable`) for a bad option or `ACTINGCOMMAND_INITIATOR`.
-  The plan had LAB-7 move actingctl's codes into actinglab's fragment; as built (0.12.62) they
+  The plan had LAB-7 move actingctl's codes into actinglab's fragment; as built (0.12.64) they
   stay in `contracts/outcome-codes/actingctl.json`, whose owner `actingctl` is the crate
   `crates/lab-ops` since LAB-1: its registry (`lab_ops::codes`) is the one actinglab, actinglab-mcp,
   lab-rescue and the watchdog raise them from, and the outcome guard (G1) holds a registry's codes

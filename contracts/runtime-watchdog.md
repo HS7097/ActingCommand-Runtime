@@ -11,7 +11,7 @@ Scheduler runs one tick a minute through `<root>\tools\actingwatch.exe`. From Wo
 LAB-4 the watchdog is the crate `crates/watchdog`: `actingwatch.exe` runs the tick in its own
 process (see "Launcher"), and the Lab's rescue rows `alive`, `watchdog install` and `watchdog
 uninstall` run the same code ([lab-two-entries.md](lab-two-entries.md) §7, §8.1); `actingctl
-watchdog` ran it too until LAB-7 (0.12.62) deleted actingctl.
+watchdog` ran it too until LAB-7 (0.12.64) deleted actingctl.
 
 The watchdog reads the ledger never and writes it never. It adds no event type, no
 fact and no persisted Runtime structure. It is a read-only consumer of `owner.lock`
@@ -393,7 +393,7 @@ COM access: unsafe code is forbidden there).
 
 - **Preconditions**, each refused with exit 1: an A/B installation or a
   single-location root (`watchdog_layout_unknown`); the Runtime's daemon
-  `<root>\runtime\actingcommand-actingd.exe` (since Workflow #434 LAB-7, 0.12.62; before it
+  `<root>\runtime\actingcommand-actingd.exe` (since Workflow #434 LAB-7, 0.12.64; before it
   `<root>\runtime\actingctl.exe`, which LAB-7 deleted) and `<root>\tools\actingwatch.exe` exist
   (`watchdog_launcher_missing`: deploy the Runtime and Tools that carry the watchdog
   first); the config's state root resolves; acsetup's writer lock is free

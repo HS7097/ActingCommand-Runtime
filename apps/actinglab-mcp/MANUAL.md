@@ -266,7 +266,7 @@ naming this file.
   of this server, bind the Lab channel with `Lab-MCP` and keep the command line's envelope (since
   Workflow #434 LAB-6S2-B1, 0.12.59; on the CLI channel before): none writes a record that names
   a channel, and their answers name the channel `mcp` where they named `cli`.
-- **Production.** Since Workflow #434 LAB-7 (0.12.62) `actingctl` is deleted, and a production
+- **Production.** Since Workflow #434 LAB-7 (0.12.64) `actingctl` is deleted, and a production
   installation deploys and rolls back through the rescue module's own rows (`release stage`,
   `deploy`, `op status`, `release-hold`, `guards`; `contracts/install-cli.md`, "A deploy since
   LAB-7"), from `actinglab.exe` or through this server. Whether either runs at all is the
@@ -322,7 +322,7 @@ A registration that named the server program would keep running the replaced pro
 renames a running one aside) until the client restarted it. Moving a client onto the entry takes
 one restart of the client; after that a deploy needs none. The first generation,
 `<install root>\mcp-entry\g1\actingcommand-mcp-entry.exe`, which starts `actingctl mcp-serve`, was
-the older server's; Workflow #434 LAB-7 (0.12.62) deletes both from the builds (no deploy writes
+the older server's; Workflow #434 LAB-7 (0.12.64) deletes both from the builds (no deploy writes
 under `mcp-entry\`, so a placed `g1\` stays on disk). A client still registered with it starts
 whatever `<install root>\runtime\actingctl.exe` is left there (the build before's, which a deploy
 lists as `extra` and leaves in place); once that file is gone, every new session's `initialize`
@@ -403,6 +403,6 @@ refusal the entry waits and asks again.
 
 ### 11.7 Going back
 
-Since Workflow #434 LAB-7 (0.12.62) there is no older server to go back to: `actingctl` and its
+Since Workflow #434 LAB-7 (0.12.64) there is no older server to go back to: `actingctl` and its
 MCP server are deleted, and nothing prints the first generation's registration lines. A client
 moves onto the second generation before the deploy of that build (section 11.4).

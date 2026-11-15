@@ -6,7 +6,7 @@ frozen model is INST-M v1.0 (`rd-1024\install-design\model.md`). The Lab's rescu
 builds kept under the root, an in-place update with a journal, a gated rollback, the
 configuration candidate, the instances, the standard packs and a fresh root. It is the
 installer of a single-location root ([runtime-watchdog.md](runtime-watchdog.md), "Layout").
-Until Workflow #434 LAB-7 (0.12.62) `actingctl install` ran the same commands; LAB-7 deleted it.
+Until Workflow #434 LAB-7 (0.12.64) `actingctl install` ran the same commands; LAB-7 deleted it.
 
 **The A/B layout** (Workflow #429, Alice's rulings 131 and 132 A of 10-31): the installer
 is also the one writer of the formal A/B layout, frozen by slice R-15b in "The A/B layout" below
@@ -310,7 +310,7 @@ stopped, and until INST-3 it leaves the configuration alone.
   owner lock (`owner_lock_held`) refuses unless `--preview`; a running state that cannot be read
   (the process probe, the state root's owner journal) refuses `processes_unreadable`. Images under the root that would be
   replaced while running: the Lab's MCP server `actinglab-mcp.exe` (since 0.12.57, Workflow #434
-  LAB-5G6; since LAB-7, 0.12.62, it alone: `actingctl.exe` is deleted), in `tools\` or `runtime\`, is renamed aside and keeps running
+  LAB-5G6; since LAB-7, 0.12.64, it alone: `actingctl.exe` is deleted), in `tools\` or `runtime\`, is renamed aside and keeps running
   (listed as `running_renamed`); `adb.exe` is never moved and any other image waits
   (`running_image_blocks`, `path`, `pid`). A `.part` of another operation under
   `runtime\` or `tools\` refuses `foreign_part` (`path`).
@@ -986,7 +986,7 @@ policy|lab-options|commit|discard`, `instance remove`, `pack remove` and `pack r
     installed by this operation, the kept build with `origin` `release` or `local_build` and its
     tag, `packs: []`, the configuration's `config_sha256`). After the first write a failed step
     ends `install_operation_interrupted`, the journal and `current.json` kept. Since LAB-7
-    (0.12.62): once the configuration is in place, `next` names `resume` and `undo`, the new root's
+    (0.12.64): once the configuration is in place, `next` names `resume` and `undo`, the new root's
     own `<new_root>\tools\actinglab.exe op resume <id>` and `… undo <id>`; before it no row of the
     Lab finds the root (every row but `new` locates it from its configuration) and a second `new`
     into the folder is refused `root_not_empty`, so the answer names no command and carries
@@ -1075,7 +1075,7 @@ policy|lab-options|commit|discard`, `instance remove`, `pack remove` and `pack r
 
 [lab-two-entries.md](lab-two-entries.md) §5 to §7; the rows of module `rescue` in
 [lab-operations.json](lab-operations.json); register §1.287, "Slice LAB-3". The installer's code
-moved from `apps/actingctl` to `crates/lab-rescue` (LAB-3). Since LAB-7 (0.12.62) deleted
+moved from `apps/actingctl` to `crates/lab-rescue` (LAB-3). Since LAB-7 (0.12.64) deleted
 `actingctl install`, which kept the face of the command forms above (`install-cli` 1), the Lab's
 rescue module (`actinglab <row>`, `actinglab serve --stdio`) is the one program that runs them,
 with the rescue face. The rows that run the installer's commands:
@@ -1174,7 +1174,7 @@ The rescue face:
   reason `instance.added` and the revision the Runtime answered: it stays paused as a newly added
   instance and waits for a person's resume. `held_again` is absent when no instance was held
   again, so every other release records and answers as before. No vocabulary word is added.
-- **Ways out of a kept hold** (fix 2; since LAB-7, 0.12.62). Every answer of the module whose own
+- **Ways out of a kept hold** (fix 2; since LAB-7, 0.12.64). Every answer of the module whose own
   pauses stay says `hold` `kept: true` and gives in `next` only ways out that work today, none
   naming another party's hold: `release_hold`, the module's own `release-hold <reason>`;
   `resume`, one Lab `resume <alias>` per instance the pause step paused that the running Runtime
@@ -1558,7 +1558,7 @@ The rescue face:
   LAB-7 production deployed through the module (`release stage`, `deploy`, `op status`, run from
   the live build's kept `actinglab`), with `actingctl install` of the build it replaced as the
   way back; the rule kept no row of the module off the production root any more.
-- **A deploy since LAB-7** (Workflow #434 LAB-7, since 0.12.62; register §1.287, "Slice LAB-7";
+- **A deploy since LAB-7** (Workflow #434 LAB-7, since 0.12.64; register §1.287, "Slice LAB-7";
   the owner's ruling of 11-15 that nothing is kept compatible with earlier builds). `actingctl`
   is deleted, and production deploys through the Lab's own rows, run from the root's
   `tools\actinglab.exe` (or a kept build's `install\builds\<commit>\tools\actinglab.exe`):
@@ -1666,7 +1666,7 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 ### Running images
 
 The Lab's MCP server's images are renamed aside while running and keep running (since LAB-7,
-0.12.62, no longer `actingctl.exe` images, which no build carries);
+0.12.64, no longer `actingctl.exe` images, which no build carries);
 `adb.exe` is never moved and `adb kill-server` is never used; any other running image under the
 root that would change refuses (`running_image_blocks`); unchanged files are never
 touched; MCP servers left on renamed images are listed so the person reconnects them (an MCP
@@ -1897,7 +1897,7 @@ check-config takes `--install-root` (17). The MCP entry's tunables are its `mcp_
 ## The MCP entry (Workflow #421 MCP-ENTRY, Runtime v0.12.18)
 
 Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry instead of the MCP
-server itself. Since Workflow #434 LAB-7 (0.12.62) the first generation (`g1`,
+server itself. Since Workflow #434 LAB-7 (0.12.64) the first generation (`g1`,
 `actingcommand-mcp-entry.exe`, whose child was `actingctl mcp-serve`) is deleted with `actingctl`:
 no build carries it, no row plans for it or prints its registration, and a client still
 registered with it stops working (register §1.287, "Slice LAB-7", "At deploy"); a client
@@ -1961,7 +1961,7 @@ form was:
   `install.mcp_entry.verify_timeout_ms` refuses it, and the current child keeps serving; the
   same install is tried once more after `settle_ms`, then not again until it changes. A
   request in flight when its child ends is answered `mcp_entry_outcome_unknown` (since Workflow
-  #434 LAB-7, 0.12.62, the first entry is deleted and that code retired; the second generation's
+  #434 LAB-7, 0.12.64, the first entry is deleted and that code retired; the second generation's
   is `mcp_entry_g2_outcome_unknown`, which a client inspects with `ac_run_show` or `ac_status`)
   and never sent again; the next request goes to a fresh child.
   When the first plan after a fresh child names a build other than its predecessor's, the client
@@ -2022,7 +2022,7 @@ form was:
     `mcp entries` lists both generations' entries side by side.
   - No release or Tools archive carries it before the packaging slice (LAB-5G6), and placing it in
     `g2\` is a manual step until an installer step exists. `actingctl mcp-serve` and
-    `actingctl mcp-entry plan --entry-protocol 1` went with actingctl (LAB-7, 0.12.62), after the
+    `actingctl mcp-entry plan --entry-protocol 1` went with actingctl (LAB-7, 0.12.64), after the
     owner's registrations moved to `g2\`.
 - **The rescue module's rows** (Workflow #434 LAB-5G5b, 0.12.57; register §1.287, "Slice
   LAB-5G5b"). Three rows of the operation table, read only, which `actinglab <row>` and `actinglab
@@ -2087,7 +2087,7 @@ R-15c builds the slot material, the slot locks, `install-state` v2, the readers 
 and the fixed entries ([stable-entry.md](stable-entry.md)); R-15d the fresh root, the
 activation, update, rollback, undo, resume, the clean, `install restart` and the read face; R-15e
 the bootstrap and the conversion of a single-location root. Until a root is converted it stays
-single-location and nothing here runs on it. Since Workflow #434 LAB-7 (0.12.62) deleted
+single-location and nothing here runs on it. Since Workflow #434 LAB-7 (0.12.64) deleted
 `actingctl`, the installer this frozen design names (its commands, an installer's program in
 `install\installer.json`) is the Lab's rescue module and its `tools\actinglab.exe`: a command form
 below is the installer's, which a person runs as its rescue row where one is served (the rows of

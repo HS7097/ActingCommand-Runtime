@@ -303,12 +303,12 @@ Also planned by the same design (§5.2), outside the rows above:
 - **`install-control`** retires: `InstallTransition` goes with LAB-6S4a (Runtime 0.12.63, in
   force), which declares `install-control` [0, 0], and the cold protocol's `actingctl request-shutdown --wait` with
   LAB-7, and the installer is the Lab's rescue module. As built (Workflow #434 LAB-7, since
-  0.12.62) the release of LAB-7 **keeps it declared**: every installed installer requires the six
+  0.12.64) the release of LAB-7 **keeps it declared**: every installed installer requires the six
   v1 interfaces in a build's declaration and reads one without them as no declaration
   (`crates/lab-rescue/src/install/manifest.rs`, `V1_INTERFACES`), so a build that dropped it would
   be refused by the installer of the build before it. acsetup's per-operation check of it leaves
   with UI-L2 (after UI-2a). The planned revision 2 above is not built.
-- **`install-cli` 2** is in force since LAB-7 (0.12.62): the Runtime declares `install-cli` [2, 2]
+- **`install-cli` 2** is in force since LAB-7 (0.12.64): the Runtime declares `install-cli` [2, 2]
   (the row above); an installed installer keeps an interface it does not know and checks none.
 - **`tools-layout` 5** (derived, never declared): actinglab moves into the runtime member, and
   `actingwatch.exe` carries the watchdog itself (LAB-4, LAB-7). As built, LAB-7 keeps the Tools

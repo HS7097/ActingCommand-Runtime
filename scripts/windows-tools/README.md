@@ -18,14 +18,14 @@ MuMu/Nemu, model, provider, or Runtime binaries.
   `actingd.config.example.json`, `actingd.defaults.json` (from Workflow
   #387 D1b on; the downloader accepts a Runtime artifact with or without it),
   `actingd.config.first.json` (from Workflow #453 S4 on, likewise), `INSTALL.md`, and
-  `RELEASE-NOTES.md` (`actingctl.exe` left it with Workflow #434 LAB-7, since 0.12.62);
+  `RELEASE-NOTES.md` (`actingctl.exe` left it with Workflow #434 LAB-7, since 0.12.64);
 - `actingcommand-tools-<40-character-commit-sha>`: `actinglab.exe`,
   `actingledger.exe`,
   `actingcommand-vision-provider-check.exe`,
   the watchdog launcher `actingwatch.exe` (Workflow #374), the Lab's MCP server
   `actinglab-mcp.exe` and the MCP entry's second generation `actingcommand-mcp-entry-g2.exe`
   (Workflow #434 LAB-5G6, since 0.12.57; the first entry `actingcommand-mcp-entry.exe` left the
-  list with LAB-7, since 0.12.62), plus the official Android platform-tools 37.0.1 files under `platform-tools/`:
+  list with LAB-7, since 0.12.64), plus the official Android platform-tools 37.0.1 files under `platform-tools/`:
   `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and
   `source.properties`. The OCR engine is linked into `actingcommand-actingd.exe`;
   no vision provider DLL is built or staged (Workflow #360). The device-test probe
@@ -62,7 +62,7 @@ Tools manifests declare `tools_payload_layout: "platform-tools-v3"`, which requi
 exactly `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
 `actingwatch.exe` and the five `platform-tools/` files (manifest paths use `/`), plus each of
 the two MCP programs above that the manifest declares, and allows no directory other than
-`platform-tools`. A build since 0.12.62 declares `actinglab-mcp.exe` and
+`platform-tools`. A build since 0.12.64 declares `actinglab-mcp.exe` and
 `actingcommand-mcp-entry-g2.exe` (eleven payloads); the layout name stays, so an artifact built
 without them still verifies with nine. A
 `platform-tools-v3` manifest built before
