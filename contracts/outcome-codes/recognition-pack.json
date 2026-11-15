@@ -470,7 +470,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A text read refused to conclude because its read budget ran out; the error's own outcome names the budget.",
+      "description": "A text read refused to conclude because its read budget ran out; the error's own outcome names the budget. Workflow #469 V0: only ever a cause: no run ends with this code; a run whose page, guard or identity evaluation meets it ends with the kernel's own evaluation code (contained_task_recognition_failed, contained_task_guard_evaluation_failed).",
       "common_causes": "TBD",
       "handling": "TBD"
     }

@@ -2831,6 +2831,22 @@
     "report_output_root": {
       "type": "vocab:report_output_root",
       "description": "The root a refused output directory of a problem report lies in (Workflow #467 RPT-1, since 0.12.61)."
+    },
+    "confirmation_problem": {
+      "type": "vocab:confirmation_problem",
+      "description": "What the program saw where the confirmation of the page a step awaits ended, or the declared error page a run stood on: one word per situation it tells apart there, beside the code and never in its detail text (Workflow #469 V0, since 0.12.62)."
+    },
+    "guard_problem": {
+      "type": "vocab:guard_problem",
+      "description": "Why an operation's guard refused its input (Workflow #469 V0, since 0.12.62)."
+    },
+    "availability_source": {
+      "type": "vocab:availability_source",
+      "description": "Who withdrew an application's availability, read from the source of the active session.instance.available record that withdrew it (Workflow #469 V0, since 0.12.62)."
+    },
+    "pause_cause": {
+      "type": "vocab:pause_cause",
+      "description": "Why a failure paused its task on the application, in the settlement's own order (Workflow #469 V0, since 0.12.62)."
     }
   },
   "vocabularies": {
@@ -10290,6 +10306,157 @@
         },
         "no_schedule": {
           "description": "Fix round 2: the application's game has no standard pack root with schedule.json (the standard-pack root holds no game root for it, or its game root holds no schedule.json), so there is nothing to check: the composed catalog holds no rule and no pool of the game, no run reads a goal of it, and the page answers no_schedule. No name can be set or cleared, a resource goal that needs no declaration neither (no pool of the game is one the application can target), and nothing is stored; asking again does not help until the game root holds schedule.json."
+        }
+      }
+    },
+    "confirmation_problem": {
+      "description": "What the program saw where the confirmation of the page a step awaits ended, or the declared error page a run stood on, the value confirmation_problem of page_confirmation_failed, contained_task_step_unconfirmed, contained_task_error_page_reached, contained_task_linear_unrecorded_screen and contained_task_requires_scheduler: one word per situation the kernel already tells apart there. It stands beside the code in the outcome's values and never in its detail text, so the failure identity, the streak and the frame rules stay as they are; for one code the program does the same next whichever word it carries (Workflow #469 V0, the owner's option A on board #469, since 0.12.62; the kernel slices set it).",
+      "review": "pending",
+      "source": {
+        "file": "crates/execution-kernel/src/codes.rs",
+        "enum": "ConfirmationProblem"
+      },
+      "tokens": {
+        "input_not_taken": {
+          "description": "The step's own page was still on screen after the input: the input did not take; check its target and the gap before it."
+        },
+        "awaited_page_late": {
+          "description": "The awaited page appeared only after the confirmation wait: raise the step's timeout or check what slows the page."
+        },
+        "other_page_shown": {
+          "description": "The screen settled on another page the package declares: declare that page as a destination or an interrupt."
+        },
+        "loading_page_shown": {
+          "description": "The screen settled on a declared loading page: give the step more time or turn loading handling on."
+        },
+        "transition_shown": {
+          "description": "The screen was still a loading transition when the wait ended."
+        },
+        "interrupt_shown": {
+          "description": "A shared interrupt page was on screen and was not handled: check the interrupt's handling."
+        },
+        "screen_moving": {
+          "description": "No declared page appeared and the screen kept changing: the step's timeout may be too short."
+        },
+        "unrecorded_screen": {
+          "description": "The screen settled on a page the package never recorded: record that page in the package."
+        },
+        "nothing_recognised": {
+          "description": "The last frame matched no declared page; open the run's frames to see what it showed."
+        },
+        "screen_still": {
+          "description": "The screen stayed unchanged until the still limit: the input most likely did nothing."
+        },
+        "loading_limit": {
+          "description": "The wait ended on its loading allowance while the screen was still loading."
+        },
+        "error_page": {
+          "description": "The step reached a page the package declares as an error page."
+        },
+        "error_page_no_exit": {
+          "description": "The run stood on a declared error page and no operation of the page leads away from it."
+        },
+        "deadline_reached": {
+          "description": "The task's time ran out before the screen could be judged."
+        },
+        "check_failed": {
+          "description": "The final look at the screen failed (capture or recognition); read the run's records."
+        },
+        "neither_page": {
+          "description": "On the retry, neither the awaited page nor the step's own page appeared."
+        },
+        "unjudged_layer_run": {
+          "description": "The screen was not judged after the wait: the run is a layer's (a prerequisite, return-home, navigation or recovery run) or one the host started, not the task's own; open the run's frames."
+        },
+        "unjudged_restart_segment": {
+          "description": "The screen was not judged after the wait: the step ran inside an application restart; open the run's frames."
+        },
+        "unjudged_consensus": {
+          "description": "The screen was not judged after the wait: the package declares sample consensus; open the run's frames."
+        },
+        "unjudged_application_entry": {
+          "description": "The screen was not judged after the wait: the step is an application entry; open the run's frames."
+        },
+        "unjudged_time_short": {
+          "description": "The screen was not judged after the wait: too little of the task's time was left (under twice the step timeout); open the run's frames."
+        }
+      }
+    },
+    "guard_problem": {
+      "description": "Why an operation's guard refused its input, the value guard_problem of contained_task_guard_refused, with failure_code beside target_not_passed when the target's failure has a code: one word per situation. The program does the same next whichever word it is (Workflow #469 V0, the owner's option A on board #469, since 0.12.62; the kernel slices set it).",
+      "review": "pending",
+      "source": {
+        "file": "crates/execution-kernel/src/codes.rs",
+        "enum": "GuardProblem"
+      },
+      "tokens": {
+        "page_mismatch": {
+          "description": "The input was refused: the screen is not the page the operation's guard expects."
+        },
+        "target_not_passed": {
+          "description": "The input was refused: the guard's target did not pass on its page (see failure_code)."
+        },
+        "page_moved": {
+          "description": "The page changed during the wait before a trusted-coordinate input."
+        }
+      }
+    },
+    "availability_source": {
+      "description": "Who withdrew an application's availability, the value availability_source of instance_unavailable, read from the source of the active session.instance.available record that withdrew it, with device_link_state or device_hold beside device_link and device_state. The application is held back at placement whichever word it is (Workflow #469 V0, the owner's option A on board #469, since 0.12.62; the host slice sets it).",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-host/src/codes.rs",
+        "enum": "AvailabilitySource"
+      },
+      "tokens": {
+        "configured": {
+          "description": "The configuration marks this application unavailable."
+        },
+        "self_check": {
+          "description": "The device self-check has not passed (or the instance is fenced): see the instance's self-check and fence."
+        },
+        "device_link": {
+          "description": "The handset's cable link is not connected (see device_link_state)."
+        },
+        "device_state": {
+          "description": "The handset is locked, too hot, low on battery or in use (see device_hold)."
+        },
+        "other_publisher": {
+          "description": "Another publisher marked the application unavailable."
+        },
+        "facts_missing": {
+          "description": "The instance's facts are missing or unreadable."
+        }
+      }
+    },
+    "pause_cause": {
+      "description": "Why a failure paused its task on the application, the value pause_cause of policy_task_paused, with failure_code the failure's code, chosen in the settlement's own order: a severe failure first, then a sensitive task, then the streak, then on_failure. The pair stays paused until its lift whichever word it is (Workflow #469 V0, the owner's option A on board #469, since 0.12.62; the host slice sets it).",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-host/src/codes.rs",
+        "enum": "PauseCause"
+      },
+      "tokens": {
+        "severe_failure": {
+          "description": "The failure is one that pauses its task at the first occurrence. The pause lifts when the package changes; there is no manual lift."
+        },
+        "unrecorded_screen": {
+          "description": "The package met a screen it never recorded. The pause lifts when the package changes; there is no manual lift."
+        },
+        "runtime_budget_exceeded": {
+          "description": "The run took longer than its runtime budget. The pause lifts when the package changes; there is no manual lift."
+        },
+        "interrupted_again": {
+          "description": "The run was cut short by the Runtime's own end twice in a row (the restart lifts only the first). The pause lifts when the package changes; there is no manual lift."
+        },
+        "sensitive_task": {
+          "description": "A task marked sensitive failed; it pauses at once. The pause lifts when the package changes; there is no manual lift."
+        },
+        "repeated_failure": {
+          "description": "The same failure repeated up to the task's threshold. The pause lifts when the package changes; there is no manual lift."
+        },
+        "retries_exhausted": {
+          "description": "The task used up its retries and is set to pause on failure. The pause lifts when the package changes; there is no manual lift."
         }
       }
     }
