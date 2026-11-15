@@ -30632,8 +30632,13 @@ server has no such tool until its registration moves, which is the owner's to do
 frame of the step table and enters the sequence when the mark admits it, after every frame stored
 before that mark; the contract's section says so in one sentence, and S2-5's
 `s25_a_recognize_box_takes_the_settled_capture_and_lists_the_animation` asserts it (`record frames`
-of step 2 lists the sample `f0007` after step 2's press, after step 3's `f0006`). No behaviour
-changes.
+of step 2 lists the sample `f0007` after step 2's press, after step 3's `f0006`). The check of the
+parent's waits this section names, `check_after_capture`, is `record_after_capture_check` since the
+stage-one train's last fix round (§1.403), which answers `after_ms` too with `details{argument,
+reason: "range", value, min, max}`, as `record frames` answers its sides; that round also made the
+parent's flags answer a value that is no whole number `wrong_type` (it was `range`), while `record
+frames` answers such a value, and a flag given twice, `range` as it was built: left as it is, since
+this train adds no behaviour. No behaviour changes.
 
 ### 1.427 Slice #463 S2-5 (0.12.65): boxes on a draft: the recognition region and the press region of any recorded step (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two hands the agent the frame and where the press went and lets the agent set the recognition region and the press region; the owner's words of 11-15 on the design of board #471: a box is drawn on one state of one screen, its base images are the frames of the action whose similarity reaches 0.95, a picture with boxes is only a preview; the design `rd-1115/471-box-design.md`, its English part, and its first implementation, slices B1 to B3, paused before stage one and ported here by hand; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s25-record-boxes.md`, stacked on the stage-one train #1757 at `32f71ea6291c`)
 
