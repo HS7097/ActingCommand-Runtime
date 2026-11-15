@@ -2149,6 +2149,10 @@ impl HostShared {
             // Workflow #386 SR-2b-1: the `scheduling.rerun` values in effect decide whether the
             // run ended by a condition; a test may set the condition itself (SR-2a's hook).
             let rule = self.rerun_condition_rule()?;
+            // Workflow #463 U1b: the package content the run was prepared with, which its pair's
+            // break-in counts, read before the policy is locked. Fix round 2 (review item 3):
+            // only of a run that began its package; a run that never did is no run of it.
+            let break_in_content = self.scheduled_begun_content(decision_id)?;
             #[cfg(test)]
             let forced_condition = self.take_policy_condition_for_test()?;
             let mut policy = lock(self.policy()?, HostLocation::RecordPolicyDispatchOutcome)?;
@@ -2215,6 +2219,22 @@ impl HostShared {
                 }
                 PolicyExecutionPreparation::Replay(data) => (data, false),
             };
+            // Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its
+            // first occurrence"): a run that began its package, recorded now as a success or as a
+            // failure no condition ended, counts in its pair's break-in of the content it was
+            // prepared with; a stop, a condition end, a replay and a run that never began its
+            // package (no content above) count nothing. The value record below carries it.
+            let counts_in_break_in = match &data.outcome {
+                PolicyExecutionOutcome::Succeeded { .. } => true,
+                PolicyExecutionOutcome::Failed { failure } => failure.condition.is_none(),
+                PolicyExecutionOutcome::Stopped { .. } => false,
+            };
+            if recorded_now
+                && counts_in_break_in
+                && let Some(content) = &break_in_content
+            {
+                policy.note_break_in_run(decision_id, content, data.observed_at_unix_ms)?;
+            }
             self.finish_policy_dispatch_outcome(&mut policy, &data, context, cache_update)?;
             self.record_policy_values(&mut policy)?;
             // The settled run's four settlement facts (Workflow #308 slice 5b); none for a stopped

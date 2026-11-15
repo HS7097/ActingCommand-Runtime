@@ -12291,6 +12291,30 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "policy_break_in_unread": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "break_in_problem": "required",
+        "failure_code": "optional",
+        "instance_id": "required",
+        "task_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 U1b fix rounds 2 and 3 (contracts/policy-suspension.md, \"Only during a package's break-in\"): the break-in of a scheduled run of a linear_steps package could not be established before the run executed, for its pair (task_id, the catalog task; instance_id, the instance alias); break_in_problem says which half: content_unmeasured, the package's content was not measured when the run was prepared (the containment could not measure the package, or the Runtime clock, scheduling.suspension.lift_check_min_interval_ms or the lift checks' memory could not be read), or record_unread, the pair's break-in could not be judged (the decision memory does not hold the run's dispatch, or the two scheduling.suspension.break_in_ keys or the Runtime clock could not be read). The run is not ended for it: it goes on as a run outside its break-in, so a linear step's closing decision that finds a screen the package never recorded ends it with page_confirmation_failed (confirmation_problem unrecorded_screen) and the pair is not paused at the first occurrence; a run whose content was not measured counts in no break-in. Recorded once per such run as a Warning runtime.failed with the run's links (operation run_scheduled_contained_task); failure_code is the failure's code when the catalog registers it, and the failure is the caused_by link. It refuses nothing and ends no process.",
+      "common_causes": "content_unmeasured: a package being replaced or unreadable while the run was prepared (caused_by the containment's code), or a defect of the Runtime's own state (the lift checks' memory left broken by another thread, a clock or a configuration value that could not be read). record_unread: a defect of the Runtime's own state (a dispatch the decision memory does not hold, a clock or a configuration value that could not be read); it does not come from the package or the device.",
+      "handling": "Report it with break_in_problem, the caused_by link and the run: the run itself was judged as outside its break-in. A later run measures the content and reads the break-in again; if content_unmeasured repeats with a containment code, check the package's files at its location; if either repeats without one, the Runtime's state is broken and a restart of the Runtime is due."
+    },
     "policy_budget_counter_overflow": {
       "category": "error",
       "ladder_class": "none",
